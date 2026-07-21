@@ -8,11 +8,14 @@ import threading
 from datetime import UTC, datetime
 
 import pyarrow as pa
+import pytest
+from alert_queue import SIGNATURE_HEADER, TIMESTAMP_HEADER, CloudTasksAlertQueue
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import bridge_config
 from finelog.errors import QueryResultTooLargeError
 from github_source import GithubSource
+from google.cloud import tasks_v2
 from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
@@ -22,6 +25,14 @@ FROM_MS = 1_784_257_200_000
 TO_MS = FROM_MS + 3_600_000
 MARIN = ClusterTarget(
     name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
+)
+ALERT_QUEUE_ENV = (
+    "OPS_ALERT_QUEUE_PROJECT",
+    "OPS_ALERT_QUEUE_LOCATION",
+    "OPS_ALERT_QUEUE",
+    "OPS_ALERT_TARGET_URL",
+    "OPS_ALERT_TARGET_AUDIENCE",
+    "OPS_ALERT_DISPATCH_SERVICE_ACCOUNT",
 )
 
 
@@ -52,6 +63,24 @@ class FakeSource:
         return self._table
 
 
+class FakeAlertQueue:
+    def __init__(self) -> None:
+        self.deliveries: list[tuple[bytes, dict[str, str]]] = []
+
+    def enqueue(self, *, body: bytes, headers) -> str:
+        self.deliveries.append((body, dict(headers)))
+        return "projects/p/locations/l/queues/q/tasks/t"
+
+
+class FakeCloudTasksClient:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def create_task(self, *, parent, task, timeout):
+        self.requests.append((parent, task, timeout))
+        return tasks_v2.Task(name=f"{parent}/tasks/t")
+
+
 def _client(source: FakeSource, cache_ttl: float = 20.0) -> TestClient:
     github = GithubSource(token=None, timeout=5.0)
     return TestClient(create_app(bridge_config(cache_ttl), {"marin": source}, {}, github, K8sFleet(())))
@@ -59,6 +88,80 @@ def _client(source: FakeSource, cache_ttl: float = 20.0) -> TestClient:
 
 def _get(client: TestClient, sql: str, **params):
     return client.get("/finelog/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
+
+
+def test_alert_relay_queues_exact_signed_body_for_private_delivery():
+    queue = FakeAlertQueue()
+    app = create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), K8sFleet(()), queue)
+    body = b'{"status":"firing"}'
+
+    response = TestClient(app).post(
+        "/ops/alerts",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            SIGNATURE_HEADER: "a" * 64,
+            TIMESTAMP_HEADER: "1784660400",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"queued": True, "task": "projects/p/locations/l/queues/q/tasks/t"}
+    assert queue.deliveries == [
+        (
+            body,
+            {
+                "Content-Type": "application/json",
+                SIGNATURE_HEADER: "a" * 64,
+                TIMESTAMP_HEADER: "1784660400",
+            },
+        )
+    ]
+
+
+def test_alert_relay_rejects_unsigned_delivery_without_enqueuing():
+    queue = FakeAlertQueue()
+    app = create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), K8sFleet(()), queue)
+
+    response = TestClient(app).post("/ops/alerts", content=b"{}")
+
+    assert response.status_code == 400
+    assert queue.deliveries == []
+
+
+def test_cloud_tasks_delivery_uses_dedicated_oidc_identity():
+    client = FakeCloudTasksClient()
+    queue = CloudTasksAlertQueue(
+        client=client,
+        parent="projects/p/locations/l/queues/q",
+        target_url="https://ingest.run.app/api/ingest/grafana",
+        target_audience="https://ingest.run.app",
+        dispatch_service_account="ops-dispatch@p.iam.gserviceaccount.com",
+    )
+
+    name = queue.enqueue(body=b"signed", headers={SIGNATURE_HEADER: "a" * 64})
+
+    assert name == "projects/p/locations/l/queues/q/tasks/t"
+    parent, task, timeout = client.requests[0]
+    request = task.http_request
+    assert parent == "projects/p/locations/l/queues/q"
+    assert timeout == 10.0
+    assert request.http_method == tasks_v2.HttpMethod.POST
+    assert request.url == "https://ingest.run.app/api/ingest/grafana"
+    assert request.body == b"signed"
+    assert request.headers[SIGNATURE_HEADER] == "a" * 64
+    assert request.oidc_token.service_account_email == "ops-dispatch@p.iam.gserviceaccount.com"
+    assert request.oidc_token.audience == "https://ingest.run.app"
+
+
+def test_alert_queue_environment_is_optional_only_when_fully_absent(monkeypatch):
+    for name in ALERT_QUEUE_ENV:
+        monkeypatch.delenv(name, raising=False)
+    assert CloudTasksAlertQueue.from_environment() is None
+
+    monkeypatch.setenv("OPS_ALERT_QUEUE", "q")
+    with pytest.raises(ValueError, match="incomplete ops alert queue environment"):
+        CloudTasksAlertQueue.from_environment()
 
 
 def test_query_returns_json_rows_with_millis_timestamps():

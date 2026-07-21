@@ -49,11 +49,13 @@ PostgreSQL `FOR UPDATE SKIP LOCKED` supports a non-blocking multi-worker claim, 
 
 ### Credentials require process isolation
 
-Grafana and the public ingest service need only their HMAC pair. The public service should expose no case APIs and receive no Loom or cluster credential. The IAP UI needs an application DB user and a dedicated Loom token. Kubernetes and Iris credentials belong to the agent runtime, not the web process.
+Grafana signs to a loopback relay in its bridge. The bridge enqueues the exact body and signature headers in Cloud Tasks. The ingest service accepts internal traffic and the dedicated dispatcher identity, exposes no case APIs, and receives no Loom or cluster credential. The IAP UI needs an application DB user and a dedicated Loom token. Kubernetes and Iris credentials belong to the agent runtime, not the web process.
 
-Prompt language and the `ops-expert` skill are not security controls. Plan-mode ACP plus read-only RBAC, no secret reads, no pod exec, no GitHub write token, and negative mutation tests form the boundary. The public DB role needs a fixed-`search_path` security-definer ingestion function before deployment; direct table access is acceptable only in the local vertical slice.
+Cloud Run's `internal` ingress admits same-project Cloud Tasks while rejecting requests from the public internet. IAM still applies to every admitted network request. Google recommends a per-service account with `roles/run.invoker` and a short-lived OIDC ID token for service-to-service calls ([Cloud Run ingress](https://docs.cloud.google.com/run/docs/securing/ingress), [service-to-service authentication](https://docs.cloud.google.com/run/docs/authenticating/service-to-service)).
 
-Pulumi's existing `CloudRunService` and `CloudSqlPostgres` components already cover service accounts, IAP, Cloud SQL sockets, Secret Manager grants, logical databases, and password secret shells. The ops split adds an explicit public access enum so public ingress is an intentional resource property rather than an ad hoc IAM grant.
+Prompt language and the `ops-expert` skill are not security controls. Plan-mode ACP plus read-only RBAC, no secret reads, no pod exec, no GitHub write token, and negative mutation tests form the boundary. The ingest DB role needs a fixed-`search_path` security-definer ingestion function before deployment; direct table access is acceptable only in the local vertical slice.
+
+Pulumi's existing `CloudRunService` and `CloudSqlPostgres` components cover service accounts, IAP, Cloud SQL sockets, Secret Manager grants, logical databases, and password secret shells. The ops split adds explicit private access and internal ingress. Cloud Tasks is the only network source admitted by Cloud Run, and its dispatcher is the only principal with `roles/run.invoker`.
 
 ## Live Validation
 
@@ -86,7 +88,7 @@ The first real session based itself on `origin/main`, where the new `ops-expert`
 
 1. Keep Grafana as the only alert-definition and alert-lifecycle surface.
 2. Land the signed webhook, fingerprint/group case model, global turn queue, Vue UI, and stub/real Loom adapters.
-3. Split public ingest from IAP UI in Cloud Run and finish the database privilege boundary.
+3. Split internal ingest from the IAP UI in Cloud Run and finish the database privilege boundary.
 4. Run warning notifications in shadow/no-agent mode to tune rules and grouping.
 5. Pin a dedicated ops Loom runtime to a reviewed revision and pass negative mutation tests.
 6. Enable one cluster with a daily launch budget, then expand. Critical/error paging remains independent and continues to Slack/email.

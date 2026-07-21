@@ -64,4 +64,17 @@ uv run --project infra/grafana pytest infra/grafana/tests/test_provisioning.py
 npm --prefix infra/ops/dashboard run build:check
 ```
 
-`infra/ops/compose.yaml` is for local development. Pulumi declares split production services: a public webhook-only ingest surface and an IAP-gated UI/worker. Before production, finish the ingestion-only PostgreSQL function/role, crash reconciliation, rate limiting, metrics, retention, and negative mutation tests described in the spec.
+`infra/ops/compose.yaml` is for local development. Pulumi declares an internal webhook-only ingest surface, a Cloud Tasks delivery queue, and an IAP-gated UI/worker. Grafana sends signed webhooks to its loopback bridge; only the Grafana service account may enqueue, and only the queue dispatcher may invoke ingest.
+
+The IAP allowlist is non-secret policy in `Pulumi.marin-ops.yaml`:
+
+```yaml
+config:
+  marin-ops:viewers:
+    - "*@openathena.ai"
+    - ops@openathena.ai
+```
+
+Use a `group:` member when the ops address is a Google Group. Bare addresses are individual users. Run `pulumi preview` after an allowlist change; Pulumi adds or removes only the corresponding `roles/iap.httpsResourceAccessor` grants.
+
+Before production, finish the ingestion-only PostgreSQL function/role, crash reconciliation, queue failure metrics, retention, and negative mutation tests described in the spec.

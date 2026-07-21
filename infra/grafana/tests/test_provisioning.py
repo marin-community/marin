@@ -129,7 +129,7 @@ def test_notification_tiers_route_warning_to_agent_and_critical_to_every_channel
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
             if receiver["type"] == "webhook":
                 settings = receiver["settings"]
-                assert settings["url"] == "$OPS_ALERT_WEBHOOK_URL"
+                assert settings["url"] == "http://127.0.0.1:8081/ops/alerts"
                 assert settings["httpMethod"] == "POST"
                 assert settings["maxAlerts"] == "0"
                 assert settings["hmacConfig"] == {

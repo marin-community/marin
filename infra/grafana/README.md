@@ -140,11 +140,18 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold. The stuck-pod rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
-dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
-Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
+dashboard-only because they have expected benign causes. `severity=critical` and
+`severity=error` route to `ops-critical` (email ops@openathena.ai, Slack, and the ops
+agent); `severity=warning` routes only to `ops-agent`. Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
 resolving.
+
+Both agent receivers post their timestamped HMAC webhook to the bridge on
+`127.0.0.1:8081`. The bridge preserves the raw body and signature headers in a Cloud
+Tasks request. The target ops service accepts internal ingress only, and Cloud Run IAM
+admits only the queue's dispatcher service account. Grafana's service account may enqueue
+tasks but cannot invoke ingest directly.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it
@@ -170,6 +177,7 @@ All secrets live in Secret Manager and reach the container as env vars via the
 | `GF_DATABASE_PASSWORD` | `cloudsql-grafana-password` | Grafana's Postgres state (see Deploy) |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
 | `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
+| `OPS_ALERT_WEBHOOK_SECRET` | `marin-ops-grafana-webhook-hmac` | signed ops-agent webhooks |
 | `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
 
 All but the last must exist before a deploy — Cloud Run fails to start a revision
@@ -214,6 +222,10 @@ Artifact Registry repo and image, the Cloud Run service, and the IAP wiring. The
 and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` component
 (`infra/pulumi`); this directory is its own Pulumi project. It runs on the shared repo venv
 and shares `infra/pulumi`'s state backend.
+
+Deploy `infra/ops` first. Grafana reads the queue name, private target URL, OIDC audience,
+and dispatcher identity from the `marin-ops` stack. The ops stack grants
+`marin-grafana@hai-gcp-models.iam.gserviceaccount.com` enqueue permission.
 
 ```bash
 uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])

@@ -20,10 +20,10 @@ Claude Sonnet reviewed the implementation diff, design/spec, Grafana provisionin
 ### Areas reviewed without a finding
 
 - Grafana routes match the intended notification tiers and configure timestamped HMAC with untruncated groups.
-- The public and IAP Cloud Run branches are explicit and mutually guarded; existing IAP consumers retain their behavior.
+- The private, public, and IAP Cloud Run branches are explicit and mutually guarded; existing IAP consumers retain their behavior.
 - IAP identity is trusted only on the IAP-gated service, whose Cloud Run invoker is the IAP service agent.
 - The Vue dashboard renders agent text through escaped interpolation and uses no raw HTML path.
-- The split service credentials match the architecture: public ingest has no Loom or cluster credential; UI has no cluster credential; the agent runtime owns read-only diagnostics.
+- The split service credentials match the architecture: internal ingest has no Loom or cluster credential; UI has no cluster credential; the agent runtime owns read-only diagnostics.
 
 ## Recommendation
 

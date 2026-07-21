@@ -49,6 +49,7 @@ from datetime import UTC, datetime
 
 import pyarrow as pa
 import uvicorn
+from alert_queue import SIGNATURE_HEADER, TIMESTAMP_HEADER, AlertQueue, CloudTasksAlertQueue
 from cache import TtlCache
 from config import BRIDGE_PORT, CLUSTERS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
 from errors import UpstreamError
@@ -58,8 +59,9 @@ from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
@@ -243,6 +245,7 @@ def create_app(
     iris_sources: Mapping[str, IrisSource],
     github_source: GithubSource,
     k8s_fleet: K8sFleet,
+    alert_queue: AlertQueue | None = None,
 ) -> Starlette:
     """Build the ASGI app serving finelog, Iris, GitHub, and k8s for the configured clusters."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
@@ -355,9 +358,28 @@ def create_app(
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
+    async def enqueue_alert(request: Request) -> Response:
+        if alert_queue is None:
+            return JSONResponse({"error": "alert queue is not configured"}, status_code=503)
+        signature = request.headers.get(SIGNATURE_HEADER)
+        timestamp = request.headers.get(TIMESTAMP_HEADER)
+        if not signature or not timestamp:
+            return JSONResponse({"error": "signed Grafana webhook headers are required"}, status_code=400)
+        task_name = await run_in_threadpool(
+            alert_queue.enqueue,
+            body=await request.body(),
+            headers={
+                "Content-Type": request.headers.get("content-type", "application/json"),
+                SIGNATURE_HEADER: signature,
+                TIMESTAMP_HEADER: timestamp,
+            },
+        )
+        return JSONResponse({"queued": True, "task": task_name}, status_code=202)
+
     return Starlette(
         routes=[
             Route("/health", health),
+            Route("/ops/alerts", enqueue_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -389,10 +411,11 @@ def main() -> None:
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
+    alert_queue = CloudTasksAlertQueue.from_environment()
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, alert_queue),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

@@ -22,7 +22,9 @@ flowchart LR
     AM -->|critical / error| CriticalCP[ops-critical contact point]
     CriticalCP --> Slack[Slack + email]
     CriticalCP --> AgentCP
-    AgentCP -->|timestamped HMAC webhook| Ingest[Public ingest surface<br/>webhook route only]
+    AgentCP -->|timestamped HMAC webhook| Relay[Loopback bridge relay]
+    Relay -->|enqueue raw body + signature| Tasks[Cloud Tasks]
+    Tasks -->|internal ingress + OIDC| Ingest[Private ingest surface<br/>webhook route only]
     Ingest --> DB[(Ops PostgreSQL)]
     Worker[IAP ops service<br/>durable global queue] <--> DB
     Browser[ops.oa.dev<br/>Vue + IAP] <--> Worker
@@ -36,7 +38,7 @@ Production uses two Cloud Run surfaces built from the same image:
 
 | Surface | Ingress | Credentials | Routes |
 |---|---|---|---|
-| `marin-ops-ingest` | Public Cloud Run IAM | Webhook HMAC, narrow Postgres user | `POST /api/ingest/grafana`, health only |
+| `marin-ops-ingest` | Internal Cloud Run; dispatcher-only IAM | Cloud Tasks OIDC, webhook HMAC, narrow Postgres user | `POST /api/ingest/grafana`, health only |
 | `marin-ops-ui` | IAP | App Postgres user, dedicated Loom token | Case APIs, queue worker, Vue assets |
 
 The ingest process has no Loom, Kubernetes, Iris, Slack, or browser credential. The UI process has no Kubernetes or Iris credential. Those read-only credentials live with the dedicated Loom agent runtime.
@@ -65,14 +67,18 @@ Grouping by `alertname, cluster` is the initial Grafana policy. Rule authors can
 ```mermaid
 sequenceDiagram
     participant G as Grafana
-    participant I as Ops ingest
+    participant R as Loopback relay
+    participant T as Cloud Tasks
+    participant I as Private ops ingest
     participant P as PostgreSQL
     participant W as Ops worker
     participant L as Loom ACP
     participant A as ops-expert
     participant K as Kubernetes / Iris
 
-    G->>I: POST grouped webhook + timestamped HMAC
+    G->>R: POST grouped webhook + timestamped HMAC
+    R->>T: Enqueue exact body and signature headers
+    T->>I: POST with dispatcher OIDC token
     I->>I: Bound body, verify signature and replay window
     I->>P: Store delivery; upsert fingerprints and group case
     P-->>I: Existing/new case and queue disposition
@@ -120,7 +126,7 @@ stateDiagram-v2
 | Two groups fire together | Queue both, then run them by severity and age through the one-agent slot. |
 | An operator asks a one-off question | Create a manual case with higher queue priority and the same read-only runtime policy. |
 | Loom is unavailable | Persist the turn failure and visible case error; the Grafana delivery remains durable. |
-| The webhook signature is bad, stale, oversized, malformed, or truncated | Reject before database state changes. `maxAlerts=0` prevents Grafana truncation. |
+| The webhook signature is bad, older than the 25-hour task window, oversized, malformed, or truncated | Reject before database state changes. `maxAlerts=0` prevents Grafana truncation. |
 | Alert text contains instructions | Treat it as data inside the evidence envelope. Runtime permissions, not prompting, enforce read-only access. |
 
 One subtle case is a Grafana grouping-policy change. A fingerprint can move to a different `groupKey`. The initial schema assigns one case per fingerprint generation to preserve operator suppression semantics. Before production policy changes, either migrate open cases or explicitly advance their generation; silently duplicating an active generation into two chats is not allowed.
@@ -133,9 +139,11 @@ The inbox refreshes while visible. An open case polls more frequently for the sp
 
 ## Pulumi and Credentials
 
-Pulumi describes the `ops` logical Cloud SQL database, separate `ops_ingest` and `ops_app` password secret shells, the Grafana webhook HMAC secret shell, public ingest service, IAP UI service, Cloud SQL attachment, service accounts, and exact Secret Manager grants. Secret values are populated out of band and never enter Pulumi state.
+Pulumi describes the `ops` logical Cloud SQL database, separate `ops_ingest` and `ops_app` password secret shells, the Grafana webhook HMAC secret shell, Cloud Tasks queue, internal ingest service, IAP UI service, Cloud SQL attachment, service accounts, and exact IAM and Secret Manager grants. Secret values are populated out of band and never enter Pulumi state.
 
-Grafana receives only `OPS_ALERT_WEBHOOK_URL` and the HMAC secret. The public ingest service receives only that HMAC and its database password. The IAP service receives only its database password and the dedicated ops Loom token. The Loom runtime must use a pinned Marin base containing the `ops-expert` skill and read-only cluster credentials; using a general-purpose mutable production credential is out of scope.
+Grafana signs a webhook to `127.0.0.1:8081`; its bridge may only enqueue on `marin-ops-alerts`. Cloud Tasks preserves the exact body and signature headers and authenticates to ingest as `marin-ops-alert-dispatch`. The ingest service accepts internal traffic only and grants `roles/run.invoker` only to that dispatcher. It receives the HMAC and its database password but no Loom or cluster credential. The IAP service receives only its database password and the dedicated ops Loom token. The Loom runtime must use a pinned Marin base containing the `ops-expert` skill and read-only cluster credentials.
+
+`infra/ops/Pulumi.marin-ops.yaml` keeps the non-secret IAP admission policy in review. It currently admits `*@openathena.ai` and the explicit `ops@openathena.ai` identity. The latter is redundant for access but records the operational owner. Secret values remain outside stack YAML.
 
 Before deployment, the database role split must be completed with an ingestion-only security-definer function and fixed `search_path`. `ops_ingest` should receive only `CONNECT` and `EXECUTE` on that function, not direct table privileges. Schema migrations run as a separate deploy principal, never at restricted service startup.
 
@@ -154,7 +162,7 @@ The real canary validated the motivating `DNSConfigForming` warning on `cw-us-ea
 ## Rollout Gates
 
 1. Land the spike with dispatch disabled in production.
-2. Provision the database roles and secret values; add rate limiting and rejection metrics to public ingest.
+2. Provision the database roles and secret values; add rejection and Cloud Tasks dead-letter metrics.
 3. Deploy Grafana routing in shadow mode, compare grouped cases with Grafana for a week, and tune rule labels and repeat intervals.
 4. Deploy a dedicated Loom runtime pinned to a merged revision containing `ops-expert`; pass negative mutation tests for Kubernetes, Iris, GitHub, and cloud metadata.
 5. Enable manual turns, then warning turns for one cluster with a daily budget.

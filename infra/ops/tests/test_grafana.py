@@ -60,9 +60,26 @@ def test_signature_covers_timestamp_and_exact_raw_body():
     assert error.value.code == "invalid_signature"
 
 
-def test_old_timestamp_is_rejected_before_payload_is_applied():
+def test_cloud_tasks_retry_within_delivery_window_is_accepted():
     body = FIXTURE.read_bytes()
-    timestamp = str(int((NOW - timedelta(minutes=6)).timestamp()))
+    timestamp = str(int((NOW - timedelta(hours=24)).timestamp()))
+
+    assert _verify(body, timestamp=timestamp).notification.status == "firing"
+
+
+def test_timestamp_older_than_task_retry_window_is_rejected_before_payload_is_applied():
+    body = FIXTURE.read_bytes()
+    timestamp = str(int((NOW - timedelta(hours=26)).timestamp()))
+
+    with pytest.raises(GrafanaWebhookError, match="outside the replay window") as error:
+        _verify(body, timestamp=timestamp)
+
+    assert error.value.code == "replay"
+
+
+def test_timestamp_beyond_future_clock_skew_is_rejected():
+    body = FIXTURE.read_bytes()
+    timestamp = str(int((NOW + timedelta(minutes=6)).timestamp()))
 
     with pytest.raises(GrafanaWebhookError, match="outside the replay window") as error:
         _verify(body, timestamp=timestamp)

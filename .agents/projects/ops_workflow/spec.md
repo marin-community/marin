@@ -22,10 +22,11 @@ Limits are:
 - 1 MiB raw body;
 - 5,000 alert instances;
 - 16 KiB per string field;
-- five-minute signed timestamp replay window;
+- 25-hour signed timestamp delivery window, covering the queue's one-day retry duration;
+- five-minute future clock-skew allowance;
 - `truncatedAlerts` must be integer zero.
 
-The signature is lowercase hexadecimal HMAC-SHA256 over `<timestamp>:<exact raw body>`. Authentication and size checks occur before JSON normalization. The exact raw-body SHA-256 is the retry key. A retry returns the first persisted response.
+The signature is lowercase hexadecimal HMAC-SHA256 over `<timestamp>:<exact raw body>`. Grafana sends it to the loopback bridge. The bridge queues the exact body and signature headers without parsing them. Cloud Tasks authenticates to the internal ingest service with a short-lived OIDC token. HMAC authentication and size checks occur before JSON normalization at ingest. The exact raw-body SHA-256 is the retry key. A retry returns the first persisted response.
 
 The payload is untrusted data. Labels and annotations cannot select credentials, commands, paths, or permission mode.
 
@@ -103,7 +104,7 @@ The spike polls. Production reconciliation must also cover deadlines, expired la
 
 ## HTTP Surface
 
-The public ingest process exposes only:
+The internal ingest process exposes only:
 
 ```text
 POST /api/ingest/grafana
@@ -123,7 +124,7 @@ GET  /healthz
 GET  / and SPA routes
 ```
 
-Local mode is accepted only on a loopback bind and identifies the actor as `local-operator`. Production UI mode requires IAP and normalizes `X-Goog-Authenticated-User-Email`. The Cloud Run IAP boundary, not the header alone, authenticates the request. The public ingest image does not register UI or catch-all SPA routes.
+Local mode is accepted only on a loopback bind and identifies the actor as `local-operator`. Production UI mode requires IAP and normalizes `X-Goog-Authenticated-User-Email`. The Cloud Run IAP boundary, not the header alone, authenticates the request. The ingest image does not register UI or catch-all SPA routes.
 
 Question text is non-empty and at most 16 KiB. The production mutation endpoints must require `Idempotency-Key` and use `operation_requests`; the current spike does not yet expose retry, interrupt, override, or permission-approval operations.
 
@@ -136,24 +137,25 @@ Pulumi declares:
 - Cloud SQL logical database `ops`;
 - Secret Manager shells `cloudsql-ops-ingest-password` and `cloudsql-ops-app-password`;
 - Secret Manager shell `marin-ops-grafana-webhook-hmac`;
-- public `marin-ops-ingest` with `allUsers` Cloud Run invoker and no IAP;
+- Cloud Tasks queue `marin-ops-alerts`, with enqueue permission granted only to the Grafana runtime service account;
+- internal-ingress `marin-ops-ingest`, with Cloud Run invocation granted only to `marin-ops-alert-dispatch`;
 - IAP-gated `marin-ops-ui` with configured viewer grants;
 - separate service accounts, Cloud SQL attachments, and exact per-secret access grants.
 
-The public-access option is an explicit `CloudRunAccess.PUBLIC` enum in the shared component. It cannot be combined with IAP member grants.
+The shared Cloud Run component separates IAP, private, and public access. Private invoker members cannot be combined with IAP members or public invocation. `infra/ops/Pulumi.marin-ops.yaml` checks in the non-secret `marin-ops:viewers` policy; it currently contains `*@openathena.ai` and `ops@openathena.ai`.
 
 Environment and secret readers are:
 
 | Process | Non-secret configuration | Secret values |
 |---|---|---|
-| Grafana | ops webhook URL | webhook HMAC |
+| Grafana bridge | queue, target URL/audience, dispatcher identity | webhook HMAC |
 | ingest | Cloud SQL socket/database/user, source surface | webhook HMAC, ingest DB password |
 | UI | Cloud SQL socket/database/user, Loom URL/repo/base/revisions | app DB password, Loom token |
 | Loom agent | pinned Marin revision and skill | read-only Kubernetes/Iris credentials |
 
 Secret values are populated out of band and never become Pulumi config or outputs. Restricted service users do not run schema migrations. The deployment pipeline applies migrations with a separate owner principal before rolling services.
 
-Before production, create an ingestion-only security-definer SQL function with a fixed `search_path`; grant `ops_ingest` only `CONNECT` and `EXECUTE`. The current Python repository performs the complete transaction directly so the local spike can exercise it. This is not the final public-service database privilege boundary.
+Before production, create an ingestion-only security-definer SQL function with a fixed `search_path`; grant `ops_ingest` only `CONNECT` and `EXECUTE`. The current Python repository performs the complete transaction directly so the local spike can exercise it. This is not the final production database privilege boundary.
 
 ## Local Reproduction
 

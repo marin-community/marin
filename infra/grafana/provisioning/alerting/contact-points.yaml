@@ -11,8 +11,9 @@
 # $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
 # Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
 # SMTP credentials — without them email is inert while Slack and the agent still
-# receive critical alerts. Grafana signs the raw webhook body and timestamp with
-# a secret shared only with the narrow public ingest service.
+# receive critical alerts. Grafana signs the raw webhook body and timestamp, then
+# posts only to the loopback bridge. The bridge preserves the signature while a
+# private Cloud Tasks queue dispatches to the internal-only ops ingest service.
 apiVersion: 1
 
 contactPoints:
@@ -30,7 +31,7 @@ contactPoints:
       - uid: ops-critical-agent
         type: webhook
         settings:
-          url: $OPS_ALERT_WEBHOOK_URL
+          url: http://127.0.0.1:8081/ops/alerts
           httpMethod: POST
           maxAlerts: "0"
           hmacConfig:
@@ -44,7 +45,7 @@ contactPoints:
       - uid: ops-agent-webhook
         type: webhook
         settings:
-          url: $OPS_ALERT_WEBHOOK_URL
+          url: http://127.0.0.1:8081/ops/alerts
           httpMethod: POST
           maxAlerts: "0"
           hmacConfig:

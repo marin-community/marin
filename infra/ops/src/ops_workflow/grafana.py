@@ -15,7 +15,10 @@ from typing import Any
 MAX_BODY_BYTES = 1024 * 1024
 MAX_ALERTS = 5_000
 MAX_FIELD_BYTES = 16 * 1024
-REPLAY_WINDOW_SECONDS = 5 * 60
+# Cloud Tasks may retry an authenticated internal delivery for one day. Keep a
+# narrow future-clock allowance while accepting delayed, HMAC-covered tasks.
+MAX_DELIVERY_DELAY_SECONDS = 25 * 60 * 60
+MAX_FUTURE_SKEW_SECONDS = 5 * 60
 SIGNATURE_HEADER = "x-grafana-alerting-signature"
 TIMESTAMP_HEADER = "x-grafana-alerting-signature-timestamp"
 
@@ -102,7 +105,8 @@ def verify_grafana_webhook(
         raise GrafanaWebhookError("invalid_signature", "signature must be lowercase hexadecimal SHA-256")
     source_timestamp = _unix_timestamp(timestamp)
     current = _to_utc(now, "now")
-    if abs((current - source_timestamp).total_seconds()) > REPLAY_WINDOW_SECONDS:
+    delivery_age = (current - source_timestamp).total_seconds()
+    if delivery_age < -MAX_FUTURE_SKEW_SECONDS or delivery_age > MAX_DELIVERY_DELAY_SECONDS:
         raise GrafanaWebhookError("replay", "webhook timestamp is outside the replay window")
     signed = timestamp.encode() + b":" + raw_body
     expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()

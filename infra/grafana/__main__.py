@@ -72,7 +72,11 @@ def main() -> None:
     connection_name = cloudsql.get_output("connection_name")
     database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
     ops = pulumi.StackReference(OPS_STACK)
-    ops_alert_webhook_url = ops.get_output("ingest_url")
+    ops_alert_target_url = ops.get_output("ingest_url")
+    ops_alert_target_audience = ops.get_output("ingest_audience")
+    ops_alert_queue = ops.get_output("alert_queue")
+    ops_alert_queue_location = ops.get_output("alert_queue_location")
+    ops_alert_dispatch_service_account = ops.get_output("alert_dispatch_service_account")
 
     # Values stay in Secret Manager; the component only grants the runtime service
     # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
@@ -90,7 +94,12 @@ def main() -> None:
         "DATABASE_SOCKET_DIR": database_socket_dir,
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
-        "OPS_ALERT_WEBHOOK_URL": ops_alert_webhook_url,
+        "OPS_ALERT_QUEUE_PROJECT": PROJECT,
+        "OPS_ALERT_QUEUE_LOCATION": ops_alert_queue_location,
+        "OPS_ALERT_QUEUE": ops_alert_queue,
+        "OPS_ALERT_TARGET_URL": ops_alert_target_url,
+        "OPS_ALERT_TARGET_AUDIENCE": ops_alert_target_audience,
+        "OPS_ALERT_DISPATCH_SERVICE_ACCOUNT": ops_alert_dispatch_service_account,
     }
     if smtp_secret_exists(provider):
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))

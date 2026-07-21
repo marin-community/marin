@@ -1,0 +1,7 @@
+config:
+  # IAP admission is non-secret policy and stays checked in for review. A domain entry
+  # admits every Google identity in that Workspace domain; the explicit ops address also
+  # documents the operational owner even though it is covered by the domain grant.
+  marin-ops:viewers:
+    - "*@openathena.ai"
+    - ops@openathena.ai
