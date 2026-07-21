@@ -279,7 +279,12 @@ def main() -> None:
         "--weighting", type=MixtureWeighting, choices=list(MixtureWeighting), default=MixtureWeighting.TOKEN_PROPORTIONAL
     )
     parser.add_argument(
-        "--stop-after", type=Stage, choices=list(Stage), default=Stage.EVAL, help="run through this stage"
+        "--stop-after",
+        type=Stage,
+        choices=list(Stage),
+        default=Stage.TRAIN,
+        help="run through this stage; default 'train' (eval needs an HF export the Grug orbax "
+        "checkpoint does not yet produce -- pass '--stop-after eval' once that is wired)",
     )
     parser.add_argument("--pool-workers", type=int, default=None, help="datakit per-stage worker count (override scale)")
     parser.add_argument("--max-concurrent", type=int, default=8, help="max steps a StepRunner walks at once")

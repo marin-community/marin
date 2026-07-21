@@ -26,25 +26,18 @@ wiring is a datakit/Levanter concern). No new package.
 def store_mixture(
     store: ClusteredStoreData,
     *,
-    validation: Sequence[ArtifactStep[TokenizedCache]] = (),
     weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL,
-    prefix: str | None = None,
 ) -> LmDataConfig:
     """Build the Levanter training data config from a datakit store's non-empty buckets.
 
     For each entry in ``store.buckets`` (which already omits buckets that received zero rows),
-    emits one ``DatasetComponent`` with ``flat_cache=True`` and
-    ``source=UrlDatasetSourceConfig(cache_dir=<bucket>, train_urls=[], ...)``, ``cache_dir=<bucket>``,
-    and the component weight. ``store.tokenizer`` is set once as the config's tokenizer (all
-    components share it — the store guarantees a single tokenizer). ``validation`` caches are added
-    as zero-weight held-out components (ordinary, non-flat ``TokenizedCache`` handles resolved to
-    their cache dirs). Returns the ``LmDataConfig`` the Grug launch trainer consumes as
-    ``GrugBaseLaunchConfig.data``.
-
-    Bucket path handling: ``bucket.path`` is absolute (``s3://.../datakit/store_<hash>/cluster=C/quality=Q``).
-    When ``prefix`` is given it is stripped to a prefix-relative ``cache_dir`` so the training
-    fingerprint is region-independent (matching the moe precedent's ``_STORE_PREFIX``); with
-    ``prefix=None`` the absolute path is used and the training identity is region-specific.
+    emits one ``DatasetComponent`` with ``flat_cache=True``, ``source=None``, and
+    ``cache_dir=bucket.path`` (the bucket's **absolute** ``s3://`` path — Levanter resolves a
+    relative ``cache_dir`` against the worker CWD, not the object store). ``store.tokenizer`` is
+    set once as the config's tokenizer. Returns the ``LmDataConfig`` the Grug launch trainer
+    consumes as ``GrugBaseLaunchConfig.data``. No validation components: the reference disables
+    in-loop eval (``eval_batch_size=None``); the readout is the training loss (and, once wired,
+    the downstream ``core_evals`` report).
 
     Weights:
       - ``TOKEN_PROPORTIONAL``: ``bucket.total_tokens``. Asserts ``total_tokens > 0`` for every
@@ -71,15 +64,15 @@ class MixtureWeighting(StrEnum):
 def reference_train_on_store(
     store: ClusteredStoreData,
     *,
-    model: GrugModelConfig,
+    model: GrugModelConfig = REFERENCE_MODEL,
     version: str | None = None,
     weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL,
+    resources: ResourceConfig = REFERENCE_TRAIN_RESOURCES,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble the reference pretrain step over a resolved datakit store.
 
-    Mirrors the current reference: builds an ``ArtifactStep[LevanterCheckpoint]`` named ``REF_NAME``
-    whose ``build_config(ctx)`` returns a ``GrugBaseLaunchConfig`` with
-    ``data=store_mixture(store, validation=VALIDATION, weighting=weighting, prefix=ctx.prefix)``,
+    Builds an ``ArtifactStep[LevanterCheckpoint]`` named ``REF_NAME`` whose ``build_config(ctx)``
+    returns a ``GrugBaseLaunchConfig`` with ``data=store_mixture(store, weighting=weighting)``,
     ``model=model``, ``steps=REFERENCE_STEPS``, ``resources=ctx.runtime_arg("train_resources")``, and
     the standard optimizer/precision/tracker, run via ``run_grug_base_trial``. ``REFERENCE_STEPS`` is
     a fixed step count — **epochs are unsupported** for store buckets (an epoch count would read
@@ -103,8 +96,10 @@ def main() -> None:
        name=REF_NAME)``; ``run(report, max_concurrent=args.max_concurrent)``.
 
     Flags: ``--version`` (calendar tag or ``dev``), ``--sample-prefix`` (default ``SAMPLE_PREFIX``),
-    ``--weighting`` (``token_proportional`` | ``uniform``), ``--max-concurrent`` (threaded into both
-    passes). A single process; both passes resume from their own caches on re-run.
+    ``--weighting`` (``token_proportional`` | ``uniform``), ``--stop-after`` (``datakit`` | ``train``
+    | ``eval``, **default ``train``** — eval needs an HF export the Grug orbax checkpoint does not
+    yet produce), ``--max-concurrent`` (threaded into both passes). A single process; both passes
+    resume from their own caches on re-run.
     """
 
 
@@ -128,7 +123,6 @@ entry are **removed** — a dynamic bucket set cannot be authored before datakit
 | `REFERENCE_STEPS` | small int (e.g. `100`) | token budget = steps × batch × seq_len |
 | `REFERENCE_TRAIN_RESOURCES` | small GPU/TPU `ResourceConfig` (`runtime_args`, off identity) | train dispatch target |
 | `REFERENCE_SERVE` | a pinned small `ServeSpec` (concrete slice — see Open Question) | evalchemy serving slice for `core_evals` |
-| `VALIDATION` | paloma + uncheatable `TokenizedCache` handles | held-out (zero-weight) eval-loss datasets |
 
 ## Contracts at the existing-API seams (unchanged; documented, not modified)
 
