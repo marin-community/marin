@@ -4,8 +4,6 @@ This directory contains the vertical slice behind `ops.oa.dev`: a read-only Graf
 
 Grafana remains canonical. The backend polls firing `alert_instance` rows every minute and joins `alert_rule` metadata. Warning notifications are muted; error and critical notifications continue to Slack and email. All three severities can wake the read-only ops agent.
 
-The full architecture, edge cases, IAP policy, and rollout order are in [`../../.agents/projects/ops_workflow/design.md`](../../.agents/projects/ops_workflow/design.md). The exact adapter and database contract is in [`../../.agents/projects/ops_workflow/spec.md`](../../.agents/projects/ops_workflow/spec.md).
-
 ## Local spike
 
 Start the ops database and the Grafana-shaped fixture database:

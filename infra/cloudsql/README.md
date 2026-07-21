@@ -31,6 +31,17 @@ The password secret shells are:
 
 Cloud SQL grants `cloudsqlsuperuser` to a PostgreSQL user created without an explicit database role. The ops users instead inherit narrow `NOLOGIN` roles. This keeps schema ownership separate from the runtime and limits the Grafana reader to two tables. See Google's [user-role behavior](https://cloud.google.com/sql/docs/postgres/users) and [`--database-roles` guidance](https://cloud.google.com/sdk/gcloud/reference/sql/users/create#--database-roles).
 
+These privileges are PostgreSQL objects, not Cloud SQL IAM resources. The GCP Pulumi
+provider can assign an existing custom role with `gcp.sql.User.database_roles`, but it
+cannot create `NOLOGIN` roles, transfer schema ownership, set login defaults, grant tables,
+or manage default privileges. A PostgreSQL Pulumi provider could manage those objects, but
+would make every preview and update depend on a live Auth Proxy connection and the database
+owner credential. Keep that bootstrap at the SQL boundary.
+
+The two scripts reflect the required order. [`ops_roles.sql`](ops_roles.sql) creates the
+custom roles before Cloud SQL creates login users with `--database-roles`;
+[`ops_login_roles.sql`](ops_login_roles.sql) sets login defaults after those users exist.
+
 Start the Cloud SQL Auth Proxy on `127.0.0.1:55439`. Retrieve the existing Grafana owner password into an environment variable without printing it. After the Pulumi update has created the `ops` database and secret shells, create the custom roles and grants:
 
 ```bash
