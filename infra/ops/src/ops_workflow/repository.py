@@ -17,7 +17,13 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert, GrafanaDelivery, GrafanaNotification
+from ops_workflow.grafana import (
+    GRAFANA_BASE_URL,
+    GrafanaAlert,
+    GrafanaDelivery,
+    GrafanaNotification,
+    grafana_group_metadata,
+)
 from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
 from ops_workflow.result import OpsResult
 from ops_workflow.slack import SlackDelivery, SlackEscalationDraft
@@ -34,6 +40,8 @@ TURN_TIMEOUT = timedelta(minutes=20)
 SLACK_LEASE_DURATION = timedelta(minutes=2)
 SLACK_MAX_ATTEMPTS = 5
 SLACK_MAX_RETRY_DELAY = 300
+MAX_PERSISTED_ERROR_CHARS = 4_000
+MAX_EVENT_ERROR_CHARS = 1_000
 
 
 class TurnPendingError(RuntimeError):
@@ -592,7 +600,7 @@ class OpsRepository:
                         lease_expires_at = NULL, last_error = %s
                     WHERE id = %s AND state = 'sending'
                     """,
-                    (state, retry_delay, error[:4_000], escalation_id),
+                    (state, retry_delay, error[:MAX_PERSISTED_ERROR_CHARS], escalation_id),
                 )
                 if state == "abandoned":
                     await self._event(
@@ -600,7 +608,7 @@ class OpsRepository:
                         str(row["case_id"]),
                         "slack_escalation_abandoned",
                         OPS_SERVICE_ACTOR,
-                        {"attempts": attempts, "error": error[:1_000]},
+                        {"attempts": attempts, "error": error[:MAX_EVENT_ERROR_CHARS]},
                         turn_id=str(row["turn_id"]),
                     )
 
@@ -633,7 +641,7 @@ class OpsRepository:
                 row = await cursor.fetchone()
                 if row is None:
                     return
-                bounded_error = error[:4_000]
+                bounded_error = error[:MAX_PERSISTED_ERROR_CHARS]
                 await connection.execute(
                     """
                     UPDATE agent_turns SET state = 'failed', error = %s, completed_at = now(),
@@ -1209,6 +1217,7 @@ def _resolved_polled_alert(signal: Mapping[str, Any], *, observed_at: datetime) 
         raise RuntimeError("stored signal values must be an object")
     alert_name = str(signal["alert_name"])
     cluster = str(signal["cluster"] or "")
+    group = grafana_group_metadata(alert_name, cluster)
     return PolledGrafanaAlert(
         alert=GrafanaAlert(
             fingerprint=str(signal["fingerprint"]),
@@ -1225,8 +1234,8 @@ def _resolved_polled_alert(signal: Mapping[str, Any], *, observed_at: datetime) 
         ),
         receiver=str(signal["receiver"]),
         group_key=str(signal["group_key"]),
-        group_labels={"alertname": alert_name, "cluster": cluster},
-        title=f"{alert_name} · {cluster}" if cluster else alert_name,
+        group_labels=group.labels,
+        title=group.title,
     )
 
 

@@ -11,6 +11,23 @@ GRAFANA_BASE_URL = "https://grafana.oa.dev"
 
 
 @dataclass(frozen=True)
+class GrafanaGroupMetadata:
+    """Labels and title shared by firing and resolved group projections."""
+
+    labels: Mapping[str, str]
+    title: str
+
+
+def grafana_group_metadata(alert_name: str, cluster: str) -> GrafanaGroupMetadata:
+    """Build the stable workflow presentation for one Grafana alert group."""
+
+    return GrafanaGroupMetadata(
+        labels={"alertname": alert_name, "cluster": cluster},
+        title=f"{alert_name} · {cluster}" if cluster else alert_name,
+    )
+
+
+@dataclass(frozen=True)
 class GrafanaAlert:
     """One alert instance from a Grafana-owned group."""
 

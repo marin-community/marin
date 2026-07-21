@@ -16,6 +16,7 @@ MAX_REASON_BYTES = 2_000
 MAX_NEXT_STEP_BYTES = 4_000
 MAX_EVIDENCE_ITEMS = 20
 MAX_EVIDENCE_FIELD_BYTES = 2_000
+MAX_CONTROL_FIELD_BYTES = 64
 EnumValue = TypeVar("EnumValue", bound=StrEnum)
 
 
@@ -81,7 +82,7 @@ def parse_ops_result(content: str, *, case_id: str, turn_id: str) -> OpsResult:
 
     outcome = _enum(result, "outcome", OpsOutcome)
     summary = _bounded_string(result, "summary", MAX_SUMMARY_BYTES)
-    action_taken = _bounded_string(result, "action_taken", 64)
+    action_taken = _bounded_string(result, "action_taken", MAX_CONTROL_FIELD_BYTES)
     if action_taken != "none":
         raise ValueError("ops-result action_taken must be 'none'")
     evidence = _evidence(result.get("evidence"))
@@ -141,7 +142,7 @@ def _integer(value: Mapping[str, object], field: str) -> int:
 
 
 def _uuid(value: Mapping[str, object], field: str) -> str:
-    item = _bounded_string(value, field, 64)
+    item = _bounded_string(value, field, MAX_CONTROL_FIELD_BYTES)
     try:
         return str(UUID(item))
     except ValueError as error:
@@ -159,7 +160,7 @@ def _bounded_string(value: Mapping[str, object], field: str, max_bytes: int) -> 
 
 
 def _enum(value: Mapping[str, object], field: str, enum_type: type[EnumValue]) -> EnumValue:
-    item = _bounded_string(value, field, 64)
+    item = _bounded_string(value, field, MAX_CONTROL_FIELD_BYTES)
     try:
         return enum_type(item)
     except ValueError as error:
