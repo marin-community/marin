@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -441,7 +442,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        # SCALE_DISABLE_CHECKPOINT=1 skips checkpoint creation entirely (including the forced final
+        # save), so short profiling/debug runs reach tracker.finish() — the sharded tensorstore save
+        # can crash at large scale and would otherwise block the profile upload.
+        if os.environ.get("SCALE_DISABLE_CHECKPOINT") == "1":
+            checkpointer = None
+        else:
+            checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
