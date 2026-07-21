@@ -200,16 +200,11 @@ def reference_train_on_store(
             batch_size=REFERENCE_BATCH_SIZE,
             seed=REFERENCE_SEED,
             mp="params=float32,compute=bfloat16,output=bfloat16",
-            # Offline by default so the harness is self-contained: cw-rno2a pods carry no
-            # WANDB_API_KEY, and W&B only forwards XLA/NCCL/JAX env to the training child (not
-            # WANDB_*). Metrics still land in tracker_metrics.jsonl next to the checkpoint via
-            # replicate_path; a keyed canary can flip this to online.
             tracker=WandbConfig(
                 project="marin",
                 tags=["reference", "pipeline", "e2e"],
                 group="reference-pipeline",
                 name=None,
-                mode="offline",
                 replicate_path=ctx.output_path,
             ),
             optimizer=AdamConfig(
