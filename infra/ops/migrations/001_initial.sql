@@ -170,17 +170,6 @@ CREATE TABLE case_events (
     data jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
-CREATE TABLE operation_requests (
-    actor text NOT NULL,
-    idempotency_key text NOT NULL,
-    operation text NOT NULL,
-    request_sha256 text NOT NULL,
-    response_status integer NOT NULL,
-    response_body jsonb NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (actor, idempotency_key)
-);
-
 CREATE INDEX cases_queue_order
     ON cases (priority DESC, next_eligible_at, opened_at)
     WHERE state = 'pending';

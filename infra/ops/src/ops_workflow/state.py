@@ -20,13 +20,6 @@ class CaseState(StrEnum):
     ARCHIVED = "archived"
 
 
-class CaseOutcome(StrEnum):
-    NO_ACTION = "no_action"
-    ACTION_RECOMMENDED = "action_recommended"
-    BLOCKED = "blocked"
-    UNKNOWN = "unknown"
-
-
 class SignalDisposition(StrEnum):
     CREATED = "created"
     UPDATED = "updated"

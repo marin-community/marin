@@ -53,7 +53,6 @@ The schema contains:
 - `cases` and `case_signals`: one non-archived workflow per deterministic group and its signal generations;
 - `agent_sessions` and `agent_turns`: stable Loom mapping and immutable work queue;
 - `case_events`: append-only operator timeline;
-- `operation_requests`: reserved idempotency ledger for a future approved mutation API.
 
 For each current group, a new or reopened firing generation may create or wake a case. Repeated firing instances update evidence only. A new fingerprint attaches once. When no group signal remains firing, queued automatic work is cancelled; a running turn is never interrupted.
 
