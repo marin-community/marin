@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -678,6 +679,24 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+def _prefetch_expert_weights(mlp: "MoEMLP") -> "MoEMLP":
+    """Reshard the routed-expert weights to fully replicated eagerly, returning an MoEMLP with the
+    gathered weights swapped in. Called before attention so the FSDP all-gather is issued early and
+    overlaps the attention window; moe_mlp's own reshard then sees already-replicated inputs (no-op).
+    """
+    expert = mlp.expert_mlp
+    replicated = P(None, None, None)
+    if expert.w_gate_up is not None:
+        mlp = eqx.tree_at(lambda m: m.expert_mlp.w_gate_up, mlp, reshard(expert.w_gate_up, replicated))
+    else:
+        mlp = eqx.tree_at(
+            lambda m: [m.expert_mlp.w_gate, m.expert_mlp.w_up],
+            mlp,
+            [reshard(expert.w_gate, replicated), reshard(expert.w_up, replicated)],
+        )
+    return eqx.tree_at(lambda m: m.expert_mlp.w_down, mlp, reshard(expert.w_down, replicated))
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -716,10 +735,17 @@ class Block(eqx.Module):
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        mlp = self.mlp
+        if os.environ.get("SCALE_PREFETCH_EXPERT_WEIGHTS") == "1":
+            # Issue the expert-weight FSDP all-gather BEFORE attention (the weights don't depend on
+            # the attention output), so the ~attention window overlaps the gather instead of the
+            # gather sitting exposed on the compute stream just before the expert GEMM. moe_mlp's
+            # internal reshard of the already-replicated weights then becomes a no-op.
+            mlp = _prefetch_expert_weights(mlp)
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out, router_stats = mlp(mlp_in)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
