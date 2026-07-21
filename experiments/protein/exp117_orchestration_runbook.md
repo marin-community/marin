@@ -64,7 +64,11 @@ wiring) makes every permissible slice fit every batch; `tpu_batch_config` is the
 authority and raises if one genuinely won't. Do not avoid a smaller slice on a hand-estimate that
 per-device batch/activations won't fit, and do not "memory-match" a prior slice — choose by
 availability and throughput, and let the tool reject an infeasible placement. Small slices are
-often the right call (more available; fine for near-done trials).
+often the right call (more available; fine for near-done trials). For a trial with little training
+left, **slices smaller than the grid floor are acceptable** (e.g. `v6e-4`, a single-host 4-chip
+slice): the tiny slice schedules easily and the remaining compute is trivial. When a same-region
+relocation of a near-done trial keeps failing to gang, step DOWN in size (…→`v5litepod-32`→`v6e-8`→
+`v6e-4`) rather than holding out for a large slice.
 
 ## Slice-throughput balancing (bs64 catch-up)
 Every 8-epoch run is the SAME ~37.4B tokens regardless of batch, so wall-clock ≈ tokens ÷ chips. A
