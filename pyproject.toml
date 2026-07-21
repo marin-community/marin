@@ -451,6 +451,7 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
+    "sm100: mark numerical GPU probes that require an NVIDIA SM100 device",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
