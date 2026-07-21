@@ -1148,3 +1148,43 @@ Output: scratch/mixture_features/grug/gp_simple_variants.json
   actually delivered.** This further undercuts the case for the full Bayesian treatment.
 - Caveat: conformal gives MARGINAL (constant-width) coverage, so it will fail off-support just as the
   GP did. It does not fix the epoch blindness — nothing distance-based does — but it does not pretend to.
+
+## 2026-07-21 OPTION 3 — epoch-in-kernel head-to-head: REJECTED (prediction held)
+Code: experiments/datakit/mixture_features/epoch_kernel_headtohead.py (tracked, lint+pyrefly clean)
+Artifacts: grug/epoch_kernel_headtohead.{json,md}, report/figs3/f34_epoch_kernel_headtohead.png
+
+Predicting the 53 off-design probe runs (humaneval bpb), models fit on the 800 swarm runs:
+  model                          RMSE     mean|z|  cov2sd   mean miss
+  (a) content kernel            0.7849     12.0      17%     +0.585
+  (b) content + ADDITIVE harm   0.4879      4.08     25%     +0.389   <- the only one that helps
+  (c) epoch INSIDE the kernel   0.7860     11.83     17%     +0.585   <- collapses into (a)
+- **gamma_e driven to 2.96e-05** = 0.022% of the kernel's total exponent; log-evidence gain +0.030 nats
+  (nothing); 4/5 CV folds hit the lower bound; multi-start over 5 inits lands on the same optimum, so it
+  is not an initialization artifact. In-distribution the extra length-scale is free and useless:
+  (a) RMSE 0.02349 / rho 0.9377 vs (c) 0.02351 / 0.9375.
+- **Forcing gamma_e proves it isn't a bad optimum**: sweeping it makes NLML monotonically WORSE
+  (−1777.5 → −1508.1) and probe RMSE RISE (0.785 → 0.867). No epoch length-scale would have helped.
+  Confirming: spearman(kernel CV residual, repmass) = −0.041 (zero, slightly wrong sign).
+- **The crispest evidence — epochrep residual slopes** (mixture fixed, only e moves):
+  code arm slope bpb/epoch: (a) +0.0466, (b) **+0.0033** (14x flatter), (c) +0.0467 (untouched).
+  The imported b_code=0.0521 reproduces the observed (a) slope of +0.0466 almost exactly →
+  **parameters calibrated OUT-OF-REGIME transfer**. What remains after (b) is a near-constant offset
+  (+0.27 code, +0.84 web) = pure content-extrapolation error on extreme 2-bucket mixtures, which no
+  epoch machinery was ever meant to fix.
+- **VERDICT: keep the additive harm term; reject epoch-in-kernel.** The swarm contains epoch VARIATION
+  but no epoch SIGNAL (harm is inert in-regime), so no kernel can learn it from swarm data. The additive
+  term works precisely because it is calibrated where the signal lives (dedicated out-of-regime
+  experiments) and those parameters transfer. This validates the design philosophy: fit the correction
+  where the signal is, rather than hoping the model discovers it in data that does not contain it.
+
+### Three caveats recorded
+1. **Do NOT apply the harm term in-regime.** (b) costs real in-distribution accuracy: CV RMSE
+   0.0235 → 0.0620, Spearman 0.938 → 0.717, because the swarm sits right at the threshold and the term
+   injects spurious harm. Same conclusion as the 100B gate: proxy-scale guardrail, not a production term.
+2. Part of (b)'s |z| improvement is sd INFLATION (mean predicted sd 0.044 → 0.091), not better means.
+   The RMSE gain (38%) is the honest number; the 3x |z| gain is not all signal.
+3. **NEW GAP — the harm term's w-dependence is UNIDENTIFIED.** Every calibration point held the sliced
+   bucket at w=0.2. The documented unweighted form Σⱼbⱼ·max(eⱼ−τⱼ,0) gives probe RMSE 0.488; the equally
+   admissible mass-weighted reading Σₚ Σⱼ wₚⱼ(bⱼ/0.2)·max(eₚⱼ−τⱼ,0) gives **1.619 — worse than baseline**,
+   because on twobucket's natural arm w and e are perfectly confounded and it extrapolates to an absurd
+   13.1 bpb. Resolving this needs calibration points at w != 0.2. Both readings are in the artifacts.
