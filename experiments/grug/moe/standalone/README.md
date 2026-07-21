@@ -103,7 +103,7 @@ d5120, `none` OOMs and `all_but_moe` gives **16.9%** (`ring_cute` EP8, vs 16.2%
 `all_but_moe`/`none`. All EP arms above use the default `recompute_all` unless
 stated.
 
-At the 64-GPU reference config (d5120, 48 layers, batch 1024, seq 4096;
+At the 64-GPU d5120 reference config (48 layers, batch 1024, seq 4096;
 `--replica-axis-size 2` so each 32-GPU replica group holds one FSDP+EP model
 copy, 16 seq/GPU): `sonic_cute` EP1 20.2%, **`ring_cute` EP4 20.8%** (best),
 `ragged_all_to_all_cute` EP8 19.1%, `ragged_all_to_all` EP8 18.8%. EP's margin
@@ -162,19 +162,32 @@ reference_args=(
   --steps 30 --warmup-steps 8
   --batch-size 1024 --seq-len 4096
   --hidden-dim 6144 --num-layers 48
-  --num-experts 128 --num-experts-per-token 4
+  --num-experts-per-token 4
   --num-heads 48 --num-kv-heads 8 --head-dim 128
   --shared-expert-intermediate-dim 6144
   --sliding-window 512 --global-every 6
   --attention-implementation gpu_fa4_cute
-  --num-gpus 64 --replica-axis-size 2
+  --num-gpus 64 --replica-axis-size 1
   --capacity-factor 1.0 --remat-mode recompute_all
 )
 
-baseline_args=("${reference_args[@]}" --expert-intermediate-dim 3072)
-latent_args=(
+baseline_args=(
   "${reference_args[@]}"
-  --expert-intermediate-dim 6144
+  --num-experts 128 --expert-intermediate-dim 3072
+)
+matched_work_latent_args=(
+  "${reference_args[@]}"
+  --num-experts 128 --expert-intermediate-dim 6144
+  --moe-latent-dim 3072 --moe-latent-norm
+)
+reduced_latent_args=(
+  "${reference_args[@]}"
+  --num-experts 128 --expert-intermediate-dim 3072
+  --moe-latent-dim 3072 --moe-latent-norm
+)
+efficient_latent_args=(
+  "${reference_args[@]}"
+  --num-experts 256 --expert-intermediate-dim 3072
   --moe-latent-dim 3072 --moe-latent-norm
 )
 ```
@@ -187,7 +200,7 @@ projection and GEMM-shape costs:
 python grug_moe_mfu.py "${baseline_args[@]}" \
   --run-id b200lmoe-001-a --output-dir runs/b200lmoe-001-a \
   --moe-implementation sonic_cute --expert-parallelism 1
-python grug_moe_mfu.py "${latent_args[@]}" \
+python grug_moe_mfu.py "${matched_work_latent_args[@]}" \
   --run-id b200lmoe-002-a --output-dir runs/b200lmoe-002-a \
   --moe-implementation sonic_cute --expert-parallelism 1
 
@@ -195,7 +208,7 @@ python grug_moe_mfu.py "${latent_args[@]}" \
 python grug_moe_mfu.py "${baseline_args[@]}" \
   --run-id b200lmoe-001-b --output-dir runs/b200lmoe-001-b \
   --moe-implementation ring_cute --expert-parallelism 4
-python grug_moe_mfu.py "${latent_args[@]}" \
+python grug_moe_mfu.py "${matched_work_latent_args[@]}" \
   --run-id b200lmoe-002-b --output-dir runs/b200lmoe-002-b \
   --moe-implementation ring_cute --expert-parallelism 4
 
@@ -203,7 +216,7 @@ python grug_moe_mfu.py "${latent_args[@]}" \
 python grug_moe_mfu.py "${baseline_args[@]}" \
   --run-id b200lmoe-001-c --output-dir runs/b200lmoe-001-c \
   --moe-implementation ring_cute --expert-parallelism 8
-python grug_moe_mfu.py "${latent_args[@]}" \
+python grug_moe_mfu.py "${matched_work_latent_args[@]}" \
   --run-id b200lmoe-002-c --output-dir runs/b200lmoe-002-c \
   --moe-implementation ring_cute --expert-parallelism 8
 
@@ -213,7 +226,7 @@ XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false \
   --run-id b200lmoe-001-d --output-dir runs/b200lmoe-001-d \
   --moe-implementation ragged_all_to_all_cute --expert-parallelism 8
 XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false \
-  python grug_moe_mfu.py "${latent_args[@]}" \
+  python grug_moe_mfu.py "${matched_work_latent_args[@]}" \
   --run-id b200lmoe-002-d --output-dir runs/b200lmoe-002-d \
   --moe-implementation ragged_all_to_all_cute --expert-parallelism 8
 ```
@@ -223,6 +236,54 @@ The matched-work latent arms change routed experts from
 remain at width 6144. This preserves routed-expert parameter count and active
 expert GEMM work, halves the EP activation payload, and adds one shared
 `6144 -> 3072 -> 6144` projection pair per layer.
+
+The D6144 configuration uses one model copy sharded across all 64 GPUs
+(`--replica-axis-size 1`), matching the `r1` run in #7201. The separate d5120
+reference ladder above used replica axis 2; carrying that topology into D6144
+duplicates the 360B-parameter model and does not fit in GB200 HBM.
+
+The parameter-count-preserving efficient candidate runs on the winning baseline
+backend as follows:
+
+```bash
+python grug_moe_mfu.py "${efficient_latent_args[@]}" \
+  --run-id b200lmoe-004-b-e256-r1 \
+  --output-dir runs/b200lmoe-004-b-e256-r1 \
+  --moe-implementation ring_cute --expert-parallelism 4
+```
+
+### 2026-07-20 single-rack results
+
+All successful rows are 30-step runs with eight warmup steps. GB200 MFU uses
+2.5 PFLOP/s/GPU and architecture-aware FLOPs.
+
+| Configuration | Backend | EP | Median tok/s | Median step | GB200 MFU | Outcome |
+|---|---|---:|---:|---:|---:|---|
+| #7201 baseline | sonic_cute | 1 | 188,998 | 22.2032 s | 16.862% | succeeded |
+| #7201 baseline | ring_cute | 4 | **220,648** | **19.0117 s** | **19.686%** | succeeded |
+| #7201 baseline | ring_cute | 8 | 204,117 | 20.5513 s | 18.211% | succeeded |
+| #7201 baseline | ragged_all_to_all_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| reduced latent, L3072/I3072/e128 | sonic_cute | 1 | 269,630 | 15.6722 s | 20.391% | succeeded |
+| reduced latent, L3072/I3072/e128 | ring_cute | 4 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| reduced latent, L3072/I3072/e128 | ring_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| reduced latent, L3072/I3072/e128 | ragged_all_to_all_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| efficient latent, L3072/I3072/e256 | ring_cute | 4 | **256,059** | **16.3862 s** | **19.401%** | succeeded |
+
+The matched-work L3072/I6144/e128 construction does not fit: XLA planned
+181.34 GiB/GPU and first execution OOMed. L2048/I9216 was worse at
+185.95 GiB/GPU because the wider rectangular expert temporaries outweighed the
+narrower dispatched representation. The L3072/I3072/e256 candidate preserves
+the baseline routed-expert parameter count, halves active routed-expert work and
+EP payload, and improves the best baseline by 16.0% in tokens/s. Its 19.401%
+architecture-aware MFU is 0.28 percentage points below baseline after accounting
+for the 15.1% reduction in analytic work/token.
+
+Use e256 ring EP4 when routed-expert parameter capacity should remain fixed. The
+e128 variant is the throughput-first option when halving routed-expert parameters
+is acceptable; its EP1 result is 42.7% faster than the EP1 baseline. Quantitative
+EP>1 results for e128 remain blocked by the intermittent JAX 0.10.1 CUBIN-loader
+fault tracked in [#7421](https://github.com/marin-community/marin/issues/7421),
+despite viable XLA memory plans of 134.62–147.49 GiB/GPU.
 
 ### Multi-node
 
