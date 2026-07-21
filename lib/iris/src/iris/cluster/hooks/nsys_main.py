@@ -3,7 +3,7 @@
 
 """Nsight Systems launch wrapper — a runtime helper the caller composes into the command.
 
-``python -m iris.runtime.nsys [--tasks SPEC] [--output-uri URI] -- <argv>`` runs ``<argv>``
+``python -m iris.cluster.hooks.nsys_main [--tasks SPEC] [--output-uri URI] -- <argv>`` runs ``<argv>``
 under ``nsys profile`` when this unit is selected, and execs ``<argv>`` unchanged
 otherwise. iris is a dumb scheduler and does not inject this; a GPU image (``iris-task-gpu``)
 bakes the ``nsys`` binary in, and the caller invokes the wrapper. Without ``--output-uri``
@@ -60,7 +60,7 @@ from rigging.filesystem import StoragePath
 from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from iris.cluster.client.job_info import get_job_info
-from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.cluster.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger("iris.nsys")
 
@@ -91,7 +91,7 @@ class TaskSelector(StrEnum):
 def selection_index() -> int:
     """The index ``--tasks`` selects on, from the task env.
 
-    Two scopes, one rule: when this process is a multigpu child (``iris.runtime.multigpu``
+    Two scopes, one rule: when this process is a multigpu child (``iris.cluster.hooks.multigpu_main``
     stamped ``IRIS_MULTIGPU_PROCESS_INDEX``), that global rank is the unit — one report
     per selected *process*. Otherwise the whole task is the unit (its ``task_index``) —
     one report per selected *task*, covering every rank the task runs. Which one applies
@@ -216,7 +216,7 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     Returns the child's exit code, with a signal death normalized to the conventional
     ``128 + signum``. ``Popen.wait`` reports those as a negative code, which ``sys.exit``
     would turn into a wrapping status (``-15`` becomes 241, not 143) and hide the
-    termination behind a bogus application failure. ``iris.runtime.multigpu``
+    termination behind a bogus application failure. ``iris.cluster.hooks.multigpu_main``
     normalizes the same way for the same reason.
     """
     proc = subprocess.Popen([*nsys_argv, *command])
@@ -278,11 +278,13 @@ def main(argv: list[str] | None = None) -> NoReturn:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
-        raise SystemExit("usage: python -m iris.runtime.nsys [--tasks SPEC] [--output-uri URI] -- <command...>")
+        raise SystemExit(
+            "usage: python -m iris.cluster.hooks.nsys_main [--tasks SPEC] [--output-uri URI] -- <command...>"
+        )
     split = raw.index("--")
     own_args, command = raw[:split], raw[split + 1 :]
 
-    parser = argparse.ArgumentParser(prog="python -m iris.runtime.nsys")
+    parser = argparse.ArgumentParser(prog="python -m iris.cluster.hooks.nsys_main")
     parser.add_argument("--tasks", default="first", help="'first', 'all', or a comma-separated list of indices")
     parser.add_argument("--trace", default="cuda,nvtx,cublas", help="nsys --trace value")
     parser.add_argument("--output-uri", default=None, help="report directory URI (default: the cluster temp bucket)")

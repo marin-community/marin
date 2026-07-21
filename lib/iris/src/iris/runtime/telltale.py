@@ -19,7 +19,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
 from iris.managed_thread import get_thread_container
-from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.cluster.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger(__name__)
 

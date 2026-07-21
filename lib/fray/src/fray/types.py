@@ -695,7 +695,7 @@ class JobRequest:
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         processes_per_task: GPU processes to run inside each task (default 1). When
-            > 1, fray composes the ``iris.runtime.multigpu`` supervisor into the command
+            > 1, fray composes the ``iris.cluster.hooks.multigpu_main`` supervisor into the command
             (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption

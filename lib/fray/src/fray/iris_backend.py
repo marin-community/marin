@@ -33,11 +33,11 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.hooks.multigpu import build_multigpu_hook
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
     ResourceSpec,
-    get_gpu_count,
     is_job_finished,
     tpu_device,
 )
@@ -155,28 +155,12 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
     """Prepend the multigpu supervisor so each task runs ``processes_per_task`` GPU processes.
 
-    iris runs the entrypoint verbatim, so fray composes the supervisor into the command
-    (``python -m iris.runtime.multigpu --nproc N --devices-per-proc D -- <cmd>``). Requires a
-    GPU device whose count is divisible by ``processes_per_task``.
+    iris runs the entrypoint verbatim, so fray applies the hook here. Requires a GPU
+    device whose count is divisible by ``processes_per_task``.
     """
-    device = resources.device
-    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
-    if gpu_count <= 0:
-        raise ValueError("processes_per_task > 1 requires a GPU device")
-    if gpu_count % processes_per_task != 0:
-        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    prefix = [
-        "python",
-        "-m",
-        "iris.runtime.multigpu",
-        "--nproc",
-        str(processes_per_task),
-        "--devices-per-proc",
-        str(gpu_count // processes_per_task),
-        "--",
-    ]
+    hook = build_multigpu_hook(resources, processes_per_task)
     return IrisEntrypoint(
-        command=[*prefix, *entrypoint.command],
+        command=hook.wrap(entrypoint.command),
         workdir_files=entrypoint.workdir_files,
         workdir_file_refs=entrypoint.workdir_file_refs,
     )
