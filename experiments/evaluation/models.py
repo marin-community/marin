@@ -43,9 +43,6 @@ class EvalModelConfig:
     """Per-model override of a suite's generation budget. A verbose reasoning model needs a longer
     budget than the suite default or its chain truncates before the final answer (scoring it wrong)."""
     tokenizer: str | None = None
-    trust_remote_code: bool = False
-    """Load the eval client's tokenizer with ``trust_remote_code`` for a model whose HF repo ships
-    custom code (the serve backend enables it on its own)."""
     fixed_gpu: tuple[str, int] | None = None
     target_cluster: str | None = None
     serve_memory: str | None = None
@@ -93,40 +90,29 @@ def _base_hf(
     revision: str,
     hbm_gb: int,
     max_model_len: int | None = None,
-    gpu_only: bool = False,
-    trust_remote_code: bool = False,
 ) -> EvalModelConfig:
     """A base (non-chat) HF model, pinned to an immutable revision.
 
     ``apply_chat_template=False`` (base models ship no chat template), so these run the NLP
     (lm-eval) suite, not the chat benchmarks. The revision is pinned through ``vllm serve
     --revision`` so results are reproducible against a fixed checkpoint rather than the HF branch head.
-    ``gpu_only`` routes serving to GPU for a model the TPU attention kernel cannot compile;
-    ``trust_remote_code`` lets the eval client load a tokenizer whose repo ships custom code.
     """
     return EvalModelConfig(
         name=name,
         location=location,
         hbm_gb=hbm_gb,
         apply_chat_template=False,
-        gpu_only=gpu_only,
         vllm_extra_args=("--revision", revision),
         max_model_len=max_model_len,
-        trust_remote_code=trust_remote_code,
     )
 
 
 MODELS: dict[str, EvalModelConfig] = {
     # Base reference models, pinned to the revisions used elsewhere in experiments/models.py. Amber
-    # and MAP-NEO clamp to their native context windows. MAP-NEO's head_dim is 192 (hidden 3072 / 16
-    # heads), which the TPU ragged-paged-attention kernel cannot compile, so it serves on GPU; its HF
-    # repo also ships custom code, so the eval client needs trust_remote_code to load its tokenizer.
+    # clamps to its native 2048-token context window.
     "llama-3.1-8b-base": _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
     "olmo-2-7b-base": _base_hf("olmo-2-7b-base", "allenai/OLMo-2-1124-7B", "7df9a82", 18),
     "amber-7b": _base_hf("amber-7b", "LLM360/Amber", "83c188f", 18, max_model_len=2048),
-    "map-neo-7b": _base_hf(
-        "map-neo-7b", "m-a-p/neo_7b", "81bad32", 18, max_model_len=4096, gpu_only=True, trust_remote_code=True
-    ),
     # Qwen3.5-9B is a verbose hybrid-GDN reasoning model; its chains exceed the 8192-token chat
     # default and truncate before the boxed answer (OlympiadBench scored 0), so give it a 32k budget.
     "qwen3.5-9b": EvalModelConfig(

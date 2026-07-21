@@ -94,9 +94,6 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
         "timeout=1800",
     ]
-    if config.get("trust_remote_code"):
-        # The tokenizer's HF repo ships custom code; lm-eval's AutoTokenizer load refuses it otherwise.
-        args.append("trust_remote_code=True")
     if max_length is not None:
         args.append(f"max_length={max_length}")
     return ",".join(args)
