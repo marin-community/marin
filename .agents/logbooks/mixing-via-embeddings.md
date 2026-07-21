@@ -1053,3 +1053,33 @@ uncertainty and for adaptive/sequential workflows, not for a better optimum.
 **CAVEAT:** the model-quality metric is scored on each strategy's own remaining pool, which differs
 across strategies (greedy/EI are evaluated on the region they avoided) — a fixed held-out set would be
 the cleaner design; treat the model-quality column as indicative, not decisive.
+
+## 2026-07-21 De-confounded design study (Part 4) + batch study (Part 2)
+Code: experiments/datakit/mixture_features/gp_design_study.py (tracked, lint-clean)
+Output: scratch/mixture_features/grug/gp_design_study.json
+
+**PART 4 — fixed held-out set (200 runs, never acquirable) REVERSES the earlier claim.**
+  held-out Spearman:            n=50 / 100 / 150 / 200
+    max_var   0.664 / 0.705 / 0.708 / 0.730
+    ei        0.653 / 0.707 / 0.719 / 0.717
+    random    0.611 / 0.653 / 0.708 / 0.727
+    greedy    0.599 / 0.659 / 0.703 / 0.711   <- consistently worst (the greedy trap is real)
+- GP-guided (max_var/ei) BEATS random by ~+0.05 Spearman at n=50-100, converging to parity by n=200.
+  To reach rho~0.70 the GP needs ~100 runs vs random's ~150 → roughly **1.5x sample efficiency in the
+  data-poor regime**. My earlier "random is a surprisingly strong baseline" was an ARTIFACT of the
+  confounded evaluation set and is now RETRACTED — the de-confounded result is the conventional
+  active-learning story.
+- Optimization unchanged: ei finds the optimum (−1.058) by n=100, greedy by ~150, random never (−0.942).
+
+**PART 2 — batch of 50: my pre-registered prediction FAILED (and the setup can't test it).**
+    strategy    batch spread | best y in batch | holdout rho gain
+    gp_batch        0.1808   |     −1.020      |     0.0377
+    greedy_mean     0.1636   |     −0.992      |     0.0370
+    random          0.1969   |     −0.829      |     0.0398
+- I predicted greedy-by-mean would collapse to ~50 near-duplicates. It did NOT: only ~17% less spread
+  than random, no collapse. BUT the experiment structurally cannot show it — the candidate pool is 800
+  pre-existing, well-spread Dirichlet runs, so there simply are no 50 near-duplicates to collapse onto.
+  The proper test needs a CONTINUOUS candidate bank (generated mixtures), where greedy really can return
+  50 arbitrarily-close points. Treat Part 2 as INCONCLUSIVE, not as evidence against the collapse.
+- Real signal in Part 2: gp_batch got the best run in the batch (−1.020 vs greedy −0.992 vs random
+  −0.829); model gain was a wash across all three (~0.037-0.040).
