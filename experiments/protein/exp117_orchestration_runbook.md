@@ -59,6 +59,13 @@ shard a small model**. HBM is the only hard limit (`tpu_batch_config` raises if 
 fit). v5p is still the only family > 256 chips (`v5p-1024`=512ch, `v5p-2048`=1024ch). Region
 availability from policy `targets.allow`; large slices are not capacity-guaranteed.
 
+**Never gate slice choice on guessed HBM headroom.** The design (`batch_calibration` + `tensor_parallel_size`
+wiring) makes every permissible slice fit every batch; `tpu_batch_config` is the SOLE feasibility
+authority and raises if one genuinely won't. Do not avoid a smaller slice on a hand-estimate that
+per-device batch/activations won't fit, and do not "memory-match" a prior slice — choose by
+availability and throughput, and let the tool reject an infeasible placement. Small slices are
+often the right call (more available; fine for near-done trials).
+
 ## Slice-throughput balancing (bs64 catch-up)
 Every 8-epoch run is the SAME ~37.4B tokens regardless of batch, so wall-clock ≈ tokens ÷ chips. A
 chip-efficient placement (slice chips ≈ batch/2, giving 2-way accumulation) packs more parallel
