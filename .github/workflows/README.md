@@ -2,6 +2,26 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
+## Agent prose cleanup
+
+`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
+`agent-generated` label. It runs when an item is opened, edited, reopened, or
+labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
+default branch; `pull_request_target` never checks out the PR head.
+
+The cleaner removes a narrow set of presentation patterns outside fenced and
+inline code: hype-only interjections, stock framing phrases, `not just X, but Y`
+rhetoric, decorative emoji or boldface, and presentational HTML tags. It does
+not summarize, enforce the 200-word authoring limit, rewrite technical claims,
+or change titles.
+
+Before an edit, the workflow stores the exact prior description in a collapsed
+`github-actions[bot]` comment. The edited description ends with an `Original
+description` link to that comment. Content hashes make archive creation
+idempotent across retries, and the workflow rechecks the current description
+before writing so a queued run cannot overwrite a newer edit. It skips cleanup
+when the archive or updated body would exceed GitHub's size limit.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.

@@ -82,3 +82,7 @@ Before committing or calling `gh pr create` or `gh pr edit`:
 Use `printf %s '<title>' | wc -m` for the title and
 `wc -w < path/to/body.md` for the body. Inspect the body file itself after
 counting it.
+
+The agent prose cleanup workflow removes a small set of obvious presentation
+patterns after publication. It does not enforce this guide or replace the
+author's exact-payload review.

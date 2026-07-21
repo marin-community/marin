@@ -1,0 +1,135 @@
+name: "Ops - Agent Prose Cleanup"
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled]
+  pull_request_target:
+    types: [opened, edited, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    if: >-
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-generated')) ||
+      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'agent-generated'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      # pull_request_target has a write token, so execute only the default-branch
+      # cleaner. Never check out or execute the PR head.
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build cleanup payload
+        id: cleanup
+        env:
+          CLEANUP_RESULT: ${{ runner.temp }}/github-prose-cleanup.json
+        run: |
+          python scripts/ci/github_prose_cleanup.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --output "$CLEANUP_RESULT" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Archive and update description
+        if: steps.cleanup.outputs.changed == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          CLEANUP_RESULT: ${{ steps.cleanup.outputs.result }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync(process.env.CLEANUP_RESULT, 'utf8'));
+            const { owner, repo } = context.repo;
+            const issueNumber = Number(result.number);
+
+            async function currentBody() {
+              if (result.kind === 'pull_request') {
+                const response = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: issueNumber,
+                });
+                return response.data.body || '';
+              }
+              const response = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber,
+              });
+              return response.data.body || '';
+            }
+
+            function bodyHash(body) {
+              return crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+            }
+
+            if (bodyHash(await currentBody()) !== result.original_body_hash) {
+              core.notice('Description changed after this workflow was queued; skipping stale cleanup.');
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            let archive = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' &&
+              comment.body?.includes(result.archive_marker)
+            );
+            if (!archive) {
+              const response = await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: result.archive_comment_body,
+              });
+              archive = response.data;
+            }
+
+            if (bodyHash(await currentBody()) !== result.original_body_hash) {
+              core.notice('Description changed while its archive was being created; skipping stale cleanup.');
+              return;
+            }
+
+            const footer = `[Original description](${archive.html_url}) <!-- marin-prose-cleanup -->`;
+            const updatedBody = `${result.cleaned_body.trimEnd()}\n\n---\n${footer}`;
+            if (Buffer.byteLength(updatedBody, 'utf8') > 65536) {
+              core.setFailed('Cleaned description exceeds GitHub body limit after adding the archive link.');
+              return;
+            }
+
+            if (result.kind === 'pull_request') {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: issueNumber,
+                body: updatedBody,
+              });
+            } else {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: updatedBody,
+              });
+            }
+            core.notice(`Cleaned ${result.kind} #${issueNumber} and linked its archived description.`);
