@@ -30,7 +30,6 @@ Submit on iris (datakit fans out its own Zephyr fleets; the driver is a small CP
 
     uv run iris --cluster=cw-rno2a job run --cpu 2 --memory 8GB \\
         --enable-extra-resources --extra datakit \\
-        -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python -m experiments.references.reference_training_pipeline \\
             --version dev --stop-after datakit
 """
