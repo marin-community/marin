@@ -4,8 +4,8 @@
 """Task hooks: composable transforms over a task's run command.
 
 A hook wraps a command so the user's process runs *under* it — a profiler
-(:mod:`iris.cluster.hooks.nsys`), a multi-process GPU supervisor
-(:mod:`iris.cluster.hooks.multigpu`). Everything the wrapper needs at run time
+(:mod:`iris.hooks.nsys`), a multi-process GPU supervisor
+(:mod:`iris.hooks.multigpu`). Everything the wrapper needs at run time
 (rank selection, report upload, signal forwarding) lives in the module its
 ``wrap`` prepends.
 
@@ -17,7 +17,7 @@ compose them either programmatically::
 or by writing the equivalent command by hand, since each hook's run-phase module
 parses the same arguments ``wrap`` emits::
 
-    python -m iris.cluster.hooks.multigpu_main --nproc 8 -- python train.py
+    python -m iris.hooks.multigpu_main --nproc 8 -- python train.py
 
 Order is the nesting: a hook applied later ends up the outer wrapper.
 """

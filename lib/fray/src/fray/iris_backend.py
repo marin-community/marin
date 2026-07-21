@@ -33,7 +33,6 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.hooks.multigpu import build_multigpu_hook
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -42,6 +41,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.hooks.multigpu import build_multigpu_hook
 from iris.rpc import actor_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 

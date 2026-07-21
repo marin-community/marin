@@ -364,7 +364,7 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
     assert wrapped.command == [
         "python",
         "-m",
-        "iris.cluster.hooks.multigpu_main",
+        "iris.hooks.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -384,7 +384,7 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     assert wrapped.command[:8] == [
         "python",
         "-m",
-        "iris.cluster.hooks.multigpu_main",
+        "iris.hooks.multigpu_main",
         "--nproc",
         "4",
         "--devices-per-proc",

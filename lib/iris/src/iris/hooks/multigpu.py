@@ -3,13 +3,13 @@
 
 """Multi-process GPU supervisor hook.
 
-``MultiGpuHook`` wraps a command in :mod:`iris.cluster.hooks.multigpu_main`, which
+``MultiGpuHook`` wraps a command in :mod:`iris.hooks.multigpu_main`, which
 spawns one process per GPU group inside a single task. ``build_multigpu_hook``
 derives it from a job's GPU count.
 
 This module also defines the ``IRIS_MULTIGPU_*`` rank-env contract the supervisor
 stamps on each child; :mod:`iris.runtime.jax_init` and
-:mod:`iris.cluster.hooks.nsys_main` read it.
+:mod:`iris.hooks.nsys_main` read it.
 """
 
 from collections.abc import Sequence
@@ -22,7 +22,7 @@ IRIS_MULTIGPU_PROCESS_COUNT_ENV = "IRIS_MULTIGPU_PROCESS_COUNT"
 IRIS_MULTIGPU_PROCESS_INDEX_ENV = "IRIS_MULTIGPU_PROCESS_INDEX"
 IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV = "IRIS_MULTIGPU_LOCAL_DEVICE_IDS"
 
-_MULTIGPU_MAIN_MODULE = "iris.cluster.hooks.multigpu_main"
+_MULTIGPU_MAIN_MODULE = "iris.hooks.multigpu_main"
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.cluster.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
 runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ import sys
 import textwrap
 
 import pytest
-from iris.cluster.hooks import multigpu_main as multigpu
-from iris.cluster.hooks.multigpu import MultiGpuHook, build_multigpu_hook
-from iris.cluster.hooks.multigpu_main import main, run
 from iris.cluster.types import ResourceSpec, gpu_device
+from iris.hooks import multigpu_main as multigpu
+from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.hooks.multigpu_main import main, run
 from rigging.timing import Duration
 
 
@@ -87,7 +87,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.cluster.hooks.multigpu_main import run
+        from iris.hooks.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
@@ -118,14 +118,12 @@ def test_run_rejects_empty_command() -> None:
 def test_wrap_prefixes_each_child(monkeypatch: pytest.MonkeyPatch) -> None:
     """--wrap CMD makes each child run `<CMD> -- <command>` — the process-scope seam."""
     seen: dict[str, object] = {}
-    monkeypatch.setattr(
-        "iris.cluster.hooks.multigpu_main.run", lambda nproc, dpp, child_argv: seen.update(argv=child_argv) or 0
-    )
-    main(["--nproc", "2", "--wrap", "python -m iris.cluster.hooks.nsys_main --tasks first", "--", "python", "train.py"])
+    monkeypatch.setattr("iris.hooks.multigpu_main.run", lambda nproc, dpp, child_argv: seen.update(argv=child_argv) or 0)
+    main(["--nproc", "2", "--wrap", "python -m iris.hooks.nsys_main --tasks first", "--", "python", "train.py"])
     assert seen["argv"] == [
         "python",
         "-m",
-        "iris.cluster.hooks.nsys_main",
+        "iris.hooks.nsys_main",
         "--tasks",
         "first",
         "--",
@@ -145,7 +143,7 @@ def test_hook_wrap_builds_the_command_the_entry_point_parses() -> None:
     assert wrapped == [
         "python",
         "-m",
-        "iris.cluster.hooks.multigpu_main",
+        "iris.hooks.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -157,8 +155,8 @@ def test_hook_wrap_builds_the_command_the_entry_point_parses() -> None:
 
 
 def test_hook_wrap_child_composes_a_per_process_wrapper() -> None:
-    wrapped = MultiGpuHook(nproc=2, wrap_child="python -m iris.cluster.hooks.nsys_main --tasks first").wrap(["cmd"])
-    assert wrapped[wrapped.index("--wrap") + 1] == "python -m iris.cluster.hooks.nsys_main --tasks first"
+    wrapped = MultiGpuHook(nproc=2, wrap_child="python -m iris.hooks.nsys_main --tasks first").wrap(["cmd"])
+    assert wrapped[wrapped.index("--wrap") + 1] == "python -m iris.hooks.nsys_main --tasks first"
 
 
 def test_build_multigpu_hook_groups_devices() -> None:

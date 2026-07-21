@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for iris.cluster.hooks.nsys_main — the user-invoked Nsight Systems launch wrapper. iris the
+"""Tests for iris.hooks.nsys_main — the user-invoked Nsight Systems launch wrapper. iris the
 scheduler knows nothing about it; the GPU image bakes `nsys` in. None of this runs nsys."""
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from typing import NoReturn
 
 import pytest
 from iris.cluster.client.job_info import set_job_info
-from iris.cluster.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
-from iris.cluster.hooks.nsys import NsysHook
-from iris.cluster.hooks.nsys_main import (
+from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.hooks.nsys import NsysHook
+from iris.hooks.nsys_main import (
     _supervise,
     build_nsys_argv,
     default_output_uri,
@@ -26,10 +26,10 @@ from iris.cluster.hooks.nsys_main import (
     selection_index,
     should_profile,
 )
-from iris.cluster.hooks.nsys_main import main as nsys_main
+from iris.hooks.nsys_main import main as nsys_main
 
 CMD = ["python", "train.py", "--steps", "10"]
-# Positional signature of iris.cluster.hooks.nsys_main.run, as main() calls it.
+# Positional signature of iris.hooks.nsys_main.run, as main() calls it.
 _RUN_PARAMS = ("tasks", "trace", "capture_range", "output_uri", "argv")
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
 
@@ -107,12 +107,12 @@ def test_report_path_carries_the_selection_index() -> None:
 
 
 def test_resolve_nsys_bin_prefers_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
+    monkeypatch.setattr("iris.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
     assert resolve_nsys_bin() == "/usr/local/bin/nsys"
 
 
 def test_resolve_nsys_bin_requires_a_gpu_image(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: None)
+    monkeypatch.setattr("iris.hooks.nsys_main.shutil.which", lambda _: None)
     with pytest.raises(RuntimeError, match="no nsys on PATH"):
         resolve_nsys_bin()
 
@@ -120,7 +120,7 @@ def test_resolve_nsys_bin_requires_a_gpu_image(monkeypatch: pytest.MonkeyPatch) 
 def test_main_argv_round_trips_into_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """The user (or multigpu --wrap) builds this argv and main() parses it into run()."""
     seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
+    monkeypatch.setattr("iris.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
     nsys_main(["--tasks", "0,7", "--trace", "cuda,nvtx", "--output-uri", OUT, "--capture-range", "--", "python", "x.py"])
     assert seen == {
         "tasks": "0,7",
@@ -171,7 +171,7 @@ def selected_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("IRIS_TASK_ID", "/user/job/0")
     monkeypatch.setenv("IRIS_NUM_TASKS", "2")
     monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
+    monkeypatch.setattr("iris.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
     return tmp_path
 
 
@@ -190,7 +190,7 @@ def _fake_supervise(returncode: int, write_report: bool):
 
 
 def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
+    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
@@ -204,8 +204,8 @@ def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selec
 
 def test_run_uploads_to_the_default_when_output_uri_unset(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
     destination = selected_task / "default-dest"
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.default_output_uri", lambda: f"file://{destination}")
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
+    monkeypatch.setattr("iris.hooks.nsys_main.default_output_uri", lambda: f"file://{destination}")
+    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=CMD)
     assert excinfo.value.code == 0
@@ -214,7 +214,7 @@ def test_run_uploads_to_the_default_when_output_uri_unset(monkeypatch: pytest.Mo
 
 def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
     """A crash is exactly when the profile is worth keeping."""
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(7, write_report=True))
+    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(7, write_report=True))
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
@@ -229,7 +229,7 @@ def test_supervise_normalizes_a_signalled_child(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(3, write_report=False))
+    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(3, write_report=False))
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
@@ -240,7 +240,7 @@ def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.Monke
 def test_missing_report_fails_even_when_the_command_succeeded(
     monkeypatch: pytest.MonkeyPatch, selected_task: Path
 ) -> None:
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=False))
+    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=False))
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{selected_task / 'up'}", argv=CMD)
     assert excinfo.value.code != 0
@@ -249,9 +249,9 @@ def test_missing_report_fails_even_when_the_command_succeeded(
 def test_hook_wrap_builds_the_command_the_entry_point_parses(monkeypatch: pytest.MonkeyPatch) -> None:
     """The programmatic wrap emits exactly what nsys_main's parser accepts."""
     wrapped = NsysHook(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True).wrap(["python", "x.py"])
-    assert wrapped[:3] == ["python", "-m", "iris.cluster.hooks.nsys_main"]
+    assert wrapped[:3] == ["python", "-m", "iris.hooks.nsys_main"]
     seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.cluster.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
+    monkeypatch.setattr("iris.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
     nsys_main(wrapped[3:])
     assert seen == {
         "tasks": "0,7",

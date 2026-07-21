@@ -3,7 +3,7 @@
 
 """Nsight Systems profiling hook.
 
-``NsysHook`` wraps a command in :mod:`iris.cluster.hooks.nsys_main`, which runs it
+``NsysHook`` wraps a command in :mod:`iris.hooks.nsys_main`, which runs it
 under ``nsys profile`` on the selected units and uploads the report. The ``nsys``
 binary comes from the task image (``iris-task-gpu``), so there is nothing to install.
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 # unprivileged task container lacks, so they are never enabled.
 NSYS_DEFAULT_TRACE = "cuda,nvtx,cublas"
 
-_NSYS_MAIN_MODULE = "iris.cluster.hooks.nsys_main"
+_NSYS_MAIN_MODULE = "iris.hooks.nsys_main"
 
 
 @dataclass(frozen=True)
