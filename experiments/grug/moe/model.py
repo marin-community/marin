@@ -1005,6 +1005,11 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
 
     for layer_index, block in enumerate(model.blocks):
         layer_prefix = f"model.layers.{layer_index}"
+        expert = block.mlp.expert_mlp
+        if expert.w_gate_up is not None:  # fused gate/up storage
+            expert_w_gate, expert_w_up = jnp.split(expert.w_gate_up, 2, axis=-1)
+        else:
+            expert_w_gate, expert_w_up = expert.w_gate, expert.w_up
         tensors.update(
             {
                 f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
@@ -1022,8 +1027,8 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
                 f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
                 f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(expert_w_gate),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(expert_w_up),
                 f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
