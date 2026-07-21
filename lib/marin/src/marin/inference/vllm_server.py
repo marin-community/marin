@@ -21,6 +21,7 @@ import requests
 from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import WORKER_PYTHON_VERSION
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
@@ -32,14 +33,6 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# The worker interpreter marin-serve provisions everywhere it controls one: the checkout-free
-# venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
-# worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
-WORKER_PYTHON_VERSION = "3.12"
-# Stock CUDA vLLM used by GPU serving. It runs in an isolated uv-tool environment, so it does not
-# participate in Marin's workspace dependency resolution.
-DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
-TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
 # Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
 # vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
@@ -154,7 +147,7 @@ class IsolatedTpuVllm:
     The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
     runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
     provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve --tpu`` runs from outside a checkout.
+    ``marin-serve iris --tpu`` runs from outside a checkout.
     """
 
     vllm_ref: str

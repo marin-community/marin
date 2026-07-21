@@ -1,26 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serving backends for quick-serve: the stack that actually answers OpenAI requests.
-
-A backend boots one OpenAI-compatible HTTP server for one model on the local slice and hands
-back the URL it listens on. vLLM runs as a subprocess; Levanter's inference engine runs
-in-process under uvicorn. Both speak OpenAI over localhost HTTP, so the quick-serve dashboard
-and its ``/v1`` reverse proxy front either one without knowing which is behind it — which is what
-makes the two stacks comparable on the same model, the same slice, and the same API.
-
-A backend *is* its config: :class:`VllmBackend` and :class:`LevanterBackend` are frozen
-dataclasses carrying their own knobs and their own ``serve()``, and the launcher cloudpickles the
-chosen one into the Iris job.
-"""
+"""Levanter local inference backend."""
 
 import dataclasses
 import logging
-import socket
-import tempfile
 from collections.abc import Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 import jax
@@ -34,21 +21,18 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.quick_serve_dashboard import BackgroundServer, bind_serving_socket, serve_app_background
+from marin.inference.backend import ModelSpec
+from marin.inference.config import LevanterEngineConfig
+from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
+from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
-    VllmEnvironment,
-    VllmLauncher,
-    WorkspaceVllm,
     default_jax_compilation_cache_dir,
 )
 
 logger = logging.getLogger(__name__)
 
-# Every OpenAI-compatible server mounts its routes under /v1; a backend reports the root above it.
-OPENAI_API_SUFFIX = "/v1"
 # Levanter sizes its KV page table from max_seq_len, so — unlike vLLM, which derives the window
 # from the model — it needs a concrete number. Serve a modest window by default and let
 # --max-model-len raise it, rather than reserving a KV cache for a model's full 128k claim.
@@ -72,136 +56,6 @@ class SupportsPagedGeneration(Protocol):
     def initial_cache(self, spec, *, dtype): ...
 
     def decode(self, tokens, cache, binfo, pos_ids): ...
-
-
-# Renders a message list as the raw concatenation of its contents, one blank line between turns.
-# The faithful chat-API template for a base model whose tokenizer ships none: it introduces no
-# protocol tokens, so a chat request degrades to the plain completion the model was trained on.
-CONCAT_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\n\n{%- endfor -%}"
-
-
-@dataclass(frozen=True)
-class ModelSpec:
-    """What to serve, and on what slice: the inputs every backend needs."""
-
-    model: str
-    """Friendly model id (HF repo id or object-store path); the id the OpenAI API reports."""
-    model_path: str
-    """Resolved path the weights load from: an HF repo id, or an HF-format snapshot directory."""
-    num_chips: int
-    tensor_parallel_size: int
-    dtype: str
-    max_model_len: int | None
-    chat_template_content: str | None
-
-
-class ServedModel(Protocol):
-    """A running OpenAI-compatible server for one model on this slice."""
-
-    @property
-    def base_url(self) -> str:
-        """Root URL of the local server, without the ``/v1`` suffix."""
-        ...
-
-    @property
-    def model_id(self) -> str:
-        """Model id the server reports over the OpenAI API."""
-        ...
-
-    def check_alive(self) -> None:
-        """Raise if the server has died."""
-        ...
-
-
-class ServingBackend(Protocol):
-    """Boots an OpenAI-compatible server for one model on the local slice."""
-
-    @property
-    def name(self) -> str:
-        """Backend id, surfaced on the dashboard and in the endpoint's metadata."""
-        ...
-
-    def serve(self, spec: ModelSpec) -> AbstractContextManager[ServedModel]:
-        """Serve ``spec`` for the duration of the context, yielding the running server."""
-        ...
-
-
-@dataclass(frozen=True)
-class VllmServedModel:
-    """A ``vllm serve`` subprocess."""
-
-    base_url: str
-    model_id: str
-    environment: VllmEnvironment
-
-    def check_alive(self) -> None:
-        server = self.environment.vllm_server
-        if server is not None and server.process.poll() is not None:
-            raise RuntimeError(f"vLLM server exited unexpectedly with code {server.process.returncode}.")
-
-
-@dataclass(frozen=True)
-class VllmBackend:
-    """Serve the model with vLLM, launched as a subprocess.
-
-    ``launcher`` decides which vLLM runs: ``None`` serves the ``vllm`` already on the venv/image
-    ``PATH`` (:class:`~marin.inference.vllm_server.WorkspaceVllm`) — the workspace TPU-vLLM stack or
-    a prebuilt ``--task-image``. Pass :class:`~marin.inference.vllm_server.IsolatedCudaVllm` for GPU
-    serving (stock or the Marin fork) or :class:`~marin.inference.vllm_server.IsolatedTpuVllm` for
-    the checkout-free TPU fork.
-    """
-
-    name: str = "vllm"
-    launcher: VllmLauncher | None = None
-    max_num_batched_tokens: int = 512
-    """Prefill batch size. Kept modest because the TPU paged-attention kernel's on-chip (VMEM)
-    scratch grows with this; large values overflow VMEM at compile."""
-    startup_timeout_seconds: int = 1800
-    """How long ``vllm serve`` may take to answer ``/v1/models`` before the job gives up."""
-    extra_args: tuple[str, ...] = field(default_factory=tuple)
-    """Raw flags forwarded verbatim to ``vllm serve``."""
-
-    def select_launcher(self) -> VllmLauncher:
-        return self.launcher or WorkspaceVllm()
-
-    @contextmanager
-    def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
-        engine_kwargs: dict[str, object] = {"max_num_batched_tokens": self.max_num_batched_tokens}
-        if spec.max_model_len is not None:
-            engine_kwargs["max_model_len"] = spec.max_model_len
-        model = ModelConfig(name="quick-serve", path=spec.model_path, engine_kwargs=engine_kwargs)
-
-        with VllmEnvironment(
-            model,
-            host="127.0.0.1",
-            port=_reserve_localhost_port(),
-            timeout_seconds=self.startup_timeout_seconds,
-            extra_args=self._cli_args(spec),
-            launcher=self.select_launcher(),
-        ) as environment:
-            if environment.model_id is None:
-                raise RuntimeError("vLLM server did not report a model id.")
-            yield VllmServedModel(
-                base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
-                model_id=environment.model_id,
-                environment=environment,
-            )
-
-    def _cli_args(self, spec: ModelSpec) -> list[str]:
-        # Pin the served model name to the requested model so the OpenAI API id stays the friendly
-        # HF id regardless of whether the backing path is local or gs://.
-        args = [
-            "--tensor-parallel-size",
-            str(spec.tensor_parallel_size),
-            "--dtype",
-            spec.dtype,
-            "--served-model-name",
-            spec.model,
-        ]
-        chat_template_path = _write_chat_template(spec.chat_template_content)
-        if chat_template_path is not None:
-            args += ["--chat-template", chat_template_path]
-        return args + list(self.extra_args)
 
 
 @dataclass(frozen=True)
@@ -243,13 +97,18 @@ class LevanterBackend:
     native Levanter checkpoint tree (not an HF export) is not servable this way.
     """
 
+    config: LevanterEngineConfig
+    host: str = "127.0.0.1"
+    port: int = 0
     name: str = "levanter"
-    max_seqs: int = 16
-    """Concurrent sequences the engine holds slots for."""
-    page_size: int = 128
-    """Tokens per KV-cache page."""
-    hbm_utilization: float = 0.8
-    """Fraction of device HBM the KV cache may claim."""
+
+    def _resolved_spec(self, spec: ModelSpec) -> ModelSpec:
+        num_chips = spec.num_chips or jax.device_count()
+        tensor_parallel_size = spec.tensor_parallel_size
+        if tensor_parallel_size is None:
+            attention_heads, key_value_heads = read_attention_heads(spec.model_path)
+            tensor_parallel_size = select_tensor_parallel_size(attention_heads, num_chips, key_value_heads)
+        return replace(spec, num_chips=num_chips, tensor_parallel_size=tensor_parallel_size)
 
     @contextmanager
     def load_model(
@@ -268,6 +127,10 @@ class LevanterBackend:
         hatch for runtime knobs the HF ``config.json`` does not carry, e.g. a Grug MoE's kernel
         backend (``moe_implementation="sonic"``), which the portable default cannot size on GPU.
         """
+        spec = self._resolved_spec(spec)
+        assert spec.num_chips is not None
+        assert spec.tensor_parallel_size is not None
+
         # Levanter compiles on the first request; write to the cache the vLLM path already uses so
         # a re-serve of the same model on the same slice skips the compile.
         jax.config.update("jax_compilation_cache_dir", default_jax_compilation_cache_dir())
@@ -339,10 +202,10 @@ class LevanterBackend:
                     model_name=spec.model,
                     service=InferenceEngineConfig(
                         max_seq_len=loaded.max_seq_len,
-                        max_seqs=self.max_seqs,
-                        page_size=self.page_size,
-                        hbm_utilization=self.hbm_utilization,
-                        max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.max_seqs),
+                        max_seqs=self.config.max_seqs,
+                        page_size=self.config.page_size,
+                        hbm_utilization=self.config.hbm_utilization,
+                        max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.config.max_seqs),
                         compute_dtype=jnp.dtype(loaded.compute_dtype),
                     ),
                 ),
@@ -352,11 +215,11 @@ class LevanterBackend:
 
         # Levanter's own InferenceServer.serve() owns a uvicorn it never signals to stop, so serve
         # its app under the same helper the dashboard uses and keep teardown in our hands.
-        sock = bind_serving_socket("127.0.0.1", 0)
+        sock = bind_serving_socket(self.host, self.port)
         port = sock.getsockname()[1]
         try:
             with serve_app_background(server.app, sock, name="levanter-inference") as background:
-                yield LevanterServedModel(base_url=f"http://127.0.0.1:{port}", model_id=spec.model, uvicorn=background)
+                yield LevanterServedModel(base_url=f"http://{self.host}:{port}", model_id=spec.model, uvicorn=background)
         finally:
             server.shutdown()
 
@@ -384,7 +247,7 @@ def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
 
 
 def validate_levanter_dtype(dtype: str) -> str:
-    """Check a quick-serve ``--dtype`` names a dtype Levanter can load weights at."""
+    """Check that ``--dtype`` names a dtype Levanter can load weights at."""
     if dtype not in LEVANTER_DTYPES:
         raise ValueError(f"--dtype {dtype!r} is not supported by the levanter backend; use one of {LEVANTER_DTYPES}.")
     return dtype
@@ -399,18 +262,3 @@ def levanter_max_seq_len(max_model_len: int | None, model_max_seq_len: int) -> i
             f"--max-model-len {max_model_len} exceeds the model's maximum sequence length {model_max_seq_len}."
         )
     return max_model_len
-
-
-def _reserve_localhost_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _write_chat_template(content: str | None) -> str | None:
-    """Write an inline chat template to a file, for backends that take one by path."""
-    if content is None:
-        return None
-    with tempfile.NamedTemporaryFile("w", suffix=".jinja", prefix="quick_serve_chat_", delete=False) as handle:
-        handle.write(content)
-        return handle.name

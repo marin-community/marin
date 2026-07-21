@@ -184,6 +184,12 @@ class IrisJobHandle:
         self._job = job
 
     @property
+    def iris_job(self) -> IrisJob:
+        """Underlying Iris job for callers that need Iris-specific logs or state."""
+
+        return self._job
+
+    @property
     def job_id(self) -> str:
         return str(self._job.job_id)
 

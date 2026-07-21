@@ -370,9 +370,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
         records_prefix=records_prefix,
         session=EvalSession(
             model=first.model.location,
-            # The serve child's self-stop backstop must outlive the whole suite running sequentially
-            # against it: budget two hours per eval on top of boot time.
-            serve=replace(first.serve, timeout_hours=2.0 + 2.0 * len(plans)),
+            serve=first.serve,
             tokenizer=first.model.tokenizer,
             apply_chat_template=first.model.apply_chat_template,
         ),

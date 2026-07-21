@@ -3,33 +3,30 @@
 
 """Serve a model, run evalchemy against its OpenAI URL, tear the server down.
 
-The eval is decoupled from the model backend by an OpenAI-compatible URL (issue #4827): a marin-serve
-child job (``VllmBackend`` or ``LevanterBackend``, on a TPU/GPU slice) exposes an endpoint, and an
-evalchemy child job (the ``:evalchemy-tpu`` container on a CPU slice) hits it with
+The eval is decoupled from the model backend by an OpenAI-compatible URL (issue #4827):
+``remote_inference`` starts vLLM or Levanter on an Iris TPU/GPU slice, and an evalchemy child job
+(the ``:evalchemy-tpu`` container on a CPU slice) calls it with
 ``eval.eval --model local-completions``. Evalchemy is the sole eval client.
 
-Topology — one parent orchestrator job spawns a serve child, then one eval child per eval unit
-against the same endpoint (:func:`run_eval_units` serves once for a whole suite)::
+One parent orchestrator starts a remote inference session, then one eval child per eval unit calls
+the same endpoint (:func:`run_eval_units` serves once for a whole suite)::
 
-    parent (CPU, marin)  ──serve child──▶  marin-serve backend (TPU/GPU)  ──▶ OpenAI endpoint
-                         ──eval child(s)──▶  :evalchemy-tpu (CPU)  ──local-completions──▶ endpoint
+    parent (CPU, marin)  ──remote_inference──▶  local backend (TPU/GPU)  ──▶ OpenAI endpoint
+                         ──eval child(s)─────▶  :evalchemy-tpu (CPU)  ──local-completions──▶ endpoint
 
-:func:`serve_model` submits the serve child, waits for its endpoint to register, and yields the
-served backend's in-cluster address. The eval child is pinned to the serve region, so it reaches
-that address straight over the same-cluster VPC -- no controller proxy or capability token. Iris
-auto-cleans child jobs when the parent ends, so leaving the ``with`` block (or the parent exiting)
-tears the server down; the context manager also stops it eagerly for promptness.
+:func:`serve_model` enters the shared remote lifecycle and yields its in-cluster address. The eval
+child is pinned to the serving region, so it reaches that address over the same-cluster VPC without
+a controller proxy or capability token. Leaving the context stops the remote session eagerly; Iris
+also cleans up child jobs when the parent ends.
 
-The two children take different entrypoints. The serve child runs in the marin image, whose synced
-venv can deserialize a cloudpickled callable, so it uses ``Entrypoint.from_callable``. The eval child
-runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare python with no cloudpickle
--- only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec`` -- so it runs
+The eval child runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare Python with
+no cloudpickle. Only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec``, so it runs
 :mod:`experiments.evals.evalchemy.run_evalchemy_client` as a plain command under that interpreter,
 with its config passed as JSON in an env var.
 
-Top-level imports are kept light: the serve child's ``VllmBackend``/``LevanterBackend``
-construction (which pulls levanter + vLLM) happens lazily inside :func:`_serve_for_eval`, so the CPU
-parent that references it for cloudpickling never imports the serving stack.
+Top-level imports stay light. ``remote_inference`` cloudpickles model and engine configs; the
+accelerator worker imports ``vllm_backend`` or ``levanter_backend`` only when it enters
+``local_inference``.
 """
 
 from __future__ import annotations
@@ -42,10 +39,13 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator, Sequence
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import cast
 
+from fray.iris_backend import IrisJobHandle
+from fray.types import ResourceConfig, create_environment
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.constraints import region_constraint
 from iris.cluster.setup_scripts import default_setup_script
@@ -53,11 +53,19 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
-    gpu_device,
     is_job_finished,
-    tpu_device,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.inference.config import (
+    BrokerConfig,
+    IrisConfig,
+    LevanterEngineConfig,
+    ServedModelConfig,
+    VllmEngineConfig,
+    VllmLauncherType,
+    VllmSource,
+)
+from marin.inference.iris import remote_inference
 
 from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 from experiments.evals.evalchemy.run_evalchemy_client import CONFIG_ENV_KEY
@@ -67,10 +75,7 @@ logger = logging.getLogger(__name__)
 # How long to wait for the served endpoint to register before giving up (model download + compile).
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 _ENDPOINT_POLL_SECONDS = 10.0
-# The served model self-stops after this wall-clock lifetime, a backstop in case the parent dies
-# before it can tear the child down.
-SERVE_TIMEOUT_HOURS = 4.0
-# 512 matches the quick-serve default: on the current TPU vLLM stack the prompt-logprobs path kills
+# 512 matches the serving default: on the current TPU vLLM stack the prompt-logprobs path kills
 # the whole engine within minutes of MCQ traffic at 2048 (five out of five serves died on first
 # logprob bursts; generation-only traffic was unaffected), so larger prefill budgets are not safe
 # until the fork's prompt-logprobs handling is fixed.
@@ -166,10 +171,6 @@ class ServeSpec:
     serve_cpu: float = 8.0
     serve_memory: str = "64g"
     serve_disk: str = "100g"
-    timeout_hours: float = SERVE_TIMEOUT_HOURS
-    """Serve-child self-stop lifetime, a backstop in case the parent dies before tearing it down.
-    Must cover the whole eval suite the session runs against the endpoint; the launcher scales it
-    with the number of evals in the group."""
     max_num_batched_tokens: int = EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
     """vLLM prefill budget per engine step. The 512 default is conservative: 2048 boots on the current
     TPU stack but prompt-logprobs traffic then kills the engine within minutes."""
@@ -187,7 +188,9 @@ class ServeSpec:
     chat_template_content: str | None = None
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
-    Passed straight to :class:`~marin.inference.quick_serve.QuickServeConfig`."""
+    Passed to :class:`~marin.inference.config.ServedModelConfig`."""
+    instances: int = 1
+    broker: bool = False
 
 
 @dataclass(frozen=True)
@@ -204,7 +207,7 @@ class ServedEndpoint:
     """Iris job path of the serve child behind the endpoint."""
     handle: Job
     """Live handle to the serve child, for liveness checks and log tails between evals."""
-    name: str
+    name: str | None
     """Registry endpoint name the serve child registers; a restarted serve attempt re-registers it
     at its new address, so resolving the name again finds the live server after a preemption."""
 
@@ -235,193 +238,102 @@ class EvalchemyEvalConfig:
     eval_disk: str = "50g"
 
 
-# --------------------------------------------------------------------------------------------------
-# Serve child: build the marin-serve config + backend and block serving (runs in the marin image).
-# --------------------------------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
-class _ServeParams:
-    """The serve child's inputs, cloudpickled into it. Flattened from ``ServeSpec`` so the child never
-    imports this module's serving-stack helpers just to read a config."""
-
-    model: str
-    endpoint_name: str
-    backend: ServeBackend
-    tpu_type: str | None
-    gpu_type: str | None
-    gpu_count: int | None
-    dtype: str
-    max_model_len: int | None
-    tensor_parallel_size: int | None
-    timeout_hours: float
-    startup_timeout_seconds: int
-    max_num_batched_tokens: int
-    vllm_extra_args: tuple[str, ...]
-    chat_template_content: str | None
+class _InferenceLaunch:
+    model: ServedModelConfig
+    engine: VllmEngineConfig | LevanterEngineConfig
+    iris: IrisConfig
+    instances: int
+    broker: BrokerConfig | None
 
 
-def _serve_for_eval(params: _ServeParams) -> None:
-    """Serve-child entrypoint: construct the backend + quick-serve config and serve until stopped.
-
-    Runs in the marin task image on the serving slice. Imports the serving stack lazily so the CPU
-    parent that references this function for cloudpickling never pulls levanter/vLLM.
-    """
-    from marin.inference.quick_serve import (  # noqa: PLC0415  # lazy: keep vLLM/levanter out of the CPU parent
-        QuickServeConfig,
-        serve_in_job,
-    )
-    from marin.inference.serving_backend import (  # noqa: PLC0415  # lazy: keep vLLM/levanter out of the CPU parent
-        LevanterBackend,
-        VllmBackend,
-    )
-    from marin.inference.vllm_server import (  # noqa: PLC0415  # lazy: keep vLLM out of the CPU parent
-        IsolatedCudaVllm,
-        VllmType,
-    )
-    from rigging.log_setup import configure_logging  # noqa: PLC0415  # lazy: only needed in the serve child
-
-    configure_logging()
-    if params.backend == ServeBackend.VLLM:
-        # GPU serves the Marin vLLM fork (grug_moe et al.) from an isolated uvx env; TPU serves the
-        # workspace TPU-vLLM stack already on PATH (WorkspaceVllm, the default launcher).
-        launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK) if params.gpu_count is not None else None
-        backend = VllmBackend(
-            launcher=launcher,
-            startup_timeout_seconds=params.startup_timeout_seconds,
-            max_num_batched_tokens=params.max_num_batched_tokens,
-            # warning: an lm-eval suite makes ~10^5 completions requests, and uvicorn's per-request
-            # INFO access lines would drown the serve log (errors and tracebacks still print).
-            extra_args=(*params.vllm_extra_args, "--uvicorn-log-level", "warning"),
-        )
-    elif params.backend == ServeBackend.LEVANTER:
-        backend = LevanterBackend()
-    else:
-        raise ValueError(f"unknown serve backend {params.backend!r}")
-
-    config = QuickServeConfig(
-        model=params.model,
-        endpoint_name=params.endpoint_name,
-        backend=backend,
-        tpu_type=params.tpu_type,
-        gpu_type=params.gpu_type,
-        gpu_count=params.gpu_count,
-        dtype=params.dtype,
-        max_model_len=params.max_model_len,
-        tensor_parallel_size=params.tensor_parallel_size,
-        chat_template_content=params.chat_template_content,
-        timeout_hours=params.timeout_hours,
-    )
-    serve_in_job(config)
-
-
-def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
-    """Worker environment for the serve child, by slice and backend.
-
-    - GPU + vLLM: base ``marin-core`` only. The fork, its precompiled/cu130 build, the Run:ai
-      streamer, and the virtual-hosted S3 addressing are all owned by ``IsolatedCudaVllm(MARIN_FORK)``
-      (uvx), so the worker venv just needs enough to run ``serve_in_job``.
-    - GPU + Levanter: the ``gpu`` build (the JAX/Levanter GPU stack) suffices; Levanter serves in-process.
-    - TPU + vLLM: the ``tpu``+``vllm`` build. TPU + Levanter: only jax (the ``tpu`` extra).
-    """
+def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _InferenceLaunch:
     if spec.gpu_count is not None:
-        if spec.backend == ServeBackend.LEVANTER:
-            return EnvironmentSpec(extras=("gpu",), env_vars=_propagated_env())
-        return EnvironmentSpec(
-            setup_scripts=[default_setup_script(packages=["marin-core"])],
-            env_vars=_propagated_env(),
+        resources = ResourceConfig.with_gpu(
+            spec.gpu_type or "H100",
+            count=spec.gpu_count,
+            cpu=spec.serve_cpu,
+            ram=spec.serve_memory,
+            disk=spec.serve_disk,
+            regions=[spec.region] if spec.region else None,
         )
-    if spec.backend == ServeBackend.LEVANTER:
-        extras = ("tpu",)
+        if spec.backend == ServeBackend.VLLM:
+            engine = VllmEngineConfig(
+                launcher=VllmLauncherType.CUDA,
+                source=VllmSource.MARIN_FORK,
+                startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
+                max_num_batched_tokens=spec.max_num_batched_tokens,
+                extra_args=(*spec.vllm_extra_args, "--uvicorn-log-level", "warning"),
+            )
+            environment = create_environment(
+                setup_scripts=[default_setup_script(packages=["marin-core"])],
+                env_vars=_propagated_env(),
+            )
+        else:
+            engine = LevanterEngineConfig()
+            environment = create_environment(extras=["gpu"], env_vars=_propagated_env())
     else:
-        extras = ("tpu", "vllm")
-    return EnvironmentSpec(extras=extras, env_vars=_propagated_env())
-
-
-def _serve_device(spec: ServeSpec):
-    if spec.gpu_count is not None:
-        return gpu_device(spec.gpu_type or "H100", spec.gpu_count)
-    if spec.tpu_type is None:
-        raise ValueError("ServeSpec needs tpu_type (TPU path) or gpu_type/gpu_count (GPU path).")
-    return tpu_device(spec.tpu_type)
+        if spec.tpu_type is None:
+            raise ValueError("ServeSpec needs tpu_type or gpu_type/gpu_count")
+        resources = ResourceConfig.with_tpu(
+            spec.tpu_type,
+            cpu=spec.serve_cpu,
+            ram=spec.serve_memory,
+            disk=spec.serve_disk,
+            regions=[spec.region] if spec.region else None,
+        )
+        if spec.backend == ServeBackend.VLLM:
+            engine = VllmEngineConfig(
+                startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
+                max_num_batched_tokens=spec.max_num_batched_tokens,
+                extra_args=(*spec.vllm_extra_args, "--uvicorn-log-level", "warning"),
+            )
+            environment = create_environment(extras=["tpu", "vllm"], env_vars=_propagated_env())
+        else:
+            engine = LevanterEngineConfig()
+            environment = create_environment(extras=["tpu"], env_vars=_propagated_env())
+    broker = BrokerConfig() if spec.broker or spec.instances > 1 else None
+    return _InferenceLaunch(
+        model=ServedModelConfig(
+            model=model,
+            tokenizer=tokenizer,
+            dtype=spec.dtype,
+            max_model_len=spec.max_model_len,
+            tensor_parallel_size=spec.tensor_parallel_size,
+            chat_template_content=spec.chat_template_content,
+        ),
+        engine=engine,
+        iris=IrisConfig(worker_resources=resources, worker_environment=environment),
+        instances=spec.instances,
+        broker=broker,
+    )
 
 
 @contextmanager
 def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedEndpoint]:
-    """Serve ``model`` on a marin-serve child job and yield its in-cluster OpenAI URL.
+    """Serve ``model`` through the shared Iris inference lifecycle."""
 
-    Submits the serve child, waits for its endpoint to register, and yields a :class:`ServedEndpoint`.
-    On exit the serve child is stopped eagerly; Iris also auto-cleans it when the parent job ends, so
-    the server never outlives the eval.
-    """
-    ctx = iris_ctx()
-    if ctx is None or ctx.client is None:
-        raise RuntimeError("serve_model must run inside an Iris job (no ambient IrisClient).")
-    client = ctx.client
-
-    run_id = uuid.uuid4().hex[:8]
-    endpoint_name = f"/serve/eval-{run_id}"
-    params = _ServeParams(
-        model=model,
-        endpoint_name=endpoint_name,
-        backend=spec.backend,
-        tpu_type=spec.tpu_type,
-        gpu_type=spec.gpu_type,
-        gpu_count=spec.gpu_count,
-        dtype=spec.dtype,
-        max_model_len=spec.max_model_len,
-        tensor_parallel_size=spec.tensor_parallel_size,
-        timeout_hours=spec.timeout_hours,
-        startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
-        max_num_batched_tokens=spec.max_num_batched_tokens,
-        vllm_extra_args=spec.vllm_extra_args,
-        chat_template_content=spec.chat_template_content,
-    )
-    constraints = [region_constraint([spec.region])] if spec.region else None
-
-    serve_job = client.submit(
-        entrypoint=Entrypoint.from_callable(_serve_for_eval, params),
-        name=f"eval-serve-{run_id}",
-        resources=ResourceSpec(
-            cpu=spec.serve_cpu, memory=spec.serve_memory, disk=spec.serve_disk, device=_serve_device(spec)
-        ),
-        environment=_serve_environment(spec),
-        ports=["http"],
-        constraints=constraints,
-        # One retry: first placements are occasionally poisoned by host-global port collisions
-        # (libtpu's fixed :8431 grabbed by a co-tenant) that a reschedule escapes. The endpoint
-        # wait tracks job state, so a retry is transparent to it.
-        max_retries_failure=1,
-    )
-    logger.info("Submitted serve job %s (backend=%s) for endpoint %s", serve_job, spec.backend, endpoint_name)
-    serve_path = str(serve_job.job_id)
-    try:
-        try:
-            _wait_for_endpoint(client, serve_job, endpoint_name)
-        except (RuntimeError, TimeoutError) as exc:
-            raise EvalPipelineError(
-                str(exc),
-                stage=PipelineStage.SERVE,
-                jobs={"serve": serve_path},
-                log_tails={"serve": job_log_tail(serve_job)},
-            ) from exc
-        # In-cluster, resolve_endpoint returns the served backend's direct address (its dashboard's
-        # OpenAI reverse proxy); the eval child, colocated in the same region/VPC, calls it straight
-        # -- no controller proxy or capability token needed for a same-cluster consumer.
-        base_url = client.resolve_endpoint(endpoint_name).rstrip("/") + "/v1"
-        logger.info("Serve endpoint %s ready at %s", endpoint_name, base_url)
+    inference = _shared_inference_config(model, tokenizer, spec)
+    with remote_inference(
+        inference.model,
+        inference.engine,
+        inference.iris,
+        instances=inference.instances,
+        broker=inference.broker,
+    ) as session:
+        if not session.jobs:
+            raise RuntimeError("Iris inference returned no worker jobs")
+        handle = session.iris_job
+        if handle is None:
+            handle = cast(IrisJobHandle, session.jobs[0]).iris_job
         yield ServedEndpoint(
-            base_url=base_url,
-            model_id=model,
+            base_url=session.model.endpoint.base_url,
+            model_id=session.model.endpoint.model,
             tokenizer=tokenizer,
-            job=serve_path,
-            handle=serve_job,
-            name=endpoint_name,
+            job=str(handle.job_id),
+            handle=handle,
+            name=session.endpoint_name,
         )
-    finally:
-        with suppress(Exception):
-            serve_job.terminate()
-            logger.info("Terminated serve job %s", serve_job)
 
 
 def _wait_for_endpoint(client, serve_job, endpoint_name: str) -> None:
@@ -555,6 +467,8 @@ def _refresh_endpoint(endpoint: ServedEndpoint) -> ServedEndpoint | None:
     client = iris_ctx().client
     if is_job_finished(endpoint.handle.state):
         return None
+    if endpoint.name is None:
+        return endpoint if _endpoint_alive(endpoint) else None
     try:
         _wait_for_endpoint(client, endpoint.handle, endpoint.name)
         base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
@@ -587,6 +501,8 @@ def _endpoint_departed(endpoint: ServedEndpoint) -> bool:
     client = iris_ctx().client
     if is_job_finished(endpoint.handle.state):
         return True
+    if endpoint.name is None:
+        return False
     try:
         base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
     except (ConnectionError, RuntimeError, TimeoutError):

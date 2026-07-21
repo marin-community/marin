@@ -8,6 +8,7 @@ export interface ServingInfo {
   has_chat_template: boolean
   tpu_type: string
   endpoint: string
+  streaming: boolean
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'

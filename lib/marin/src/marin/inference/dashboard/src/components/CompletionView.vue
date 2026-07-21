@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { streamSse } from '../lib/api'
+import { requestCompletion } from '../lib/api'
 import { COMPLETION_EXAMPLES } from '../lib/examples'
 import type { SamplingParams } from '../lib/types'
 
 const props = defineProps<{
   params: SamplingParams
   model: string
+  streaming: boolean
 }>()
 
-const PROMPT_KEY = 'marin-quick-serve:completion-prompt:v1'
+const PROMPT_KEY = 'marin-serve:completion-prompt:v1'
 
 function storedPrompt(): string {
   try {
@@ -51,16 +52,17 @@ async function run() {
   error.value = ''
   abort = new AbortController()
   try {
-    await streamSse(
+    await requestCompletion(
       'v1/completions',
       {
         model: props.model,
         prompt: prompt.value,
-        stream: true,
+        stream: props.streaming,
         temperature: props.params.temperature,
         max_tokens: props.params.maxTokens,
         top_p: props.params.topP,
       },
+      props.streaming,
       abort.signal,
       (data) => {
         const text = data.choices?.[0]?.text

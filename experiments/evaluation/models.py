@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from marin.inference.serving_backend import CONCAT_CHAT_TEMPLATE
+from marin.inference.backend import CONCAT_CHAT_TEMPLATE
 
 from experiments.evals.evalchemy.serve_and_eval import ServeBackend
 

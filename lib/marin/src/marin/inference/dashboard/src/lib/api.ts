@@ -22,10 +22,11 @@ export async function fetchHealth(): Promise<HealthResult> {
   return { ok: response.ok, model: body.model ?? null }
 }
 
-/** POST an OpenAI-style streaming request and invoke onData per SSE data event. */
-export async function streamSse(
+/** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
+export async function requestCompletion(
   path: string,
   body: Record<string, unknown>,
+  streaming: boolean,
   signal: AbortSignal,
   onData: (data: any) => void,
 ): Promise<void> {
@@ -37,6 +38,10 @@ export async function streamSse(
   })
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
+  }
+  if (!streaming) {
+    onData(await response.json())
+    return
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

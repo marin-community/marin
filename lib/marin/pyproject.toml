@@ -50,7 +50,7 @@ file = "../../LICENSE"
 
 [project.scripts]
 marin-mcp-babysitter = "marin.mcp.babysitter:main"
-marin-serve = "marin.inference.quick_serve_cli:main"
+marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
@@ -242,8 +242,8 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin"]
-# The quick-serve dashboard's node project lives inside the package for
-# colocation; only its build artifact (quick_serve_dashboard.html) ships.
+# The serving dashboard's node project lives inside the package for colocation;
+# only its build artifact (serve_dashboard.html) ships.
 exclude = ["src/marin/inference/dashboard"]
 
 [tool.hatch.build.targets.sdist]

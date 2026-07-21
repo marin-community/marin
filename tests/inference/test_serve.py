@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the quick-serve TP auto-selection and dashboard reverse proxy."""
+"""Tests for inference serving and the dashboard reverse proxy."""
 
 import dataclasses
 import json
 import re
 import socket
 import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import click
@@ -16,34 +18,43 @@ import requests
 from click.testing import CliRunner
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.inference.quick_serve import (
+from marin.inference.model_preparation import (
     resolve_model_path,
     select_tensor_parallel_size,
 )
-from marin.inference.quick_serve_cli import (
+from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
     _resolve_serving_plan,
     main,
 )
-from marin.inference.quick_serve_dashboard import (
+from marin.inference.serve_cli import main as serve_main
+from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.serving_backend import (
+from marin.inference.config import (
+    DEFAULT_CUDA_VLLM_VERSION,
+    LevanterEngineConfig,
+    ServedModelConfig,
+    VllmEngineConfig,
+    VllmLauncherType,
+    VllmSource,
+)
+from marin.inference.levanter_backend import (
     DEFAULT_LEVANTER_MAX_SEQ_LEN,
     LevanterBackend,
-    VllmBackend,
     inference_mesh,
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
+from marin.inference.serve import local_inference
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_server import (
-    DEFAULT_CUDA_VLLM_VERSION,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     VllmType,
@@ -123,12 +134,42 @@ def test_isolated_cuda_vllm_upstream_requires_version():
 def test_vllm_backend_falls_back_to_workspace_without_version():
     # No launcher (the TPU path, or a --task-image GPU path whose image ships its own vLLM) serves
     # from the vLLM already on PATH.
-    assert VllmBackend().select_launcher() == WorkspaceVllm()
+    assert vllm_launcher(VllmEngineConfig()) == WorkspaceVllm()
 
 
 def test_vllm_backend_returns_its_composed_launcher():
-    launcher = IsolatedTpuVllm(vllm_ref="vllm @ git+...@abc", tpu_inference_ref="tpu-inference @ git+...@def")
-    assert VllmBackend(launcher=launcher).select_launcher() is launcher
+    assert isinstance(vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)), IsolatedTpuVllm)
+
+
+@pytest.mark.parametrize(
+    ("engine", "backend_type"),
+    [
+        (VllmEngineConfig(), VllmBackend),
+        (LevanterEngineConfig(), LevanterBackend),
+    ],
+)
+def test_local_inference_dispatches_to_the_selected_backend(monkeypatch, engine, backend_type) -> None:
+    captured = []
+    check_alive = MagicMock()
+
+    @contextmanager
+    def _serve(_self, spec):
+        captured.append(spec)
+        yield SimpleNamespace(
+            base_url="http://127.0.0.1:8000",
+            model_id="served-model",
+            check_alive=check_alive,
+        )
+
+    monkeypatch.setattr(backend_type, "serve", _serve)
+    with local_inference(ServedModelConfig(model="requested-model"), engine) as session:
+        assert session.model.endpoint.base_url == "http://127.0.0.1:8000/v1"
+        assert session.model.endpoint.model == "served-model"
+        session.check_alive()
+        check_alive.assert_called_once_with()
+
+    assert captured[0].model == "requested-model"
+    assert captured[0].model_path == "requested-model"
 
 
 def test_levanter_max_seq_len_defaults_within_the_models_window():
@@ -183,7 +224,7 @@ def test_cli_defaulted_vllm_options_do_not_trip_the_levanter_backend(monkeypatch
     def _fail_at_controller(*_args, **_kwargs):
         raise reached_controller
 
-    monkeypatch.setattr("marin.inference.quick_serve_cli.connect_controller", _fail_at_controller)
+    monkeypatch.setattr("marin.inference.iris_cli.connect_controller", _fail_at_controller)
     result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--backend", "levanter", "--max-seqs", "4"])
     assert result.exception is reached_controller
 
@@ -192,6 +233,22 @@ def test_cli_rejects_levanter_flags_under_the_vllm_backend():
     result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--page-size", "64"])
     assert result.exit_code != 0
     assert "--page-size cannot be used with --backend vllm" in result.output
+
+
+def test_local_cli_rejects_backend_specific_flags() -> None:
+    levanter = CliRunner().invoke(
+        serve_main,
+        ["local", "Qwen/Qwen3-0.6B", "--backend", "levanter", "--launcher", "cuda"],
+    )
+    vllm = CliRunner().invoke(
+        serve_main,
+        ["local", "Qwen/Qwen3-0.6B", "--backend", "vllm", "--max-seqs", "4"],
+    )
+
+    assert levanter.exit_code != 0
+    assert "--launcher cannot be used with --backend levanter" in levanter.output
+    assert vllm.exit_code != 0
+    assert "--max-seqs cannot be used with --backend vllm" in vllm.output
 
 
 def _plan(**overrides):
@@ -203,9 +260,9 @@ def _plan(**overrides):
         "isolated_vllm": False,
         "task_image": None,
         "cuda_vllm_version": DEFAULT_CUDA_VLLM_VERSION,
-        "vllm_source": VllmType.UPSTREAM,
-        "vllm": VllmBackend(),
-        "levanter": LevanterBackend(),
+        "vllm_source": VllmSource.UPSTREAM,
+        "vllm": VllmEngineConfig(),
+        "levanter": LevanterEngineConfig(),
         "extras": (),
     }
     return _resolve_serving_plan(**{**args, **overrides})
@@ -215,52 +272,53 @@ def _plan(**overrides):
     ("overrides", "backend_type", "worker_extras"),
     [
         # vLLM in a checkout builds from the workspace lock, so the venv needs both TPU extras.
-        ({}, VllmBackend, ("tpu", "vllm")),
+        ({}, VllmEngineConfig, ("tpu", "vllm")),
         # Outside a checkout (or with --isolated-vllm) vLLM comes from uvx: no `vllm` extra.
-        ({"in_checkout": False}, VllmBackend, ("tpu",)),
-        ({"isolated_vllm": True}, VllmBackend, ("tpu",)),
+        ({"in_checkout": False}, VllmEngineConfig, ("tpu",)),
+        ({"isolated_vllm": True}, VllmEngineConfig, ("tpu",)),
         # CUDA vLLM is provisioned by uvx, so the GPU worker venv needs no accelerator extra.
-        ({"gpu": "H100x8"}, VllmBackend, ()),
+        ({"gpu": "H100x8"}, VllmEngineConfig, ()),
         # Levanter computes in the worker venv, so that venv carries the accelerator's JAX itself.
-        ({"backend": "levanter"}, LevanterBackend, ("tpu",)),
-        ({"backend": "levanter", "gpu": "H100x8"}, LevanterBackend, ("gpu",)),
+        ({"backend": "levanter"}, LevanterEngineConfig, ("tpu",)),
+        ({"backend": "levanter", "gpu": "H100x8"}, LevanterEngineConfig, ("gpu",)),
     ],
 )
 def test_resolve_serving_plan_picks_the_worker_extras_the_backend_needs(overrides, backend_type, worker_extras):
     plan = _plan(**overrides)
-    assert isinstance(plan.backend, backend_type)
+    assert isinstance(plan.engine, backend_type)
     assert plan.worker_extras == worker_extras
 
 
 def test_gpu_plan_defaults_to_upstream_launcher():
     plan = _plan(gpu="H100x8")
-    assert plan.backend.launcher == IsolatedCudaVllm(
-        source=VllmType.UPSTREAM,
+    assert plan.engine == VllmEngineConfig(
+        launcher=VllmLauncherType.CUDA,
+        source=VllmSource.UPSTREAM,
         version=DEFAULT_CUDA_VLLM_VERSION,
     )
 
 
 def test_gpu_plan_marin_fork_selects_fork_launcher():
-    plan = _plan(gpu="H100x8", vllm_source=VllmType.MARIN_FORK)
-    assert plan.backend.launcher == IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+    plan = _plan(gpu="H100x8", vllm_source=VllmSource.MARIN_FORK)
+    assert plan.engine.launcher is VllmLauncherType.CUDA
+    assert plan.engine.source is VllmSource.MARIN_FORK
 
 
 def test_gpu_plan_task_image_serves_workspace_vllm():
     # A prebuilt --task-image ships its own vLLM on PATH, so no launcher is provisioned.
-    assert _plan(gpu="H100x8", task_image="img").backend.launcher is None
-    assert _plan(gpu="H100x8", task_image="img").backend.select_launcher() == WorkspaceVllm()
+    assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.WORKSPACE
 
 
 def test_tpu_plan_isolates_vllm_outside_a_checkout():
     # No checkout to build the TPU-vLLM fork from, so it comes from a pinned uvx env; in a checkout
     # it serves the workspace vLLM instead.
-    assert isinstance(_plan(in_checkout=False).backend.select_launcher(), IsolatedTpuVllm)
-    assert isinstance(_plan().backend.select_launcher(), WorkspaceVllm)
+    assert _plan(in_checkout=False).engine.launcher is VllmLauncherType.TPU
+    assert _plan().engine.launcher is VllmLauncherType.WORKSPACE
 
 
 def test_marin_fork_requires_gpu():
     with pytest.raises(click.ClickException, match="requires --gpu"):
-        _plan(vllm_source=VllmType.MARIN_FORK)  # default tpu path
+        _plan(vllm_source=VllmSource.MARIN_FORK)  # default tpu path
 
 
 def test_resolve_serving_plan_rejects_multihost_slices():
@@ -345,7 +403,7 @@ def test_dashboard_html_is_self_contained():
     sibling-asset reference (a broken rsbuild inlining config) would render a
     blank page in exactly the environments the dashboard exists for.
     """
-    assert "marin · quick serve" in DASHBOARD_HTML
+    assert "marin · serve" in DASHBOARD_HTML
     assert not re.search(r'(?:src|href)="[^"]*\.(?:js|css)"', DASHBOARD_HTML)
     assert 'src="http' not in DASHBOARD_HTML
 
@@ -375,7 +433,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
             page = requests.get(f"{base}/", timeout=10)
             assert page.status_code == 200
-            assert "marin · quick serve" in page.text
+            assert "marin · serve" in page.text
 
             assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}

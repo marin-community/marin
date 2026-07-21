@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Browser dashboard and OpenAI-compatible reverse proxy for a quick-serve job.
+"""Browser dashboard and OpenAI-compatible reverse proxy for local inference.
 
 The dashboard is a single self-contained HTML file served at ``/``, built from
 the Vue app in the sibling ``dashboard/`` directory (``npm run build`` there
@@ -12,7 +12,7 @@ does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
-slice (see :mod:`marin.inference.serving_backend`) with the response streamed back
+slice (see :mod:`marin.inference.backend`) with the response streamed back
 verbatim, so server-sent-event token streaming works end to end.
 """
 
@@ -33,46 +33,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
+
 logger = logging.getLogger(__name__)
-
-# Request headers that must not be forwarded to the upstream backend server; httpx
-# recomputes Host/Content-Length, and the rest are hop-by-hop per RFC 7230.
-_REQUEST_DROP_HEADERS = frozenset(
-    {
-        "host",
-        "content-length",
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailers",
-        "transfer-encoding",
-        "upgrade",
-    }
-)
-# Response headers dropped so the framing matches the re-chunked StreamingResponse.
-# Content-Encoding is preserved because aiter_raw() yields the undecoded body.
-_RESPONSE_DROP_HEADERS = frozenset({"content-length", "connection", "keep-alive", "transfer-encoding"})
-
-
-def _forwardable_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    """Headers to forward upstream: drop hop-by-hop headers and a blank-token ``Authorization``.
-
-    lm-eval's ``local-completions`` client always sends ``Authorization: Bearer <key>`` with an empty
-    key when none is configured, i.e. the literal value ``"Bearer "``. That trailing-space value is an
-    illegal HTTP header that httpx refuses to send, which would 502 the whole request. The upstream
-    needs no auth, so a blank-token ``Authorization`` is dropped rather than forwarded; a real token
-    passes through unchanged.
-    """
-    forwardable: dict[str, str] = {}
-    for key, value in headers.items():
-        if key.lower() in _REQUEST_DROP_HEADERS:
-            continue
-        if key.lower() == "authorization" and not value.removeprefix("Bearer").strip():
-            continue
-        forwardable[key] = value
-    return forwardable
 
 
 @dataclass(frozen=True)
@@ -87,6 +50,7 @@ class ServingInfo:
     has_chat_template: bool
     tpu_type: str
     endpoint: str
+    streaming: bool = True
 
 
 def build_dashboard_app(
@@ -138,7 +102,7 @@ def build_dashboard_app(
     async def proxy(request: Request) -> Response:
         client = state["client"]
         body = await request.body()
-        fwd_headers = _forwardable_request_headers(request.headers)
+        fwd_headers = forwardable_request_headers(request.headers)
         upstream_request = client.build_request(
             request.method,
             request.url.path,
@@ -151,7 +115,7 @@ def build_dashboard_app(
         except httpx.HTTPError as exc:
             return JSONResponse({"error": f"upstream request failed: {exc}"}, status_code=502)
 
-        resp_headers = {k: v for k, v in upstream_response.headers.items() if k.lower() not in _RESPONSE_DROP_HEADERS}
+        resp_headers = forwardable_response_headers(upstream_response.headers)
 
         async def body_iter() -> AsyncIterator[bytes]:
             try:
@@ -208,7 +172,7 @@ def serve_app_background(
     app: Starlette,
     sock: socket.socket,
     *,
-    name: str = "quick-serve-dashboard",
+    name: str = "serve-dashboard",
     start_timeout_seconds: float = 30.0,
 ) -> Iterator[BackgroundServer]:
     """Run ``app`` under uvicorn on an already-bound ``sock`` in a daemon thread.
@@ -242,4 +206,4 @@ def serve_app_background(
 # is the committed build artifact of the dashboard/ Vue app: fully self-contained
 # (scripts and styles inlined, no CDN), so it works from both the bundled
 # workspace and the PyPI wheel, on networks that reach only the controller proxy.
-DASHBOARD_HTML = (importlib.resources.files(__package__) / "quick_serve_dashboard.html").read_text(encoding="utf-8")
+DASHBOARD_HTML = (importlib.resources.files(__package__) / "serve_dashboard.html").read_text(encoding="utf-8")
