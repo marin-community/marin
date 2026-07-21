@@ -51,6 +51,7 @@ from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
+    _drop_absent_mesh_axes,
     _mesh_axis_size,
     _mesh_has_axis,
     _reshard_for_init,
@@ -280,6 +281,23 @@ def moe_mlp(
             return out, dropped
         return out
 
+    chunks = int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
+    if chunks > 1 and resolved_implementation == "sonic_cute":
+        out, dropped = _moe_mlp_chunked_no_ep(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            mesh=mesh,
+            chunks=chunks,
+        )
+        if report_capacity_overflow:
+            return out, dropped
+        return out
+
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
     # match the actual input sharding, so reshard ordinary inputs to the mesh
@@ -318,6 +336,54 @@ def moe_mlp(
     if report_capacity_overflow:
         return out, dropped
     return out
+
+
+def _moe_mlp_chunked_no_ep(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    chunks: int,
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+    """No-EP chunked sonic_cute path (gate: ``SCALE_MOE_EXPERT_CHUNKS`` > 1).
+
+    Instead of resharding the full expert weights to replicated before the GEMM (the exposed FSDP
+    all-gather), pass the H-sharded weights into the shard_map and let the local fn all-gather one
+    ``1/chunks`` slice of experts at a time over the ``data`` axis, so each gather fits the scheduler's
+    overlap-memory budget and chunk k+1's gather can hide under chunk k's GEMM.
+    """
+    from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute_chunked  # noqa: PLC0415
+
+    batch_spec = _batch_spec_from_x(x, mesh)
+    # FSDP layout from MoEExpertMlpPspecs: w_up_gate [E, H/data, 2I/model], w_down [E, I/model, H/data].
+    w13_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
+    w2_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
+
+    x = _reshard_for_shard_map(x, mesh, batch_spec)
+    selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+    combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+    w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w13_spec)
+    w_down = _reshard_for_shard_map(w_down, mesh, w2_spec)
+
+    shard_fn = shard_map(
+        partial(
+            _moe_mlp_local_sonic_cute_chunked,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            chunks=chunks,
+            data_axis_name="data",
+        ),
+        mesh=mesh,
+        in_specs=(batch_spec, batch_spec, batch_spec, w13_spec, w2_spec),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
 
 
 __all__ = [
