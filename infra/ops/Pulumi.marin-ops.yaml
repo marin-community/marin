@@ -1,4 +1,12 @@
 config:
+  # The first rollout uses the deterministic local implementation. Change this to
+  # loom only after a managed Loom API and its Secret Manager token exist.
+  marin-ops:agent_mode: stub
+  marin-ops:repo_revision: weaver/ops-workflow
+  marin-ops:skill_revision: working-tree
+  # Cloud Run terminates TLS and IAP for this DNS-only Cloudflare CNAME.
+  marin-ops:custom_domain: ops.oa.dev
+  marin-ops:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
   # IAP admission is non-secret policy and stays checked in for review. A domain entry
   # admits every Google identity in that Workspace domain; the explicit ops address also
   # documents the operational owner even though it is covered by the domain grant.

@@ -3,9 +3,11 @@
 
 """PostgreSQL persistence for Grafana-owned alert and agent lifecycles."""
 
+import hashlib
 import json
 import uuid
-from collections.abc import Mapping
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -14,12 +16,15 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ops_workflow.grafana import GrafanaAlert, VerifiedGrafanaWebhook
+from ops_workflow.grafana import GrafanaAlert, GrafanaDelivery, GrafanaNotification
+from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
 from ops_workflow.state import CaseState, SignalDisposition, severity_priority
 
 SOURCE = "grafana"
-GROUPING_RULE = "grafana:receiver+groupKey"
+GROUPING_RULE = "grafana:alertname+cluster"
 AUTOMATIC_REQUESTER = "grafana"
+MISSING_POLLS_TO_RESOLVE = 2
+POLL_KEY_ID = "grafana-postgres-reader"
 
 
 class TurnPendingError(RuntimeError):
@@ -54,68 +59,61 @@ class OpsRepository:
         self._repo_revision = repo_revision
         self._skill_revision = skill_revision
 
-    async def ingest(self, webhook: VerifiedGrafanaWebhook, *, key_id: str) -> IngestResult:
-        """Apply one authenticated Grafana delivery atomically."""
+    async def reconcile_grafana_snapshot(self, snapshot: GrafanaSnapshot) -> tuple[IngestResult, ...]:
+        """Atomically reconcile one complete, successful Grafana SQL snapshot."""
+
+        grouped: dict[tuple[str, str], list[PolledGrafanaAlert]] = defaultdict(list)
+        for item in snapshot.alerts:
+            grouped[(item.receiver, item.group_key)].append(item)
+        present = {item.alert.fingerprint for item in snapshot.alerts}
 
         async with await self._connection() as connection:
             async with connection.transaction():
-                existing = await self._existing_delivery(connection, webhook.delivery_key)
-                if existing is not None:
-                    return _stored_ingest_result(existing)
-
-                delivery_id = str(uuid.uuid4())
-                insert_cursor = await connection.execute(
+                poll_slot = snapshot.observed_at.replace(second=0, microsecond=0)
+                poll_cursor = await connection.execute(
                     """
-                    INSERT INTO source_deliveries (
-                        id, source, delivery_key, key_id, source_timestamp,
-                        body_sha256, normalized_payload
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (source, delivery_key) DO NOTHING
+                    INSERT INTO grafana_polls (poll_slot, observed_at, alert_count)
+                    VALUES (%s, %s, %s) ON CONFLICT (poll_slot) DO NOTHING
                     RETURNING id
                     """,
-                    (
-                        delivery_id,
-                        SOURCE,
-                        webhook.delivery_key,
-                        key_id,
-                        webhook.source_timestamp,
-                        webhook.body_sha256,
-                        Jsonb(webhook.normalized_payload),
-                    ),
+                    (poll_slot, snapshot.observed_at, len(snapshot.alerts)),
                 )
-                if await insert_cursor.fetchone() is None:
-                    existing = await self._existing_delivery(connection, webhook.delivery_key)
-                    assert existing is not None
-                    return _stored_ingest_result(existing)
+                if await poll_cursor.fetchone() is None:
+                    return ()
+                results: list[IngestResult] = []
+                for items in grouped.values():
+                    webhook = _poll_webhook(items, observed_at=snapshot.observed_at, status="firing")
+                    results.append(await self._ingest_delivery(connection, webhook, key_id=POLL_KEY_ID))
 
-                touched: list[tuple[str, int, str, SignalDisposition, GrafanaAlert]] = []
-                for alert in webhook.notification.alerts:
-                    touched.append(await self._upsert_signal(connection, webhook, delivery_id, alert))
-
-                case_id, should_queue = await self._materialize_case(connection, webhook, touched)
-                queued_case_ids: tuple[str, ...] = ()
-                if case_id is not None and should_queue:
-                    queued = await self._enqueue_automatic_turn(
-                        connection,
-                        case_id=case_id,
-                        delivery_key=webhook.delivery_key,
-                    )
-                    if queued:
-                        queued_case_ids = (case_id,)
-
-                case_ids = (case_id,) if case_id is not None else ()
-                result = IngestResult(
-                    delivery_id=delivery_id,
-                    duplicate=False,
-                    case_ids=case_ids,
-                    signal_dispositions={item[4].fingerprint: item[3].value for item in touched},
-                    queued_case_ids=queued_case_ids,
+                cursor = await connection.execute(
+                    "SELECT * FROM signals WHERE source = %s AND state = 'firing' FOR UPDATE",
+                    (SOURCE,),
                 )
-                await connection.execute(
-                    "UPDATE source_deliveries SET result = %s WHERE id = %s",
-                    (Jsonb(result.as_dict()), delivery_id),
-                )
-                return result
+                firing = await cursor.fetchall()
+                resolving: dict[tuple[str, str], list[PolledGrafanaAlert]] = defaultdict(list)
+                for signal in firing:
+                    fingerprint = str(signal["fingerprint"])
+                    if fingerprint in present:
+                        if signal["missing_successful_polls"]:
+                            await connection.execute(
+                                "UPDATE signals SET missing_successful_polls = 0 WHERE id = %s",
+                                (signal["id"],),
+                            )
+                        continue
+                    missing = int(signal["missing_successful_polls"]) + 1
+                    if missing < MISSING_POLLS_TO_RESOLVE:
+                        await connection.execute(
+                            "UPDATE signals SET missing_successful_polls = %s WHERE id = %s",
+                            (missing, signal["id"]),
+                        )
+                        continue
+                    item = _resolved_polled_alert(signal, observed_at=snapshot.observed_at)
+                    resolving[(item.receiver, item.group_key)].append(item)
+
+                for items in resolving.values():
+                    webhook = _poll_webhook(items, observed_at=snapshot.observed_at, status="resolved")
+                    results.append(await self._ingest_delivery(connection, webhook, key_id=POLL_KEY_ID))
+                return tuple(results)
 
     async def overview(self) -> dict[str, object]:
         async with await self._connection() as connection:
@@ -134,15 +132,12 @@ class OpsRepository:
                 """
             )
             active = await active_cursor.fetchone()
-            freshness_cursor = await connection.execute(
-                "SELECT max(received_at) AS last_delivery_at FROM source_deliveries WHERE source = %s",
-                (SOURCE,),
-            )
+            freshness_cursor = await connection.execute("SELECT max(observed_at) AS last_poll_at FROM grafana_polls")
             freshness = await freshness_cursor.fetchone()
         return {
             "case_counts": {row["state"]: row["count"] for row in count_rows},
             "active_investigation": active,
-            "last_delivery_at": freshness["last_delivery_at"] if freshness else None,
+            "last_poll_at": freshness["last_poll_at"] if freshness else None,
         }
 
     async def list_cases(self, *, include_archived: bool = False) -> list[dict[str, object]]:
@@ -490,6 +485,70 @@ class OpsRepository:
         connection = await psycopg.AsyncConnection.connect(self._database_url, row_factory=dict_row)
         return cast(psycopg.AsyncConnection[dict[str, Any]], connection)
 
+    async def _ingest_delivery(
+        self,
+        connection: psycopg.AsyncConnection[dict[str, Any]],
+        webhook: GrafanaDelivery,
+        *,
+        key_id: str,
+    ) -> IngestResult:
+        existing = await self._existing_delivery(connection, webhook.delivery_key)
+        if existing is not None:
+            return _stored_ingest_result(existing)
+
+        delivery_id = str(uuid.uuid4())
+        insert_cursor = await connection.execute(
+            """
+            INSERT INTO source_deliveries (
+                id, source, delivery_key, key_id, source_timestamp,
+                body_sha256, normalized_payload
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source, delivery_key) DO NOTHING
+            RETURNING id
+            """,
+            (
+                delivery_id,
+                SOURCE,
+                webhook.delivery_key,
+                key_id,
+                webhook.source_timestamp,
+                webhook.body_sha256,
+                Jsonb(webhook.normalized_payload),
+            ),
+        )
+        if await insert_cursor.fetchone() is None:
+            existing = await self._existing_delivery(connection, webhook.delivery_key)
+            assert existing is not None
+            return _stored_ingest_result(existing)
+
+        touched = [
+            await self._upsert_signal(connection, webhook, delivery_id, alert) for alert in webhook.notification.alerts
+        ]
+        case_id, should_queue = await self._materialize_case(connection, webhook, touched)
+        queued_case_ids: tuple[str, ...] = ()
+        if case_id is not None and should_queue:
+            queued = await self._enqueue_automatic_turn(
+                connection,
+                case_id=case_id,
+                delivery_key=webhook.delivery_key,
+            )
+            if queued:
+                queued_case_ids = (case_id,)
+
+        case_ids = (case_id,) if case_id is not None else ()
+        result = IngestResult(
+            delivery_id=delivery_id,
+            duplicate=False,
+            case_ids=case_ids,
+            signal_dispositions={item[4].fingerprint: item[3].value for item in touched},
+            queued_case_ids=queued_case_ids,
+        )
+        await connection.execute(
+            "UPDATE source_deliveries SET result = %s WHERE id = %s",
+            (Jsonb(result.as_dict()), delivery_id),
+        )
+        return result
+
     async def _existing_delivery(
         self, connection: psycopg.AsyncConnection[dict[str, Any]], delivery_key: str
     ) -> dict[str, Any] | None:
@@ -503,7 +562,7 @@ class OpsRepository:
     async def _upsert_signal(
         self,
         connection: psycopg.AsyncConnection[dict[str, Any]],
-        webhook: VerifiedGrafanaWebhook,
+        webhook: GrafanaDelivery,
         delivery_id: str,
         alert: GrafanaAlert,
     ) -> tuple[str, int, str, SignalDisposition, GrafanaAlert]:
@@ -600,7 +659,8 @@ class OpsRepository:
                     labels = %s, annotations = %s, values = %s, generator_url = %s,
                     silence_url = %s, dashboard_url = %s, panel_url = %s,
                     source_version = %s, first_seen_at = %s, last_seen_at = %s,
-                    resolved_at = %s, latest_source_timestamp = %s, latest_delivery_id = %s
+                    resolved_at = %s, latest_source_timestamp = %s, latest_delivery_id = %s,
+                    missing_successful_polls = 0
                 WHERE id = %s
                 """,
                 (generation, alert.status, *current_fields, signal_id),
@@ -617,7 +677,7 @@ class OpsRepository:
     async def _materialize_case(
         self,
         connection: psycopg.AsyncConnection[dict[str, Any]],
-        webhook: VerifiedGrafanaWebhook,
+        webhook: GrafanaDelivery,
         touched: list[tuple[str, int, str, SignalDisposition, GrafanaAlert]],
     ) -> tuple[str | None, bool]:
         notification = webhook.notification
@@ -822,6 +882,106 @@ def _stored_ingest_result(row: Mapping[str, Any]) -> IngestResult:
         signal_dispositions=dict(result.get("signal_dispositions", {})),
         queued_case_ids=tuple(result.get("queued_case_ids", ())),
     )
+
+
+def _poll_webhook(
+    items: Sequence[PolledGrafanaAlert],
+    *,
+    observed_at: datetime,
+    status: str,
+) -> GrafanaDelivery:
+    if not items:
+        raise ValueError("a polled Grafana delivery requires at least one alert")
+    first = items[0]
+    if any(item.receiver != first.receiver or item.group_key != first.group_key for item in items):
+        raise ValueError("all alerts in a polled delivery must share one group")
+    alerts = tuple(item.alert for item in items)
+    common_labels = _common_strings([alert.labels for alert in alerts])
+    common_annotations = _common_strings([alert.annotations for alert in alerts])
+    normalized = {
+        "source": SOURCE_VERSION,
+        "observed_at": observed_at.isoformat(),
+        "receiver": first.receiver,
+        "status": status,
+        "group_key": first.group_key,
+        "group_labels": dict(first.group_labels),
+        "alerts": [
+            {
+                "fingerprint": alert.fingerprint,
+                "status": alert.status,
+                "labels": dict(alert.labels),
+                "annotations": dict(alert.annotations),
+                "values": dict(alert.values),
+                "starts_at": alert.starts_at.isoformat(),
+                "ends_at": alert.ends_at.isoformat() if alert.ends_at else None,
+            }
+            for alert in alerts
+        ],
+    }
+    body = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str).encode()
+    body_sha256 = hashlib.sha256(body).hexdigest()
+    return GrafanaDelivery(
+        notification=GrafanaNotification(
+            receiver=first.receiver,
+            status=status,
+            org_id=0,
+            version=SOURCE_VERSION,
+            group_key=first.group_key,
+            group_labels=first.group_labels,
+            common_labels=common_labels,
+            common_annotations=common_annotations,
+            external_url="https://grafana.oa.dev/",
+            title=first.title,
+            message="",
+            alerts=alerts,
+        ),
+        source_timestamp=observed_at,
+        delivery_key=f"poll:{body_sha256}",
+        body_sha256=body_sha256,
+        normalized_payload=normalized,
+    )
+
+
+def _resolved_polled_alert(signal: Mapping[str, Any], *, observed_at: datetime) -> PolledGrafanaAlert:
+    labels = _mapping(signal["labels"], "signal labels")
+    annotations = _mapping(signal["annotations"], "signal annotations")
+    values = signal["values"]
+    if not isinstance(values, Mapping):
+        raise RuntimeError("stored signal values must be an object")
+    alert_name = str(signal["alert_name"])
+    cluster = str(signal["cluster"] or "")
+    return PolledGrafanaAlert(
+        alert=GrafanaAlert(
+            fingerprint=str(signal["fingerprint"]),
+            status="resolved",
+            labels=labels,
+            annotations=annotations,
+            values=values,
+            starts_at=signal["first_seen_at"],
+            ends_at=observed_at,
+            generator_url=str(signal["generator_url"] or ""),
+            silence_url=str(signal["silence_url"] or ""),
+            dashboard_url=str(signal["dashboard_url"] or ""),
+            panel_url=str(signal["panel_url"] or ""),
+        ),
+        receiver=str(signal["receiver"]),
+        group_key=str(signal["group_key"]),
+        group_labels={"alertname": alert_name, "cluster": cluster},
+        title=f"{alert_name} · {cluster}" if cluster else alert_name,
+    )
+
+
+def _mapping(value: object, field: str) -> Mapping[str, str]:
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    ):
+        raise RuntimeError(f"stored {field} must contain string keys and values")
+    return cast(Mapping[str, str], value)
+
+
+def _common_strings(values: Sequence[Mapping[str, str]]) -> Mapping[str, str]:
+    first = values[0]
+    return {key: item for key, item in first.items() if all(value.get(key) == item for value in values[1:])}
 
 
 def _case_title(touched: list[tuple[str, int, str, SignalDisposition, GrafanaAlert]]) -> str:

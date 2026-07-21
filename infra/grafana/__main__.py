@@ -34,7 +34,6 @@ SERVICE = "marin-grafana"
 # "organization/<project>/<stack>" (the literal "organization"), so this names the
 # marin-cloudsql stack of the marin-cloudsql project.
 CLOUDSQL_STACK = "organization/marin-cloudsql/marin-cloudsql"
-OPS_STACK = "organization/marin-ops/marin-ops"
 
 # This file sits beside the Dockerfile, dashboards, and bridge source; the whole directory
 # is the image build context.
@@ -44,7 +43,6 @@ BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
 # secret exists, so a project without it still deploys — critical alerts then reach
 # Slack only.
 SMTP_SECRET = "marin-grafana-smtp-credentials"
-OPS_WEBHOOK_SECRET = "marin-ops-grafana-webhook-hmac"
 
 
 def smtp_secret_exists(provider: gcp.Provider) -> bool:
@@ -71,12 +69,6 @@ def main() -> None:
     cloudsql = pulumi.StackReference(CLOUDSQL_STACK)
     connection_name = cloudsql.get_output("connection_name")
     database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
-    ops = pulumi.StackReference(OPS_STACK)
-    ops_alert_target_url = ops.get_output("ingest_url")
-    ops_alert_target_audience = ops.get_output("ingest_audience")
-    ops_alert_queue = ops.get_output("alert_queue")
-    ops_alert_queue_location = ops.get_output("alert_queue_location")
-    ops_alert_dispatch_service_account = ops.get_output("alert_dispatch_service_account")
 
     # Values stay in Secret Manager; the component only grants the runtime service
     # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
@@ -88,18 +80,11 @@ def main() -> None:
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
         SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
-        SecretEnv(name="OPS_ALERT_WEBHOOK_SECRET", secret=OPS_WEBHOOK_SECRET),
     ]
     env = {
         "DATABASE_SOCKET_DIR": database_socket_dir,
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
-        "OPS_ALERT_QUEUE_PROJECT": PROJECT,
-        "OPS_ALERT_QUEUE_LOCATION": ops_alert_queue_location,
-        "OPS_ALERT_QUEUE": ops_alert_queue,
-        "OPS_ALERT_TARGET_URL": ops_alert_target_url,
-        "OPS_ALERT_TARGET_AUDIENCE": ops_alert_target_audience,
-        "OPS_ALERT_DISPATCH_SERVICE_ACCOUNT": ops_alert_dispatch_service_account,
     }
     if smtp_secret_exists(provider):
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))

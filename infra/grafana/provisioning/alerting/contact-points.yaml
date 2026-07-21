@@ -5,15 +5,13 @@
 # edits do not persist (Grafana's SQLite is ephemeral on Cloud Run) and would be
 # overwritten by these files anyway.
 #
-# ops-critical carries three receivers so a critical alert reaches email, Slack,
-# and the agent without relying on routing-tree subtleties. ops-agent is the
-# webhook-only warning tier.
+# ops-critical carries email and Slack. Warning instances are muted in the
+# notification policy while remaining canonical Grafana alert instances for the
+# ops dashboard's read-only PostgreSQL poller.
 # $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
 # Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
-# SMTP credentials — without them email is inert while Slack and the agent still
-# receive critical alerts. Grafana signs the raw webhook body and timestamp, then
-# posts only to the loopback bridge. The bridge preserves the signature while a
-# private Cloud Tasks queue dispatches to the internal-only ops ingest service.
+# SMTP credentials — without them email is inert while Slack still receives
+# critical alerts.
 apiVersion: 1
 
 contactPoints:
@@ -28,27 +26,3 @@ contactPoints:
         type: slack
         settings:
           url: $SLACK_ALERTS_WEBHOOK
-      - uid: ops-critical-agent
-        type: webhook
-        settings:
-          url: http://127.0.0.1:8081/ops/alerts
-          httpMethod: POST
-          maxAlerts: "0"
-          hmacConfig:
-            secret: $OPS_ALERT_WEBHOOK_SECRET
-            header: X-Grafana-Alerting-Signature
-            timestampHeader: X-Grafana-Alerting-Signature-Timestamp
-
-  - orgId: 1
-    name: ops-agent
-    receivers:
-      - uid: ops-agent-webhook
-        type: webhook
-        settings:
-          url: http://127.0.0.1:8081/ops/alerts
-          httpMethod: POST
-          maxAlerts: "0"
-          hmacConfig:
-            secret: $OPS_ALERT_WEBHOOK_SECRET
-            header: X-Grafana-Alerting-Signature
-            timestampHeader: X-Grafana-Alerting-Signature-Timestamp

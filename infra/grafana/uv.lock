@@ -542,23 +542,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-cloud-tasks"
-version = "2.23.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "grpc-google-iam-v1" },
-    { name = "grpcio" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/a2/adec373a05a569baf52d41b374994b5d3ed4a9dab52bb96ed3536bcbe334/google_cloud_tasks-2.23.0.tar.gz", hash = "sha256:a6da2c114a4db5a59593eba64987a4bf6973a0f48b1a31a3d4acffb6f4c7beb9", size = 352038, upload-time = "2026-06-22T23:22:33.928Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/03/f7a0dde9b971940fec9441141ab1581624434546dc8dd42f18f5703a2899/google_cloud_tasks-2.23.0-py3-none-any.whl", hash = "sha256:2a3e35c22b37947f829d62c50276a6f47c9ac1a789ec8ba0b646f31131b3c894", size = 296564, upload-time = "2026-06-22T23:20:32.66Z" },
-]
-
-[[package]]
 name = "google-crc32c"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -755,7 +738,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-cloud-compute" },
-    { name = "google-cloud-tasks" },
     { name = "httpx" },
     { name = "marin-finelog" },
     { name = "starlette" },
@@ -771,7 +753,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "google-cloud-compute", specifier = ">=1.19" },
-    { name = "google-cloud-tasks", specifier = ">=2.19" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "marin-finelog", specifier = ">=0.2.0" },
     { name = "starlette", specifier = ">=0.40" },

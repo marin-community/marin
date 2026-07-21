@@ -37,7 +37,7 @@ onUnmounted(() => {
 })
 
 function when(value: string | null): string {
-  if (!value) return 'No delivery yet'
+  if (!value) return 'No successful poll yet'
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value))
 }
 </script>
@@ -73,8 +73,8 @@ function when(value: string | null): string {
         <p class="mt-2 text-3xl font-semibold">{{ counts.waiting_human ?? 0 }}</p>
       </div>
       <div class="rounded-xl border border-[#d8dcd5] bg-white p-4 shadow-[0_1px_2px_rgba(20,35,27,.05)]">
-        <p class="text-xs font-medium uppercase tracking-wide text-[#7a847e]">Last Grafana delivery</p>
-        <p class="mt-2 text-sm font-medium leading-6">{{ when(overview?.last_delivery_at ?? null) }}</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-[#7a847e]">Last Grafana poll</p>
+        <p class="mt-2 text-sm font-medium leading-6">{{ when(overview?.last_poll_at ?? null) }}</p>
       </div>
     </div>
 
@@ -96,7 +96,7 @@ function when(value: string | null): string {
         <h3 class="font-semibold">Cases</h3>
       </div>
       <div v-if="cases.length === 0" class="px-5 py-14 text-center text-sm text-[#78817c]">
-        No cases yet. Replay the signed Grafana fixture to start the first investigation.
+        No cases yet. The next successful Grafana poll will open one for each new alert group.
       </div>
       <RouterLink
         v-for="item in cases"

@@ -36,8 +36,9 @@ def main() -> None:
             password_secrets=(
                 "cloudsql-grafana-password",
                 "cloudsql-evals-password",
-                "cloudsql-ops-ingest-password",
                 "cloudsql-ops-app-password",
+                "cloudsql-ops-grafana-reader-password",
+                "cloudsql-ops-migrator-password",
             ),
         ),
         gcp_provider=provider,

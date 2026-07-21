@@ -4,18 +4,15 @@
 """Local and production command line for the ops workflow spike."""
 
 import argparse
-import hashlib
-import hmac
 import logging
 import os
-import time
 from pathlib import Path
 from typing import cast
 
-import httpx
 import psycopg
 import uvicorn
 
+from ops_workflow.grafana_source import PostgresGrafanaAlertSource
 from ops_workflow.loom import LoomGateway, StubAgentGateway
 from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
@@ -35,9 +32,6 @@ def main() -> None:
     if args.command == "migrate":
         _migrate(args.database_url, args.migrations)
         return
-    if args.command == "send-fixture":
-        _send_fixture(args.url, args.secret, args.fixture)
-        return
     if args.command == "serve":
         _serve(args)
         return
@@ -52,20 +46,17 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--database-url", required=True)
     migrate.add_argument("--migrations", type=Path, default=DEFAULT_MIGRATIONS)
 
-    fixture = subparsers.add_parser("send-fixture")
-    fixture.add_argument("--url", default="http://127.0.0.1:8088/api/ingest/grafana")
-    fixture.add_argument("--secret", required=True)
-    fixture.add_argument("fixture", type=Path)
-
     serve = subparsers.add_parser("serve")
     serve.add_argument("--database-url", required=True)
     serve.add_argument("--migrations", type=Path, default=DEFAULT_MIGRATIONS)
     serve.add_argument("--migrate-on-start", action="store_true")
-    serve.add_argument("--grafana-webhook-secret")
-    serve.add_argument("--grafana-webhook-secret-env")
-    serve.add_argument("--grafana-key-id", default="grafana-v1")
+    grafana_url = serve.add_mutually_exclusive_group(required=True)
+    grafana_url.add_argument("--grafana-database-url")
+    grafana_url.add_argument("--grafana-database-url-env")
+    serve.add_argument("--grafana-database-password")
+    serve.add_argument("--grafana-database-password-env")
+    serve.add_argument("--grafana-poll-interval", type=float, default=60.0)
     serve.add_argument("--auth-mode", choices=("local", "iap"), default="local")
-    serve.add_argument("--surface", choices=("all", "ingest", "ui"), default="all")
     serve.add_argument("--agent-mode", choices=("stub", "loom"), default="stub")
     serve.add_argument("--loom-api-url")
     serve.add_argument("--loom-token")
@@ -88,39 +79,27 @@ def _migrate(database_url: str, migrations: Path) -> None:
         apply_migrations(cast(MigrationConnection, connection), migration_plan(migrations))
 
 
-def _send_fixture(url: str, secret: str, fixture: Path) -> None:
-    body = fixture.read_bytes()
-    timestamp = str(int(time.time()))
-    signature = hmac.new(secret.encode(), timestamp.encode() + b":" + body, hashlib.sha256).hexdigest()
-    response = httpx.post(
-        url,
-        content=body,
-        headers={
-            "content-type": "application/json",
-            "x-grafana-alerting-signature": signature,
-            "x-grafana-alerting-signature-timestamp": timestamp,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    print(response.json())
-
-
 def _serve(args: argparse.Namespace) -> None:
     if args.auth_mode == "local" and args.host not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit("local auth mode may only bind to loopback")
-    grafana_webhook_secret = _secret_argument(
-        value=args.grafana_webhook_secret,
-        environment_name=args.grafana_webhook_secret_env,
-        option="--grafana-webhook-secret",
+    grafana_database_url = _secret_argument(
+        value=args.grafana_database_url,
+        environment_name=args.grafana_database_url_env,
+        option="--grafana-database-url",
+    )
+    assert grafana_database_url is not None
+    grafana_database_password = _secret_argument(
+        value=args.grafana_database_password,
+        environment_name=args.grafana_database_password_env,
+        option="--grafana-database-password",
     )
     loom_token = _secret_argument(
         value=args.loom_token,
         environment_name=args.loom_token_env,
         option="--loom-token",
     )
-    if args.surface in ("all", "ingest") and not grafana_webhook_secret:
-        raise SystemExit("a Grafana webhook secret is required for the ingest surface")
+    if args.grafana_poll_interval <= 0:
+        raise SystemExit("--grafana-poll-interval must be positive")
     if args.migrate_on_start:
         _migrate(args.database_url, args.migrations)
     repository = OpsRepository(
@@ -145,12 +124,11 @@ def _serve(args: argparse.Namespace) -> None:
     app = create_app(
         OpsService(repository, gateway),
         repository,
+        PostgresGrafanaAlertSource(grafana_database_url, password=grafana_database_password),
         WebConfig(
-            grafana_webhook_secret=grafana_webhook_secret.encode() if grafana_webhook_secret else None,
-            grafana_key_id=args.grafana_key_id,
             auth_mode=args.auth_mode,
             static_dir=args.static_dir,
-            surface=args.surface,
+            poll_interval=args.grafana_poll_interval,
         ),
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

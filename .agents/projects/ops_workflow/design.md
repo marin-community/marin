@@ -1,171 +1,183 @@
 # Grafana-Driven Ops Workflow
 
-Grafana is the canonical alert engine. Operators express operational intent once, as Grafana rules and labels. Grafana evaluates those rules, decides when an instance is firing or resolved, groups instances, suppresses duplicates, and controls repeat timing. The ops workflow responds to that notification lifecycle; it does not poll Grafana's private database or independently decide whether an alert exists.
+Grafana is the canonical alert engine. Operators write Grafana rules with `severity=warning`, `severity=error`, or `severity=critical`. Grafana evaluates those rules, owns pending and firing state, and persists each alert instance. The ops workflow responds to that state; it does not independently evaluate metrics or accept an alert webhook.
 
-The notification contract is simple:
+- `warning`: Grafana records the firing instance, notification delivery is muted, and the ops agent investigates it.
+- `error` or `critical`: Grafana sends Slack and email while the same ops agent investigates it.
+- Stable Grafana rule and instance identifiers suppress repeated work.
+- Kubernetes and Iris are read-only evidence sources after an investigation starts.
 
-- `severity=warning` sends a signed webhook to the ops agent and does not send Slack.
-- `severity=critical` or `severity=error` sends email, Slack, and the same ops webhook.
-- Unlabelled alerts default to the agent-only receiver, avoiding accidental pages.
-- Grafana `fingerprint` identifies one alert instance. Grafana `receiver + groupKey` identifies one investigation thread.
+## System shape
 
-This means Grafana's alert identifier directly reduces chatter. A repeated notification refreshes the existing evidence. It does not create another case or restart a completed agent. A resolved-to-firing transition advances the signal generation and can wake the same case thread again.
-
-## System Shape
-
-The UI is a separate Vue application rather than a Loom feature. Loom already owns ACP process lifecycle and canonical chat journals; it has no Grafana alert, case, grouping, or resolution model. `ops.oa.dev` adds that domain model and proxies the narrow Loom APIs the browser needs. `LOOM_TOKEN` remains server-side.
+`ops.oa.dev` is a separate Vue application. Loom owns ACP session lifecycle and canonical chat journals; the ops service owns alerts, cases, scheduling, and the narrow browser API.
 
 ```mermaid
 flowchart LR
-    Rules[Grafana rules<br/>severity + labels] --> AM[Grafana Alertmanager<br/>fingerprint, grouping, dedup,<br/>repeat and resolve]
-    AM -->|warning| AgentCP[ops-agent contact point]
-    AM -->|critical / error| CriticalCP[ops-critical contact point]
-    CriticalCP --> Slack[Slack + email]
-    CriticalCP --> AgentCP
-    AgentCP -->|timestamped HMAC webhook| Relay[Loopback bridge relay]
-    Relay -->|enqueue raw body + signature| Tasks[Cloud Tasks]
-    Tasks -->|internal ingress + OIDC| Ingest[Private ingest surface<br/>webhook route only]
-    Ingest --> DB[(Ops PostgreSQL)]
-    Worker[IAP ops service<br/>durable global queue] <--> DB
-    Browser[ops.oa.dev<br/>Vue + IAP] <--> Worker
-    Worker -->|server-side bearer token| Loom[Loom ACP API]
+    Rules[Grafana rules<br/>severity + labels] --> Eval[Grafana evaluator]
+    Eval --> GDB[(Grafana PostgreSQL<br/>alert_rule + alert_instance)]
+    Eval --> Policy{severity}
+    Policy -->|warning| Muted[notification muted]
+    Policy -->|error / critical| Notify[Slack + email]
+
+    Poller[marin-ops-ui<br/>60 s server poller] -->|SELECT only| GDB
+    Poller --> ODB[(Ops PostgreSQL)]
+    Browser[ops.oa.dev<br/>Vue + IAP] <--> Poller
+    Poller -->|server-side token| Loom[Loom ACP API]
     Loom --> Agent[ops-expert<br/>plan mode]
-    Agent -->|read-only validation| K8s[Kubernetes + Iris]
-    Loom -->|chat journal| Worker
+    Agent -->|read-only validation| Evidence[Kubernetes + Iris]
+    Loom -->|chat journal| Poller
 ```
 
-Production uses two Cloud Run surfaces built from the same image:
+There is one IAP-gated Cloud Run service and no ingestion endpoint. The service has a Cloud SQL connector socket and three PostgreSQL identities:
 
-| Surface | Ingress | Credentials | Routes |
-|---|---|---|---|
-| `marin-ops-ingest` | Internal Cloud Run; dispatcher-only IAM | Cloud Tasks OIDC, webhook HMAC, narrow Postgres user | `POST /api/ingest/grafana`, health only |
-| `marin-ops-ui` | IAP | App Postgres user, dedicated Loom token | Case APIs, queue worker, Vue assets |
+| Identity | Database | Privilege |
+|---|---|---|
+| `ops_migrator` | `ops` | Assumes the schema-owning `ops_migrator_role`; never mounted at runtime |
+| `ops_app` | `ops` | Assumes `ops_app_role`; workflow table DML and sequence use only |
+| `ops_grafana_reader` | `grafana` | Assumes `ops_grafana_reader_role`; `CONNECT`, schema `USAGE`, and `SELECT` on `alert_instance` and `alert_rule` only |
 
-The ingest process has no Loom, Kubernetes, Iris, Slack, or browser credential. The UI process has no Kubernetes or Iris credential. Those read-only credentials live with the dedicated Loom agent runtime.
+The service never receives Grafana's owner password. Grafana never receives an ops-service credential. The public HTTP surface is behind IAP and contains only the dashboard and case APIs.
 
-## Identity and Grouping
+## Poll and identity model
 
-The service deliberately does not ask a cheap model to regroup alerts. Grafana already has exact, deterministic grouping rules and emits the result in every webhook.
+The poller runs in the server process, not the browser, so closing a tab cannot pause alert collection. Cloud Run keeps one warm instance with CPU allocated while idle. A database-unique minute slot makes overlapping deployment revisions harmless.
 
 ```mermaid
 flowchart TD
-    Delivery[Raw signed webhook] -->|SHA-256 body| DeliveryKey[Idempotent delivery]
-    Alert[alerts array item] -->|fingerprint| Signal[Signal row]
-    Signal -->|resolved → firing| Generation[Increment generation]
-    Group[receiver + groupKey] --> Case[One non-archived case]
-    Signal --> Attachment[Case-signal generation attachment]
-    Case --> Session[One current Loom session]
-    Session --> Turns[Immutable automatic,<br/>question, and follow-up turns]
+    Row[alert_instance in Alerting state] --> ID[org ID + rule UID + labels hash]
+    ID --> Signal[one durable signal]
+    Signal -->|resolved then returns| Generation[generation + 1]
+    Rule[alert_rule title + labels] --> Merge[merge with instance labels]
+    Merge --> Group[alertname + cluster]
+    Group --> Case[one non-archived case]
+    Signal --> Attachment[case-signal generation]
+    Case --> Session[one current Loom session]
+    Session --> Turns[immutable automatic,<br/>question, follow-up turns]
 ```
 
-The raw body hash makes exact Grafana retries safe. The signed source timestamp prevents an older delivery from regressing newer signal state. Signal rows retain the labels, annotations, values, Grafana links, start/end time, and latest delivery. The case retains a stable human and chat context while its constituent fingerprints change.
+The initial grouping rule is deterministic: `alertname, cluster`. A model is not needed to discover groups Grafana already defines. The agent may summarize a large group, but it cannot change durable identity or move alerts between cases.
 
-Grouping by `alertname, cluster` is the initial Grafana policy. Rule authors can choose another label set when one thread should cover a different failure domain. They should not add model-driven grouping unless deterministic Grafana labels prove insufficient in real traffic.
+The instance fingerprint is namespaced as:
 
-## Investigation Flow
+```text
+<Grafana org ID>:<Grafana rule UID>:<Grafana labels_hash>
+```
+
+`labels_hash` is Grafana's persisted identity for one rule instance. Namespacing it prevents collisions across rules and organizations. The normalized signal also stores rule title, labels, expanded instance annotations, last evaluation values, start time, and a Grafana rule link.
+
+## Reconciliation
 
 ```mermaid
 sequenceDiagram
-    participant G as Grafana
-    participant R as Loopback relay
-    participant T as Cloud Tasks
-    participant I as Private ops ingest
-    participant P as PostgreSQL
-    participant W as Ops worker
+    participant P as Ops poller
+    participant G as Grafana PostgreSQL
+    participant O as Ops PostgreSQL
     participant L as Loom ACP
     participant A as ops-expert
     participant K as Kubernetes / Iris
 
-    G->>R: POST grouped webhook + timestamped HMAC
-    R->>T: Enqueue exact body and signature headers
-    T->>I: POST with dispatcher OIDC token
-    I->>I: Bound body, verify signature and replay window
-    I->>P: Store delivery; upsert fingerprints and group case
-    P-->>I: Existing/new case and queue disposition
-    W->>P: Claim highest-priority turn (global slot)
-    W->>L: Create deterministic plan-mode session
-    L->>A: Prompt + normalized Grafana evidence
-    A->>K: Read-only get/list/log/status validation
-    K-->>A: Current production evidence
-    A-->>L: Explanation, impact, evidence, next action
-    W->>L: Poll canonical chat snapshot
-    W->>P: Finish turn; store dashboard summary
-    P-->>W: Release global slot
-    W->>P: Claim next queued turn
+    P->>G: read-only SELECT of Alerting instances + rules
+    G-->>P: complete firing snapshot
+    P->>O: claim this UTC minute slot
+    alt another revision already reconciled the minute
+        O-->>P: slot exists; stop
+    else first successful poll
+        P->>O: upsert current fingerprints and groups
+        P->>O: increment absence counters for missing fingerprints
+        P->>O: queue one turn for novel firing evidence
+    end
+    P->>O: claim highest-priority turn if global slot is free
+    P->>L: create or prompt deterministic plan-mode session
+    L->>A: bounded case evidence + ops-expert skill
+    A->>K: read-only get/list/log/status validation
+    K-->>A: current production evidence
+    A-->>L: finding, impact, evidence, next step
+    P->>L: read canonical chat snapshot
+    P->>O: persist summary and release global slot
 ```
 
-The worker, not the browser, drives the queue. Closing a tab does not stop investigations, and multiple tabs cannot launch duplicate agents. Automatic alerts, one-off questions, and follow-ups all enter the same durable turn table. A partial unique index permits only one `launching` or `running` turn globally. Manual questions have higher priority but do not preempt a running diagnosis.
+A poll is successful only after the Grafana query returns a complete result. A connection error, timeout, parse error, or permission error does not call reconciliation and therefore cannot resolve anything.
 
-The ops agent prompt requires the versioned `ops-expert` skill, treats every Grafana field as untrusted evidence, and prohibits repository edits and production mutation. Loom starts the ACP runtime in `plan` mode. The agent may use explicit read-only Kubernetes and Iris diagnostics to determine whether the alert is current and impactful.
+One missing successful snapshot increments `missing_successful_polls` but leaves the signal firing. The second consecutive successful absence resolves it. This adds at most one poll interval to resolution and avoids churn at evaluation boundaries. A present fingerprint resets the counter.
 
-## Lifecycles and Edge Cases
+## Investigation lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending: new Grafana group / manual question
     pending --> investigating: global turn claimed
-    pending --> investigated: all fingerprints resolve before launch
+    pending --> investigated: group resolves before launch
     investigating --> waiting_human: ACP turn completes
-    investigating --> failed: launch fails
-    waiting_human --> pending: follow-up or true re-fire
-    investigated --> pending: true re-fire
-    failed --> pending: explicit/new work
+    investigating --> failed: launch or reconciliation fails
+    waiting_human --> pending: follow-up or re-fire
+    investigated --> pending: re-fire
+    failed --> pending: explicit or new work
     waiting_human --> archived: operator archive
     investigated --> archived: operator archive
 ```
 
-| Situation | Required behavior |
+The queue is server-driven and globally serialized. Automatic alerts, one-off questions, and follow-ups all enter `agent_turns`. Manual work has higher priority but does not preempt an active diagnosis. A partial unique index permits only one `launching` or `running` turn globally.
+
+The `ops-expert` prompt treats Grafana fields as untrusted evidence, requires a bounded result artifact, and prohibits repository or production mutations. Loom starts ACP in `plan` mode. Runtime permissions are the final boundary: the investigation environment receives read-only Kubernetes and Iris credentials.
+
+## Edge cases
+
+| Situation | Behavior |
 |---|---|
-| Grafana retries the exact webhook | Return the stored delivery result; do not rewrite signals or queue another turn. |
-| Grafana repeats a still-firing fingerprint | Refresh current evidence; do not wake a completed agent. Grafana's `repeat_interval` controls notification frequency. |
-| A new fingerprint joins an existing group | Attach it to the case. If the prior turn is complete, queue one new turn; if a turn is active, queue at most one automatic follow-up. |
-| A fingerprint resolves | Mark the signal resolved. If the whole group resolves before launch, cancel its queued automatic turn as `no_action`. |
-| The group resolves during validation | Keep the active turn. Resolution is valuable evidence; do not interrupt an agent mid-diagnosis. |
-| A resolved fingerprint fires again | Increment its generation and wake the existing non-archived group case. |
-| A case is archived while the same generation repeats | Do not recreate it. A later resolved-to-firing generation can create a new case. |
-| Two groups fire together | Queue both, then run them by severity and age through the one-agent slot. |
-| An operator asks a one-off question | Create a manual case with higher queue priority and the same read-only runtime policy. |
-| Loom is unavailable | Persist the turn failure and visible case error; the Grafana delivery remains durable. |
-| The webhook signature is bad, older than the 25-hour task window, oversized, malformed, or truncated | Reject before database state changes. `maxAlerts=0` prevents Grafana truncation. |
-| Alert text contains instructions | Treat it as data inside the evidence envelope. Runtime permissions, not prompting, enforce read-only access. |
+| Same fingerprint remains firing | Refresh evidence; do not queue another turn. |
+| New fingerprint joins a group | Attach it. Queue at most one automatic follow-up, even if another turn is running. |
+| Grafana query fails | Log the failure; do not update absence counters or resolve signals. |
+| One successful snapshot misses a fingerprint | Keep it firing with `missing_successful_polls=1`. |
+| Second successful snapshot also misses it | Resolve it. Cancel an unstarted automatic turn if the entire group is resolved. |
+| Group resolves during validation | Keep the active turn; resolution is useful evidence. |
+| Resolved fingerprint returns | Increment generation and wake the existing non-archived case. |
+| Two Cloud Run revisions poll together | The unique UTC-minute slot admits only one reconciliation. |
+| Two groups fire together | Queue both and run by severity, eligibility, and age through the one-agent slot. |
+| Operator asks a one-off question | Create a higher-priority manual case under the same read-only policy. |
+| Alert text contains instructions | Store and display it as data; never use it to select commands, paths, or permissions. |
+| Grafana changes its private schema | Fail visibly. The adapter and its tests isolate the compatibility update. |
 
-One subtle case is a Grafana grouping-policy change. A fingerprint can move to a different `groupKey`. The initial schema assigns one case per fingerprint generation to preserve operator suppression semantics. Before production policy changes, either migrate open cases or explicitly advance their generation; silently duplicating an active generation into two chats is not allowed.
+A grouping-policy change is deliberate schema behavior, not an LLM decision. Before changing group labels, migrate or resolve open cases so one active generation is not silently forked across chats.
 
-## Dashboard
+## IAP users
 
-The Vue 3/Rsbuild application follows Marin's evaldash conventions. The inbox shows queue counts, the active turn, source freshness, firing/total fingerprint counts, clusters, and case state. A case page places Grafana evidence beside the proxied Loom conversation, with a workflow timeline, follow-up composer, Grafana links, full-Loom deep link, and archive action. `/ask` creates a one-off case.
+IAP membership is non-secret policy and is checked in at `infra/ops/Pulumi.marin-ops.yaml`:
 
-The inbox refreshes while visible. An open case polls more frequently for the spike; production should use Loom chat SSE as a latency optimization and always recover from the full `/chat` snapshot. Agent Markdown is displayed as text until a reviewed sanitizer is added.
+```yaml
+config:
+  marin-ops:viewers:
+    - "*@openathena.ai"
+    - ops@openathena.ai
+```
 
-## Pulumi and Credentials
+`*@openathena.ai` becomes the IAM principal `domain:openathena.ai`. The explicit address becomes `user:ops@openathena.ai`; it is redundant for access but records the operational owner. If `ops@openathena.ai` becomes a Google Group, replace the bare address with `group:ops@openathena.ai`. Pulumi creates one `roles/iap.httpsResourceAccessor` grant per entry. The browser request reaches the application only after IAP authenticates it, and the backend records `X-Goog-Authenticated-User-Email` as the actor.
 
-Pulumi describes the `ops` logical Cloud SQL database, separate `ops_ingest` and `ops_app` password secret shells, the Grafana webhook HMAC secret shell, Cloud Tasks queue, internal ingest service, IAP UI service, Cloud SQL attachment, service accounts, and exact IAM and Secret Manager grants. Secret values are populated out of band and never enter Pulumi state.
+## Pulumi and credentials
 
-Grafana signs a webhook to `127.0.0.1:8081`; its bridge may only enqueue on `marin-ops-alerts`. Cloud Tasks preserves the exact body and signature headers and authenticates to ingest as `marin-ops-alert-dispatch`. The ingest service accepts internal traffic only and grants `roles/run.invoker` only to that dispatcher. It receives the HMAC and its database password but no Loom or cluster credential. The IAP service receives only its database password and the dedicated ops Loom token. The Loom runtime must use a pinned Marin base containing the `ops-expert` skill and read-only cluster credentials.
+Pulumi declares:
 
-`infra/ops/Pulumi.marin-ops.yaml` keeps the non-secret IAP admission policy in review. It currently admits `*@openathena.ai` and the explicit `ops@openathena.ai` identity. The latter is redundant for access but records the operational owner. Secret values remain outside stack YAML.
+- the `ops` logical database;
+- Secret Manager shells for `ops_migrator`, `ops_app`, and `ops_grafana_reader` passwords;
+- the IAP-gated `marin-ops-ui` Cloud Run service;
+- one attached Cloud SQL instance and the runtime `roles/cloudsql.client` grant;
+- exact secret-access grants for the ops database and Grafana reader, plus Loom only when enabled;
+- the `ops.oa.dev` Cloud Run mapping and DNS-only Cloudflare record;
+- the checked-in IAP membership grants.
 
-Before deployment, the database role split must be completed with an ingestion-only security-definer function and fixed `search_path`. `ops_ingest` should receive only `CONNECT` and `EXECUTE` on that function, not direct table privileges. Schema migrations run as a separate deploy principal, never at restricted service startup.
+Secret values and native PostgreSQL users are created out of band so passwords never enter Pulumi state. Each login is created with an explicit custom `NOLOGIN` database role, avoiding Cloud SQL's default `cloudsqlsuperuser` membership. Grants are explicit and reviewable in the Cloud SQL runbook. Schema migrations run before the service rollout under `ops_migrator`, never under either runtime identity.
 
-## Spike Result
+## Spike result and rollout
 
-The local vertical slice is operational:
+The vertical slice now includes a Grafana-shaped PostgreSQL fixture, the one-minute server poller, PostgreSQL lifecycle reconciliation, the Vue inbox and case pages, the ACP stub and Loom adapter, and a Playwright workflow. The earlier read-only canary for the motivating `DNSConfigForming` event found affected pods healthy and recommended a node resolver configuration fix without making production changes.
 
-- a real-shaped, two-fingerprint Grafana fixture is timestamp-signed and accepted;
-- PostgreSQL creates one grouped case and one durable automatic turn;
-- a deterministic ACP stub completes the UI path, including follow-up and one-off question flows;
-- Playwright drives the built Vue application end to end;
-- a real Loom ACP session was launched through the same backend and used the configured CoreWeave kubeconfig read-only.
+Rollout order:
 
-The real canary validated the motivating `DNSConfigForming` warning on `cw-us-east-08a`. It found both alerted pods plus a third affected system pod on node `sg6txs64`; all were Running/Ready, the node had no Iris workload, and the relevant DaemonSets were fully available. The evidence points to duplicated host resolver configuration (`1.1.1.1 8.8.8.8 1.1.1.1`) with low immediate impact. It recommended a CoreWeave configuration fix and made no production changes.
+1. Create the custom database roles, restricted logins, and secret versions.
+2. Apply the ops schema migrations as `ops_migrator` and verify the negative privilege boundaries.
+3. Deploy `marin-ops-ui` with polling and confirm `last_poll_at` advances while zero alerts fire.
+4. Deploy Grafana's warning mute policy; verify warning rows remain in `alert_instance` while Slack receives only error/critical alerts.
+5. Exercise a synthetic warning through the checked-in stub agent and inspect the case and chat workflow.
+6. Switch `agent_mode` to Loom only after a managed endpoint and read-only cluster runtime are available.
+7. Keep agent operation read-only until mutation APIs, approvals, and negative authorization tests are separately designed.
 
-## Rollout Gates
-
-1. Land the spike with dispatch disabled in production.
-2. Provision the database roles and secret values; add rejection and Cloud Tasks dead-letter metrics.
-3. Deploy Grafana routing in shadow mode, compare grouped cases with Grafana for a week, and tune rule labels and repeat intervals.
-4. Deploy a dedicated Loom runtime pinned to a merged revision containing `ops-expert`; pass negative mutation tests for Kubernetes, Iris, GitHub, and cloud metadata.
-5. Enable manual turns, then warning turns for one cluster with a daily budget.
-6. Enable all warnings. Critical/error alerts continue to page Slack while also receiving agent validation.
-
-The Kubernetes Warning-event table shown in the original example is not itself an alert rule today. Rule authors must first encode the actionable subsets in Grafana. Broadly turning every Kubernetes Warning event into an alert would recreate the noise this system is intended to remove.
+The broad Kubernetes Warning-event table from the motivating screenshot is not itself an alert rule. Operators should encode actionable subsets as Grafana rules; waking an agent for every Warning event would recreate the noise this workflow is meant to remove.

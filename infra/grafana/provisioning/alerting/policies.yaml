@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The notification policy tree. Grafana is canonical for grouping, deduplication,
-# repeat timing, and resolution. Warnings and unmatched alerts reach only the ops
-# agent. Critical/error alerts reach email, Slack, and the agent through the
-# compound ops-critical contact point. Instances group by (alertname, cluster).
+# repeat timing, and resolution. Warnings are muted for notifications but remain
+# visible in alert_instance for the ops agent poller. Critical/error alerts reach
+# email and Slack. Instances group by (alertname, cluster).
 apiVersion: 1
 
 policies:
   - orgId: 1
-    receiver: ops-agent
+    receiver: ops-critical
     group_by: ["alertname", "cluster"]
     group_wait: 30s
     group_interval: 5m
@@ -21,6 +21,15 @@ policies:
       - receiver: ops-critical
         object_matchers:
           - ["severity", "=", "error"]
-      - receiver: ops-agent
+      - receiver: ops-critical
         object_matchers:
           - ["severity", "=", "warning"]
+        mute_time_intervals: [ops-agent-only]
+
+muteTimes:
+  - orgId: 1
+    name: ops-agent-only
+    time_intervals:
+      - times:
+          - start_time: "00:00"
+            end_time: "24:00"

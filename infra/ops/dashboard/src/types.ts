@@ -1,7 +1,7 @@
 export interface Overview {
   case_counts: Record<string, number>
   active_investigation: { case_id: string; title: string; started_at: string; loom_session_url: string | null } | null
-  last_delivery_at: string | null
+  last_poll_at: string | null
 }
 
 export interface CaseRow {

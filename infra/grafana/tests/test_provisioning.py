@@ -110,33 +110,32 @@ def test_policies_reference_provisioned_contact_points():
             assert route["receiver"] in contact_points
 
 
-def test_notification_tiers_route_warning_to_agent_and_critical_to_every_channel():
+def test_notification_tiers_mute_warnings_and_send_critical_to_slack_and_email():
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack", "webhook"}
-    assert {receiver["type"] for receiver in points["ops-agent"]["receivers"]} == {"webhook"}
+    assert critical_types == {"email", "slack"}
 
-    policies = _load(ALERTING / "policies.yaml")["policies"]
+    policy_config = _load(ALERTING / "policies.yaml")
+    policies = policy_config["policies"]
     assert len(policies) == 1
     policy = policies[0]
-    assert policy["receiver"] == "ops-agent"
+    assert policy["receiver"] == "ops-critical"
     routes = {route["object_matchers"][0][2]: route["receiver"] for route in policy["routes"]}
-    assert routes == {"critical": "ops-critical", "error": "ops-critical", "warning": "ops-agent"}
+    assert routes == {"critical": "ops-critical", "error": "ops-critical", "warning": "ops-critical"}
+    warning = next(route for route in policy["routes"] if route["object_matchers"][0][2] == "warning")
+    assert warning["mute_time_intervals"] == ["ops-agent-only"]
+    assert policy_config["muteTimes"] == [
+        {
+            "orgId": 1,
+            "name": "ops-agent-only",
+            "time_intervals": [{"times": [{"start_time": "00:00", "end_time": "24:00"}]}],
+        }
+    ]
 
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
-            if receiver["type"] == "webhook":
-                settings = receiver["settings"]
-                assert settings["url"] == "http://127.0.0.1:8081/ops/alerts"
-                assert settings["httpMethod"] == "POST"
-                assert settings["maxAlerts"] == "0"
-                assert settings["hmacConfig"] == {
-                    "secret": "$OPS_ALERT_WEBHOOK_SECRET",
-                    "header": "X-Grafana-Alerting-Signature",
-                    "timestampHeader": "X-Grafana-Alerting-Signature-Timestamp",
-                }
 
 
 def test_dashboard_filter_expressions_reference_selected_columns():

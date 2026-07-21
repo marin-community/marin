@@ -1,17 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A Cloud Run service with explicit IAP, private, or public access, built locally.
+"""A Cloud Run service with explicit IAP or public ingress, built locally.
 
 The generic shape behind Marin's web services: build the image from a Dockerfile, push it
 digest-pinned to a per-service Artifact Registry repo, and run it on Cloud Run v2 with
-Direct VPC egress. Browser services use Identity-Aware Proxy; service-to-service endpoints
-use named invoker identities; endpoints may opt into public Cloud Run IAM explicitly.
+Direct VPC egress. Internal services use Identity-Aware Proxy; narrow webhook receivers can
+opt into public Cloud Run IAM explicitly.
 
 The component owns everything a deploy needs: the runtime service account and its
-project roles, the Artifact Registry repo and image, the service, and access-specific IAM
-wiring. The one project-level prerequisite it does not own is the OAuth consent screen,
-which is shared across a project's IAP services.
+project roles, the Artifact Registry repo and image, the service, and the IAP wiring
+(the service is invokable only by the IAP service agent; people reach it through IAP's
+``httpsResourceAccessor``). The one project-level prerequisite it does not own is the
+OAuth consent screen, which is shared across a project's IAP services.
 """
 
 import re
@@ -32,15 +33,7 @@ class CloudRunAccess(StrEnum):
     """Who may invoke the generated Cloud Run service."""
 
     IAP = "iap"
-    PRIVATE = "private"
     PUBLIC = "public"
-
-
-class CloudRunIngress(StrEnum):
-    """Which network paths may reach the generated Cloud Run service."""
-
-    ALL = "INGRESS_TRAFFIC_ALL"
-    INTERNAL = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 
 
 @dataclass(frozen=True)
@@ -69,7 +62,6 @@ class CloudRunServiceArgs:
     # rebuilds identical bytes is a no-op.
     build_context: str
     access: CloudRunAccess = CloudRunAccess.IAP
-    ingress: CloudRunIngress = CloudRunIngress.ALL
     dockerfile: str = "Dockerfile"
 
     # Container runtime. Cloud Run injects PORT and expects the app to listen on it;
@@ -110,9 +102,6 @@ class CloudRunServiceArgs:
     # Each grant is its own resource, so re-running with a changed list updates only the
     # added/removed grants — never the service.
     iap_members: tuple[str, ...] = ()
-    # Service identities admitted directly to a private service. Callers must attach a
-    # Google-signed ID token; this never grants browser/IAP access.
-    invoker_members: tuple[str, ...] = ()
     # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
     # service mounts the connector socket at /cloudsql and the runtime service account gets
     # roles/cloudsql.client on the project.
@@ -140,15 +129,6 @@ def normalize_iap_member(entry: str) -> str:
     raise ValueError(f"cannot read IAP access entry {entry!r}: use an email, *@domain, or a prefixed IAM member")
 
 
-def normalize_private_invoker(entry: str) -> str:
-    """Normalize one private invoker while rejecting public IAM principals."""
-
-    member = normalize_iap_member(entry)
-    if member in IAM_SPECIAL_MEMBERS:
-        raise ValueError(f"private invoker cannot be {member}")
-    return member
-
-
 def _role_slug(role: str) -> str:
     """Pulumi resource-name-safe slug for an IAM role id (roles/compute.viewer -> compute-viewer)."""
     return role.removeprefix("roles/").replace(".", "-").replace("/", "-")
@@ -160,10 +140,10 @@ def _member_slug(member: str) -> str:
 
 
 class CloudRunService(pulumi.ComponentResource):
-    """Build, push, and run a Dockerfile as an IAP, private, or public Cloud Run v2 service.
+    """Build, push, and run a Dockerfile as an IAP or public Cloud Run v2 service.
 
-    Exposes ``uri`` (the service URL) and ``image_ref`` (the digest-pinned image the
-    service runs).
+    Exposes ``uri`` (the service URL, reachable only through IAP) and ``image_ref`` (the
+    digest-pinned image the service runs).
     """
 
     uri: pulumi.Output[str]
@@ -180,8 +160,6 @@ class CloudRunService(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
         if args.access != CloudRunAccess.IAP and args.iap_members:
             raise ValueError("iap_members require access=CloudRunAccess.IAP")
-        if args.access != CloudRunAccess.PRIVATE and args.invoker_members:
-            raise ValueError("invoker_members require access=CloudRunAccess.PRIVATE")
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
         service_account = gcp.serviceaccount.Account(
@@ -269,7 +247,8 @@ class CloudRunService(pulumi.ComponentResource):
             name=args.service_name,
             project=args.project,
             location=args.region,
-            ingress=args.ingress,
+            # Ingress stays open; either IAP or Cloud Run IAM is the explicit gate.
+            ingress="INGRESS_TRAFFIC_ALL",
             iap_enabled=args.access == CloudRunAccess.IAP,
             template=gcp.cloudrunv2.ServiceTemplateArgs(
                 service_account=service_account.email,
@@ -346,7 +325,7 @@ class CloudRunService(pulumi.ComponentResource):
                     member=member,
                     opts=child,
                 )
-        elif args.access == CloudRunAccess.PUBLIC:
+        else:
             gcp.cloudrunv2.ServiceIamMember(
                 "public-invoker",
                 project=args.project,
@@ -356,18 +335,6 @@ class CloudRunService(pulumi.ComponentResource):
                 member="allUsers",
                 opts=child,
             )
-        else:
-            for raw_member in args.invoker_members:
-                member = normalize_private_invoker(raw_member)
-                gcp.cloudrunv2.ServiceIamMember(
-                    f"private-invoker-{_member_slug(member)}",
-                    project=args.project,
-                    location=args.region,
-                    name=service.name,
-                    role="roles/run.invoker",
-                    member=member,
-                    opts=child,
-                )
 
         self.uri = service.uri
         self.image_ref = image.ref

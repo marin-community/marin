@@ -10,7 +10,6 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -20,7 +19,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import BaseRoute, Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ops_workflow.grafana import SIGNATURE_HEADER, TIMESTAMP_HEADER, GrafanaWebhookError, verify_grafana_webhook
+from ops_workflow.grafana_source import GrafanaAlertSource
 from ops_workflow.repository import OpsRepository, TurnPendingError
 from ops_workflow.service import OpsService
 
@@ -29,49 +28,36 @@ MAX_QUESTION_BYTES = 16 * 1024
 
 @dataclass(frozen=True)
 class WebConfig:
-    grafana_webhook_secret: bytes | None
-    grafana_key_id: str
     auth_mode: str
     static_dir: Path | None
-    surface: str = "all"
     reconcile_interval: float = 0.5
+    poll_interval: float = 60.0
 
 
-def create_app(service: OpsService, repository: OpsRepository, config: WebConfig) -> Starlette:
+def create_app(
+    service: OpsService,
+    repository: OpsRepository,
+    grafana_source: GrafanaAlertSource,
+    config: WebConfig,
+) -> Starlette:
     """Create the API, coordinator loop, and optional built Vue host."""
 
     @asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        task = None
-        if config.surface in ("all", "ui"):
-            task = asyncio.create_task(_coordinator_loop(service, config.reconcile_interval))
+        coordinator = asyncio.create_task(_coordinator_loop(service, config.reconcile_interval))
+        poller = asyncio.create_task(_grafana_poll_loop(repository, grafana_source, config.poll_interval))
         try:
             yield
         finally:
-            if task is not None:
+            for task in (coordinator, poller):
                 task.cancel()
+            for task in (coordinator, poller):
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await service.gateway.close()
 
     async def health(_: Request) -> Response:
         return _json({"ok": True})
-
-    async def ingest_grafana(request: Request) -> Response:
-        assert config.grafana_webhook_secret is not None
-        raw_body = await request.body()
-        try:
-            webhook = verify_grafana_webhook(
-                raw_body,
-                signature=request.headers.get(SIGNATURE_HEADER, ""),
-                timestamp=request.headers.get(TIMESTAMP_HEADER, ""),
-                secret=config.grafana_webhook_secret,
-                now=datetime.now(UTC),
-            )
-            result = await repository.ingest(webhook, key_id=config.grafana_key_id)
-        except GrafanaWebhookError as error:
-            return _json({"error": error.code, "message": str(error)}, status_code=400)
-        return _json(result.as_dict(), status_code=200 if result.duplicate else 202)
 
     async def overview(request: Request) -> Response:
         _actor(request, config)
@@ -131,25 +117,19 @@ def create_app(service: OpsService, repository: OpsRepository, config: WebConfig
         return FileResponse(index)
 
     routes: list[BaseRoute] = [Route("/healthz", health)]
-    if config.surface in ("all", "ingest"):
-        if config.grafana_webhook_secret is None:
-            raise ValueError("the ingest surface requires a Grafana webhook secret")
-        routes.append(Route("/api/ingest/grafana", ingest_grafana, methods=["POST"]))
-    if config.surface in ("all", "ui"):
-        routes.extend(
-            (
-                Route("/api/overview", overview),
-                Route("/api/cases", cases),
-                Route("/api/cases/{case_id}", case_detail),
-                Route("/api/cases/{case_id}/messages", follow_up, methods=["POST"]),
-                Route("/api/cases/{case_id}/archive", archive, methods=["POST"]),
-                Route("/api/questions", question, methods=["POST"]),
-            )
+    routes.extend(
+        (
+            Route("/api/overview", overview),
+            Route("/api/cases", cases),
+            Route("/api/cases/{case_id}", case_detail),
+            Route("/api/cases/{case_id}/messages", follow_up, methods=["POST"]),
+            Route("/api/cases/{case_id}/archive", archive, methods=["POST"]),
+            Route("/api/questions", question, methods=["POST"]),
         )
-    if config.surface in ("all", "ui") and config.static_dir is not None and (config.static_dir / "static").exists():
+    )
+    if config.static_dir is not None and (config.static_dir / "static").exists():
         routes.append(Mount("/static", StaticFiles(directory=config.static_dir / "static"), name="static"))
-    if config.surface in ("all", "ui"):
-        routes.extend((Route("/", spa), Route("/{path:path}", spa)))
+    routes.extend((Route("/", spa), Route("/{path:path}", spa)))
     return Starlette(routes=routes, lifespan=lifespan)
 
 
@@ -161,6 +141,23 @@ async def _coordinator_loop(service: OpsService, interval: float) -> None:
             # Individual turn failures are persisted by OpsService; this guard
             # keeps a transient database outage from killing the coordinator.
             logging.getLogger(__name__).exception("ops coordinator iteration failed")
+        await asyncio.sleep(interval)
+
+
+async def _grafana_poll_loop(repository: OpsRepository, source: GrafanaAlertSource, interval: float) -> None:
+    while True:
+        try:
+            snapshot = await source.snapshot()
+            results = await repository.reconcile_grafana_snapshot(snapshot)
+            queued = sum(len(result.queued_case_ids) for result in results)
+            logging.getLogger(__name__).info(
+                "reconciled Grafana snapshot: alerts=%d groups=%d queued=%d",
+                len(snapshot.alerts),
+                len(results),
+                queued,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Grafana polling iteration failed")
         await asyncio.sleep(interval)
 
 
