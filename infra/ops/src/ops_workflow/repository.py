@@ -9,26 +9,38 @@ import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ops_workflow.grafana import GrafanaAlert, GrafanaDelivery, GrafanaNotification
+from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert, GrafanaDelivery, GrafanaNotification
 from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
-from ops_workflow.state import CaseState, SignalDisposition, severity_priority
+from ops_workflow.state import CaseState, SignalDisposition, SignalState, severity_priority
 
 SOURCE = "grafana"
 GROUPING_RULE = "grafana:alertname+cluster"
 AUTOMATIC_REQUESTER = "grafana"
 MISSING_POLLS_TO_RESOLVE = 2
 POLL_KEY_ID = "grafana-postgres-reader"
+TURN_LEASE_DURATION = timedelta(minutes=10)
+TURN_TIMEOUT = timedelta(minutes=20)
 
 
 class TurnPendingError(RuntimeError):
     """The case already has queued work for its current session."""
+
+
+class ArchiveResult(StrEnum):
+    """Outcome of an archive request at the persistence boundary."""
+
+    ARCHIVED = "archived"
+    ACTIVE_TURN = "active_turn"
+    ALREADY_ARCHIVED = "already_archived"
+    NOT_FOUND = "not_found"
 
 
 @dataclass(frozen=True)
@@ -49,6 +61,17 @@ class IngestResult:
             "signal_dispositions": dict(self.signal_dispositions),
             "queued_case_ids": list(self.queued_case_ids),
         }
+
+
+@dataclass(frozen=True)
+class TouchedSignal:
+    """Named result of applying one delivery alert to its durable signal."""
+
+    id: str
+    generation: int
+    state: SignalState
+    disposition: SignalDisposition
+    alert: GrafanaAlert
 
 
 class OpsRepository:
@@ -82,8 +105,8 @@ class OpsRepository:
                     return ()
                 results: list[IngestResult] = []
                 for items in grouped.values():
-                    webhook = _poll_webhook(items, observed_at=snapshot.observed_at, status="firing")
-                    results.append(await self._ingest_delivery(connection, webhook, key_id=POLL_KEY_ID))
+                    delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="firing")
+                    results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
 
                 cursor = await connection.execute(
                     "SELECT * FROM signals WHERE source = %s AND state = 'firing' FOR UPDATE",
@@ -111,8 +134,8 @@ class OpsRepository:
                     resolving[(item.receiver, item.group_key)].append(item)
 
                 for items in resolving.values():
-                    webhook = _poll_webhook(items, observed_at=snapshot.observed_at, status="resolved")
-                    results.append(await self._ingest_delivery(connection, webhook, key_id=POLL_KEY_ID))
+                    delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="resolved")
+                    results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
                 return tuple(results)
 
     async def overview(self) -> dict[str, object]:
@@ -308,11 +331,11 @@ class OpsRepository:
                     """
                     UPDATE agent_turns
                     SET state = 'launching', lease_owner = 'ops-service',
-                        lease_expires_at = now() + interval '10 minutes',
-                        started_at = now(), deadline_at = now() + interval '20 minutes'
+                        lease_expires_at = now() + %s,
+                        started_at = now(), deadline_at = now() + %s
                     WHERE id = %s
                     """,
-                    (turn["id"],),
+                    (TURN_LEASE_DURATION, TURN_TIMEOUT, turn["id"]),
                 )
                 await connection.execute(
                     "UPDATE cases SET state = 'investigating', updated_at = now() WHERE id = %s",
@@ -355,9 +378,9 @@ class OpsRepository:
                 await connection.execute(
                     """
                     UPDATE agent_turns SET state = 'running', loom_turn_number = %s,
-                        lease_expires_at = now() + interval '10 minutes' WHERE id = %s
+                        lease_expires_at = now() + %s WHERE id = %s
                     """,
-                    (loom_turn_number, turn_id),
+                    (loom_turn_number, TURN_LEASE_DURATION, turn_id),
                 )
 
     async def running_turn(self) -> dict[str, object] | None:
@@ -449,9 +472,18 @@ class OpsRepository:
                     (bounded_error, row["case_id"]),
                 )
 
-    async def archive_case(self, *, case_id: str, actor: str) -> bool:
+    async def archive_case(self, *, case_id: str, actor: str) -> ArchiveResult:
         async with await self._connection() as connection:
             async with connection.transaction():
+                case_cursor = await connection.execute(
+                    "SELECT state FROM cases WHERE id = %s FOR UPDATE",
+                    (case_id,),
+                )
+                case = await case_cursor.fetchone()
+                if case is None:
+                    return ArchiveResult.NOT_FOUND
+                if case["state"] == CaseState.ARCHIVED.value:
+                    return ArchiveResult.ALREADY_ARCHIVED
                 active_cursor = await connection.execute(
                     """
                     SELECT t.id FROM agent_turns t JOIN agent_sessions a ON a.id = t.session_id
@@ -460,17 +492,23 @@ class OpsRepository:
                     (case_id,),
                 )
                 if await active_cursor.fetchone() is not None:
-                    return False
-                cursor = await connection.execute(
+                    return ArchiveResult.ACTIVE_TURN
+                await connection.execute(
                     """
                     UPDATE cases SET state = 'archived', archived_at = now(), updated_at = now()
-                    WHERE id = %s AND state <> 'archived' RETURNING id
+                    WHERE id = %s
                     """,
                     (case_id,),
                 )
-                archived = await cursor.fetchone()
-                if archived is None:
-                    return False
+                await connection.execute(
+                    """
+                    UPDATE agent_turns SET state = 'cancelled', completed_at = now(),
+                        error = 'Case archived before launch'
+                    WHERE session_id IN (SELECT id FROM agent_sessions WHERE case_id = %s)
+                      AND state = 'queued'
+                    """,
+                    (case_id,),
+                )
                 await connection.execute(
                     """
                     UPDATE agent_sessions SET state = 'archived', archived_at = now(), updated_at = now()
@@ -479,7 +517,7 @@ class OpsRepository:
                     (case_id,),
                 )
                 await self._event(connection, case_id, "case_archived", actor, {})
-                return True
+                return ArchiveResult.ARCHIVED
 
     async def _connection(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         connection = await psycopg.AsyncConnection.connect(self._database_url, row_factory=dict_row)
@@ -488,11 +526,11 @@ class OpsRepository:
     async def _ingest_delivery(
         self,
         connection: psycopg.AsyncConnection[dict[str, Any]],
-        webhook: GrafanaDelivery,
+        delivery: GrafanaDelivery,
         *,
         key_id: str,
     ) -> IngestResult:
-        existing = await self._existing_delivery(connection, webhook.delivery_key)
+        existing = await self._existing_delivery(connection, delivery.delivery_key)
         if existing is not None:
             return _stored_ingest_result(existing)
 
@@ -509,28 +547,28 @@ class OpsRepository:
             (
                 delivery_id,
                 SOURCE,
-                webhook.delivery_key,
+                delivery.delivery_key,
                 key_id,
-                webhook.source_timestamp,
-                webhook.body_sha256,
-                Jsonb(webhook.normalized_payload),
+                delivery.source_timestamp,
+                delivery.body_sha256,
+                Jsonb(delivery.normalized_payload),
             ),
         )
         if await insert_cursor.fetchone() is None:
-            existing = await self._existing_delivery(connection, webhook.delivery_key)
+            existing = await self._existing_delivery(connection, delivery.delivery_key)
             assert existing is not None
             return _stored_ingest_result(existing)
 
         touched = [
-            await self._upsert_signal(connection, webhook, delivery_id, alert) for alert in webhook.notification.alerts
+            await self._upsert_signal(connection, delivery, delivery_id, alert) for alert in delivery.notification.alerts
         ]
-        case_id, should_queue = await self._materialize_case(connection, webhook, touched)
+        case_id, should_queue = await self._materialize_case(connection, delivery, touched)
         queued_case_ids: tuple[str, ...] = ()
         if case_id is not None and should_queue:
             queued = await self._enqueue_automatic_turn(
                 connection,
                 case_id=case_id,
-                delivery_key=webhook.delivery_key,
+                delivery_key=delivery.delivery_key,
             )
             if queued:
                 queued_case_ids = (case_id,)
@@ -540,7 +578,7 @@ class OpsRepository:
             delivery_id=delivery_id,
             duplicate=False,
             case_ids=case_ids,
-            signal_dispositions={item[4].fingerprint: item[3].value for item in touched},
+            signal_dispositions={item.alert.fingerprint: item.disposition.value for item in touched},
             queued_case_ids=queued_case_ids,
         )
         await connection.execute(
@@ -562,16 +600,16 @@ class OpsRepository:
     async def _upsert_signal(
         self,
         connection: psycopg.AsyncConnection[dict[str, Any]],
-        webhook: GrafanaDelivery,
+        delivery: GrafanaDelivery,
         delivery_id: str,
         alert: GrafanaAlert,
-    ) -> tuple[str, int, str, SignalDisposition, GrafanaAlert]:
+    ) -> TouchedSignal:
         cursor = await connection.execute(
             "SELECT * FROM signals WHERE source = %s AND fingerprint = %s FOR UPDATE",
             (SOURCE, alert.fingerprint),
         )
         prior = await cursor.fetchone()
-        if prior is not None and webhook.source_timestamp < prior["latest_source_timestamp"]:
+        if prior is not None and delivery.source_timestamp < prior["latest_source_timestamp"]:
             await connection.execute(
                 """
                 INSERT INTO delivery_signals (delivery_id, signal_id, disposition)
@@ -579,12 +617,12 @@ class OpsRepository:
                 """,
                 (delivery_id, prior["id"]),
             )
-            return (
-                str(prior["id"]),
-                int(prior["generation"]),
-                str(prior["state"]),
-                SignalDisposition.STALE,
-                alert,
+            return TouchedSignal(
+                id=str(prior["id"]),
+                generation=int(prior["generation"]),
+                state=SignalState(str(prior["state"])),
+                disposition=SignalDisposition.STALE,
+                alert=alert,
             )
 
         if prior is None:
@@ -604,8 +642,8 @@ class OpsRepository:
 
         labels = alert.labels
         current_fields = (
-            webhook.notification.receiver,
-            webhook.notification.group_key,
+            delivery.notification.receiver,
+            delivery.notification.group_key,
             alert.alert_name,
             alert.severity,
             labels.get("cluster"),
@@ -620,11 +658,11 @@ class OpsRepository:
             alert.silence_url or None,
             alert.dashboard_url or None,
             alert.panel_url or None,
-            webhook.notification.version,
+            delivery.notification.version,
             alert.starts_at,
-            webhook.source_timestamp,
+            delivery.source_timestamp,
             alert.ends_at if alert.status == "resolved" else None,
-            webhook.source_timestamp,
+            delivery.source_timestamp,
             delivery_id,
         )
         if prior is None:
@@ -672,15 +710,21 @@ class OpsRepository:
             """,
             (delivery_id, signal_id, disposition.value),
         )
-        return signal_id, generation, alert.status, disposition, alert
+        return TouchedSignal(
+            id=signal_id,
+            generation=generation,
+            state=SignalState(alert.status),
+            disposition=disposition,
+            alert=alert,
+        )
 
     async def _materialize_case(
         self,
         connection: psycopg.AsyncConnection[dict[str, Any]],
-        webhook: GrafanaDelivery,
-        touched: list[tuple[str, int, str, SignalDisposition, GrafanaAlert]],
+        delivery: GrafanaDelivery,
+        touched: Sequence[TouchedSignal],
     ) -> tuple[str | None, bool]:
-        notification = webhook.notification
+        notification = delivery.notification
         cursor = await connection.execute(
             """
             SELECT * FROM cases
@@ -691,8 +735,9 @@ class OpsRepository:
         )
         case = await cursor.fetchone()
         novel_firing = any(
-            state == "firing" and disposition in (SignalDisposition.CREATED, SignalDisposition.REOPENED)
-            for _, _, state, disposition, _ in touched
+            item.state == SignalState.FIRING
+            and item.disposition in (SignalDisposition.CREATED, SignalDisposition.REOPENED)
+            for item in touched
         )
         firing_cursor = await connection.execute(
             """
@@ -710,87 +755,123 @@ class OpsRepository:
             return None, False
         created = case is None
         if created:
-            case_id = str(uuid.uuid4())
-            priority = max(severity_priority(alert.severity) for _, _, state, _, alert in touched if state == "firing")
-            title = notification.title or notification.common_annotations.get("summary") or _case_title(touched)
-            await connection.execute(
-                """
-                INSERT INTO cases (
-                    id, trigger, receiver, group_key, grouping_rule, state,
-                    priority, title, opened_at, updated_at
-                ) VALUES (%s, 'automatic', %s, %s, %s, 'pending', %s, %s, now(), now())
-                """,
-                (case_id, notification.receiver, notification.group_key, GROUPING_RULE, priority, title),
-            )
-            await self._event(
-                connection,
-                case_id,
-                "case_opened",
-                SOURCE,
-                {"receiver": notification.receiver, "group_key": notification.group_key},
-            )
+            case_id = await self._open_case(connection, notification=notification, touched=touched)
         else:
             case_id = str(case["id"])
 
+        attached_novel = await self._attach_signals(connection, case_id=case_id, touched=touched)
+
+        if not any_firing:
+            await self._resolve_case_group(connection, case_id=case_id)
+            return case_id, False
+
+        should_queue = created or novel_firing or attached_novel
+        case_state = None if case is None else CaseState(str(case["state"]))
+        await self._touch_case(connection, case_id=case_id, requeue=should_queue and not created, state=case_state)
+        return case_id, should_queue
+
+    async def _open_case(
+        self,
+        connection: psycopg.AsyncConnection[dict[str, Any]],
+        *,
+        notification: GrafanaNotification,
+        touched: Sequence[TouchedSignal],
+    ) -> str:
+        case_id = str(uuid.uuid4())
+        priority = max(severity_priority(item.alert.severity) for item in touched if item.state == SignalState.FIRING)
+        title = notification.title or notification.common_annotations.get("summary") or _case_title(touched)
+        await connection.execute(
+            """
+            INSERT INTO cases (
+                id, trigger, receiver, group_key, grouping_rule, state,
+                priority, title, opened_at, updated_at
+            ) VALUES (%s, 'automatic', %s, %s, %s, 'pending', %s, %s, now(), now())
+            """,
+            (case_id, notification.receiver, notification.group_key, GROUPING_RULE, priority, title),
+        )
+        await self._event(
+            connection,
+            case_id,
+            "case_opened",
+            SOURCE,
+            {"receiver": notification.receiver, "group_key": notification.group_key},
+        )
+        return case_id
+
+    async def _attach_signals(
+        self,
+        connection: psycopg.AsyncConnection[dict[str, Any]],
+        *,
+        case_id: str,
+        touched: Sequence[TouchedSignal],
+    ) -> bool:
         attached_novel = False
-        for signal_id, generation, _, disposition, _ in touched:
-            if disposition == SignalDisposition.STALE:
+        for item in touched:
+            if item.disposition == SignalDisposition.STALE:
                 continue
-            insert_cursor = await connection.execute(
+            cursor = await connection.execute(
                 """
                 INSERT INTO case_signals (case_id, signal_id, signal_generation)
                 VALUES (%s, %s, %s)
                 ON CONFLICT DO NOTHING
                 RETURNING signal_id
                 """,
-                (case_id, signal_id, generation),
+                (case_id, item.id, item.generation),
             )
-            attached_novel = attached_novel or await insert_cursor.fetchone() is not None
+            attached_novel = attached_novel or await cursor.fetchone() is not None
+        return attached_novel
 
-        if not any_firing:
+    async def _resolve_case_group(
+        self,
+        connection: psycopg.AsyncConnection[dict[str, Any]],
+        *,
+        case_id: str,
+    ) -> None:
+        await connection.execute(
+            """
+            UPDATE cases SET state = CASE WHEN state = 'pending' THEN 'investigated' ELSE state END,
+                outcome = CASE WHEN state = 'pending' THEN 'no_action' ELSE outcome END,
+                summary = CASE
+                    WHEN state = 'pending' THEN 'Grafana resolved the group before investigation'
+                    ELSE summary
+                END,
+                investigated_at = CASE WHEN state = 'pending' THEN now() ELSE investigated_at END,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (case_id,),
+        )
+        await connection.execute(
+            """
+            UPDATE agent_turns SET state = 'cancelled', completed_at = now(),
+                error = 'Grafana resolved the group before launch'
+            WHERE session_id IN (SELECT id FROM agent_sessions WHERE case_id = %s)
+              AND state = 'queued' AND kind = 'automatic'
+            """,
+            (case_id,),
+        )
+        await self._event(connection, case_id, "grafana_group_resolved", SOURCE, {})
+
+    async def _touch_case(
+        self,
+        connection: psycopg.AsyncConnection[dict[str, Any]],
+        *,
+        case_id: str,
+        requeue: bool,
+        state: CaseState | None,
+    ) -> None:
+        needs_pending = requeue and state in (
+            CaseState.WAITING_HUMAN,
+            CaseState.INVESTIGATED,
+            CaseState.FAILED,
+        )
+        if needs_pending:
             await connection.execute(
-                """
-                UPDATE cases SET state = CASE WHEN state = 'pending' THEN 'investigated' ELSE state END,
-                    outcome = CASE WHEN state = 'pending' THEN 'no_action' ELSE outcome END,
-                    summary = CASE
-                        WHEN state = 'pending' THEN 'Grafana resolved the group before investigation'
-                        ELSE summary
-                    END,
-                    investigated_at = CASE WHEN state = 'pending' THEN now() ELSE investigated_at END,
-                    updated_at = now()
-                WHERE id = %s
-                """,
+                "UPDATE cases SET state = 'pending', outcome = NULL, updated_at = now() WHERE id = %s",
                 (case_id,),
             )
-            await connection.execute(
-                """
-                UPDATE agent_turns SET state = 'cancelled', completed_at = now(),
-                    error = 'Grafana resolved the group before launch'
-                WHERE session_id IN (SELECT id FROM agent_sessions WHERE case_id = %s)
-                  AND state = 'queued' AND kind = 'automatic'
-                """,
-                (case_id,),
-            )
-            await self._event(connection, case_id, "grafana_group_resolved", SOURCE, {})
-            return case_id, False
-
-        should_queue = created or novel_firing or attached_novel
-        if should_queue and not created:
-            assert case is not None
-            if case["state"] in (
-                CaseState.WAITING_HUMAN.value,
-                CaseState.INVESTIGATED.value,
-                CaseState.FAILED.value,
-            ):
-                await connection.execute(
-                    "UPDATE cases SET state = 'pending', outcome = NULL, updated_at = now() WHERE id = %s",
-                    (case_id,),
-                )
-            else:
-                await connection.execute("UPDATE cases SET updated_at = now() WHERE id = %s", (case_id,))
-        else:
-            await connection.execute("UPDATE cases SET updated_at = now() WHERE id = %s", (case_id,))
-        return case_id, should_queue
+            return
+        await connection.execute("UPDATE cases SET updated_at = now() WHERE id = %s", (case_id,))
 
     async def _enqueue_automatic_turn(
         self,
@@ -884,7 +965,7 @@ def _stored_ingest_result(row: Mapping[str, Any]) -> IngestResult:
     )
 
 
-def _poll_webhook(
+def _poll_delivery(
     items: Sequence[PolledGrafanaAlert],
     *,
     observed_at: datetime,
@@ -930,7 +1011,7 @@ def _poll_webhook(
             group_labels=first.group_labels,
             common_labels=common_labels,
             common_annotations=common_annotations,
-            external_url="https://grafana.oa.dev/",
+            external_url=f"{GRAFANA_BASE_URL}/",
             title=first.title,
             message="",
             alerts=alerts,
@@ -984,8 +1065,8 @@ def _common_strings(values: Sequence[Mapping[str, str]]) -> Mapping[str, str]:
     return {key: item for key, item in first.items() if all(value.get(key) == item for value in values[1:])}
 
 
-def _case_title(touched: list[tuple[str, int, str, SignalDisposition, GrafanaAlert]]) -> str:
-    alerts = [item[4] for item in touched if item[2] == "firing"]
+def _case_title(touched: Sequence[TouchedSignal]) -> str:
+    alerts = [item.alert for item in touched if item.state == SignalState.FIRING]
     if not alerts:
         return "Resolved Grafana alert group"
     first = alerts[0]

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from ops_workflow.loom import AgentGateway, ChatSnapshot
-from ops_workflow.repository import OpsRepository, json_evidence
+from ops_workflow.repository import ArchiveResult, OpsRepository, json_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -131,16 +131,18 @@ class OpsService:
         detail["chat"] = {"blocks": chat.blocks, "live_turn": chat.live_turn}
         return detail
 
-    async def archive(self, *, case_id: str, actor: str) -> bool:
+    async def archive(self, *, case_id: str, actor: str) -> ArchiveResult:
         detail = await self.repository.case_detail(case_id)
         if detail is None:
             raise KeyError(case_id)
         case = detail["case"]
         assert isinstance(case, Mapping)
-        archived = await self.repository.archive_case(case_id=case_id, actor=actor)
-        if not archived:
-            return False
+        result = await self.repository.archive_case(case_id=case_id, actor=actor)
+        if result == ArchiveResult.NOT_FOUND:
+            raise KeyError(case_id)
+        if result != ArchiveResult.ARCHIVED:
+            return result
         session_id = case.get("loom_session_id")
         if isinstance(session_id, str) and session_id:
             await self.gateway.archive(session_id)
-        return True
+        return result

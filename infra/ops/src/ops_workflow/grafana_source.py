@@ -12,7 +12,7 @@ from typing import Any, Protocol, cast
 import psycopg
 from psycopg.rows import dict_row
 
-from ops_workflow.grafana import GrafanaAlert
+from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert
 
 ACTIVE_GRAFANA_STATE = "Alerting"
 OPS_RECEIVER = "ops-agent"
@@ -129,7 +129,7 @@ def _alert_from_row(row: Mapping[str, object]) -> PolledGrafanaAlert:
     group_labels = {"alertname": alert_name, "cluster": cluster}
     group_key = json.dumps(group_labels, sort_keys=True, separators=(",", ":"))
     title = f"{alert_name} · {cluster}" if cluster else alert_name
-    generator_url = f"https://grafana.oa.dev/alerting/grafana/{rule_uid}/view"
+    generator_url = f"{GRAFANA_BASE_URL}/alerting/grafana/{rule_uid}/view"
     return PolledGrafanaAlert(
         alert=GrafanaAlert(
             fingerprint=fingerprint,

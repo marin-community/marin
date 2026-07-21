@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A Cloud Run service with explicit IAP or public ingress, built locally.
+"""An IAP-gated Cloud Run service built locally.
 
 The generic shape behind Marin's web services: build the image from a Dockerfile, push it
 digest-pinned to a per-service Artifact Registry repo, and run it on Cloud Run v2 with
-Direct VPC egress. Internal services use Identity-Aware Proxy; narrow webhook receivers can
-opt into public Cloud Run IAM explicitly.
+Direct VPC egress and Identity-Aware Proxy.
 
 The component owns everything a deploy needs: the runtime service account and its
 project roles, the Artifact Registry repo and image, the service, and the IAP wiring
@@ -17,7 +16,6 @@ OAuth consent screen, which is shared across a project's IAP services.
 
 import re
 from dataclasses import dataclass, field
-from enum import StrEnum
 
 import pulumi
 import pulumi_docker_build as docker_build
@@ -27,13 +25,6 @@ import pulumi_gcp as gcp
 # not the end user — is what invokes the service. People are admitted separately, through
 # IAP's httpsResourceAccessor role.
 IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gserviceaccount.com"
-
-
-class CloudRunAccess(StrEnum):
-    """Who may invoke the generated Cloud Run service."""
-
-    IAP = "iap"
-    PUBLIC = "public"
 
 
 @dataclass(frozen=True)
@@ -61,7 +52,6 @@ class CloudRunServiceArgs:
     # resolved within it. The pushed image is referenced by digest so a redeploy that
     # rebuilds identical bytes is a no-op.
     build_context: str
-    access: CloudRunAccess = CloudRunAccess.IAP
     dockerfile: str = "Dockerfile"
 
     # Container runtime. Cloud Run injects PORT and expects the app to listen on it;
@@ -140,7 +130,7 @@ def _member_slug(member: str) -> str:
 
 
 class CloudRunService(pulumi.ComponentResource):
-    """Build, push, and run a Dockerfile as an IAP or public Cloud Run v2 service.
+    """Build, push, and run a Dockerfile as an IAP-gated Cloud Run v2 service.
 
     Exposes ``uri`` (the service URL, reachable only through IAP) and ``image_ref`` (the
     digest-pinned image the service runs).
@@ -158,8 +148,6 @@ class CloudRunService(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
-        if args.access != CloudRunAccess.IAP and args.iap_members:
-            raise ValueError("iap_members require access=CloudRunAccess.IAP")
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
         service_account = gcp.serviceaccount.Account(
@@ -247,9 +235,9 @@ class CloudRunService(pulumi.ComponentResource):
             name=args.service_name,
             project=args.project,
             location=args.region,
-            # Ingress stays open; either IAP or Cloud Run IAM is the explicit gate.
+            # Ingress stays open so Google's IAP frontend can reach the service.
             ingress="INGRESS_TRAFFIC_ALL",
-            iap_enabled=args.access == CloudRunAccess.IAP,
+            iap_enabled=True,
             template=gcp.cloudrunv2.ServiceTemplateArgs(
                 service_account=service_account.email,
                 timeout=f"{args.request_timeout}s",
@@ -299,40 +287,29 @@ class CloudRunService(pulumi.ComponentResource):
             opts=child,
         )
 
-        if args.access == CloudRunAccess.IAP:
-            # IAP invokes as its service agent. People are admitted separately
-            # through httpsResourceAccessor grants.
-            project_number = gcp.organizations.get_project(
-                project_id=args.project, opts=pulumi.InvokeOptions(provider=gcp_provider)
-            ).number
-            gcp.cloudrunv2.ServiceIamMember(
-                "iap-invoker",
+        # IAP invokes as its service agent. People are admitted separately through
+        # httpsResourceAccessor grants.
+        project_number = gcp.organizations.get_project(
+            project_id=args.project, opts=pulumi.InvokeOptions(provider=gcp_provider)
+        ).number
+        gcp.cloudrunv2.ServiceIamMember(
+            "iap-invoker",
+            project=args.project,
+            location=args.region,
+            name=service.name,
+            role="roles/run.invoker",
+            member=IAP_SERVICE_AGENT.format(project_number=project_number),
+            opts=child,
+        )
+        for raw_member in args.iap_members:
+            member = normalize_iap_member(raw_member)
+            gcp.iap.WebCloudRunServiceIamMember(
+                f"iap-access-{_member_slug(member)}",
                 project=args.project,
                 location=args.region,
-                name=service.name,
-                role="roles/run.invoker",
-                member=IAP_SERVICE_AGENT.format(project_number=project_number),
-                opts=child,
-            )
-            for raw_member in args.iap_members:
-                member = normalize_iap_member(raw_member)
-                gcp.iap.WebCloudRunServiceIamMember(
-                    f"iap-access-{_member_slug(member)}",
-                    project=args.project,
-                    location=args.region,
-                    cloud_run_service_name=service.name,
-                    role="roles/iap.httpsResourceAccessor",
-                    member=member,
-                    opts=child,
-                )
-        else:
-            gcp.cloudrunv2.ServiceIamMember(
-                "public-invoker",
-                project=args.project,
-                location=args.region,
-                name=service.name,
-                role="roles/run.invoker",
-                member="allUsers",
+                cloud_run_service_name=service.name,
+                role="roles/iap.httpsResourceAccessor",
+                member=member,
                 opts=child,
             )
 

@@ -12,7 +12,7 @@ import pytest
 from ops_workflow.grafana_source import snapshot_from_rows
 from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
-from ops_workflow.repository import OpsRepository
+from ops_workflow.repository import ArchiveResult, OpsRepository
 
 DATABASE_URL = os.environ.get("OPS_TEST_DATABASE_URL")
 MIGRATIONS = Path(__file__).parent.parent / "migrations"
@@ -168,3 +168,28 @@ async def test_only_one_service_instance_reconciles_each_poll_minute():
     signals = detail["signals"]
     assert isinstance(signals, list)
     assert signals[0]["missing_successful_polls"] == 0
+
+
+@pytest.mark.anyio
+async def test_archive_distinguishes_active_already_archived_and_missing_cases():
+    assert DATABASE_URL is not None
+    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+    now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
+
+    result = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    case_id = result[0].case_ids[0]
+    assert await repository.archive_case(case_id=case_id, actor="test@example.com") == ArchiveResult.ARCHIVED
+    assert await repository.archive_case(case_id=case_id, actor="test@example.com") == ArchiveResult.ALREADY_ARCHIVED
+    assert await repository.archive_case(case_id="00000000-0000-0000-0000-000000000000", actor="test@example.com") == (
+        ArchiveResult.NOT_FOUND
+    )
+    detail = await repository.case_detail(case_id)
+    assert detail is not None
+    turns = detail["turns"]
+    assert isinstance(turns, list)
+    assert turns[0]["state"] == "cancelled"
+
+    active_case_id = await repository.create_question(text="Is the cluster healthy?", actor="test@example.com")
+    turn = await repository.claim_next_turn()
+    assert turn is not None
+    assert await repository.archive_case(case_id=active_case_id, actor="test@example.com") == ArchiveResult.ACTIVE_TURN

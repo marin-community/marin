@@ -18,4 +18,14 @@ The current patch makes Grafana PostgreSQL polling the only automatic alert sour
 6. IAP normalization for `*@openathena.ai` and `ops@openathena.ai`.
 7. The local Grafana-shaped database and Playwright vertical slice.
 
-The final code review command and disposition are recorded in the PR and Weaver peer-review artifact.
+## Code review disposition
+
+The required `./infra/pre-commit.py --review --agent-command='claude -p'` review ran against commit `8538e135f7`. Four independent passes and a consolidation pass found no defect in the polling, IAP, SQL-role, or alert-routing design. The actionable findings were cleanup in the earlier spike implementation:
+
+- a test-only scheduler, turn model, and fake runner duplicated the PostgreSQL and Loom path;
+- reconciliation threaded an unnamed five-field tuple through several methods;
+- archive outcomes conflated an active turn with an already archived or absent case;
+- Grafana URL and turn lease values were duplicated literals;
+- the Cloud Run component retained an unused public-access mode.
+
+The follow-up deletes the parallel subsystem, introduces the named `TouchedSignal` and `ArchiveResult` types, splits case materialization into focused helpers, centralizes the constants, and makes the shared Cloud Run component IAP-only. The archive integration test covers active, first archive, repeat archive, missing case, and queued-turn cancellation. A clean second review is required before rollout.

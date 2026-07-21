@@ -20,7 +20,7 @@ from starlette.routing import BaseRoute, Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ops_workflow.grafana_source import GrafanaAlertSource
-from ops_workflow.repository import OpsRepository, TurnPendingError
+from ops_workflow.repository import ArchiveResult, OpsRepository, TurnPendingError
 from ops_workflow.service import OpsService
 
 MAX_QUESTION_BYTES = 16 * 1024
@@ -101,12 +101,12 @@ def create_app(
     async def archive(request: Request) -> Response:
         actor = _actor(request, config)
         try:
-            archived = await service.archive(case_id=request.path_params["case_id"], actor=actor)
+            result = await service.archive(case_id=request.path_params["case_id"], actor=actor)
         except KeyError:
             return _json({"error": "not_found"}, status_code=404)
-        if not archived:
+        if result == ArchiveResult.ACTIVE_TURN:
             return _json({"error": "turn_active"}, status_code=409)
-        return _json({"archived": True})
+        return _json({"archived": True, "already_archived": result == ArchiveResult.ALREADY_ARCHIVED})
 
     async def spa(_: Request) -> Response:
         if config.static_dir is None:
