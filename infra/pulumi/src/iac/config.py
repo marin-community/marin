@@ -42,8 +42,6 @@ class CksClusterSpec(BaseModel):
 
     name: str
     zone: str
-    vpc: str | None = None
-    import_existing: bool = False
 
 
 class KueueProvisioningSpec(BaseModel):
@@ -92,25 +90,11 @@ class RbacSpec(BaseModel):
     service_account: str = "iris-controller"
 
 
-class BucketSpec(BaseModel):
-    name: str
-    region: str
-
-
-class ObjectStorageSpec(BaseModel):
-    """Buckets + access key(s). Bucket lifecycle rules are out of scope (configure_buckets.py)."""
-
-    buckets: list[BucketSpec] = Field(default_factory=list)
-    access_key_secret_ref: str | None = None
-
-
 class CoreweaveProvisioning(BaseModel):
-    region: str
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
     ingress: IngressSpec
     rbac: RbacSpec = RbacSpec()
-    object_storage: ObjectStorageSpec = ObjectStorageSpec()
 
 
 class GcpAddressSpec(BaseModel):

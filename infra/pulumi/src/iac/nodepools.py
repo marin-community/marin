@@ -3,22 +3,19 @@
 
 """Project Iris `scale_groups` onto CoreWeave NodePool specs.
 
-Byte-compatible with the manifest Iris builds today in
-`iris.cluster.platforms.k8s.controller` (`ensure_nodepools` / `_ensure_one_nodepool`):
-one NodePool per scale group that has a CoreWeave `slice_template`, names normalized to
-RFC 1123, node counts multiplied by `num_vms`, and the iris managed/scale-group labels
-reproduced so Iris scheduling and `cluster status` keep working after the cede.
+Naming, labels, and rack-based derivation come from the shared
+`iris.cluster.platforms.k8s.nodepool_manifests` builders, so IaC and any imperative
+caller (e.g. the GPU gang smoke harness) render identically.
 """
 
 from dataclasses import dataclass
 
 from iris.cluster.config import IrisClusterConfig
-from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
-from iris.cluster.platforms.types import Labels
-
-# NodePool spec.nodeLabels key that pins system pods (Konnectivity, monitoring) to
-# always-on nodes so GPU pools can scale to zero. Applied only when min_nodes > 0.
-SYSTEM_CRITICAL_LABEL = "cks.coreweave.cloud/system-critical"
+from iris.cluster.platforms.k8s.nodepool_manifests import (
+    compute_target_racks,
+    nodepool_name,
+    nodepool_node_labels,
+)
 
 
 @dataclass(frozen=True)
@@ -38,19 +35,12 @@ class NodePoolSpec:
     target_racks: int | None = None
 
 
-def _nodepool_name(label_prefix: str, scale_group: str) -> str:
-    # metadata.name must be a valid RFC 1123 subdomain (lowercase, '-', '.').
-    return f"{label_prefix}-{scale_group}".replace("_", "-").lower()
-
-
 def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
     """Return one NodePoolSpec per scale group that defines a CoreWeave slice_template.
 
-    Scale groups without a CoreWeave `instance_type` are skipped (mirroring
-    `ensure_nodepools`), not errored.
+    Scale groups without a CoreWeave `instance_type` are skipped, not errored.
     """
     label_prefix = config.platform.label_prefix
-    labels = Labels(label_prefix)
     specs: list[NodePoolSpec] = []
     for name, scale_group in config.scale_groups.items():
         template = scale_group.slice_template
@@ -60,30 +50,15 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
         num_vms = max(1, template.num_vms)
         min_nodes = scale_group.buffer_slices * num_vms
         max_nodes = scale_group.max_slices * num_vms
-        node_labels = {
-            labels.iris_managed: "true",
-            labels.iris_scale_group: name,
-        }
-        if min_nodes > 0:
-            node_labels[SYSTEM_CRITICAL_LABEL] = "true"
-
-        rack_based = is_rack_based(coreweave.instance_type)
-        target_racks: int | None = None
-        if rack_based:
-            if max_nodes % RACK_SIZE != 0:
-                raise ValueError(
-                    f"scale group {name!r} is a rack-based ({coreweave.instance_type}) NVL72 pool, "
-                    f"so its node count must be a whole number of {RACK_SIZE}-node racks; got {max_nodes}"
-                )
-            target_racks = max_nodes // RACK_SIZE
+        target_racks = compute_target_racks(coreweave.instance_type, max_nodes, name)
         specs.append(
             NodePoolSpec(
-                name=_nodepool_name(label_prefix, name),
+                name=nodepool_name(label_prefix, name),
                 instance_type=coreweave.instance_type,
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
-                node_labels=node_labels,
-                autoscaling=not rack_based,
+                node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
+                autoscaling=target_racks is None,
                 target_racks=target_racks,
             )
         )

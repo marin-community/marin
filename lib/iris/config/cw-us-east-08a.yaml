@@ -14,7 +14,8 @@
 # One CKS cluster / one Iris cluster / one Pulumi stack holds the full delivery
 # (confirmed one cluster), mirroring how cw-us-east-02a and cw-rno2a each hold a whole
 # region's reserved fleet. The CKS cluster name, kube_context, and kubeconfig_path below
-# are placeholders to confirm against the console once the hardware lands.
+# are confirmed against the live cluster (2026-07-21) — kubectl connects and both
+# NodePools (cpu-erapids, gb200) match this file's scale_groups exactly.
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
@@ -43,14 +44,10 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-08a.oa.dev
 
-# Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
-# dict; iac.config owns the typed schema. NodePools derive from scale_groups,
-# namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
-# from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.
+# Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
   provider: coreweave
   coreweave:
-    region: US-EAST-08A
     cluster: { name: marin-us-east-08a, zone: US-EAST-08A }
     kueue:
       flavor_topology: multinode-nvlink-ib  # GB200 NVL72: bind the flavor to the nvlink.domain topology
@@ -58,12 +55,8 @@ provisioning:
       ingress_class: traefik
       acme_email: ops@oa.dev
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
-      # federation_allow_sources (the marin/marin-dev controller egress IPs admitted through
-      # the federation route) defaults to iac.config.MARIN_FEDERATION_EGRESS_SOURCES; override
-      # here only if this cluster's allowlist differs.
+      active_cluster_issuer: letsencrypt-http01-prod
     rbac: { service_account: iris-controller }
-    # Reuses the shared CoreWeave bucket marin-us-east-02a (provisioned by cw-us-east-02a),
-    # like cw-rno2a — this cluster declares no bucket of its own; LOTA caches reads in-cluster.
 
 platform:
   label_prefix: cw-use08a

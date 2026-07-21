@@ -38,25 +38,19 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 
-# Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
-# dict; iac.config owns the typed schema. NodePools derive from scale_groups,
-# namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
-# from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.
+# Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
   provider: coreweave
   coreweave:
-    region: US-EAST-02A
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
-      acme_email: ops@oa.dev
+      acme_email: ops@openathena.ai
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      active_cluster_issuer: letsencrypt-http01-prod
     rbac: { service_account: iris-controller }
-    object_storage:
-      buckets:
-        - { name: marin-us-east-02a, region: US-EAST-02A }
 
 platform:
   label_prefix: cw-use02a

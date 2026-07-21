@@ -16,7 +16,6 @@ name: cw-us-west-04a
 provisioning:
   provider: coreweave
   coreweave:
-    region: US-WEST-04A
     cluster: { name: marin, zone: US-WEST-04A }
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
@@ -27,9 +26,6 @@ provisioning:
       # Flipped from the default staging issuer once the staging cert validated (2026-07-17).
       active_cluster_issuer: letsencrypt-http01-prod
     rbac: { service_account: iris-controller }
-    object_storage:
-      buckets:
-        - { name: marin-us-west-04a, region: US-WEST-04A }
 
 # Request auth. Identity is by network location: in-cluster peers (RFC1918 pods/nodes,
 # loopback for kubectl port-forward) are trusted as admin. A non-empty trusted_cidrs makes

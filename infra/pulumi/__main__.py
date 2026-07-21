@@ -102,7 +102,6 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         "cluster",
         CoreweaveClusterArgs(
             cluster=coreweave_provisioning.cluster,
-            region=coreweave_provisioning.region,
             nodepools=derive_nodepools(iris_config),
             adopt=adopt,
         ),

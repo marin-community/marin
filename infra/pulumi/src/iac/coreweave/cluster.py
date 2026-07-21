@@ -18,15 +18,15 @@ from dataclasses import dataclass
 
 import pulumi
 import pulumi_kubernetes as k8s
+from iris.cluster.platforms.k8s.nodepool_manifests import build_nodepool_manifest
 
 from iac.config import CksClusterSpec
-from iac.nodepools import SYSTEM_CRITICAL_LABEL, NodePoolSpec
+from iac.nodepools import NodePoolSpec
 
 
 @dataclass(frozen=True)
 class CoreweaveClusterArgs:
     cluster: CksClusterSpec
-    region: str
     nodepools: list[NodePoolSpec]
     # Adoption mode: stamp import_=<nodepool name> on each NodePool so `pulumi preview` shows
     # the real adoption diff instead of planning creates. Set via `marin-iac:import`. §4.
@@ -34,27 +34,18 @@ class CoreweaveClusterArgs:
 
 
 def _nodepool_manifest(nodepool: NodePoolSpec) -> dict:
-    # metadata.labels carry the managed + scale-group labels (not the system-critical
-    # node label, which belongs on spec.nodeLabels).
-    metadata_labels = {k: v for k, v in nodepool.node_labels.items() if k != SYSTEM_CRITICAL_LABEL}
-    spec: dict = {
-        "computeClass": "default",
-        "instanceType": nodepool.instance_type,
-        "nodeLabels": nodepool.node_labels,
-    }
-    if nodepool.target_racks is not None:
-        # Rack-based (NVL72) pool: fixed whole-rack capacity, no autoscaler. The CRD requires
-        # exactly one of targetNodes/targetRacks; racks are declaratively owned by IaC.
-        spec["targetRacks"] = nodepool.target_racks
-    else:
-        # Node-based pool: declare the [minNodes, maxNodes] autoscaler envelope. targetNodes is
-        # required at create; we seed it to minNodes and hand the live count to CoreWeave's
-        # autoscaler thereafter via ignore_changes on spec.targetNodes (see below).
-        spec["autoscaling"] = nodepool.autoscaling
-        spec["minNodes"] = nodepool.min_nodes
-        spec["maxNodes"] = nodepool.max_nodes
-        spec["targetNodes"] = nodepool.min_nodes
-    return {"metadata": {"name": nodepool.name, "labels": metadata_labels}, "spec": spec}
+    # targetNodes is required at create; we seed it to minNodes and hand the live count to
+    # CoreWeave's autoscaler thereafter via ignore_changes on spec.targetNodes (see below).
+    return build_nodepool_manifest(
+        nodepool.name,
+        nodepool.instance_type,
+        node_labels=nodepool.node_labels,
+        min_nodes=nodepool.min_nodes,
+        max_nodes=nodepool.max_nodes,
+        target_nodes=nodepool.min_nodes,
+        target_racks=nodepool.target_racks,
+        autoscaling=nodepool.autoscaling,
+    )
 
 
 class CoreweaveCluster(pulumi.ComponentResource):
@@ -84,8 +75,8 @@ class CoreweaveCluster(pulumi.ComponentResource):
             # NodePools are cluster-scoped, so the k8s import ID is just the object name.
             k8s.apiextensions.CustomResource(
                 f"nodepool-{nodepool.name}",
-                api_version="compute.coreweave.com/v1alpha1",
-                kind="NodePool",
+                api_version=manifest["apiVersion"],
+                kind=manifest["kind"],
                 metadata=manifest["metadata"],
                 spec=manifest["spec"],
                 opts=pulumi.ResourceOptions(

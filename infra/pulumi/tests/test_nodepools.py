@@ -11,7 +11,8 @@ a manifest that provides neither.
 import pytest
 from iac.config import load_iris_config
 from iac.coreweave.cluster import _nodepool_manifest
-from iac.nodepools import RACK_SIZE, NodePoolSpec, derive_nodepools
+from iac.nodepools import NodePoolSpec, derive_nodepools
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 
 
 def _node_based_spec() -> NodePoolSpec:

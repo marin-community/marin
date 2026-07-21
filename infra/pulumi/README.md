@@ -80,19 +80,16 @@ you create the stack once with `pulumi stack init` before it can be selected.
 ```bash
 cd infra/pulumi
 
-# 1. one-time: pick a state backend. --local keeps state in a local file (good for
-#    experimentation); production uses gs://marin-iac-state (see spec.md §2 backend bootstrap).
-pulumi login --local
+# 1. one-time: log in to the shared state backend (see spec.md §2 backend bootstrap /
+#    "Backend bootstrap" below for provisioning it and getting KMS access).
+pulumi login gs://marin-iac-state
 
-# 2. the secrets provider is a passphrase for local, throwaway previews (production uses a GCP
-#    KMS key — see "Backend bootstrap" below). An empty passphrase is fine here:
-export PULUMI_CONFIG_PASSPHRASE=""
-
-# 3. one-time: create the stack. This reads the committed Pulumi.cw-us-east-02a.yaml.
-pulumi stack init cw-us-east-02a
+# 2. one-time: create the stack. This reads the committed Pulumi.cw-us-east-02a.yaml.
+pulumi stack init cw-us-east-02a \
+  --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
 #    (on later runs, just: pulumi stack select cw-us-east-02a)
 
-# 4. preview
+# 3. preview
 pulumi preview
 ```
 
@@ -111,19 +108,20 @@ the cluster is `pulumi up`, which you must **not** run until the preview is clea
 
 Setting `marin-iac:import=true` makes the program stamp `import_=<live id>` on every resource, so
 `pulumi preview` shows the true adoption diff — correctly parented and on the real `cw-k8s`
-provider. Preview writes nothing; it reports per resource whether adoption is a no-op, an update,
-or a **replace**. Do this against a **local** backend so state stays in a throwaway local file.
+provider. Preview writes nothing regardless of backend, so this is safe to run against the real
+GCS-backed stack from the start — no separate local recon stack needed.
 
 ```bash
-pulumi login --local
-export PULUMI_CONFIG_PASSPHRASE=""
-export KUBECONFIG=~/.kube/coreweave-iris       # read access to the live cluster
+pulumi login gs://marin-iac-state
 pulumi stack select cw-us-east-02a
 
 pulumi config set marin-iac:import true
 pulumi preview                                 # read the adoption diff
-pulumi config set marin-iac:import false       # (or `pulumi config rm marin-iac:import`)
 ```
+
+No `KUBECONFIG` export needed: `__main__.py` builds the k8s provider with an explicit
+`kubeconfig=`/`context=` read from the cluster's own `platform.coreweave.kubeconfig_path`/
+`kube_context`, never from the env var or your shell's current-context.
 
 Reading it: **no-change / update-in-place** on a NodePool → safe to adopt; **replace / delete** on
 a NodePool → **stop.** A NodePool replace deprovisions the bare-metal fleet (a reserved 256-GPU
@@ -139,9 +137,6 @@ written); it lets Pulumi compute the merged result. Taking ownership for real ha
 `pulumi up`, which has a hard ordering rule — see **Production adoption** below. (2) Fields the
 live object carries but the program doesn't declare won't show as diffs (Pulumi only manages
 declared fields).
-
-To discard the recon entirely, `pulumi stack rm cw-us-east-02a` (local backend) — it drops the
-state file without touching the cluster.
 
 ## Production adoption (GCS state)
 
@@ -213,7 +208,6 @@ pulumi stack init cw-us-west-04a \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
 #    (on later runs, just: pulumi stack select cw-us-east-02a — the secretsprovider is already
 #    recorded in the committed Pulumi.<stack>.yaml)
-export KUBECONFIG=~/.kube/coreweave-iris
 
 pulumi config set marin-iac:import true
 pulumi preview          # gate: every resource `import` + no-op/update; ANY NodePool replace/delete → STOP
@@ -251,10 +245,6 @@ already-managed resource and error. Flow is strictly: set true → `up` once →
 **After adoption:** protect the fleet — add `protect=true` (or `retainOnDelete=true`) to the
 NodePools so an accidental `pulumi destroy`/rename can't deprovision the reserved bare-metal
 nodes. Then normal ops are plain `pulumi preview`/`up` with the flag off; state lives in GCS.
-
-> **Keep local recon off the production stack.** Do recon under a throwaway stack name (e.g.
-> `cw-us-east-02a-recon` on `--local`) so the production `cw-us-east-02a` stack config keeps its
-> `secretsprovider: gcpkms://…` pointer — not a local passphrase.
 
 > **Do not** `pulumi up` **against a live cluster until the cede is deployed.** Recon (dry-run) is
 > always fine; the real adoption is ordered. See `spec.md §4`.
