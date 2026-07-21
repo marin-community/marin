@@ -63,9 +63,13 @@ from levanter.utils.activation import ActivationFunctionEnum
 class MoEExpertMlp(eqx.Module):
     """Expert MLP weights for routed MoE calls."""
 
-    w_gate: jax.Array
-    w_up: jax.Array
+    # Either (w_gate, w_up) are populated and w_gate_up is None (default), or — under
+    # SCALE_FUSED_GATE_UP_PARAM — w_gate_up holds the pre-concatenated [E, D, I2] tensor and
+    # w_gate/w_up are None, so the FSDP gather feeds straight from one stored parameter.
+    w_gate: jax.Array | None
+    w_up: jax.Array | None
     w_down: jax.Array
+    w_gate_up: jax.Array | None
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
@@ -91,10 +95,22 @@ class MoEExpertMlp(eqx.Module):
             _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
             pspecs.w_down,
         )
+        if os.environ.get("SCALE_FUSED_GATE_UP_PARAM") == "1":
+            w_gate_up = _reshard_for_init(jnp.concatenate([w_gate, w_up], axis=-1), pspecs.w_gate_up)
+            return MoEExpertMlp(
+                w_gate=None,
+                w_up=None,
+                w_down=w_down,
+                w_gate_up=w_gate_up,
+                implementation=resolved_implementation,
+                activation=activation,
+                capacity_factor=capacity_factor,
+            )
         return MoEExpertMlp(
             w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
             w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
             w_down=w_down,
+            w_gate_up=None,
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
@@ -110,7 +126,9 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
-        if os.environ.get("SCALE_SPLIT_GATE_UP_GATHER") == "1":
+        if self.w_gate_up is not None:
+            w_gate_up = self.w_gate_up
+        elif os.environ.get("SCALE_SPLIT_GATE_UP_GATHER") == "1":
             # Gather w_gate and w_up as two independent all-gathers (then concat the gathered
             # results locally), instead of concatenating first and gathering one monolithic
             # w_gate_up. Two smaller collectives are easier for XLA to schedule/overlap; the
