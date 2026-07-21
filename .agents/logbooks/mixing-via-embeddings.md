@@ -1188,3 +1188,41 @@ Predicting the 53 off-design probe runs (humaneval bpb), models fit on the 800 s
    admissible mass-weighted reading Σₚ Σⱼ wₚⱼ(bⱼ/0.2)·max(eₚⱼ−τⱼ,0) gives **1.619 — worse than baseline**,
    because on twobucket's natural arm w and e are perfectly confounded and it extrapolates to an absurd
    13.1 bpb. Resolving this needs calibration points at w != 0.2. Both readings are in the artifacts.
+
+## 2026-07-21 Function contours: projecting the surrogate onto interpretable 2-D slices
+Code: experiments/datakit/mixture_features/function_contours.py (tracked, lint-clean)
+Artifacts: report/figs3/f35_function_contours_zmacro.png, f36_..._humaneval.png (in manifest3.json),
+grug/function_contours.{json,md}. Artifact page: claude.ai/code/artifact/5a9f6c73-...
+- Slice A = code_adjacent group's phase-0 vs phase-1 share (the f18 axes). Slice B = code_adjacent vs
+  **c05**, justified from data: of 33 non-code clusters c05 has by far the largest realized spread
+  (sd 0.157, reaching 0.80 of the mix; runner-up c30 sd 0.061) and the strongest marginal association
+  with zmacro (rho +0.52) — the only other axis the swarm genuinely explores.
+- **Kernel wins every FAIR (out-of-fold) comparison**, and its OOF RMSE is BELOW the binning noise floor
+  in all four cells (fit to the limit the bins can resolve): zmacro A +0.918 vs wridge +0.853; zmacro B
+  +0.984 vs +0.963; humaneval A +0.991 vs +0.974; humaneval B +0.964 vs +0.906. Global OOF Spearman
+  over all 800: zmacro 0.818 vs 0.722, humaneval 0.938 vs 0.811.
+- **Two blocks answer two questions.** The model SURFACE is a conditional ceteris-paribus cut; the binned
+  empirical is a MARGINAL view of a Dirichlet swarm where coordinates covary. On zmacro slice A both
+  methods ANTI-correlate with the bins (−0.11 / −0.33) while their OOF per-run predictions binned
+  identically score +0.92 / +0.85. That gap is design confounding, not model failure — code share is only
+  weakly associated with zmacro marginally (rho −0.03), so those bins are dominated by what else moved.
+- **CORRECTION to my first read ("the methods look nearly identical"):** correlation is high
+  (Pearson +0.88..+0.99) but the RMS LEVEL difference is **0.46 on zmacro A = 4.2x the noise floor**.
+  They agree on ORDERING, not on VALUES. Geometrically the weights-ridge is PLANAR by construction
+  (straight parallel contours — only the weighted sum matters) while the kernel has curved contours, an
+  interior optimum, and saturation at high code dose; they diverge most in the high-share corners where
+  the linear model keeps extrapolating and the kernel bends.
+- **★ The most interesting finding — an UNADJUDICATED claim.** The kernel surface sits systematically
+  BELOW the bin means everywhere (−0.42 zmacro A = 3.8x noise floor; −0.37 B; −0.038 humaneval A) while
+  the weights-ridge is essentially unbiased (+0.04/+0.05). Reading: the kernel scores anchor-ratio grid
+  mixtures much better than the average lumpy Dirichlet run at the same group coordinate — a nonlinear
+  "spread the remaining mass evenly is better" bonus a linear model cannot represent. Every grid cell is
+  inside the train p95 NN radius, so by our own off-support test this is INTERPOLATION — yet **the swarm
+  cannot adjudicate it, because no run sits at anchor within-group ratios.** A testable, unverified
+  prediction of the model that our off-support flag does not catch. Worth a dedicated confirmation run.
+- Off-support: slice A **0%** (the f18 axes are genuinely explored — why the campaign trusts them);
+  slice B 5.2% of the feasible grid (plus 15% infeasible), a wedge on the high-code/high-c05 diagonal.
+- Caveats: ~20% of runs fall in sub-8-run bins (hatched, dropped); slice B collapses each run's two phase
+  shares onto one overall share so 0.5/0.0 and 0.4/0.4 share a column (slice A has no such projection);
+  **LightGBM (the literal RegMix model) NOT run — no libgomp on this host**, the linear weights-ridge is
+  the stand-in; panels 1-3 share a colour scale within each row, rows scaled independently (~2x ranges).
