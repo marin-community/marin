@@ -77,8 +77,8 @@ class VllmType(StrEnum):
 class IsolatedCudaVllm:
     """Provide an isolated CUDA vLLM command and environment.
 
-    Upstream serves standard vLLM architectures. The Marin fork additionally serves Marin-specific
-    architectures and streams checkpoints from the CoreWeave object store.
+    Both variants stream checkpoints from the CoreWeave object store. The Marin fork additionally
+    serves Marin-specific architectures.
     """
 
     source: VllmType = VllmType.UPSTREAM
@@ -126,15 +126,7 @@ class IsolatedCudaVllm:
 
 
 def _write_virtual_hosted_s3_config() -> str:
-    """Write a boto3 config forcing virtual-hosted S3 addressing and return its path.
-
-    boto3's S3 addressing style can only be set from a config file (no env var), and the CoreWeave
-    object store rejects the default path-style requests. The Run:ai streamer reads it via
-    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file for both stock and
-    Marin-fork vLLM. Rewritten on every call (once per serve, cheap) rather than reused: a truncated
-    leftover from a crash mid-write would otherwise be kept and silently re-enable path-style
-    addressing.
-    """
+    """Write and return a boto3 config for virtual-hosted S3 addressing."""
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
     with open(path, "w") as handle:
         handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
