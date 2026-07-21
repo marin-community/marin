@@ -301,6 +301,17 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+# Attention-projection shardings. The default (FSDP) variant shards the contraction ("data") axis, so
+# XLA inserts a per-layer weight all-gather before the attention matmuls. The ``*_GATHERED`` specs are
+# that gather's result -- the "data" axis replicated, the "model" axis kept -- i.e. exactly what the
+# implicit gather produces, what ``SCALE_REPLICATE_ATTN_WEIGHTS`` leaves the weights as permanently,
+# and what ``SCALE_PREFETCH_ATTN`` reshards to one layer ahead.
+_QKV_SPEC = P("data", "model")
+_O_SPEC = P("model", "data")
+_QKV_GATHERED_SPEC = P(None, "model")
+_O_GATHERED_SPEC = P("model", None)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -318,9 +329,9 @@ class CausalSelfAttention(eqx.Module):
         # weight all-gather (which sits exposed at the layer boundary, unhideable across the scan).
         # Costs replicating the (small) attention weights + their optimizer state instead of 1/data.
         if os.environ.get("SCALE_REPLICATE_ATTN_WEIGHTS") == "1":
-            qkv_spec, o_spec = P(None, "model"), P("model", None)
+            qkv_spec, o_spec = _QKV_GATHERED_SPEC, _O_GATHERED_SPEC
         else:
-            qkv_spec, o_spec = P("data", "model"), P("model", "data")
+            qkv_spec, o_spec = _QKV_SPEC, _O_SPEC
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), qkv_spec),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), qkv_spec),
@@ -705,6 +716,33 @@ def _prefetch_expert_weights(mlp: "MoEMLP") -> "MoEMLP":
     return eqx.tree_at(lambda m: m.expert_mlp.w_down, mlp, reshard(expert.w_down, replicated))
 
 
+AttnWeights = tuple[jax.Array, jax.Array, jax.Array, jax.Array]
+
+
+def _gather_attn_weights(attn_weights: AttnWeights) -> AttnWeights:
+    """All-gather (w_q, w_k, w_v, w_o) off the FSDP ``data`` axis to their ``*_GATHERED`` specs -- the
+    exact residency the implicit per-layer attention gather produces. Used by the prefetch scan to
+    issue one layer's gather ahead of time."""
+    w_q, w_k, w_v, w_o = attn_weights
+    return (
+        reshard(w_q, _QKV_GATHERED_SPEC),
+        reshard(w_k, _QKV_GATHERED_SPEC),
+        reshard(w_v, _QKV_GATHERED_SPEC),
+        reshard(w_o, _O_GATHERED_SPEC),
+    )
+
+
+def _swap_attn_weights(block: "Block", gathered: AttnWeights) -> "Block":
+    """Return ``block`` with its attention projections replaced by pre-gathered (replicated) weights.
+    The attention matmuls then see already-gathered inputs -- no all-gather at the layer boundary."""
+    gq, gk, gv, go = gathered
+    return eqx.tree_at(
+        lambda b: [b.attn.w_q, b.attn.w_k, b.attn.w_v, b.attn.w_o],
+        block,
+        [gq, gk, gv, go],
+    )
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -913,20 +951,72 @@ class Transformer(eqx.Module):
             short_lower_bounds = _batch_reshard(short_lower_bounds)
             valid = _batch_reshard(valid)
 
-            def _scan_layers(
-                carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, jax.Array],
-            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
+            # SCALE_SCAN_UNROLL inlines N layers per compiled scan step. With N=2, layer 2i+1's
+            # attention-weight all-gather becomes downstream of layer 2i's compute WITHIN one compiled
+            # block, so XLA can hide it with ordinary within-block latency hiding (no cross-iteration
+            # collective pipelining, which risks the #7407 CUBIN failure). Pure scheduling change; loss
+            # is bit-identical to unroll=1.
+            scan_unroll = int(os.environ.get("SCALE_SCAN_UNROLL", "1"))
+
+            def _layer_mask_and_rope(layer_use_long_mask: jax.Array) -> tuple[AttentionMask, bool | jax.Array]:
                 use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.disable_long_rope else False
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
+                return layer_mask, disable_rope
 
-            hidden, stacked_router_stats = jax.lax.scan(
-                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-            )
+            if os.environ.get("SCALE_PREFETCH_ATTN") == "1":
+                # Bounded one-layer-ahead prefetch: iteration i gathers layer i+1's attention weights
+                # while computing layer i, hiding the per-layer attention all-gather under the prior
+                # layer's compute. The carry holds the CURRENT layer's already-gathered weights.
+                stacked = self.stacked_blocks.stacked
+                attn_weights = (stacked.attn.w_q, stacked.attn.w_k, stacked.attn.w_v, stacked.attn.w_o)
+                # xs feeds each iteration the NEXT layer's still-sharded attn weights: roll -1 on the
+                # (unsharded) layer axis so next_attn[i] == attn_weights[i+1]. The final iteration's
+                # wrap-around gather (attn_weights[0]) lands in the discarded final carry -- harmless.
+                next_attn = jax.tree.map(lambda a: jnp.roll(a, -1, axis=0), attn_weights)
+                # Prologue: gather layer 0's attention weights (the same all-gather XLA would otherwise
+                # insert implicitly inside layer 0's attention), seeding the carry.
+                gathered0 = _gather_attn_weights(jax.tree.map(lambda a: a[0], attn_weights))
+
+                def _scan_layers_prefetch(
+                    carry: tuple[Float[Array, "B S D"], AttnWeights],
+                    scan_inputs: tuple[Block, jax.Array, AttnWeights],
+                ) -> tuple[tuple[Float[Array, "B S D"], AttnWeights], dict[str, jax.Array]]:
+                    carry_hidden, gathered_attn = carry
+                    layer, layer_use_long_mask, layer_next_attn = scan_inputs
+                    layer_mask, disable_rope = _layer_mask_and_rope(layer_use_long_mask)
+                    # Issue the NEXT layer's attention all-gather now (independent of carry_hidden) so it
+                    # overlaps THIS layer's attention+MoE compute instead of sitting exposed at the next
+                    # layer boundary. Kept outside the layer's remat region so backward reuses it.
+                    next_gathered = _gather_attn_weights(layer_next_attn)
+                    layer = _swap_attn_weights(layer, gathered_attn)
+                    new_hidden, router_stats = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                        carry_hidden, layer_mask, False, disable_rope
+                    )
+                    return (new_hidden, next_gathered), router_stats
+
+                (hidden, _), stacked_router_stats = jax.lax.scan(
+                    _scan_layers_prefetch,
+                    (hidden, gathered0),
+                    xs=(self.stacked_blocks.stacked, mask_schedule, next_attn),
+                    unroll=scan_unroll,
+                )
+            else:
+
+                def _scan_layers(
+                    carry_hidden: Float[Array, "B S D"],
+                    scan_inputs: tuple[Block, jax.Array],
+                ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                    layer, layer_use_long_mask = scan_inputs
+                    layer_mask, disable_rope = _layer_mask_and_rope(layer_use_long_mask)
+                    return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                        carry_hidden, layer_mask, False, disable_rope
+                    )
+
+                hidden, stacked_router_stats = jax.lax.scan(
+                    _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule), unroll=scan_unroll
+                )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
                 "routing_counts_per_layer": stacked_router_stats["routing_counts"],
