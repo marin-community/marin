@@ -18,6 +18,7 @@ from iris.actor.client import unwrap_actor_response
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS, IRIS_RPC_ZSTD
 from iris.rpc.errors import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,8 @@ class ActorPool(Generic[T]):
             client = ActorServiceClientSync(
                 address=url,
                 timeout_ms=int(self._timeout * 1000),
-                accept_compression=[],
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=IRIS_RPC_ZSTD,
             )
             self._clients[url] = client
             return client

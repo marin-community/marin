@@ -91,7 +91,6 @@ def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
         model=RunningModel(endpoint=OpenAIEndpoint(base_url="http://10.0.0.1:8000/v1", model="gpt2")),
         jobs=(),
         endpoint_name="/serve/gpt2",
-        uses_broker=False,
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",

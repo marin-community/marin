@@ -28,7 +28,8 @@ vLLM. The Levanter backend needs no vLLM at all: it serves from the worker venv'
 
 ``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
-inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``.
+inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``. Once the
+endpoint is ready, the command always mints and prints an endpoint-scoped capability URL.
 """
 
 import contextlib
@@ -353,13 +354,11 @@ def _mint_and_print_capability_url(
     "Raise for long reasoning generations; the shorter proxy default cuts those off.",
 )
 @click.option(
-    "--access",
-    type=click.Choice(["private", "link"]),
-    default="private",
-    help="Proxy access. private: cluster identity only. link: mints a scoped capability "
-    "URL anyone with the link can call off-cluster (printed once the model is ready).",
+    "--region",
+    default=None,
+    help="Direct mode only: comma-separated region(s) to pin the accelerator slice to. "
+    "Broker workers schedule in any region with matching capacity.",
 )
-@click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
 @click.option("--memory", default="64g")
 @click.option("--disk", default="100g")
@@ -399,7 +398,7 @@ def _mint_and_print_capability_url(
     help="Override the task container image. On the GPU path this bypasses the isolated "
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
-@click.option("--wait/--no-wait", default=True, help="Hold the tunnel open until the endpoint is ready, then block.")
+@click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
     "--wait-timeout",
     type=float,
@@ -430,7 +429,6 @@ def main(
     no_cache: bool,
     timeout_hours: float,
     proxy_timeout: float,
-    access: str,
     region: str | None,
     cpu: float,
     memory: str,
@@ -470,8 +468,6 @@ def main(
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
-
-    endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
@@ -553,7 +549,7 @@ def main(
         endpoint_name=endpoint,
         instances=instances,
         broker=broker_config,
-        access=endpoint_access,
+        access=EndpointAccess.ENDPOINT_ACCESS_LINK,
         timeout_hours=timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
     )
@@ -565,7 +561,10 @@ def main(
         environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
 
     constraints: list[Constraint] = []
-    if region:
+    # Broker workers carry their own device constraints. Leaving the lightweight broker job
+    # region-free prevents Iris from implicitly pinning its child workers to a region that may not
+    # have the requested accelerator slice. Direct serves still place the server in --region.
+    if region and not brokered:
         regions = [r.strip() for r in region.split(",") if r.strip()]
         if regions:
             constraints.append(region_constraint(regions))
@@ -623,9 +622,7 @@ def main(
             click.echo("")
 
             if not wait:
-                click.echo("Submitted. Open the dashboard from the Iris UI once the model has booted.")
-                if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
-                    click.echo("Re-run with --wait once the server registers to mint the off-cluster capability URL.")
+                click.echo("Submitted without waiting; no capability URL was minted.")
                 return
 
             click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
@@ -636,15 +633,14 @@ def main(
             if dashboard_url:
                 click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
-            if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
-                # Mint after the endpoint registers (the controller resolves the row
-                # for owner authz), so the token is bound to a live endpoint.
-                _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+            # Mint after the endpoint registers (the controller resolves the row for owner authz),
+            # so the token is bound to a live endpoint.
+            _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
                 while True:
                     time.sleep(3600)
-            click.echo("\nDetached. Reconnect from the Iris dashboard or re-run with --no-wait.")
+            click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
 
 
 if __name__ == "__main__":

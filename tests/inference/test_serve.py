@@ -8,6 +8,9 @@ import json
 import re
 import socket
 import time
+from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import click
@@ -305,6 +308,76 @@ def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     out = capsys.readouterr().out
     # The scoped token rides in the URL path (gist-style); possession is the credential.
     assert "https://iris.oa.dev/proxy/t/ep-token-xyz/serve.foo/v1" in out
+
+
+def _invoke_iris_serve(monkeypatch, *args: str):
+    client = MagicMock()
+    client.submit.return_value = "/power/serve-test"
+    client.resolve_endpoint.return_value = "https://controller/proxy/serve.test"
+
+    @contextmanager
+    def connect(*_args, **_kwargs):
+        yield SimpleNamespace(
+            url="https://controller",
+            config=SimpleNamespace(dashboard_url="https://iris.oa.dev"),
+            credentials=None,
+        )
+
+    @contextmanager
+    def remote(*_args, **_kwargs):
+        yield client
+
+    services = []
+    monkeypatch.setattr("marin.inference.iris_cli.find_project_root", lambda: Path.cwd())
+    monkeypatch.setattr("marin.inference.iris_cli.connect_controller", connect)
+    monkeypatch.setattr("marin.inference.iris_cli.IrisClient.remote", remote)
+    monkeypatch.setattr(
+        "marin.inference.iris_cli.Entrypoint.from_callable",
+        lambda _fn, service: services.append(service) or MagicMock(),
+    )
+    monkeypatch.setattr("marin.inference.iris_cli._wait_for_endpoint", MagicMock())
+    mint = MagicMock()
+    monkeypatch.setattr("marin.inference.iris_cli._mint_and_print_capability_url", mint)
+    monkeypatch.setattr("marin.inference.iris_cli.time.sleep", MagicMock(side_effect=KeyboardInterrupt))
+
+    result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--name", "serve-test", *args])
+    return result, client, services, mint
+
+
+def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatch):
+    result, _client, services, mint = _invoke_iris_serve(monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
+    mint.assert_called_once_with(
+        _client,
+        "/serve/serve-test",
+        "https://iris.oa.dev",
+        24.0,
+    )
+
+
+def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
+    result, _client, services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
+
+    assert result.exit_code == 0, result.output
+    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
+    mint.assert_not_called()
+    assert "Submitted" in result.output
+
+
+@pytest.mark.parametrize(("broker_args", "expects_region"), [([], True), (["--broker"], False)])
+def test_iris_serve_only_pins_direct_jobs_to_the_requested_region(monkeypatch, broker_args, expects_region):
+    result, client, _services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--region",
+        "us-central2",
+        *broker_args,
+    )
+
+    assert result.exit_code == 0, result.output
+    constraints = client.submit.call_args.kwargs["constraints"]
+    assert ("region" in {constraint.key for constraint in constraints}) is expects_region
 
 
 def _free_port() -> int:

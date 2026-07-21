@@ -171,7 +171,9 @@ broker_config = BrokerConfig() if broker or instances > 1 else None
 ```
 
 CLI output reports `mode direct` or `mode brokered`, instance count, and
-streaming support.
+streaming support. Every CLI endpoint uses link access; after readiness the CLI
+always mints and prints an endpoint-scoped JWT capability URL before holding
+the controller connection open.
 
 ## Direct Iris flow
 
@@ -210,12 +212,21 @@ creates one `InferenceBroker` actor, submits `instances` accelerator workers,
 and binds the broker proxy to `job_info.advertise_host`. Eval children can call
 that address; it is not loopback-only.
 
-The coordinator must be non-preemptible and colocated with its workers. Broker
-workers inherit cluster and region placement from the coordinator; reject
-worker configs that request a different region. The CLI applies `--region` and
-`--target-cluster` to the coordinator job, then leaves child worker placement
-unset so it inherits. This avoids cross-region inference traffic and keeps
-federated pod addresses reachable.
+The coordinator must be non-preemptible. The CLI applies `--target-cluster` to
+the coordinator job but deliberately omits its `--region` constraint in broker
+mode, so child workers can schedule in any region with matching accelerator
+capacity. Direct mode continues to apply `--region` to its accelerator job.
+Programmatic callers can constrain broker workers explicitly through
+`IrisConfig.worker_resources`.
+
+This can put the coordinator and workers in different regions. Actor clients
+send large broker payloads with zstd and advertise zstd/gzip for responses;
+actor servers offer the same encodings. A dry-run of
+`base_model_evals()` in `experiments/evals/evals.py` counted at least 210.4M
+echoed token positions. Top-5 OpenAI completion responses serialized with
+Qwen3 token pieces and float32 logprobs compress to roughly 61–66 bytes/token
+under ConnectRPC's gzip level 6, or 12.9–13.9 GB of response traffic; prompts
+add about 0.8 GB. That cost is accepted in exchange for schedulability.
 
 For library callers already inside Iris, broker mode requires the ambient job
 to be in the intended worker region/cluster. It cannot use Fray to federate
@@ -278,9 +289,10 @@ class IrisServiceConfig:
   coordinator, bind dashboard/proxy against the advertised broker endpoint,
   and register the public endpoint.
 
-Both modes retain endpoint metadata, access mode, capability links, health,
-and wall-clock shutdown. `controller_proxy_timeout_seconds` is distinct from
-the broker request timeout and is used only for endpoint metadata.
+Both modes retain endpoint metadata, capability links, health, and wall-clock
+shutdown. `marin-serve iris` always registers LINK access and mints the scoped
+URL after the live endpoint can be owner-authorized. `controller_proxy_timeout_seconds`
+is distinct from the broker request timeout and is used only for endpoint metadata.
 
 ## Control flow
 
@@ -297,7 +309,7 @@ flowchart TD
     ENGINE --> START
     SERVICE --> ENDPOINT[dashboard and Iris endpoint]
 
-    POLICY -->|Brokered| COORD[non-preemptible colocated coordinator]
+    POLICY -->|Brokered| COORD[non-preemptible region-free coordinator]
     COORD --> BROKER[InferenceBroker actor]
     BROKER --> WORKERS[N accelerator workers]
     WORKERS --> ENGINE
@@ -341,10 +353,12 @@ Do not leave import aliases.
   target-cluster constraints; children inherit placement.
 - `--extra`, checkout-free install, `--task-image`, and launcher selection
   build the lightweight engine and worker environment.
-- `--endpoint-name`, `--access`, `--proxy-timeout`, and `--timeout-hours` build
+- `--endpoint-name`, `--proxy-timeout`, and `--timeout-hours` build
   `IrisServiceConfig`.
-- `--wait`, capability minting, controller selection, and detach instructions
-  stay CLI-side.
+- Readiness waiting, capability minting, controller selection, and detach
+  instructions stay CLI-side. `--no-wait` is an explicit opt-out of waiting
+  and minting because the controller cannot mint a token until the endpoint
+  exists; the default flow always waits and mints.
 - Direct and broker workers use `max_retries_failure=1` and
   `max_retries_preemption=10`. Broker actor restart remains disabled because
   state is in-memory.
@@ -381,7 +395,7 @@ submission helpers remain.
    broker components.
 2. `BrokerConfig` rejects invalid timeout ordering; `remote_inference` rejects zero instances;
    multi-replica resources, multi-host TPU variants, and broker worker
-   placement that differs from its coordinator.
+   invalid worker placement.
 3. Direct mode submits one worker, preserves the current streaming proxy, waits
    for registry readiness, fails on early job exit, refreshes a changed address,
    and cleans up.
@@ -394,8 +408,8 @@ submission helpers remain.
    mode. Health and chat-template probing work for both.
 7. CLI tests cover subcommands, automatic topology selection, launcher-specific
    validation, direct versus coordinator resource placement, checkout-free
-   installs, federation/region constraints, task images, access links, and
-   wait/detach behavior.
+   installs, federation/region constraints, task images, and unconditional
+   capability minting.
 8. Evalchemy and lm-eval tests use the shared Iris API and no longer construct
    `QuickServeConfig` or call broker-specific launch functions.
 

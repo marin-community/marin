@@ -63,7 +63,6 @@ class RemoteInferenceSession:
     model: RunningModel
     jobs: tuple[JobHandle, ...]
     endpoint_name: str | None
-    uses_broker: bool
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
@@ -363,7 +362,6 @@ def _start_direct_inference(
             ),
             jobs=(job,),
             endpoint_name=endpoint_name,
-            uses_broker=False,
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
@@ -470,7 +468,6 @@ def _start_brokered_inference(
                 model=replace(running_model, tokenizer=model.tokenizer),
                 jobs=tuple(worker_jobs),
                 endpoint_name=None,
-                uses_broker=True,
                 streaming=False,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,

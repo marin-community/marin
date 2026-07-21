@@ -54,8 +54,7 @@ def read_attention_heads(model: str) -> tuple[int, int | None]:
 
 def _read_model_config_dict(model: str) -> dict:
     if _is_object_store_path(model):
-        config_path = model.rstrip("/") + "/config.json"
-        return json.loads(StoragePath(config_path).read_text())
+        return json.loads((StoragePath(model) / "config.json").read_text())
     return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
 
 
