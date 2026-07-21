@@ -17,9 +17,10 @@ from dataclasses import dataclass
 from marin.evaluation.records import EvalRunRecord
 from marin.evaluation.samples import primary_metric as primary_metric
 
-# Presentation grouping of eval columns into suites for the dashboard's column tree. Mirrors the
-# launcher's suite membership (experiments/evaluation/evals.py); an eval not listed here falls into
-# "Other", so drift only misfiles a column rather than dropping it.
+# Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
+# launcher's suite membership (experiments/evaluation/evals.py), which evaldash cannot import: it ships
+# as a standalone image vendoring only the marin record contracts, and experiments depends on marin,
+# not the reverse. Membership drift is graceful -- an eval not listed here just falls into "Other".
 EVAL_SUITES: dict[str, tuple[str, ...]] = {
     "NLP": (
         "mmlu",
@@ -215,12 +216,12 @@ def _cohort_cells(records: list[EvalRunRecord]) -> dict[str, dict]:
 def build_matrix(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
     """Pivot runs into a ``model x eval`` matrix plus a per-model leaderboard.
 
-    Each model row reflects its latest version cohort (:func:`_current_version`): only the runs
-    labelled with the version of the model's most recent launch fill its cells, so the headline never
-    unions evals produced against different model states. Columns are the registry eval names present
-    across those cohorts. Each row and leaderboard entry carries its cohort ``version`` and an
-    ``archived`` flag. The leaderboard scores each model by the unweighted mean of its succeeded
-    cells over the full eval set, sorted best-first with unscored models last.
+    Each model row reflects its latest version cohort: only the runs labelled with the version of the
+    model's most recent launch fill its cells, so the headline never unions evals produced against
+    different model states. Columns are the registry eval names present across those cohorts. Each row
+    and leaderboard entry carries its cohort ``version`` and an ``archived`` flag. The leaderboard
+    scores each model by the unweighted mean of its succeeded cells over the full eval set, sorted
+    best-first with unscored models last.
     """
     by_model: dict[str, list[EvalRunRecord]] = {}
     for record in records:
