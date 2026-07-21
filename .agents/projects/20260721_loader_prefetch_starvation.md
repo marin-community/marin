@@ -4,8 +4,8 @@
 
 This investigation follows the open loader observation in
 [#7012 comment 5007009232](https://github.com/marin-community/marin/issues/7012#issuecomment-5007009232): a
-512-device training run was compute-healthy while fed, but reportedly stalled after its input prefetch buffer drained
-at step 38 with Datakit and step 43 with Slim. The loader observation does not yet have its own issue under
+production training run was compute-healthy while fed, but reportedly stalled after its input prefetch buffer drained
+with two data paths. The loader observation does not yet have its own issue under
 [#6710](https://github.com/marin-community/marin/issues/6710).
 
 This note reproduces one mechanism in the current loader: an initially full queue can hide a sustained producer-rate
@@ -23,11 +23,9 @@ production producer deficit came from the dataset implementation, object storage
 awaits one `data_store.get_batch(...)`. Only after that entire call completes does it batchify and enqueue the 32
 results. It does not enqueue partial results from a fetch window.
 
-For the reported d5120/L48/E64/top4 run, the global batch was 8,192 sequences of length 4,096 across 128 hosts. Each
-host therefore requested 64 sequences (262,144 tokens) per training step. At about 12.1 seconds per step, the
-sustained per-host requirement was about 5.29 sequences/s (21,665 tokens/s). A default 32-step fetch window contains
-2,048 sequences (8,388,608 tokens) on each host and must complete within about 387 seconds to sustain that rate. The
-global consumer waits for the slowest host.
+The public reproduction deliberately omits private infrastructure topology and capacity details. The relevant
+software property is that the distributed consumer waits for the slowest producer while each producer emits a whole
+fetch window only after its backend request completes.
 
 The two datasets share this loader and eventually converge on the same `TokenSeqDataset`/`TreeCache` read path, but
 their transforms and cache layout differ. The available run evidence cannot distinguish backend throughput from
@@ -35,7 +33,7 @@ host/network tail latency.
 
 ## Bounded reproduction
 
-Run on one CPU:
+Run in the standard project environment:
 
 ```bash
 uv run --package marin-levanter \
@@ -65,8 +63,8 @@ consumer_interval < fetch_delay / prefetch_size  -> eventual drain and starvatio
 consumer_interval > fetch_delay / prefetch_size  -> sustainable after warmup
 ```
 
-A deeper buffer moves the first stalled step but does not change that sustained-rate boundary. No accelerator,
-multi-host runtime, dataset cache, or network is needed to reproduce it.
+A deeper buffer moves the first stalled step but does not change that sustained-rate boundary. The same trace was
+observed on CPU and on a B200-class accelerator. No real dataset or distributed runtime is needed to reproduce it.
 
 ## Interpretation and next measurement
 
@@ -88,7 +86,6 @@ GPU profiling is not required until the producer behavior has been separated fro
 
 ## Related production evidence
 
-[#7344](https://github.com/marin-community/marin/issues/7344) records a later 500-step Datakit run with transient
-loader warnings and a separate hard hang at step 145. That issue attributes the hard hang to a collective, not the
-loader. Slim also completed a 100-step run. Those observations are compatible with transient loader starvation but
-do not support calling every later training hang a loader failure.
+[#7344](https://github.com/marin-community/marin/issues/7344) records a later run with transient loader warnings and
+a separate hard hang. That issue attributes the hard hang to a collective, not the loader. Those observations are
+compatible with transient loader starvation but do not support calling every later training hang a loader failure.
