@@ -6,13 +6,13 @@
           <span class="grid h-9 w-9 place-items-center rounded-lg bg-[#b9ef84] font-mono text-sm font-bold text-[#17251e]">OA</span>
           <div>
             <h1 class="text-[15px] font-semibold tracking-wide">Marin Operations</h1>
-            <p class="text-[11px] text-[#aebbb3]">Grafana-triggered investigations</p>
+            <p class="font-mono text-[10px] text-[#aebbb3]">ops.oa.dev · read-only</p>
           </div>
         </RouterLink>
         <nav class="flex items-center gap-1 text-sm">
-          <RouterLink to="/" class="rounded-md px-3 py-2 hover:bg-white/10">Inbox</RouterLink>
+          <RouterLink to="/" class="rounded-md px-3 py-2 hover:bg-white/10">Cases</RouterLink>
           <RouterLink to="/diagnostics" class="rounded-md px-3 py-2 hover:bg-white/10">Diagnostics</RouterLink>
-          <RouterLink to="/ask" class="rounded-md bg-[#b9ef84] px-3 py-2 font-medium text-[#17251e] hover:bg-[#cdf8a3]">Ask ops agent</RouterLink>
+          <RouterLink to="/ask" class="rounded-md bg-[#b9ef84] px-3 py-2 font-medium text-[#17251e] hover:bg-[#cdf8a3]">New investigation</RouterLink>
         </nav>
       </div>
     </header>

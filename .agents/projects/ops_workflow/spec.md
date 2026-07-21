@@ -53,6 +53,7 @@ The schema contains:
 - `cases` and `case_signals`: one non-archived workflow per deterministic group and its signal generations;
 - `agent_sessions` and `agent_turns`: stable Loom mapping and immutable work queue;
 - `case_events`: append-only operator timeline;
+- `slack_escalations`: leased, retryable delivery outbox with one row per incident key.
 
 For each current group, a new or reopened firing generation may create or wake a case. Repeated firing instances update evidence only. A new fingerprint attaches once. When no group signal remains firing, queued automatic work is cancelled; a running turn is never interrupted.
 
@@ -64,9 +65,13 @@ Automatic priority follows severity: `critical=100`, `error=90`, `warning=50`, `
 
 The worker first proves no turn is active, locks one queued turn with `FOR UPDATE SKIP LOCKED`, and moves it to `launching`. The global partial unique index is the final concurrency guard.
 
-For a new case, the server creates a Loom ACP session with a deterministic name, pinned repository base, `mode=plan`, and the `ops-expert` evidence prompt. Follow-ups use the same session. The backend reads the canonical chat snapshot and stores the final summary; the browser never receives `LOOM_TOKEN`.
+For a new case, the server creates a Loom ACP session with a deterministic name, pinned repository base, `mode=plan`, and the `ops-expert` evidence prompt. Follow-ups use the same session. The backend reads the canonical chat snapshot and the `ops-result` artifact; the browser never receives `LOOM_TOKEN`.
 
 The agent may inspect Kubernetes and Iris through read-only credentials. It may not mutate production, edit the repository, or treat alert text as instructions.
+
+`ops-result` uses schema version 2 and includes the case UUID, ops turn UUID, outcome, bounded summary and evidence, `action_taken="none"`, next step, and an optional escalation request. The backend rejects mismatched IDs, unknown enum values, oversized fields, mutation claims, and escalation requests on `no_action` or `unknown` outcomes.
+
+The backend, not the agent, constructs the Slack message. It ignores escalation requests when any case signal has Grafana severity `error` or `critical`. Otherwise it hashes the sorted `<fingerprint>:<generation>` set into the unique incident key; manual cases use their case UUID. The result update and outbox insert commit in one transaction. Delivery uses a two-minute lease, at most five attempts, and bounded exponential retry. Only sanitized failure text is stored.
 
 ## HTTP and IAP contract
 
@@ -75,6 +80,7 @@ There is no alert-ingestion route. The service exposes:
 ```text
 GET  /healthz
 GET  /api/overview
+GET  /api/diagnostics
 GET  /api/cases
 GET  /api/cases/{case_id}
 POST /api/cases/{case_id}/messages
@@ -95,6 +101,7 @@ The runtime receives:
 
 - `PGPASSWORD` from `cloudsql-ops-app-password`;
 - `GRAFANA_PGPASSWORD` from `cloudsql-ops-grafana-reader-password`;
+- `OPS_SLACK_WEBHOOK` from `marin-grafana-slack-webhook`;
 - non-secret connection names, database names, revisions, agent mode, and the 60-second interval as environment configuration.
 
 The checked-in first rollout sets `agent_mode=stub` and does not mount a Loom credential. In `loom` mode, `LOOM_TOKEN` comes from `marin-ops-loom-token`, and the Loom URL, repository root, and base are required non-secret stack configuration.

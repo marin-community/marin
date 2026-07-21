@@ -19,6 +19,7 @@ from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
 from ops_workflow.repository import OpsRepository
 from ops_workflow.service import OpsService
+from ops_workflow.slack import SlackDispatcher, SlackWebhook
 from ops_workflow.web import WebConfig, create_app
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--grafana-database-password")
     serve.add_argument("--grafana-database-password-env")
     serve.add_argument("--grafana-poll-interval", type=float, default=60.0)
+    serve.add_argument("--public-url", default="http://127.0.0.1:8088")
+    serve.add_argument("--slack-webhook-url-env")
     serve.add_argument("--auth-mode", choices=("local", "iap"), default="local")
     serve.add_argument("--agent-mode", choices=("stub", "loom"), default="stub")
     serve.add_argument("--loom-api-url")
@@ -99,6 +102,11 @@ def _serve(args: argparse.Namespace, log_buffer: LogBuffer) -> None:
         environment_name=args.loom_token_env,
         option="--loom-token",
     )
+    slack_webhook_url = _secret_argument(
+        value=None,
+        environment_name=args.slack_webhook_url_env,
+        option="--slack-webhook-url",
+    )
     if args.grafana_poll_interval <= 0:
         raise SystemExit("--grafana-poll-interval must be positive")
     if args.migrate_on_start:
@@ -122,11 +130,13 @@ def _serve(args: argparse.Namespace, log_buffer: LogBuffer) -> None:
         )
     else:
         gateway = StubAgentGateway()
+    slack_dispatcher = SlackDispatcher(repository, SlackWebhook(slack_webhook_url)) if slack_webhook_url else None
     app = create_app(
-        OpsService(repository, gateway),
+        OpsService(repository, gateway, public_url=args.public_url),
         repository,
         PostgresGrafanaAlertSource(grafana_database_url, password=grafana_database_password),
         log_buffer,
+        slack_dispatcher,
         WebConfig(
             auth_mode=args.auth_mode,
             static_dir=args.static_dir,

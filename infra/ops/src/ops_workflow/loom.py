@@ -3,6 +3,7 @@
 
 """Narrow server-side adapter for Loom's ACP session API."""
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -26,25 +27,23 @@ class ChatSnapshot:
     def complete(self) -> bool:
         return self.live_turn is None and any(block.get("kind") == "turn_end" for block in self.blocks)
 
-    @property
-    def last_agent_message(self) -> str:
-        for block in reversed(self.blocks):
-            if block.get("kind") != "agent_message":
-                continue
-            payload = block.get("payload")
-            if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-                return payload["text"]
-        return "The agent turn finished without a text summary."
+
+@dataclass(frozen=True)
+class AgentArtifact:
+    content: str
+    revision: int
 
 
 class AgentGateway(Protocol):
     """The subset of Loom required by the ops workflow."""
 
-    async def create_session(self, *, name: str, title: str, goal: str) -> LoomSession: ...
+    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession: ...
 
-    async def prompt(self, session_id: str, text: str, *, actor: str) -> int | None: ...
+    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None: ...
 
     async def chat(self, session_id: str) -> ChatSnapshot: ...
+
+    async def artifact(self, session_id: str, name: str) -> AgentArtifact: ...
 
     async def archive(self, session_id: str) -> None: ...
 
@@ -78,7 +77,7 @@ class LoomGateway:
             timeout=httpx.Timeout(30, read=60),
         )
 
-    async def create_session(self, *, name: str, title: str, goal: str) -> LoomSession:
+    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession:
         payload = {
             "cwd": self._repo_root,
             "title": title,
@@ -104,7 +103,7 @@ class LoomGateway:
         snapshot = await self.chat(session_id)
         return LoomSession(id=session_id, url=str(url_response.json()["url"]), live_turn=snapshot.live_turn)
 
-    async def prompt(self, session_id: str, text: str, *, actor: str) -> int | None:
+    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None:
         response = await self._client.post(
             f"/api/sessions/{session_id}/prompt",
             json={"text": text, "by": actor, "force_steer": False, "force_queued": False, "files": []},
@@ -126,6 +125,16 @@ class LoomGateway:
             live_turn=int(live_turn) if isinstance(live_turn, int) else None,
         )
 
+    async def artifact(self, session_id: str, name: str) -> AgentArtifact:
+        response = await self._client.get(f"/api/sessions/{session_id}/artifacts/{name}")
+        response.raise_for_status()
+        payload = response.json()
+        content = payload.get("content")
+        meta = payload.get("meta")
+        if not isinstance(content, str) or not isinstance(meta, dict) or not isinstance(meta.get("rev"), int):
+            raise RuntimeError(f"Loom artifact {name!r} has an invalid response")
+        return AgentArtifact(content=content, revision=int(meta["rev"]))
+
     async def archive(self, session_id: str) -> None:
         response = await self._client.post(f"/api/sessions/{session_id}/archive", json={})
         response.raise_for_status()
@@ -145,6 +154,8 @@ class _StubSession:
     prompts: list[str]
     started_at: float
     turn: int
+    case_id: str
+    turn_id: str
 
 
 class StubAgentGateway:
@@ -155,7 +166,7 @@ class StubAgentGateway:
         self._sessions: dict[str, _StubSession] = {}
         self._sessions_by_name: dict[str, _StubSession] = {}
 
-    async def create_session(self, *, name: str, title: str, goal: str) -> LoomSession:
+    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession:
         existing = self._sessions_by_name.get(name)
         if existing is not None:
             return LoomSession(id=existing.id, url=existing.url, live_turn=existing.turn)
@@ -166,16 +177,20 @@ class StubAgentGateway:
             prompts=[goal],
             started_at=time.monotonic(),
             turn=0,
+            case_id=case_id,
+            turn_id=turn_id,
         )
         self._sessions[session_id] = session
         self._sessions_by_name[name] = session
         return LoomSession(id=session.id, url=session.url, live_turn=0)
 
-    async def prompt(self, session_id: str, text: str, *, actor: str) -> int | None:
+    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None:
         session = self._sessions[session_id]
         session.turn += 1
         session.prompts.append(text)
         session.started_at = time.monotonic()
+        session.case_id = case_id
+        session.turn_id = turn_id
         return session.turn
 
     async def chat(self, session_id: str) -> ChatSnapshot:
@@ -194,6 +209,27 @@ class StubAgentGateway:
     async def archive(self, session_id: str) -> None:
         if session_id not in self._sessions:
             raise KeyError(session_id)
+
+    async def artifact(self, session_id: str, name: str) -> AgentArtifact:
+        if name != "ops-result":
+            raise KeyError(name)
+        session = self._sessions[session_id]
+        return AgentArtifact(
+            content=json.dumps(
+                {
+                    "schema_version": 2,
+                    "case_id": session.case_id,
+                    "ops_turn_id": session.turn_id,
+                    "outcome": "no_action",
+                    "summary": "The stub completed the read-only investigation.",
+                    "evidence": [],
+                    "action_taken": "none",
+                    "recommended_next_step": "Review the case evidence if the alert remains firing.",
+                    "escalation": None,
+                }
+            ),
+            revision=session.turn + 1,
+        )
 
     async def interrupt(self, session_id: str) -> None:
         session = self._sessions[session_id]

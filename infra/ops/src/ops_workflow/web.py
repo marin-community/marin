@@ -24,10 +24,12 @@ from starlette.staticfiles import StaticFiles
 from ops_workflow.grafana_source import GrafanaAlertSource
 from ops_workflow.repository import ArchiveResult, OpsRepository, TurnPendingError
 from ops_workflow.service import OpsService
+from ops_workflow.slack import SlackDispatcher
 
 MAX_QUESTION_BYTES = 16 * 1024
 DIAGNOSTIC_LOG_LIMIT = 500
 DIAGNOSTIC_POLL_LIMIT = 60
+DIAGNOSTIC_ESCALATION_LIMIT = 60
 
 
 class LogBuffer(Protocol):
@@ -49,6 +51,7 @@ def create_app(
     repository: OpsRepository,
     grafana_source: GrafanaAlertSource,
     log_buffer: LogBuffer,
+    slack_dispatcher: SlackDispatcher | None,
     config: WebConfig,
 ) -> Starlette:
     """Create the API, coordinator loop, and optional built Vue host."""
@@ -57,15 +60,20 @@ def create_app(
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
         coordinator = asyncio.create_task(_coordinator_loop(service, config.reconcile_interval))
         poller = asyncio.create_task(_grafana_poll_loop(repository, grafana_source, config.poll_interval))
+        tasks = [coordinator, poller]
+        if slack_dispatcher is not None:
+            tasks.append(asyncio.create_task(_slack_loop(slack_dispatcher, config.reconcile_interval)))
         try:
             yield
         finally:
-            for task in (coordinator, poller):
+            for task in tasks:
                 task.cancel()
-            for task in (coordinator, poller):
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await service.gateway.close()
+            if slack_dispatcher is not None:
+                await slack_dispatcher.close()
 
     async def health(_: Request) -> Response:
         return _json({"ok": True})
@@ -87,6 +95,7 @@ def create_app(
                 "buffer_scope": "process",
                 "resets_on_restart": True,
                 "polls": await repository.recent_grafana_polls(limit=DIAGNOSTIC_POLL_LIMIT),
+                "escalations": await repository.recent_slack_escalations(limit=DIAGNOSTIC_ESCALATION_LIMIT),
                 "logs": logs,
             }
         )
@@ -182,6 +191,15 @@ async def _grafana_poll_loop(repository: OpsRepository, source: GrafanaAlertSour
             )
         except Exception:
             logging.getLogger(__name__).exception("Grafana polling iteration failed")
+        await asyncio.sleep(interval)
+
+
+async def _slack_loop(dispatcher: SlackDispatcher, interval: float) -> None:
+    while True:
+        try:
+            await dispatcher.reconcile()
+        except Exception:
+            logging.getLogger(__name__).exception("Slack escalation iteration failed")
         await asyncio.sleep(interval)
 
 

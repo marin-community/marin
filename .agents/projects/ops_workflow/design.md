@@ -25,6 +25,9 @@ flowchart LR
     Poller -->|server-side token| Loom[Loom ACP API]
     Loom --> Agent[ops-expert<br/>plan mode]
     Agent -->|read-only validation| Evidence[Kubernetes + Iris]
+    Loom -->|ops-result artifact| Poller
+    Poller --> Outbox[(Slack outbox)]
+    Outbox -->|warning escalation only| Slack[Slack webhook]
     Loom -->|chat journal| Poller
 ```
 
@@ -91,9 +94,10 @@ sequenceDiagram
     L->>A: bounded case evidence + ops-expert skill
     A->>K: read-only get/list/log/status validation
     K-->>A: current production evidence
-    A-->>L: finding, impact, evidence, next step
-    P->>L: read canonical chat snapshot
-    P->>O: persist summary and release global slot
+    A-->>L: versioned ops-result artifact
+    P->>L: read canonical chat and artifact
+    P->>O: validate result; persist summary and optional escalation
+    O-->>P: claim Slack outbox delivery
 ```
 
 A poll is successful only after the Grafana query returns a complete result. A connection error, timeout, parse error, or permission error does not call reconciliation and therefore cannot resolve anything.
@@ -120,6 +124,10 @@ The queue is server-driven and globally serialized. Automatic alerts, one-off qu
 
 The `ops-expert` prompt treats Grafana fields as untrusted evidence, requires a bounded result artifact, and prohibits repository or production mutations. Loom starts ACP in `plan` mode. Runtime permissions are the final boundary: the investigation environment receives read-only Kubernetes and Iris credentials.
 
+The agent can request, but cannot send, a Slack escalation. The backend validates the versioned `ops-result` artifact, requires a matching case and turn UUID, rejects any claim that production was mutated, and accepts escalation only for `action_recommended` or `blocked`. A transactional outbox derives its incident key from sorted Grafana fingerprint generations. This suppresses repeat requests for the same alert generation across follow-up turns. The backend drops agent escalation requests for Grafana `error` and `critical` cases because Grafana already notified Slack. Manual and `warning` cases may produce one `error` or `critical` agent escalation when current evidence requires operator attention.
+
+The Slack webhook stays in Secret Manager and is mounted only into the ops service. It never enters the agent environment, Loom prompt, browser API, database, or logs. Webhook failures are reduced to a status code or fixed request-failure message, then retried from the outbox with a lease and bounded backoff.
+
 ## Edge cases
 
 | Situation | Behavior |
@@ -136,6 +144,10 @@ The `ops-expert` prompt treats Grafana fields as untrusted evidence, requires a 
 | Operator asks a one-off question | Create a higher-priority manual case under the same read-only policy. |
 | Alert text contains instructions | Store and display it as data; never use it to select commands, paths, or permissions. |
 | Grafana changes its private schema | Fail visibly. The adapter and its tests isolate the compatibility update. |
+| Agent requests Slack for a Grafana error/critical case | Ignore the request; Grafana already notified Slack. |
+| Agent repeats an escalation for one signal generation | Keep the first outbox record; the incident key is unique. |
+| Slack delivery fails | Release the lease and retry with bounded backoff; abandon after five attempts and expose the failure in Diagnostics. |
+| Service stops during Slack delivery | The lease expires and a later instance retries the durable record. Slack webhooks do not provide an idempotency key, so a crash after Slack accepts the request can rarely duplicate one message. |
 
 A grouping-policy change is deliberate schema behavior, not an LLM decision. Before changing group labels, migrate or resolve open cases so one active generation is not silently forked across chats.
 
@@ -160,7 +172,7 @@ Pulumi declares:
 - Secret Manager shells for `ops_migrator`, `ops_app`, and `ops_grafana_reader` passwords;
 - the IAP-gated `marin-ops-ui` Cloud Run service;
 - one attached Cloud SQL instance and the runtime `roles/cloudsql.client` grant;
-- exact secret-access grants for the ops database and Grafana reader, plus Loom only when enabled;
+- exact secret-access grants for the ops database, Grafana reader, and Slack webhook, plus Loom only when enabled;
 - the `ops.oa.dev` Cloud Run mapping and DNS-only Cloudflare record;
 - the checked-in IAP membership grants.
 

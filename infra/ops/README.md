@@ -31,7 +31,7 @@ uv run --project infra/ops ops-workflow serve \
 
 Open <http://127.0.0.1:8088>. The first poll creates one case for the two `DNSConfigForming` instances. The case moves through `pending → investigating → waiting_human` and exposes follow-up, one-off question, Loom-link, and archive flows.
 
-The Diagnostics page shows the most recent successful poll snapshots from Postgres and the process-local ring buffer provided by `rigging.log_setup`. The ring is intentionally bounded and clears on service restart or rollout. Python logs continue to stderr, which Cloud Run captures in Cloud Logging as the durable service-log source. Finelog's `RemoteLogHandler` can be added later if the service is given a reachable Finelog endpoint and stable log key; it is not required for polling visibility.
+The Diagnostics page shows successful poll snapshots, the durable Slack escalation outbox, and the process-local ring buffer provided by `rigging.log_setup`. The ring is intentionally bounded and clears on service restart or rollout. Python logs continue to stderr, which Cloud Run captures in Cloud Logging as the durable service-log source. Finelog's `RemoteLogHandler` can be added later if the service is given a reachable Finelog endpoint and stable log key; it is not required for polling visibility.
 
 Run Playwright against the service:
 
@@ -74,6 +74,8 @@ The service has no alert receiver. It reaches the shared Cloud SQL instance thro
 - `ops_grafana_reader` can select only `grafana.public.alert_instance` and `grafana.public.alert_rule`.
 
 The separate `ops_migrator` identity owns schema objects but is never mounted into the service. Create all three logins and their custom database roles using [`../cloudsql/README.md`](../cloudsql/README.md). The Grafana owner and migrator passwords are never mounted into the ops service.
+
+The service reuses the `marin-grafana-slack-webhook` Secret Manager secret for agent-requested escalations. The webhook is not passed to Loom or the agent. The backend validates the `ops-result` artifact, suppresses escalations for Grafana error/critical alerts that already notified Slack, deduplicates warning escalations by fingerprint generation, and sends through a durable retrying outbox.
 
 Pulumi maps the IAP-protected service to `ops.oa.dev` with a DNS-only Cloudflare CNAME. The Cloudflare API token is a deployment credential, not a runtime secret.
 

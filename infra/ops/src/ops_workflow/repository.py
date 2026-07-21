@@ -19,6 +19,8 @@ from psycopg.types.json import Jsonb
 
 from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert, GrafanaDelivery, GrafanaNotification
 from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
+from ops_workflow.result import OpsResult
+from ops_workflow.slack import SlackEscalationDraft
 from ops_workflow.state import CaseState, SignalDisposition, SignalState, severity_priority
 
 SOURCE = "grafana"
@@ -28,6 +30,9 @@ MISSING_POLLS_TO_RESOLVE = 2
 POLL_KEY_ID = "grafana-postgres-reader"
 TURN_LEASE_DURATION = timedelta(minutes=10)
 TURN_TIMEOUT = timedelta(minutes=20)
+SLACK_LEASE_DURATION = timedelta(minutes=2)
+SLACK_MAX_ATTEMPTS = 5
+SLACK_MAX_RETRY_DELAY = 300
 
 
 class TurnPendingError(RuntimeError):
@@ -243,10 +248,15 @@ class OpsRepository:
                 "SELECT * FROM case_events WHERE case_id = %s ORDER BY created_at, id",
                 (case_id,),
             )
+            escalations_cursor = await connection.execute(
+                "SELECT * FROM slack_escalations WHERE case_id = %s ORDER BY created_at",
+                (case_id,),
+            )
             signals = await signals_cursor.fetchall()
             turns = await turns_cursor.fetchall()
             events = await events_cursor.fetchall()
-        return {"case": case, "signals": signals, "turns": turns, "events": events}
+            escalations = await escalations_cursor.fetchall()
+        return {"case": case, "signals": signals, "turns": turns, "events": events, "escalations": escalations}
 
     async def create_question(self, *, text: str, actor: str) -> str:
         case_id = str(uuid.uuid4())
@@ -413,7 +423,14 @@ class OpsRepository:
             row = await cursor.fetchone()
         return dict(row) if row is not None else None
 
-    async def finish_turn(self, *, turn_id: str, summary: str) -> None:
+    async def finish_turn(
+        self,
+        *,
+        turn_id: str,
+        result: OpsResult,
+        artifact_revision: int,
+        escalation: SlackEscalationDraft | None,
+    ) -> None:
         async with await self._connection() as connection:
             async with connection.transaction():
                 cursor = await connection.execute(
@@ -427,14 +444,14 @@ class OpsRepository:
                 row = await cursor.fetchone()
                 if row is None:
                     return
-                result = {"summary": summary, "source": "loom_chat"}
                 await connection.execute(
                     """
                     UPDATE agent_turns SET state = 'succeeded', result = %s,
-                        completed_at = now(), lease_owner = NULL, lease_expires_at = NULL
+                        result_artifact_revision = %s, completed_at = now(),
+                        lease_owner = NULL, lease_expires_at = NULL
                     WHERE id = %s
                     """,
-                    (Jsonb(result), turn_id),
+                    (Jsonb(result.as_dict()), artifact_revision, turn_id),
                 )
                 await connection.execute(
                     "UPDATE agent_sessions SET state = 'idle', updated_at = now() WHERE id = %s",
@@ -442,20 +459,160 @@ class OpsRepository:
                 )
                 await connection.execute(
                     """
-                    UPDATE cases SET state = 'waiting_human', outcome = 'unknown',
+                    UPDATE cases SET state = 'waiting_human', outcome = %s,
                         summary = %s, investigated_at = now(), updated_at = now()
                     WHERE id = %s
                     """,
-                    (summary, row["case_id"]),
+                    (result.outcome.value, result.summary, row["case_id"]),
                 )
                 await self._event(
                     connection,
                     str(row["case_id"]),
                     "turn_finished",
                     "ops-service",
-                    {"summary": summary},
+                    {"outcome": result.outcome.value, "summary": result.summary},
                     turn_id=turn_id,
                 )
+                if escalation is not None:
+                    inserted = await connection.execute(
+                        """
+                        INSERT INTO slack_escalations (
+                            incident_key, case_id, turn_id, severity, reason, message, state
+                        ) VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+                        ON CONFLICT (incident_key) DO NOTHING
+                        RETURNING id
+                        """,
+                        (
+                            escalation.incident_key,
+                            row["case_id"],
+                            turn_id,
+                            escalation.severity.value,
+                            escalation.reason,
+                            escalation.message,
+                        ),
+                    )
+                    if await inserted.fetchone() is not None:
+                        await self._event(
+                            connection,
+                            str(row["case_id"]),
+                            "slack_escalation_queued",
+                            "ops-service",
+                            {"severity": escalation.severity.value},
+                            turn_id=turn_id,
+                        )
+
+    async def claim_slack_escalation(self) -> dict[str, object] | None:
+        """Lease the oldest due Slack escalation for one delivery attempt."""
+
+        async with await self._connection() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE slack_escalations
+                    SET state = CASE WHEN attempts >= %s THEN 'abandoned' ELSE 'pending' END,
+                        lease_expires_at = NULL
+                    WHERE state = 'sending' AND lease_expires_at <= now()
+                    """,
+                    (SLACK_MAX_ATTEMPTS,),
+                )
+                cursor = await connection.execute(
+                    """
+                    SELECT id FROM slack_escalations
+                    WHERE state = 'pending' AND available_at <= now()
+                    ORDER BY available_at, created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    """
+                )
+                queued = await cursor.fetchone()
+                if queued is None:
+                    return None
+                claimed_cursor = await connection.execute(
+                    """
+                    UPDATE slack_escalations
+                    SET state = 'sending', attempts = attempts + 1,
+                        lease_expires_at = now() + %s
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (SLACK_LEASE_DURATION, queued["id"]),
+                )
+                claimed = await claimed_cursor.fetchone()
+                assert claimed is not None
+                return dict(claimed)
+
+    async def slack_escalation_sent(self, escalation_id: str) -> None:
+        async with await self._connection() as connection:
+            async with connection.transaction():
+                cursor = await connection.execute(
+                    """
+                    UPDATE slack_escalations
+                    SET state = 'sent', sent_at = now(), lease_expires_at = NULL, last_error = NULL
+                    WHERE id = %s AND state = 'sending'
+                    RETURNING case_id, turn_id
+                    """,
+                    (escalation_id,),
+                )
+                row = await cursor.fetchone()
+                if row is not None:
+                    await self._event(
+                        connection,
+                        str(row["case_id"]),
+                        "slack_escalation_sent",
+                        "ops-service",
+                        {},
+                        turn_id=str(row["turn_id"]),
+                    )
+
+    async def slack_escalation_retry(self, escalation_id: str, error: str) -> None:
+        async with await self._connection() as connection:
+            async with connection.transaction():
+                cursor = await connection.execute(
+                    """
+                    SELECT case_id, turn_id, attempts FROM slack_escalations
+                    WHERE id = %s AND state = 'sending' FOR UPDATE
+                    """,
+                    (escalation_id,),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return
+                attempts = int(row["attempts"])
+                state = "abandoned" if attempts >= SLACK_MAX_ATTEMPTS else "pending"
+                retry_delay = timedelta(seconds=min(2**attempts, SLACK_MAX_RETRY_DELAY))
+                await connection.execute(
+                    """
+                    UPDATE slack_escalations
+                    SET state = %s, available_at = now() + %s,
+                        lease_expires_at = NULL, last_error = %s
+                    WHERE id = %s AND state = 'sending'
+                    """,
+                    (state, retry_delay, error[:4_000], escalation_id),
+                )
+                if state == "abandoned":
+                    await self._event(
+                        connection,
+                        str(row["case_id"]),
+                        "slack_escalation_abandoned",
+                        "ops-service",
+                        {"attempts": attempts, "error": error[:1_000]},
+                        turn_id=str(row["turn_id"]),
+                    )
+
+    async def recent_slack_escalations(self, *, limit: int = 60) -> list[dict[str, object]]:
+        async with await self._connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT id, case_id, turn_id, severity, reason, state, attempts,
+                       available_at, last_error, created_at, sent_at
+                FROM slack_escalations
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return list(rows)
 
     async def fail_turn(self, *, turn_id: str, error: str) -> None:
         async with await self._connection() as connection:

@@ -9,6 +9,8 @@ set -- serve \
   --grafana-database-url-env GRAFANA_DATABASE_URL \
   --grafana-database-password-env GRAFANA_PGPASSWORD \
   --grafana-poll-interval "${GRAFANA_POLL_INTERVAL:-60}" \
+  --public-url "${OPS_PUBLIC_URL}" \
+  --slack-webhook-url-env OPS_SLACK_WEBHOOK \
   --auth-mode iap \
   --host 0.0.0.0 \
   --port "${PORT:-8080}" \

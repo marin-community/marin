@@ -19,10 +19,25 @@ export interface ProcessLog {
   message: string
 }
 
+export interface SlackEscalation {
+  id: string
+  case_id: string
+  turn_id: string
+  severity: 'error' | 'critical'
+  reason: string
+  state: 'pending' | 'sending' | 'sent' | 'abandoned'
+  attempts: number
+  available_at: string
+  last_error: string | null
+  created_at: string
+  sent_at: string | null
+}
+
 export interface Diagnostics {
   buffer_scope: 'process'
   resets_on_restart: true
   polls: GrafanaPoll[]
+  escalations: SlackEscalation[]
   logs: ProcessLog[]
 }
 
@@ -73,8 +88,9 @@ export interface ChatBlock {
 export interface CaseDetail {
   case: CaseRow & { loom_session_id: string | null; agent_session_state: string | null; question: string | null }
   signals: Signal[]
-  turns: Array<{ id: string; kind: string; state: string; requested_by: string; error: string | null }>
+  turns: Array<{ id: string; kind: string; state: string; requested_by: string; prompt: string; created_at: string; error: string | null }>
   events: Array<{ id: number; event_type: string; actor: string; created_at: string }>
+  escalations: SlackEscalation[]
   chat: { blocks: ChatBlock[]; live_turn: number | null }
   chat_error?: string
 }

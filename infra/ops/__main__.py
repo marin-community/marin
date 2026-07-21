@@ -18,6 +18,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 CLOUDSQL_STACK = "organization/marin-cloudsql/marin-cloudsql"
 GRAFANA_READER_USER = "ops_grafana_reader"
 GRAFANA_READER_SECRET = "cloudsql-ops-grafana-reader-password"
+SLACK_WEBHOOK_SECRET = "marin-grafana-slack-webhook"
 
 
 def main() -> None:
@@ -44,10 +45,12 @@ def main() -> None:
         "OPS_AGENT_MODE": agent_mode,
         "OPS_REPO_REVISION": repo_revision,
         "OPS_SKILL_REVISION": skill_revision,
+        "OPS_PUBLIC_URL": "https://ops.oa.dev",
     }
     secrets = [
         SecretEnv(name="PGPASSWORD", secret="cloudsql-ops-app-password"),
         SecretEnv(name="GRAFANA_PGPASSWORD", secret=GRAFANA_READER_SECRET),
+        SecretEnv(name="OPS_SLACK_WEBHOOK", secret=SLACK_WEBHOOK_SECRET),
     ]
     if agent_mode == "loom":
         env.update(

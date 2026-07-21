@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -13,6 +15,8 @@ from ops_workflow.grafana_source import snapshot_from_rows
 from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
 from ops_workflow.repository import ArchiveResult, OpsRepository
+from ops_workflow.result import parse_ops_result
+from ops_workflow.slack import escalation_draft
 
 DATABASE_URL = os.environ.get("OPS_TEST_DATABASE_URL")
 MIGRATIONS = Path(__file__).parent.parent / "migrations"
@@ -193,3 +197,95 @@ async def test_archive_distinguishes_active_already_archived_and_missing_cases()
     turn = await repository.claim_next_turn()
     assert turn is not None
     assert await repository.archive_case(case_id=active_case_id, actor="test@example.com") == ArchiveResult.ACTIVE_TURN
+
+
+@pytest.mark.anyio
+async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation():
+    assert DATABASE_URL is not None
+    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+    now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
+    ingested = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    case_id = ingested[0].case_ids[0]
+
+    turn = await repository.claim_next_turn()
+    assert turn is not None
+    turn_id = str(turn["id"])
+    await repository.turn_started(
+        turn_id=turn_id,
+        loom_session_id="loom-test",
+        loom_session_url="https://loom.test/s/loom-test",
+        loom_turn_number=0,
+    )
+    await _finish_with_escalation(repository, case_id=case_id, turn_id=turn_id, artifact_revision=1)
+
+    detail = await repository.case_detail(case_id)
+    assert detail is not None
+    case = cast(Mapping[str, object], detail["case"])
+    escalations = cast(Sequence[Mapping[str, object]], detail["escalations"])
+    assert case["outcome"] == "action_recommended"
+    assert len(escalations) == 1
+    delivery = await repository.claim_slack_escalation()
+    assert delivery is not None
+    assert delivery["attempts"] == 1
+    await repository.slack_escalation_sent(str(delivery["id"]))
+
+    follow_up_id = await repository.enqueue_follow_up(
+        case_id=case_id,
+        text="Recheck the same incident.",
+        actor="operator@example.com",
+    )
+    follow_up = await repository.claim_next_turn()
+    assert follow_up is not None
+    assert str(follow_up["id"]) == follow_up_id
+    await repository.turn_started(
+        turn_id=follow_up_id,
+        loom_session_id="loom-test",
+        loom_session_url="https://loom.test/s/loom-test",
+        loom_turn_number=1,
+    )
+    await _finish_with_escalation(repository, case_id=case_id, turn_id=follow_up_id, artifact_revision=2)
+
+    detail = await repository.case_detail(case_id)
+    assert detail is not None
+    escalations = cast(Sequence[Mapping[str, object]], detail["escalations"])
+    assert [item["state"] for item in escalations] == ["sent"]
+    assert await repository.claim_slack_escalation() is None
+
+
+async def _finish_with_escalation(
+    repository: OpsRepository, *, case_id: str, turn_id: str, artifact_revision: int
+) -> None:
+    result = parse_ops_result(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "case_id": case_id,
+                "ops_turn_id": turn_id,
+                "outcome": "action_recommended",
+                "summary": "The warning requires operator attention.",
+                "evidence": [],
+                "action_taken": "none",
+                "recommended_next_step": "Inspect disk consumers.",
+                "escalation": {"severity": "error", "reason": "Automated cleanup freed no space."},
+            }
+        ),
+        case_id=case_id,
+        turn_id=turn_id,
+    )
+    detail = await repository.case_detail(case_id)
+    assert detail is not None
+    case = cast(Mapping[str, object], detail["case"])
+    signals = cast(Sequence[Mapping[str, object]], detail["signals"])
+    draft = escalation_draft(
+        result=result,
+        case=case,
+        signals=signals,
+        public_url="https://ops.oa.dev",
+    )
+    assert draft is not None
+    await repository.finish_turn(
+        turn_id=turn_id,
+        result=result,
+        artifact_revision=artifact_revision,
+        escalation=draft,
+    )
