@@ -393,6 +393,22 @@ def test_render_job_summary_text_shows_peak_memory():
 # ---------------------------------------------------------------------------
 
 
+class _PrefixClusterClient:
+    def __init__(self, active_job_id: str):
+        self.active_job_id = active_job_id
+        self.terminated: list[JobName] = []
+
+    def list_jobs(self, *, query, **_kwargs):
+        assert query.job_id_prefix == "/alice/"
+        return [
+            _job_pb2.JobStatus(job_id=self.active_job_id, state=_job_pb2.JOB_STATE_RUNNING),
+            _job_pb2.JobStatus(job_id="/alice/done", state=_job_pb2.JOB_STATE_SUCCEEDED),
+        ]
+
+    def terminate_job(self, job_id):
+        self.terminated.append(job_id)
+
+
 def test_read_targets_from_stdin_drops_csv_header_and_extra_columns(monkeypatch):
     # Exactly what `iris query -f csv "SELECT task_id, state FROM ..."` emits:
     # a header line with no leading slash, then id + trailing columns per row.
@@ -506,18 +522,8 @@ def test_stop_dry_run_lists_jobs_without_sending(monkeypatch):
 
 
 def test_stop_prefix_dry_run_lists_matching_active_jobs_without_terminating(monkeypatch):
-    class FakeClusterClient:
-        def list_jobs(self, *, query, limit):
-            assert query.job_id_prefix == "/alice/"
-            return [
-                _job_pb2.JobStatus(job_id="/alice/running", state=_job_pb2.JOB_STATE_RUNNING),
-                _job_pb2.JobStatus(job_id="/alice/done", state=_job_pb2.JOB_STATE_SUCCEEDED),
-            ]
-
-        def terminate_job(self, job_id):
-            pytest.fail("dry-run must not terminate jobs")
-
-    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(FakeClusterClient()))
+    cluster = _PrefixClusterClient("/alice/running")
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
 
     result = CliRunner().invoke(
         stop,
@@ -526,6 +532,7 @@ def test_stop_prefix_dry_run_lists_matching_active_jobs_without_terminating(monk
     )
 
     assert result.exit_code == 0, result.output
+    assert cluster.terminated == []
     assert "/alice/running" in result.output
     assert "/alice/done" not in result.output
 
@@ -581,20 +588,8 @@ def test_kill_prefix_terminates_matching_jobs(monkeypatch):
 
 
 def test_stop_prefix_accepts_namespace_prefix(monkeypatch):
-    terminated: list[JobName] = []
-
-    class FakeClusterClient:
-        def list_jobs(self, *, query, limit):
-            assert query.job_id_prefix == "/alice/"
-            return [
-                _job_pb2.JobStatus(job_id="/alice/job", state=_job_pb2.JOB_STATE_RUNNING),
-                _job_pb2.JobStatus(job_id="/alice/done", state=_job_pb2.JOB_STATE_SUCCEEDED),
-            ]
-
-        def terminate_job(self, job_id):
-            terminated.append(job_id)
-
-    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(FakeClusterClient()))
+    cluster = _PrefixClusterClient("/alice/job")
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
 
     result = CliRunner().invoke(
         stop,
@@ -603,7 +598,7 @@ def test_stop_prefix_accepts_namespace_prefix(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert terminated == [JobName.from_wire("/alice/job")]
+    assert cluster.terminated == [JobName.from_wire("/alice/job")]
     assert "/alice/job" in result.output
 
 
