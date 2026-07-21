@@ -109,6 +109,7 @@ SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
 # Subdirectory of MARIN_PREFIX these scale runs write their per-run output dirs
 # into, so they stay grouped instead of cluttering the prefix root.
 OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+_PROBE_ENV_PREFIX = "MARIN_CUDA_MODULE_PROBE_"
 
 # SlimPajama block-shuffle: a small, R2-local corpus for the scale/throughput run.
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -295,6 +296,11 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
         data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
+        probe_env = {key: value for key, value in os.environ.items() if key.startswith(_PROBE_ENV_PREFIX)}
+        if "MARIN_CUDA_MODULE_PROBE_PROFILE" in probe_env:
+            probe_env.setdefault("MARIN_CUDA_MODULE_PROBE_REQUIRED", "1")
+            probe_env.setdefault("MARIN_CUDA_MODULE_PROBE_LOG_DIR", "/tmp/marin-cuda-module-probe")
+            probe_env["MARIN_CUDA_MODULE_PROBE_UPLOAD_PREFIX"] = f"{ctx.output_path}/cuda-module-probe"
         return GrugMoeLaunchConfig(
             model=model,
             data=data,
@@ -312,6 +318,8 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,
+            env_vars=probe_env,
+            max_retries_failure=0 if probe_env else 3,
         )
 
     return ArtifactStep(

@@ -4,8 +4,10 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -42,6 +44,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.standalone.cuda_module_probe import upload_probe_artifacts
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -99,6 +102,8 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
+    env_vars: dict[str, str] = field(default_factory=dict)
+    max_retries_failure: int = 3
 
 
 def build_train_dataset(
@@ -409,7 +414,7 @@ def _make_train_step(
     return train_step
 
 
-def _run_grug_local(config: GrugRunConfig) -> None:
+def _run_grug_local_impl(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -607,6 +612,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
+def _upload_configured_probe_artifacts() -> None:
+    if "MARIN_CUDA_MODULE_PROBE_PROFILE" not in os.environ:
+        return
+    log_dir = os.environ.get("MARIN_CUDA_MODULE_PROBE_LOG_DIR")
+    upload_prefix = os.environ.get("MARIN_CUDA_MODULE_PROBE_UPLOAD_PREFIX")
+    if log_dir is None or upload_prefix is None:
+        raise ValueError("Probe runs require MARIN_CUDA_MODULE_PROBE_LOG_DIR and MARIN_CUDA_MODULE_PROBE_UPLOAD_PREFIX")
+    upload_probe_artifacts(Path(log_dir), upload_prefix, int(os.environ["IRIS_TASK_INDEX"]))
+
+
+def _run_grug_local(config: GrugRunConfig) -> None:
+    """Run training and preserve module-probe artifacts on every exit path."""
+    try:
+        _run_grug_local_impl(config)
+    finally:
+        _upload_configured_probe_artifacts()
+
+
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
     trainer = config.trainer.trainer
@@ -619,6 +642,8 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        env_vars=config.env_vars,
+        max_retries_failure=config.max_retries_failure,
     )
 
 

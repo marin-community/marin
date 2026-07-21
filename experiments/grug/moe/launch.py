@@ -87,6 +87,8 @@ class GrugMoeLaunchConfig:
     mp: str  # jmp policy string, e.g. "params=float32,compute=bfloat16,output=bfloat16".
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    env_vars: dict[str, str] = field(default_factory=dict)
+    max_retries_failure: int = 3
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -178,6 +180,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        env_vars=config.env_vars,
+        max_retries_failure=config.max_retries_failure,
     )
     run_grug(run_config)
 
