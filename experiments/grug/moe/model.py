@@ -313,11 +313,19 @@ class CausalSelfAttention(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        # SCALE_REPLICATE_ATTN_WEIGHTS=1 leaves the FSDP ("data") axis unsharded on the attention
+        # projections, so each device already holds the full contraction dim and XLA emits no per-layer
+        # weight all-gather (which sits exposed at the layer boundary, unhideable across the scan).
+        # Costs replicating the (small) attention weights + their optimizer state instead of 1/data.
+        if os.environ.get("SCALE_REPLICATE_ATTN_WEIGHTS") == "1":
+            qkv_spec, o_spec = P(None, "model"), P("model", None)
+        else:
+            qkv_spec, o_spec = P("data", "model"), P("model", "data")
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), qkv_spec),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), qkv_spec),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), qkv_spec),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), o_spec),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
