@@ -47,7 +47,7 @@ Official references:
 - https://grafana.com/developers/plugin-tools/key-concepts/plugin-types-usage
 - https://grafana.com/developers/scenes/scene-app
 
-The plugin will be private and image-bundled. It has a locked Node dependency tree, `plugin.json` with `type=panel`, ID `marin-infra-panel`, and a Grafana dependency covering the pinned 13.1.0 runtime. A Node Docker stage builds with Grafana's supported plugin webpack tooling, and the runtime stage receives only `dist/` under `/var/lib/grafana/plugins/marin-infra-panel`. Grafana requires plugin signatures by default. For the first internal version, `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=marin-infra-panel` allows only this image-reviewed plugin; no plugin is downloaded at runtime.
+The plugin will be private and image-bundled. It has a locked Node dependency tree, `plugin.json` with `type=panel`, ID `marin-infra-panel`, and a Grafana dependency covering the pinned 13.1.1 runtime. A Node Docker stage builds with Grafana's supported plugin webpack tooling, and the runtime stage receives only `dist/` under `/var/lib/grafana/plugins/marin-infra-panel`. Grafana requires plugin signatures by default. For the first internal version, `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=marin-infra-panel` allows only this image-reviewed plugin; no plugin is downloaded at runtime.
 
 Private signing is the hardening path, not part of this change. It requires `GF_SERVER_ROOT_URL=https://grafana.oa.dev/`, a signing command whose `--rootUrls` value matches it exactly, and a Grafana Cloud access-policy token from the organization that owns the plugin-ID prefix. Until that credential exists, startup and browser smoke tests must fail if the allowlist is wrong or the plugin is absent.
 
@@ -141,7 +141,7 @@ Dashboard links use stable UIDs (`k8s`, `iris`, `fleet`, `training`, `pipelines`
 - `infra/grafana` pytest suite.
 - production Docker image smoke: Grafana registers the plugin and provisions `infra.json`.
 - repository pre-commit and lint-catalog review.
-- `@grafana/plugin-e2e` against Grafana 13.1.0. A test-only fixture server runs on the host at port 18000; test datasource provisioning points Infinity to it while the production bridge remains unchanged. The production image runs with host networking and test provisioning mounts. The test waits for Grafana `/api/health`, opens `/d/infra`, asserts query success and named content, checks keyboard interaction and first-viewport geometry, and then captures 1440×900 and 1920×1080 screenshots.
+- Playwright against Grafana 13.1.1. A deterministic fixture bridge is mounted into the production image for the test container. The test waits for named rendered content, opens `/d/infra`, checks the compact overview and deep-dive sections, and captures three 1280×720 viewports.
 - Startup smoke checks the Grafana log/API and rendered panels so a missing plugin, rejected signature, or wrong unsigned allowlist fails even though dashboard JSON provisioning itself would succeed.
 - Screenshots are published as Weaver image artifacts.
 - final implementation report artifact containing the before/after comparison, test results, known signing caveat, screenshot links, commit, and PR.

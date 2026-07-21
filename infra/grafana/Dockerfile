@@ -22,7 +22,7 @@ COPY marin-infra-panel/CHANGELOG.md marin-infra-panel/LICENSE marin-infra-panel/
 COPY marin-infra-panel/tsconfig.json ./
 RUN npm run build
 
-FROM grafana/grafana:13.1.0-ubuntu
+FROM grafana/grafana:13.1.1-ubuntu
 
 USER root
 
