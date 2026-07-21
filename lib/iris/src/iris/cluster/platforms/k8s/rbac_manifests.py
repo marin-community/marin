@@ -1,17 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure RBAC + Namespace manifest builders and their constants.
+"""Define Kubernetes namespace and RBAC manifests for Iris controllers."""
 
-One source of truth for the controller's namespace and RBAC prerequisites: the IaC
-component (``iac.coreweave.rbac``) and any imperative caller (e.g. the GPU gang smoke
-harness, ``tests/e2e/gpu_gang_smoke.py``) import these builders so they render
-byte-identical manifests. Everything here is pure — the functions return plain dicts
-and do no I/O.
-"""
-
-# The permissions the iris-controller ServiceAccount needs at runtime. Kept here as the
-# single copy so IaC's declared ClusterRole and any imperative caller never drift apart.
+# Permissions the iris-controller ServiceAccount needs at runtime.
 CLUSTER_ROLE_RULES = [
     {
         "apiGroups": ["compute.coreweave.com"],
@@ -64,7 +56,7 @@ def cluster_role_name(namespace: str) -> str:
     return f"iris-controller-{namespace}"
 
 
-def build_namespace_manifest(namespace: str) -> dict:
+def namespace_manifest(namespace: str) -> dict:
     """Return the controller's Namespace.
 
     Declares the default ``kubernetes`` finalizer explicitly: a caller applying this
@@ -79,7 +71,7 @@ def build_namespace_manifest(namespace: str) -> dict:
     }
 
 
-def build_service_account_manifest(namespace: str, service_account: str) -> dict:
+def service_account_manifest(namespace: str, service_account: str) -> dict:
     """Return the controller's ServiceAccount."""
     return {
         "apiVersion": "v1",
@@ -88,7 +80,7 @@ def build_service_account_manifest(namespace: str, service_account: str) -> dict
     }
 
 
-def build_cluster_role_manifest(role_name: str) -> dict:
+def cluster_role_manifest(role_name: str) -> dict:
     """Return the namespace-qualified ClusterRole granting CLUSTER_ROLE_RULES."""
     return {
         "apiVersion": "rbac.authorization.k8s.io/v1",
@@ -98,7 +90,7 @@ def build_cluster_role_manifest(role_name: str) -> dict:
     }
 
 
-def build_cluster_role_binding_manifest(role_name: str, namespace: str, service_account: str) -> dict:
+def cluster_role_binding_manifest(role_name: str, namespace: str, service_account: str) -> dict:
     """Return the ClusterRoleBinding tying ``service_account`` to ``role_name``."""
     return {
         "apiVersion": "rbac.authorization.k8s.io/v1",

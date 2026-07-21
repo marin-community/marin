@@ -41,17 +41,17 @@ from iris.cluster.platforms.k8s.controller import (
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
 from iris.cluster.platforms.k8s.nodepool_manifests import (
-    build_nodepool_manifest,
     compute_target_racks,
+    nodepool_manifest,
     nodepool_name,
     nodepool_node_labels,
 )
 from iris.cluster.platforms.k8s.rbac_manifests import (
-    build_cluster_role_binding_manifest,
-    build_cluster_role_manifest,
-    build_namespace_manifest,
-    build_service_account_manifest,
+    cluster_role_binding_manifest,
+    cluster_role_manifest,
     cluster_role_name,
+    namespace_manifest,
+    service_account_manifest,
 )
 from iris.cluster.platforms.k8s.types import (
     K8sResource,
@@ -174,21 +174,16 @@ def _make_cluster_config(
 
 
 def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConfig) -> None:
-    """Seed the IaC-provisioned prerequisites verify_prerequisites checks for.
-
-    start_controller no longer creates these itself (spec.md §4 — infra/pulumi's Pulumi
-    program does); built from the same shared manifest builders Pulumi uses, so the fake
-    matches what a real cluster looks like post-adoption.
-    """
+    """Populate the prerequisites that Pulumi owns in production."""
     namespace = cluster_config.platform.coreweave.namespace or "iris"
     label_prefix = cluster_config.platform.label_prefix
     service_account = "iris-controller"
 
-    k8s.apply_json(build_namespace_manifest(namespace))
-    k8s.apply_json(build_service_account_manifest(namespace, service_account))
+    k8s.apply_json(namespace_manifest(namespace))
+    k8s.apply_json(service_account_manifest(namespace, service_account))
     role_name = cluster_role_name(namespace)
-    k8s.apply_json(build_cluster_role_manifest(role_name))
-    k8s.apply_json(build_cluster_role_binding_manifest(role_name, namespace, service_account))
+    k8s.apply_json(cluster_role_manifest(role_name))
+    k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
 
     for name, sg in cluster_config.scale_groups.items():
         cw = sg.slice_template.coreweave if sg.slice_template is not None else None
@@ -199,7 +194,7 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
         max_nodes = sg.max_slices * num_vms
         pool_name = nodepool_name(label_prefix, name)
         k8s.apply_json(
-            build_nodepool_manifest(
+            nodepool_manifest(
                 pool_name,
                 cw.instance_type,
                 node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
@@ -220,8 +215,8 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     )
 
 
-def test_start_controller_creates_all_resources():
-    """start_controller creates ConfigMap, Deployment, and Service."""
+def test_start_controller_creates_controller_resources():
+    """start_controller creates the runtime resources that remain Iris-owned."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     _seed_prerequisites(k8s, cluster_config)

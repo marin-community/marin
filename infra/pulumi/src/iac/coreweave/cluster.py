@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import pulumi
 import pulumi_kubernetes as k8s
-from iris.cluster.platforms.k8s.nodepool_manifests import build_nodepool_manifest
+from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_manifest
 
 from iac.config import CksClusterSpec
 from iac.nodepools import NodePoolSpec
@@ -36,7 +36,7 @@ class CoreweaveClusterArgs:
 def _nodepool_manifest(nodepool: NodePoolSpec) -> dict:
     # targetNodes is required at create; we seed it to minNodes and hand the live count to
     # CoreWeave's autoscaler thereafter via ignore_changes on spec.targetNodes (see below).
-    return build_nodepool_manifest(
+    return nodepool_manifest(
         nodepool.name,
         nodepool.instance_type,
         node_labels=nodepool.node_labels,

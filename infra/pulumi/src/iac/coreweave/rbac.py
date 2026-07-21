@@ -13,11 +13,11 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 from iris.cluster.platforms.k8s.rbac_manifests import (
-    build_cluster_role_binding_manifest,
-    build_cluster_role_manifest,
-    build_namespace_manifest,
-    build_service_account_manifest,
+    cluster_role_binding_manifest,
+    cluster_role_manifest,
     cluster_role_name,
+    namespace_manifest,
+    service_account_manifest,
 )
 
 from iac.config import RbacSpec
@@ -58,31 +58,31 @@ class IrisRbac(pulumi.ComponentResource):
                 import_=import_id if args.adopt else None,
             )
 
-        namespace_manifest = build_namespace_manifest(args.namespace)
+        namespace_resource = namespace_manifest(args.namespace)
         namespace = k8s.core.v1.Namespace(
             "namespace",
-            metadata=namespace_manifest["metadata"],
-            spec=namespace_manifest["spec"],
+            metadata=namespace_resource["metadata"],
+            spec=namespace_resource["spec"],
             opts=child_opts(args.namespace),
         )
         # Exposed so other addons that create objects in this namespace (e.g. TraefikAddon's
         # federation Middleware/Ingress) can depend_on it — Pulumi has no ordering guarantee
         # between sibling ComponentResources otherwise, and a fresh cluster has no namespace yet.
         self.namespace = namespace
-        sa_manifest = build_service_account_manifest(args.namespace, args.spec.service_account)
+        sa_manifest = service_account_manifest(args.namespace, args.spec.service_account)
         service_account = k8s.core.v1.ServiceAccount(
             "service-account",
             metadata=sa_manifest["metadata"],
             opts=child_opts(f"{args.namespace}/{args.spec.service_account}", depends_on=[namespace]),
         )
-        role_manifest = build_cluster_role_manifest(role_name)
+        role_manifest = cluster_role_manifest(role_name)
         cluster_role = k8s.rbac.v1.ClusterRole(
             "cluster-role",
             metadata=role_manifest["metadata"],
             rules=role_manifest["rules"],
             opts=child_opts(role_name),
         )
-        binding_manifest = build_cluster_role_binding_manifest(role_name, args.namespace, args.spec.service_account)
+        binding_manifest = cluster_role_binding_manifest(role_name, args.namespace, args.spec.service_account)
         k8s.rbac.v1.ClusterRoleBinding(
             "cluster-role-binding",
             metadata=binding_manifest["metadata"],

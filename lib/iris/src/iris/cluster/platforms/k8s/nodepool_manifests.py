@@ -1,16 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure CoreWeave NodePool manifest builders and their constants.
-
-One source of truth for NodePool naming/labels/shape: the IaC component
-(``iac.nodepools`` / ``iac.coreweave.cluster``) and any imperative caller (e.g. the GPU
-gang smoke harness, ``tests/e2e/gpu_gang_smoke.py``) import these so they render
-byte-identical manifests. Everything here is pure — the functions return plain dicts
-and do no I/O; callers own reconciling the live ``targetNodes``/``targetRacks`` value
-(a persistent IaC-managed cluster and a one-shot ephemeral test fixture want different
-reconcile policies for that one field — see ``build_nodepool_manifest``).
-"""
+"""Define CoreWeave NodePool manifests for node- and rack-based instances."""
 
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
 from iris.cluster.platforms.types import Labels
@@ -50,7 +41,7 @@ def compute_target_racks(instance_type: str, max_nodes: int, scale_group_name: s
     return max_nodes // RACK_SIZE
 
 
-def build_nodepool_manifest(
+def nodepool_manifest(
     pool_name: str,
     instance_type: str,
     *,
@@ -61,15 +52,13 @@ def build_nodepool_manifest(
     target_racks: int | None = None,
     autoscaling: bool = True,
 ) -> dict:
-    """Build one CoreWeave NodePool manifest.
+    """Return a CoreWeave NodePool manifest.
 
     Rack-based (NVL72) pools declare only spec.targetRacks (no autoscaler envelope) —
     pass ``target_racks`` (from ``compute_target_racks``) and ``target_nodes``/
     ``min_nodes``/``max_nodes``/``autoscaling`` are ignored. Node-based pools declare
     the [minNodes, maxNodes] autoscaler envelope plus spec.targetNodes, which the CRD
-    requires at create; callers compute ``target_nodes`` themselves (a persistent
-    cluster seeds it once and lets ``ignore_changes``/CoreWeave's autoscaler own it
-    thereafter; a one-shot ephemeral pool can just seed 0 and patch it after create).
+    requires at create.
     """
     metadata_labels = {k: v for k, v in node_labels.items() if k != SYSTEM_CRITICAL_LABEL}
     spec: dict = {"computeClass": "default", "instanceType": instance_type, "nodeLabels": node_labels}

@@ -62,17 +62,17 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_SUPERPOD,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import (
-    build_nodepool_manifest,
     compute_target_racks,
+    nodepool_manifest,
     nodepool_name,
     nodepool_node_labels,
 )
 from iris.cluster.platforms.k8s.rbac_manifests import (
-    build_cluster_role_binding_manifest,
-    build_cluster_role_manifest,
-    build_namespace_manifest,
-    build_service_account_manifest,
+    cluster_role_binding_manifest,
+    cluster_role_manifest,
     cluster_role_name,
+    namespace_manifest,
+    service_account_manifest,
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import Labels, find_free_port
@@ -229,10 +229,10 @@ class ControllerTarget:
 
         role_name = cluster_role_name(self.namespace)
         for manifest in (
-            build_namespace_manifest(self.namespace),
-            build_service_account_manifest(self.namespace, "iris-controller"),
-            build_cluster_role_manifest(role_name),
-            build_cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            namespace_manifest(self.namespace),
+            service_account_manifest(self.namespace, "iris-controller"),
+            cluster_role_manifest(role_name),
+            cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
         ):
             self.kubectl.apply_json(manifest)
         cm = c._config_json_for_configmap(cfg)
@@ -415,9 +415,9 @@ class CoreweaveTarget(ControllerTarget):
         """
         role_name = cluster_role_name(self.namespace)
         for manifest in (
-            build_service_account_manifest(self.namespace, "iris-controller"),
-            build_cluster_role_manifest(role_name),
-            build_cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            service_account_manifest(self.namespace, "iris-controller"),
+            cluster_role_manifest(role_name),
+            cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
         ):
             self.kubectl.apply_json(manifest)
 
@@ -430,7 +430,7 @@ class CoreweaveTarget(ControllerTarget):
             max_nodes = sg.max_slices * num_vms
             pool_name = nodepool_name(self.label_prefix, name)
             self.kubectl.apply_json(
-                build_nodepool_manifest(
+                nodepool_manifest(
                     pool_name,
                     cw.instance_type,
                     node_labels=nodepool_node_labels(self.label_prefix, name, min_nodes=min_nodes),
