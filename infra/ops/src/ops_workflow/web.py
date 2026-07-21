@@ -1,0 +1,201 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Starlette API and static dashboard host for the ops workflow."""
+
+import asyncio
+import contextlib
+import json
+import logging
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import BaseRoute, Mount, Route
+from starlette.staticfiles import StaticFiles
+
+from ops_workflow.grafana import SIGNATURE_HEADER, TIMESTAMP_HEADER, GrafanaWebhookError, verify_grafana_webhook
+from ops_workflow.repository import OpsRepository, TurnPendingError
+from ops_workflow.service import OpsService
+
+MAX_QUESTION_BYTES = 16 * 1024
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    grafana_webhook_secret: bytes | None
+    grafana_key_id: str
+    auth_mode: str
+    static_dir: Path | None
+    surface: str = "all"
+    reconcile_interval: float = 0.5
+
+
+def create_app(service: OpsService, repository: OpsRepository, config: WebConfig) -> Starlette:
+    """Create the API, coordinator loop, and optional built Vue host."""
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        task = None
+        if config.surface in ("all", "ui"):
+            task = asyncio.create_task(_coordinator_loop(service, config.reconcile_interval))
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            await service.gateway.close()
+
+    async def health(_: Request) -> Response:
+        return _json({"ok": True})
+
+    async def ingest_grafana(request: Request) -> Response:
+        assert config.grafana_webhook_secret is not None
+        raw_body = await request.body()
+        try:
+            webhook = verify_grafana_webhook(
+                raw_body,
+                signature=request.headers.get(SIGNATURE_HEADER, ""),
+                timestamp=request.headers.get(TIMESTAMP_HEADER, ""),
+                secret=config.grafana_webhook_secret,
+                now=datetime.now(UTC),
+            )
+            result = await repository.ingest(webhook, key_id=config.grafana_key_id)
+        except GrafanaWebhookError as error:
+            return _json({"error": error.code, "message": str(error)}, status_code=400)
+        return _json(result.as_dict(), status_code=200 if result.duplicate else 202)
+
+    async def overview(request: Request) -> Response:
+        _actor(request, config)
+        return _json(await repository.overview())
+
+    async def cases(request: Request) -> Response:
+        _actor(request, config)
+        include_archived = request.query_params.get("archived") == "true"
+        return _json({"cases": await repository.list_cases(include_archived=include_archived)})
+
+    async def case_detail(request: Request) -> Response:
+        _actor(request, config)
+        detail = await service.case_with_chat(request.path_params["case_id"])
+        if detail is None:
+            return _json({"error": "not_found"}, status_code=404)
+        return _json(detail)
+
+    async def question(request: Request) -> Response:
+        actor = _actor(request, config)
+        body = await _object_body(request)
+        text = _question_text(body)
+        case_id = await repository.create_question(text=text, actor=actor)
+        return _json({"case_id": case_id}, status_code=202)
+
+    async def follow_up(request: Request) -> Response:
+        actor = _actor(request, config)
+        body = await _object_body(request)
+        text = _question_text(body)
+        try:
+            turn_id = await repository.enqueue_follow_up(
+                case_id=request.path_params["case_id"],
+                text=text,
+                actor=actor,
+            )
+        except KeyError:
+            return _json({"error": "not_found"}, status_code=404)
+        except TurnPendingError as error:
+            return _json({"error": "turn_pending", "turn_id": str(error)}, status_code=409)
+        return _json({"turn_id": turn_id}, status_code=202)
+
+    async def archive(request: Request) -> Response:
+        actor = _actor(request, config)
+        try:
+            archived = await service.archive(case_id=request.path_params["case_id"], actor=actor)
+        except KeyError:
+            return _json({"error": "not_found"}, status_code=404)
+        if not archived:
+            return _json({"error": "turn_active"}, status_code=409)
+        return _json({"archived": True})
+
+    async def spa(_: Request) -> Response:
+        if config.static_dir is None:
+            return _json({"service": "marin-ops", "dashboard": "not_built"})
+        index = config.static_dir / "index.html"
+        if not index.exists():
+            return _json({"error": "dashboard_not_built"}, status_code=503)
+        return FileResponse(index)
+
+    routes: list[BaseRoute] = [Route("/healthz", health)]
+    if config.surface in ("all", "ingest"):
+        if config.grafana_webhook_secret is None:
+            raise ValueError("the ingest surface requires a Grafana webhook secret")
+        routes.append(Route("/api/ingest/grafana", ingest_grafana, methods=["POST"]))
+    if config.surface in ("all", "ui"):
+        routes.extend(
+            (
+                Route("/api/overview", overview),
+                Route("/api/cases", cases),
+                Route("/api/cases/{case_id}", case_detail),
+                Route("/api/cases/{case_id}/messages", follow_up, methods=["POST"]),
+                Route("/api/cases/{case_id}/archive", archive, methods=["POST"]),
+                Route("/api/questions", question, methods=["POST"]),
+            )
+        )
+    if config.surface in ("all", "ui") and config.static_dir is not None and (config.static_dir / "static").exists():
+        routes.append(Mount("/static", StaticFiles(directory=config.static_dir / "static"), name="static"))
+    if config.surface in ("all", "ui"):
+        routes.extend((Route("/", spa), Route("/{path:path}", spa)))
+    return Starlette(routes=routes, lifespan=lifespan)
+
+
+async def _coordinator_loop(service: OpsService, interval: float) -> None:
+    while True:
+        try:
+            await service.reconcile()
+        except Exception:
+            # Individual turn failures are persisted by OpsService; this guard
+            # keeps a transient database outage from killing the coordinator.
+            logging.getLogger(__name__).exception("ops coordinator iteration failed")
+        await asyncio.sleep(interval)
+
+
+def _actor(request: Request, config: WebConfig) -> str:
+    if config.auth_mode == "local":
+        return "local-operator"
+    if config.auth_mode != "iap":
+        raise RuntimeError(f"unsupported auth mode {config.auth_mode}")
+    principal = request.headers.get("x-goog-authenticated-user-email", "")
+    prefix = "accounts.google.com:"
+    if not principal.startswith(prefix) or len(principal) == len(prefix):
+        raise HTTPException(401, "IAP identity required")
+    return principal.removeprefix(prefix).lower()
+
+
+async def _object_body(request: Request) -> Mapping[str, object]:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(400, "request body must be JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "request body must be an object")
+    return body
+
+
+def _question_text(body: Mapping[str, object]) -> str:
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(400, "text must be a non-empty string")
+    text = text.strip()
+    if len(text.encode()) > MAX_QUESTION_BYTES:
+        raise HTTPException(413, f"text exceeds {MAX_QUESTION_BYTES} bytes")
+    return text
+
+
+def _json(value: object, *, status_code: int = 200) -> JSONResponse:
+    serializable = json.loads(json.dumps(value, default=str))
+    return JSONResponse(serializable, status_code=status_code)

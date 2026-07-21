@@ -1,0 +1,57 @@
+{
+  "receiver": "ops-agent",
+  "status": "resolved",
+  "orgId": 1,
+  "alerts": [
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "DNSConfigForming",
+        "cluster": "cw-us-east-08a",
+        "namespace": "kube-system",
+        "kind": "Pod",
+        "name": "node-local-dns-dcb4s",
+        "severity": "warning"
+      },
+      "annotations": {"summary": "Nameserver limits were exceeded; validate node-local DNS configuration"},
+      "startsAt": "2026-07-21T15:31:37Z",
+      "endsAt": "2026-07-21T16:05:00Z",
+      "generatorURL": "https://grafana.oa.dev/alerting/grafana/dns-config-forming/view",
+      "fingerprint": "2b05ef3b1641c79a",
+      "silenceURL": "",
+      "dashboardURL": "https://grafana.oa.dev/d/k8s/kubernetes",
+      "panelURL": "https://grafana.oa.dev/d/k8s/kubernetes?viewPanel=alerts",
+      "values": {"A": 0, "C": 0}
+    },
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "DNSConfigForming",
+        "cluster": "cw-us-east-08a",
+        "namespace": "cw-nvidia-imex",
+        "kind": "Pod",
+        "name": "nvidia-imex-xkljx",
+        "severity": "warning"
+      },
+      "annotations": {"summary": "Nameserver limits were exceeded; validate pod DNS configuration"},
+      "startsAt": "2026-07-21T15:31:35Z",
+      "endsAt": "2026-07-21T16:05:00Z",
+      "generatorURL": "https://grafana.oa.dev/alerting/grafana/dns-config-forming/view",
+      "fingerprint": "ef356383208c86c5",
+      "silenceURL": "",
+      "dashboardURL": "https://grafana.oa.dev/d/k8s/kubernetes",
+      "panelURL": "https://grafana.oa.dev/d/k8s/kubernetes?viewPanel=alerts",
+      "values": {"A": 0, "C": 0}
+    }
+  ],
+  "groupLabels": {"alertname": "DNSConfigForming", "cluster": "cw-us-east-08a"},
+  "commonLabels": {"alertname": "DNSConfigForming", "cluster": "cw-us-east-08a", "severity": "warning"},
+  "commonAnnotations": {},
+  "externalURL": "https://grafana.oa.dev/",
+  "version": "1",
+  "groupKey": "{}:{alertname=\"DNSConfigForming\", cluster=\"cw-us-east-08a\"}",
+  "truncatedAlerts": 0,
+  "title": "[RESOLVED] DNSConfigForming cw-us-east-08a (warning)",
+  "state": "ok",
+  "message": "The DNSConfigForming alert group resolved."
+}

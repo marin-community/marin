@@ -1,0 +1,6 @@
+name: marin-ops
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Grafana-triggered, agent-assisted Marin operations workflow.

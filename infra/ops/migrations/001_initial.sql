@@ -16,33 +16,33 @@ CREATE TABLE source_deliveries (
     UNIQUE (source, delivery_key)
 );
 
-CREATE TABLE source_streams (
-    source text NOT NULL,
-    cluster text NOT NULL,
-    latest_observed_at timestamptz NOT NULL,
-    latest_body_sha256 text NOT NULL,
-    latest_delivery_id uuid NOT NULL REFERENCES source_deliveries(id),
-    PRIMARY KEY (source, cluster)
-);
-
 CREATE TABLE signals (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source text NOT NULL,
     fingerprint text NOT NULL,
     generation integer NOT NULL DEFAULT 1,
     state text NOT NULL CHECK (state IN ('firing', 'resolved')),
-    cluster text NOT NULL,
+    receiver text NOT NULL,
+    group_key text NOT NULL,
+    alert_name text NOT NULL,
+    severity text NOT NULL,
+    cluster text,
     namespace text,
     object_kind text,
     object_name text,
-    reason text NOT NULL,
     summary text NOT NULL,
+    labels jsonb NOT NULL,
+    annotations jsonb NOT NULL,
+    values jsonb NOT NULL,
+    generator_url text,
+    silence_url text,
+    dashboard_url text,
+    panel_url text,
     source_version text NOT NULL,
     first_seen_at timestamptz NOT NULL,
     last_seen_at timestamptz NOT NULL,
-    last_snapshot_at timestamptz NOT NULL,
+    latest_source_timestamp timestamptz NOT NULL,
     resolved_at timestamptz,
-    occurrence_count bigint NOT NULL,
     latest_delivery_id uuid NOT NULL REFERENCES source_deliveries(id),
     UNIQUE (source, fingerprint)
 );
@@ -58,9 +58,10 @@ CREATE TABLE delivery_signals (
 
 CREATE TABLE cases (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    signal_id uuid REFERENCES signals(id),
-    signal_generation integer,
     trigger text NOT NULL CHECK (trigger IN ('automatic', 'manual')),
+    receiver text NOT NULL,
+    group_key text NOT NULL,
+    grouping_rule text NOT NULL,
     state text NOT NULL CHECK (state IN (
         'pending', 'investigating', 'waiting_human',
         'investigated', 'failed', 'archived'
@@ -78,20 +79,33 @@ CREATE TABLE cases (
     )),
     summary text,
     CHECK (
-        (trigger = 'automatic' AND signal_id IS NOT NULL
-            AND signal_generation IS NOT NULL AND question IS NULL)
+        (trigger = 'automatic' AND question IS NULL)
         OR
-        (trigger = 'manual' AND signal_id IS NULL
-            AND signal_generation IS NULL AND question IS NOT NULL)
-    ),
-    UNIQUE (signal_id, signal_generation)
+        (trigger = 'manual' AND question IS NOT NULL)
+    )
 );
+
+CREATE UNIQUE INDEX cases_one_open_group
+    ON cases (receiver, group_key)
+    WHERE state <> 'archived';
+
+CREATE TABLE case_signals (
+    case_id uuid NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    signal_id uuid NOT NULL REFERENCES signals(id),
+    signal_generation integer NOT NULL,
+    attached_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (case_id, signal_id, signal_generation)
+);
+
+CREATE UNIQUE INDEX case_signals_one_case_per_generation
+    ON case_signals (signal_id, signal_generation);
 
 CREATE TABLE agent_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     case_id uuid NOT NULL REFERENCES cases(id),
     deterministic_name text NOT NULL UNIQUE,
     loom_session_id text UNIQUE,
+    loom_session_url text,
     state text NOT NULL CHECK (state IN (
         'new', 'ready', 'active', 'idle', 'lost', 'archived'
     )),
@@ -134,9 +148,13 @@ CREATE TABLE agent_turns (
     UNIQUE (requested_by, client_request_id)
 );
 
-CREATE UNIQUE INDEX agent_turns_one_pending_per_session
+CREATE UNIQUE INDEX agent_turns_one_queued_per_session
     ON agent_turns (session_id)
-    WHERE state IN ('queued', 'launching', 'running');
+    WHERE state = 'queued';
+
+CREATE UNIQUE INDEX agent_turns_one_active_per_session
+    ON agent_turns (session_id)
+    WHERE state IN ('launching', 'running');
 
 CREATE UNIQUE INDEX agent_turns_one_active_global
     ON agent_turns ((true))
@@ -166,6 +184,12 @@ CREATE TABLE operation_requests (
 CREATE INDEX cases_queue_order
     ON cases (priority DESC, next_eligible_at, opened_at)
     WHERE state = 'pending';
+
+CREATE INDEX signals_group_state
+    ON signals (receiver, group_key, state, last_seen_at DESC);
+
+CREATE INDEX case_signals_case
+    ON case_signals (case_id, attached_at);
 
 CREATE INDEX agent_turns_queue_order
     ON agent_turns (priority DESC, available_at, created_at)

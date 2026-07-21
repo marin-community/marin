@@ -1,104 +1,96 @@
 # Ops Workflow Background Research
 
-## Background Research Brief
+## Brief
 
 - Effort: medium
-- Stop rule: stop after the Marin observability, dashboard, database, Pulumi, and agent-session searches stop producing new reusable contracts
 - Date: 2026-07-21
-- Marin revision: `d885c9b0a40bf97de6658fa8b137e7d230d67ff6`
-- Loom revision: `6f5188715d94a15dfbe10f5616a17e46ff2139ea`
+- Marin branch: `weaver/ops-workflow`
+- Question: How should Grafana alerts trigger durable, low-chatter, agent-assisted production diagnosis while keeping paging and credentials safe?
+- Stop rule: stop after Grafana, Marin dashboard/Pulumi, PostgreSQL, Loom ACP, and a live read-only canary establish the integration boundaries.
 
-### Question
+## Findings
 
-How should Marin turn low-urgency operational signals into durable, agent-assisted investigations without sending every warning to Slack, duplicating agent infrastructure, or giving an unattended agent unsafe production access?
+### Grafana should be canonical, but its database should not
 
-### Current Marin Context
+The original Grafana panel rows are Kubernetes Warning events projected by Marin's bridge. That projection is a useful exploration surface but is bounded and omits stable Kubernetes event identity. It is not the alert lifecycle. Operators should encode actionable conditions as Grafana alert rules, then let Grafana own firing/resolved state, instance fingerprints, grouping, deduplication, and repeat timing.
 
-The rows that motivated this design are Kubernetes Warning events, not Grafana alert instances. The Grafana bridge lists `type=Warning` events, truncates messages to 200 characters, keeps the newest 100, and exposes them through a current-state panel whose retention is about one hour ([source](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/grafana/src/k8s_source.py#L408-L430), [panel](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/grafana/dashboards/k8s.json#L650-L719)). It omits the Kubernetes event UID, so polling this projection cannot identify repeated observations reliably.
+Grafana's documented webhook is the supported downstream boundary. Its default payload includes `receiver`, group status, `groupKey`, alert fingerprints, labels, annotations, values, start/end times, and Grafana links. Its webhook integration supports HMAC-SHA256 over the request body, plus an optional timestamp header; when configured, the signed content is `<timestamp>:<body>`. Setting `maxAlerts=0` prevents group truncation ([Grafana webhook notifier](https://grafana.com/docs/grafana-cloud/alerting-and-irm/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/)).
 
-Grafana's provisioned alert catalog intentionally covers near-certain incidents, not all Warning events ([rules](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/grafana/provisioning/alerting/rules.yaml#L1-L13)). Notification routing currently defaults unmatched alerts to Slack, with exact `critical` and `warning` child routes ([policy](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/grafana/provisioning/alerting/policies.yaml#L4-L23)). Adding a `silent` label without a webhook-only route would therefore still notify Slack.
+Grafana notification policies already solve the proposed cheap-model grouping problem deterministically. `group_by`, `group_wait`, `group_interval`, and `repeat_interval` control grouping and notification cadence; grouping labels should describe the operational failure domain ([Grafana notification grouping](https://grafana.com/docs/grafana/latest/alerting/fundamentals/notifications/group-alert-notifications/)). Provisioned contact points and policies remain reviewable files alongside rules ([Grafana file provisioning](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/)).
 
-Grafana's private state is in the `grafana` Cloud SQL database. The repository defines no supported alert-table schema or query contract for that database. The shared Cloud SQL stack already isolates consumers with separate databases and native users ([Cloud SQL stack](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/cloudsql/__main__.py#L27-L39)). The ops workflow should own an `ops` database instead of reading or mutating Grafana internals.
+Grafana's Cloud SQL database is private application state. Marin owns no stable alerts-table query contract, and direct writes would bypass Grafana notification semantics. The ops workflow therefore stores its own delivery and case state but never claims to be the source of truth for whether an alert is firing.
 
-### Internal Prior Work
+### Current Marin notification routing can express the desired tiers
 
-#### Evaldash service shell
+Marin provisions rules, contact points, and the notification tree from YAML. Before this change, warning alerts went to Slack and critical alerts went to email plus Slack. A compound contact point can send critical/error notifications to the agent as well as the paging channels, while an agent-only contact point handles warnings. Making the agent receiver the root prevents an unlabelled rule from accidentally paging.
 
-`infra/evaldash` is the closest Marin service pattern: an IAP-gated Cloud Run service, Vue SPA, Starlette API, periodic background loop, and Cloud SQL Postgres ([deployment](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/evaldash/__main__.py#L51-L130), [coordinator](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/evaldash/src/server.py#L264-L319)). Its visibility-aware 60-second Vue refresh and race-safe `fetch` wrapper are directly reusable ([refresh](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/evaldash/dashboard/src/composables/useRefresh.ts#L1-L82), [API wrapper](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/evaldash/dashboard/src/composables/useApi.ts#L17-L45)).
+The motivating raw Warning rows are not all Grafana alerts. Existing rules target conditions judged close to incidents, such as cluster reachability, control-plane degradation, and stuck GPU termination. New warning-class rules must be selective; wrapping every Kubernetes Warning event in one rule would create alert and agent noise without adding intent.
 
-Two evaldash choices should not carry over. Its in-process lock relies on `min=max=1`, while ops claims must survive a restart. Its `metadata.create_all()` schema bootstrap has no ordered migration history ([schema bootstrap](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/evaldash/src/results_db.py#L147-L149)). Ops needs Postgres leases and versioned SQL migrations from the first release.
+### A separate ops UI should compose, not replace, Loom
 
-#### Pulumi and credentials
+`infra/evaldash` is Marin's closest application pattern: Vue 3, TypeScript, Rsbuild, Starlette, Cloud SQL, IAP, and visibility-aware refresh. Those patterns are reusable for the ops inbox and case page.
 
-`CloudRunService` already owns the runtime service account, IAP, Direct VPC egress, Secret Manager grants, Cloud SQL attachment, one warm instance, and always-allocated CPU option ([component](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/pulumi/src/iac/gcp/cloud_run.py#L31-L89)). `CloudSqlPostgres` creates logical databases and secret shells without placing passwords in Pulumi state ([component](https://github.com/marin-community/marin/blob/d885c9b0a40bf97de6658fa8b137e7d230d67ff6/infra/pulumi/src/iac/gcp/cloud_sql.py#L33-L58)).
+Loom already implements the hard agent runtime pieces. Its authenticated API creates ACP sessions with `cwd`, base, agent, model/effort, protocol, and permission mode; exposes canonical chat snapshots and an SSE tail; queues or steers prompts; interrupts exact sessions; archives; and returns a browser deep link. `GET /api/agents` on the local instance reported both Codex and Claude ACP runtimes available. The ops service should proxy this API and retain only session identity and workflow results. A second ACP implementation would create two transcript authorities.
 
-Grafana's CoreWeave credential is deliberately read-only. Broader Iris controller credentials can create, exec, update, and delete pods and mutate node pools. Existing recovery playbooks require explicit approval for destructive action. The v1 agent environment should therefore expose read-only cluster access and leave mutation out of scope.
+The browser must not receive `LOOM_TOKEN`, launch sessions, or own the queue timer. Tabs disappear, duplicate, and sleep. A server worker plus PostgreSQL partial unique index makes the one-agent policy independent of browser state.
 
-#### Ops expertise
+### Alert and workflow identities are different
 
-Marin already has focused operational playbooks: `debug` routes symptoms to the Iris and Zephyr runbooks, `scan-logs` bounds large-log analysis, `recover-stuck-k8s-pod` classifies recovery options and approval boundaries, and `write-ops-log` defines a durable handoff. A small `ops-expert` router should invoke these sources instead of copying them into one large personality prompt.
+The durable model needs four identities:
 
-#### Loom session runtime
+1. raw body SHA-256 for exact webhook retries;
+2. Grafana `fingerprint` for one current alert instance;
+3. fingerprint `generation` for a resolved instance that later fires again;
+4. `receiver + groupKey` for the operator's investigation thread.
 
-Loom already supplies the session features in the proposal. Its ACP sessions expose live conversation, steering or durable queued prompts, permission cards, archive capture, and a normalized chat journal ([conversation behavior](https://github.com/rjpower/weaver/blob/6f5188715d94a15dfbe10f5616a17e46ff2139ea/README.md#L236-L251)). Its token-authenticated API creates sessions and supports send, interrupt, archive, chat snapshot, and chat SSE ([API and auth](https://github.com/rjpower/weaver/blob/6f5188715d94a15dfbe10f5616a17e46ff2139ea/README.md#L277-L340)). The launch request accepts a managed repository, goal, agent, ACP protocol, and permission mode ([contract](https://github.com/rjpower/weaver/blob/6f5188715d94a15dfbe10f5616a17e46ff2139ea/crates/weaver-api/src/dto.rs#L531-L599)).
+One `cleaned` flag cannot express source resolution, investigation completion, human follow-up, failure, archive, or re-fire. Separate signal, case, session, and turn states are required.
 
-The ops service should use Loom as the runner, proxy its chat APIs to the IAP-authenticated browser, and store only the stable Loom session ID plus final investigation metadata. Reimplementing ACP in Marin would duplicate an actively maintained subsystem and create a second transcript authority.
+PostgreSQL `FOR UPDATE SKIP LOCKED` supports a non-blocking multi-worker claim, while a partial unique index remains the final guarantee that only one turn is launching/running. The queue should contain automatic alerts, one-off questions, and follow-ups so manual work cannot bypass concurrency and cost controls.
 
-### External Prior Art
+### Credentials require process isolation
 
-Grafana supports webhook contact points, grouped notification payloads, firing and resolved deliveries, and HMAC-SHA256 signatures with optional timestamps. A timestamped HMAC lets the ops endpoint reject tampered or replayed requests without embedding credentials in the URL ([Grafana webhook documentation](https://grafana.com/docs/grafana/latest/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/)). Notification policies route alerts to contact points by label and control grouping and repeat timing ([Grafana policy documentation](https://grafana.com/docs/grafana/latest/alerting/configure-notifications/create-notification-policy/)).
+Grafana and the public ingest service need only their HMAC pair. The public service should expose no case APIs and receive no Loom or cluster credential. The IAP UI needs an application DB user and a dedicated Loom token. Kubernetes and Iris credentials belong to the agent runtime, not the web process.
 
-PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` gives multiple coordinators a non-blocking claim primitive while preserving row locks inside a transaction ([PostgreSQL `SELECT`](https://www.postgresql.org/docs/current/sql-select.html)). Kubernetes recommends minimum-permission RBAC and short-lived credentials for external applications ([Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/), [RBAC good practices](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)).
+Prompt language and the `ops-expert` skill are not security controls. Plan-mode ACP plus read-only RBAC, no secret reads, no pod exec, no GitHub write token, and negative mutation tests form the boundary. The public DB role needs a fixed-`search_path` security-definer ingestion function before deployment; direct table access is acceptable only in the local vertical slice.
 
-### Evidence Map
+Pulumi's existing `CloudRunService` and `CloudSqlPostgres` components already cover service accounts, IAP, Cloud SQL sockets, Secret Manager grants, logical databases, and password secret shells. The ops split adds an explicit public access enum so public ingress is an intentional resource property rather than an ad hoc IAM grant.
 
-#### Claim: the browser must not launch investigations
+## Live Validation
 
-- Support: evaldash's timer pauses in hidden tabs; no open browser means no work. Multiple tabs also have no shared transactional exclusion.
-- Directness to Marin: exact dashboard pattern proposed for reuse.
-- Confidence: high.
-- Action: run a server-side coordinator; the browser only reads state and sends authenticated user actions.
+The spike replayed a real-shaped notification group containing the two motivating `DNSConfigForming` fingerprints. The backend created one case, launched a real Codex ACP session through Loom, and exposed its chat at `https://loom.rjp.io/s/732hh1uo`. The agent used `~/.kube/coreweave-iris` and context `marin-us-east-08a_US-EAST-08A` for read-only validation.
 
-#### Claim: Grafana's database is the wrong integration boundary
+It found:
 
-- Support: no owned alert schema exists; Grafana notification webhooks are a supported, versioned boundary.
-- Contradiction: using the existing database would avoid one webhook hop.
-- Directness to Marin: the current Grafana database is already private application state.
-- Confidence: high.
-- Action: add a separate `ops` database and webhook receiver.
+- both alerted pods were Running/Ready with zero application-container restarts;
+- a third system pod on the same node had the same warning;
+- node `sg6txs64` was Ready and hosted no Iris workload;
+- node-local DNS was 206/206 Ready and NVIDIA IMEX was 202/202 Ready;
+- the retained resolver line was `1.1.1.1 8.8.8.8 1.1.1.1`, pointing to duplicated host resolver configuration;
+- immediate impact was low, no eviction/restart was indicated, and CoreWeave should correct the managed node resolver configuration.
 
-#### Claim: one boolean cannot represent cleanup
+No production mutation occurred. This validates that Grafana evidence can identify a bounded target while live Kubernetes evidence determines current severity and next action.
 
-- Support: source resolution, agent completion, human archive, suppression, and failed execution occur independently.
-- Directness to Marin: Grafana sends both firing and resolved events while Loom sessions can wait, fail, or be archived separately.
-- Confidence: high.
-- Action: model signals, cases, runs, and append-only case events separately.
+The first real session based itself on `origin/main`, where the new `ops-expert` skill was not yet present. The explicit read-only prompt still kept the run safe, but the failure proved that production must pin a merged Marin revision containing the skill. The Loom adapter now accepts an explicit base.
 
-### Negative / Failed Leads
+## Negative Leads
 
-- No supported Grafana alerts-table contract exists in Marin.
-- No ACP client or persistent agent-session implementation exists in Marin; the implementation is in Loom.
-- The current Kubernetes Warning-event projection is too lossy to serve as a durable source without adding stable event identity.
-- Evaldash's in-process lock and schema bootstrap are insufficient for restart-safe work claiming and schema evolution.
-- Browser-local chat history is not acceptable as the canonical transcript.
+- Polling a Grafana SQL alerts table: no supported Marin/Grafana schema contract, and it bypasses Alertmanager lifecycle semantics.
+- Polling the rendered Warning-event panel: lossy projection and no rule-author intent.
+- Model-based grouping before deterministic grouping is tried: adds cost and nondeterminism where Grafana already emits `groupKey`.
+- Adding this UI directly to Loom: couples a general agent fleet UI to Marin-specific alert and case state.
+- Letting the browser run the minute loop: loses work when hidden/closed and cannot safely serialize multiple tabs.
+- Sending all warnings to Slack and relying on the agent to mute them: Slack noise has already occurred by then.
+- Sharing broad production credentials with a general-purpose Loom deployment: violates least privilege and expands blast radius.
 
-### Recommended First Vertical Slice
+## Recommended Path
 
-1. Add the `ops` database/user secret shell and an IAP-gated `infra/ops` service.
-2. Add ordered SQL migrations, authenticated Grafana webhook ingestion, signal/case state, and a Postgres lease-based coordinator with a fake runner.
-3. Add the minimal Vue inbox, case detail, status, and manual-question surfaces.
-4. Add a Loom adapter and the versioned `ops-expert` skill; proxy Loom chat through the backend.
-5. Add the webhook-only Grafana contact point and `handling=agent` policy after deduplication and authentication tests pass.
-6. Add a stable Kubernetes Warning-event silent rule or a lossless source adapter; do not poll the existing lossy panel projection.
+1. Keep Grafana as the only alert-definition and alert-lifecycle surface.
+2. Land the signed webhook, fingerprint/group case model, global turn queue, Vue UI, and stub/real Loom adapters.
+3. Split public ingest from IAP UI in Cloud Run and finish the database privilege boundary.
+4. Run warning notifications in shadow/no-agent mode to tune rules and grouping.
+5. Pin a dedicated ops Loom runtime to a reviewed revision and pass negative mutation tests.
+6. Enable one cluster with a daily launch budget, then expand. Critical/error paging remains independent and continues to Slack/email.
 
-### Open Questions
+## Stop Reason
 
-- Should the first Kubernetes Warning-event source include provider namespaces by default, or place `kube-*` and `cw-*` events in a lower-priority queue?
-- Is one automatic active turn fleet-wide the intended long-term policy, or only the safest v1 default?
-- Should a session waiting for a human release the automatic slot? This design says yes.
-- Which production Loom deployment and managed Marin repository should Pulumi target?
-- What retention period should apply to raw deliveries and archived cases?
-
-### Stop Reason
-
-The service, data, session, and security boundaries are supported by implemented Marin and Loom code. Further searching did not find another queue, alert-history, or agent runtime worth reusing.
+The repository, official Grafana contracts, Loom API, browser test, and live read-only canary agree on the system boundaries. Further research would not reduce the remaining implementation risks, which are concrete production hardening tasks: least-privilege SQL, crash reconciliation, metrics/rate limits, and negative credential tests.

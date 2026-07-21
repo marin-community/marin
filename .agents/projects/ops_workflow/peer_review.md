@@ -1,30 +1,30 @@
 # Ops Workflow Peer Review
 
-The design and specification received two independent reviews before production integration work began.
+## Review
 
-## Internal production-systems review
+Claude Sonnet reviewed the implementation diff, design/spec, Grafana provisioning, PostgreSQL repository, Loom adapter, Vue dashboard, Pulumi deployment, and shared Cloud Run access change on 2026-07-21. The review separated spike merge readiness from production enablement.
 
-The first pass was a no-go for the original production path. It identified path-level IAP exemptions that Cloud Run cannot provide, unscoped shared Loom credentials, conflated sessions and turns, prompts that could bypass the global scheduler, unsupported Loom idempotency claims, an unstructured completion protocol, incomplete case lifecycle rules, and an invented Grafana delivery header.
+### Findings and disposition
 
-The revision addressed those findings by splitting public ingest from the IAP UI, requiring dedicated ops Loom tenancy and read-only credentials, separating sessions from turns, scheduling every prompt through Postgres, gating the real runner on missing Loom contracts, using a correlated result artifact, selecting one stable Kubernetes Warning source for V1, and defining reopen/archive/resolution behavior.
+| Severity | Finding | Disposition |
+|---|---|---|
+| Critical | A new Grafana fingerprint arriving while the case turn was running attempted to insert a queued turn, but one partial unique index allowed only one queued-or-active turn. The webhook transaction would repeatedly roll back. | Fixed. The schema now permits one queued and one active turn per session through separate partial indexes. Automatic enqueue detects any existing queued work. A real-PostgreSQL regression test holds one turn running, ingests a third group fingerprint, and proves one follow-up remains queued. |
+| High | The hardened `coordinator`/`runner`/`turn` recovery contract is not yet connected to the vertical-slice service, so launch-lease recovery, result artifact correlation, and retry lineage are not production-ready. | Accepted as a production gate, not hidden. The design and spec explicitly distinguish the running spike from that hardened contract. Production dispatch stays disabled until it is wired and tested. A running-turn deadline and exact Loom interrupt are now enforced in the spike so a hung agent cannot occupy the global slot forever. |
+| High | The transactional repository had no direct test coverage. | Partially fixed for merge. The new PostgreSQL test covers the highest-risk concurrent group update. HMAC/parser, runner lifecycle, Grafana provisioning, and browser flows remain covered. The spec still requires duplicate, stale, resolution, re-fire, archive, and concurrent-claim PostgreSQL cases before production. |
+| Medium | Loom session creation can succeed before the database records acknowledgement. Marking the turn failed would free the global slot and permit two external agents. | Made fail-safe. Once an external turn may have started, an acknowledgement failure leaves the database turn in `launching`; it does not release the slot. Durable adoption of that state remains a production recovery gate. |
+| Medium | Fire-and-forget dispatch tasks were weakly referenced and could lose exceptions before the coordinator observed them. | Fixed. HTTP handlers only persist work. The supervised coordinator loop performs all dispatch. |
+| Medium | The production entrypoint's bare `postgresql://` relies on libpq environment fallback and secret arguments were copied into process argv. | Clarified and hardened. The entrypoint documents libpq fallback. Secret values stay in Secret Manager-backed environment and the CLI reads them by environment-variable name, so HMAC and Loom tokens are not placed in argv. |
+| Low | Public ingest inherited a one-instance cap intended for local-state services. | Fixed. Ingest scales from zero to three instances; PostgreSQL remains the concurrency authority. |
+| Low | Grafana/ops stack ordering and webhook URL handoff were manual. | Fixed. Grafana reads the ops stack's `ingest_url` through a Pulumi `StackReference`. The ops stack still deploys first because it owns the secret shell and output. |
 
-The second pass gave a conditional go for the fake-runner/no-credentials slice. Its remaining blockers and dispositions were:
+### Areas reviewed without a finding
 
-| Finding | Disposition |
-|---|---|
-| Per-signal timestamps cannot reject a stale complete snapshot containing a previously unseen UID | Added the locked `source_streams` per-cluster high-water row and conflict rules |
-| Pending cases were not transactionally materialized into sessions and turns | Pinned one promotion transaction, exact case transition, cancellation on pre-launch resolution, and unique replacement behavior |
-| Disabling IAP does not grant public Cloud Run invocation | Required separate IAP and invoker-member options, including `allUsers` only for the HMAC ingest service |
-| Runtime timeout was not durable | Added `deadline_at` computed from database time |
-| Operation idempotency and retry lineage were incomplete | Added `operation_requests`, immutable retry rows, and `retry_of` |
-| The agent could not know Loom's turn number before dispatch | Removed that value from the agent-authored result and correlate it in the coordinator |
+- Grafana routes match the intended notification tiers and configure timestamped HMAC with untruncated groups.
+- The public and IAP Cloud Run branches are explicit and mutually guarded; existing IAP consumers retain their behavior.
+- IAP identity is trusted only on the IAP-gated service, whose Cloud Run invoker is the IAP service agent.
+- The Vue dashboard renders agent text through escaped interpolation and uses no raw HTML path.
+- The split service credentials match the architecture: public ingest has no Loom or cluster credential; UI has no cluster credential; the agent runtime owns read-only diagnostics.
 
-## Claude production review
+## Recommendation
 
-Claude reviewed the revised artifact and current first-slice code. It agreed that production integration should remain gated and identified three implementation prerequisites: the SQL migration, session/turn runner contract, and scheduler/lease reconciliation primitives. The implementation now includes all three, plus behavior tests for source high-water ordering, exact-turn correlation, lost acknowledgement recovery, the all-turn global slot, and durable timeout interruption.
-
-Claude also recommended a small raw-SQL migration layer rather than a query-builder abstraction, strict evidence/prompt bounds, and idempotent fake-runner behavior. Those recommendations are reflected in `infra/ops`.
-
-## Review Verdict
-
-The reviewed boundary is approved for code review: schema, authenticated snapshot validation, pure signal/case transitions, immutable turn transitions, a contract fake, and coordinator boundaries. Production source wiring, public deployment, real Loom dispatch, and cluster credentials remain disabled until the rollout gates in the specification pass.
+After the critical queue-constraint fix and regression test, merge the work as an explicitly gated vertical slice. Do not enable production automatic dispatch yet. Production remains blocked on least-privilege SQL ingestion, full launch/restart reconciliation, broader repository integration tests, rate limiting/metrics, a pinned merged ops skill, and negative mutation tests for the dedicated agent credentials.

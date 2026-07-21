@@ -4,8 +4,8 @@
 """Pulumi entry point for Marin's shared Cloud SQL metadata instance.
 
 Declares the `marin-metadata` PostgreSQL instance through the reusable
-`iac.gcp.cloud_sql.CloudSqlPostgres` component — one instance carrying the `grafana` and
-`evals` databases, with a Secret Manager secret shell per native user — plus the
+`iac.gcp.cloud_sql.CloudSqlPostgres` component — one instance carrying the `grafana`,
+`evals`, and `ops` databases, with a Secret Manager secret shell per native user — plus the
 `marin-eval-metadata` GCS bucket that holds eval run records. SQL users and secret values are
 set out-of-band; see README.md.
 
@@ -32,8 +32,13 @@ def main() -> None:
             project=PROJECT,
             region=REGION,
             instance_name=INSTANCE,
-            databases=("grafana", "evals"),
-            password_secrets=("cloudsql-grafana-password", "cloudsql-evals-password"),
+            databases=("grafana", "evals", "ops"),
+            password_secrets=(
+                "cloudsql-grafana-password",
+                "cloudsql-evals-password",
+                "cloudsql-ops-ingest-password",
+                "cloudsql-ops-app-password",
+            ),
         ),
         gcp_provider=provider,
     )

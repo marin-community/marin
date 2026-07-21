@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The notification policy tree. severity=critical routes to ops-critical (email +
-# Slack); severity=warning routes to ops-slack, which is also the root receiver
-# so an unlabeled alert still lands somewhere visible. Instances group by
-# (alertname, cluster) and re-notify every 4h while firing.
+# The notification policy tree. Grafana is canonical for grouping, deduplication,
+# repeat timing, and resolution. Warnings and unmatched alerts reach only the ops
+# agent. Critical/error alerts reach email, Slack, and the agent through the
+# compound ops-critical contact point. Instances group by (alertname, cluster).
 apiVersion: 1
 
 policies:
   - orgId: 1
-    receiver: ops-slack
+    receiver: ops-agent
     group_by: ["alertname", "cluster"]
     group_wait: 30s
     group_interval: 5m
@@ -18,6 +18,9 @@ policies:
       - receiver: ops-critical
         object_matchers:
           - ["severity", "=", "critical"]
-      - receiver: ops-slack
+      - receiver: ops-critical
+        object_matchers:
+          - ["severity", "=", "error"]
+      - receiver: ops-agent
         object_matchers:
           - ["severity", "=", "warning"]

@@ -7,7 +7,15 @@ name = "marin-infra-ops"
 version = "0.1.0"
 description = "Durable operational signal ingestion and agent workflow coordination."
 requires-python = ">=3.12,<3.14"
-dependencies = []
+dependencies = [
+  "httpx >= 0.28",
+  "psycopg[binary] >= 3.2",
+  "starlette >= 0.47",
+  "uvicorn >= 0.35",
+]
+
+[project.scripts]
+ops-workflow = "ops_workflow.cli:main"
 
 [dependency-groups]
 dev = ["pytest >= 8.4"]

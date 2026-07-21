@@ -5,11 +5,14 @@
 # edits do not persist (Grafana's SQLite is ephemeral on Cloud Run) and would be
 # overwritten by these files anyway.
 #
-# ops-critical carries two receivers so a critical alert reaches email and Slack
-# without relying on routing-tree subtleties; ops-slack is the warning tier.
+# ops-critical carries three receivers so a critical alert reaches email, Slack,
+# and the agent without relying on routing-tree subtleties. ops-agent is the
+# webhook-only warning tier.
 # $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
 # Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
-# SMTP credentials — without them email is inert while Slack still delivers.
+# SMTP credentials — without them email is inert while Slack and the agent still
+# receive critical alerts. Grafana signs the raw webhook body and timestamp with
+# a secret shared only with the narrow public ingest service.
 apiVersion: 1
 
 contactPoints:
@@ -24,11 +27,27 @@ contactPoints:
         type: slack
         settings:
           url: $SLACK_ALERTS_WEBHOOK
+      - uid: ops-critical-agent
+        type: webhook
+        settings:
+          url: $OPS_ALERT_WEBHOOK_URL
+          httpMethod: POST
+          maxAlerts: "0"
+          hmacConfig:
+            secret: $OPS_ALERT_WEBHOOK_SECRET
+            header: X-Grafana-Alerting-Signature
+            timestampHeader: X-Grafana-Alerting-Signature-Timestamp
 
   - orgId: 1
-    name: ops-slack
+    name: ops-agent
     receivers:
-      - uid: ops-slack-webhook
-        type: slack
+      - uid: ops-agent-webhook
+        type: webhook
         settings:
-          url: $SLACK_ALERTS_WEBHOOK
+          url: $OPS_ALERT_WEBHOOK_URL
+          httpMethod: POST
+          maxAlerts: "0"
+          hmacConfig:
+            secret: $OPS_ALERT_WEBHOOK_SECRET
+            header: X-Grafana-Alerting-Signature
+            timestampHeader: X-Grafana-Alerting-Signature-Timestamp

@@ -1,0 +1,9 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+@import 'tailwindcss';
+@config '../../tailwind.config.ts';
+
+:root { font-family: 'Noto Sans Variable', system-ui, sans-serif; }
+body { margin: 0; }
+button, input, textarea { font: inherit; }
+.router-link-active:not(.brand) { outline: 1px solid rgba(255,255,255,.18); }

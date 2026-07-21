@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ALERTING = ROOT / "provisioning" / "alerting"
 
 EXPRESSION_UID = "__expr__"
-VALID_SEVERITIES = {"critical", "warning"}
+VALID_SEVERITIES = {"critical", "error", "warning"}
 
 
 def _load(path: Path) -> dict:
@@ -110,14 +110,33 @@ def test_policies_reference_provisioned_contact_points():
             assert route["receiver"] in contact_points
 
 
-def test_critical_contact_point_reaches_email_and_slack():
+def test_notification_tiers_route_warning_to_agent_and_critical_to_every_channel():
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack"}
+    assert critical_types == {"email", "slack", "webhook"}
+    assert {receiver["type"] for receiver in points["ops-agent"]["receivers"]} == {"webhook"}
+
+    policies = _load(ALERTING / "policies.yaml")["policies"]
+    assert len(policies) == 1
+    policy = policies[0]
+    assert policy["receiver"] == "ops-agent"
+    routes = {route["object_matchers"][0][2]: route["receiver"] for route in policy["routes"]}
+    assert routes == {"critical": "ops-critical", "error": "ops-critical", "warning": "ops-agent"}
+
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+            if receiver["type"] == "webhook":
+                settings = receiver["settings"]
+                assert settings["url"] == "$OPS_ALERT_WEBHOOK_URL"
+                assert settings["httpMethod"] == "POST"
+                assert settings["maxAlerts"] == "0"
+                assert settings["hmacConfig"] == {
+                    "secret": "$OPS_ALERT_WEBHOOK_SECRET",
+                    "header": "X-Grafana-Alerting-Signature",
+                    "timestampHeader": "X-Grafana-Alerting-Signature-Timestamp",
+                }
 
 
 def test_dashboard_filter_expressions_reference_selected_columns():
