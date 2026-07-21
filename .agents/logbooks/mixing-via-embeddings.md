@@ -1121,3 +1121,30 @@ probe runs whose outcomes we already know.
 - Surviving GP value: (i) ~1.5x sample efficiency for sequential design (see Part 4), (ii) honest
   in-distribution error bars -- though note in-distribution sd is ~constant and ~= the measured seed
   floor, so that bar is obtainable from the seed panel WITHOUT the GP.
+
+## 2026-07-21 Simple-variant tests (options 1 & 2) — held to "simple unless it clearly wins"
+Code: experiments/datakit/mixture_features/gp_simple_variants.py (tracked, lint-clean)
+Output: scratch/mixture_features/grug/gp_simple_variants.json
+
+**OPTION 1 — linear mean (top-20 content PCs per phase) instead of constant mean: REJECTED.**
+  baseline (constant mean): RMSE 0.2579  Spearman 0.8168
+  linear mean + kernel    : RMSE 0.2732  Spearman 0.7961   -> WORSE on both (-0.015 RMSE, -0.021 rho)
+- It also failed its own motivation: the prediction range did NOT widen. Baseline spans to −1.060,
+  linear only to −0.988, against a best-observed of −1.058. So the constant-mean model ALREADY predicts
+  values as extreme as the best real run.
+- **Correction to an earlier framing:** the "mean reversion" I flagged from the inversion study
+  (best predicted candidate −0.689 vs best observed −1.058) is a property of the GENERATED Dirichlet
+  candidate bank (drawn near the design centre), NOT a deficiency of the model on real runs. Adding a
+  global linear trend fixes nothing and costs accuracy — the kernel already captures the content
+  relation better than a rigid global trend does. KEEP THE CONSTANT MEAN.
+
+**OPTION 2 — split-conformal intervals instead of GP posterior variance: WINS ON SIMPLICITY.**
+  GP        95% coverage 96.2%   mean half-width 0.5007
+  conformal 95% coverage 96.0%   mean half-width 0.5154   (+3% width)
+  conformal 68% half-width 0.2338  (~= the measured seed floor 0.213, consistent with everything else)
+- Conformal matches the GP's coverage and width with NO marginal-likelihood fitting, NO signal/noise
+  amplitude decomposition — just residual quantiles — and carries a distribution-free finite-sample
+  guarantee. **If error bars are wanted, conformal is the simpler way to get the one benefit the GP
+  actually delivered.** This further undercuts the case for the full Bayesian treatment.
+- Caveat: conformal gives MARGINAL (constant-width) coverage, so it will fail off-support just as the
+  GP did. It does not fix the epoch blindness — nothing distance-based does — but it does not pretend to.
