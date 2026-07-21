@@ -1775,3 +1775,102 @@ author: mcwitt
   then stop if packaging or sharding prevents a bounded Grug smoke. If the
   direct call works, add an experiment-only fused QKV/gate-up layout and apply
   the 4-8 GPU full-step gate before considering a 64-GPU run.
+
+### 2026-07-20 16:40 - MXFP8-U004: stateless TE control matches the Flax path
+
+- Hypothesis: Transformer Engine's public stateless `dense.dense` API uses the
+  same MXFP8 kernels and numerics as its documented Flax wrapper, without
+  adding Flax variables to the Grug model state.
+- Commit Hash: `5648dcffc`.
+- Command: `/home/marin/projects/marin/.venv/bin/iris
+  --cluster=cw-us-east-08a job run --no-wait --user mwittmann --job-name
+  mxfp8-uniform-te-direct-r1 --gpu GB200x1 --enable-extra-resources --cpu 16
+  --memory 96g --extra gpu -- bash
+  experiments/grug/moe/standalone/run_te_bench.sh python
+  experiments/grug/moe/standalone/bench_te_dense.py --git-sha 5648dcffc
+  --shape kv_5120x1280 --direct-api --tokens 65536 --warmup 10 --iters 50
+  --out /dev/stdout`.
+- Config: one GB200, TE 2.16.0, JAX 0.10.1, CUDA 13, cuDNN 9.19; BF16
+  inputs; 10 warmups and 50 measured iterations.
+- Result (`exploratory`): direct stateless TE took
+  `1.396 +/- 0.044 ms`, versus `1.349 +/- 0.037 ms` for the Flax wrapper and
+  `1.119 +/- 0.035 ms` for delayed per-tensor FP8. Direct and Flax TE had the
+  same output/dgrad/wgrad relative errors (`3.706e-2/3.706e-2/3.808e-2`) and
+  both lowered to `te_gemm_v2_ffi` plus `te_dbias_quantize_ffi`.
+- Artifact: Iris job `/mwittmann/mxfp8-uniform-te-direct-r1`, succeeded with
+  exit 0 in 148 seconds.
+- Interpretation: the stateless call is suitable for an experiment-only Grug
+  integration. It does not improve the separate-projection result; projection
+  fusion remains necessary for the projected 99% gate.
+- Next action: add `dense_recipe="mxfp8"` without changing the hybrid default,
+  then compile a complete distributed train step.
+
+### 2026-07-20 17:48 - MXFP8-U005: no available dense path meets the distributed full-step gate
+
+- Hypothesis: TE's stateless MXFP8 dense op can replace every attention and
+  shared-expert `Fp8DotGeneralOp` while Grug's existing fused MXFP8 expert op
+  remains unchanged, producing a uniform recipe within 1% of the hybrid
+  step time.
+- Commit Hashes: `5a4e285bc` adds the uniform recipe and `5c782b91c` adds the
+  required TE mesh-resource context. `GrugFp8Config(recipe="mxfp8")` remains
+  the exact hybrid default; uniform is selected explicitly with
+  `dense_recipe="mxfp8"`.
+- Representative command (run twice, changing `dense_recipe` between
+  `mxfp8` and `per_tensor`):
+  `/home/marin/projects/marin/.venv/bin/iris --cluster=cw-us-east-08a job run
+  --no-wait --user mwittmann --job-name mxfp8-uniform-fullstep-two-r1 --gpu
+  GB200x2 --enable-extra-resources --cpu 24 --memory 192g --extra gpu -- bash
+  experiments/grug/moe/standalone/run_te_bench.sh python
+  experiments/grug/moe/standalone/bench_grug_moe_mfu_fp8.py --run-id
+  mxfp8-uniform-fullstep-two-r1 --output-dir
+  /tmp/mxfp8-uniform-fullstep-two-r1 --fp8 --no-fp8-wire --fp8-recipe
+  mxfp8 --fp8-dense-recipe mxfp8 --mxfp8-producer xla --steps 15
+  --warmup-steps 7 --batch-size 32 --seq-len 4096 --hidden-dim 5120
+  --num-layers 4 --num-experts 32 --num-experts-per-token 5 --head-dim 128
+  --num-kv-heads 10 --num-gpus 2 --moe-implementation ring
+  --expert-parallelism 2 --replica-axis 1 --attention-implementation
+  gpu_fa4_cute --remat-mode recompute_all --stacked-blocks`.
+- Config: TE 2.16.0, JAX 0.10.1, CUDA 13, cuDNN 9.19; d5120, KV1280,
+  shared intermediate 2560, seq4096, top-5 routing, `recompute_all`. The final
+  EP2 pair used 65,536 tokens and 16 experts per device, matching the
+  production run's per-device token count and local-expert count.
+- Result:
+
+  | arm | outcome | steady median |
+  |---|---|---:|
+  | hybrid EP2, L4 | succeeded, finite loss through step 14 | **48,157 tok/s; 2.7221 s; 13.05% B200-convention MFU** |
+  | uniform EP2, L4 | XLA GPU backend abort before execution | `AllReduceThunk::CheckImplementable(): reduction_kind.has_value()` |
+  | uniform EP4, L4 | same XLA GPU backend abort before execution | no timing |
+
+  The EP2 uniform failure reproduced the EP4 failure at the same backend
+  phase, after TE import, model tracing, custom partitioning, and several
+  minutes of compilation. The process exits 134 from a C++ fatal check, so
+  Python cannot catch or downgrade it. The paired EP2 hybrid job succeeded
+  with exit 0. A one-GPU fallback is not a valid uniform test because Grug's
+  MXFP8 whole-expert-MLP op requires an expert axis larger than one.
+- Integration failures excluded from timing evidence: the first EP4 attempt
+  lacked TE's process-global `MeshResource` and was fixed; an eight-layer EP4
+  attempt exhausted memory while autotuning a 25 GiB expert transpose; the
+  four-layer EP4 hybrid control hit the pre-existing in-memory CUBIN load
+  fault. Reducing to the minimum valid EP2 graph removed those confounds and
+  retained the TE all-reduce abort only in the uniform arm.
+- Local verification: the focused config/state/import contracts pass
+  (`3 passed`); required exact-file pre-commit checks pass; pyrefly reports
+  zero errors on `mxfp8_dense.py` and `train.py`. A broader Grug suite reached
+  24 passes and 14 skips, then hit the existing base-variant checkpoint
+  serialization timeout.
+- Artifacts: `/mwittmann/mxfp8-uniform-fullstep-{u-r1,u-r1b,u-r1c,two-r1}`
+  and `/mwittmann/mxfp8-hybrid-fullstep-{h-r1c,two-r1}`. Full traces and the
+  hybrid JSON summary are retained in Iris task logs.
+- Interpretation: uniform MXFP8 is not physically impossible. The TE fused
+  microbenchmark projects to 99.39-99.48% of hybrid throughput. No available
+  implementation can realize that result in the current Grug train graph:
+  Marin's correct CuTe producer is 21.25% slower on the weighted dense mix
+  (13.45-14.26% slower with projection fusion), while TE's faster op aborts
+  deterministically on the minimum valid distributed graph and is not a Marin
+  dependency. The current hybrid recipe is therefore the only demonstrated
+  production-viable choice.
+- Decision: keep dense matmuls on delayed per-tensor FP8 and ragged expert
+  matmuls on MXFP8. Resume uniform work when either TE supports Grug's
+  multi-axis distributed backward or a dense MXFP8 producer can be fused into
+  GEMM epilogues without the measured standalone producer tax.
