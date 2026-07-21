@@ -475,26 +475,18 @@ def test_apply_worker_failed_from_assigned(state):
 
 
 def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
-    """A CLUSTER_VIEW (K8s) controller enforces ``--timeout``: an executing task
-    past its wall-clock deadline is finalized even though the cluster has no
-    worker-daemon backend.
-
-    Regression for #7431 — the execution-timeout scan was gated to worker-daemon
-    backends, so a gang on the K8s backend (which skips activeDeadlineSeconds) had
-    no wall-clock enforcement and held its GPU nodes indefinitely.
-    """
+    """A K8s-only controller enforces execution timeouts (#7431)."""
     ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431")
     state = ControllerTestState(ctrl._db)
 
     jid = JobName.root("test-user", "gang-timeout")
     req = make_direct_job_request("gang-timeout", replicas=1)
-    req.timeout.milliseconds = 1000  # 1s wall-clock deadline
+    req.timeout.milliseconds = 1000
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
     [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
 
-    # Drive the task to RUNNING with a start two hours in the past (started_at_ms
-    # is stamped from ``now``), so it is well past its 1s deadline at the next tick.
+    # Start the task two hours before the timeout scan.
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -507,36 +499,25 @@ def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
         )
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
-    # One reconcile tick runs the (now backend-agnostic) execution-timeout scan.
     ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
     reconcile_once(ctrl)
 
-    # TIMEOUT is terminal without retry, so the task lands in FAILED.
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
 
 
 def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
-    """A K8s pod that is still Pending/SchedulingGated (reported as BUILDING) must
-    NOT be execution-timed-out, no matter how long it waits for Kueue/autoscaler
-    admission — the execution clock only starts at RUNNING (gang start).
-
-    Guards the #7431 fix against the trap the backend-agnostic scan would spring:
-    K8s maps Pending → BUILDING, and if BUILDING stamped ``started_at_ms`` the
-    admission wait would be charged against ``--timeout`` — the very thing gangs
-    skip activeDeadlineSeconds to avoid.
-    """
+    """K8s admission waits do not consume the execution timeout (#7431)."""
     ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431-pending")
     state = ControllerTestState(ctrl._db)
 
     jid = JobName.root("test-user", "gang-pending")
     req = make_direct_job_request("gang-pending", replicas=1)
-    req.timeout.milliseconds = 1000  # 1s wall-clock deadline
+    req.timeout.milliseconds = 1000
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
     [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
 
-    # Pod has been Pending (BUILDING) for two hours — far longer than the 1s
-    # deadline — but never admitted/RUNNING.
+    # K8s reports Pending/SchedulingGated pods as BUILDING.
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
@@ -548,13 +529,11 @@ def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
             now=long_ago,
         )
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
-    # started_at_ms must stay NULL for a K8s BUILDING (Pending) attempt.
     assert query_attempt(state, task_id, attempt_id).started_at_ms is None
 
     ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
     reconcile_once(ctrl)
 
-    # Still BUILDING — the admission wait is not execution time.
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
 
 

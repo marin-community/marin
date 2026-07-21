@@ -415,17 +415,9 @@ def apply_one_transition(
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Stamp started_at_ms on BUILDING so the execution-timeout scan
-        # (gated on started_at_ms IS NOT NULL) can finalize wedged builds.
-        # COALESCE on the RUNNING write preserves this stamp. Issue #6077.
-        #
-        # Worker-daemon only: there BUILDING is the attempt actively running its
-        # setup on the assigned worker, so the execution clock legitimately starts
-        # then. On the K8s backend BUILDING maps to a Pending pod, which includes
-        # the pre-admission SchedulingGated wait while the autoscaler provisions
-        # nodes; stamping there would start the execution clock before the gang
-        # ever runs — the very reason gangs skip activeDeadlineSeconds. So a K8s
-        # task starts its clock at RUNNING (below), i.e. at gang start. Issue #7431.
+        # Worker BUILDING runs setup, so start its clock to catch wedged builds
+        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
+        # at RUNNING instead (#7431).
         if source is TransitionSource.WORKER_RECONCILE:
             started_ms = now_ms
         task_state = job_pb2.TASK_STATE_BUILDING

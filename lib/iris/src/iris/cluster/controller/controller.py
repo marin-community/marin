@@ -1011,14 +1011,9 @@ class Controller:
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
-            # Execution-timeout finalization is controller-owned and global,
-            # covering every backend: worker-daemon tasks and K8s pods alike. For
-            # a gang on the K8s backend it is the ONLY wall-clock enforcement
-            # (activeDeadlineSeconds is skipped for gangs), and it counts from
-            # started_at_ms — stamped at gang start, not pod creation — so a gang
-            # that sits SchedulingGated while nodes provision is not charged for
-            # that wait. A timed-out K8s task, once finalized, drops from the
-            # dispatch desired set and its pod is torn down on the next sync.
+            # Execution-timeout finalization is global across worker-daemon and
+            # K8s backends. K8s gangs rely on it because they omit
+            # activeDeadlineSeconds.
             if run_reconcile and scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
