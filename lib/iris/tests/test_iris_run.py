@@ -18,7 +18,8 @@ from iris.cli.job import (
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
-from iris.cluster.types import JobName
+from iris.cluster.hooks.respawn import RespawnHook
+from iris.cluster.types import EnvironmentSpec, JobName
 from iris.rpc import job_pb2
 
 
@@ -268,3 +269,29 @@ def test_no_wait_prints_job_id(monkeypatch):
     )
     assert result.exit_code == 0
     assert result.output.strip() == "/test-user/test-job"
+
+
+def test_cli_respawn_options_reach_the_submitted_environment(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *a, **kw: FakeClient())
+
+    result = CliRunner().invoke(
+        run_cmd,
+        ["--no-wait", "--respawn", "--respawn-max-restarts", "7", "--", "echo", "hi"],
+        catch_exceptions=False,
+        obj={"controller_url": "http://fake:10000"},
+    )
+
+    assert result.exit_code == 0
+    environment = captured["environment"]
+    assert isinstance(environment, EnvironmentSpec)
+    assert environment.respawn == RespawnHook(max_restarts=7)

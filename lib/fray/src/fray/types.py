@@ -701,6 +701,12 @@ class JobRequest:
         max_retries_preemption: Max retries on preemption
         max_task_failures: Cumulative failed task attempts the job tolerates before it
             fails (0 = fail on the first failure). Counts across retries.
+        max_restarts: In-place restarts per task attempt when the task's process dies
+            from a crash signal (SIGABRT/SIGSEGV/…), via the
+            iris.cluster.hooks.respawn_main wrapper. Rides out a fate-sharing gang
+            crash without an iris-level gang reschedule; nonzero exits still fail the
+            task, so the retry budgets above remain the fallback. 0 disables. Iris
+            backend only.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
     """
@@ -714,11 +720,14 @@ class JobRequest:
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
     max_task_failures: int = 0
+    max_restarts: int = 0
     priority: int = 0
 
     def __post_init__(self):
         if " " in self.name:
             raise ValueError("Job name must not contain spaces")
+        if self.max_restarts < 0:
+            raise ValueError(f"max_restarts must be >= 0, got {self.max_restarts}")
         if self.replicas is None:
             # Pick up replicas from ResourceConfig (set by e.g. with_tpu slice_count)
             self.replicas = self.resources.replicas

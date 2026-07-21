@@ -145,8 +145,11 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     ``128 + signum`` if a SIGINT/SIGTERM was delivered to the supervisor (an
     external termination/preemption); this takes precedence because the children
     it forwards the signal to report their own (negative) signal codes, which
-    must not be surfaced as a task failure. Otherwise the first non-zero child
-    exit code (after tearing the rest down), or 0 once every child exits cleanly.
+    must not be surfaced as a task failure. Otherwise the first failing child's
+    exit code (after tearing the rest down) — a signal death surfaces as the
+    conventional ``128 + signum``, not Popen's negative code, so the task exit
+    code stays legible to iris (OOM 137) and to an outer respawn hook — or 0
+    once every child exits cleanly.
     """
     if nproc < 1:
         raise ValueError(f"--nproc must be >= 1, got {nproc}")
@@ -186,51 +189,58 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
         if kill_deadline is None:
             kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
 
+    previous_handlers = {sig: signal.getsignal(sig) for sig in _SHUTDOWN_SIGNALS}
     for sig in _SHUTDOWN_SIGNALS:
         signal.signal(sig, _forward_signal)
 
-    first_failure: int | None = None
-    pending = set(range(nproc))
-    while pending:
-        # Escalate to SIGKILL if a requested teardown overran its grace period,
-        # so a child that traps or ignores SIGTERM cannot wedge the supervisor.
-        if kill_deadline is not None and kill_deadline.expired():
-            survivors = [r for r in pending if children[r].poll() is None]
-            if survivors:
-                logger.error("SIGTERM grace expired; SIGKILL %d straggler(s): %s", len(survivors), survivors)
-                _signal_children(children, survivors, signal.SIGKILL)
-            kill_deadline = None  # SIGKILL is final; do not re-fire each tick
-        for local_rank in list(pending):
-            child = children[local_rank]
-            try:
-                code = child.wait(timeout=_REAP_POLL_INTERVAL)
-            except subprocess.TimeoutExpired:
-                continue
-            pending.discard(local_rank)
-            logger.info("local rank %d exited with code %d", local_rank, code)
-            if code != 0 and first_failure is None:
-                first_failure = code
-            # A failure tears the whole group down: a collective job cannot make
-            # progress once one rank is gone. A clean exit does not — peers run to
-            # their own completion.
-            if code != 0 and not terminating.is_set():
-                terminating.set()
-                logger.error("local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending))
-                _signal_children(children, pending, signal.SIGTERM)
-                kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
+    try:
+        first_failure: int | None = None
+        pending = set(range(nproc))
+        while pending:
+            # Escalate to SIGKILL if a requested teardown overran its grace period,
+            # so a child that traps or ignores SIGTERM cannot wedge the supervisor.
+            if kill_deadline is not None and kill_deadline.expired():
+                survivors = [r for r in pending if children[r].poll() is None]
+                if survivors:
+                    logger.error("SIGTERM grace expired; SIGKILL %d straggler(s): %s", len(survivors), survivors)
+                    _signal_children(children, survivors, signal.SIGKILL)
+                kill_deadline = None  # SIGKILL is final; do not re-fire each tick
+            for local_rank in list(pending):
+                child = children[local_rank]
+                try:
+                    code = child.wait(timeout=_REAP_POLL_INTERVAL)
+                except subprocess.TimeoutExpired:
+                    continue
+                pending.discard(local_rank)
+                logger.info("local rank %d exited with code %d", local_rank, code)
+                if code != 0 and first_failure is None:
+                    first_failure = 128 - code if code < 0 else code
+                # A failure tears the whole group down: a collective job cannot make
+                # progress once one rank is gone. A clean exit does not — peers run to
+                # their own completion.
+                if code != 0 and not terminating.is_set():
+                    terminating.set()
+                    logger.error(
+                        "local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending)
+                    )
+                    _signal_children(children, pending, signal.SIGTERM)
+                    kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
 
-    for pump in pumps:
-        pump.join(timeout=5.0)
+        for pump in pumps:
+            pump.join(timeout=5.0)
 
-    # An external signal wins over child exit codes: the children we forwarded it
-    # to report negative (signal) codes that are an artifact of the teardown, not
-    # a task failure. A child failing on its own never sets shutdown_signum, so
-    # its genuine non-zero code surfaces.
-    if shutdown_signum is not None:
-        return 128 + shutdown_signum
-    if first_failure is not None:
-        return first_failure
-    return 0
+        # An external signal wins over child exit codes: the children we forwarded it
+        # to report negative (signal) codes that are an artifact of the teardown, not
+        # a task failure. A child failing on its own never sets shutdown_signum, so
+        # its genuine non-zero code surfaces.
+        if shutdown_signum is not None:
+            return 128 + shutdown_signum
+        if first_failure is not None:
+            return first_failure
+        return 0
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 def main(argv: list[str] | None = None) -> int:

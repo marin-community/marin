@@ -41,6 +41,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.hooks import TaskHook
 from iris.cluster.hooks.nsys import build_profile_hook, profile_cli_options
+from iris.cluster.hooks.respawn import build_respawn_hook, respawn_cli_options
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -637,6 +638,7 @@ def run_iris_job(
     task_image: str | None = None,
     container_profile: str | None = None,
     profile_hook: TaskHook | None = None,
+    respawn_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -753,6 +755,7 @@ def run_iris_job(
         priority_band=priority_band,
         container_profile=profile,
         profile_hook=profile_hook,
+        respawn_hook=respawn_hook,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -781,6 +784,7 @@ def _submit_and_wait_job(
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     profile_hook: TaskHook | None = None,
+    respawn_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -804,6 +808,7 @@ def _submit_and_wait_job(
             setup_scripts=setup_scripts,
             sync_packages=sync_packages or [],
             profile=profile_hook,
+            respawn=respawn_hook,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -1005,6 +1010,7 @@ Examples:
     ),
 )
 @profile_cli_options
+@respawn_cli_options
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
@@ -1044,6 +1050,8 @@ def run(
     profile_tasks: str,
     profile_trace: str,
     profile_capture_range: bool,
+    respawn: bool,
+    respawn_max_restarts: int,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -1072,6 +1080,7 @@ def run(
         trace=profile_trace,
         capture_range=profile_capture_range,
     )
+    respawn_hook: TaskHook | None = build_respawn_hook(respawn, max_restarts=respawn_max_restarts)
 
     submit_argv = redact_submit_argv(list(sys.argv))
 
@@ -1118,6 +1127,7 @@ def run(
             task_image=task_image,
             container_profile=container_profile,
             profile_hook=profile_hook,
+            respawn_hook=respawn_hook,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

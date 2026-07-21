@@ -261,6 +261,29 @@ Iris maintains two independent retry budgets per task:
    - The job's `_compute_job_state` may trigger a job-level state change
      (e.g., `JOB_STATE_FAILED` if `max_task_failures` is exceeded).
 
+### In-place crash respawn
+
+`iris job run --respawn --respawn-max-restarts N -- <command>` wraps the run
+command in a supervisor inside each task attempt. The supervisor reuses the
+container, workdir, and synced environment after a native crash, so a
+fate-sharing distributed workload can form a new coordination world without
+waiting for Iris to schedule a new attempt. Fray jobs select the same behavior
+with `JobRequest(max_restarts=N)`; `0` (the default) disables it.
+
+The supervisor restarts SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, and SIGTRAP
+deaths. It propagates ordinary nonzero exits and SIGKILL, and forwards
+SIGINT/SIGTERM without restarting, so deterministic failures, OOM kills,
+preemptions, and operator stops retain their existing Iris behavior. It stops
+after `N` restarts or three consecutive deaths within ten minutes of process
+launch. Each child receives a zero-based `IRIS_RESPAWN_ATTEMPT` value.
+
+Respawns happen within one task attempt and do not increment `failure_count` or
+`max_task_failures`. Keep `max_retries_failure` and `max_task_failures`
+configured as the fallback after the supervisor gives up. For a coscheduled
+gang, `max_task_failures=0` still fails the job on the first failure even when
+`max_retries_failure` is nonzero. The Grug dispatch helpers opt in with 100
+in-place restarts and set `max_task_failures=max_retries_failure`.
+
 ### What counts toward job failure
 
 Only `TASK_STATE_FAILED` counts toward the job's `max_task_failures` threshold.
