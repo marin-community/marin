@@ -38,6 +38,7 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 
 
 class VllmLauncher(Protocol):
@@ -118,7 +119,7 @@ class IsolatedCudaVllm:
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
         environment = {
             _FLASHINFER_SAMPLER_ENV_VAR: "0",
-            "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
+            _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         if self.source is VllmType.MARIN_FORK:
             environment["VLLM_USE_PRECOMPILED"] = "1"
@@ -126,7 +127,6 @@ class IsolatedCudaVllm:
 
 
 def _write_virtual_hosted_s3_config() -> str:
-    """Write and return a boto3 config for virtual-hosted S3 addressing."""
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
     with open(path, "w") as handle:
         handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
