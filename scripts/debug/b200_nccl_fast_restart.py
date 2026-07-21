@@ -43,6 +43,8 @@ def initialize_distributed() -> None:
     """Join the process group described by the Iris multigpu supervisor."""
     if _IRIS_PROCESS_COUNT_ENV not in os.environ:
         return
+    if int(os.environ[_IRIS_PROCESS_COUNT_ENV]) == 1:
+        return
 
     repeat = int(os.environ.get(_REPEAT_ENV, "0"))
     # Bypass the public initializer's per-process telemetry HTTP server. That

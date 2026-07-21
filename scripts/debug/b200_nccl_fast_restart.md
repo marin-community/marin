@@ -23,27 +23,31 @@ path under test. The runner stops after the first failed repeat so distributed
 tasks cannot mix process generations.
 
 Run `run_b200_nccl_fast_restart.sh` inside a bounded Iris B200 job. Start with
-`MARIN_REPRO_PROCESSES_PER_TASK=2`; submission commands and run identifiers
-belong in private operator notes, not this repository.
+`MARIN_REPRO_PROCESSES_PER_TASK=1 MARIN_REPRO_DEVICES_PER_PROCESS=2`;
+submission commands and run identifiers belong in private operator notes, not
+this repository.
 
 Scale one dimension at a time only when every repeat passes:
 
 | Order | Process topology | Purpose |
 |---:|---|---|
-| 1 | 2 local processes | Smallest local NCCL clique |
-| 2 | 4 local processes | Larger local clique |
-| 3 | 8 distributed processes | Smallest distributed arm |
+| 1 | 1 local process x 2 devices | Smallest local NCCL clique |
+| 2 | 1 local process x 4 devices | Larger local clique |
+| 3 | 2 distributed processes x 4 devices | Smallest distributed arm |
 
-Set `MARIN_REPRO_PROCESSES_PER_TASK` to the local process count for each arm.
-Stop scaling when repeat two or three times out. A candidate reproduction
-requires a successful earlier repeat, then a later repeat that reaches NCCL
-`Init START` without `Init COMPLETE` or `REPRO_OK`. A compilation failure,
-allocation timeout, or first-run failure is not this bug.
+Set `MARIN_REPRO_PROCESSES_PER_TASK` and `MARIN_REPRO_DEVICES_PER_PROCESS` to
+the local JAX process and device counts for each arm. This matches the source
+layout: one JAX process owns multiple local devices, while NCCL assigns one rank
+per device. Stop scaling when repeat two or three times out. A candidate
+reproduction requires a successful earlier repeat, then a later repeat where
+every NCCL rank reaches `Init START` without any `Init COMPLETE` or `REPRO_OK`.
+A compilation failure, allocation timeout, or first-run failure is not this
+bug.
 
 The expected result is `REPRO_OK` for every rank and repeat. Iris preserves the
 combined task output; the runner also stores per-repeat logs under a temporary
 task-local directory and prints its path in `RESULT`. Record the process
 topology, GPU name, driver, CUDA, JAX, jaxlib, NCCL, per-repeat exit status, and
-pass/hang count before changing the matrix. If the two-to-eight-process matrix
+pass/hang count before changing the matrix. If the two-to-eight-device matrix
 stays green, the remaining boundary is the larger source topology; do not infer
 that the original defect is fixed.
