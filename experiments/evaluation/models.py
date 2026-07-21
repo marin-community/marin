@@ -39,6 +39,9 @@ class EvalModelConfig:
     vllm_extra_args: tuple[str, ...] = ()
     tensor_parallel_size: int | None = None
     max_model_len: int | None = None
+    max_gen_toks: int | None = None
+    """Per-model override of a suite's generation budget. A verbose reasoning model needs a longer
+    budget than the suite default or its chain truncates before the final answer (scoring it wrong)."""
     tokenizer: str | None = None
     trust_remote_code: bool = False
     """Load the eval client's tokenizer with ``trust_remote_code`` for a model whose HF repo ships
@@ -124,11 +127,14 @@ MODELS: dict[str, EvalModelConfig] = {
     "map-neo-7b": _base_hf(
         "map-neo-7b", "m-a-p/neo_7b", "81bad32", 18, max_model_len=4096, gpu_only=True, trust_remote_code=True
     ),
+    # Qwen3.5-9B is a verbose hybrid-GDN reasoning model; its chains exceed the 8192-token chat
+    # default and truncate before the boxed answer (OlympiadBench scored 0), so give it a 32k budget.
     "qwen3.5-9b": EvalModelConfig(
         name="qwen3.5-9b",
         location="Qwen/Qwen3.5-9B",
         hbm_gb=24,
         apply_chat_template=True,
+        max_gen_toks=32768,
     ),
     "qwen3-8b": EvalModelConfig(
         name="qwen3-8b",

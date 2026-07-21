@@ -357,7 +357,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
                     name=plan.eval_key,
                     tasks=plan.suite.tasks,
                     out_path=out_path,
-                    max_gen_toks=plan.suite.max_gen_toks,
+                    max_gen_toks=plan.model.max_gen_toks or plan.suite.max_gen_toks,
                     max_eval_instances=plan.limit,
                 ),
             )
