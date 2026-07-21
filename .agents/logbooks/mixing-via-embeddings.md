@@ -996,3 +996,26 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   (label decision-focused-7fig), GCS private refreshed, Marin public NEW version
   https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.21.1/index.html (prior versions
   stay live). Issue #7067 results comment edited in place to the new link.
+
+## 2026-07-21 Bayesian (GP) formulation implemented + validated — TRACKED code
+- New (tracked, lint-clean): experiments/datakit/mixture_features/gp_surrogate.py (GP fit by marginal
+  likelihood; posterior mean + variance) and gp_surrogate_validate.py (equivalence / calibration /
+  informativeness checks). Output: scratch/mixture_features/grug/gp_surrogate_validation.json
+- **EQUIVALENCE**: GP posterior mean == kernel-ridge prediction to 3.7e-10 (corr 1.000000). The ridge α
+  is exactly the noise-to-signal variance ratio σn²/σf². Same estimator → no prediction changes.
+- **CALIBRATION (the payoff)**: 5-fold held-out, hyperparams refit inside each fold — RMS z = 1.014,
+  68% coverage 72.0% (nominal 68.3%), 95% coverage 96.2% (nominal 95.0%), mean predicted sd 0.2555 vs
+  actual RMSE 0.2579. Credible intervals mean what they claim (slightly conservative).
+- **Independent check of the noise model**: marginal likelihood infers noise sd = **0.2261 z**; the
+  independently measured 10-seed replicate floor is **0.2127 z** (~6% agreement) — and the GP never saw
+  the seed panel. Evidence the noise term captures real seed noise rather than absorbing misfit.
+- Evidence-selected hyperparams: γ=0.428 (vs frozen 1.248), ridge-equivalent α=0.040 (vs CV-picked 0.1);
+  CV-RMSE 0.2579 vs KRR's 0.2591 → no accuracy cost for going Bayesian.
+- **Honest limit**: predicted sd is nearly flat in-distribution (range 1.37×; spearman(sd,|error|)=+0.04)
+  — it does NOT rank which in-regime prediction will be wrong. It DOES grow off-support
+  (spearman(sd, dist-to-nearest-run)=+0.364). In-regime the predictive variance is dominated by the
+  irreducible seed noise (0.226), which is constant everywhere. Practical value = honest absolute error
+  bars + a principled out-of-distribution flag + the basis for expected-improvement proposals;
+  NOT per-point error ranking among well-covered mixtures.
+- NEXT: expected-improvement acquisition to turn the posterior variance into uncertainty-aware mixture
+  proposals (explore where uncertain), which is what f16's "trust green only where explored" needs.
