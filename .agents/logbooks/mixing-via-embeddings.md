@@ -1019,3 +1019,37 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   NOT per-point error ranking among well-covered mixtures.
 - NEXT: expected-improvement acquisition to turn the posterior variance into uncertainty-aware mixture
   proposals (explore where uncertain), which is what f16's "trust green only where explored" needs.
+
+## 2026-07-21 INVERSION study: is the Bayesian form more practically useful than KRR?
+Code (tracked, lint-clean): experiments/datakit/mixture_features/gp_inversion_study.py
+Output: scratch/mixture_features/grug/gp_inversion_study.json
+
+**A. Find the best mixture from FIXED data (4000 Dirichlet candidates around the design):**
+- argmin(mean) [KRR == GP] and argmin(mean+2sd) [GP risk-adjusted] chose the **SAME mixture**
+  (pred −0.689, sd 0.120, dist-to-nearest-run 0.0961 vs median train NN dist 0.0945 → the optimum is
+  comfortably IN-SUPPORT, so there was no extrapolation risk for the GP to guard against).
+- → For this job the Bayesian form buys **nothing**. KRR suffices.
+- Note: best PREDICTED candidate (−0.689) is WORSE than the best OBSERVED run (−1.058) — mean
+  reversion; the surrogate will not propose anything as extreme as the luckiest observed run.
+
+**B. Sequential design (retrospective pool replay, 800 runs, n_init 30 → 200, batch 5, 3 seeds):**
+  best TRUE y found (lower better):   n=50 / 100 / 150 / 200
+    ei          −1.026 / −1.058 / −1.058 / −1.058
+    greedy_mean −1.026 / −1.058 / −1.058 / −1.058     <- KRR-style, TIES with EI
+    random      −0.827 / −0.942 / −0.950 / −0.950     <- never finds the optimum
+    max_var     −0.686 / −0.743 / −1.058 / −1.058
+  model quality (Spearman on not-yet-acquired pool):
+    random      0.665 / 0.728 / 0.759 / 0.778         <- BEST
+    max_var     0.686 / 0.733 / 0.747 / 0.751
+    ei          0.667 / 0.714 / 0.721 / 0.704
+    greedy_mean 0.649 / 0.664 / 0.673 / 0.653         <- WORST, and DEGRADES with more data
+
+**Verdict:** the GP's uncertainty does NOT improve optimization (EI ties greedy-mean; both find the
+optimum by ~100 runs vs random's >200). Its value is elsewhere: honest error bars, OOD detection, and
+avoiding the greedy trap — greedy exploitation actively poisons the global model (0.664→0.653) while
+max-variance is the only model-guided strategy that doesn't. Random remains the best space-sampler.
+Practical read: fit-on-random-swarm + argmin → KRR is sufficient; go Bayesian for calibrated
+uncertainty and for adaptive/sequential workflows, not for a better optimum.
+**CAVEAT:** the model-quality metric is scored on each strategy's own remaining pool, which differs
+across strategies (greedy/EI are evaluated on the region they avoided) — a fixed held-out set would be
+the cleaner design; treat the model-quality column as indicative, not decisive.

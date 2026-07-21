@@ -73,6 +73,25 @@ def fit_gp(d2: np.ndarray, y: np.ndarray) -> dict:
     }
 
 
+def condition_gp(d2: np.ndarray, y: np.ndarray, sigma_f2: float, sigma_n2: float, gamma: float) -> dict:
+    """Condition the GP on data with FIXED hyperparameters.
+
+    Sequential design re-conditions on every newly acquired point but only needs to re-optimize
+    the hyperparameters occasionally; this is the cheap half (one Cholesky, no optimization).
+    """
+    ybar = float(y.mean())
+    yc = y - ybar
+    chol, sf2, sn2, g = _build_chol(d2, np.log([sigma_f2, sigma_n2, gamma]))
+    return {
+        "chol": chol,
+        "alpha_dual": cho_solve((chol, True), yc),
+        "ybar": ybar,
+        "sigma_f2": float(sf2),
+        "sigma_n2": float(sn2),
+        "gamma": float(g),
+    }
+
+
 def predict_gp(fit: dict, d2_star: np.ndarray, include_noise: bool = True):
     """Posterior mean and standard deviation at new points. d2_star is (n_star, n_train)."""
     k_star = fit["sigma_f2"] * np.exp(-fit["gamma"] * d2_star)
