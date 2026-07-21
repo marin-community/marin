@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -497,10 +498,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        # jax.profiler cannot reliably write to object stores, so the trace goes to local disk and
+        # is uploaded to SCALE_PROFILER_UPLOAD (an fsspec URL) after training — fsspec handles s3,
+        # so the trace survives the ephemeral pod for offline ingestion.
+        prof_local_dir = f"/tmp/grug-profiler/{run_id}/profiler"
         if profiler_enabled:
             state_callbacks.add_hook(
                 callbacks.profile(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    prof_local_dir,
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
@@ -582,6 +587,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if checkpointer is not None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
+
+        prof_upload = os.environ.get("SCALE_PROFILER_UPLOAD")
+        if profiler_enabled and prof_upload and jax.process_index() == 0:
+            fs = fsspec.core.get_fs_token_paths(prof_upload, mode="wb")[0]
+            fs.put(os.path.join(prof_local_dir, "*"), prof_upload.rstrip("/"), recursive=True)
+            logger.info(f"Uploaded profiler trace to {prof_upload}")
 
     levanter.tracker.current_tracker().finish()
 
