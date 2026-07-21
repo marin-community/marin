@@ -67,6 +67,10 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
         # fails the whole task, so give each request enough headroom to ride out a burst.
         "max_retries=8",
+        # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
+        # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
+        # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
+        "timeout=1800",
     ]
     if max_length is not None:
         args.append(f"max_length={max_length}")
@@ -108,8 +112,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--verbosity",
         "INFO",
     ]
-    if task["num_fewshot"]:
-        cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    # Always pass --num_fewshot, including 0. evalchemy's parser defaults it to None, so omitting the
+    # flag lets lm-eval fall back to the task YAML's own default (gsm8k defaults to 5-shot) and a
+    # 0-shot request is silently ignored. Chat-native benchmarks record it in their config but do not
+    # few-shot on it, so an explicit 0 is harmless there.
+    cmd += ["--num_fewshot", str(task["num_fewshot"])]
     if task["unsafe_code"]:
         # code_eval tasks execute model-generated code; lm-eval refuses them without this opt-in.
         cmd.append("--confirm_run_unsafe_code")
