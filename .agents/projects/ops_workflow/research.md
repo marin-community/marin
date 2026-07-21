@@ -38,7 +38,7 @@ Grafana notification policy already groups by `alertname, cluster`. A cheap grou
 
 ## IAP
 
-The existing `CloudRunService` component normalizes `*@openathena.ai` to `domain:openathena.ai` and a bare address to `user:<address>`, then creates one `roles/iap.httpsResourceAccessor` grant per member. Keeping this non-secret list in stack YAML makes access reviewable and diffable. Secrets remain in Secret Manager and are granted only to the runtime service account.
+The existing `CloudRunService` component normalizes `*@openathena.ai` to `domain:openathena.ai` and preserves explicitly prefixed principals. Google Workspace identifies `ops@openathena.ai` as a Group, so the checked-in entry is `group:ops@openathena.ai`. The component creates one `roles/iap.httpsResourceAccessor` grant per member. Keeping this non-secret list in stack YAML makes access reviewable and diffable. Secrets remain in Secret Manager and are granted only to the runtime service account.
 
 ## Agent and cluster access
 

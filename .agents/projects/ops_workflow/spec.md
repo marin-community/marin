@@ -83,7 +83,7 @@ POST /api/questions
 GET  / and static dashboard assets
 ```
 
-Except for liveness, the production service requires an IAP-authenticated principal. It records the lower-cased email from `X-Goog-Authenticated-User-Email`. The checked-in viewers are `domain:openathena.ai` and `user:ops@openathena.ai`, derived from the stack YAML.
+Except for liveness, the production service requires an IAP-authenticated principal. It records the lower-cased email from `X-Goog-Authenticated-User-Email`. The checked-in viewers are `domain:openathena.ai` and `group:ops@openathena.ai`, derived from the stack YAML.
 
 Question and follow-up bodies are JSON objects with a non-empty `text` string no larger than 16 KiB. An archive is rejected while a turn is active. A second queued follow-up for the same session returns conflict.
 

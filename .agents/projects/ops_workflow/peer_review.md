@@ -15,7 +15,7 @@ The current patch makes Grafana PostgreSQL polling the only automatic alert sour
 3. Two-successful-absence resolution and failed-poll behavior.
 4. The least-privilege `ops_grafana_reader` grants.
 5. Warning mute timing versus error/critical Slack and email delivery.
-6. IAP normalization for `*@openathena.ai` and `ops@openathena.ai`.
+6. IAP normalization for `*@openathena.ai` and `group:ops@openathena.ai`.
 7. The local Grafana-shaped database and Playwright vertical slice.
 
 ## Code review disposition

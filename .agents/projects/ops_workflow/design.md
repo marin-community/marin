@@ -147,10 +147,10 @@ IAP membership is non-secret policy and is checked in at `infra/ops/Pulumi.marin
 config:
   marin-ops:viewers:
     - "*@openathena.ai"
-    - ops@openathena.ai
+    - group:ops@openathena.ai
 ```
 
-`*@openathena.ai` becomes the IAM principal `domain:openathena.ai`. The explicit address becomes `user:ops@openathena.ai`; it is redundant for access but records the operational owner. If `ops@openathena.ai` becomes a Google Group, replace the bare address with `group:ops@openathena.ai`. Pulumi creates one `roles/iap.httpsResourceAccessor` grant per entry. The browser request reaches the application only after IAP authenticates it, and the backend records `X-Goog-Authenticated-User-Email` as the actor.
+`*@openathena.ai` becomes the IAM principal `domain:openathena.ai`. Google Workspace identifies `ops@openathena.ai` as a Group, so its explicit entry is `group:ops@openathena.ai`. It is redundant for access but records the operational owner. Pulumi creates one `roles/iap.httpsResourceAccessor` grant per entry. The browser request reaches the application only after IAP authenticates it, and the backend records `X-Goog-Authenticated-User-Email` as the actor.
 
 ## Pulumi and credentials
 

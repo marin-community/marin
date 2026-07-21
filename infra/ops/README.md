@@ -61,10 +61,10 @@ The IAP allowlist is non-secret policy checked into [`Pulumi.marin-ops.yaml`](Pu
 config:
   marin-ops:viewers:
     - "*@openathena.ai"
-    - ops@openathena.ai
+    - group:ops@openathena.ai
 ```
 
-The wildcard becomes `domain:openathena.ai`; the bare address becomes `user:ops@openathena.ai`. If the address becomes a Google Group, use `group:ops@openathena.ai`. Run `pulumi preview` after a membership change. Each entry owns one `roles/iap.httpsResourceAccessor` grant, so Pulumi changes only the added or removed member.
+The wildcard becomes `domain:openathena.ai`. Google Workspace reports `ops@openathena.ai` as a Group, so the explicit entry must keep its `group:` prefix. Run `pulumi preview` after a membership change. Each entry owns one `roles/iap.httpsResourceAccessor` grant, so Pulumi changes only the added or removed member.
 
 The service has no alert receiver. It reaches the shared Cloud SQL instance through the connector socket and uses separate credentials:
 
