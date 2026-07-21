@@ -13,3 +13,5 @@ config:
   marin-ops:viewers:
     - "*@openathena.ai"
     - ops@openathena.ai
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6QKd2uan79js/Mjj59QN5ye9W+Fo0TsBekSar29X/lgSSQCdtF6iw0HoIGOopjzrAJZIATqmuVbRdUspoiB5PhZAWBhjLXXJyzliqq9vYHDXQB5+NdDy0zc0GUScIdkgVWhsqj3SjYOgk6k=

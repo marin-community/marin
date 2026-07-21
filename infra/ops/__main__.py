@@ -80,7 +80,7 @@ def main() -> None:
     custom_domain = config.get("custom_domain")
     if custom_domain:
         dns_zone_id = config.require("dns_zone_id")
-        gcp.cloudrun.DomainMapping(
+        domain_mapping = gcp.cloudrun.DomainMapping(
             "ops-domain",
             name=custom_domain,
             location=REGION,
@@ -88,6 +88,7 @@ def main() -> None:
             spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=SERVICE),
             opts=pulumi.ResourceOptions(
                 provider=provider,
+                depends_on=[ui],
                 ignore_changes=["metadata", "spec", "statuses"],
             ),
         )
@@ -99,6 +100,7 @@ def main() -> None:
             content=CLOUD_RUN_FRONTEND,
             ttl=1,
             proxied=False,
+            opts=pulumi.ResourceOptions(depends_on=[domain_mapping]),
         )
         pulumi.export("custom_domain", f"https://{custom_domain}")
 

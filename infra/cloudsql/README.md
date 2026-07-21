@@ -77,6 +77,8 @@ unset GRAFANA_ADMIN_PW
 
 The login defaults select the corresponding group role at connection time. Objects created by `ops_migrator` therefore belong to the durable `ops_migrator_role`; the application and reader cannot inherit the owner's privileges.
 
+The role bootstrap temporarily grants the schema-owner role to the existing Grafana admin because PostgreSQL requires the current user to be able to `SET ROLE` before transferring schema ownership. The last statement revokes that membership; a failed bootstrap must be rerun through the revocation before continuing.
+
 ## Migrations and grants
 
 Apply every migration as the dedicated migrator before deploying the service:
