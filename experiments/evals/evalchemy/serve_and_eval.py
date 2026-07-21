@@ -85,6 +85,86 @@ _PROPAGATED_ENV_KEYS = ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJ
 LOG_TAIL_LINES = 100
 
 
+# --------------------------------------------------------------------------------------------------
+# Per-model serve overrides: auto-derive vLLM flags from the model's config.json.
+# --------------------------------------------------------------------------------------------------
+
+
+def auto_serve_overrides(
+    model: str,
+    max_model_len: int,
+    existing_extra_args: tuple[str, ...] = (),
+) -> tuple[tuple[str, ...], int]:
+    """Derive per-model vLLM flags from the model's ``config.json``.
+
+    Returns ``(merged_vllm_extra_args, effective_max_model_len)``. Existing extra args take
+    precedence — an auto-derived flag is appended only when its flag name is not already present.
+
+    Detects:
+
+    - **GDN hybrid attention** (``gated_delta_net`` / ``linear_attn`` / Qwen3-Next / Qwen3.5):
+      ``--gdn-prefill-backend triton``. The FlashInfer GDN kernel is JIT-compiled and needs nvcc,
+      absent in the uvx serve env.
+    - **Multimodal wrapper** (vision tower / ``ForConditionalGeneration``):
+      ``--limit-mm-per-prompt {"image":0,"video":0}`` for text-only serving.
+    - **Thinking/reasoning models** (Qwen3-*-Thinking, Qwen3.5, Qwen3-Next):
+      ``--reasoning-parser qwen3`` so the chat endpoint splits ``reasoning_content`` from ``content``.
+    - **Native context cap**: caps ``max_model_len`` at the model's ``max_position_embeddings``.
+    """
+    import json as _json  # noqa: PLC0415
+
+    extra: list[str] = []
+    mml = max_model_len
+    cfg: dict = {}
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        cfg = _json.loads(hf_hub_download(model, "config.json"))
+    except Exception as exc:
+        logger.warning("config.json fetch failed for %s: %r; using request defaults", model, exc)
+
+    txt = _json.dumps(cfg).lower()
+    arch = " ".join(cfg.get("architectures") or []).lower()
+    tcfg = cfg.get("text_config", cfg) if isinstance(cfg.get("text_config", cfg), dict) else cfg
+
+    # GDN hybrid attention → triton prefill backend.
+    if (
+        "gated_delta_net" in txt
+        or "linear_attn" in txt
+        or "qwen3next" in arch
+        or "qwen3_5" in arch
+        or "qwen3.5" in model.lower()
+        or "qwen3-next" in model.lower()
+    ):
+        extra += ["--gdn-prefill-backend", "triton"]
+
+    # Multimodal wrapper → disable image/video inputs for text-only eval.
+    if cfg.get("vision_config") or "forconditionalgeneration" in arch:
+        extra += ["--limit-mm-per-prompt", '{"image":0,"video":0}']
+
+    # Reasoning parser for thinking models.
+    ml = model.lower()
+    if ("thinking" in ml or "qwen3.5" in ml or "qwen3-next" in ml) and "qwen" in ml:
+        extra += ["--reasoning-parser", "qwen3"]
+
+    # Cap max_model_len at native context.
+    mpe = tcfg.get("max_position_embeddings") or cfg.get("max_position_embeddings")
+    if isinstance(mpe, (int, float)) and int(mpe) < mml:
+        mml = int(mpe)
+
+    # Merge: existing args win; append auto flags only if their name is not already present.
+    merged = list(existing_extra_args)
+    i = 0
+    while i < len(extra):
+        flag = extra[i]
+        pair = extra[i : i + 2] if i + 1 < len(extra) and not extra[i + 1].startswith("--") else extra[i : i + 1]
+        if flag not in merged:
+            merged += list(pair)
+        i += len(pair)
+
+    return tuple(merged), mml
+
+
 class PipelineStage(StrEnum):
     """Which stage of the serve/eval pipeline a failure came from.
 
@@ -188,6 +268,10 @@ class ServeSpec:
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
     Passed straight to :class:`~marin.inference.quick_serve.QuickServeConfig`."""
+    auto_overrides: bool = True
+    """When True (default), auto-derive per-model vLLM flags from the model's config.json via
+    :func:`auto_serve_overrides` (GDN triton backend, multimodal limits, reasoning parser, native
+    context cap). Explicit ``vllm_extra_args`` take precedence over auto-derived flags."""
 
 
 @dataclass(frozen=True)
@@ -233,6 +317,9 @@ class EvalchemyEvalConfig:
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
     eval_disk: str = "50g"
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional ``--gen_kwargs`` key=value pairs folded into every lm-eval request (e.g.
+    ``skip_special_tokens=false`` for thinking models that emit atomic delimiters)."""
 
 
 # --------------------------------------------------------------------------------------------------
@@ -358,6 +445,12 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
     if ctx is None or ctx.client is None:
         raise RuntimeError("serve_model must run inside an Iris job (no ambient IrisClient).")
     client = ctx.client
+
+    # Auto-derive per-model vLLM flags from config.json (GDN triton, multimodal limit, reasoning
+    # parser, native context cap). Existing vllm_extra_args take precedence.
+    if spec.auto_overrides:
+        merged_args, auto_mml = auto_serve_overrides(model, spec.max_model_len or 32768, spec.vllm_extra_args)
+        spec = replace(spec, vllm_extra_args=merged_args, max_model_len=auto_mml)
 
     run_id = uuid.uuid4().hex[:8]
     endpoint_name = f"/serve/eval-{run_id}"
@@ -487,6 +580,7 @@ def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEn
             "max_gen_toks": unit.max_gen_toks,
             "max_eval_instances": unit.max_eval_instances,
             "num_concurrent": session.num_concurrent,
+            "extra_gen_kwargs": session.extra_gen_kwargs,
         }
     )
 
@@ -512,6 +606,8 @@ class EvalSession:
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
     eval_disk: str = "50g"
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional ``--gen_kwargs`` key=value pairs folded into every lm-eval request."""
 
 
 @dataclass(frozen=True)
@@ -781,6 +877,7 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> ServeAndEvalRun:
         eval_cpu=config.eval_cpu,
         eval_memory=config.eval_memory,
         eval_disk=config.eval_disk,
+        extra_gen_kwargs=config.extra_gen_kwargs,
     )
     unit = EvalUnit(
         name="eval",

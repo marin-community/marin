@@ -84,6 +84,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
+    # Build gen_kwargs: base max_gen_toks + any extra kwargs from the config (e.g.
+    # skip_special_tokens=false for thinking models, repetition_penalty for loop curbing).
+    gen_kwargs = {"max_gen_toks": config["max_gen_toks"]}
+    gen_kwargs.update(config.get("extra_gen_kwargs", {}))
+    gen_kwargs_str = ",".join(f"{k}={v}" for k, v in gen_kwargs.items())
     cmd = [
         python,
         "-m",
@@ -95,7 +100,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--tasks",
         task["name"],
         "--gen_kwargs",
-        f"max_gen_toks={config['max_gen_toks']}",
+        gen_kwargs_str,
         # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
         # gen_kwargs; lm-eval-native tasks ignore it.
         "--max_tokens",
