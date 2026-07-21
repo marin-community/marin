@@ -49,3 +49,13 @@ author: mcwitt
 - Result: 16 focused tests passed in 14.83 seconds. Scoped repository lint passed. Pyrefly reported zero errors. The probe compiled with warnings treated as errors. Source SHA-256: `f79b8e1d5090f6a4c42605cca2557ff335f70dc1482df9e8417f9b10d86c2100`.
 - Interpretation: the local harness validates the event and treatment contracts. It does not establish that the interposer reaches JAX/XLA in the production CUDA environment.
 - Next action: run a one-GB200 JAX smoke and require both a FatBinary symbol redirect and a raw ELF load before the 16-host diagnostic.
+
+### 2026-07-21 - CUBIN7421-002 one-GB200 smoke attempt 1
+
+- Hypothesis: the locally validated interposer reaches JAX/XLA unchanged on an aarch64 GB200 worker.
+- Commit Hash: `db61c4a4f`.
+- Job: `/mwittmann/cubin7421-probe-smoke-001`.
+- Config: one GB200; JAX 0.10.1; trace profile; required FatBinary and raw ELF coverage; task-zero capture.
+- Result: failed before JAX output with no probe events. The worker built the expected source hash and binary, then the child returned before the coverage check.
+- Interpretation: `real_dlsym` requested only the x86-64 symbol version `GLIBC_2.2.5`; the aarch64 worker uses `GLIBC_2.17`. This is an instrumentation portability defect, not evidence about the CUDA failure.
+- Next action: resolve both glibc symbol versions, rerun local tests, and repeat the same smoke.

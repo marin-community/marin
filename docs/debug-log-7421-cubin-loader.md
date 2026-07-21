@@ -28,6 +28,8 @@ The fake driver confirms:
 
 The focused suite passed 16 tests. Scoped lint and type checks passed, and the C++ source compiled with `-Wall -Wextra -Werror`. This is local contract evidence only; the real XLA interception path remains to be established by the one-GPU smoke.
 
+The first GB200 smoke failed before JAX emitted output because the interposer resolved the real `dlsym` using only x86-64's `GLIBC_2.2.5` version. GB200 workers are aarch64 and use `GLIBC_2.17`. The corrected resolver tries both versions; the failed smoke carries no CUDA-loader evidence.
+
 ## Future work
 
 - [ ] Trace the immediately preceding CUDA operation if pre-load synchronization fails.

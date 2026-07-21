@@ -234,7 +234,13 @@ ElfIdentity elf_identity(const void* image) {
 }
 
 Dlsym real_dlsym() {
-    static auto function = reinterpret_cast<Dlsym>(dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5"));
+    static auto function = [] {
+        void* resolved = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+        if (resolved == nullptr) {
+            resolved = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.17");
+        }
+        return reinterpret_cast<Dlsym>(resolved);
+    }();
     if (function == nullptr) {
         _exit(126);
     }
