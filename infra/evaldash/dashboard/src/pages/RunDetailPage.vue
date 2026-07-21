@@ -67,8 +67,15 @@ async function copyPath() {
       <div class="flex items-center gap-3 flex-wrap">
         <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
         <StatusChip :status="data.status" />
+        <span
+          v-if="data.version"
+          class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
+          :title="`version ${data.version}`"
+        >{{ data.version }}</span>
         <span class="text-xs text-text-muted">{{ formatTimestamp(data.created_at) }}</span>
       </div>
+
+      <p v-if="data.description" class="text-sm text-text-secondary -mt-3">{{ data.description }}</p>
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
