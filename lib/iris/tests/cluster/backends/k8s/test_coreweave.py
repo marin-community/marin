@@ -176,7 +176,7 @@ def _make_cluster_config(
 def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConfig) -> None:
     """Seed the IaC-provisioned prerequisites verify_prerequisites checks for.
 
-    start_controller no longer creates these itself (spec.md §4 — infra/iac's Pulumi
+    start_controller no longer creates these itself (spec.md §4 — infra/pulumi's Pulumi
     program does); built from the same shared manifest builders Pulumi uses, so the fake
     matches what a real cluster looks like post-adoption.
     """
@@ -627,8 +627,13 @@ def test_verify_prerequisites_passes_once_seeded():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     _seed_prerequisites(k8s, cluster_config)
+    pools_before = {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)}
 
     provider.verify_prerequisites(cluster_config)  # must not raise
+
+    # Presence-only: verifying must not create, delete, or otherwise touch anything.
+    assert {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)} == pools_before
+    assert k8s.get_json(K8sResource.NAMESPACES, "iris") is not None
     provider.shutdown()
 
 

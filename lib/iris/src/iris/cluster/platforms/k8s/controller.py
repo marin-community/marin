@@ -4,7 +4,7 @@
 """K8sControllerProvider: controller lifecycle for Kubernetes (CoreWeave CKS) clusters.
 
 Manages the controller Deployment, Service, ConfigMap, and S3 credential Secrets.
-The Namespace, RBAC, and NodePools are provisioned by `infra/iac`'s Pulumi program
+The Namespace, RBAC, and NodePools are provisioned by `infra/pulumi`'s Pulumi program
 (spec.md §4) — `verify_prerequisites` only checks they exist, never creates them.
 Worker pods and node scaling are handled by K8sTaskProvider.
 """
@@ -630,7 +630,7 @@ class K8sControllerProvider:
         Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
         namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
         scale group, the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
-        IngressClass. All of these are provisioned by `infra/iac`'s Pulumi program
+        IngressClass. All of these are provisioned by `infra/pulumi`'s Pulumi program
         (spec.md §4) — this method creates nothing. Raises PrerequisitesNotProvisionedError
         enumerating every missing object if any are absent.
         """
@@ -669,7 +669,7 @@ class K8sControllerProvider:
             raise PrerequisitesNotProvisionedError(
                 "IaC-provisioned prerequisites missing: "
                 + ", ".join(missing)
-                + f". Run: cd infra/iac && pulumi stack select {config.name} && pulumi up"
+                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
             )
 
     # -- Kueue ------------------------------------------------------------------

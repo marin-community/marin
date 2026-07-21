@@ -10,7 +10,7 @@ Order: `cw-us-east-02a` → `cw-rno2a` → `cw-us-east-08a`.
 
 1. **Preview each cluster clean**, one at a time.
   ```bash
-   cd infra/iac
+   cd infra/pulumi
    pulumi login gs://marin-iac-state
    pulumi stack init <cluster> \
      --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"

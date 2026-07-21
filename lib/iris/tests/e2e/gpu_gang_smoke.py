@@ -219,7 +219,7 @@ class ControllerTarget:
         CoreweaveTarget.deploy(), which goes through the real start_controller() (and its
         verify_prerequisites) against the real CKS cluster instead. Manifests come from
         the shared iris.cluster.platforms.k8s.rbac_manifests builders, the same ones
-        infra/iac's Pulumi program uses, so this never drifts from production RBAC. Uses
+        infra/pulumi's Pulumi program uses, so this never drifts from production RBAC. Uses
         a kind-loaded image (imagePullPolicy IfNotPresent, no scale-group nodeSelector).
         """
         cfg = self.cfg
@@ -407,7 +407,7 @@ class CoreweaveTarget(ControllerTarget):
             raise RuntimeError(f"refusing to run in shared namespace {self.namespace!r}; use a dedicated namespace")
 
     def _provision_prerequisites(self) -> None:
-        """Apply RBAC + NodePools — the prerequisites infra/iac's Pulumi program provisions
+        """Apply RBAC + NodePools — the prerequisites infra/pulumi's Pulumi program provisions
         for a real Iris cluster, ahead of `start_controller()`'s `verify_prerequisites`
         check (spec.md §4). Built from the same shared manifest builders Pulumi uses.
         The Kueue ClusterQueue/ResourceFlavor are admin-provisioned on the shared CKS
@@ -450,7 +450,7 @@ class CoreweaveTarget(ControllerTarget):
         # scale group via nodeSelector), Service, and PDB, then waits for readiness. The
         # kind path can't use this (no NodePool CRD, kind-loaded image), but on real CKS
         # this is exactly what `iris cluster up` runs — RBAC/NodePools are ahead of it,
-        # matching how infra/iac's Pulumi program provisions them for a real cluster.
+        # matching how infra/pulumi's Pulumi program provisions them for a real cluster.
         self._provision_prerequisites()
         addr = self.controller.start_controller(self.cfg)
         self._set_target_nodes(self.args.replicas)
