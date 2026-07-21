@@ -1083,3 +1083,41 @@ Output: scratch/mixture_features/grug/gp_design_study.json
   50 arbitrarily-close points. Treat Part 2 as INCONCLUSIVE, not as evidence against the collapse.
 - Real signal in Part 2: gp_batch got the best run in the batch (−1.020 vs greedy −0.992 vs random
   −0.829); model gain was a wash across all three (~0.037-0.040).
+
+## 2026-07-21 ★ OOD COVERAGE TEST: the GP's uncertainty is OVERCONFIDENT off-support (negative result)
+Code: experiments/datakit/mixture_features/gp_ood_coverage.py (tracked, lint-clean)
+Artifacts: grug/gp_ood_coverage.{json,md}, report/figs3/f33_gp_ood_coverage.png
+
+GP fit on the 800 swarm runs (target humaneval bpb), then asked to predict the 53 real off-design
+probe runs whose outcomes we already know.
+  group      n   mean miss   mean sd   mean|z|  cov@2sd   NN dist
+  twobucket 25    +0.652     0.0482     12.9      4%       0.465
+  epochrep  18    +0.801     0.0481     16.6      0%       0.460
+  transect   7    +0.021     0.0168      1.3     86%       0.278
+  harm100b   3    +0.048     0.0460      1.0     67%       0.441
+  ALL       53    +0.585     0.0439     12.0     17%       0.437   (nominal 95%)
+- In-distribution the GP stays calibrated (RMS z 1.038, 2sd coverage 95.2%). Off-support sd inflates
+  only **1.98x** while actual error jumps **25x** (CV RMSE 0.0235 -> 0.585 bpb). sd would need **16x**
+  scaling to cover. Verification: 26 probe runs reproduce their pre-registered frozen-kernel
+  predictions to 9.4e-15 bpb, so the weight/basis/distance reconstruction is exactly the campaign's.
+- **Root cause 1 — the variance is blind to epoching, exactly like the mean.** The 53 probe runs
+  collapse to only **16 distinct posteriors**: runs sharing a mixture but repeating the sliced bucket a
+  different number of times are the SAME point to the content kernel. Worst case: 26 runs share
+  posterior 0.715 +/- 0.046 while realized spans 0.738-2.286 (a 1.548 bpb spread, **34 sd wide**).
+  No distance-based uncertainty can ever flag this.
+- **Root cause 2 — it is a one-sided BIAS, not missing variance.** 100% of the 53 misses are POSITIVE
+  (surrogate optimistic every time). Widening intervals is the wrong repair; a structural term is missing.
+- sd also fails to discriminate WHICH off-support run breaks: epochrep (|z| 16.6) and harm100b (|z| 1.0)
+  sit at nearly the same distance (0.460 vs 0.441) and get nearly the same sd (0.048 vs 0.046).
+- Where the bars DO hold: transect (86%) and harm100b (67%) -- i.e. wherever the content assumption
+  holds. They fail precisely on the epoch-repetition axis the content features do not encode.
+- Caveat: twobucket a3 varies budget and a4 uses d256, so part of those misses is not mixture-surrogate
+  error -- but epochrep is single-budget, single-architecture, swarm-matched, and is the WORST group
+  (0/18 covered), so the caveat does not rescue the verdict.
+- **CONSEQUENCE for KRR-vs-GP: the GP's headline advantage (a principled OOD flag) DOES NOT WORK for
+  this project's actual failure mode.** The kernel is blind to epoching in its VARIANCE as well as its
+  MEAN; the GP inherits the blindness rather than fixing it. The correct guardrail remains the
+  structural epoch-harm term / explicit epoch caps, NOT wider credible intervals.
+- Surviving GP value: (i) ~1.5x sample efficiency for sequential design (see Part 4), (ii) honest
+  in-distribution error bars -- though note in-distribution sd is ~constant and ~= the measured seed
+  floor, so that bar is obtainable from the seed panel WITHOUT the GP.
