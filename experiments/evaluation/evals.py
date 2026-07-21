@@ -117,16 +117,16 @@ EVALS: dict[str, EvalSuiteConfig] = {
         ),
         max_gen_toks=1024,
     ),
-    # --- Baseline lm-eval-harness NLP tasks (the goal's lm-eval table) ---
-    # mmlu/arc-challenge/hellaswag/winogrande/truthfulqa/boolq/piqa/openbookqa above already match the
-    # goal's shot counts; these fill in the rest of the 14-task NLP suite.
+    # --- Baseline lm-eval-harness NLP tasks ---
+    # mmlu/arc-challenge/hellaswag/winogrande/truthfulqa/boolq/piqa/openbookqa above already carry the
+    # standard OpenLLM shot counts; these fill in the rest of the 14-task NLP suite (see NLP_EVALS).
     "arc-easy": _mcq_eval("arc-easy", "arc_easy", 0),
     "lambada": _mcq_eval("lambada", "lambada_openai", 0),
     "triviaqa": _gen_eval("triviaqa", "triviaqa", 5, max_gen_toks=128),
     "nq-open": _gen_eval("nq-open", "nq_open", 5, max_gen_toks=128),
     "drop": _gen_eval("drop", "drop", 3, max_gen_toks=256),
-    # gsm8k at the goal's 0-shot; a distinct identity from the existing 5-shot "gsm8k" so evaldash
-    # never mixes the two protocols in one history/column.
+    # gsm8k at 0-shot, a distinct eval identity from the existing 5-shot "gsm8k" so evaldash never
+    # mixes the two protocols in one history/column.
     "gsm8k-0shot": _gen_eval("gsm8k-0shot", "gsm8k", 0, max_gen_toks=512),
     # --- Baseline evalchemy chat benchmarks (greedy) ---
     # 8192-token generation budget for the math-reasoning benchmarks (matches "math500"). A much larger
@@ -174,8 +174,8 @@ CORE_EVALS: tuple[str, ...] = (
     "math500",
 )
 
-# The baseline lm-eval-harness NLP suite (the goal's 14-task lm-eval table). Deterministic
-# loglikelihood/greedy tasks; runnable on every served model (base or instruct).
+# The baseline lm-eval-harness NLP suite: 14 deterministic loglikelihood/greedy tasks, runnable on
+# every served model (base or instruct).
 NLP_EVALS: tuple[str, ...] = (
     "mmlu",
     "arc-challenge",

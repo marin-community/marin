@@ -99,8 +99,8 @@ def _base_hf(name: str, location: str, revision: str, hbm_gb: int, max_model_len
 
 
 MODELS: dict[str, EvalModelConfig] = {
-    # Base reference models (the goal's referenced test set), pinned to the revisions used elsewhere
-    # in experiments/models.py. Amber and MAP-NEO clamp to their native context windows.
+    # Base reference models, pinned to the revisions used elsewhere in experiments/models.py. Amber
+    # and MAP-NEO clamp to their native context windows.
     "llama-3.1-8b-base": _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
     "olmo-2-7b-base": _base_hf("olmo-2-7b-base", "allenai/OLMo-2-1124-7B", "7df9a82", 18),
     "amber-7b": _base_hf("amber-7b", "LLM360/Amber", "83c188f", 18, max_model_len=2048),
