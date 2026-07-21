@@ -142,7 +142,7 @@ MODELS: dict[str, EvalModelConfig] = {
     # concat template: a message list rendered as the raw text a base model expects.
     "snowball": _snowball(
         "snowball",
-        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/",
+        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/",
         chat_template=CONCAT_CHAT_TEMPLATE,
     ),
     # The stage-2 (thinking) SFT of the same checkpoint. Its export ships a chat_template.jinja that
