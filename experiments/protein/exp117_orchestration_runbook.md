@@ -135,6 +135,15 @@ job = one point.
      slices give faster wall-clock (operator: bias larger at cold start) but preempt more, schedule
      slower, and are less chip-efficient at fixed batch, so **bigger ≠ always better** — MEASURE.
      Prefer proven regions (europe-west4, us-east5 v6e) but include untried ones for coverage.
+   - **Region re-probing (per-slice, per-region).** Availability is per slice *and* region —
+     correlated but not identical (a `v6e-64` gang says nothing about `v6e-256` or `v5p` there), and a
+     stale "avoid" label or a >~1-day-old read is missing evidence, not proof of unavailability. A
+     lone-slice probe under-samples: re-probe each region with **≥2 real grid points across ≥2 slice
+     sizes** (span families where the region allows more than one; else span sizes). On a region-wide
+     availability drop (work stuck pending / silent-hung region-wide), spread such probes across every
+     allowed region not already saturated with running trials to re-map capacity, then resume
+     exploiting proven targets. Drop a probe that never gangs by `startup_relocation` (3h). Never a
+     filler — every probe is a meaningful grid point.
 5. **Dispatch.** Launch/stop/restart exact work orders. Record prediction+placement+decision in
    `decisions` BEFORE dispatch. One logical trial → at most one objective; never duplicate a
    `(rung,point)`.
