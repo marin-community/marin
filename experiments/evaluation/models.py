@@ -38,7 +38,6 @@ class EvalModelConfig:
     gpu_only: bool = False
     vllm_extra_args: tuple[str, ...] = ()
     tensor_parallel_size: int | None = None
-    max_model_len: int | None = None
     max_gen_toks: int | None = None
     """Per-model override of a suite's generation budget. A verbose reasoning model needs a longer
     budget than the suite default or its chain truncates before the final answer (scoring it wrong)."""
@@ -84,13 +83,7 @@ def _snowball(name: str, location: str, chat_template: str | None = None) -> Eva
     )
 
 
-def _base_hf(
-    name: str,
-    location: str,
-    revision: str,
-    hbm_gb: int,
-    max_model_len: int | None = None,
-) -> EvalModelConfig:
+def _base_hf(name: str, location: str, revision: str, hbm_gb: int) -> EvalModelConfig:
     """A base (non-chat) HF model, pinned to an immutable revision.
 
     ``apply_chat_template=False`` (base models ship no chat template), so these run the NLP
@@ -103,16 +96,13 @@ def _base_hf(
         hbm_gb=hbm_gb,
         apply_chat_template=False,
         vllm_extra_args=("--revision", revision),
-        max_model_len=max_model_len,
     )
 
 
 MODELS: dict[str, EvalModelConfig] = {
-    # Base reference models, pinned to the revisions used elsewhere in experiments/models.py. Amber
-    # clamps to its native 2048-token context window.
+    # Base reference models, pinned to the revisions used elsewhere in experiments/models.py.
     "llama-3.1-8b-base": _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
     "olmo-2-7b-base": _base_hf("olmo-2-7b-base", "allenai/OLMo-2-1124-7B", "7df9a82", 18),
-    "amber-7b": _base_hf("amber-7b", "LLM360/Amber", "83c188f", 18, max_model_len=2048),
     # Qwen3.5-9B is a verbose hybrid-GDN reasoning model; its chains exceed the 8192-token chat
     # default and truncate before the boxed answer (OlympiadBench scored 0), so give it a 32k budget.
     "qwen3.5-9b": EvalModelConfig(
