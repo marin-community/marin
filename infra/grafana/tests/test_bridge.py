@@ -14,8 +14,9 @@ from conftest import bridge_config
 from finelog.errors import QueryResultTooLargeError
 from github_source import GithubSource
 from k8s_source import K8sFleet
-from server import create_app
+from server import create_app, workload_overview
 from starlette.testclient import TestClient
+from wandb_source import WandbSource
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
@@ -54,7 +55,9 @@ class FakeSource:
 
 def _client(source: FakeSource, cache_ttl: float = 20.0) -> TestClient:
     github = GithubSource(token=None, timeout=5.0)
-    return TestClient(create_app(bridge_config(cache_ttl), {"marin": source}, {}, github, K8sFleet(())))
+    return TestClient(
+        create_app(bridge_config(cache_ttl), {"marin": source}, {}, github, K8sFleet(()), WandbSource(timeout=5.0))
+    )
 
 
 def _get(client: TestClient, sql: str, **params):
@@ -154,6 +157,14 @@ def test_unparseable_labels_cell_keeps_the_row():
 
 def test_health_lists_configured_clusters():
     assert _client(FakeSource()).get("/health").json() == {"status": "ok", "clusters": ["marin"]}
+
+
+def test_workload_overview_counts_issue_rows_and_keeps_explicit_zeros():
+    assert workload_overview([], []) == [{"pending_pods": 0, "crashlooping_containers": 0}]
+    assert workload_overview(
+        [{"pod": "queued"}, {"error_class": "network"}],
+        [{"container": "trainer"}, {"container": "logger"}],
+    ) == [{"pending_pods": 1, "crashlooping_containers": 2}]
 
 
 def test_cache_coalesces_concurrent_misses_on_one_key():

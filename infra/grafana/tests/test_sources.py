@@ -20,6 +20,7 @@ from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
 from server import create_app
 from starlette.testclient import TestClient
+from wandb_source import WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
 
@@ -33,6 +34,12 @@ def _iris(handler) -> IrisSource:
 
 def _github(handler, token: str | None = None) -> GithubSource:
     source = GithubSource(token=token, timeout=5.0)
+    source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
+    return source
+
+
+def _wandb(handler) -> WandbSource:
+    source = WandbSource(timeout=5.0)
     source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
     return source
 
@@ -94,7 +101,10 @@ def test_workers_aggregates_healthy_only_per_region():
 def test_workers_follows_pagination():
     pages = [
         {"hasMore": True, "workers": [{"healthy": True, "metadata": {"attributes": {"region": {"stringValue": "a"}}}}]},
-        {"hasMore": False, "workers": [{"healthy": True, "metadata": {"attributes": {"region": {"stringValue": "b"}}}}]},
+        {
+            "hasMore": False,
+            "workers": [{"healthy": True, "metadata": {"attributes": {"region": {"stringValue": "b"}}}}],
+        },
     ]
     seen_offsets = []
 
@@ -207,6 +217,54 @@ def test_github_graphql_errors_raise():
     assert excinfo.value.source == "github"
 
 
+def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "query Report" in body["query"]:
+            spec = {"blocks": [{"type": "panel-grid", "metadata": {"runSets": [{"selections": {"tree": ["hero"]}}]}}]}
+            return httpx.Response(
+                200,
+                json={"data": {"view": {"displayName": "Hero report", "spec": json.dumps(spec)}}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "project": {
+                        "run": {
+                            "state": "running",
+                            "sampledHistory": [
+                                [
+                                    {"throughput/total_tokens": 10, "throughput/mfu": 0.42},
+                                    {"throughput/total_tokens": 20, "throughput/mfu": None},
+                                ]
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+    assert _wandb(handler).points("mfu") == [
+        {
+            "chart": "MFU (%)",
+            "run": "hero",
+            "run_state": "running",
+            "tokens": 10,
+            "value": 0.42,
+            "report_title": "Hero report",
+            "report_url": (
+                "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+            ),
+        }
+    ]
+
+
+def test_wandb_rejects_unknown_chart_without_network():
+    with pytest.raises(ValueError, match="unknown W&B chart"):
+        _wandb(lambda request: pytest.fail("unexpected request")).points("nope")
+
+
 # --- endpoint routing / fail-loud ------------------------------------------
 
 
@@ -228,7 +286,9 @@ class _FakeIris:
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
     github = github_source or GithubSource(token=None, timeout=5.0)
-    return TestClient(create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(())))
+    return TestClient(
+        create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(()), WandbSource(timeout=5.0))
+    )
 
 
 def test_iris_endpoint_returns_rows():
@@ -247,7 +307,7 @@ def test_unknown_cluster_on_iris_route_is_400():
     assert _app(_FakeIris(TARGET)).get("/iris/nope/jobs").status_code == 400
 
 
-def test_nightlies_endpoint_returns_full_matrix():
+def test_nightlies_endpoint_returns_linked_long_cells():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -269,11 +329,8 @@ def test_nightlies_endpoint_returns_full_matrix():
         )
 
     rows = _app(_FakeIris(TARGET), github_source=_github(handler)).get("/github/nightlies").json()
-    # One wide row per day over the trailing 7 days, keyed by lane id per cell.
-    assert len(rows) == 7
+    assert len(rows) == 7 * len(NIGHTLY_LANES)
     lane_ids = {lane.id for lane in NIGHTLY_LANES}
-    assert all(set(row) == {"ts", "date"} | lane_ids for row in rows)
-    # Each cell is a numeric status code or a null gap, never a nested object.
-    assert all(cell is None or isinstance(cell, int) for row in rows for cell in (row[lid] for lid in lane_ids))
-    # Days ascend so the panel's time axis reads left to right.
-    assert [row["ts"] for row in rows] == sorted(row["ts"] for row in rows)
+    assert {row["lane_id"] for row in rows} == lane_ids
+    assert all("workflow_url" in row and "lane_order" in row for row in rows)
+    assert any(row["url"] == "https://x" for row in rows)

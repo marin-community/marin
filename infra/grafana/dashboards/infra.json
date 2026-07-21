@@ -1,13 +1,13 @@
 {
   "uid": "infra",
   "title": "Infra",
-  "description": "Marin infra status: GitHub build/ferry health, the live Iris control plane, and the infra/probes canary namespace. Replaces the standalone status page; panels read the Grafana bridge's fixed GitHub/Iris endpoints and finelog SQL.",
+  "description": "Compact Marin infrastructure cockpit: nightly regressions, main CI, ferries, Iris capacity, provisioning, Kubernetes control plane, and hero training.",
   "tags": [
     "marin"
   ],
   "timezone": "utc",
   "editable": false,
-  "schemaVersion": 39,
+  "schemaVersion": 42,
   "refresh": "1m",
   "time": {
     "from": "now-24h",
@@ -16,72 +16,209 @@
   "templating": {
     "list": []
   },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Fleet",
+      "type": "link",
+      "url": "/d/marin-fleet"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Iris",
+      "type": "link",
+      "url": "/d/marin-iris"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "K8s",
+      "type": "link",
+      "url": "/d/marin-k8s"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Pipelines",
+      "type": "link",
+      "url": "/d/marin-pipelines"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Training",
+      "type": "link",
+      "url": "/d/marin-training"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "GitHub Actions",
+      "type": "link",
+      "url": "https://github.com/marin-community/marin/actions"
+    }
+  ],
   "panels": [
     {
       "id": 1,
-      "type": "row",
-      "title": "Build & Ferries",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "panels": []
-    },
-    {
-      "id": 2,
-      "type": "stat",
-      "title": "Main CI success rate",
-      "description": "Finalized-build success rate on main, from the GitHub statusCheckRollup.",
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": false,
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "github"
       },
       "gridPos": {
-        "h": 8,
-        "w": 6,
+        "h": 9,
+        "w": 24,
         "x": 0,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.8
-              },
-              {
-                "color": "green",
-                "value": 0.95
-              }
-            ]
-          }
-        },
-        "overrides": []
+        "y": 0
       },
       "options": {
-        "reduceOptions": {
-          "calc": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
+        "view": "nightlies"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/nightlies",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "date",
+              "text": "date",
+              "type": "string"
+            },
+            {
+              "selector": "lane_id",
+              "text": "lane_id",
+              "type": "string"
+            },
+            {
+              "selector": "lane",
+              "text": "lane",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "label",
+              "type": "string"
+            },
+            {
+              "selector": "group",
+              "text": "group",
+              "type": "string"
+            },
+            {
+              "selector": "subgroup",
+              "text": "subgroup",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "duration_state",
+              "text": "duration_state",
+              "type": "string"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "url",
+              "text": "url",
+              "type": "string"
+            },
+            {
+              "selector": "workflow_url",
+              "text": "workflow_url",
+              "type": "string"
+            },
+            {
+              "selector": "healthy",
+              "text": "healthy",
+              "type": "boolean"
+            },
+            {
+              "selector": "due",
+              "text": "due",
+              "type": "boolean"
+            },
+            {
+              "selector": "source_error",
+              "text": "source_error",
+              "type": "string"
+            },
+            {
+              "selector": "lane_order",
+              "text": "lane_order",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": false,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "github"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "options": {
+        "view": "commits"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       },
       "targets": [
         {
@@ -97,54 +234,10 @@
           },
           "columns": [
             {
-              "selector": "success_rate",
-              "text": "success_rate",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "table",
-      "title": "Recent commits",
-      "description": "Recent commits on main with their CI rollup state.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "github"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 18,
-        "x": 6,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/builds",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
+              "selector": "oid",
+              "text": "oid",
+              "type": "string"
+            },
             {
               "selector": "short_oid",
               "text": "short_oid",
@@ -161,6 +254,11 @@
               "type": "string"
             },
             {
+              "selector": "avatar_url",
+              "text": "avatar_url",
+              "type": "string"
+            },
+            {
               "selector": "state",
               "text": "state",
               "type": "string"
@@ -169,195 +267,75 @@
               "selector": "committed_at",
               "text": "committed_at",
               "type": "timestamp_epoch"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "type": "table",
-      "title": "Ferry runs",
-      "description": "Recent ferry runs across every tier, with per-tier success rate.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "github"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 9
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "success_rate"
             },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percentunit"
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 1
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "duration_seconds"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/ferries",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
             {
-              "selector": "group",
-              "text": "group",
+              "selector": "url",
+              "text": "url",
               "type": "string"
-            },
-            {
-              "selector": "tier",
-              "text": "tier",
-              "type": "string"
-            },
-            {
-              "selector": "conclusion",
-              "text": "conclusion",
-              "type": "string"
-            },
-            {
-              "selector": "status",
-              "text": "status",
-              "type": "string"
-            },
-            {
-              "selector": "sha",
-              "text": "sha",
-              "type": "string"
-            },
-            {
-              "selector": "started_at",
-              "text": "started_at",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "duration_seconds",
-              "text": "duration_seconds",
-              "type": "number"
             },
             {
               "selector": "success_rate",
               "text": "success_rate",
               "type": "number"
-            },
-            {
-              "selector": "actor",
-              "text": "actor",
-              "type": "string"
             }
           ]
         }
       ]
     },
     {
-      "id": 5,
-      "type": "row",
-      "title": "Iris control plane",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 17
-      },
-      "panels": []
-    },
-    {
-      "id": 6,
+      "id": 3,
       "type": "stat",
-      "title": "Controller reachable",
-      "description": "Whether the marin controller /health answers.",
+      "title": "Iris controller",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "iris-marin"
       },
       "gridPos": {
-        "h": 4,
-        "w": 8,
+        "h": 3,
+        "w": 4,
         "x": 0,
-        "y": 18
+        "y": 12
       },
       "fieldConfig": {
         "defaults": {
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "true": {
-                  "text": "UP",
-                  "color": "green",
-                  "index": 0
-                },
-                "false": {
-                  "text": "DOWN",
-                  "color": "red",
-                  "index": 1
-                }
-              }
-            }
-          ],
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
-          }
+          },
+          "max": 1,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calc": [
+          "calcs": [
             "lastNotNull"
           ],
           "fields": "",
@@ -365,7 +343,7 @@
         },
         "colorMode": "background",
         "graphMode": "none",
-        "textMode": "value",
+        "textMode": "auto",
         "orientation": "auto"
       },
       "targets": [
@@ -382,33 +360,32 @@
           },
           "columns": [
             {
-              "selector": "reachable",
-              "text": "reachable",
-              "type": "boolean"
+              "selector": "up",
+              "text": "up",
+              "type": "number"
             }
           ]
         }
       ]
     },
     {
-      "id": 7,
+      "id": 4,
       "type": "stat",
-      "title": "Controller latency",
-      "description": "Round-trip latency of the controller /health probe.",
+      "title": "K8s APIs reachable",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "iris-marin"
+        "uid": "k8s"
       },
       "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 18
+        "h": 3,
+        "w": 4,
+        "x": 4,
+        "y": 12
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
           "min": 0,
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -418,11 +395,11 @@
               },
               {
                 "color": "yellow",
-                "value": 250
+                "value": 1
               },
               {
                 "color": "red",
-                "value": 1000
+                "value": 5
               }
             ]
           }
@@ -431,8 +408,8 @@
       },
       "options": {
         "reduceOptions": {
-          "calc": [
-            "lastNotNull"
+          "calcs": [
+            "sum"
           ],
           "fields": "",
           "values": false
@@ -456,8 +433,8 @@
           },
           "columns": [
             {
-              "selector": "latency_ms",
-              "text": "latency_ms",
+              "selector": "up",
+              "text": "up",
               "type": "number"
             }
           ]
@@ -465,23 +442,165 @@
       ]
     },
     {
-      "id": 8,
+      "id": 5,
       "type": "stat",
-      "title": "Healthy workers",
-      "description": "Total healthy workers across all regions, from Iris ListWorkers.",
+      "title": "Synthetic probes",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "iris-marin"
+        "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 18
+        "h": 3,
+        "w": 4,
+        "x": 8,
+        "y": 12
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH recent AS (SELECT labels, value, ROW_NUMBER() OVER (PARTITION BY labels ORDER BY collected_at DESC) AS rn FROM \"infra.canary.metrics\" WHERE metric = 'probe_up' AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT value FROM recent WHERE rn = 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Ferry success",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "github"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 12,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/ferries",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "success_rate",
+              "text": "success_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Pending pods",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 16,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -497,7 +616,144 @@
       },
       "options": {
         "reduceOptions": {
-          "calc": [
+          "calcs": [
+            "count"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/overview",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "pending_pods",
+              "text": "pending_pods",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Crashloops",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "count"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/overview",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "crashlooping_containers",
+              "text": "crashlooping_containers",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Healthy workers",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
             "sum"
           ],
           "fields": "",
@@ -531,19 +787,225 @@
       ]
     },
     {
-      "id": 9,
-      "type": "table",
-      "title": "Workers by region",
-      "description": "Healthy worker counts and resource totals per region.",
+      "id": 10,
+      "type": "stat",
+      "title": "CPU capacity",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "iris-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "mcores"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/workers",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cpu_millicores",
+              "text": "cpu_millicores",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Memory capacity",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 12,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/workers",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "memory_bytes",
+              "text": "memory_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "TPU chips",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 18,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/workers",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "tpu_chips",
+              "text": "tpu_chips",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Fleet and provisioning",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 22
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "table",
+      "title": "Workers by region",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "iris-marin"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 0,
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -568,7 +1030,8 @@
         ]
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "cellHeight": "sm"
       },
       "targets": [
         {
@@ -613,19 +1076,18 @@
       ]
     },
     {
-      "id": 10,
+      "id": 22,
       "type": "table",
       "title": "Jobs by state",
-      "description": "Root-job counts: in-flight now plus terminal states over the last 24h.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "iris-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 22
+        "h": 7,
+        "w": 7,
+        "x": 9,
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -637,7 +1099,8 @@
         "overrides": []
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "cellHeight": "sm"
       },
       "targets": [
         {
@@ -672,32 +1135,18 @@
       ]
     },
     {
-      "id": 11,
-      "type": "row",
-      "title": "Probes & provisioning",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 30
-      },
-      "panels": []
-    },
-    {
-      "id": 12,
+      "id": 23,
       "type": "table",
-      "title": "Latest health checks",
-      "description": "Latest probe_up and probe_latency_ms per synthetic health check, keyed by the probe label.",
+      "title": "Ferry runs",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
+        "uid": "github"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 31
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -709,7 +1158,8 @@
         "overrides": []
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "cellHeight": "sm"
       },
       "targets": [
         {
@@ -718,49 +1168,60 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/ferries",
           "url_options": {
             "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "WITH recent AS (SELECT labels, metric, value, ROW_NUMBER() OVER (PARTITION BY labels, metric ORDER BY collected_at DESC) AS rn FROM \"infra.canary.metrics\" WHERE metric IN ('probe_up', 'probe_latency_ms') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT json_get(labels, 'probe') AS probe, metric, value FROM recent WHERE rn = 1 ORDER BY probe, metric"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
+            "params": []
           },
           "columns": [
             {
-              "selector": "probe",
-              "text": "probe",
+              "selector": "group",
+              "text": "group",
               "type": "string"
             },
             {
-              "selector": "metric",
-              "text": "metric",
+              "selector": "tier",
+              "text": "tier",
               "type": "string"
             },
             {
-              "selector": "value",
-              "text": "value",
+              "selector": "conclusion",
+              "text": "conclusion",
+              "type": "string"
+            },
+            {
+              "selector": "sha",
+              "text": "sha",
+              "type": "string"
+            },
+            {
+              "selector": "started_at",
+              "text": "started_at",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "duration_seconds",
+              "text": "duration_seconds",
               "type": "number"
+            },
+            {
+              "selector": "success_rate",
+              "text": "success_rate",
+              "type": "number"
+            },
+            {
+              "selector": "html_url",
+              "text": "html_url",
+              "type": "string"
             }
           ]
         }
       ]
     },
     {
-      "id": 13,
+      "id": 24,
       "type": "timeseries",
-      "title": "Control-plane latency",
-      "description": "probe_latency_ms per synthetic health check, split by the probe label.",
+      "title": "Healthy workers by region",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -768,92 +1229,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 31
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_latency_ms' AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "label_probe",
-              "text": "probe",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "latency_ms",
-              "type": "number"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 14,
-      "type": "row",
-      "title": "History (24h)",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
         "x": 0,
-        "y": 39
-      },
-      "panels": []
-    },
-    {
-      "id": 15,
-      "type": "timeseries",
-      "title": "Healthy workers by region",
-      "description": "worker_healthy per region. Rows carrying a region label, grouped by it.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 40
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -861,10 +1238,23 @@
           "min": 0,
           "custom": {
             "drawStyle": "line",
-            "showPoints": "never"
+            "showPoints": "never",
+            "lineWidth": 1,
+            "fillOpacity": 8
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
@@ -912,19 +1302,18 @@
       ]
     },
     {
-      "id": 16,
+      "id": 25,
       "type": "timeseries",
       "title": "Provisioning success ratio",
-      "description": "provision_success_ratio for the fleet rollup row: ready / resolved create attempts.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -933,10 +1322,23 @@
           "max": 1,
           "custom": {
             "drawStyle": "line",
-            "showPoints": "never"
+            "showPoints": "never",
+            "lineWidth": 1,
+            "fillOpacity": 8
           }
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
@@ -979,128 +1381,126 @@
       ]
     },
     {
-      "id": 17,
+      "id": 30,
       "type": "row",
-      "title": "Nightly regression matrix",
+      "title": "Control plane",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 34
       },
       "panels": []
     },
     {
-      "id": 18,
-      "type": "state-timeline",
-      "timeFrom": "8d",
-      "title": "Nightly lanes (7 days)",
-      "description": "Each nightly workflow lane over the last 7 UTC days: green healthy, yellow slow, red failed, dark-red missing (overdue, no run), orange source unavailable, blue not yet due. Blank cells are days the lane was not scheduled or not yet introduced.",
+      "id": 31,
+      "type": "table",
+      "title": "Latest synthetic health checks",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "github"
+        "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 14,
-        "w": 24,
+        "h": 7,
+        "w": 8,
         "x": 0,
-        "y": 50
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "lineWidth": 0,
-            "fillOpacity": 80
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "text": "healthy",
-                  "color": "green",
-                  "index": 0
-                },
-                "2": {
-                  "text": "slow",
-                  "color": "yellow",
-                  "index": 1
-                },
-                "3": {
-                  "text": "failed",
-                  "color": "red",
-                  "index": 2
-                },
-                "4": {
-                  "text": "missing",
-                  "color": "dark-red",
-                  "index": 3
-                },
-                "5": {
-                  "text": "unavailable",
-                  "color": "orange",
-                  "index": 4
-                },
-                "6": {
-                  "text": "not yet due",
-                  "color": "blue",
-                  "index": 5
-                }
-              }
-            }
-          ],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "transparent"
-              },
-              {
-                "value": 1,
-                "color": "green"
-              },
-              {
-                "value": 2,
-                "color": "yellow"
-              },
-              {
-                "value": 3,
-                "color": "red"
-              },
-              {
-                "value": 4,
-                "color": "dark-red"
-              },
-              {
-                "value": 5,
-                "color": "orange"
-              },
-              {
-                "value": 6,
-                "color": "blue"
-              }
-            ]
+            "align": "auto",
+            "filterable": true
           }
         },
         "overrides": []
       },
       "options": {
-        "mergeValues": false,
-        "showValue": "never",
-        "alignValue": "center",
-        "rowHeight": 0.9,
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH recent AS (SELECT labels, metric, value, ROW_NUMBER() OVER (PARTITION BY labels, metric ORDER BY collected_at DESC) AS rn FROM \"infra.canary.metrics\" WHERE metric IN ('probe_up', 'probe_latency_ms') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT json_get(labels, 'probe') AS probe, metric, value FROM recent WHERE rn = 1 ORDER BY probe, metric"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "probe",
+              "text": "probe",
+              "type": "string"
+            },
+            {
+              "selector": "metric",
+              "text": "metric",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Control-plane latency",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
         "legend": {
-          "showLegend": true,
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single"
+          "mode": "multi",
+          "sort": "none"
         }
       },
       "targets": [
@@ -1110,76 +1510,771 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/nightlies",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_latency_ms' AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "label_probe",
+              "text": "probe",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "latency_ms",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "table",
+      "title": "Kubernetes control plane",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/control_plane",
           "url_options": {
             "method": "GET",
             "params": []
           },
           "columns": [
             {
-              "selector": "ts",
-              "text": "time",
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "desired",
+              "text": "desired",
+              "type": "number"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "number"
+            },
+            {
+              "selector": "up",
+              "text": "up",
+              "type": "number"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Hero training",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "panels": []
+    },
+    {
+      "id": 41,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": false,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "wandb"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 43
+      },
+      "options": {
+        "view": "wandb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/train-loss",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "run_state",
+              "text": "run_state",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": false,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "wandb"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 43
+      },
+      "options": {
+        "view": "wandb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/paloma-macro-loss",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "run_state",
+              "text": "run_state",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": false,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "wandb"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 43
+      },
+      "options": {
+        "view": "wandb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/mfu",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "chart",
+              "text": "chart",
+              "type": "string"
+            },
+            {
+              "selector": "run",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "run_state",
+              "text": "run_state",
+              "type": "string"
+            },
+            {
+              "selector": "tokens",
+              "text": "tokens",
+              "type": "number"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "report_title",
+              "text": "report_title",
+              "type": "string"
+            },
+            {
+              "selector": "report_url",
+              "text": "report_url",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Kubernetes workload details",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "panels": []
+    },
+    {
+      "id": 51,
+      "type": "table",
+      "title": "Pending and gated pods",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/pending",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "age_seconds",
+              "text": "age_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "type": "table",
+      "title": "Crashlooping containers",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/crashloops",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "container",
+              "text": "container",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "restarts",
+              "text": "restarts",
+              "type": "number"
+            },
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "type": "table",
+      "title": "Termination candidates",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/termination_candidates",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "classification",
+              "text": "classification",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_count",
+              "text": "gpu_count",
+              "type": "number"
+            },
+            {
+              "selector": "overdue_seconds",
+              "text": "overdue_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "type": "table",
+      "title": "Kueue backlog",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/kueue",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "queue",
+              "text": "queue",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "oldest_age_seconds",
+              "text": "oldest_age_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 55,
+      "type": "table",
+      "title": "Warning events",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/events",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "involved_object",
+              "text": "involved_object",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "last_seen",
+              "text": "last_seen",
               "type": "timestamp_epoch"
             },
             {
-              "selector": "tpu-ferry",
-              "text": "TPU ferry",
-              "type": "number"
-            },
-            {
-              "selector": "cw-gpu-ferry",
-              "text": "CW ferry",
-              "type": "number"
-            },
-            {
-              "selector": "grug-multislice",
-              "text": "Grug",
-              "type": "number"
-            },
-            {
-              "selector": "datakit-t1",
-              "text": "Data T1",
-              "type": "number"
-            },
-            {
-              "selector": "datakit-t2",
-              "text": "Data T2",
-              "type": "number"
-            },
-            {
-              "selector": "datakit-t3",
-              "text": "Data T3 · Mon",
-              "type": "number"
-            },
-            {
-              "selector": "cluster-smoke",
-              "text": "Cluster",
-              "type": "number"
-            },
-            {
-              "selector": "evalchemy",
-              "text": "Evalchemy",
-              "type": "number"
-            },
-            {
-              "selector": "harbor",
-              "text": "Harbor",
-              "type": "number"
-            },
-            {
-              "selector": "marinskyrl",
-              "text": "SkyRL",
-              "type": "number"
-            },
-            {
-              "selector": "vllm-gpu",
-              "text": "vLLM GPU",
-              "type": "number"
-            },
-            {
-              "selector": "tpu-inference",
-              "text": "TPU infer",
-              "type": "number"
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
             }
           ]
         }

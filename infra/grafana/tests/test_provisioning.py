@@ -18,6 +18,7 @@ from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
+from wandb_source import WandbSource
 
 ROOT = Path(__file__).resolve().parent.parent
 ALERTING = ROOT / "provisioning" / "alerting"
@@ -76,8 +77,16 @@ def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
-    client = TestClient(create_app(bridge_config(), {}, iris_sources, GithubSource(token=None, timeout=5.0), fleet))
-
+    client = TestClient(
+        create_app(
+            bridge_config(),
+            {},
+            iris_sources,
+            GithubSource(token=None, timeout=5.0),
+            fleet,
+            WandbSource(timeout=5.0),
+        )
+    )
     base_paths = _datasources()
     for rule in _rules():
         for node in rule["data"]:
@@ -147,3 +156,14 @@ def test_dashboard_datasource_uids_are_provisioned():
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
             assert uid in uids, f"{path.name} panel {panel.get('id')}: unknown datasource {uid!r}"
+
+
+def test_stat_panels_use_grafana_reduce_options_schema():
+    for path in (ROOT / "dashboards").glob("*.json"):
+        dashboard = json.loads(path.read_text())
+        for panel in dashboard["panels"]:
+            if panel.get("type") != "stat":
+                continue
+            reduce_options = panel.get("options", {}).get("reduceOptions", {})
+            assert "calc" not in reduce_options, f"{path.name} panel {panel['id']}: use calcs, not calc"
+            assert reduce_options.get("calcs"), f"{path.name} panel {panel['id']}: missing reduction"

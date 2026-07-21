@@ -11,7 +11,18 @@
 # GF_INSTALL_PLUGINS, so a cold start never depends on grafana.com being reachable.
 # The version is pinned: the provisioned alert rules evaluate through this plugin,
 # so an untested plugin build must never arrive as a side effect of an image build.
-FROM grafana/grafana:13.1.0-ubuntu
+FROM node:24.16.0-bookworm-slim AS infra-panel
+
+WORKDIR /plugin
+COPY marin-infra-panel/package.json marin-infra-panel/package-lock.json ./
+RUN npm ci
+COPY marin-infra-panel/.config .config
+COPY marin-infra-panel/src src
+COPY marin-infra-panel/CHANGELOG.md marin-infra-panel/LICENSE marin-infra-panel/README.md ./
+COPY marin-infra-panel/tsconfig.json ./
+RUN npm run build
+
+FROM grafana/grafana:13.1.1-ubuntu
 
 USER root
 
@@ -20,6 +31,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource 3.10.1
+COPY --from=infra-panel /plugin/dist /var/lib/grafana/plugins/marin-infra-panel
 
 # The bridge lives in its own venv; nothing else in the image is Python.
 #
@@ -67,6 +79,7 @@ ENV GF_SMTP_HOST=smtp.gmail.com:587 \
     GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
 
 ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
+    GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=marin-infra-panel \
     GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
     GF_AUTH_DISABLE_LOGIN_FORM=true \

@@ -19,6 +19,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
+    GET /wandb/{chart}                           sampled public hero-report series by chart key
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -26,6 +27,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
     GET /k8s/health                              per-cluster API server reachability + latency
+    GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
@@ -61,6 +63,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from wandb_source import WandbSource
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,16 @@ TO_MACRO = "{{to}}"
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
+
+
+def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
+    """Summarize workload issue rows into one stat-safe row with explicit zeros."""
+    return [
+        {
+            "pending_pods": sum("pod" in row for row in pending_rows),
+            "crashlooping_containers": sum("container" in row for row in crashloop_rows),
+        }
+    ]
 
 
 def _sql_timestamp(at: datetime) -> str:
@@ -243,12 +256,14 @@ def create_app(
     iris_sources: Mapping[str, IrisSource],
     github_source: GithubSource,
     k8s_fleet: K8sFleet,
+    wandb_source: WandbSource,
 ) -> Starlette:
-    """Build the ASGI app serving finelog, Iris, GitHub, and k8s for the configured clusters."""
+    """Build the ASGI app serving finelog, Iris, GitHub, W&B, and k8s sources."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
+    wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
 
     def query(request: Request) -> JSONResponse:
         try:
@@ -302,6 +317,15 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
+    def wandb_chart(request: Request) -> JSONResponse:
+        chart = request.path_params["chart"]
+        try:
+            return JSONResponse(wandb_cache.get_or_compute(chart, lambda: wandb_source.points(chart)))
+        except ValueError as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -328,6 +352,14 @@ def create_app(
 
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
+
+    def k8s_overview(_: Request) -> JSONResponse:
+        def compute() -> list[dict]:
+            pending = k8s_cache.get_or_compute("pending", k8s_fleet.pending)
+            crashloops = k8s_cache.get_or_compute("crashloops", k8s_fleet.crashloops)
+            return workload_overview(pending, crashloops)
+
+        return k8s_endpoint("overview", compute)
 
     def k8s_alerts_unreachable(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
@@ -361,6 +393,7 @@ def create_app(
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
+            Route("/wandb/{chart}", wandb_chart),
             Route("/finelog/{cluster}/query", query),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
@@ -373,6 +406,7 @@ def create_app(
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),
             Route("/k8s/health", k8s_health),
+            Route("/k8s/overview", k8s_overview),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
@@ -389,10 +423,11 @@ def main() -> None:
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
+    wandb_source = WandbSource(timeout=config.http_timeout)
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

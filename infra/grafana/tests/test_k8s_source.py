@@ -24,6 +24,7 @@ from github_source import GithubSource
 from k8s_source import K8sError, K8sErrorClass, K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
+from wandb_source import WandbSource
 
 GPU_RESOURCE = "nvidia.com/gpu"
 STALE_DELETION_TIMESTAMP = "2000-01-01T00:00:00Z"
@@ -421,7 +422,9 @@ def test_crashloop_alert_counts_by_scope():
 
 
 def _client(fleet: K8sFleet) -> TestClient:
-    return TestClient(create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet))
+    return TestClient(
+        create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
+    )
 
 
 def test_k8s_routes_serve_fleet_rows():
