@@ -158,7 +158,7 @@ def workdir() -> Path:
 
 
 def resolve_nsys_bin() -> str:
-    """Return the ``nsys`` binary from PATH — a GPU image (``default_gpu_image``) bakes it in.
+    """Return the ``nsys`` binary from PATH — the GPU task image bakes it in.
 
     Raises:
         RuntimeError: If ``nsys`` is not on PATH (the job is not using a GPU image).

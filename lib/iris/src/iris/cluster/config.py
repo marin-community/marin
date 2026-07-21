@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
+GPU_TASK_IMAGE = "ghcr.io/marin-community/iris-task-gpu:latest"
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -625,10 +626,12 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
+    # Image GPU tasks run under unless the job sets task_image: the task image plus
+    # GPU tooling (Nsight Systems) baked in, so a profiler is on PATH rather than
+    # installed per task. Defaulted because it tracks the iris release rather than
+    # the cluster; override it to pin a tag or point at a mirror.
+    default_gpu_image: str = GPU_TASK_IMAGE
     # Image for GPU jobs (a device.gpu request), used unless a job overrides with
-    # --task-image. Empty falls back to default_image. Lets a cluster ship GPU
-    # tooling (nsys, CUDA) baked once rather than installed per task.
-    default_gpu_image: str = ""
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
