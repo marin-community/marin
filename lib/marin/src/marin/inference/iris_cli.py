@@ -71,17 +71,17 @@ from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
 from marin.inference.config import (
-    BrokerConfig,
     DEFAULT_CUDA_VLLM_VERSION,
+    TPU_VLLM_WORKER_EXTRAS,
+    WORKER_PYTHON_VERSION,
+    BrokerConfig,
     InferenceProxyConfig,
     IrisConfig,
     LevanterEngineConfig,
     ServedModelConfig,
-    TPU_VLLM_WORKER_EXTRAS,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
-    WORKER_PYTHON_VERSION,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -97,7 +97,7 @@ _ENDPOINT_READY_POLL_SECONDS = 5.0
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
 # other backend is a mistake worth failing on, but several carry non-None defaults, so only a
-# value the user actually typed counts (hence the ParameterSource check in _reject_foreign_flags).
+# value the user actually typed counts (hence the ParameterSource check in reject_backend_options).
 _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
@@ -112,7 +112,7 @@ _LEVANTER_ONLY_OPTIONS = {
 }
 
 
-def _reject_foreign_flags(backend: str, options: dict[str, str]) -> None:
+def reject_backend_options(backend: str, options: dict[str, str]) -> None:
     """Fail if the user typed an option belonging to a backend they did not select."""
     ctx = click.get_current_context()
     typed = [flag for name, flag in options.items() if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE]
@@ -455,7 +455,7 @@ def main(
     tpu_from_cli = click.get_current_context().get_parameter_source("tpu") == ParameterSource.COMMANDLINE
     if gpu is not None and tpu_from_cli:
         raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
-    _reject_foreign_flags(backend, _VLLM_ONLY_OPTIONS if backend == "levanter" else _LEVANTER_ONLY_OPTIONS)
+    reject_backend_options(backend, _VLLM_ONLY_OPTIONS if backend == "levanter" else _LEVANTER_ONLY_OPTIONS)
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -543,6 +543,7 @@ def main(
         worker_resources=worker_resources,
         worker_environment=worker_environment,
         cache_ttl_days=0 if no_cache else cache_ttl_days,
+        endpoint_ready_timeout_seconds=wait_timeout,
         max_retries_preemption=max_retries_preemption,
     )
     service = IrisServiceConfig(
@@ -559,9 +560,7 @@ def main(
 
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
-        environment = EnvironmentSpec(
-            setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)]
-        )
+        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
     else:
         environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
 

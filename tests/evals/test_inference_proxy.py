@@ -79,7 +79,7 @@ def test_remote_topology_selection() -> None:
         iris_module._broker_config(0, None)
 
 
-def test_remote_session_refreshes_direct_endpoint(monkeypatch) -> None:
+def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
     endpoint = SimpleNamespace(address="http://10.0.0.2:9000")
     cluster_client = SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [endpoint])
     monkeypatch.setattr(
@@ -97,7 +97,7 @@ def test_remote_session_refreshes_direct_endpoint(monkeypatch) -> None:
         backend_name="vllm",
     )
 
-    assert session.refresh().endpoint.base_url == "http://10.0.0.2:9000/v1"
+    assert session.resolve_model().endpoint.base_url == "http://10.0.0.2:9000/v1"
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:

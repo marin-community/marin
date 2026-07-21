@@ -11,7 +11,6 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
 
 import anyio
 import uvicorn
@@ -150,25 +149,6 @@ class InferenceProxy:
                 headers=forwardable_request_headers(request.headers),
                 timeout_seconds=timeout_seconds,
             )
-        )
-
-    def forward_request(
-        self,
-        path: str,
-        request_json: Mapping[str, Any],
-        *,
-        method: str,
-        timeout_seconds: float | None = None,
-    ) -> Response:
-        forwarded_json = {key: value for key, value in request_json.items() if key not in self._ignored_request_fields}
-        if forwarded_json.get("stream") is True:
-            return JSONResponse({"error": "brokered inference does not support streaming"}, status_code=400)
-        return self.forward_raw_request(
-            path,
-            json.dumps(forwarded_json, separators=(",", ":")).encode(),
-            method=method,
-            headers={"content-type": "application/json"},
-            timeout_seconds=timeout_seconds,
         )
 
     def forward_raw_request(

@@ -19,8 +19,23 @@ from marin.inference.config import (
     VllmSource,
 )
 from marin.inference.iris_cli import main as iris
+from marin.inference.iris_cli import reject_backend_options
 from marin.inference.serve import local_inference
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
+
+_LOCAL_VLLM_OPTIONS = {
+    "launcher": "--launcher",
+    "vllm_source": "--vllm-source",
+    "vllm_version": "--vllm-version",
+    "max_num_batched_tokens": "--max-num-batched-tokens",
+    "vllm_args": "--vllm-arg",
+    "startup_timeout": "--startup-timeout",
+}
+_LOCAL_LEVANTER_OPTIONS = {
+    "max_seqs": "--max-seqs",
+    "page_size": "--page-size",
+    "hbm_utilization": "--hbm-utilization",
+}
 
 
 @click.group(context_settings={"show_default": True})
@@ -72,28 +87,9 @@ def local(
     logging.basicConfig(level=logging.INFO, format="[marin-serve] %(message)s")
     ctx = click.get_current_context()
     if backend == "levanter":
-        vllm_options = (
-            "launcher",
-            "vllm_source",
-            "vllm_version",
-            "max_num_batched_tokens",
-            "vllm_args",
-            "startup_timeout",
-        )
-        typed = [
-            name for name in vllm_options if ctx.get_parameter_source(name) is click.core.ParameterSource.COMMANDLINE
-        ]
-        if typed:
-            flags = ", ".join(f"--{name.replace('_', '-')}" for name in typed)
-            raise click.ClickException(f"{flags} cannot be used with --backend levanter")
+        reject_backend_options(backend, _LOCAL_VLLM_OPTIONS)
     else:
-        levanter_options = ("max_seqs", "page_size", "hbm_utilization")
-        typed = [
-            name for name in levanter_options if ctx.get_parameter_source(name) is click.core.ParameterSource.COMMANDLINE
-        ]
-        if typed:
-            flags = ", ".join(f"--{name.replace('_', '-')}" for name in typed)
-            raise click.ClickException(f"{flags} cannot be used with --backend vllm")
+        reject_backend_options(backend, _LOCAL_LEVANTER_OPTIONS)
 
     launcher_type = VllmLauncherType(launcher)
     source = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM

@@ -134,7 +134,8 @@ launchers. CUDA-only flags fail with other launchers.
 ## Remote inference boundary
 
 The first two arguments are identical to `local_inference`. `IrisConfig` adds
-worker resources, environment, caching, priority, and retry policy:
+worker resources, environment, caching, endpoint-readiness timeout, priority,
+and retry policy:
 
 ```python
 @contextmanager
@@ -186,7 +187,7 @@ current `/v1/*` GET/POST/OPTIONS, hop-by-hop header filtering, blank
 Authorization filtering, raw byte forwarding, status codes, and streaming.
 
 `RemoteInferenceSession` contains the initial `RunningModel`, endpoint name,
-worker handles, resolved serving metadata, and a `refresh()` operation that
+worker handles, resolved serving metadata, and a `resolve_model()` operation that
 re-resolves the registry name. Evalchemy uses the shared submission lifecycle
 and keeps its current connection-failure and endpoint-refresh policy. There is
 no coordinator HTTP server in direct mode.

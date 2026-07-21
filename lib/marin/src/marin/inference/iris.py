@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+_METADATA_BACKEND = "backend"
+_METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 
 
 @dataclass(frozen=True)
@@ -59,7 +61,7 @@ class RemoteInferenceSession:
     backend_name: str
     iris_job: Job | None = None
 
-    def refresh(self) -> RunningModel:
+    def resolve_model(self) -> RunningModel:
         """Resolve the current address after a direct worker restart."""
 
         if self.endpoint_name is None:
@@ -133,12 +135,10 @@ def _prepared_local_inference(
     model: ServedModelConfig,
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
-) -> Iterator[tuple[LocalInferenceSession, int, str]]:
+) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
-    tensor_parallel_size = cast(int, resolved_model.tensor_parallel_size)
-    backend_name = "vllm" if isinstance(engine, VllmEngineConfig) else "levanter"
     with local_inference(resolved_model, engine, num_chips=num_chips) as session:
-        yield session, tensor_parallel_size, backend_name
+        yield session
 
 
 def _server_root(model: RunningModel) -> str:
@@ -197,9 +197,9 @@ def _register_dashboard(
         metadata = {
             "model": model.endpoint.model,
             "kind": "marin-serve",
-            "backend": backend_name,
+            _METADATA_BACKEND: backend_name,
             "accelerator": _accelerator_label(service.iris),
-            "tensor_parallel_size": str(tensor_parallel_size),
+            _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
             "streaming": str(streaming).lower(),
             PROXY_TIMEOUT_METADATA_KEY: str(service.controller_proxy_timeout_seconds),
         }
@@ -214,8 +214,10 @@ def _register_dashboard(
         try:
             yield
         finally:
-            with contextlib.suppress(Exception):
+            try:
                 ctx.registry.unregister(endpoint_id)
+            except Exception:
+                logger.warning("Failed to unregister inference endpoint id=%s", endpoint_id, exc_info=True)
 
 
 def _block_until_timeout(session: LocalInferenceSession, timeout_hours: float) -> None:
@@ -241,16 +243,13 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     configure_logging()
     broker = _broker_config(service.instances, service.broker)
     if broker is None:
-        with _prepared_local_inference(service.model, service.engine, service.iris) as (
-            local_session,
-            tensor_parallel_size,
-            backend_name,
-        ):
+        with _prepared_local_inference(service.model, service.engine, service.iris) as local_session:
+            tensor_parallel_size = cast(int, local_session.tensor_parallel_size)
             with _register_dashboard(
                 service,
                 local_session.model,
                 tensor_parallel_size=tensor_parallel_size,
-                backend_name=backend_name,
+                backend_name=local_session.backend_name,
                 streaming=True,
             ):
                 _block_until_timeout(local_session, service.timeout_hours)
@@ -271,10 +270,6 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             streaming=session.streaming,
         ):
             _block_remote_until_timeout(session, service.timeout_hours)
-
-
-def _run_direct_service(service: IrisServiceConfig) -> None:
-    run_iris_service(service)
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
@@ -331,7 +326,7 @@ def _start_direct_inference(
     job = current_client().submit(
         JobRequest(
             name=f"inference-{run_id}",
-            entrypoint=Entrypoint.from_callable(_run_direct_service, args=(service,)),
+            entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
             resources=iris.worker_resources,
             environment=iris.worker_environment,
             max_retries_failure=iris.max_retries_failure,
@@ -340,9 +335,13 @@ def _start_direct_inference(
         )
     )
     try:
-        address, metadata = _wait_for_endpoint(job, endpoint_name, timeout_seconds=1800)
-        tensor_parallel_size = int(metadata["tensor_parallel_size"])
-        backend_name = metadata["backend"]
+        address, metadata = _wait_for_endpoint(
+            job,
+            endpoint_name,
+            timeout_seconds=iris.endpoint_ready_timeout_seconds,
+        )
+        tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
+        backend_name = metadata[_METADATA_BACKEND]
         yield RemoteInferenceSession(
             model=RunningModel(
                 endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.model),
@@ -357,8 +356,7 @@ def _start_direct_inference(
             iris_job=cast(IrisJobHandle, job).iris_job,
         )
     finally:
-        with contextlib.suppress(Exception):
-            job.terminate()
+        _terminate_job(job)
 
 
 def _run_broker_worker(
@@ -370,12 +368,13 @@ def _run_broker_worker(
     broker: InferenceRequestProvider,
 ) -> None:
     configure_logging()
-    with _prepared_local_inference(model, engine, iris) as (local_session, tensor_parallel_size, backend_name):
+    with _prepared_local_inference(model, engine, iris) as local_session:
+        tensor_parallel_size = cast(int, local_session.tensor_parallel_size)
         broker.register_worker(
             worker_id,
             InferenceWorkerMetadata(
                 tensor_parallel_size=tensor_parallel_size,
-                backend_name=backend_name,
+                backend_name=local_session.backend_name,
             ),
         )
         worker = InferenceWorker(
@@ -461,7 +460,15 @@ def _start_brokered_inference(
             )
     finally:
         for job in worker_jobs:
-            with contextlib.suppress(Exception):
-                job.terminate()
-        with contextlib.suppress(Exception):
+            _terminate_job(job)
+        try:
             broker_group.shutdown()
+        except Exception:
+            logger.warning("Failed to shut down inference broker actor", exc_info=True)
+
+
+def _terminate_job(job: JobHandle) -> None:
+    try:
+        job.terminate()
+    except Exception:
+        logger.warning("Failed to terminate inference job job_id=%s", job.job_id, exc_info=True)

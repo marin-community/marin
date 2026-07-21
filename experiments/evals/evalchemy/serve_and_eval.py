@@ -1,32 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve a model, run evalchemy against its OpenAI URL, tear the server down.
+"""Run Evalchemy suites against a shared remote inference session.
 
-The eval is decoupled from the model backend by an OpenAI-compatible URL (issue #4827):
-``remote_inference`` starts vLLM or Levanter on an Iris TPU/GPU slice, and an evalchemy child job
-(the ``:evalchemy-tpu`` container on a CPU slice) calls it with
-``eval.eval --model local-completions``. Evalchemy is the sole eval client.
-
-One parent orchestrator starts a remote inference session, then one eval child per eval unit calls
-the same endpoint (:func:`run_eval_units` serves once for a whole suite)::
+One parent starts vLLM or Levanter on Iris, then one Evalchemy child per eval unit calls the same
+OpenAI-compatible endpoint (:func:`run_eval_units` serves once for a whole suite)::
 
     parent (CPU, marin)  ──remote_inference──▶  local backend (TPU/GPU)  ──▶ OpenAI endpoint
                          ──eval child(s)─────▶  :evalchemy-tpu (CPU)  ──local-completions──▶ endpoint
 
-:func:`serve_model` enters the shared remote lifecycle and yields its in-cluster address. The eval
-child is pinned to the serving region, so it reaches that address over the same-cluster VPC without
-a controller proxy or capability token. Leaving the context stops the remote session eagerly; Iris
-also cleans up child jobs when the parent ends.
-
-The eval child runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare Python with
-no cloudpickle. Only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec``, so it runs
-:mod:`experiments.evals.evalchemy.run_evalchemy_client` as a plain command under that interpreter,
-with its config passed as JSON in an env var.
-
-Top-level imports stay light. ``remote_inference`` cloudpickles model and engine configs; the
-accelerator worker imports ``vllm_backend`` or ``levanter_backend`` only when it enters
-``local_inference``.
+The eval children stay in the serving region and call the in-cluster address directly. Leaving the
+session stops the accelerator jobs; Iris also cleans them up when the parent ends.
 """
 
 from __future__ import annotations
@@ -80,6 +64,7 @@ _ENDPOINT_POLL_SECONDS = 10.0
 # logprob bursts; generation-only traffic was unaffected), so larger prefill budgets are not safe
 # until the fork's prompt-logprobs handling is fixed.
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
+_QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 # lm-eval's local-completions client concurrency (parallel in-flight requests to the endpoint).
 DEFAULT_NUM_CONCURRENT = 16
 # Credentials the child jobs need (HF model/dataset downloads, wandb logging); the parent propagates
@@ -175,7 +160,7 @@ class ServeSpec:
     """vLLM prefill budget per engine step. The 512 default is conservative: 2048 boots on the current
     TPU stack but prompt-logprobs traffic then kills the engine within minutes."""
     vllm_extra_args: tuple[str, ...] = ()
-    """Extra flags forwarded to ``vllm serve`` (``VllmBackend.extra_args``); empty for the common case.
+    """Extra flags forwarded to ``vllm serve`` (``VllmEngineConfig.extra_args``); empty for the common case.
     Use it for models the portable defaults miss:
 
     - 256-expert Grug MoE export: ``--data-parallel-size N --enable-expert-parallel
@@ -190,7 +175,7 @@ class ServeSpec:
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
     Passed to :class:`~marin.inference.config.ServedModelConfig`."""
     instances: int = 1
-    broker: bool = False
+    broker: BrokerConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -263,7 +248,7 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
                 source=VllmSource.MARIN_FORK,
                 startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
                 max_num_batched_tokens=spec.max_num_batched_tokens,
-                extra_args=(*spec.vllm_extra_args, "--uvicorn-log-level", "warning"),
+                extra_args=(*spec.vllm_extra_args, *_QUIET_VLLM_ARGS),
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -286,13 +271,12 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
             engine = VllmEngineConfig(
                 startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
                 max_num_batched_tokens=spec.max_num_batched_tokens,
-                extra_args=(*spec.vllm_extra_args, "--uvicorn-log-level", "warning"),
+                extra_args=(*spec.vllm_extra_args, *_QUIET_VLLM_ARGS),
             )
             environment = create_environment(extras=["tpu", "vllm"], env_vars=_propagated_env())
         else:
             engine = LevanterEngineConfig()
             environment = create_environment(extras=["tpu"], env_vars=_propagated_env())
-    broker = BrokerConfig() if spec.broker or spec.instances > 1 else None
     return _InferenceLaunch(
         model=ServedModelConfig(
             model=model,
@@ -303,9 +287,13 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
             chat_template_content=spec.chat_template_content,
         ),
         engine=engine,
-        iris=IrisConfig(worker_resources=resources, worker_environment=environment),
+        iris=IrisConfig(
+            worker_resources=resources,
+            worker_environment=environment,
+            endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+        ),
         instances=spec.instances,
-        broker=broker,
+        broker=spec.broker,
     )
 
 

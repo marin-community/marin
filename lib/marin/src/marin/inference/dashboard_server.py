@@ -12,8 +12,8 @@ does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
-slice (see :mod:`marin.inference.backend`) with the response streamed back
-verbatim, so server-sent-event token streaming works end to end.
+slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
+events end to end; brokered sessions return buffered JSON and reject streaming.
 """
 
 import dataclasses
@@ -21,7 +21,7 @@ import importlib.resources
 import logging
 import socket
 import threading
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 

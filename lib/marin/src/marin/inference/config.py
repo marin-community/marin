@@ -89,7 +89,6 @@ InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig
 
 @dataclass(frozen=True)
 class InferenceProxyConfig:
-    host: str = "127.0.0.1"
     port: int = 0
     request_timeout_seconds: float = 300.0
     readiness_timeout_seconds: float = 300.0
@@ -170,11 +169,18 @@ class IrisConfig:
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
     cache_ttl_days: int = 14
+    endpoint_ready_timeout_seconds: float = 1800.0
     priority: int = 0
     max_retries_failure: int = 1
     max_retries_preemption: int = 10
 
     def __post_init__(self) -> None:
+        if self.cache_ttl_days < 0:
+            raise ValueError("cache_ttl_days must not be negative")
+        if self.endpoint_ready_timeout_seconds <= 0:
+            raise ValueError("endpoint_ready_timeout_seconds must be positive")
+        if self.max_retries_failure < 0 or self.max_retries_preemption < 0:
+            raise ValueError("worker retry counts must not be negative")
         # Lazy artifact fingerprinting substitutes a symbolic runtime-resource
         # marker before concrete resources are restored at execution time.
         if not isinstance(self.worker_resources, ResourceConfig):
@@ -186,7 +192,3 @@ class IrisConfig:
             raise ValueError("Inference workers require an accelerator")
         if isinstance(device, TpuConfig) and device.vm_count() != 1:
             raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
-        if self.cache_ttl_days < 0:
-            raise ValueError("cache_ttl_days must not be negative")
-        if self.max_retries_failure < 0 or self.max_retries_preemption < 0:
-            raise ValueError("worker retry counts must not be negative")
