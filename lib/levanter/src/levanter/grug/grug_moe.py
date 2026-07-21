@@ -126,6 +126,10 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+        chunks = int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
+        if chunks > 1:
+            out, dropped = self._chunked_moe(x, selected_experts, combine_weights, chunks, mesh)
+            return (out, dropped) if report_capacity_overflow else out
         if self.w_gate_up is not None:
             w_gate_up = self.w_gate_up
         elif os.environ.get("SCALE_SPLIT_GATE_UP_GATHER") == "1":
@@ -153,6 +157,53 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
         )
+
+    def _chunked_moe(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        chunks: int,
+        mesh: jax.sharding.AbstractMesh | None,
+    ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+        """Run the routed MoE as ``chunks`` expert-groups. Each chunk gathers only its slice of the
+        expert weights (1/chunks the size, so the FSDP all-gather fits the scheduler's overlap memory
+        budget), and chunk k+1's gather can overlap chunk k's GEMM. Tokens routed to experts outside a
+        chunk are remapped to the out-of-range index ``per`` (dropped by ``bincount(length=per)``, so
+        no wasted compute) with zero combine weight; per-chunk outputs sum to the full MoE result.
+        """
+        fused, w_gate, w_up = self.w_gate_up, self.w_gate, self.w_up
+        per = self.w_down.shape[0] // chunks
+        out: jax.Array | None = None
+        dropped = jnp.zeros((), jnp.int32)
+        for c in range(chunks):
+            lo = c * per
+            if fused is not None:
+                w_gate_up_c = fused[lo : lo + per]
+            elif w_gate is not None and w_up is not None:
+                w_gate_up_c = jnp.concatenate([w_gate[lo : lo + per], w_up[lo : lo + per]], axis=-1)
+            else:
+                raise ValueError("MoEExpertMlp has neither fused w_gate_up nor separate w_gate/w_up")
+            w_down_c = self.w_down[lo : lo + per]
+            in_chunk = (selected_experts >= lo) & (selected_experts < lo + per)
+            selected_c = jnp.where(in_chunk, selected_experts - lo, per)
+            combine_c = jnp.where(in_chunk, combine_weights, jnp.zeros_like(combine_weights))
+            out_c, dropped_c = moe_mlp(
+                x,
+                selected_c,
+                combine_c,
+                w_gate_up_c,
+                w_down_c,
+                activation=self.activation,
+                implementation=self.implementation,
+                mesh=mesh,
+                capacity_factor=self.capacity_factor,
+                report_capacity_overflow=True,
+            )
+            out = out_c if out is None else out + out_c
+            dropped = dropped + dropped_c
+        assert out is not None
+        return out, dropped
 
 
 @named_call
