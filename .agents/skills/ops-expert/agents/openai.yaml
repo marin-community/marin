@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ops Expert"
+  short_description: "Investigate Marin operations with read-only evidence"
+  default_prompt: "Use $ops-expert to investigate this operational case and publish a structured result."
