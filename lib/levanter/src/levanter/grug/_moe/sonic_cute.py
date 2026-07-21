@@ -155,13 +155,20 @@ def _moe_mlp_local_sonic_cute_chunked(
     w_pad = jnp.pad(w_dispatch, (0, capacity))
     token_pad = jnp.pad(token_dispatch, (0, capacity))
 
+    # w_down was already async/overlapped in the unchunked baseline (only w_up_gate's gather was
+    # exposed), so gather it ONCE as a single collective and slice it locally per chunk. Only
+    # w_up_gate is chunked. This drops the per-layer MoE collective count from 2*chunks to chunks+1,
+    # removing the w_down over-chunking overhead while still splitting the one gather that was exposed.
+    with jax.named_scope("gather_down"):
+        w2_full = jax.lax.all_gather(moe_w2_local, data_axis_name, axis=2, tiled=True)
+
     out = jnp.zeros_like(x)
     for c in range(chunks):
         lo = c * per
         hi = lo + per
         with jax.named_scope("gather_chunk"):
             w13_chunk = jax.lax.all_gather(moe_w13_local[lo:hi], data_axis_name, axis=1, tiled=True)
-            w2_chunk = jax.lax.all_gather(moe_w2_local[lo:hi], data_axis_name, axis=2, tiled=True)
+        w2_chunk = w2_full[lo:hi]
         w13_il = _interleave_gate_up(w13_chunk, moe_dim)
 
         start = cu[lo]
