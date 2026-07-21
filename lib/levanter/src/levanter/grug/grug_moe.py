@@ -14,6 +14,7 @@ Implementation overview:
   keeps the stable public API used by Grug model code and benchmarks.
 """
 
+import os
 from collections.abc import Callable
 from functools import partial
 
@@ -109,7 +110,19 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        if os.environ.get("SCALE_SPLIT_GATE_UP_GATHER") == "1":
+            # Gather w_gate and w_up as two independent all-gathers (then concat the gathered
+            # results locally), instead of concatenating first and gathering one monolithic
+            # w_gate_up. Two smaller collectives are easier for XLA to schedule/overlap; the
+            # concat below is a cheap local op on already-replicated tensors, so moe_mlp's own
+            # reshard becomes a no-op.
+            m = mesh if mesh is not None else _current_mesh()
+            replicated = P(*(None for _ in range(self.w_gate.ndim)))
+            w_gate = _reshard_for_shard_map(self.w_gate, m, replicated)
+            w_up = _reshard_for_shard_map(self.w_up, m, replicated)
+            w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+        else:
+            w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
             selected_experts,
