@@ -189,3 +189,65 @@ def _moe_mlp_local_sonic_cute_chunked(
         with jax.named_scope("scatter_chunk"):
             out = out.at[token_seg].add(out_dispatch * w_seg[:, None], mode="drop")
     return out, _zero_dropped_assignments()
+
+
+def _moe_mlp_local_sonic_cute_intermediate_chunked(
+    x: Float[Array, "T H"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    moe_w13_local: Float[Array, "E Hlocal I2"],
+    moe_w2_local: Float[Array, "E I Hlocal"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    chunks: int,
+    data_axis_name: str,
+) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    """Dropless chunked variant that partitions the expert MLP's INTERMEDIATE dim into ``chunks``.
+
+    The expert-dim chunker (:func:`_moe_mlp_local_sonic_cute_chunked`) caps each expert-group at a
+    static ``capacity`` and drops overflow. This variant keeps every ``(token, expert)`` assignment:
+    dispatch runs once over the full sorted buffer, and for each static intermediate slice
+    ``[ilo, ihi)`` we all-gather only that slice's ``w13`` columns (gate ``[ilo:ihi]`` + up
+    ``[I+ilo:I+ihi]`` -> ``[E, H, 2I/chunks]``) and ``w2`` rows (``[E, I/chunks, H]``) — a
+    ``1/chunks``-size collective that hides under the previous slice's GEMM — run the full token
+    buffer through the QuACK up/SwiGLU/down over just that slice, and accumulate the partial
+    down-projection outputs. The down GEMM sums over the intermediate dim, so the full expert output
+    is the sum over slices; there is no capacity and nothing is dropped (exact up to float summation
+    order). Total FLOPs are unchanged; the only shape cost is a thinner down-GEMM contraction
+    (``K = I/chunks``).
+
+    The intermediate dim is not sharded here (the ``model`` axis is absent under pure FSDP), so
+    ``moe_w13_local`` is ``[E, H/data, 2I]`` and ``moe_w2_local`` is ``[E, I, H/data]`` with the full
+    intermediate present locally; only ``H`` is gathered over ``data_axis_name``.
+    """
+    moe_dim = moe_w2_local.shape[1]
+    if moe_dim % chunks != 0:
+        raise ValueError(f"intermediate_dim={moe_dim} must be divisible by SCALE_MOE_EXPERT_CHUNKS={chunks}")
+
+    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+        x, selected_experts, combine_weights, num_experts=num_experts
+    )
+    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+    per_i = moe_dim // chunks
+
+    out_dispatch = jnp.zeros_like(x_dispatch)
+    for c in range(chunks):
+        ilo = c * per_i
+        hi = ilo + per_i
+        with jax.named_scope("gather_ichunk"):
+            # gate columns [ilo:hi] and up columns [I+ilo:I+hi] -> [E, H/data, 2*per_i], then gather H.
+            w13_slice = jnp.concatenate(
+                [moe_w13_local[:, :, ilo:hi], moe_w13_local[:, :, moe_dim + ilo : moe_dim + hi]], axis=-1
+            )
+            w13_chunk = jax.lax.all_gather(w13_slice, data_axis_name, axis=1, tiled=True)
+            w2_chunk = jax.lax.all_gather(moe_w2_local[:, ilo:hi, :], data_axis_name, axis=2, tiled=True)
+        w13_il = _interleave_gate_up(w13_chunk, per_i)
+        with jax.named_scope("moe_up_down_quack_ichunk"):
+            out_dispatch = out_dispatch + _expert_mlp(x_dispatch, w13_il, w2_chunk, group_sizes, cu)
+
+    out_dispatch = tree_checkpoint_name(out_dispatch, _CHECKPOINT_DISPATCH_OUTPUT)
+    with jax.named_scope("scatter"):
+        out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+    return out, _zero_dropped_assignments()
