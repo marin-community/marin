@@ -798,10 +798,20 @@ class Block(eqx.Module):
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = mlp(mlp_in)
-        if self.shared is not None:
+        if os.environ.get("SCALE_SHARED_AFTER_MOE") == "1" and self.shared is not None:
+            # Serialize the shared expert AFTER the routed MoE: commit the MoE output to the residual
+            # first, then have the shared expert read the updated x (re-normalized). This adds a data
+            # dependency on the MoE result, so XLA cannot co-schedule the shared dense GEMM alongside
+            # the routed expert-weight all-gather; the shared GEMM runs strictly after the MoE.
+            x = x + mlp_out
+            shared_in = self.mlp_gated_norm(self.rms_mlp(x))
             for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+                x = x + shared_expert(shared_in, activation=ActivationFunctionEnum.silu)
+        else:
+            if self.shared is not None:
+                for shared_expert in self.shared:
+                    mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+            x = x + mlp_out
         return x, router_stats
 
 
