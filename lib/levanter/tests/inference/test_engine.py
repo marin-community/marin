@@ -29,8 +29,10 @@ class DummyModel(eqx.Module):
         self.eos = eos_id
 
     def initial_cache(self, spec: PageTableSpec, *, dtype):
-        # Use trivial cache dimensions; the cache is unused by this dummy model
-        kv_heads = Axis("kv_head", 1)
+        # The cache contents are unused by this dummy model, so only its shardability matters.
+        # `KvPageCache.init` packs K and V into a single `2 * kv_heads` axis, so one kv head per
+        # device keeps that axis divisible by a `model` mesh axis sized to the device count.
+        kv_heads = Axis("kv_head", jax.device_count())
         head_size = Axis("embed", 1)
         return KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
 
