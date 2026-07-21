@@ -20,7 +20,8 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from iris.runtime.jax_init import initialize_jax
+from iris.cluster.client.job_info import get_job_info
+from iris.runtime.jax_init import _initialize_supervised_jax
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -43,9 +44,16 @@ def initialize_distributed() -> None:
         return
 
     repeat = int(os.environ.get(_REPEAT_ENV, "0"))
-    initialize_jax(
+    # Bypass the public initializer's per-process telemetry HTTP server. That
+    # service is outside the workload and its ephemeral-port selection can race
+    # when several local ranks start together.
+    _initialize_supervised_jax(
+        jax,
+        get_job_info(),
+        port=8476,
         endpoint_name=f"b200_nccl_fast_restart_{repeat}",
         poll_timeout=180,
+        poll_interval=2.0,
     )
 
 

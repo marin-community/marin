@@ -41,6 +41,7 @@ for ((repeat = 1; repeat <= repeat_count; repeat++)); do
     if [[ "${repeat_status}" -ne 0 ]]; then
         status="${repeat_status}"
         ((fail_count += 1))
+        break
     else
         ((pass_count += 1))
     fi

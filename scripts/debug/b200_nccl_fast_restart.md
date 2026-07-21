@@ -19,7 +19,8 @@ launcher runs it as three fresh process groups in one bounded allocation,
 shares the JAX compilation cache across repeats, records software and hardware
 versions, and limits each repeat to 180 seconds. Natural process exit is
 intentional; an explicit `jax.distributed.shutdown()` would change the teardown
-path under test.
+path under test. The runner stops after the first failed repeat so distributed
+tasks cannot mix process generations.
 
 Run `run_b200_nccl_fast_restart.sh` inside a bounded Iris B200 job. Start with
 `MARIN_REPRO_PROCESSES_PER_TASK=2`; submission commands and run identifiers
