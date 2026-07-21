@@ -57,7 +57,6 @@ from iris.cluster.types import (
     JobName,
     ResourceSpec,
     gpu_device,
-    is_job_finished,
     tpu_device,
 )
 from iris.rpc import job_pb2
@@ -101,7 +100,7 @@ def _terminate_jobs(
     terminated: list[JobName] = []
     for raw in job_ids:
         if prefix:
-            terminated.extend(client.terminate_prefix(raw, exclude_finished=True))
+            terminated.extend(client.terminate_prefix(raw))
             continue
 
         name = JobName.from_wire(raw)
@@ -1118,10 +1117,7 @@ def _stop_jobs(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run:
         if prefix:
             client = _remote_client(ctx)
             matches = [
-                job.job_id
-                for target in targets
-                for job in client.list_jobs(prefix=target)
-                if not is_job_finished(job.state)
+                job_name.to_wire() for target in targets for job_name in client.active_job_names_for_prefix(target)
             ]
         else:
             matches = [JobName.from_wire(target).to_wire() for target in targets]
