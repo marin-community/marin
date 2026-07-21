@@ -788,8 +788,12 @@ class Block(eqx.Module):
             # gather sitting exposed on the compute stream just before the expert GEMM. moe_mlp's
             # internal reshard of the already-replicated weights then becomes a no-op.
             mlp = _prefetch_expert_weights(mlp)
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        # SCALE_MOE_ONLY strips the attention sub-block so each layer is norm -> routed MoE ->
+        # residual only, isolating MoE throughput (pair with SCALE_SHARED_INTERMEDIATE=0 to also
+        # drop the shared expert). The attention-only args (mask/use_pko/disable_rope) go unused.
+        if os.environ.get("SCALE_MOE_ONLY") != "1":
+            attn_in = self.attn_gated_norm(self.rms_attn(x))
+            x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = mlp(mlp_in)
         if os.environ.get("SCALE_SHARED_AFTER_MOE") == "1" and self.shared is not None:
