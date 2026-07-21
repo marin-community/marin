@@ -93,6 +93,8 @@ class EvalGroupParams:
 
     group_id: str
     user: str
+    version: str | None
+    description: str | None
     records_prefix: str
     session: EvalSession
     runs: tuple[EvalRunParams, ...]
@@ -122,6 +124,8 @@ def _build_record(
         group_id=group.group_id,
         created_at=run.created_at,
         user=group.user,
+        version=group.version,
+        description=group.description,
         model=group.model_ref,
         evaluation=run.eval_ref,
         hardware=group.hardware_ref,
@@ -201,6 +205,8 @@ class LaunchSpec:
     limit: int | None
     records_prefix: str | None
     cluster: str
+    version: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -365,6 +371,8 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
     return EvalGroupParams(
         group_id=_group_id(first.model_key),
         user=user,
+        version=spec.version,
+        description=spec.description,
         records_prefix=records_prefix,
         session=EvalSession(
             model=first.model.location,

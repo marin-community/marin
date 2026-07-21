@@ -18,11 +18,12 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 import sqlalchemy
 from marin.evaluation.records import EvalRunRecord
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Double,
@@ -77,6 +78,18 @@ eval_metrics = Table(
     Column("metric", Text, nullable=False),
     Column("value", Double, nullable=False),
     PrimaryKeyConstraint("run_id", "task", "metric"),
+)
+
+# Per-model UI state, set from the dashboard and NEVER written by the record ingestor. ``eval_runs`` is
+# a rebuildable index fully re-upserted every ingest pass, so mutable dashboard state (an archived
+# model dropped from the headline matrix) lives in this side table keyed by model name instead.
+model_state = Table(
+    "model_state",
+    metadata,
+    Column("model_name", Text, primary_key=True),
+    Column("archived", Boolean, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("updated_by", Text),
 )
 
 
@@ -145,8 +158,32 @@ def resolve_db_config() -> DbConfig | None:
 
 
 def ensure_schema(engine: Engine) -> None:
-    """Create the ``eval_runs`` and ``eval_metrics`` tables if they do not already exist."""
+    """Create the ``eval_runs``, ``eval_metrics``, and ``model_state`` tables if they do not exist."""
     metadata.create_all(engine)
+
+
+def fetch_archived_models(engine: Engine) -> set[str]:
+    """The set of model names currently archived (hidden from the headline matrix by default)."""
+    stmt = sqlalchemy.select(model_state.c.model_name).where(model_state.c.archived.is_(True))
+    with engine.begin() as conn:
+        return {row[0] for row in conn.execute(stmt).all()}
+
+
+def set_model_archived(engine: Engine, model_name: str, archived: bool, updated_by: str | None) -> None:
+    """Upsert one model's archive flag in the ``model_state`` side table."""
+    values = {
+        "model_name": model_name,
+        "archived": archived,
+        "updated_at": datetime.now(UTC),
+        "updated_by": updated_by,
+    }
+    insert = pg_insert(model_state).values(**values)
+    upsert = insert.on_conflict_do_update(
+        index_elements=[model_state.c.model_name],
+        set_={key: insert.excluded[key] for key in values if key != "model_name"},
+    )
+    with engine.begin() as conn:
+        conn.execute(upsert)
 
 
 def run_row(record: EvalRunRecord) -> dict:

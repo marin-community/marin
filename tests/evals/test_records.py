@@ -28,6 +28,8 @@ _RECORD = EvalRunRecord(
     group_id="20260719-091431-qwen3-8b-7565",
     created_at="2026-07-19T09:14:31.123456+00:00",
     user="russell",
+    version="2026.07.19",
+    description="baseline sweep",
     model=ModelRef(name="qwen3-8b", location="gs://marin-models/qwen3-8b", backend="vllm"),
     evaluation=EvalRef(
         name="gsm8k",
@@ -69,6 +71,8 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     }
     assert raw["status"] == "succeeded"
     assert isinstance(raw["status"], str)
+    assert raw["version"] == "2026.07.19"
+    assert raw["description"] == "baseline sweep"
 
 
 def test_read_record_parses_a_previously_written_record_json(tmp_path):
