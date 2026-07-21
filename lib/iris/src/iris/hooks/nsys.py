@@ -5,7 +5,7 @@
 
 ``NsysHook`` wraps a command in :mod:`iris.hooks.nsys_main`, which runs it
 under ``nsys profile`` on the selected units and uploads the report. The ``nsys``
-binary comes from the task image (``iris-task-gpu``), so there is nothing to install.
+binary is baked into the iris task image, so there is nothing to install.
 
 Scope follows composition. Wrapped around the multigpu supervisor, one report covers
 every rank the task runs; passed as that supervisor's ``wrap_child``, each child

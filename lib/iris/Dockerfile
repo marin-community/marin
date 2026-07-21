@@ -216,24 +216,11 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 ARG IRIS_PROVENANCE={}
 ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
-WORKDIR /app
-
-
-# ---------------------------------------------------------------------------
-# GPU task image: the task base with the Nsight Systems CLI baked in, so GPU
-# jobs profile without a ~450MB per-task fetch and iris carries no install
-# script. Selected automatically for GPU jobs via the cluster's
-# `default_gpu_image` (see iris.cluster.backends.k8s.tasks). Built FROM `task`,
-# so a profiled run observes the real task environment, just with `nsys` on PATH.
-# ---------------------------------------------------------------------------
-FROM task AS task-gpu
-
-LABEL org.opencontainers.image.description="Iris GPU task image (task base + Nsight Systems CLI)"
-
 # Nsight Systems CLI, extracted from NVIDIA's deb (the target binary is
 # self-contained; apt-installing it pulls the whole Qt/GUI chain). Arch-aware:
 # `sbsa` on Grace/aarch64, `x86_64` elsewhere. Kept in sync with the version the
-# reports are opened against.
+# reports are opened against. Baked into the one task image so a GPU job can
+# profile with `nsys` already on PATH and iris needs no notion of a GPU image.
 ARG NSYS_VERSION=2026.1.3
 ARG NSYS_BUILD=2026.1.3.425-1
 RUN set -eux; \
@@ -248,3 +235,5 @@ RUN set -eux; \
     rm -f /tmp/nsys.deb; \
     ln -s "$(ls /opt/nsight/opt/nvidia/nsight-systems/${NSYS_VERSION}/target-linux-*/nsys | head -1)" /usr/local/bin/nsys; \
     nsys --version
+
+WORKDIR /app

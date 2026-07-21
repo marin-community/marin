@@ -5,8 +5,8 @@
 
 ``python -m iris.hooks.nsys_main [--tasks SPEC] [--output-uri URI] -- <argv>`` runs ``<argv>``
 under ``nsys profile`` when this unit is selected, and execs ``<argv>`` unchanged
-otherwise. iris is a dumb scheduler and does not inject this; a GPU image (``iris-task-gpu``)
-bakes the ``nsys`` binary in, and the caller invokes the wrapper. Without ``--output-uri``
+otherwise. iris is a dumb scheduler and does not inject this; the ``nsys`` binary is
+baked into the task image, and the caller invokes the wrapper. Without ``--output-uri``
 the report goes to the cluster's temp bucket, resolved from the task env
 (see :func:`default_output_uri`).
 
@@ -158,14 +158,14 @@ def workdir() -> Path:
 
 
 def resolve_nsys_bin() -> str:
-    """Return the ``nsys`` binary from PATH — the GPU task image bakes it in.
+    """Return the ``nsys`` binary from PATH — the iris task image bakes it in.
 
     Raises:
-        RuntimeError: If ``nsys`` is not on PATH (the job is not using a GPU image).
+        RuntimeError: If ``nsys`` is not on PATH (a task image without it baked in).
     """
     on_path = shutil.which("nsys")
     if not on_path:
-        raise RuntimeError("no nsys on PATH; run on a GPU image (e.g. iris-task-gpu) that bakes it in")
+        raise RuntimeError("no nsys on PATH; run on the iris task image, which bakes it in")
     return on_path
 
 

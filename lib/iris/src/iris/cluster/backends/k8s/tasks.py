@@ -33,7 +33,6 @@ from iris.cluster.backends.k8s.node_metrics import (
     NodeStatsCollector,
     NodeTarget,
 )
-from iris.cluster.config import GPU_TASK_IMAGE
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -424,7 +423,6 @@ class PodConfig:
 
     namespace: str
     default_image: str
-    default_gpu_image: str = GPU_TASK_IMAGE
     # Image for the log-shipper sidecar. The task default_image is a bare runtime
     # that only gains the iris package after the task's own `uv sync`, so the
     # sidecar instead runs the iris controller image (iris + finelog installed),
@@ -711,22 +709,6 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
-def _wants_gpu(run_req: job_pb2.RunTaskRequest) -> bool:
-    """Whether the task requests a GPU device (as opposed to CPU/TPU)."""
-    return (
-        run_req.HasField("resources")
-        and run_req.resources.HasField("device")
-        and run_req.resources.device.HasField("gpu")
-    )
-
-
-def _default_task_image(run_req: job_pb2.RunTaskRequest, config: PodConfig) -> str:
-    """Cluster-default image for a task: the GPU image for GPU jobs."""
-    if _wants_gpu(run_req):
-        return config.default_gpu_image
-    return config.default_image
-
-
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -737,10 +719,10 @@ def _build_pod_manifest(
     pod_name = _pod_name(task_id, attempt_id)
 
     namespace = config.namespace
-    # Per-task image override (RunTaskRequest.task_image) wins. Otherwise a GPU job
-    # (device.gpu request) gets GPU_TASK_IMAGE and everything else default_image. The
-    # init container keeps default_image since it runs iris's own bundle_fetch tooling.
-    task_image = run_req.task_image or _default_task_image(run_req, config)
+    # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
+    # cluster default. GPU tooling (nsys) is baked into the task image, so a GPU
+    # job needs no special image and iris does not inspect the resource request.
+    task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -2137,7 +2119,6 @@ class K8sTaskProvider:
     kubectl: K8sService
     namespace: str
     default_image: str
-    default_gpu_image: str = GPU_TASK_IMAGE
     # Iris controller image, used for the log-shipper sidecar (see PodConfig).
     logship_image: str = ""
     cache_dir: str = "/cache"
@@ -2546,7 +2527,6 @@ class K8sTaskProvider:
         return PodConfig(
             namespace=self.namespace,
             default_image=self.default_image,
-            default_gpu_image=self.default_gpu_image,
             logship_image=self.logship_image,
             cache_dir=self.cache_dir,
             service_account=self.service_account,

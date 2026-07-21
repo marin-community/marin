@@ -35,7 +35,6 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
     _task_update_from_pod,
 )
-from iris.cluster.config import GPU_TASK_IMAGE
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
@@ -139,24 +138,6 @@ def test_build_pod_manifest_honors_task_image_override():
     req.task_image = "myrepo/custom:v9"
     manifest = _build_pod_manifest(req, pod_config(default_image="myrepo/iris:latest"))
     assert manifest["spec"]["containers"][0]["image"] == "myrepo/custom:v9"
-
-
-def test_build_pod_manifest_uses_gpu_image_for_gpu_jobs():
-    """A GPU job gets the GPU image (GPU tooling baked in) with no --task-image;
-    a CPU job keeps default_image; an explicit override wins over both."""
-    cfg = pod_config(default_image="repo/task:latest")
-
-    gpu = make_run_req("/test-job/0")
-    gpu.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-    assert _build_pod_manifest(gpu, cfg)["spec"]["containers"][0]["image"] == GPU_TASK_IMAGE
-
-    cpu = make_run_req("/test-job/0")
-    assert _build_pod_manifest(cpu, cfg)["spec"]["containers"][0]["image"] == "repo/task:latest"
-
-    override = make_run_req("/test-job/0")
-    override.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-    override.task_image = "repo/mine:v1"
-    assert _build_pod_manifest(override, cfg)["spec"]["containers"][0]["image"] == "repo/mine:v1"
 
 
 def test_build_pod_manifest_env_vars():
