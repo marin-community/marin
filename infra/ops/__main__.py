@@ -29,6 +29,8 @@ def main() -> None:
         raise ValueError("agent_mode must be stub or loom")
     repo_revision = config.require("repo_revision")
     skill_revision = config.require("skill_revision")
+    custom_domain = config.get("custom_domain")
+    public_url = f"https://{custom_domain}" if custom_domain else config.require("public_url")
     provider = gcp.Provider("gcp", project=PROJECT)
 
     cloudsql = pulumi.StackReference(CLOUDSQL_STACK)
@@ -45,7 +47,7 @@ def main() -> None:
         "OPS_AGENT_MODE": agent_mode,
         "OPS_REPO_REVISION": repo_revision,
         "OPS_SKILL_REVISION": skill_revision,
-        "OPS_PUBLIC_URL": "https://ops.oa.dev",
+        "OPS_PUBLIC_URL": public_url,
     }
     secrets = [
         SecretEnv(name="PGPASSWORD", secret="cloudsql-ops-app-password"),
@@ -80,7 +82,6 @@ def main() -> None:
     pulumi.export("ui_url", ui.uri)
     pulumi.export("image", ui.image_ref)
 
-    custom_domain = config.get("custom_domain")
     if custom_domain:
         dns_zone_id = config.require("dns_zone_id")
         domain_mapping = gcp.cloudrun.DomainMapping(

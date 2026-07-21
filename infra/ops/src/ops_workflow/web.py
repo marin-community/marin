@@ -11,9 +11,8 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
 
-from rigging.log_setup import BufferedLogRecord
+from rigging.log_setup import LogBuffer
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -30,12 +29,6 @@ MAX_QUESTION_BYTES = 16 * 1024
 DIAGNOSTIC_LOG_LIMIT = 500
 DIAGNOSTIC_POLL_LIMIT = 60
 DIAGNOSTIC_ESCALATION_LIMIT = 60
-
-
-class LogBuffer(Protocol):
-    """Read-only subset of rigging's process log buffer used by the API."""
-
-    def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
 
 
 @dataclass(frozen=True)

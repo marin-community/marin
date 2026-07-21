@@ -15,6 +15,7 @@ MAX_SUMMARY_BYTES = 8_000
 MAX_REASON_BYTES = 2_000
 MAX_NEXT_STEP_BYTES = 4_000
 MAX_EVIDENCE_ITEMS = 20
+MAX_EVIDENCE_FIELD_BYTES = 2_000
 EnumValue = TypeVar("EnumValue", bound=StrEnum)
 
 
@@ -111,8 +112,8 @@ def _evidence(value: object) -> tuple[ResultEvidence, ...]:
         item = cast(Mapping[str, object], raw)
         items.append(
             ResultEvidence(
-                claim=_bounded_string(item, "claim", 2_000),
-                source=_bounded_string(item, "source", 2_000),
+                claim=_bounded_string(item, "claim", MAX_EVIDENCE_FIELD_BYTES),
+                source=_bounded_string(item, "source", MAX_EVIDENCE_FIELD_BYTES),
             )
         )
     return tuple(items)

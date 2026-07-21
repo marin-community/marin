@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local and production command line for the ops workflow spike."""
+"""Local and production command line for the ops workflow."""
 
 import argparse
 import logging

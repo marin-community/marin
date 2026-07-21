@@ -75,7 +75,7 @@ async def test_webhook_failure_does_not_expose_secret_url(monkeypatch: pytest.Mo
     secret_url = "https://hooks.slack.com/services/secret-token"
     response = httpx.Response(500, request=httpx.Request("POST", secret_url))
 
-    async def fail_request(*args: object, **kwargs: object) -> httpx.Response:
+    async def fail_request(*_args: object, **_kwargs: object) -> httpx.Response:
         return response
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fail_request)

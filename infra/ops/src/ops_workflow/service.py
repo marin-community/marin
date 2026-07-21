@@ -8,7 +8,7 @@ import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from ops_workflow.loom import AgentGateway, ChatSnapshot
+from ops_workflow.loom import AgentGateway, AgentPrompt, AgentSessionRequest, ChatSnapshot, InvalidAgentArtifact
 from ops_workflow.repository import ArchiveResult, OpsRepository, json_evidence
 from ops_workflow.result import parse_ops_result
 from ops_workflow.slack import escalation_draft
@@ -70,20 +70,24 @@ class OpsService:
                 if isinstance(loom_session_id, str) and loom_session_id:
                     loom_turn = await self.gateway.prompt(
                         loom_session_id,
-                        prompt,
-                        actor=str(turn["requested_by"]),
-                        case_id=case_id,
-                        turn_id=turn_id,
+                        AgentPrompt(
+                            text=prompt,
+                            actor=str(turn["requested_by"]),
+                            case_id=case_id,
+                            turn_id=turn_id,
+                        ),
                     )
                     loom_url = str(turn["loom_session_url"])
                     external_turn_started = True
                 else:
                     session = await self.gateway.create_session(
-                        name=f"ops-case-{turn['case_id']}",
-                        title=f"Ops: {turn['title']}",
-                        goal=prompt,
-                        case_id=case_id,
-                        turn_id=turn_id,
+                        AgentSessionRequest(
+                            name=f"ops-case-{turn['case_id']}",
+                            title=f"Ops: {turn['title']}",
+                            goal=prompt,
+                            case_id=case_id,
+                            turn_id=turn_id,
+                        )
                     )
                     loom_session_id = session.id
                     loom_url = session.url
@@ -131,29 +135,40 @@ class OpsService:
         case_id = str(running["case_id"])
         try:
             artifact = await self.gateway.artifact(str(running["loom_session_id"]), "ops-result")
-            result = parse_ops_result(artifact.content, case_id=case_id, turn_id=turn_id)
-            detail = await self.repository.case_detail(case_id)
-            if detail is None:
-                raise RuntimeError(f"case {case_id} disappeared")
-            case = detail["case"]
-            signals = detail["signals"]
-            assert isinstance(case, Mapping)
-            assert isinstance(signals, list)
-            escalation = escalation_draft(
-                result=result,
-                case=case,
-                signals=signals,
-                public_url=self.public_url,
-            )
-            await self.repository.finish_turn(
-                turn_id=turn_id,
-                result=result,
-                artifact_revision=artifact.revision,
-                escalation=escalation,
-            )
-        except Exception as error:
-            logger.exception("failed to accept ops-result for turn %s", turn_id)
+        except InvalidAgentArtifact as error:
+            logger.warning("invalid ops-result for turn %s: %s", turn_id, error)
             await self.repository.fail_turn(turn_id=turn_id, error=str(error))
+            await self.dispatch()
+            return
+        except Exception:
+            logger.exception("failed to read ops-result for turn %s", turn_id)
+            return
+        try:
+            result = parse_ops_result(artifact.content, case_id=case_id, turn_id=turn_id)
+        except ValueError as error:
+            logger.warning("invalid ops-result for turn %s: %s", turn_id, error)
+            await self.repository.fail_turn(turn_id=turn_id, error=str(error))
+            await self.dispatch()
+            return
+        detail = await self.repository.case_detail(case_id)
+        if detail is None:
+            raise RuntimeError(f"case {case_id} disappeared")
+        case = detail["case"]
+        signals = detail["signals"]
+        assert isinstance(case, Mapping)
+        assert isinstance(signals, list)
+        escalation = escalation_draft(
+            result=result,
+            case=case,
+            signals=signals,
+            public_url=self.public_url,
+        )
+        await self.repository.finish_turn(
+            turn_id=turn_id,
+            result=result,
+            artifact_revision=artifact.revision,
+            escalation=escalation,
+        )
         await self.dispatch()
 
     async def case_with_chat(self, case_id: str) -> dict[str, object] | None:

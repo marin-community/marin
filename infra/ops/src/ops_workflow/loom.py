@@ -34,12 +34,39 @@ class AgentArtifact:
     revision: int
 
 
+@dataclass(frozen=True)
+class AgentSessionRequest:
+    """Session inputs and ops correlation identifiers."""
+
+    name: str
+    title: str
+    goal: str
+    case_id: str
+    turn_id: str
+
+
+@dataclass(frozen=True)
+class AgentPrompt:
+    """Follow-up inputs and ops correlation identifiers."""
+
+    text: str
+    actor: str
+    case_id: str
+    turn_id: str
+
+
+class InvalidAgentArtifact(RuntimeError):
+    """The agent artifact exists but does not satisfy the gateway contract."""
+
+
 class AgentGateway(Protocol):
     """The subset of Loom required by the ops workflow."""
 
-    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession: ...
+    async def create_session(self, request: AgentSessionRequest) -> LoomSession: ...
 
-    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None: ...
+    async def prompt(self, session_id: str, request: AgentPrompt) -> int | None:
+        """Queue a prompt and return Loom's turn number when one is reported."""
+        ...
 
     async def chat(self, session_id: str) -> ChatSnapshot: ...
 
@@ -77,12 +104,12 @@ class LoomGateway:
             timeout=httpx.Timeout(30, read=60),
         )
 
-    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession:
+    async def create_session(self, request: AgentSessionRequest) -> LoomSession:
         payload = {
             "cwd": self._repo_root,
-            "title": title,
-            "goal": goal,
-            "name": name,
+            "title": request.title,
+            "goal": request.goal,
+            "name": request.name,
             "base": self._base,
             "agent": self._agent,
             "protocol": "acp",
@@ -94,7 +121,7 @@ class LoomGateway:
             payload["effort"] = self._effort
         response = await self._client.post("/api/sessions", json=payload)
         if response.status_code == 409:
-            response = await self._client.get(f"/api/sessions/{name}")
+            response = await self._client.get(f"/api/sessions/{request.name}")
         response.raise_for_status()
         session = response.json()
         session_id = str(session["id"])
@@ -103,10 +130,16 @@ class LoomGateway:
         snapshot = await self.chat(session_id)
         return LoomSession(id=session_id, url=str(url_response.json()["url"]), live_turn=snapshot.live_turn)
 
-    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None:
+    async def prompt(self, session_id: str, request: AgentPrompt) -> int | None:
         response = await self._client.post(
             f"/api/sessions/{session_id}/prompt",
-            json={"text": text, "by": actor, "force_steer": False, "force_queued": False, "files": []},
+            json={
+                "text": request.text,
+                "by": request.actor,
+                "force_steer": False,
+                "force_queued": False,
+                "files": [],
+            },
         )
         response.raise_for_status()
         turn = response.json().get("turn")
@@ -127,12 +160,14 @@ class LoomGateway:
 
     async def artifact(self, session_id: str, name: str) -> AgentArtifact:
         response = await self._client.get(f"/api/sessions/{session_id}/artifacts/{name}")
+        if response.status_code == 404:
+            raise InvalidAgentArtifact(f"Loom artifact {name!r} was not published")
         response.raise_for_status()
         payload = response.json()
         content = payload.get("content")
         meta = payload.get("meta")
         if not isinstance(content, str) or not isinstance(meta, dict) or not isinstance(meta.get("rev"), int):
-            raise RuntimeError(f"Loom artifact {name!r} has an invalid response")
+            raise InvalidAgentArtifact(f"Loom artifact {name!r} has an invalid response")
         return AgentArtifact(content=content, revision=int(meta["rev"]))
 
     async def archive(self, session_id: str) -> None:
@@ -159,38 +194,38 @@ class _StubSession:
 
 
 class StubAgentGateway:
-    """Deterministic local ACP substitute used by the browser spike and tests."""
+    """Deterministic in-memory agent for local development."""
 
     def __init__(self, *, completion_delay: float = 0.8) -> None:
         self._completion_delay = completion_delay
         self._sessions: dict[str, _StubSession] = {}
         self._sessions_by_name: dict[str, _StubSession] = {}
 
-    async def create_session(self, *, name: str, title: str, goal: str, case_id: str, turn_id: str) -> LoomSession:
-        existing = self._sessions_by_name.get(name)
+    async def create_session(self, request: AgentSessionRequest) -> LoomSession:
+        existing = self._sessions_by_name.get(request.name)
         if existing is not None:
             return LoomSession(id=existing.id, url=existing.url, live_turn=existing.turn)
         session_id = f"stub-{len(self._sessions) + 1}"
         session = _StubSession(
             id=session_id,
             url=f"http://127.0.0.1:7878/s/{session_id}",
-            prompts=[goal],
+            prompts=[request.goal],
             started_at=time.monotonic(),
             turn=0,
-            case_id=case_id,
-            turn_id=turn_id,
+            case_id=request.case_id,
+            turn_id=request.turn_id,
         )
         self._sessions[session_id] = session
-        self._sessions_by_name[name] = session
+        self._sessions_by_name[request.name] = session
         return LoomSession(id=session.id, url=session.url, live_turn=0)
 
-    async def prompt(self, session_id: str, text: str, *, actor: str, case_id: str, turn_id: str) -> int | None:
+    async def prompt(self, session_id: str, request: AgentPrompt) -> int | None:
         session = self._sessions[session_id]
         session.turn += 1
-        session.prompts.append(text)
+        session.prompts.append(request.text)
         session.started_at = time.monotonic()
-        session.case_id = case_id
-        session.turn_id = turn_id
+        session.case_id = request.case_id
+        session.turn_id = request.turn_id
         return session.turn
 
     async def chat(self, session_id: str) -> ChatSnapshot:

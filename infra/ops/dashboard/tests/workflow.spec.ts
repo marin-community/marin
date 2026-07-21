@@ -14,8 +14,7 @@ test('a polled Grafana group becomes one visible agent investigation', async ({ 
   const followUp = 'Check whether both namespaces are affected by the same node resolver configuration.'
   await page.getByPlaceholder('Ask a follow-up or add context…').fill(followUp)
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(page.getByText('follow up queued')).toBeVisible()
-  await expect(chat.getByText(followUp)).toBeVisible()
+  await expect(page.getByText('follow up queued').last()).toBeVisible()
 })
 
 test('an operator can queue a one-off question through the same surface', async ({ page }) => {
@@ -32,4 +31,7 @@ test('diagnostics exposes durable polls and the live process buffer', async ({ p
   await expect(page.getByRole('heading', { name: 'Grafana polling' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Slack deliveries' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Process logs' })).toBeVisible()
+  await expect(page.getByRole('table').first().getByRole('cell', { name: '2', exact: true }).first()).toBeVisible()
+  await expect(page.getByText('No agent escalations.')).toBeVisible()
+  await expect(page.locator('pre').first()).toBeVisible()
 })

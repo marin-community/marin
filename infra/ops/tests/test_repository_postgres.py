@@ -226,8 +226,8 @@ async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation
     assert len(escalations) == 1
     delivery = await repository.claim_slack_escalation()
     assert delivery is not None
-    assert delivery["attempts"] == 1
-    await repository.slack_escalation_sent(str(delivery["id"]))
+    assert delivery.attempts == 1
+    await repository.slack_escalation_sent(delivery.id)
 
     follow_up_id = await repository.enqueue_follow_up(
         case_id=case_id,

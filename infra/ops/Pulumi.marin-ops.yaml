@@ -1,6 +1,6 @@
 config:
-  # The first rollout uses the deterministic local implementation. Change this to
-  # loom only after a managed Loom API and its Secret Manager token exist.
+  # Stub mode keeps the service deployable without an ACP endpoint or agent credential.
+  # Loom mode requires loom_api_url plus a managed Secret Manager token.
   marin-ops:agent_mode: stub
   marin-ops:repo_revision: weaver/ops-workflow
   marin-ops:skill_revision: working-tree

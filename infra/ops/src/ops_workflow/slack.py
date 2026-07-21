@@ -29,8 +29,17 @@ class SlackEscalationDraft:
     message: str
 
 
+@dataclass(frozen=True)
+class SlackDelivery:
+    """Leased outbox record ready for one webhook attempt."""
+
+    id: str
+    message: str
+    attempts: int
+
+
 class SlackDeliveryStore(Protocol):
-    async def claim_slack_escalation(self) -> dict[str, object] | None: ...
+    async def claim_slack_escalation(self) -> SlackDelivery | None: ...
     async def slack_escalation_sent(self, escalation_id: str) -> None: ...
     async def slack_escalation_retry(self, escalation_id: str, error: str) -> None: ...
 
@@ -66,13 +75,12 @@ class SlackDispatcher:
         delivery = await self._store.claim_slack_escalation()
         if delivery is None:
             return
-        escalation_id = str(delivery["id"])
         try:
-            await self._webhook.send(str(delivery["message"]))
+            await self._webhook.send(delivery.message)
         except SlackWebhookError as error:
-            await self._store.slack_escalation_retry(escalation_id, str(error))
+            await self._store.slack_escalation_retry(delivery.id, str(error))
             return
-        await self._store.slack_escalation_sent(escalation_id)
+        await self._store.slack_escalation_sent(delivery.id)
 
     async def close(self) -> None:
         await self._webhook.close()

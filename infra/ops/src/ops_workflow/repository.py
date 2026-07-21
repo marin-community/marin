@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert, GrafanaDelivery, GrafanaNotification
 from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
 from ops_workflow.result import OpsResult
-from ops_workflow.slack import SlackEscalationDraft
+from ops_workflow.slack import SlackDelivery, SlackEscalationDraft
 from ops_workflow.state import CaseState, SignalDisposition, SignalState, severity_priority
 
 SOURCE = "grafana"
@@ -28,6 +28,7 @@ GROUPING_RULE = "grafana:alertname+cluster"
 AUTOMATIC_REQUESTER = "grafana"
 MISSING_POLLS_TO_RESOLVE = 2
 POLL_KEY_ID = "grafana-postgres-reader"
+OPS_SERVICE_ACTOR = "ops-service"
 TURN_LEASE_DURATION = timedelta(minutes=10)
 TURN_TIMEOUT = timedelta(minutes=20)
 SLACK_LEASE_DURATION = timedelta(minutes=2)
@@ -356,12 +357,12 @@ class OpsRepository:
                 await connection.execute(
                     """
                     UPDATE agent_turns
-                    SET state = 'launching', lease_owner = 'ops-service',
+                    SET state = 'launching', lease_owner = %s,
                         lease_expires_at = now() + %s,
                         started_at = now(), deadline_at = now() + %s
                     WHERE id = %s
                     """,
-                    (TURN_LEASE_DURATION, TURN_TIMEOUT, turn["id"]),
+                    (OPS_SERVICE_ACTOR, TURN_LEASE_DURATION, TURN_TIMEOUT, turn["id"]),
                 )
                 await connection.execute(
                     "UPDATE cases SET state = 'investigating', updated_at = now() WHERE id = %s",
@@ -371,7 +372,7 @@ class OpsRepository:
                     connection,
                     str(turn["case_id"]),
                     "turn_claimed",
-                    "ops-service",
+                    OPS_SERVICE_ACTOR,
                     {"turn_id": str(turn["id"])},
                     turn_id=str(turn["id"]),
                 )
@@ -469,7 +470,7 @@ class OpsRepository:
                     connection,
                     str(row["case_id"]),
                     "turn_finished",
-                    "ops-service",
+                    OPS_SERVICE_ACTOR,
                     {"outcome": result.outcome.value, "summary": result.summary},
                     turn_id=turn_id,
                 )
@@ -496,12 +497,12 @@ class OpsRepository:
                             connection,
                             str(row["case_id"]),
                             "slack_escalation_queued",
-                            "ops-service",
+                            OPS_SERVICE_ACTOR,
                             {"severity": escalation.severity.value},
                             turn_id=turn_id,
                         )
 
-    async def claim_slack_escalation(self) -> dict[str, object] | None:
+    async def claim_slack_escalation(self) -> SlackDelivery | None:
         """Lease the oldest due Slack escalation for one delivery attempt."""
 
         async with await self._connection() as connection:
@@ -539,7 +540,11 @@ class OpsRepository:
                 )
                 claimed = await claimed_cursor.fetchone()
                 assert claimed is not None
-                return dict(claimed)
+                return SlackDelivery(
+                    id=str(claimed["id"]),
+                    message=str(claimed["message"]),
+                    attempts=int(claimed["attempts"]),
+                )
 
     async def slack_escalation_sent(self, escalation_id: str) -> None:
         async with await self._connection() as connection:
@@ -559,7 +564,7 @@ class OpsRepository:
                         connection,
                         str(row["case_id"]),
                         "slack_escalation_sent",
-                        "ops-service",
+                        OPS_SERVICE_ACTOR,
                         {},
                         turn_id=str(row["turn_id"]),
                     )
@@ -594,7 +599,7 @@ class OpsRepository:
                         connection,
                         str(row["case_id"]),
                         "slack_escalation_abandoned",
-                        "ops-service",
+                        OPS_SERVICE_ACTOR,
                         {"attempts": attempts, "error": error[:1_000]},
                         turn_id=str(row["turn_id"]),
                     )
