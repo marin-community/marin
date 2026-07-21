@@ -19,7 +19,8 @@ from urllib.parse import quote
 import httpx
 from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_REPO
 from errors import UpstreamError
-from nightly import NightlyLaneSnapshot, NightlyRun, nightly_matrix, project_nightlies
+from graphql_source import graphql_data
+from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
 from nightly_config import NIGHTLY_LANES, NightlyLane
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ query MainCommits($owner: String!, $repo: String!, $count: Int!) {
               messageHeadline
               committedDate
               url
-              author { user { login } name }
+              author { user { login avatarUrl(size: 80) } name }
               statusCheckRollup { state }
             }
           }
@@ -151,26 +152,18 @@ class GithubSource:
 
     def builds(self) -> list[dict]:
         """One row per recent commit on main with its CI rollup state and finalized success rate."""
-        try:
-            response = self._client.post(
-                _GRAPHQL_URL,
-                json={
-                    "query": _BUILD_QUERY,
-                    "variables": {
-                        "owner": GITHUB_REPO.split("/")[0],
-                        "repo": GITHUB_REPO.split("/")[1],
-                        "count": BUILD_HISTORY,
-                    },
-                },
-            )
-        except httpx.TransportError as err:
-            raise UpstreamError("github", f"graphql unreachable ({err})", status_code=504) from err
-        if response.status_code != 200:
-            raise UpstreamError("github", f"graphql returned {response.status_code}", status_code=502)
-        payload = response.json()
-        if payload.get("errors"):
-            raise UpstreamError("github", f"graphql errors: {payload['errors']}", status_code=502)
-        nodes = (((payload.get("data") or {}).get("repository") or {}).get("ref") or {}).get("target", {})
+        data = graphql_data(
+            self._client,
+            source="github",
+            url=_GRAPHQL_URL,
+            query=_BUILD_QUERY,
+            variables={
+                "owner": GITHUB_REPO.split("/")[0],
+                "repo": GITHUB_REPO.split("/")[1],
+                "count": BUILD_HISTORY,
+            },
+        )
+        nodes = ((data.get("repository") or {}).get("ref") or {}).get("target") or {}
         nodes = ((nodes or {}).get("history") or {}).get("nodes") or []
 
         states = [(node.get("statusCheckRollup") or {}).get("state") or "NONE" for node in nodes]
@@ -188,6 +181,7 @@ class GithubSource:
                     "headline": node.get("messageHeadline"),
                     "committed_at": _iso_to_ms(node.get("committedDate")),
                     "author": user.get("login") or author.get("name"),
+                    "avatar_url": user.get("avatarUrl"),
                     "url": node.get("url"),
                     "state": state,
                     "success_rate": success_rate,
@@ -212,13 +206,7 @@ class GithubSource:
         return NightlyLaneSnapshot(lane_id=lane.id, runs=runs, error=None)
 
     def nightlies(self, now: datetime | None = None) -> list[dict]:
-        """The nightly regression matrix: one wide row per day over the trailing 7 UTC days.
-
-        Each row carries a `status_code` per lane keyed by lane id, which the
-        state-timeline panel renders as one row per lane. Each configured lane is
-        fetched independently; a lane whose fetch fails renders its cells
-        "unavailable" rather than failing the whole matrix.
-        """
+        """One linked, duration-aware cell per nightly lane and UTC day."""
         effective_now = now or datetime.now(UTC)
         snapshots = [self._nightly_lane_snapshot(lane, effective_now) for lane in NIGHTLY_LANES]
-        return nightly_matrix(project_nightlies(NIGHTLY_LANES, snapshots, effective_now))
+        return project_nightlies(NIGHTLY_LANES, snapshots, effective_now)

@@ -168,6 +168,7 @@ def _row(
         "subgroup": lane.subgroup,
         "repository": lane.repository,
         "workflow": lane.workflow_file,
+        "workflow_url": f"https://github.com/{lane.repository}/actions/workflows/{lane.workflow_file}",
         "state": state,
         "status_code": _status_code(state, healthy=healthy, duration_state=duration_state),
         "healthy": healthy,
@@ -176,6 +177,7 @@ def _row(
         "duration_seconds": duration_seconds,
         "conclusion": conclusion,
         "url": url,
+        "source_error": None,
     }
 
 
@@ -202,7 +204,7 @@ def _empty_row(
             state, due = NightlyCellState.UNAVAILABLE, True
         else:
             state, due = NightlyCellState.MISSING, True
-    return _row(
+    row = _row(
         lane,
         date,
         ts,
@@ -214,6 +216,8 @@ def _empty_row(
         conclusion=None,
         url=None,
     )
+    row["source_error"] = snapshot.error
+    return row
 
 
 def _run_row(lane: NightlyLane, date: str, ts: int, candidates: Sequence[NightlyRun], now: datetime) -> dict:
@@ -270,21 +274,7 @@ def project_nightlies(
                 rows.append(_run_row(lane, date, ts, candidates, now))
             else:
                 rows.append(_empty_row(lane, date, ts, expected, snapshot, now))
-    return rows
-
-
-def nightly_matrix(rows: Sequence[dict]) -> list[dict]:
-    """Pivot per-cell rows into one wide row per day for the state-timeline panel.
-
-    Each output row is `{ts, date, <lane_id>: status_code, ...}` — one key per lane
-    — ordered by day ascending so the panel's time axis reads left to right. A cell
-    with no color code (a day the lane was not scheduled or not yet introduced)
-    carries `None`, which the panel renders as a gap. State-timeline needs one
-    series per lane, which is a numeric field per lane; the long per-cell rows do
-    not split into series, so the endpoint serves this wide view instead.
-    """
-    by_day: dict[int, dict] = {}
+    lane_order = {lane.id: index for index, lane in enumerate(lanes)}
     for row in rows:
-        day = by_day.setdefault(row["ts"], {"ts": row["ts"], "date": row["date"]})
-        day[row["lane_id"]] = row["status_code"]
-    return [by_day[ts] for ts in sorted(by_day)]
+        row["lane_order"] = lane_order[row["lane_id"]]
+    return rows
