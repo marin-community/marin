@@ -58,10 +58,14 @@ uv run pyrefly
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- A PR description is the squash-merge commit message: lead with what the change
-  does, no template scaffold (no `Problem`/`Fix`/`Summary`/`Changes` headings),
-  no "Testing"/"Verification" section. Use markdown only when it makes the change
-  clearer for a human, never as boilerplate. Follow the `commit` skill
+- All agent-authored commit, PR, and issue titles and bodies must follow
+  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
+  exact text that will be published, then apply `ai-writing-donts.md` as a final
+  compression pass. Do not publish raw implementation notes, test narration,
+  prompt-shaped headings, or claims that use emphasis in place of evidence.
+- A PR description is the squash-merge commit message. Normal PR bodies and
+  bug/task issue bodies stay under 200 words; put detailed evidence in the
+  linked issue, design doc, logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 

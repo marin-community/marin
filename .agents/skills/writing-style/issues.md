@@ -23,10 +23,23 @@ more on what should be included rather than tone.
 - Avoid unexplained shorthand.
 - Keep the discussion focused and actionable.
 - Use a direct, practical tone with no narrative padding.
+- Keep the title at or below 80 characters. State a factual symptom for a bug
+  and an imperative outcome for a task.
+- Keep agent-authored bug and task bodies at or below 200 words.
+- Use only the headings needed to separate the repro or completion criteria.
+- Put extended investigation history in a linked comment, logbook, or artifact.
+- Do not prescribe an implementation unless the choice is part of the task.
+
+Before publishing, apply [ai-writing-donts.md](ai-writing-donts.md) to the exact
+title and body. Delete any sentence that does not add a symptom, impact,
+reproduction step, observation, expected behavior, or completion criterion.
 
 ### Example Shape
 
-- `Fails when chunk size > 256 due to X (see logs below).`
+- Title: `[zephyr] Handle chunk sizes above 256`
+- Body: `Chunks above 256 fail with <error>. Reproduce with <command>. Expected:
+  the stage accepts the configured chunk size. <link> contains the relevant
+  coordinator log.`
 
 ## Experiment Issues
 
