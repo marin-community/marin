@@ -256,7 +256,8 @@ def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
         """
         (jobId) => {
             const text = document.body.textContent || "";
-            const routeReady = decodeURIComponent(window.location.hash) === `#/job/${jobId}`;
+            const [routePath] = decodeURIComponent(window.location.hash).split("?");
+            const routeReady = routePath === `#/job/${jobId}`;
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
             const taskRowReady = Array.from(document.querySelectorAll("table tbody tr"))
