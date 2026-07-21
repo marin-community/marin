@@ -7,9 +7,10 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 
 from rigging.log_setup import LogBuffer
@@ -51,11 +52,27 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        coordinator = asyncio.create_task(_coordinator_loop(service, config.reconcile_interval))
-        poller = asyncio.create_task(_grafana_poll_loop(repository, grafana_source, config.poll_interval))
+        coordinator = asyncio.create_task(
+            _supervisor_loop(service.reconcile, config.reconcile_interval, "ops coordinator iteration failed")
+        )
+        poller = asyncio.create_task(
+            _supervisor_loop(
+                partial(_poll_grafana, repository, grafana_source),
+                config.poll_interval,
+                "Grafana polling iteration failed",
+            )
+        )
         tasks = [coordinator, poller]
         if slack_dispatcher is not None:
-            tasks.append(asyncio.create_task(_slack_loop(slack_dispatcher, config.reconcile_interval)))
+            tasks.append(
+                asyncio.create_task(
+                    _supervisor_loop(
+                        slack_dispatcher.reconcile,
+                        config.reconcile_interval,
+                        "Slack escalation iteration failed",
+                    )
+                )
+            )
         try:
             yield
         finally:
@@ -159,41 +176,27 @@ def create_app(
     return Starlette(routes=routes, lifespan=lifespan)
 
 
-async def _coordinator_loop(service: OpsService, interval: float) -> None:
+async def _supervisor_loop(step: Callable[[], Awaitable[None]], interval: float, failure_message: str) -> None:
     while True:
         try:
-            await service.reconcile()
+            await step()
         except Exception:
-            # Individual turn failures are persisted by OpsService; this guard
-            # keeps a transient database outage from killing the coordinator.
-            logging.getLogger(__name__).exception("ops coordinator iteration failed")
+            # Background steps persist item-level failures themselves. This guard keeps a
+            # transient dependency outage from terminating the process-level supervisor.
+            logging.getLogger(__name__).exception(failure_message)
         await asyncio.sleep(interval)
 
 
-async def _grafana_poll_loop(repository: OpsRepository, source: GrafanaAlertSource, interval: float) -> None:
-    while True:
-        try:
-            snapshot = await source.snapshot()
-            results = await repository.reconcile_grafana_snapshot(snapshot)
-            queued = sum(len(result.queued_case_ids) for result in results)
-            logging.getLogger(__name__).info(
-                "reconciled Grafana snapshot: alerts=%d groups=%d queued=%d",
-                len(snapshot.alerts),
-                len(results),
-                queued,
-            )
-        except Exception:
-            logging.getLogger(__name__).exception("Grafana polling iteration failed")
-        await asyncio.sleep(interval)
-
-
-async def _slack_loop(dispatcher: SlackDispatcher, interval: float) -> None:
-    while True:
-        try:
-            await dispatcher.reconcile()
-        except Exception:
-            logging.getLogger(__name__).exception("Slack escalation iteration failed")
-        await asyncio.sleep(interval)
+async def _poll_grafana(repository: OpsRepository, source: GrafanaAlertSource) -> None:
+    snapshot = await source.snapshot()
+    results = await repository.reconcile_grafana_snapshot(snapshot)
+    queued = sum(len(result.queued_case_ids) for result in results)
+    logging.getLogger(__name__).info(
+        "reconciled Grafana snapshot: alerts=%d groups=%d queued=%d",
+        len(snapshot.alerts),
+        len(results),
+        queued,
+    )
 
 
 def _actor(request: Request, config: WebConfig) -> str:
