@@ -13,7 +13,6 @@ Run from the repository root:
 import dataclasses
 import hashlib
 import json
-import os
 import sys
 import tempfile
 import uuid
@@ -22,7 +21,6 @@ from typing import Any, cast
 
 import draccus
 import equinox as eqx
-import fsspec
 import jax
 import jax.numpy as jnp
 import pytest
@@ -32,8 +30,9 @@ from haliax.partitioning import set_mesh
 from iris.client import IrisClient
 from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import GRUG_MOE_BANNED_CONFIG_ALIASES
+from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
+from rigging.filesystem import StoragePath
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from tests.cluster.vllm.snowball import SNOWBALL
@@ -73,38 +72,13 @@ def _to_main_model(params: VendoredTransformer, config: GrugModelConfig) -> Tran
     )
 
 
-def _assert_single_name_config_contract(exported_config: dict[str, Any], config: GrugModelConfig) -> None:
-    """Issue #7447: the published config.json carries exactly one spelling per dual-name field.
-
-    Assert the canonical Option A name is present with the right value and that none of the dropped
-    aliases leak. This runs against the real, ``config_overrides``-merged artifact (which could
-    otherwise sneak an alias back in), and complements the Levanter-side from_hf_config round-trip.
-    """
-    canonical = {
-        "hidden_size": config.hidden_dim,
-        "num_hidden_layers": config.num_layers,
-        "num_attention_heads": config.num_heads,
-        "num_key_value_heads": config.num_kv_heads,
-        "max_position_embeddings": config.max_seq_len,
-        "rms_norm_eps": config.layer_norm_eps,
-        "initializer_range": config.initializer_std,
-        "num_experts": config.num_experts,
-        "num_experts_per_tok": config.num_experts_per_token,
-        "moe_intermediate_size": config.intermediate_dim,
-        "shared_expert_intermediate_size": config.shared_expert_intermediate_dim,
-    }
-    for key, value in canonical.items():
-        assert exported_config.get(key) == value, key
-    leaked = GRUG_MOE_BANNED_CONFIG_ALIASES & exported_config.keys()
-    assert not leaked, f"banned config aliases leaked into config.json: {sorted(leaked)}"
-
-
 def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
     exported_config = json.loads((export_dir / "config.json").read_text())
     assert exported_config["architectures"] == ["GrugMoeForCausalLM"]
     assert exported_config["model_type"] == "grug_moe"
     assert exported_config["dtype"] == "bfloat16"
-    _assert_single_name_config_contract(exported_config, config)
+    # Checked on the real config_overrides-merged artifact, which could otherwise reintroduce an alias.
+    validate_single_name_config(exported_config, config)
 
     tensor_dtypes: set[str] = set()
     for shard_path in export_dir.glob("model-*.safetensors"):
@@ -126,9 +100,7 @@ def _tree_sha256(export_dir: Path) -> str:
 def _export_snowball_bf16(export_dir: Path) -> None:
     """Load the pinned checkpoint and write the bf16 HF export into ``export_dir``.
 
-    Shared by the reproduction test (which asserts the persisted digest) and the re-cut/publish
-    entrypoint (which uploads the tree), so both exercise byte-identical export logic. Validates the
-    single-name config contract on the produced ``config.json`` before returning.
+    Validates the single-name config contract on the produced ``config.json`` before returning.
     """
     executor_info = read_executor_info()
     model_config = executor_info["config"]["model"]
@@ -181,19 +153,19 @@ def recut_and_publish_snowball_bf16(export_base_uri: str) -> tuple[str, str]:
         export_dir = Path(export_dir_str)
         _export_snowball_bf16(export_dir)
         export_sha256 = _tree_sha256(export_dir)
-        export_uri = f"{export_base_uri.rstrip('/')}/{export_sha256[:16]}/"
-        fs = fsspec.core.get_fs_token_paths(export_uri, mode="wb")[0]
-        fs.put(os.path.join(export_dir_str, "*"), export_uri, recursive=True)
+        destination = StoragePath(export_base_uri) / export_sha256[:16]
+        # Glob the directory's entries so the tree lands directly under the digest prefix.
+        destination.upload_from(str(export_dir / "*"), recursive=True)
+        export_uri = f"{destination}/"
         print(f"export_sha256={export_sha256}")
         print(f"export_uri={export_uri}")
         return export_sha256, export_uri
 
 
 if __name__ == "__main__":
-    # Operator entrypoint for the re-cut (issue #7447 / #7366): re-export and upload a fresh tree,
-    # then paste the printed export_sha256/export_uri into ModelIdentity.SNOWBALL. Base URI defaults
-    # to the current export's parent (strips the content-addressed <digest[:16]>/ segment).
-    base_uri = sys.argv[1] if len(sys.argv) > 1 else SNOWBALL.export_uri.rstrip("/").rsplit("/", 1)[0]
+    # Re-export and upload a fresh tree, then paste the printed values into ModelIdentity.SNOWBALL.
+    # Defaults to the parent of the current content-addressed export directory.
+    base_uri = sys.argv[1] if len(sys.argv) > 1 else str(StoragePath(SNOWBALL.export_uri).parent)
     recut_and_publish_snowball_bf16(base_uri)
 
 

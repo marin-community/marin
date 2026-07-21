@@ -226,10 +226,9 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
-        # Single name per field (issue #7447, Option A): core fields use the universal
-        # transformers spelling; MoE fields use the most common public spelling (== Qwen2-MoE's
-        # set); grug-specific extras keep their bare names. from_hf_config still accepts the old
-        # dual-name spellings, so existing artifacts keep loading.
+        # One name per field: core fields take the universal transformers spelling, MoE fields the
+        # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
+        # stays tolerant of the older spellings so existing artifacts keep loading.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,

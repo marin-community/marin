@@ -77,12 +77,30 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
-# Single-name config contract (issue #7447): to_hf_config emits exactly one spelling per field.
-# These are the dropped dual-name aliases -- from_hf_config still accepts them as fallbacks so
-# existing dual-name artifacts keep loading, but no published config.json may carry them. The
-# unit and export-time contract tests assert none of these leak.
+# A published config.json carries exactly one spelling per field. ``from_hf_config`` deliberately
+# accepts more spellings than the exporter may write, so the two lists are not interchangeable:
+# reads are tolerant (old artifacts keep loading), writes are strict. A config carrying both
+# spellings of a field can load as two different models, since backends disagree on which wins.
+#
+# (published name, config attribute) for every field that has more than one accepted spelling.
+GRUG_MOE_CANONICAL_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("hidden_size", "hidden_dim"),
+    ("num_hidden_layers", "num_layers"),
+    ("num_attention_heads", "num_heads"),
+    ("num_key_value_heads", "num_kv_heads"),
+    ("max_position_embeddings", "max_seq_len"),
+    ("rms_norm_eps", "layer_norm_eps"),
+    ("initializer_range", "initializer_std"),
+    ("num_experts", "num_experts"),
+    ("num_experts_per_tok", "num_experts_per_token"),
+    ("moe_intermediate_size", "intermediate_dim"),
+    ("shared_expert_intermediate_size", "shared_expert_intermediate_dim"),
+)
+
+# Spellings the exporter must never emit, though from_hf_config still reads them.
 GRUG_MOE_BANNED_CONFIG_ALIASES = frozenset(
     {
+        "attention_head_dim",
         "hidden_dim",
         "intermediate_dim",
         "intermediate_size",
@@ -97,6 +115,24 @@ GRUG_MOE_BANNED_CONFIG_ALIASES = frozenset(
         "initializer_std",
     }
 )
+
+
+def validate_single_name_config(serialized: dict, config: Any) -> None:
+    """Check a serialized config.json against the single-name contract.
+
+    Each canonical name must be present with the value held by the corresponding attribute of
+    ``config``, and no banned alias may appear. ``config`` may be any object exposing the grug
+    attribute names (``SnowballConfig`` and the experiment ``GrugModelConfig`` both do).
+    """
+    for published, attribute in GRUG_MOE_CANONICAL_CONFIG_FIELDS:
+        expected = getattr(config, attribute)
+        actual = serialized.get(published)
+        if actual != expected:
+            raise ValueError(f"config.json {published}={actual!r}, expected {expected!r}")
+    leaked = GRUG_MOE_BANNED_CONFIG_ALIASES & serialized.keys()
+    if leaked:
+        raise ValueError(f"banned config aliases in config.json: {sorted(leaked)}")
+
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -243,10 +279,9 @@ class SnowballConfig(HFCompatConfig):
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> GrugMoeHfConfig:
-        # Single name per field (issue #7447, Option A): core fields use the universal
-        # transformers spelling; MoE fields use the most common public spelling (== Qwen2-MoE's
-        # set); grug-specific extras keep their bare names. from_hf_config still accepts the old
-        # dual-name spellings, so existing artifacts keep loading.
+        # One name per field: core fields take the universal transformers spelling, MoE fields the
+        # most common public spelling, and grug-specific extras keep their bare names. Emitting a
+        # second spelling for any of these is what GRUG_MOE_BANNED_CONFIG_ALIASES forbids.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
