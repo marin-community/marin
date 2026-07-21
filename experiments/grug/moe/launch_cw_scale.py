@@ -55,7 +55,7 @@ import os
 from typing import cast
 
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.grug._moe.common import resolve_moe_implementation
@@ -165,10 +165,18 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    # Host tracer preserves jax.named_scope regions (e.g. "moe_up_down") and enable_hlo_proto
+    # exports the xprof collective/kernel aggregate tables — both needed for a compute-vs-comm
+    # breakdown of the FSDP all-gather vs the expert GEMMs.
     profiler = ProfilerConfig(
         enabled=profiler_steps > 0,
         start_step=env_int("SCALE_PROFILER_START", 8),
         num_steps=profiler_steps,
+        profile_options=ProfileOptionsConfig(
+            host_tracer_level=1,
+            python_tracer_level=0,
+            enable_hlo_proto=True,
+        ),
     )
 
     checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
