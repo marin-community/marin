@@ -114,14 +114,14 @@ class IsolatedCudaVllm:
         # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
         # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
         # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
-        environment = {_FLASHINFER_SAMPLER_ENV_VAR: "0"}
+        # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
+        # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        environment = {
+            _FLASHINFER_SAMPLER_ENV_VAR: "0",
+            "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
+        }
         if self.source is VllmType.MARIN_FORK:
-            environment.update(
-                {
-                    "VLLM_USE_PRECOMPILED": "1",
-                    "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
-                }
-            )
+            environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment
 
 
@@ -129,10 +129,11 @@ def _write_virtual_hosted_s3_config() -> str:
     """Write a boto3 config forcing virtual-hosted S3 addressing and return its path.
 
     boto3's S3 addressing style can only be set from a config file (no env var), and the CoreWeave
-    object store rejects the default path-style requests. The fork's Run:ai streamer reads it via
-    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file. Rewritten on every
-    call (once per serve, cheap) rather than reused: a truncated leftover from a crash mid-write would
-    otherwise be kept and silently re-enable the path-style addressing the store rejects.
+    object store rejects the default path-style requests. The Run:ai streamer reads it via
+    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file for both stock and
+    Marin-fork vLLM. Rewritten on every call (once per serve, cheap) rather than reused: a truncated
+    leftover from a crash mid-write would otherwise be kept and silently re-enable path-style
+    addressing.
     """
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
     with open(path, "w") as handle:
