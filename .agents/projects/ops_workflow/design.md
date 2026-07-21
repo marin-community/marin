@@ -43,7 +43,7 @@ The service never receives Grafana's owner password. Grafana never receives an o
 
 ## Poll and identity model
 
-The poller runs in the server process, not the browser, so closing a tab cannot pause alert collection. Cloud Run keeps one warm instance with CPU allocated while idle. A database-unique minute slot makes overlapping deployment revisions harmless.
+The poller runs in the server process, not the browser, so closing a tab cannot pause alert collection. Cloud Run keeps one service-level warm instance with CPU allocated while idle and sends all traffic to the latest revision. Revision templates have min 0, leaving prior revisions cold. A database-unique minute slot makes rollout overlap harmless.
 
 ```mermaid
 flowchart TD

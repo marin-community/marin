@@ -25,6 +25,7 @@ import pulumi_gcp as gcp
 # not the end user — is what invokes the service. People are admitted separately, through
 # IAP's httpsResourceAccessor role.
 IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gserviceaccount.com"
+COLD_REVISION_MIN_INSTANCES = 0
 
 
 @dataclass(frozen=True)
@@ -65,8 +66,9 @@ class CloudRunServiceArgs:
     # (an apiserver, indexers, reconcilers). True also enables startup CPU boost.
     cpu_always_allocated: bool = False
     request_timeout: int = 60
-    # Defaults suit a service with process-local state. Stateless/Postgres-backed callers
-    # should override these to the availability and cost profile they need.
+    # Service-level scaling keeps warm capacity on revisions receiving traffic. Revision
+    # templates explicitly use min=0, so superseded revisions stay cold while remaining
+    # available for rollback.
     min_instances: int = 1
     max_instances: int = 1
 
@@ -238,11 +240,21 @@ class CloudRunService(pulumi.ComponentResource):
             # Ingress stays open so Google's IAP frontend can reach the service.
             ingress="INGRESS_TRAFFIC_ALL",
             iap_enabled=True,
+            scaling=gcp.cloudrunv2.ServiceScalingArgs(
+                min_instance_count=args.min_instances,
+                max_instance_count=args.max_instances,
+            ),
+            traffics=[
+                gcp.cloudrunv2.ServiceTrafficArgs(
+                    type="TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+                    percent=100,
+                )
+            ],
             template=gcp.cloudrunv2.ServiceTemplateArgs(
                 service_account=service_account.email,
                 timeout=f"{args.request_timeout}s",
                 scaling=gcp.cloudrunv2.ServiceTemplateScalingArgs(
-                    min_instance_count=args.min_instances,
+                    min_instance_count=COLD_REVISION_MIN_INSTANCES,
                     max_instance_count=args.max_instances,
                 ),
                 vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(

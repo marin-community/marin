@@ -79,6 +79,11 @@ The service reuses the `marin-grafana-slack-webhook` Secret Manager secret for a
 
 Pulumi maps the IAP-protected service to `ops.oa.dev` with a DNS-only Cloudflare CNAME. The Cloudflare API token is a deployment credential, not a runtime secret.
 
+Cloud Run keeps one service-level warm instance and sends 100% of traffic to the latest
+revision. Revision templates have min 0 and max 1, so prior revisions remain cold rollback
+targets. The service-level max of 1 and the database minute slot protect the poller from
+duplicate work during a rollout.
+
 ## Verification
 
 ```bash

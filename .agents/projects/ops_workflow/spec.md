@@ -95,7 +95,10 @@ Question and follow-up bodies are JSON objects with a non-empty `text` string no
 
 ## Deployment contract
 
-The Cloud Run service is min/max one instance with CPU always allocated. The database minute slot still protects rolling-revision overlap.
+The Cloud Run service uses service-level min/max one instance with CPU always allocated and
+100% traffic on the latest revision. Revision templates use min 0, so revisions stop consuming
+warm capacity when they leave the traffic target. The database minute slot still protects
+rolling-revision overlap.
 
 The runtime receives:
 

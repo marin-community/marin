@@ -250,10 +250,15 @@ The stack uses the shared `marin-iac-key` KMS secrets provider. The operator nee
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
 `pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
-Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
-warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
-paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
-evaluators.
+Registry, and rolls the service to that digest. Service-level `min` and `max` instances are
+both 1: one warm instance serves this internal dashboard, min 1 keeps alert evaluation warm
+and first paint off a cold start, and max 1 avoids duplicate alert notifications from
+parallel evaluators. Pulumi sends 100% of traffic to the latest revision. Revision templates
+set min 0 and retain the max 1 guardrail, so prior revisions remain cold rollback targets.
+
+Revisions created before service-level scaling can still show their historical revision min
+of 1 in the console. Cloud Run does not start that minimum when the revision has no traffic
+or tag, so those immutable entries do not need to be deleted for cost control.
 
 Grafana's state is the `grafana` database on the shared `marin-metadata` Cloud SQL Postgres
 (`infra/cloudsql`). `__main__.py` reads the instance connection name from a
