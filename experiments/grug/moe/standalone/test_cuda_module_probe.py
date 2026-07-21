@@ -106,6 +106,15 @@ def test_malformed_elf_uses_original_pointer_without_hashing(probe_build: ProbeB
     assert [attempt["name"] for attempt in exit_event["attempts"]] == ["original"]
 
 
+def test_null_loader_input_is_explicitly_recorded(probe_build: ProbeBuild) -> None:
+    result = probe_build.run(CLIENT_NULL_IMAGE="1")
+
+    assert result.returncode == 0, result.stderr
+    enter = next(event for event in probe_build.events() if event["event"] == "load_enter")
+    assert enter["input_kind"] == "unknown"
+    assert enter["image_is_null"] is True
+
+
 @pytest.mark.parametrize(
     ("fat_results", "expected_attempts", "expected_module"),
     [

@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
         return successes == 2 ? 0 : 5;
     }
     void* module = nullptr;
-    const int module_result = load(&module, image.data());
+    const void* image_pointer = std::getenv("CLIENT_NULL_IMAGE") == nullptr ? image.data() : nullptr;
+    const int module_result = load(&module, image_pointer);
     const int unload_result = module_result == 0 ? unload(module) : -1;
     std::printf(
         "{\"module_result\":%d,\"unload_result\":%d,\"module\":%llu}\n",

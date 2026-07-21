@@ -34,6 +34,11 @@ The corrected GB200 smoke succeeded under JAX 0.10.1. It intercepted 10 real `cu
 
 The first multi-host probe attempt reproduced the original `CUDA_ERROR_INVALID_VALUE` at `jit_train_step`, but current Iris provides rank identity through `IRIS_TASK_ID` rather than `IRIS_TASK_INDEX`. All workers consequently used the trace fallback, and the Python uploader raised while resolving its task path. No per-task artifacts survived, so this attempt establishes only that the probed positive control still fails. Task-index derivation now parses the canonical Iris task ID in both the interposer and uploader, with regression coverage for odd-rank sync selection and task-zero CUBIN capture.
 
+The corrected split run produced all 16 task artifacts. Eight trace tasks and eight sync tasks recorded 94,116 `cuModuleLoadFatBinary` calls. Exactly four calls per task returned `CUDA_ERROR_INVALID_VALUE`; the other 94,052 calls succeeded. Every pre-load synchronization on the sync tasks returned success, including the 32 failing sync-profile calls. This rules out an earlier asynchronous CUDA error surfacing at the loader boundary.
+
+The 64 failing calls differ from the successful raw-ELF loads. Their input kind is unknown, their address is page-aligned, and no bounded size or hash is available, so the safe retry sequence did not run. Each task failed once per local GPU. Context and device queries succeeded after each failure, but `cuMemGetInfo` returned CUDA code 201 and no memory counts. The run therefore does not distinguish a null or malformed compiler output from loader-local resource state. The probe now records whether the input pointer is null; a fake-driver integration test covers that event field.
+
 ## Future work
 
-- [ ] Trace the immediately preceding CUDA operation if pre-load synchronization fails.
+- [ ] Rerun the positive control with explicit null-input classification.
+- [ ] If the failing input is non-null, add a bounded prefix identity before choosing Data-direct or paired-pressure treatments.

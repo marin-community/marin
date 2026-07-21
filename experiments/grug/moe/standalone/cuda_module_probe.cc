@@ -450,7 +450,8 @@ extern "C" CUresult cuModuleLoadFatBinary(CUmodule* module, const void* image) {
                         ",\"timestamp_ns\":" + std::to_string(timestamp_ns()) +
                         ",\"api\":\"cuModuleLoadFatBinary\",\"requested_profile\":\"" + requested_profile() +
                         "\",\"effective_profile\":\"" + profile + "\",\"input_kind\":\"" + kind +
-                        "\",\"address_mod_4096\":" +
+                        "\",\"image_is_null\":" + (image == nullptr ? "true" : "false") +
+                        ",\"address_mod_4096\":" +
                         std::to_string(reinterpret_cast<std::uintptr_t>(image) % 4096) +
                         ",\"in_flight\":" + std::to_string(in_flight);
     if (identity.kind == ElfIdentity::Kind::kElf64) {

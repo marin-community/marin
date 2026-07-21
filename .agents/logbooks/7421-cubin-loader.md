@@ -84,9 +84,20 @@ author: mcwitt
 ### 2026-07-21 - CUBIN7421-003b task-identity correction
 
 - Hypothesis: canonical Iris task IDs provide the stable rank index required for profile parity and per-task artifact paths.
-- Commit Hash: pending.
+- Commit Hash: `30fdb93e7`.
 - Commands: focused fake-driver and tooling tests; strict C++ compilation; scoped repository lint.
 - Config: `IRIS_TASK_ID=/user/job/1:0` selects sync; `IRIS_TASK_ID=/user/job/0:0` enables task-zero capture; legacy `IRIS_TASK_INDEX` remains accepted for direct tools.
 - Result: 19 focused tests passed. The C++ source compiled with `-Wall -Wextra -Werror`; scoped repository lint passed.
 - Interpretation: both the interposer and Python uploader now derive the same index from the runtime identity current Iris actually exports.
 - Next action: commit the correction and repeat the exact CUBIN7421-003 split run after cooldown.
+
+### 2026-07-21 - CUBIN7421-003c corrected split trace/sync diagnostic
+
+- Hypothesis: if a preceding asynchronous CUDA operation failed, odd task indices will surface that error from `cuCtxSynchronize` before entering the module loader.
+- Commit Hash: `30fdb93e7`.
+- Jobs: `/mwittmann/cubin7421-trace-sync-l48-b512-003-coord`, child `/mwittmann/cubin7421-trace-sync-l48-b512-003-coord/grug-train-cubin7421-trace-sync-l48-b512-003`, and collector `/mwittmann/cubin7421-probe-collect-003`.
+- Config: the same 16-host L48/B512 positive control as CUBIN7421-003. Even task indices used trace; odd task indices synchronized before every module load. Retries remained disabled.
+- Result: all 16 tasks uploaded complete artifacts. The probe recorded 94,116 FatBinary calls: 94,052 succeeded and 64 returned `CUDA_ERROR_INVALID_VALUE`, with four failures per task. All 47,024 sync-profile calls returned `CUDA_SUCCESS` from the pre-load synchronization. The 64 failures used an unknown, page-aligned input and occurred once per local device. Post-failure context and device queries succeeded, while `cuMemGetInfo` returned 201, so no HBM snapshot was available at the failing boundary. Maximum observed loader concurrency was four.
+- Artifacts: `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e128-r16-cubin7421-trace-sync-l48-b512-003/dev/cuda-module-probe/`.
+- Interpretation: a stale asynchronous CUDA error is not the direct source of the reported loader error. The original FatBinary call itself returns invalid value after a successful synchronization. OOM remains possible only through an upstream mechanism that produces an absent or malformed image, or through loader-local resource state; this run did not measure free memory at the failure.
+- Next action: record whether unknown inputs are null. If they are non-null, add a bounded prefix identity before selecting Data-direct or paired-pressure treatments.
