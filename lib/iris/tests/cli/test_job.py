@@ -8,6 +8,8 @@ import io
 import click
 import pytest
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cli.job import (
     _collect_targets,
     _parse_tpu_alternatives,
@@ -18,6 +20,7 @@ from iris.cli.job import (
     build_resources,
     build_tpu_alternatives,
     kick,
+    kill,
     run,
     stop,
     validate_extra_resources,
@@ -33,6 +36,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
 
 
@@ -498,3 +502,79 @@ def test_stop_dry_run_lists_jobs_without_sending(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "would terminate 1 job(s)" in result.output
     assert "/alice/job" in result.output
+
+
+@pytest.mark.parametrize("command", [stop, kill])
+@pytest.mark.parametrize("match_args", [[], ["--exact"]], ids=["default", "explicit"])
+def test_stop_commands_exact_match_terminates_only_named_job(monkeypatch, command, match_args):
+    terminated: list[JobName] = []
+
+    class FakeClient:
+        def terminate(self, job_id):
+            terminated.append(job_id)
+
+        def terminate_prefix(self, prefix, *, exclude_finished):
+            matches = [prefix, JobName.from_wire(f"{prefix}-lp")]
+            terminated.extend(matches)
+            return matches
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        command,
+        [*match_args, "/alice/keep1"],
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert terminated == [JobName.from_wire("/alice/keep1")]
+
+
+def test_kill_prefix_terminates_matching_jobs(monkeypatch):
+    terminated: list[JobName] = []
+
+    class FakeClient:
+        def terminate(self, job_id):
+            terminated.append(job_id)
+
+        def terminate_prefix(self, prefix, *, exclude_finished):
+            matches = [prefix, JobName.from_wire(f"{prefix}-lp")]
+            terminated.extend(matches)
+            return matches
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        kill,
+        ["--prefix", "/alice/keep1"],
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert terminated == [JobName.from_wire("/alice/keep1"), JobName.from_wire("/alice/keep1-lp")]
+
+
+def test_kill_exact_miss_suggests_prefix_matches(monkeypatch):
+    class FakeClient:
+        def terminate(self, job_id):
+            raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
+
+        def list_jobs(self, *, prefix, limit):
+            assert prefix == "/alice/keep1"
+            assert limit == 5
+            return [
+                _job_pb2.JobStatus(job_id="/alice/keep1-lp"),
+                _job_pb2.JobStatus(job_id="/alice/keep1-v2"),
+            ]
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        kill,
+        ["/alice/keep1"],
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code != 0
+    assert "No job named '/alice/keep1'" in result.output
+    assert "Did you mean: /alice/keep1-lp, /alice/keep1-v2?" in result.output

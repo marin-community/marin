@@ -19,6 +19,8 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
@@ -95,16 +97,27 @@ def _remote_client(ctx: click.Context) -> IrisClient:
 def _terminate_jobs(
     client: IrisClient,
     job_ids: tuple[str, ...],
-    include_children: bool,
+    prefix: bool,
 ) -> list[JobName]:
     terminated: list[JobName] = []
     for raw in job_ids:
         name = JobName.from_wire(raw)
-        if include_children:
+        if prefix:
             terminated.extend(client.terminate_prefix(name, exclude_finished=True))
-        else:
+            continue
+
+        try:
             client.terminate(name)
-            terminated.append(name)
+        except ConnectError as exc:
+            if exc.code != Code.NOT_FOUND:
+                raise
+            candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
+            suggestion = ""
+            if candidates:
+                candidate_names = ", ".join(job.job_id for job in candidates)
+                suggestion = f" Did you mean: {candidate_names}?"
+            raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
+        terminated.append(name)
     return terminated
 
 
@@ -842,7 +855,7 @@ def _submit_and_wait_job(
     except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
-            terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
+            terminated = _terminate_jobs(client, (str(job.job_id),), prefix=False)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
         return 130
@@ -1134,7 +1147,7 @@ def run(
     sys.exit(exit_code)
 
 
-def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def _stop_jobs(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     targets = _collect_targets(job_id, stdin)
     if not targets:
         raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
@@ -1144,21 +1157,21 @@ def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool
             click.echo(f"  {t}")
         return
     client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, tuple(targets), include_children)
+    terminated = _terminate_jobs(client, tuple(targets), prefix)
     _print_terminated(terminated)
 
 
 @job.command("stop")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def stop(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs.
 
     Pass ``-`` or ``--stdin`` to read job ids from stdin so a query can pipe in:
@@ -1167,22 +1180,22 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_
       iris query -f csv "SELECT job_id FROM jobs WHERE user_id='alice' AND state=3" \\
         | iris job stop --stdin
     """
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 @job.command("kill")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def kill(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 _KICK_STATE_MAP = {

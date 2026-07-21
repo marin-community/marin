@@ -144,7 +144,8 @@ curl -sf http://localhost:10000/health && echo " controller healthy"
 iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow job + child logs
-iris job stop /user/job-name            # kill job + children
+iris job stop /user/job-name            # exact job name + its children
+iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 ```
 
