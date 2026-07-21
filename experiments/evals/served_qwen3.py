@@ -32,9 +32,16 @@ from marin.inference.config import (
 from marin.training.run_environment import env_vars_for_dependency_groups
 
 from experiments.evals.brokered_eval_suite import brokered_eval_suite
-from experiments.evals.served_lm_eval import BrokeredEvalInference
+from experiments.evals.served_lm_eval import BrokeredEvalInference, brokered_ot_tb_lite_step
 
 QWEN3_EVAL_VERSION = "2026.07.17"
+QWEN3_OT_TB_LITE_VERSION = "2026.07.21"
+# ~53 agent-hours if every trial runs out its clock; 16 concurrent sandboxes
+# keeps the full 97-task dataset under ~5h wall.
+_OT_TB_LITE_N_CONCURRENT_TRIALS = 16
+# Flip to "gvisor" (IrisEnvironment's default, un-gated) once the fleet's
+# workers carry runsc; until then sandboxes need the admin-gated profile.
+_OT_TB_LITE_CONTAINER_PROFILE = "privileged"
 _VLLM_TIMEOUT = 1800
 _TPU_VLLM_WORKER_ENV_VARS = (
     ("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),
@@ -98,6 +105,14 @@ QWEN3_TPU_EVAL_RESULTS = brokered_eval_suite(
     version=QWEN3_EVAL_VERSION,
 )
 
+QWEN3_TPU_OT_TB_LITE_RESULTS = brokered_ot_tb_lite_step(
+    QWEN3_TPU_INFERENCE,
+    model_name="qwen3-0.6b",
+    version=QWEN3_OT_TB_LITE_VERSION,
+    container_profile=_OT_TB_LITE_CONTAINER_PROFILE,
+    n_concurrent_trials=_OT_TB_LITE_N_CONCURRENT_TRIALS,
+)
+
 QWEN3_GPU_INFERENCE = qwen3_inference_config(
     engine=VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
@@ -121,10 +136,12 @@ QWEN3_GPU_EVAL_RESULTS = brokered_eval_suite(
     version=QWEN3_EVAL_VERSION,
 )
 
+# No GPU OT TB Lite step: Dockerfile-task sandboxes need a docker-worker
+# cluster, and the GPU evals run on CoreWeave's k8s backend.
 QWEN3_EVALS_BY_ACCELERATOR = MappingProxyType(
     {
-        Accelerator.TPU: QWEN3_TPU_EVAL_RESULTS,
-        Accelerator.GPU: QWEN3_GPU_EVAL_RESULTS,
+        Accelerator.TPU: (QWEN3_TPU_EVAL_RESULTS, QWEN3_TPU_OT_TB_LITE_RESULTS),
+        Accelerator.GPU: (QWEN3_GPU_EVAL_RESULTS,),
     }
 )
 
@@ -141,4 +158,4 @@ def _parse_accelerator() -> Accelerator:
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(QWEN3_EVALS_BY_ACCELERATOR[_parse_accelerator()])])
+    StepRunner().run([lower(step) for step in QWEN3_EVALS_BY_ACCELERATOR[_parse_accelerator()]])

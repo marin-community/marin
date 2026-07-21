@@ -248,7 +248,7 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     return flags
 
 
-def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
+def security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     """Docker security flags (privilege, capabilities, docker-socket mount).
 
     A TPU run requires ``--privileged`` for device access regardless of profile,
@@ -676,7 +676,7 @@ exec {quoted_cmd}
         ]
         is_tpu_run = include_devices and _has_tpu_device(config)
 
-        cmd.extend(_security_flags(config.container_profile, is_tpu_run))
+        cmd.extend(security_flags(config.container_profile, is_tpu_run))
         logger.info(
             "Container security profile %s (tpu_run=%s) for task %s",
             job_pb2.ContainerProfile.Name(resolve_container_profile(config.container_profile)),
