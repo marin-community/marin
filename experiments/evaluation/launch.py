@@ -375,6 +375,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
             serve=replace(first.serve, timeout_hours=2.0 + 2.0 * len(plans)),
             tokenizer=first.model.tokenizer,
             apply_chat_template=first.model.apply_chat_template,
+            trust_remote_code=first.model.trust_remote_code,
         ),
         runs=tuple(runs),
         model_ref=ModelRef(name=first.model.name, location=first.model.location, backend=first.model.backend.value),

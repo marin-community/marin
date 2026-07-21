@@ -227,6 +227,9 @@ class EvalchemyEvalConfig:
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     max_gen_toks: int = 2048
     apply_chat_template: bool = False
+    trust_remote_code: bool = False
+    """Load the eval client's tokenizer with ``trust_remote_code`` for a model whose HF repo ships
+    custom code."""
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
     eval_image: str = EVALCHEMY_IMAGE
@@ -484,6 +487,7 @@ def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEn
             ],
             "out_path": unit.out_path,
             "apply_chat_template": session.apply_chat_template,
+            "trust_remote_code": session.trust_remote_code,
             "max_gen_toks": unit.max_gen_toks,
             "max_eval_instances": unit.max_eval_instances,
             "num_concurrent": session.num_concurrent,
@@ -507,6 +511,9 @@ class EvalSession:
     """HF tokenizer id the eval client loads to build prompts; defaults to ``model``. Required when
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     apply_chat_template: bool = False
+    trust_remote_code: bool = False
+    """Load the eval client's tokenizer with ``trust_remote_code`` for a model whose HF repo ships
+    custom code."""
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
     eval_image: str = EVALCHEMY_IMAGE
     eval_cpu: float = 8.0
@@ -776,6 +783,7 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> ServeAndEvalRun:
         serve=config.serve,
         tokenizer=config.tokenizer,
         apply_chat_template=config.apply_chat_template,
+        trust_remote_code=config.trust_remote_code,
         num_concurrent=config.num_concurrent,
         eval_image=config.eval_image,
         eval_cpu=config.eval_cpu,
