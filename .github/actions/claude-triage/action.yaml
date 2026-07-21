@@ -47,6 +47,8 @@ runs:
   using: composite
   steps:
     - name: Run claude-code-action
+      id: claude
+      continue-on-error: true
       uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
       with:
         claude_code_oauth_token: ${{ inputs.oauth-token }}
@@ -66,3 +68,11 @@ runs:
         WANDB_PROJECT: ${{ inputs.wandb-project }}
         WANDB_API_KEY: ${{ inputs.wandb-api-key }}
         GHA_RUN_URL: ${{ inputs.gha-run-url }}
+
+    - name: Classify Claude result
+      if: always()
+      shell: bash
+      env:
+        CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+      run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
