@@ -59,3 +59,14 @@ author: mcwitt
 - Result: failed before JAX output with no probe events. The worker built the expected source hash and binary, then the child returned before the coverage check.
 - Interpretation: `real_dlsym` requested only the x86-64 symbol version `GLIBC_2.2.5`; the aarch64 worker uses `GLIBC_2.17`. This is an instrumentation portability defect, not evidence about the CUDA failure.
 - Next action: resolve both glibc symbol versions, rerun local tests, and repeat the same smoke.
+
+### 2026-07-21 - CUBIN7421-002b one-GB200 smoke attempt 2
+
+- Hypothesis: after resolving the aarch64 glibc symbol version, the interposer reaches the actual raw-ELF loader path used by JAX 0.10.1 on GB200.
+- Commit Hash: `3ec1f64cc`.
+- Job: `/mwittmann/cubin7421-probe-smoke-002`.
+- Config: one GB200; JAX 0.10.1; trace profile; required FatBinary and raw ELF coverage; task-zero capture.
+- Result: succeeded. JAX returned `cuda:0` and sum `1048575.875`. The probe observed 10 `cuModuleLoadFatBinary` calls on raw ELF inputs, all with original result 0; eight unique CUBIN hashes; maximum in-flight loads 1. Source SHA-256: `974d807b893db6642522bb15c16a40e72173947a3f9d031ea09c199f52cdae21`. Binary SHA-256: `253648ba9e9b4b46a318982cb777bb5c0068bcf169670fb527b759fef201f436`.
+- Artifacts: `s3://marin-us-east-02a/marin/scratch/mwittmann/cubin-diag/CUBIN7421-002b/task-0/`.
+- Interpretation: the probe builds and loads on the target architecture, intercepts the production XLA loader API, parses the raw ELF inputs, and preserves a successful JIT. The instrumentation is ready for the multi-host positive control.
+- Next action: run the exact archived L48/B512 configuration with task-index split trace/sync profiles and automatic retries disabled.

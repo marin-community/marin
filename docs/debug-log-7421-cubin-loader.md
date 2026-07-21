@@ -30,6 +30,8 @@ The focused suite passed 16 tests. Scoped lint and type checks passed, and the C
 
 The first GB200 smoke failed before JAX emitted output because the interposer resolved the real `dlsym` using only x86-64's `GLIBC_2.2.5` version. GB200 workers are aarch64 and use `GLIBC_2.17`. The corrected resolver tries both versions; the failed smoke carries no CUDA-loader evidence.
 
+The corrected GB200 smoke succeeded under JAX 0.10.1. It intercepted 10 real `cuModuleLoadFatBinary` calls on raw ELF inputs, all of which returned success through the original API, while the JIT completed with the expected result. This establishes production-path coverage and permits the multi-host diagnostic; it does not yet test the failing graph or classify the failure.
+
 ## Future work
 
 - [ ] Trace the immediately preceding CUDA operation if pre-load synchronization fails.
