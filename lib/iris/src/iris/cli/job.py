@@ -57,6 +57,7 @@ from iris.cluster.types import (
     JobName,
     ResourceSpec,
     gpu_device,
+    is_job_finished,
     tpu_device,
 )
 from iris.rpc import job_pb2
@@ -99,11 +100,11 @@ def _terminate_jobs(
 ) -> list[JobName]:
     terminated: list[JobName] = []
     for raw in job_ids:
-        name = JobName.from_wire(raw)
         if prefix:
-            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
+            terminated.extend(client.terminate_prefix(raw, exclude_finished=True))
             continue
 
+        name = JobName.from_wire(raw)
         try:
             client.terminate(name)
         except ConnectError as exc:
@@ -1114,9 +1115,19 @@ def _stop_jobs(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run:
     if not targets:
         raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
     if dry_run:
-        click.echo(f"[dry-run] would terminate {len(targets)} job(s):")
-        for t in targets:
-            click.echo(f"  {t}")
+        if prefix:
+            client = _remote_client(ctx)
+            matches = [
+                job.job_id
+                for target in targets
+                for job in client.list_jobs(prefix=target)
+                if not is_job_finished(job.state)
+            ]
+        else:
+            matches = [JobName.from_wire(target).to_wire() for target in targets]
+        click.echo(f"[dry-run] would terminate {len(matches)} job(s):")
+        for match in matches:
+            click.echo(f"  {match}")
         return
     client = _remote_client(ctx)
     terminated = _terminate_jobs(client, tuple(targets), prefix)

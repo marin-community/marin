@@ -504,6 +504,35 @@ def test_stop_dry_run_lists_jobs_without_sending(monkeypatch):
     assert "/alice/job" in result.output
 
 
+def test_stop_prefix_dry_run_lists_matching_active_jobs_without_terminating(monkeypatch):
+    prefixes: list[str] = []
+
+    class FakeClient:
+        def list_jobs(self, *, prefix):
+            prefixes.append(prefix)
+            return [
+                _job_pb2.JobStatus(job_id="/alice/running", state=_job_pb2.JOB_STATE_RUNNING),
+                _job_pb2.JobStatus(job_id="/alice/done", state=_job_pb2.JOB_STATE_SUCCEEDED),
+            ]
+
+        def terminate_prefix(self, prefix, *, exclude_finished):
+            pytest.fail("dry-run must not terminate jobs")
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        stop,
+        ["--prefix", "/alice/", "--dry-run"],
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert prefixes == ["/alice/"]
+    assert "would terminate 1 job(s)" in result.output
+    assert "/alice/running" in result.output
+    assert "/alice/done" not in result.output
+
+
 @pytest.mark.parametrize("command", [stop, kill])
 @pytest.mark.parametrize("match_args", [[], ["--exact"]], ids=["default", "explicit"])
 def test_stop_commands_exact_match_terminates_only_named_job(monkeypatch, command, match_args):
@@ -532,13 +561,15 @@ def test_stop_commands_exact_match_terminates_only_named_job(monkeypatch, comman
 
 def test_kill_prefix_terminates_matching_jobs(monkeypatch):
     terminated: list[JobName] = []
+    prefixes: list[str] = []
 
     class FakeClient:
         def terminate(self, job_id):
             terminated.append(job_id)
 
         def terminate_prefix(self, prefix, *, exclude_finished):
-            matches = [prefix, JobName.from_wire(f"{prefix}-lp")]
+            prefixes.append(prefix)
+            matches = [JobName.from_wire(prefix), JobName.from_wire(f"{prefix}-lp")]
             terminated.extend(matches)
             return matches
 
@@ -551,7 +582,29 @@ def test_kill_prefix_terminates_matching_jobs(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
+    assert prefixes == ["/alice/keep1"]
     assert terminated == [JobName.from_wire("/alice/keep1"), JobName.from_wire("/alice/keep1-lp")]
+
+
+def test_stop_prefix_accepts_namespace_prefix(monkeypatch):
+    prefixes: list[str] = []
+
+    class FakeClient:
+        def terminate_prefix(self, prefix, *, exclude_finished):
+            prefixes.append(prefix)
+            return [JobName.from_wire("/alice/job")]
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        stop,
+        ["--prefix", "/alice/"],
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert prefixes == ["/alice/"]
+    assert "/alice/job" in result.output
 
 
 def test_kill_exact_miss_suggests_prefix_matches(monkeypatch):

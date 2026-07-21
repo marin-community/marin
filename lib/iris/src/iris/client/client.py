@@ -854,20 +854,20 @@ class IrisClient:
 
     def terminate_prefix(
         self,
-        prefix: JobName,
+        prefix: str,
         *,
         exclude_finished: bool = True,
     ) -> list[JobName]:
         """Terminate all jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
+            prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
             exclude_finished: If True, skip jobs already in terminal states
 
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix.to_wire())
+        jobs = self.list_jobs(prefix=prefix)
         terminated = []
         for job in jobs:
             if exclude_finished and is_job_finished(job.state):
