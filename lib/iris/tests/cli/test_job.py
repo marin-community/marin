@@ -558,14 +558,12 @@ def test_stop_commands_exact_match_terminates_only_named_job(monkeypatch, comman
 
 def test_kill_prefix_terminates_matching_jobs(monkeypatch):
     terminated: list[JobName] = []
-    prefixes: list[str] = []
 
     class FakeClient:
         def terminate(self, job_id):
             terminated.append(job_id)
 
         def terminate_prefix(self, prefix):
-            prefixes.append(prefix)
             matches = [JobName.from_wire(prefix), JobName.from_wire(f"{prefix}-lp")]
             terminated.extend(matches)
             return matches
@@ -579,7 +577,6 @@ def test_kill_prefix_terminates_matching_jobs(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert prefixes == ["/alice/keep1"]
     assert terminated == [JobName.from_wire("/alice/keep1"), JobName.from_wire("/alice/keep1-lp")]
 
 

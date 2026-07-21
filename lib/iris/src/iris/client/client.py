@@ -853,7 +853,7 @@ class IrisClient:
         return list(self._cluster_client.list_workers(query=query))
 
     def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
-        """Return active job names matching a wire-form prefix."""
+        """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
         return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
 
     def terminate_prefix(self, prefix: str) -> list[JobName]:
