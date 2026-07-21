@@ -142,6 +142,9 @@ class GrugModelConfig:
     hidden_dim: int = 512
     intermediate_dim: int = 256
     shared_expert_intermediate_dim: int = 512
+    # Split the shared expert into this many independent DenseMLPs, each of size
+    # shared_expert_intermediate_dim // num_shared_experts (same total params).
+    num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
     num_layers: int = 6
@@ -682,15 +685,18 @@ class Block(eqx.Module):
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
-    shared: DenseMLP | None
+    shared: tuple[DenseMLP, ...] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+            n = cfg.num_shared_experts
+            per_expert_dim = cfg.shared_expert_intermediate_dim // n
+            shared = tuple(
+                DenseMLP.init(cfg.hidden_dim, per_expert_dim, cfg.initializer_std, key=k)
+                for k in random.split(shared_key, n)
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -715,7 +721,8 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            for shared_expert in self.shared:
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -1015,11 +1022,16 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
             }
         )
         if block.shared is not None:
+            # Split shared experts (each intermediate I/n) sum to an equivalent single expert of
+            # intermediate I with weights concatenated along the intermediate axis.
+            shared_w_gate = jnp.concatenate([e.w_gate for e in block.shared], axis=1)
+            shared_w_up = jnp.concatenate([e.w_up for e in block.shared], axis=1)
+            shared_w_down = jnp.concatenate([e.w_down for e in block.shared], axis=0)
             tensors.update(
                 {
-                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(block.shared.w_gate),
-                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(block.shared.w_up),
-                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
+                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(shared_w_gate),
+                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(shared_w_up),
+                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(shared_w_down),
                 }
             )
 
