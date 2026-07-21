@@ -17,6 +17,7 @@ import click
 import pytest
 import requests
 from click.testing import CliRunner
+from fray.types import ANY_REGION
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.config import (
@@ -366,9 +367,17 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert "Submitted" in result.output
 
 
-@pytest.mark.parametrize(("broker_args", "expects_region"), [([], True), (["--broker"], False)])
-def test_iris_serve_only_pins_direct_jobs_to_the_requested_region(monkeypatch, broker_args, expects_region):
-    result, client, _services, _mint = _invoke_iris_serve(
+@pytest.mark.parametrize(
+    ("broker_args", "expects_coordinator_region", "expected_worker_regions"),
+    [([], True, None), (["--broker"], False, [ANY_REGION])],
+)
+def test_iris_serve_configures_region_placement(
+    monkeypatch,
+    broker_args,
+    expects_coordinator_region,
+    expected_worker_regions,
+):
+    result, client, services, _mint = _invoke_iris_serve(
         monkeypatch,
         "--region",
         "us-central2",
@@ -377,7 +386,8 @@ def test_iris_serve_only_pins_direct_jobs_to_the_requested_region(monkeypatch, b
 
     assert result.exit_code == 0, result.output
     constraints = client.submit.call_args.kwargs["constraints"]
-    assert ("region" in {constraint.key for constraint in constraints}) is expects_region
+    assert ("region" in {constraint.key for constraint in constraints}) is expects_coordinator_region
+    assert services[0].iris.worker_resources.regions == expected_worker_regions
 
 
 def _free_port() -> int:

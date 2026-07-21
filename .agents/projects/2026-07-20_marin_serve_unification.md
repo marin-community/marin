@@ -214,10 +214,11 @@ that address; it is not loopback-only.
 
 The coordinator must be non-preemptible. The CLI applies `--target-cluster` to
 the coordinator job but deliberately omits its `--region` constraint in broker
-mode, so child workers can schedule in any region with matching accelerator
-capacity. Direct mode continues to apply `--region` to its accelerator job.
-Programmatic callers can constrain broker workers explicitly through
-`IrisConfig.worker_resources`.
+mode. It also sets the worker resources to `regions=[ANY_REGION]`, which emits
+the Iris any-region marker and prevents child workers from inheriting the
+coordinator's eventual region. Direct mode continues to apply `--region` to
+its accelerator job. Programmatic callers can constrain broker workers
+explicitly through `IrisConfig.worker_resources`.
 
 This can put the coordinator and workers in different regions. Actor clients
 send large broker payloads with zstd and advertise zstd/gzip for responses;

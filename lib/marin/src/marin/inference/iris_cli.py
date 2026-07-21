@@ -45,7 +45,7 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from fray.types import ResourceConfig, create_environment
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import parse_gpu_spec
 from iris.client import IrisClient, Job
@@ -502,6 +502,7 @@ def main(
         if brokered
         else None
     )
+    worker_regions = [ANY_REGION] if brokered else None
     if plan.gpu_count is not None:
         worker_resources = ResourceConfig.with_gpu(
             plan.gpu_type or "H100",
@@ -510,6 +511,7 @@ def main(
             ram=memory,
             disk=disk,
             image=task_image,
+            regions=worker_regions,
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
@@ -518,6 +520,7 @@ def main(
             ram=memory,
             disk=disk,
             image=task_image,
+            regions=worker_regions,
         )
 
     setup_scripts = None
