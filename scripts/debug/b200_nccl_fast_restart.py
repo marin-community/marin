@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from iris.cluster.client.job_info import get_job_info
 from iris.runtime.jax_init import _initialize_supervised_jax
+from jax._src import distributed as jax_distributed
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -63,6 +64,16 @@ def package_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "not-installed"
+
+
+def coordination_barrier(name: str) -> None:
+    """Synchronize ranks through JAX coordination without creating a clique."""
+    if jax.process_count() == 1:
+        return
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("distributed coordination client is not initialized")
+    client.wait_at_barrier(name, timeout_in_ms=180_000)
 
 
 def main() -> None:
@@ -108,6 +119,8 @@ def main() -> None:
     compile_start = time.monotonic()
     compiled = execute.lower(values).compile()
     log(f"compile-complete seconds={time.monotonic() - compile_start:.3f}")
+    coordination_barrier(f"b200_nccl_fast_restart_compile_{os.environ.get(_REPEAT_ENV, '0')}")
+    log("compile-barrier-complete")
     log("first-execution-start")
     execution_start = time.monotonic()
     result = compiled(values)
