@@ -11,6 +11,7 @@
         </RouterLink>
         <nav class="flex items-center gap-1 text-sm">
           <RouterLink to="/" class="rounded-md px-3 py-2 hover:bg-white/10">Inbox</RouterLink>
+          <RouterLink to="/diagnostics" class="rounded-md px-3 py-2 hover:bg-white/10">Diagnostics</RouterLink>
           <RouterLink to="/ask" class="rounded-md bg-[#b9ef84] px-3 py-2 font-medium text-[#17251e] hover:bg-[#cdf8a3]">Ask ops agent</RouterLink>
         </nav>
       </div>

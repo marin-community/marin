@@ -11,9 +11,12 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 WORKDIR /app
-COPY infra/ops/pyproject.toml /build/ops/pyproject.toml
-COPY infra/ops/src /build/ops/src
-RUN pip install --no-cache-dir /build/ops && rm -rf /build
+COPY config /build/repo/config
+COPY lib/rigging/pyproject.toml /build/repo/lib/rigging/pyproject.toml
+COPY lib/rigging/src /build/repo/lib/rigging/src
+COPY infra/ops/pyproject.toml /build/repo/infra/ops/pyproject.toml
+COPY infra/ops/src /build/repo/infra/ops/src
+RUN pip install --no-cache-dir /build/repo/lib/rigging /build/repo/infra/ops && rm -rf /build
 COPY infra/ops/migrations /app/migrations
 COPY infra/ops/entrypoint.sh /app/entrypoint.sh
 COPY --from=dashboard /build/dist /app/dashboard

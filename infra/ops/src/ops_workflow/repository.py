@@ -163,6 +163,22 @@ class OpsRepository:
             "last_poll_at": freshness["last_poll_at"] if freshness else None,
         }
 
+    async def recent_grafana_polls(self, *, limit: int = 60) -> list[dict[str, object]]:
+        """Return recent successful snapshots for operator diagnostics."""
+
+        async with await self._connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT poll_slot, observed_at, alert_count, created_at
+                FROM grafana_polls
+                ORDER BY observed_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return list(rows)
+
     async def list_cases(self, *, include_archived: bool = False) -> list[dict[str, object]]:
         async with await self._connection() as connection:
             cursor = await connection.execute(

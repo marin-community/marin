@@ -9,9 +9,11 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
+from rigging.log_setup import BufferedLogRecord
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -24,6 +26,14 @@ from ops_workflow.repository import ArchiveResult, OpsRepository, TurnPendingErr
 from ops_workflow.service import OpsService
 
 MAX_QUESTION_BYTES = 16 * 1024
+DIAGNOSTIC_LOG_LIMIT = 500
+DIAGNOSTIC_POLL_LIMIT = 60
+
+
+class LogBuffer(Protocol):
+    """Read-only subset of rigging's process log buffer used by the API."""
+
+    def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
 
 
 @dataclass(frozen=True)
@@ -38,6 +48,7 @@ def create_app(
     service: OpsService,
     repository: OpsRepository,
     grafana_source: GrafanaAlertSource,
+    log_buffer: LogBuffer,
     config: WebConfig,
 ) -> Starlette:
     """Create the API, coordinator loop, and optional built Vue host."""
@@ -67,6 +78,18 @@ def create_app(
         _actor(request, config)
         include_archived = request.query_params.get("archived") == "true"
         return _json({"cases": await repository.list_cases(include_archived=include_archived)})
+
+    async def diagnostics(request: Request) -> Response:
+        _actor(request, config)
+        logs = [asdict(record) for record in reversed(log_buffer.query(limit=DIAGNOSTIC_LOG_LIMIT))]
+        return _json(
+            {
+                "buffer_scope": "process",
+                "resets_on_restart": True,
+                "polls": await repository.recent_grafana_polls(limit=DIAGNOSTIC_POLL_LIMIT),
+                "logs": logs,
+            }
+        )
 
     async def case_detail(request: Request) -> Response:
         _actor(request, config)
@@ -120,6 +143,7 @@ def create_app(
     routes.extend(
         (
             Route("/api/overview", overview),
+            Route("/api/diagnostics", diagnostics),
             Route("/api/cases", cases),
             Route("/api/cases/{case_id}", case_detail),
             Route("/api/cases/{case_id}/messages", follow_up, methods=["POST"]),

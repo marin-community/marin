@@ -11,6 +11,7 @@ from typing import cast
 
 import psycopg
 import uvicorn
+from rigging.log_setup import LogBuffer, configure_logging
 
 from ops_workflow.grafana_source import PostgresGrafanaAlertSource
 from ops_workflow.loom import LoomGateway, StubAgentGateway
@@ -28,12 +29,12 @@ DEFAULT_STATIC = PACKAGE_ROOT / "dashboard" / "dist"
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log_buffer = configure_logging(level=logging.INFO)
     if args.command == "migrate":
         _migrate(args.database_url, args.migrations)
         return
     if args.command == "serve":
-        _serve(args)
+        _serve(args, log_buffer)
         return
     parser.error(f"unknown command {args.command}")
 
@@ -79,7 +80,7 @@ def _migrate(database_url: str, migrations: Path) -> None:
         apply_migrations(cast(MigrationConnection, connection), migration_plan(migrations))
 
 
-def _serve(args: argparse.Namespace) -> None:
+def _serve(args: argparse.Namespace, log_buffer: LogBuffer) -> None:
     if args.auth_mode == "local" and args.host not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit("local auth mode may only bind to loopback")
     grafana_database_url = _secret_argument(
@@ -125,6 +126,7 @@ def _serve(args: argparse.Namespace) -> None:
         OpsService(repository, gateway),
         repository,
         PostgresGrafanaAlertSource(grafana_database_url, password=grafana_database_password),
+        log_buffer,
         WebConfig(
             auth_mode=args.auth_mode,
             static_dir=args.static_dir,

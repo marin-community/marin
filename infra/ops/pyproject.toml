@@ -9,10 +9,14 @@ description = "Durable operational signal ingestion and agent workflow coordinat
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "httpx >= 0.28",
+  "marin-rigging",
   "psycopg[binary] >= 3.2",
   "starlette >= 0.47",
   "uvicorn >= 0.35",
 ]
+
+[tool.uv.sources]
+marin-rigging = { path = "../../lib/rigging" }
 
 [project.scripts]
 ops-workflow = "ops_workflow.cli:main"

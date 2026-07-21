@@ -31,6 +31,8 @@ uv run --project infra/ops ops-workflow serve \
 
 Open <http://127.0.0.1:8088>. The first poll creates one case for the two `DNSConfigForming` instances. The case moves through `pending → investigating → waiting_human` and exposes follow-up, one-off question, Loom-link, and archive flows.
 
+The Diagnostics page shows the most recent successful poll snapshots from Postgres and the process-local ring buffer provided by `rigging.log_setup`. The ring is intentionally bounded and clears on service restart or rollout. Python logs continue to stderr, which Cloud Run captures in Cloud Logging as the durable service-log source. Finelog's `RemoteLogHandler` can be added later if the service is given a reachable Finelog endpoint and stable log key; it is not required for polling visibility.
+
 Run Playwright against the service:
 
 ```bash

@@ -4,6 +4,28 @@ export interface Overview {
   last_poll_at: string | null
 }
 
+export interface GrafanaPoll {
+  poll_slot: string
+  observed_at: string
+  alert_count: number
+  created_at: string
+}
+
+export interface ProcessLog {
+  seq: number
+  timestamp: number
+  level: string
+  logger_name: string
+  message: string
+}
+
+export interface Diagnostics {
+  buffer_scope: 'process'
+  resets_on_restart: true
+  polls: GrafanaPoll[]
+  logs: ProcessLog[]
+}
+
 export interface CaseRow {
   id: string
   trigger: string

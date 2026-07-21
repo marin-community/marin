@@ -24,3 +24,11 @@ test('an operator can queue a one-off question through the same surface', async 
   await expect(page).toHaveURL(/\/cases\//)
   await expect(page.getByText('Validate the current free image filesystem space', { exact: false }).first()).toBeVisible()
 })
+
+test('diagnostics exposes durable polls and the live process buffer', async ({ page }) => {
+  await page.goto('/diagnostics')
+  await expect(page.getByRole('heading', { name: 'Polling and process logs' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Recent successful Grafana polls' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Live process buffer' })).toBeVisible()
+  await expect(page.getByText('reconciled Grafana snapshot', { exact: false }).last()).toBeVisible()
+})
