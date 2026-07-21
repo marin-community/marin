@@ -66,7 +66,9 @@ skip or weaken checks.
 
 ## 3. Tests and docs checks (when relevant)
 
-- `uv run pytest -m 'not slow'` over the test directories your change touches.
+- `uv run pytest` over the test directories your change touches. Keep the
+  repository's default marker expression so slow, integration, live-cluster,
+  Docker, and manual tests remain delegated to their dedicated CI jobs.
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
 - If the change is docs-heavy: `uv run mkdocs build --strict`.
 

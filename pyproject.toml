@@ -454,17 +454,20 @@ markers = [
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "requires_cluster: mark Iris tests that start or connect to a cluster",
+    "docker: mark tests that require a Docker daemon",
     "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
 pythonpath = ["."]
 
-# Don't run slow, integration, data_integration, cluster-bound, or manual tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, Docker, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
-# cluster tests submit a real job to a standing Marin cluster (tests/cluster/);
+# cluster and requires_cluster tests submit jobs or start cluster infrastructure;
+# Docker tests require a local daemon;
 # manual tests are run by hand (e.g. live TPU smokes in a custom container).
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
-# requires_cluster lives in lib/iris's own config, so no top-level test uses it.
-addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not manual' --import-mode=importlib"
+# the Iris markers also apply when lib/iris test paths are passed from the root.
+addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

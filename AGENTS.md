@@ -37,6 +37,11 @@ favor of ad-hoc commands.
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
+# Safe local test suite
+uv run pytest
+- Pytest's repository defaults exclude slow, integration, data-integration,
+  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
 - Always run this before opening a PR, and always fix or respond to every
@@ -44,6 +49,10 @@ uv run pyrefly
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Do not replace pytest's default marker expression with a partial expression
+  such as `-m "not slow"`; `-m` overrides the whole default and can select live
+  cluster tests. Run excluded markers only when the user or a dedicated task
+  guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
