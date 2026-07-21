@@ -663,26 +663,34 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
-        mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        num_devices = 1
-        for a in _BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        # Sharded QB: compute beta locally per device, then average. The qb_beta pmean is an
+        # f32 all-reduce whose result only feeds NEXT step's router_bias (train.py:_apply_qb_betas),
+        # never this forward — yet XLA schedules it as a synchronous per-layer collective in the
+        # forward critical path, which can stall the compute stream and block the weight-gather
+        # overlap. SCALE_MOE_SKIP_QB drops it entirely (router_bias stops updating, so loss quality
+        # is invalid under this flag — throughput diagnostic only).
+        if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
+            router_stats["qb_beta"] = jnp.zeros((self.cfg.num_experts,), dtype=jnp.float32)
+        else:
+            mesh = get_abstract_mesh()
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            num_devices = 1
+            for a in _BATCH_AXES:
+                num_devices *= mesh.shape[a]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
 
         routed_flat, dropped_assignments = self.expert_mlp(
             x_flat,
