@@ -26,7 +26,7 @@ from marin.inference.config import (
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.iris import RemoteInferenceSession, remote_inference
+from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
@@ -98,6 +98,40 @@ def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
     )
 
     assert session.resolve_model().endpoint.base_url == "http://10.0.0.2:9000/v1"
+
+
+def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
+    class _FailedJob:
+        job_id = "failed-serve"
+        terminated = False
+
+        def status(self) -> JobStatus:
+            return JobStatus.FAILED
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    job = _FailedJob()
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=lambda _request: job))
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(_cluster_client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: []))
+        ),
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    with pytest.raises(RemoteInferenceStartupError) as exc_info:
+        with remote_inference(ServedModelConfig(model="gpt2"), VllmEngineConfig(), iris):
+            pass
+
+    assert exc_info.value.jobs == (job,)
+    assert job.terminated
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:

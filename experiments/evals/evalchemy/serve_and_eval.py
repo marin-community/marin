@@ -49,7 +49,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
-from marin.inference.iris import remote_inference
+from marin.inference.iris import RemoteInferenceStartupError, remote_inference
 
 from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 from experiments.evals.evalchemy.run_evalchemy_client import CONFIG_ENV_KEY
@@ -302,26 +302,39 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
     """Serve ``model`` through the shared Iris inference lifecycle."""
 
     inference = _shared_inference_config(model, tokenizer, spec)
-    with remote_inference(
-        inference.model,
-        inference.engine,
-        inference.iris,
-        instances=inference.instances,
-        broker=inference.broker,
-    ) as session:
-        if not session.jobs:
-            raise RuntimeError("Iris inference returned no worker jobs")
-        handle = session.iris_job
-        if handle is None:
-            handle = cast(IrisJobHandle, session.jobs[0]).iris_job
-        yield ServedEndpoint(
-            base_url=session.model.endpoint.base_url,
-            model_id=session.model.endpoint.model,
-            tokenizer=tokenizer,
-            job=str(handle.job_id),
-            handle=handle,
-            name=session.endpoint_name,
-        )
+    try:
+        with remote_inference(
+            inference.model,
+            inference.engine,
+            inference.iris,
+            instances=inference.instances,
+            broker=inference.broker,
+        ) as session:
+            if not session.jobs:
+                raise RuntimeError("Iris inference returned no worker jobs")
+            handle = session.iris_job
+            if handle is None:
+                handle = cast(IrisJobHandle, session.jobs[0]).iris_job
+            yield ServedEndpoint(
+                base_url=session.model.endpoint.base_url,
+                model_id=session.model.endpoint.model,
+                tokenizer=tokenizer,
+                job=str(handle.job_id),
+                handle=handle,
+                name=session.endpoint_name,
+            )
+    except RemoteInferenceStartupError as exc:
+        handles = tuple(cast(IrisJobHandle, job).iris_job for job in exc.jobs)
+        jobs = {"serve" if index == 0 else f"serve-{index}": str(handle.job_id) for index, handle in enumerate(handles)}
+        log_tails = {
+            "serve" if index == 0 else f"serve-{index}": job_log_tail(handle) for index, handle in enumerate(handles)
+        }
+        raise EvalPipelineError(
+            str(exc),
+            stage=PipelineStage.SERVE,
+            jobs=jobs,
+            log_tails=log_tails,
+        ) from exc
 
 
 def _wait_for_endpoint(client, serve_job, endpoint_name: str) -> None:

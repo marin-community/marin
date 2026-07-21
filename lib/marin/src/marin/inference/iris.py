@@ -50,6 +50,14 @@ _METADATA_BACKEND = "backend"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 
 
+class RemoteInferenceStartupError(RuntimeError):
+    """Remote inference failed before yielding a usable endpoint."""
+
+    def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
+        super().__init__(message)
+        self.jobs = jobs
+
+
 @dataclass(frozen=True)
 class RemoteInferenceSession:
     model: RunningModel
@@ -335,13 +343,19 @@ def _start_direct_inference(
         )
     )
     try:
-        address, metadata = _wait_for_endpoint(
-            job,
-            endpoint_name,
-            timeout_seconds=iris.endpoint_ready_timeout_seconds,
-        )
-        tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
-        backend_name = metadata[_METADATA_BACKEND]
+        try:
+            address, metadata = _wait_for_endpoint(
+                job,
+                endpoint_name,
+                timeout_seconds=iris.endpoint_ready_timeout_seconds,
+            )
+            tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
+            backend_name = metadata[_METADATA_BACKEND]
+        except Exception as exc:
+            raise RemoteInferenceStartupError(
+                f"Inference job {job.job_id} failed to register a usable endpoint: {exc}",
+                jobs=(job,),
+            ) from exc
         yield RemoteInferenceSession(
             model=RunningModel(
                 endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.model),
@@ -400,16 +414,18 @@ def _start_brokered_inference(
     job_info = get_job_info()
     assert job_info is not None
     run_id = uuid.uuid4().hex[:8]
-    broker_group = client.create_actor_group(
-        InferenceBroker,
-        name=f"inference-broker-{run_id}",
-        count=1,
-        request_lease_timeout_seconds=broker.request_lease_timeout_seconds,
-        resources=broker.broker_resources,
-        actor_config=ActorConfig(max_task_retries=0, priority=iris.priority),
-    )
+    broker_group = None
     worker_jobs: list[JobHandle] = []
+    started = False
     try:
+        broker_group = client.create_actor_group(
+            InferenceBroker,
+            name=f"inference-broker-{run_id}",
+            count=1,
+            request_lease_timeout_seconds=broker.request_lease_timeout_seconds,
+            resources=broker.broker_resources,
+            actor_config=ActorConfig(max_task_retries=0, priority=iris.priority),
+        )
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
@@ -449,6 +465,7 @@ def _start_brokered_inference(
             if not metadata_by_worker:
                 raise RuntimeError("Brokered inference became ready before a worker registered metadata")
             worker_metadata = next(iter(metadata_by_worker.values()))
+            started = True
             yield RemoteInferenceSession(
                 model=replace(running_model, tokenizer=model.tokenizer),
                 jobs=tuple(worker_jobs),
@@ -458,13 +475,21 @@ def _start_brokered_inference(
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,
             )
+    except Exception as exc:
+        if not started:
+            raise RemoteInferenceStartupError(
+                f"Brokered inference failed to start: {exc}",
+                jobs=tuple(worker_jobs),
+            ) from exc
+        raise
     finally:
         for job in worker_jobs:
             _terminate_job(job)
-        try:
-            broker_group.shutdown()
-        except Exception:
-            logger.warning("Failed to shut down inference broker actor", exc_info=True)
+        if broker_group is not None:
+            try:
+                broker_group.shutdown()
+            except Exception:
+                logger.warning("Failed to shut down inference broker actor", exc_info=True)
 
 
 def _terminate_job(job: JobHandle) -> None:

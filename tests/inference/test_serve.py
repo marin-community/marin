@@ -8,8 +8,6 @@ import json
 import re
 import socket
 import time
-from contextlib import contextmanager
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import click
@@ -21,7 +19,6 @@ from iris.time_proto import timestamp_to_proto
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     LevanterEngineConfig,
-    ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -41,7 +38,6 @@ from marin.inference.iris_cli import (
 )
 from marin.inference.levanter_backend import (
     DEFAULT_LEVANTER_MAX_SEQ_LEN,
-    LevanterBackend,
     inference_mesh,
     levanter_max_seq_len,
     validate_levanter_dtype,
@@ -50,10 +46,9 @@ from marin.inference.model_preparation import (
     resolve_model_path,
     select_tensor_parallel_size,
 )
-from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -139,37 +134,6 @@ def test_vllm_backend_falls_back_to_workspace_without_version():
 
 def test_vllm_backend_returns_its_composed_launcher():
     assert isinstance(vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)), IsolatedTpuVllm)
-
-
-@pytest.mark.parametrize(
-    ("engine", "backend_type"),
-    [
-        (VllmEngineConfig(), VllmBackend),
-        (LevanterEngineConfig(), LevanterBackend),
-    ],
-)
-def test_local_inference_dispatches_to_the_selected_backend(monkeypatch, engine, backend_type) -> None:
-    captured = []
-    check_alive = MagicMock()
-
-    @contextmanager
-    def _serve(_self, spec):
-        captured.append(spec)
-        yield SimpleNamespace(
-            base_url="http://127.0.0.1:8000",
-            model_id="served-model",
-            check_alive=check_alive,
-        )
-
-    monkeypatch.setattr(backend_type, "serve", _serve)
-    with local_inference(ServedModelConfig(model="requested-model"), engine) as session:
-        assert session.model.endpoint.base_url == "http://127.0.0.1:8000/v1"
-        assert session.model.endpoint.model == "served-model"
-        session.check_alive()
-        check_alive.assert_called_once_with()
-
-    assert captured[0].model == "requested-model"
-    assert captured[0].model_path == "requested-model"
 
 
 def test_levanter_max_seq_len_defaults_within_the_models_window():

@@ -390,6 +390,9 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
+    dtype = engine_kwargs.get("dtype")
+    if dtype is not None:
+        args.extend(["--dtype", str(dtype)])
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])
