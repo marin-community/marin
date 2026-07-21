@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Conservatively remove generic agent prose from GitHub descriptions."""
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Validate and publish agent-edited GitHub descriptions."""
 
 import argparse
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -17,11 +21,21 @@ UPDATED_DESCRIPTION_FOOTER_RESERVE = 512
 _ARCHIVE_COMMENT_PREFIX = "🤖 Archived the description before automated prose cleanup."
 _ARCHIVE_MARKER_PREFIX = "marin-prose-cleanup-archive"
 _CLEANUP_FOOTER_RE = re.compile(
-    r"\n{2,}---\n"
-    r"\[Original description\]\([^\n)]+\)\s+" + re.escape(CLEANUP_FOOTER_MARKER) + r"\s*$"
+    r"\n{2,}---\n" r"\[Original description\]\([^\n)]+\)\s+" + re.escape(CLEANUP_FOOTER_MARKER) + r"\s*$"
 )
 _FENCE_START_RE = re.compile(r"^(?: {0,3})(?P<fence>`{3,}|~{3,})")
 _INLINE_CODE_RE = re.compile(r"(`+[^`\n]*?`+)")
+_ATX_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,6}(?:[ \t]+(?P<heading_text>[^\n]*?))?[ \t]*#*[ \t]*(?:\n|$)", re.MULTILINE
+)
+_HTML_HEADING_LINE_RE = re.compile(
+    r"^[ \t]*<h[1-6](?:\s+[^>\n]*)?>(?P<heading_text>[^\n]*?)</h[1-6]\s*>[ \t]*(?:\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_STANDALONE_BOLD_LABEL_RE = re.compile(
+    r"^[ \t]*(?:\*\*(?P<asterisk_heading>[^*\n]+)\*\*|__(?P<underscore_heading>[^_\n]+)__)[ \t]*(?:\n|$)",
+    re.MULTILINE,
+)
 _BLOCK_HTML_CLOSE_RE = re.compile(r"</(?:h[1-6]|p|div|center)\s*>", re.IGNORECASE)
 _BLOCK_HTML_OPEN_RE = re.compile(r"<(?:h[1-6]|p|div|center)(?:\s+[^>]*)?>", re.IGNORECASE)
 _INLINE_HTML_RE = re.compile(r"</?(?:b|strong|em|i|u|font|span)(?:\s+[^>]*)?>", re.IGNORECASE)
@@ -50,8 +64,7 @@ _FRAMING_OPENER_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _NOT_JUST_RE = re.compile(
-    r"\bnot\s+(?:just|only|merely)\s+(?P<first>[^,.;\n]+?)\s*,?\s+"
-    r"but(?:\s+also)?\s+(?P<second>[^.;\n]+)",
+    r"\bnot\s+(?:just|only|merely)\s+(?P<first>[^,.;\n]+?)\s*,?\s+" r"but(?:\s+also)?\s+(?P<second>[^.;\n]+)",
     re.IGNORECASE,
 )
 _THIS_NOT_THAT_RE = re.compile(
@@ -59,6 +72,21 @@ _THIS_NOT_THAT_RE = re.compile(
     re.IGNORECASE,
 )
 _BOLD_RE = re.compile(r"\*\*(?P<asterisk_content>[^*\n]+)\*\*|__(?P<underscore_content>[^_\n]+)__")
+_CHECKBOX_RE = re.compile(r"^(?P<prefix>[ \t]*(?:[-*+]|\d+\.)[ \t]+)\[[ xX]\][ \t]+", re.MULTILINE)
+_FILLER_OPENER_RE = re.compile(
+    r"^(?P<prefix>[ \t]*(?:(?:[-*+]|\d+\.)[ \t]+|>[ \t]*)?)"
+    r"(?:this (?:pull request|pr|change)\s+|in this (?:pull request|pr|change),?[ \t]+)"
+    r"(?P<first>[a-z])",
+    re.IGNORECASE | re.MULTILINE,
+)
+_GENERIC_HEADING_RE = re.compile(
+    r"^(?:summary|what|what changed|changes|key pieces|implementation|details|testing|tests|test plan|"
+    r"validation|verification|performance|results|status|context|background|compatibility|reproduction|"
+    r"reproduce it|completion criteria|acceptance criteria|problem|fix|solution|paired with)$|"
+    r"^(?:parity verdict|why this\b)",
+    re.IGNORECASE,
+)
+_PATH_HEADING_RE = re.compile(r"^`?[\w./-]+\.(?:py|md|rst|toml|ya?ml|json|ts|tsx|js|rs|go|sh)`?$", re.IGNORECASE)
 
 
 class GithubItemKind(StrEnum):
@@ -92,6 +120,23 @@ class CleanupResult:
 
 def _capitalize_replacement(match: re.Match[str]) -> str:
     return f"{match.group('prefix')}{match.group('first').upper()}"
+
+
+def _heading_replacement(heading_text: str) -> str:
+    heading_text = heading_text.strip()
+    normalized = heading_text.strip("#*_` :.!?").strip()
+    if not normalized or _GENERIC_HEADING_RE.search(normalized) or _PATH_HEADING_RE.fullmatch(normalized):
+        return ""
+    return f"{heading_text}\n"
+
+
+def _replace_atx_or_html_heading(match: re.Match[str]) -> str:
+    return _heading_replacement(match.group("heading_text") or "")
+
+
+def _replace_bold_heading(match: re.Match[str]) -> str:
+    heading_text = match.group("asterisk_heading") or match.group("underscore_heading") or ""
+    return _heading_replacement(heading_text)
 
 
 def _replace_not_just(match: re.Match[str]) -> str:
@@ -128,7 +173,10 @@ def _strip_decorative_bold(text: str) -> str:
 
 
 def _clean_plain_text(text: str) -> str:
-    cleaned = _HTML_BREAK_RE.sub("\n", text)
+    cleaned = _ATX_HEADING_RE.sub(_replace_atx_or_html_heading, text)
+    cleaned = _HTML_HEADING_LINE_RE.sub(_replace_atx_or_html_heading, cleaned)
+    cleaned = _STANDALONE_BOLD_LABEL_RE.sub(_replace_bold_heading, cleaned)
+    cleaned = _HTML_BREAK_RE.sub("\n", cleaned)
     cleaned = _BLOCK_HTML_CLOSE_RE.sub("", cleaned)
     cleaned = _BLOCK_HTML_OPEN_RE.sub("", cleaned)
     cleaned = _INLINE_HTML_RE.sub("", cleaned)
@@ -138,6 +186,8 @@ def _clean_plain_text(text: str) -> str:
     cleaned = _FRAMING_OPENER_RE.sub(_capitalize_replacement, cleaned)
     cleaned = _NOT_JUST_RE.sub(_replace_not_just, cleaned)
     cleaned = _THIS_NOT_THAT_RE.sub(_replace_this_not_that, cleaned)
+    cleaned = _CHECKBOX_RE.sub(r"\g<prefix>", cleaned)
+    cleaned = _FILLER_OPENER_RE.sub(_capitalize_replacement, cleaned)
     return _strip_decorative_bold(cleaned)
 
 
@@ -192,7 +242,7 @@ def _body_without_cleanup_footer(body: str) -> str:
 
 
 def cleanup_github_body(body: str) -> BodyCleanup:
-    """Return a minimally cleaned GitHub body and whether it needs an edit."""
+    """Apply mechanical safeguards to an agent-edited GitHub body."""
     body_without_footer = _body_without_cleanup_footer(body)
     cleaned_body = _clean_outside_fenced_code(body_without_footer)
     if cleaned_body == body_without_footer:
@@ -232,15 +282,27 @@ def _event_item(event: dict[str, Any]) -> tuple[GithubItemKind, dict[str, Any]]:
     raise ValueError("Event does not contain an issue or pull request")
 
 
-def cleanup_result_from_event(event: dict[str, Any]) -> CleanupResult:
-    """Build the cleanup and archive payload for a GitHub webhook event."""
+def cleanup_result_from_event(event: dict[str, Any], rewritten_body: str) -> CleanupResult:
+    """Build an archive payload from an event and an agent-edited body."""
     kind, item = _event_item(event)
     number = int(item["number"])
     original_body_value = item.get("body")
     original_body = original_body_value if isinstance(original_body_value, str) else ""
     body_hash = hashlib.sha256(original_body.encode("utf-8")).hexdigest()
-    body_cleanup = cleanup_github_body(original_body)
-    if not body_cleanup.changed:
+    candidate_body = _body_without_cleanup_footer(rewritten_body).strip()
+    if original_body.strip() and not candidate_body:
+        return CleanupResult(
+            kind=kind,
+            number=number,
+            changed=False,
+            cleaned_body=original_body,
+            original_body_hash=body_hash,
+            skip_reason="rewrite_empty",
+        )
+
+    body_cleanup = cleanup_github_body(candidate_body)
+    original_without_footer = _body_without_cleanup_footer(original_body).strip()
+    if body_cleanup.cleaned_body == original_without_footer:
         return CleanupResult(
             kind=kind,
             number=number,
@@ -285,6 +347,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", type=Path, required=True, help="GitHub event JSON")
     parser.add_argument("--output", type=Path, required=True, help="Cleanup result JSON")
+    parser.add_argument("--rewritten-body-env", required=True, help="Environment variable containing the agent edit")
     parser.add_argument("--github-output", type=Path, help="GitHub Actions output file")
     return parser.parse_args()
 
@@ -292,7 +355,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     event = json.loads(args.event.read_text(encoding="utf-8"))
-    result = cleanup_result_from_event(event)
+    result = cleanup_result_from_event(event, os.environ[args.rewritten_body_env])
     args.output.write_text(json.dumps(asdict(result), ensure_ascii=False), encoding="utf-8")
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as github_output:

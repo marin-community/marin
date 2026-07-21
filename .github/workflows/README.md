@@ -9,11 +9,17 @@ This directory contains thin trigger YAML around behavior implemented in `script
 labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
 default branch; `pull_request_target` never checks out the PR head.
 
-The cleaner removes a narrow set of presentation patterns outside fenced and
-inline code: hype-only interjections, stock framing phrases, `not just X, but Y`
-rhetoric, decorative emoji or boldface, and presentational HTML tags. It does
-not summarize, enforce the 200-word authoring limit, rewrite technical claims,
-or change titles.
+Claude rewrites the description as a permanent changelog entry for a technical
+reader. It keeps behavior, rationale, symptoms, reproduction details, measured
+results, baselines, caveats, links, and useful code examples. It removes heading
+scaffolds, diff and test inventories, hype, rhetorical contrast, decorative
+formatting, and agent attribution. Useful length is not capped: benchmark tables
+and other review-relevant evidence stay. Titles are unchanged.
+
+The model job has read-only repository permissions, receives no CLI tools, and
+returns a schema-validated body. A separate write job runs the Python finalizer,
+which applies deterministic presentation checks outside fenced and inline code,
+rejects empty or oversized rewrites, and prepares the GitHub update.
 
 Before an edit, the workflow stores the exact prior description in a collapsed
 `github-actions[bot]` comment. The edited description ends with an `Original

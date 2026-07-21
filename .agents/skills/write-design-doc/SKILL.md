@@ -112,8 +112,8 @@ Two actions, can run together. After this, the skill is done.
 1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Use one
    commit to add `.agents/projects/<slug>/design.md`, `research.md`, and
    `spec.md`. Use an imperative PR title such as `[Design] Add finelog
-   persistence`. Keep the PR body under 200 words: state the proposed behavior
-   and motivation, then link all three files with absolute branch-rooted URLs
+   persistence`. State the proposed behavior and motivation in the PR body,
+   then link all three files with absolute branch-rooted URLs
    (relative paths 404 from PR descriptions; see "Linking conventions"). Do not
    add a stock discussion footer; the design's Open Questions section identifies
    requested feedback. Follow

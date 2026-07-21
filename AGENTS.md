@@ -63,9 +63,11 @@ uv run pyrefly
   exact text that will be published, then apply `ai-writing-donts.md` as a final
   compression pass. Do not publish raw implementation notes, test narration,
   prompt-shaped headings, or claims that use emphasis in place of evidence.
-- A PR description is the squash-merge commit message. Normal PR bodies and
-  bug/task issue bodies stay under 200 words; put detailed evidence in the
-  linked issue, design doc, logbook, or artifact. Follow the `commit` skill
+- A PR description is the squash-merge commit message. Keep every fact a future
+  reader needs to understand the behavior and rationale, including measured
+  results and caveats when they affect review. Remove headings, diff narration,
+  and implementation inventories; put extended history in a linked issue,
+  design doc, logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 

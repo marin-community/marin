@@ -25,8 +25,12 @@ more on what should be included rather than tone.
 - Use a direct, practical tone with no narrative padding.
 - Keep the title at or below 80 characters. State a factual symptom for a bug
   and an imperative outcome for a task.
-- Keep agent-authored bug and task bodies at or below 200 words.
-- Use only the headings needed to separate the repro or completion criteria.
+- Use as many words as needed for the symptom, impact, reproduction, expected
+  behavior, and completion criteria. Remove anything that does not help a
+  contributor understand or act on the issue.
+- Avoid section headings in normal bug and task issues. Use plain `Reproduce:`,
+  `Expected:`, or `Done when:` labels only when they make the issue easier to
+  act on.
 - Put extended investigation history in a linked comment, logbook, or artifact.
 - Do not prescribe an implementation unless the choice is part of the task.
 

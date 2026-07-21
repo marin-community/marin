@@ -12,8 +12,8 @@ jobs:
   review:
     # Runs on non-draft PRs opened/reopened/marked-ready by a writer. The
     # correctness review (/review-pr) also scans the current PR description
-    # against the writing-style rules after the fast prose-cleanup workflow has
-    # had a chance to remove mechanical agent-writing patterns.
+    # against the writing-style rules after the prose-cleanup workflow has had a
+    # chance to rewrite agent-authored presentation for a technical reader.
     if: >-
       github.event.pull_request.draft == false &&
       (

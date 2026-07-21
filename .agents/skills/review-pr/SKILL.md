@@ -31,7 +31,8 @@ Follow these steps precisely:
 
    - a title over 72 characters, a non-imperative title, or a conventional-commit
      prefix such as `feat:` or `fix:`;
-   - a body over 200 words;
+   - a body whose length comes from diff narration, repetition, or background a
+     future reader does not need;
    - a "Testing" / "Validation" / "Test plan" section, or "how I verified it" narration;
    - a templated What/Change/Scope/Testing heading scaffold, or empty boilerplate
      headings (a `## Summary` that restates the title, a `## Changes` that just

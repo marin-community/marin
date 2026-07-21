@@ -84,7 +84,8 @@ of this work.
 - **Subject**: imperative sentence (at most 72 characters), optional `[scope]` prefix
   (`[iris]`, `[zephyr]`, `[docs]`, …).
 - **Body** (optional, blank-line separated): what changed and why — the context a
-  reviewer needs. Keep it at or below 200 words. Do not inventory files or tests.
+  future reader needs. Keep relevant evidence and caveats; do not inventory
+  files or tests.
 - Do not use a conventional-commit prefix such as `feat:` or `fix:`.
 - No emoji, no markdown, no bullets in the subject. Do not credit yourself —
   this includes any `Co-Authored-By`, `Generated with`, provider, or session URL
@@ -134,9 +135,9 @@ force-push.
 Do this once the branch is ready for review. The PR description becomes the
 squash-merge commit message. Follow
 `.agents/skills/writing-style/pull-requests.md` exactly: an imperative title of
-at most 72 characters and a body of at most 200 words. Most bodies are one or
-two plain paragraphs. They state what changes and why; they do not reproduce
-the diff, test plan, or implementation notes.
+at most 72 characters and an information-dense body. Most bodies are a few plain
+paragraphs. They state what changes and why; they do not reproduce the diff,
+test plan, or implementation notes.
 
 Example:
 
@@ -156,13 +157,12 @@ Fixes #1234
 just to satisfy this — omit the link when none exists.
 
 **Specifications (>500 LOC only).** A genuinely large PR must link a spec in an
-issue or design doc. Keep the PR body under 200 words: name the important design
-decisions and link the spec for module maps, code excerpts, and detailed
-rationale.
+issue or design doc. Name the important design decisions in the PR body and link
+the spec for module maps, code excerpts, and detailed rationale.
 
 **Inspect the payload.** Draft the body in a uniquely named temporary file and
-use `--body-file`. Re-open that file, count its words, and apply the final
-compression pass before publishing. After creating or editing the PR, fetch the
+use `--body-file`. Re-open that file and apply the final compression pass before
+publishing. After creating or editing the PR, fetch the
 exact `title,body` with `gh pr view --json` and immediately correct text inserted
 by a tool or stale template.
 

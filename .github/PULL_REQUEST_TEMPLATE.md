@@ -1,11 +1,11 @@
 <!--
 See .agents/skills/writing-style/pull-requests.md for the prose rules.
 
-Write at most 200 words in one or two paragraphs. Lead with what changes, then
-why. Do not add Summary/Changes/Testing headings, an implementation inventory,
-checkboxes, attribution, or validation narration. Include a measured result only
-when it changes the review decision. If an issue exists, end with "Fixes #NNNN"
-or "Part of #NNNN".
+Lead with what changes, then why. Keep the measured results, constraints, and
+caveats a future reader needs; length follows useful content rather than a fixed
+limit. Do not add Summary/Changes/Testing headings, an implementation inventory,
+checkboxes, attribution, or validation narration. If an issue exists, end with
+"Fixes #NNNN" or "Part of #NNNN".
 
 Example:
 

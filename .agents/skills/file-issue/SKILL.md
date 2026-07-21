@@ -36,12 +36,11 @@ issue templates — these structures live here.
 ```markdown
 <what is broken and its impact -- concrete symptoms or error messages>
 
-**Reproduction**
+Reproduce:
 1. <step>
 2. <step>
 
-**Expected**
-<what should happen instead>
+Expected: <what should happen instead>
 
 <optional: concise evidence or confirmed root cause>
 ```
@@ -51,7 +50,7 @@ issue templates — these structures live here.
 ```markdown
 <what needs to be done and why -- enough context for anyone on the team>
 
-**Done when**
+Done when:
 <specific, testable completion criteria>
 ```
 
@@ -128,8 +127,9 @@ prefix.
 - No filler ("I noticed...", "During our conversation...").
 - No markdown images or tables.
 - Reference code with `file:line` links, not inline dumps.
-- Keep bug and task issues at or below 200 words; experiment issues may be longer
-  when the tracking context needs it.
+- Keep every fact needed to understand and act on the issue. Remove history,
+  repetition, and implementation narration that does not define the problem or
+  completion criteria; experiment issues may retain more tracking context.
 - Do not repeat the title in a `Description` section.
 - Do not inventory files, functions, or proposed implementation steps that are
   not required to define the problem or completion criteria.
@@ -142,7 +142,7 @@ prefix.
 
 Apply the writing-style final compression pass to the exact title and body that
 will be sent to GitHub. For a bug or task, verify the title is at most 80
-characters and the body is at most 200 words. Every remaining sentence must add
+characters. Every remaining sentence must add
 a symptom, impact, reproduction step, observation, expected behavior, or
 completion criterion.
 

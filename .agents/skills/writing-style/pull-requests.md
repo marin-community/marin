@@ -18,15 +18,22 @@ Prefer `[sft] Add the OpenCode chat template` over
 
 ## Write The Body
 
-- Keep an agent-authored PR body at or below 200 words. Most bodies are 50–150
-  words in one or two paragraphs with no headings.
+- Treat the body as a permanent changelog entry. It must make sense to a
+  competent reader who was not part of the authoring session and may encounter
+  it months later. This follows the Linux kernel's guidance for
+  [describing changes](https://docs.kernel.org/process/submitting-patches.html#describe-your-changes).
+- Use as many words as the review-relevant information needs and no more. Most
+  bodies are a few plain paragraphs with no headings; benchmarks, reproduction
+  details, or compatibility constraints may justify more.
 - Lead with the behavior that changes. Follow with the reason or constraint that
   shaped it.
-- Include a result only when it affects the review decision. State it once and
-  link the detailed evidence.
+- Keep concrete symptoms, measured results, baselines, and caveats when they
+  explain the change or affect the review decision. State them once and link
+  detailed evidence when the full record belongs elsewhere.
 - End with `Fixes #NNNN` or `Part of #NNNN` when applicable.
-- Put specifications, reproduction instructions, full benchmark results, and
-  research history in an issue, design doc, logbook, or artifact and link it.
+- Put specifications, extended raw benchmark output, and research history in an
+  issue, design doc, logbook, or artifact and link it. Keep the reproduction
+  detail and result summary needed to evaluate the change.
 
 The body must stand alone, but it does not need to reproduce the diff. Delete:
 
@@ -40,9 +47,9 @@ The body must stand alone, but it does not need to reproduce the diff. Delete:
   trailers;
 - filler openers such as `This PR`, `In this change`, or `Summary of changes`.
 
-Use a list, table, diagram, or heading only when it conveys a relationship that
-is hard to express in two short paragraphs. Markdown is not a completeness
-signal.
+Use a list, table, or diagram only when it conveys steps, data, or a relationship
+that is hard to express in prose. Do not add section headings to a normal PR
+body. Markdown is not a completeness signal.
 
 ## Compress An Implementation Report
 
@@ -70,8 +77,9 @@ Before committing or calling `gh pr create` or `gh pr edit`:
 
 1. Read the exact title and body that the command will receive, not the notes
    used to draft them.
-2. Count the title characters and body words. Shorten the text before publishing
-   if it exceeds 72 characters or 200 words.
+2. Count the title characters. Inspect the body length as a signal, not a gate:
+   shorten text that narrates the diff, but retain evidence and caveats a future
+   reader needs.
 3. Apply [ai-writing-donts.md](ai-writing-donts.md). Delete every sentence that
    does not add behavior, motivation, evidence, a caveat, or an issue link.
 4. Check that the title, opening sentence, and issue link agree with the actual
@@ -79,10 +87,9 @@ Before committing or calling `gh pr create` or `gh pr edit`:
 5. After creating or editing the PR, fetch `title,body` with `gh pr view --json`
    and correct any text added or altered by the publishing tool.
 
-Use `printf %s '<title>' | wc -m` for the title and
-`wc -w < path/to/body.md` for the body. Inspect the body file itself after
-counting it.
+Use `printf %s '<title>' | wc -m` for the title. Inspect the body file itself
+after drafting it.
 
-The agent prose cleanup workflow removes a small set of obvious presentation
-patterns after publication. It does not enforce this guide or replace the
-author's exact-payload review.
+The agent prose cleanup workflow applies an agentic editorial pass after
+publication. It preserves technical evidence while removing presentation and
+diff narration. It does not replace the author's exact-payload review.
