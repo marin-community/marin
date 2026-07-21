@@ -466,19 +466,16 @@ class GatedNorm(eqx.Module):
 
 
 class DenseMLP(eqx.Module):
-    # Gate and up are stored fused as one [H, 2I] matrix so the shared expert runs a single fused
-    # gate+up GEMM (split after) instead of two separate matmuls — one bigger GEMM (better tensor-core
-    # utilization, one launch) and one weight gather instead of two.
-    w_gate_up: jax.Array
+    w_gate: jax.Array
+    w_up: jax.Array
     w_down: jax.Array
 
     @staticmethod
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
-        w_gate = _init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std)
-        w_up = _init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std)
         return DenseMLP(
-            w_gate_up=reshard(jnp.concatenate([w_gate, w_up], axis=-1), P("data", "model")),
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
         )
 
@@ -496,9 +493,8 @@ class DenseMLP(eqx.Module):
 
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        gate_up = jnp.einsum("td,dm->tm", x_flat, self.w_gate_up)
-        inter = self.w_gate_up.shape[-1] // 2
-        gate, up = gate_up[..., :inter], gate_up[..., inter:]
+        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
+        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
@@ -1065,9 +1061,8 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
         if block.shared is not None:
             # Split shared experts (each intermediate I/n) sum to an equivalent single expert of
             # intermediate I with weights concatenated along the intermediate axis.
-            _sh_inter = block.shared[0].w_gate_up.shape[-1] // 2
-            shared_w_gate = jnp.concatenate([e.w_gate_up[:, :_sh_inter] for e in block.shared], axis=1)
-            shared_w_up = jnp.concatenate([e.w_gate_up[:, _sh_inter:] for e in block.shared], axis=1)
+            shared_w_gate = jnp.concatenate([e.w_gate for e in block.shared], axis=1)
+            shared_w_up = jnp.concatenate([e.w_up for e in block.shared], axis=1)
             shared_w_down = jnp.concatenate([e.w_down for e in block.shared], axis=0)
             tensors.update(
                 {
