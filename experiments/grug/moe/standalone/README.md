@@ -262,11 +262,11 @@ All successful rows are 30-step runs with eight warmup steps. GB200 MFU uses
 | #7201 baseline | sonic_cute | 1 | 188,998 | 22.2032 s | 16.862% | succeeded |
 | #7201 baseline | ring_cute | 4 | **220,648** | **19.0117 s** | **19.686%** | succeeded |
 | #7201 baseline | ring_cute | 8 | 204,117 | 20.5513 s | 18.211% | succeeded |
-| #7201 baseline | ragged_all_to_all_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| #7201 baseline | ragged_all_to_all_cute | 8 | — | — | — | CUBIN 3/4; fourth trial OOMed at 85.14 GiB |
 | reduced latent, L3072/I3072/e128 | sonic_cute | 1 | 269,630 | 15.6722 s | 20.391% | succeeded |
-| reduced latent, L3072/I3072/e128 | ring_cute | 4 | — | — | — | CUBIN loader failure, 2/2 allocations |
-| reduced latent, L3072/I3072/e128 | ring_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
-| reduced latent, L3072/I3072/e128 | ragged_all_to_all_cute | 8 | — | — | — | CUBIN loader failure, 2/2 allocations |
+| reduced latent, L3072/I3072/e128 | ring_cute | 4 | — | — | — | CUBIN 3/4; fourth trial coordination stall |
+| reduced latent, L3072/I3072/e128 | ring_cute | 8 | — | — | — | CUBIN 2/4; one OOM, one coordination abort |
+| reduced latent, L3072/I3072/e128 | ragged_all_to_all_cute | 8 | — | — | — | CUBIN 2/4; both added trials coordination aborts |
 | efficient latent, L3072/I3072/e256 | ring_cute | 4 | **256,059** | **16.3862 s** | **19.401%** | succeeded |
 
 The matched-work L3072/I6144/e128 construction does not fit: XLA planned
@@ -280,10 +280,14 @@ for the 15.1% reduction in analytic work/token.
 
 Use e256 ring EP4 when routed-expert parameter capacity should remain fixed. The
 e128 variant is the throughput-first option when halving routed-expert parameters
-is acceptable; its EP1 result is 42.7% faster than the EP1 baseline. Quantitative
-EP>1 results for e128 remain blocked by the intermittent JAX 0.10.1 CUBIN-loader
-fault tracked in [#7421](https://github.com/marin-community/marin/issues/7421),
-despite viable XLA memory plans of 134.62–147.49 GiB/GPU.
+is acceptable; its EP1 result is 42.7% faster than the EP1 baseline. Four-trial
+extensions do not make the EP>1 failures deterministic: CUBIN was observed in
+3/4 ring EP4 attempts, 2/4 ring EP8 attempts, and 2/4 ragged-all-to-all EP8
+attempts. The other attempts OOMed, stalled before first execution, or aborted
+in XLA coordination. The intermittent JAX 0.10.1 CUBIN-loader fault tracked in
+[#7421](https://github.com/marin-community/marin/issues/7421) remains the
+common signature when a trial reaches the loader, despite viable XLA memory
+plans of 134.62–147.49 GiB/GPU in the original latent arms.
 
 ### Multi-node
 

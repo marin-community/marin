@@ -144,3 +144,27 @@ The baseline all-to-all EP8 arm also failed at the same CUBIN load in both clean
 allocations. The failure is therefore recorded as an infrastructure-blocked
 measurement rather than a backend throughput result. All jobs launched by this
 investigation are terminal; no Iris gang remains to babysit.
+
+## 2026-07-21 12:00 PDT - Four-trial CUBIN reproducibility extension
+
+The four configurations previously marked as CUBIN failures received enough
+additional executed trials to reach four attempts each. The first parallel
+submission accidentally activated eight 16-node gangs at once; seven duplicate
+gangs were stopped before execution, and all subsequent trials were serialized
+to one gang at a time. The stopped jobs are not counted below.
+
+| Configuration | Four executed attempts | CUBIN failures | Other outcomes |
+|---|---|---:|---|
+| Baseline `ragged_all_to_all_cute` EP8 | `001-d-r1`, `r1b`, `r1c`, `r1e` | **3/4** | `r1e`: 85.14 GiB `RESOURCE_EXHAUSTED` OOM |
+| Reduced latent e128 `ring_cute` EP4 | `003-b-e128-r1`, `r1b`, `r1e`, `r1f` | **3/4** | `r1f`: killed after ~20 minutes with no first-step output; process was sleeping in coordination |
+| Reduced latent e128 `ring_cute` EP8 | `003-c-e128-r1`, `r1b`, `r1e`, `r1f` | **2/4** | `r1e`: 90.87 GiB HBM OOM; `r1f`: exit 133 coordination/barrier failure |
+| Reduced latent e128 `ragged_all_to_all_cute` EP8 | `003-d-e128-r1`, `r1b`, `r1e`, `r1f` | **2/4** | Both added trials: exit 133 coordination/barrier failure |
+
+The CUBIN signature remained `Failed to load in-memory CUBIN` /
+`CUDA_ERROR_INVALID_VALUE` at `jit_train_step` synchronization when it
+occurred. However, none of the four configurations is deterministic at the
+configuration level: each produced at least one non-CUBIN outcome under the
+same benchmark arguments. The strongest remaining concentration is ring EP4
+at 3/4, but the fourth attempt hung before first execution rather than passing.
+The aggregate failure should therefore remain classified as a graph/runtime
+and infrastructure interaction, not as a deterministic latent-MoE failure.
