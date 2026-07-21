@@ -5,7 +5,6 @@
 
 import argparse
 import json
-import os
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -79,17 +78,15 @@ def report_quota_exhaustion() -> None:
     print("::warning title=Claude quota exhausted::Skipping Claude agent because the account returned HTTP 429.")
 
 
-def _write_github_output(quota_exhausted: bool) -> None:
-    output_path = os.environ.get("GITHUB_OUTPUT")
-    if output_path:
-        with Path(output_path).open("a") as output:
-            output.write(f"quota_exhausted={str(quota_exhausted).lower()}\n")
+def _write_github_output(output_path: Path, quota_exhausted: bool) -> None:
+    with output_path.open("a") as output:
+        output.write(f"quota_exhausted={str(quota_exhausted).lower()}\n")
 
 
-def classify_action(outcome: str, execution_file: Path | None) -> None:
+def classify_action(outcome: str, execution_file: Path | None, github_output: Path) -> None:
     """Fail an action invocation unless it succeeded or exhausted quota."""
     if outcome == "success":
-        _write_github_output(quota_exhausted=False)
+        _write_github_output(github_output, quota_exhausted=False)
         return
     if execution_file is None or not execution_file.is_file():
         raise ValueError("Claude action failed without an execution file")
@@ -98,7 +95,7 @@ def classify_action(outcome: str, execution_file: Path | None) -> None:
     if classify_claude_result(execution) != ClaudeRunStatus.QUOTA_EXHAUSTED:
         raise RuntimeError("Claude action failed for a reason other than quota exhaustion")
 
-    _write_github_output(quota_exhausted=True)
+    _write_github_output(github_output, quota_exhausted=True)
     report_quota_exhaustion()
 
 
@@ -106,8 +103,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("outcome", choices=("success", "failure", "cancelled", "skipped"))
     parser.add_argument("execution_file", type=Path, nargs="?")
+    parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
-    classify_action(args.outcome, args.execution_file)
+    classify_action(args.outcome, args.execution_file, args.github_output)
 
 
 if __name__ == "__main__":

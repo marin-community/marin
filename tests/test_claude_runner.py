@@ -68,15 +68,12 @@ def test_run_claude_non_quota_error_raises(tmp_path: Path) -> None:
         run_claude("prompt", [], executable=executable)
 
 
-def test_classify_action_quota_exhaustion_writes_soft_failure_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_classify_action_quota_exhaustion_writes_soft_failure_output(tmp_path: Path) -> None:
     execution_file = tmp_path / "execution.json"
     execution_file.write_text(json.dumps([error_payload(429)]))
     github_output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
 
-    classify_action("failure", execution_file)
+    classify_action("failure", execution_file, github_output)
 
     assert github_output.read_text() == "quota_exhausted=true\n"
 
@@ -86,4 +83,4 @@ def test_classify_action_non_quota_error_raises(tmp_path: Path) -> None:
     execution_file.write_text(json.dumps([error_payload(404)]))
 
     with pytest.raises(RuntimeError):
-        classify_action("failure", execution_file)
+        classify_action("failure", execution_file, tmp_path / "github-output")

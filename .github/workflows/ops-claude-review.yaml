@@ -51,10 +51,10 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.claude.outcome }}
+          execution-file: ${{ steps.claude.outputs.execution_file }}
 
   # Runs in parallel with `review`: the advisory infra/lint/ catalog review
   # (`pre-commit.py --review`, the CI counterpart of the commit skill's local
@@ -120,7 +120,7 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.claude.outcome }}
+          execution-file: ${{ steps.claude.outputs.execution_file }}

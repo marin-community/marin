@@ -78,10 +78,10 @@ jobs:
       - name: Classify Claude result
         id: classify
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.rewrite.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.rewrite.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.rewrite.outcome }}
+          execution-file: ${{ steps.rewrite.outputs.execution_file }}
 
   cleanup:
     needs: rewrite

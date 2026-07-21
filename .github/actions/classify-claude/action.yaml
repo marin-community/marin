@@ -1,0 +1,28 @@
+name: Classify Claude Result
+description: Treat Claude HTTP 429 responses as skipped while preserving other failures.
+
+inputs:
+  outcome:
+    description: Outcome of the claude-code-action step.
+    required: true
+  execution-file:
+    description: Execution trace written by claude-code-action.
+    required: false
+    default: ''
+
+outputs:
+  quota_exhausted:
+    description: Whether Claude failed because its account quota was exhausted.
+    value: ${{ steps.classify.outputs.quota_exhausted }}
+
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        CLAUDE_OUTCOME: ${{ inputs.outcome }}
+        CLAUDE_EXECUTION_FILE: ${{ inputs.execution-file }}
+      run: >-
+        python "$GITHUB_ACTION_PATH/../../../scripts/ci/claude_runner.py"
+        "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE" --github-output "$GITHUB_OUTPUT"

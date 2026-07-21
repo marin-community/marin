@@ -80,10 +80,10 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.claude.outcome }}
+          execution-file: ${{ steps.claude.outputs.execution_file }}
 
   triage:
     if: |
@@ -206,10 +206,10 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.claude.outcome }}
+          execution-file: ${{ steps.claude.outputs.execution_file }}
 
   autofix:
     if: |
@@ -279,7 +279,7 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        env:
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        run: python scripts/ci/claude_runner.py "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE"
+        uses: ./.github/actions/classify-claude
+        with:
+          outcome: ${{ steps.claude.outcome }}
+          execution-file: ${{ steps.claude.outputs.execution_file }}
