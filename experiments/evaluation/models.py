@@ -81,18 +81,27 @@ def _snowball(name: str, location: str, chat_template: str | None = None) -> Eva
     )
 
 
-def _base_hf(name: str, location: str, revision: str, hbm_gb: int, max_model_len: int | None = None) -> EvalModelConfig:
-    """A base (non-chat) HF model served on TPU, pinned to an immutable revision.
+def _base_hf(
+    name: str,
+    location: str,
+    revision: str,
+    hbm_gb: int,
+    max_model_len: int | None = None,
+    gpu_only: bool = False,
+) -> EvalModelConfig:
+    """A base (non-chat) HF model, pinned to an immutable revision.
 
     ``apply_chat_template=False`` (base models ship no chat template), so these run the NLP
     (lm-eval) suite, not the chat benchmarks. The revision is pinned through ``vllm serve
     --revision`` so results are reproducible against a fixed checkpoint rather than the HF branch head.
+    ``gpu_only`` routes serving to GPU for a model the TPU attention kernel cannot compile.
     """
     return EvalModelConfig(
         name=name,
         location=location,
         hbm_gb=hbm_gb,
         apply_chat_template=False,
+        gpu_only=gpu_only,
         vllm_extra_args=("--revision", revision),
         max_model_len=max_model_len,
     )
@@ -100,11 +109,12 @@ def _base_hf(name: str, location: str, revision: str, hbm_gb: int, max_model_len
 
 MODELS: dict[str, EvalModelConfig] = {
     # Base reference models, pinned to the revisions used elsewhere in experiments/models.py. Amber
-    # and MAP-NEO clamp to their native context windows.
+    # and MAP-NEO clamp to their native context windows. MAP-NEO's head_dim is 192 (hidden 3072 / 16
+    # heads), which the TPU ragged-paged-attention kernel cannot compile, so it serves on GPU.
     "llama-3.1-8b-base": _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
     "olmo-2-7b-base": _base_hf("olmo-2-7b-base", "allenai/OLMo-2-1124-7B", "7df9a82", 18),
     "amber-7b": _base_hf("amber-7b", "LLM360/Amber", "83c188f", 18, max_model_len=2048),
-    "map-neo-7b": _base_hf("map-neo-7b", "m-a-p/neo_7b", "81bad32", 18, max_model_len=4096),
+    "map-neo-7b": _base_hf("map-neo-7b", "m-a-p/neo_7b", "81bad32", 18, max_model_len=4096, gpu_only=True),
     "qwen3.5-9b": EvalModelConfig(
         name="qwen3.5-9b",
         location="Qwen/Qwen3.5-9B",
