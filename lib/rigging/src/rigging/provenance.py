@@ -129,12 +129,17 @@ class Provenance:
     @classmethod
     def from_json(cls, raw: str) -> "Provenance":
         d = json.loads(raw)
+        built_by = d.get("built_by")
+        if built_by is not None and not isinstance(built_by, str):
+            # built_by feeds per-user namespacing; a non-string is a malformed payload,
+            # not an identity.
+            raise TypeError(f"built_by must be a string or null, got {type(built_by).__name__}")
         return cls(
             tree_hash=d["tree_hash"],
             base_commit=d["base_commit"],
             dirty=bool(d["dirty"]),
             branch=d.get("branch"),
-            built_by=d.get("built_by"),
+            built_by=built_by,
             git_remote=d.get("git_remote"),
             created_at=d.get("created_at", ""),
             command_line=tuple(d.get("command_line", ())),
