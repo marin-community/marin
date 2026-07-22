@@ -90,13 +90,18 @@ CoreWeave's per-node daemons are thousands of pods of someone else's infrastruct
 while the namespaces we operate hold about a hundred. These are current-state reads —
 the bridge stores no history; trends come from the finelog-backed rows.
 
-`gpu_racks` lists every node with `nvidia.com/gpu` capacity, grouped by its
-CoreWeave `node.coreweave.cloud/rack` label, with the rack's full name
+`gpu_racks` lists every GB200 NVL72 node (`nvidia.com/gpu` capacity present and
+`node.kubernetes.io/instance-type` containing `gb200`), grouped by its CoreWeave
+`node.coreweave.cloud/rack` label, with the rack's full name
 (`ds.coreweave.com/physical-topology.rack-name`), instance type, and how many of
-its trays are registered vs. Ready. A tray that never re-registers with the k8s
-API — the common failure mode after hardware maintenance — is invisible here, so
-a rack short of its physical capacity (18 trays for a GB200 NVL72 rack, one CoreWeave
-rack) is a floor on what's down, not a guarantee.
+its trays are registered vs. Ready. The instance-type filter matters: other GPU
+node pools carry a CoreWeave rack label too, but not the 18-node shared-rack
+topology the 16/18 thresholds assume — `cw-us-east-02a`'s H100 fleet
+(`gd-8xh100ib-i128`) has 29 racks, 26 of them a single standalone node, and
+without the filter every one read as "1 of 18 trays." A tray that never
+re-registers with the k8s API — the common failure mode after hardware
+maintenance — is invisible here, so a GB200 rack short of 18 trays is a floor
+on what's down, not a guarantee.
 
 The `/k8s/alerts/*` routes exist for Grafana's table-alert contract: string label
 columns plus exactly one numeric column, and always at least one row per cluster — an

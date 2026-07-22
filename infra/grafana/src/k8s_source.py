@@ -67,6 +67,14 @@ _RACK_LABEL = "node.coreweave.cloud/rack"
 _RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
 _INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
 
+# gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
+# fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
+# (e.g. gd-8xh100ib-i128, a standalone 8-GPU H100 server) get their own CoreWeave
+# rack label too, but mostly 1 node per rack: cw-us-east-02a has 29 racks, 26 of them
+# with exactly one node. Grouping those in made every one read as "1 of 18 trays" and
+# fired the below-16 alert on hardware the threshold was never about.
+_GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
+
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
@@ -436,10 +444,11 @@ class K8sSource:
         return rows[:_EVENT_LIMIT]
 
     def gpu_racks(self) -> list[dict]:
-        """One row per physical rack of GPU nodes: trays registered vs. Ready.
+        """One row per physical rack of GB200 nodes: trays registered vs. Ready.
 
-        Only nodes advertising nvidia.com/gpu capacity carry the CoreWeave rack
-        topology labels that map to a physical tray; CPU/storage nodes are excluded.
+        Scoped to GB200 NVL72 instance types (see _GB200_INSTANCE_TYPE_SUBSTRING):
+        other GPU instance types carry a CoreWeave rack label too, but with a
+        different physical-rack topology the 16/18-tray expectation doesn't apply to.
 
         Raises:
             ValueError: A node has a malformed nvidia.com/gpu capacity quantity.
@@ -449,6 +458,9 @@ class K8sSource:
             if _node_gpu_capacity(node) <= 0:
                 continue
             labels = (node.get("metadata") or {}).get("labels") or {}
+            instance_type = labels.get(_INSTANCE_TYPE_LABEL, "")
+            if _GB200_INSTANCE_TYPE_SUBSTRING not in instance_type:
+                continue
             rack = labels.get(_RACK_LABEL)
             if rack is None:
                 continue
@@ -457,7 +469,7 @@ class K8sSource:
                 {
                     "rack": rack,
                     "rack_name": labels.get(_RACK_NAME_LABEL, ""),
-                    "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
+                    "instance_type": instance_type,
                     "trays_total": 0,
                     "trays_ready": 0,
                 },

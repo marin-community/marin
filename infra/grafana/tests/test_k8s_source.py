@@ -361,9 +361,23 @@ def test_gpu_racks_groups_by_rack_and_counts_ready():
 def test_gpu_racks_excludes_non_gpu_and_unlabeled_nodes():
     routes = {
         "/api/v1/nodes": [
-            node("cpu-1", rack="122", gpu_capacity=0),
-            node("no-rack-label", gpu_capacity=4),
-            node("g1", rack="169", gpu_capacity=4),
+            node("cpu-1", rack="122", instance_type="gb200-4x", gpu_capacity=0),
+            node("no-rack-label", instance_type="gb200-4x", gpu_capacity=4),
+            node("g1", rack="169", instance_type="gb200-4x", gpu_capacity=4),
+        ]
+    }
+    rows = make_k8s_source(k8s_api(routes)).gpu_racks()
+    assert [row["rack"] for row in rows] == ["169"]
+
+
+def test_gpu_racks_excludes_non_gb200_instance_types():
+    # cw-us-east-02a's H100 fleet (gd-8xh100ib-i128) carries a CoreWeave rack label
+    # too, but mostly one node per rack — grouping it in misapplies the GB200
+    # 16/18-tray thresholds to hardware they were never about.
+    routes = {
+        "/api/v1/nodes": [
+            node("h100-1", rack="2", instance_type="gd-8xh100ib-i128", gpu_capacity=8),
+            node("g1", rack="169", instance_type="gb200-4x", gpu_capacity=4),
         ]
     }
     rows = make_k8s_source(k8s_api(routes)).gpu_racks()
@@ -373,8 +387,8 @@ def test_gpu_racks_excludes_non_gpu_and_unlabeled_nodes():
 def test_gpu_racks_sorts_numerically_not_lexically():
     routes = {
         "/api/v1/nodes": [
-            node("g1", rack="10", gpu_capacity=4),
-            node("g2", rack="9", gpu_capacity=4),
+            node("g1", rack="10", instance_type="gb200-4x", gpu_capacity=4),
+            node("g2", rack="9", instance_type="gb200-4x", gpu_capacity=4),
         ]
     }
     rows = make_k8s_source(k8s_api(routes)).gpu_racks()
@@ -382,7 +396,7 @@ def test_gpu_racks_sorts_numerically_not_lexically():
 
 
 def test_gpu_racks_rejects_an_invalid_gpu_capacity_quantity():
-    bad_node = node("g1", rack="169", gpu_capacity=4)
+    bad_node = node("g1", rack="169", instance_type="gb200-4x", gpu_capacity=4)
     bad_node["status"]["capacity"][GPU_RESOURCE] = "many"
     with pytest.raises(ValueError):
         make_k8s_source(k8s_api({"/api/v1/nodes": [bad_node]})).gpu_racks()

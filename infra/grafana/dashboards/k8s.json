@@ -361,7 +361,7 @@
       "id": 9,
       "type": "table",
       "title": "GPU rack tray inventory",
-      "description": "GPU nodes (nvidia.com/gpu capacity present) grouped by CoreWeave physical rack: trays currently registered with the k8s API vs. Ready. Thresholds on trays_ready assume the GB200 NVL72 rack spec (18 trays full, 16 minimum) and will misclassify racks of a different instance type. A rack below 16, or with a gap between trays_total and its expected full count, needs a CoreWeave ticket citing rack_name — a tray that never re-registers is invisible here, so this is a floor on down trays, not a guarantee.",
+      "description": "GB200 NVL72 nodes only (instance type contains 'gb200') grouped by CoreWeave physical rack: trays currently registered with the k8s API vs. Ready, against the 18-tray-full/16-minimum rack spec. Other GPU instance types (e.g. standalone H100 servers) carry a CoreWeave rack label too but with a different physical-rack topology — mostly one node per rack — so they're excluded rather than misread against a threshold that isn't about them. A rack below 16, or with a gap between trays_total and its expected full count, needs a CoreWeave ticket citing rack_name — a tray that never re-registers is invisible here, so this is a floor on down trays, not a guarantee.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "k8s"
@@ -461,7 +461,7 @@
       "id": 10,
       "type": "barchart",
       "title": "GPU racks — trays ready",
-      "description": "Trays Ready per physical rack (bar height), colored by the same GB200 NVL72 thresholds as the inventory table above: red under 16, orange 16-17, green at the 18-tray full spec. One bar per rack_name, so a rack short of trays reads at a glance without scanning the table.",
+      "description": "GB200 NVL72 racks only, same scope as the inventory table above. Trays Ready per physical rack (bar height), colored by the same thresholds: red under 16, orange 16-17, green at the 18-tray full spec. One bar per rack_name, so a rack short of trays reads at a glance without scanning the table.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "k8s"
