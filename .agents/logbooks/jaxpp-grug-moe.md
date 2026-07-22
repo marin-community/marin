@@ -2275,3 +2275,19 @@ author: dlwh
   - Applying the clean p50 gain to the best L24/b8192/m256 mean MFU projects about `18.59`, still `1.41` points below the 20-MFU target. The exact m256 FP8 run is not justified.
 - Next action:
   - Stop scaling packed FP8 pipeline transfer for this objective. Retain it as an explicit research mode and return to a qualitatively different mechanism, led by the one-node Transformer Engine NCCL EP HT gate or a schedule that actually overlaps the exposed SendRecv rendezvous.
+
+### 2026-07-22 11:58 PDT - FP8 expert-GEMM gate prepared
+- Hypothesis: Replacing only the two EP-local Pallas-Triton ragged expert GEMMs with Hopper FP8 tensor-core kernels can reduce the exact routed-MLP critical path while preserving the proven ring routing and BF16 collectives.
+- Commit Hashes:
+  - `97301bbdfb` (`[grug] Add FP8 ring GEMM benchmark gate`) adds the ring adapter and exact-shape diagnostic.
+  - `8232eedf5f` through `a61081dd1a` port the reviewed Haliax FP8 ragged-dot forward, dgrad, and wgrad implementation.
+- Config:
+  - One RNO2A H100x8 node, EP8, d2560/i1280, 64 experts, top-k4, microbatch `32x4096`, capacity factor `1.25`, balanced routing, five warmups, and 30 timed iterations.
+  - `ring_fp8_gemm` keeps dispatch/combine and collectives in BF16. Only W13 and W2 grouped GEMMs use E4M3 inputs; the JAX 0.10.1 gate also uses E4M3 output gradients because mixed E5M2-by-E4M3 WGMMA requires JAX 0.11.
+  - This is an approximate diagnostic, not a training-semantics acceptance. Full JaxPP integration must separately preserve overwrite semantics for FP8 scale/amax state instead of summing those leaves across microbatches.
+- Validation:
+  - Focused tests report `29 passed, 8 skipped`; forced multi-device CPU ring/state tests report `2 passed`; focused Pyrefly and `./infra/pre-commit.py --changed-files --fix` pass.
+- Promotion gate:
+  - Require finite output and gradients for `x`, combine weights, W13, and W2; relative L2 error below `0.10`; FP8 WGMMA evidence; at least `1.05x` forward and `1.10x` forward-backward median speedup versus the eight-warp ring baseline; and no OOM at preallocation `0.70`.
+- Next action:
+  - Run the bounded one-node diagnostic. Stop this branch of work if forward-backward misses `1.10x`; otherwise run a matched reduced JaxPP A/B before any exact L24/m256 attempt.
