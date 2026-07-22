@@ -402,6 +402,21 @@ def test_fleet_stamps_cluster_and_keeps_healthy_clusters_on_partial_failure():
     assert "403" in error_row["error"]
 
 
+def test_alert_gpu_rack_trays_maps_trays_ready_to_value():
+    fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())))
+    assert fleet.alert_gpu_rack_trays() == [
+        {"cluster": "cw-a", "rack": "169", "rack_name": "dh1-r169-us-east-08a", "value": 1}
+    ]
+
+
+def test_alert_gpu_rack_trays_omits_rows_for_an_unreachable_cluster():
+    # Unlike the other alert routes, an unreachable cluster contributes no rows: we
+    # don't know its rack set, and a fabricated below-threshold value would double-page
+    # alongside K8sClusterUnreachable.
+    fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())), ("cw-b", _forbidden))
+    assert [row["cluster"] for row in fleet.alert_gpu_rack_trays()] == ["cw-a"]
+
+
 def test_alert_routes_return_explicit_zeros_when_healthy():
     fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())))
     assert fleet.alert_unreachable() == [{"cluster": "cw-a", "error_class": "none", "value": 0}]
@@ -481,9 +496,7 @@ def _client(fleet: K8sFleet) -> TestClient:
 
 
 def test_k8s_routes_serve_fleet_rows():
-    routes = healthy_k8s_routes()
-    routes["/api/v1/nodes"] = [node("g1", rack="169", instance_type="gb200-4x", gpu_capacity=4)]
-    client = _client(_fleet(("cw-a", k8s_api(routes))))
+    client = _client(_fleet(("cw-a", k8s_api(healthy_k8s_routes()))))
     for path in (
         "/k8s/control_plane",
         "/k8s/crashloops",
@@ -500,7 +513,7 @@ def test_k8s_routes_serve_fleet_rows():
     assert rack == {
         "cluster": "cw-a",
         "rack": "169",
-        "rack_name": "",
+        "rack_name": "dh1-r169-us-east-08a",
         "instance_type": "gb200-4x",
         "trays_total": 1,
         "trays_ready": 1,

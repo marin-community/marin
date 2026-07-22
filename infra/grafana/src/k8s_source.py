@@ -613,6 +613,24 @@ class K8sFleet:
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
+    def alert_gpu_rack_trays(self) -> list[dict]:
+        """Per rack: trays_ready as ``value``, for the below-minimum-trays alert.
+
+        Unlike the other alert routes, an unreachable cluster contributes no rows
+        here rather than an explicit safe value: we don't know its rack set to fill
+        in placeholders for, and a fabricated value below the threshold would
+        double-page alongside K8sClusterUnreachable, which already covers that
+        failure mode. noDataState=Alerting still pages if the whole fleet drops out.
+        """
+
+        def counts(source: K8sSource) -> list[dict]:
+            return [
+                {"rack": row["rack"], "rack_name": row["rack_name"], "value": row["trays_ready"]}
+                for row in source.gpu_racks()
+            ]
+
+        return self._fan_out(counts, lambda err: [])
+
     def health(self) -> list[dict]:
         """One row per cluster: reachable, error class, and API server latency."""
 

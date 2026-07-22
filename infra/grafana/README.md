@@ -40,7 +40,8 @@ GET /k8s/termination_candidates | kueue | events | health
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
-     webhook_ready,degraded,stuck_gpu_pods}       numeric, >=1 row per cluster
+     webhook_ready,degraded,stuck_gpu_pods,        numeric; gpu_rack_trays omits rows for
+     gpu_rack_trays}                               a cluster it cannot reach, others zero
 GET /health                                       bridge liveness
 ```
 
@@ -152,9 +153,11 @@ redeploy.
 
 Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, a dead Iris controller, and a GPU pod that stays node-bound and
+degraded component, a dead Iris controller, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
-overdue threshold. The stuck-pod rule groups by node and links the cordon-first
+overdue threshold, and a GPU rack with fewer than 16 trays Ready for 15 minutes
+(the GB200 NVL72 rack spec is 18; a floor rather than an outright outage — see
+`gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +

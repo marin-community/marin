@@ -34,6 +34,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
+    GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -383,6 +384,9 @@ def create_app(
     def k8s_alerts_degraded(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
 
+    def k8s_alerts_gpu_rack_trays(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_gpu_rack_trays", k8s_fleet.alert_gpu_rack_trays)
+
     def k8s_alerts_stuck_gpu_pods(_: Request) -> JSONResponse:
         # The dashboard and alert projection share one fleet LIST per cache TTL.
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
@@ -416,6 +420,7 @@ def create_app(
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
+            Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
             Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
         ]
     )

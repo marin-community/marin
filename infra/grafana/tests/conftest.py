@@ -110,7 +110,7 @@ def make_k8s_source(handler, name: str = "cw-a", token: str | None = "secret") -
 
 
 def healthy_k8s_routes() -> dict:
-    """A cluster where every watched component is up and the webhook has one endpoint."""
+    """A cluster where every watched component is up, the webhook has one endpoint, and one GPU rack is full."""
     return {
         "/version": {"gitVersion": "v1.32.0"},
         KUEUE_DEPLOY: deployment("kueue-system", "kueue-controller-manager"),
@@ -125,4 +125,7 @@ def healthy_k8s_routes() -> dict:
         "/api/v1/namespaces": [],
         "/apis/kueue.x-k8s.io/v1beta2/workloads": [],
         "/api/v1/events": [],
+        "/api/v1/nodes": [
+            node("g1", rack="169", rack_name="dh1-r169-us-east-08a", instance_type="gb200-4x", gpu_capacity=4)
+        ],
     }
