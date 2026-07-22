@@ -10,6 +10,7 @@ import functools
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,8 @@ VLLM_TPU_ENV_VARS: dict[str, str] = {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
     "VLLM_TPU_SKIP_PRECOMPILE": "1",
+    # Bound CPU staging when several engines load concurrently on one VM.
+    "RUNAI_STREAMER_MEMORY_LIMIT": "4294967296",
 }
 
 DEFAULT_HEARTBEAT_TIMEOUT = 2 * 60
@@ -55,13 +58,20 @@ DEFAULT_POLL_BACKOFF = 10.0
 
 @dataclass(frozen=True)
 class IIDSamplingConfig:
-    n_samples: int
     temperature: float
     top_p: float
     top_k: int
     max_tokens: int
-    seed: int
     stop: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class IIDModelConfig:
+    max_model_len: int | None = None
+    gpu_memory_utilization: float | None = None
+    enable_prefix_caching: bool | None = None
+    # Required for Delphi-shaped models, but slower for standard model shapes.
+    apply_rpa_block_size_patch: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,12 +82,28 @@ class IIDExecutionConfig:
     heartbeat_timeout: float = DEFAULT_HEARTBEAT_TIMEOUT
     poll_backoff: float = DEFAULT_POLL_BACKOFF
     tensor_parallel_size: int = 1
+    aggregate_workers: int = 32
+
+    def __post_init__(self) -> None:
+        if self.aggregate_workers < 1:
+            raise ValueError(f"aggregate_workers must be >= 1 (got {self.aggregate_workers})")
 
 
 @dataclass(frozen=True)
 class IIDConfig:
-    sampling: IIDSamplingConfig
+    n_samples: int
+    seed: int
+    sampling_configs: tuple[IIDSamplingConfig, ...]
     execution: IIDExecutionConfig
+    model: IIDModelConfig = IIDModelConfig()
+
+    def __post_init__(self) -> None:
+        if self.n_samples < 1:
+            raise ValueError(f"n_samples must be >= 1 (got {self.n_samples})")
+        if not self.sampling_configs:
+            raise ValueError("sampling_configs must be non-empty")
+        if len(set(self.sampling_configs)) != len(self.sampling_configs):
+            raise ValueError(f"sampling_configs must be distinct (got {self.sampling_configs})")
 
 
 @dataclass(frozen=True)
@@ -85,29 +111,36 @@ class IIDCompletionStepConfig:
     output_path: str
     model_path: str
     prompts_path: str
-    sampling: IIDSamplingConfig
+    n_samples: int
+    seed: int
+    sampling_configs: tuple[IIDSamplingConfig, ...]
+    model: IIDModelConfig
     worker_pools: tuple[WorkerPoolConfig, ...]
     ledger_prefix: str
     chunk_size: int
     heartbeat_timeout: float
     poll_backoff: float
     tensor_parallel_size: int
+    aggregate_workers: int
 
 
 @dataclass(frozen=True)
 class IIDChunkSpec:
     chunk_id: int
+    sampling_config_index: int
     chunk_start: int
     chunk_end: int
     output_path: str
-    success_path: str
 
 
 @dataclass(frozen=True)
 class IIDLocalEngineWorkerConfig:
     model_path: str
     prompts_path: str
-    sampling: IIDSamplingConfig
+    n_samples: int
+    seed: int
+    sampling_configs: tuple[IIDSamplingConfig, ...]
+    model: IIDModelConfig
     ledger_path: str
     poll_backoff: float
     tensor_parallel_size: int
@@ -135,15 +168,28 @@ class IIDCompletionAlgorithm:
 
 
 @functools.cache
-def _load_vllm(model_path: str, tensor_parallel_size: int):
+def _load_vllm(model_path: str, tensor_parallel_size: int, model: IIDModelConfig):
     for key, value in VLLM_TPU_ENV_VARS.items():
         os.environ.setdefault(key, value)
+
+    if model.apply_rpa_block_size_patch:
+        from joint_decode.tpu.worker import _patch_rpa_kernel_block_sizes  # noqa: PLC0415
+
+        _patch_rpa_kernel_block_sizes()
 
     from vllm import LLM, SamplingParams  # noqa: PLC0415
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
     resolved_model_path = localize_mirror_path(resolved_model_path)
     logger.info("Resolved %s -> %s", model_path, resolved_model_path)
+
+    model_kwargs: dict[str, Any] = {}
+    if model.max_model_len is not None:
+        model_kwargs["max_model_len"] = model.max_model_len
+    if model.gpu_memory_utilization is not None:
+        model_kwargs["gpu_memory_utilization"] = model.gpu_memory_utilization
+    if model.enable_prefix_caching is not None:
+        model_kwargs["enable_prefix_caching"] = model.enable_prefix_caching
 
     llm = LLM(
         model=resolved_model_path,
@@ -152,6 +198,7 @@ def _load_vllm(model_path: str, tensor_parallel_size: int):
         seed=VLLM_CONSTRUCTOR_SEED,
         tensor_parallel_size=tensor_parallel_size,
         data_parallel_size=1,
+        **model_kwargs,
     )
     return llm, SamplingParams
 
@@ -194,29 +241,49 @@ def make_iid_completion_step(
             output_path=this_output_path(),
             model_path=version_path(model_path),  # type: ignore[arg-type]
             prompts_path=version_path(prompts_path),  # type: ignore[arg-type]
-            sampling=versioned(config.sampling),  # type: ignore[arg-type]
+            n_samples=versioned(config.n_samples),  # type: ignore[arg-type]
+            seed=versioned(config.seed),  # type: ignore[arg-type]
+            sampling_configs=versioned(config.sampling_configs),  # type: ignore[arg-type]
+            # Only the context limit changes output semantics; the other fields tune execution.
+            model=IIDModelConfig(
+                max_model_len=versioned(config.model.max_model_len),  # type: ignore[arg-type]
+                gpu_memory_utilization=config.model.gpu_memory_utilization,
+                enable_prefix_caching=config.model.enable_prefix_caching,
+                apply_rpa_block_size_patch=config.model.apply_rpa_block_size_patch,
+            ),
             worker_pools=config.execution.worker_pools,
             ledger_prefix=config.execution.ledger_prefix,
             chunk_size=versioned(config.execution.chunk_size),  # type: ignore[arg-type]
             heartbeat_timeout=config.execution.heartbeat_timeout,
             poll_backoff=config.execution.poll_backoff,
             tensor_parallel_size=config.execution.tensor_parallel_size,
+            aggregate_workers=config.execution.aggregate_workers,
         ),
     )
 
 
-def _chunk_specs(chunks_dir: str, num_prompts: int, n_samples: int, chunk_size: int) -> list[IIDChunkSpec]:
+def _chunk_specs(
+    chunks_dir: str,
+    num_prompts: int,
+    n_samples: int,
+    num_sampling_configs: int,
+    chunk_size: int,
+) -> list[IIDChunkSpec]:
     total_requests = num_prompts * n_samples
-    return [
-        IIDChunkSpec(
-            chunk_id=chunk_id,
-            chunk_start=start,
-            chunk_end=min(start + chunk_size, total_requests),
-            output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
-            success_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.SUCCESS"),
-        )
-        for chunk_id, start in enumerate(range(0, total_requests, chunk_size))
-    ]
+    specs = []
+    for sampling_config_index in range(num_sampling_configs):
+        for start in range(0, total_requests, chunk_size):
+            chunk_id = len(specs)
+            specs.append(
+                IIDChunkSpec(
+                    chunk_id=chunk_id,
+                    sampling_config_index=sampling_config_index,
+                    chunk_start=start,
+                    chunk_end=min(start + chunk_size, total_requests),
+                    output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
+                )
+            )
+    return specs
 
 
 def _sampling_kwargs(sampling: IIDSamplingConfig) -> dict[str, Any]:
@@ -234,21 +301,24 @@ def _run_iid_chunk(
     *,
     model_path: str,
     prompts_path: str,
+    model: IIDModelConfig,
     sampling: IIDSamplingConfig,
+    n_samples: int,
+    seed: int,
     tensor_parallel_size: int,
 ) -> None:
-    llm, SamplingParams = _load_vllm(model_path, tensor_parallel_size)
+    llm, SamplingParams = _load_vllm(model_path, tensor_parallel_size, model)
     prompt_ids, prompts = _load_prompts(prompts_path)
     sampling_params = SamplingParams(n=1, **_sampling_kwargs(sampling))
-    n_samples = sampling.n_samples
 
     # TPU vLLM ignores SamplingParams.seed, so resume-safety comes from
     # directly reseeding the sampler for each durable chunk.
-    llm.collective_rpc(_reseed_sampler, args=(sampling.seed + chunk.chunk_id,))
+    llm.collective_rpc(_reseed_sampler, args=(seed + chunk.chunk_id,))
 
     request_indices = range(chunk.chunk_start, chunk.chunk_end)
     chunk_prompt_ids = [prompt_ids[i // n_samples] for i in request_indices]
-    chunk_completion_indices = [i % n_samples for i in request_indices]
+    completion_index_offset = chunk.sampling_config_index * n_samples
+    chunk_completion_indices = [completion_index_offset + i % n_samples for i in request_indices]
     chunk_prompts = [prompts[i // n_samples] for i in request_indices]
 
     records = []
@@ -268,6 +338,7 @@ def _run_iid_chunk(
                     "text": completion_output.text,
                     "metadata": {
                         "finish_reason": getattr(completion_output, "finish_reason", None),
+                        "sampling_config": asdict(sampling),
                     },
                 },
             }
@@ -285,10 +356,23 @@ def _num_prompts(prompts_path: str) -> int:
 def _child_config_from_file(path: str) -> IIDLocalEngineWorkerConfig:
     with open(path) as f:
         data = json.load(f)
+    sampling_configs = tuple(
+        IIDSamplingConfig(
+            temperature=sampling_config["temperature"],
+            top_p=sampling_config["top_p"],
+            top_k=sampling_config["top_k"],
+            max_tokens=sampling_config["max_tokens"],
+            stop=tuple(sampling_config["stop"]) if sampling_config["stop"] is not None else None,
+        )
+        for sampling_config in data["sampling_configs"]
+    )
     return IIDLocalEngineWorkerConfig(
         model_path=data["model_path"],
         prompts_path=data["prompts_path"],
-        sampling=IIDSamplingConfig(**data["sampling"]),
+        n_samples=data["n_samples"],
+        seed=data["seed"],
+        sampling_configs=sampling_configs,
+        model=IIDModelConfig(**data["model"]),
         ledger_path=data["ledger_path"],
         poll_backoff=data["poll_backoff"],
         tensor_parallel_size=data["tensor_parallel_size"],
@@ -301,9 +385,7 @@ def _run_iid_local_engine_worker(config: IIDLocalEngineWorkerConfig) -> None:
     expected_visible_chips = ",".join(str(chip) for chip in config.chip_group)
     actual_visible_chips = os.environ.get("TPU_VISIBLE_CHIPS")
     if actual_visible_chips != expected_visible_chips:
-        raise ValueError(
-            f"TPU_VISIBLE_CHIPS={actual_visible_chips!r}, expected {expected_visible_chips!r}"
-        )
+        raise ValueError(f"TPU_VISIBLE_CHIPS={actual_visible_chips!r}, expected {expected_visible_chips!r}")
 
     for key, value in VLLM_TPU_ENV_VARS.items():
         os.environ.setdefault(key, value)
@@ -317,11 +399,15 @@ def _run_iid_local_engine_worker(config: IIDLocalEngineWorkerConfig) -> None:
                 time.sleep(config.poll_backoff)
                 continue
 
+            chunk = IIDChunkSpec(**claim.chunk)
             _run_iid_chunk(
-                IIDChunkSpec(**claim.chunk),
+                chunk,
                 model_path=config.model_path,
                 prompts_path=config.prompts_path,
-                sampling=config.sampling,
+                model=config.model,
+                sampling=config.sampling_configs[chunk.sampling_config_index],
+                n_samples=config.n_samples,
+                seed=config.seed,
                 tensor_parallel_size=config.tensor_parallel_size,
             )
             ledger.mark_done(claim)
@@ -331,13 +417,8 @@ def _chip_groups(chips_per_vm: int, tensor_parallel_size: int) -> list[tuple[int
     if tensor_parallel_size <= 0:
         raise ValueError(f"tensor_parallel_size must be positive, got {tensor_parallel_size}")
     if chips_per_vm % tensor_parallel_size != 0:
-        raise ValueError(
-            f"chips_per_vm={chips_per_vm} must be divisible by tensor_parallel_size={tensor_parallel_size}"
-        )
-    return [
-        tuple(range(start, start + tensor_parallel_size))
-        for start in range(0, chips_per_vm, tensor_parallel_size)
-    ]
+        raise ValueError(f"chips_per_vm={chips_per_vm} must be divisible by tensor_parallel_size={tensor_parallel_size}")
+    return [tuple(range(start, start + tensor_parallel_size)) for start in range(0, chips_per_vm, tensor_parallel_size)]
 
 
 def _child_owner(pool_id: str, shard_idx: int, chip_group: tuple[int, ...]) -> str:
@@ -380,7 +461,10 @@ def _spawn_child(
     child_config = IIDLocalEngineWorkerConfig(
         model_path=config.model_path,
         prompts_path=config.prompts_path,
-        sampling=config.sampling,
+        n_samples=config.n_samples,
+        seed=config.seed,
+        sampling_configs=config.sampling_configs,
+        model=config.model,
         ledger_path=ledger_path,
         poll_backoff=config.poll_backoff,
         tensor_parallel_size=config.tensor_parallel_size,
@@ -414,6 +498,7 @@ def _spawn_child(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     return proc, _stream_child_output(proc, label=chip_label)
 
@@ -421,13 +506,19 @@ def _spawn_child(
 def _terminate_children(procs: list[subprocess.Popen[str]]) -> None:
     for proc in procs:
         if proc.poll() is None:
-            proc.terminate()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
     for proc in procs:
         if proc.poll() is None:
             try:
                 proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait()
 
 
@@ -514,7 +605,13 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
         raise ValueError("IID xregion requires at least one worker pool")
 
     chunks_dir = os.path.join(config.output_path, "chunks", f"chunk_size={config.chunk_size}")
-    chunks = _chunk_specs(chunks_dir, _num_prompts(config.prompts_path), config.sampling.n_samples, config.chunk_size)
+    chunks = _chunk_specs(
+        chunks_dir,
+        _num_prompts(config.prompts_path),
+        config.n_samples,
+        len(config.sampling_configs),
+        config.chunk_size,
+    )
     ledger_path = ledger.convert_mirror_path(
         ledger_prefix=config.ledger_prefix,
         output_path=config.output_path,
@@ -554,6 +651,7 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
                 "completions": [item["completion"] for item in items],
                 "metadata": {
                     "completion_algorithm": "iid_xregion",
+                    "model_path": config.model_path,
                 },
             },
             sort_by=lambda record: record["completion_index"],
@@ -561,10 +659,10 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
         )
         .write_jsonl(path, skip_existing=True)
     )
-    aggregate_workers = max(pool.num_workers for pool in config.worker_pools)
     ZephyrContext(
         name="iid-xregion-completions-aggregate",
-        max_workers=aggregate_workers,
+        max_workers=config.aggregate_workers,
+        resources=ResourceConfig(cpu=1, ram="4g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(aggregate_pipeline)
     logger.info("Wrote IID xregion completion rows to %s", path)

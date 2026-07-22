@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
-from dataclasses import dataclass, replace
+from collections import Counter
+from dataclasses import asdict, dataclass, replace
 
 import fsspec
 from fray.cluster import ANY_REGION, ResourceConfig, get_tpu_topology
@@ -23,6 +25,7 @@ from experiments.downstream_scaling.evals.algorithms.iid_xregion import (
     IIDCompletionAlgorithm,
     IIDConfig,
     IIDExecutionConfig,
+    IIDModelConfig,
     IIDSamplingConfig,
 )
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
@@ -36,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_KEY = "3e20"
 N_PROBLEMS = 128
-N_SAMPLES = 8
+N_SAMPLES = 4
 NUM_WORKERS = 2
 CHUNK_SIZE = 32
 TENSOR_PARALLEL_SIZE = 1
@@ -50,6 +53,23 @@ SEED = 42
 STOP_TOKENS = ("Question:", "</s>", "<|im_end|>")
 HEARTBEAT_TIMEOUT = 120.0
 
+SAMPLING_CONFIGS = (
+    IIDSamplingConfig(
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+        top_k=TOP_K,
+        max_tokens=MAX_TOKENS,
+        stop=STOP_TOKENS,
+    ),
+    IIDSamplingConfig(
+        temperature=0.0,
+        top_p=TOP_P,
+        top_k=TOP_K,
+        max_tokens=MAX_TOKENS,
+        stop=STOP_TOKENS,
+    ),
+)
+
 NUM_FEWSHOT = 5
 FEWSHOT_SEED = 1234
 
@@ -62,7 +82,8 @@ class ValidateCompletionsConfig:
     output_path: str
     completions_path: str
     expected_rows: int
-    expected_completions_per_row: int
+    expected_samples_per_config: int
+    expected_sampling_configs: tuple[IIDSamplingConfig, ...]
 
 
 def make_task(n_problems: int) -> GSM8KTask:
@@ -85,21 +106,16 @@ def make_algorithm(
 ) -> IIDCompletionAlgorithm:
     return IIDCompletionAlgorithm(
         config=IIDConfig(
-            sampling=IIDSamplingConfig(
-                n_samples=n_samples,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                top_k=TOP_K,
-                max_tokens=MAX_TOKENS,
-                seed=SEED,
-                stop=STOP_TOKENS,
-            ),
+            n_samples=n_samples,
+            seed=SEED,
+            sampling_configs=SAMPLING_CONFIGS,
             execution=IIDExecutionConfig(
                 worker_pools=worker_pools,
                 chunk_size=chunk_size,
                 heartbeat_timeout=heartbeat_timeout,
                 tensor_parallel_size=tensor_parallel_size,
             ),
+            model=IIDModelConfig(apply_rpa_block_size_patch=True),
         )
     )
 
@@ -109,6 +125,14 @@ def validate_completions(config: ValidateCompletionsConfig) -> None:
     if len(rows) != config.expected_rows:
         raise ValueError(f"Expected {config.expected_rows} completion rows, got {len(rows)}")
 
+    expected_config_counts = Counter(
+        {
+            json.dumps(asdict(sampling_config), sort_keys=True): config.expected_samples_per_config
+            for sampling_config in config.expected_sampling_configs
+        }
+    )
+    expected_completions = config.expected_samples_per_config * len(config.expected_sampling_configs)
+
     seen_ids: set[str] = set()
     for row in rows:
         row_id = row["id"]
@@ -117,9 +141,15 @@ def validate_completions(config: ValidateCompletionsConfig) -> None:
         seen_ids.add(row_id)
 
         completions = row["completions"]
-        if len(completions) != config.expected_completions_per_row:
+        if len(completions) != expected_completions:
+            raise ValueError(f"Expected {expected_completions} completions for {row_id!r}, got {len(completions)}")
+        actual_config_counts = Counter(
+            json.dumps(completion["metadata"]["sampling_config"], sort_keys=True) for completion in completions
+        )
+        if actual_config_counts != expected_config_counts:
             raise ValueError(
-                f"Expected {config.expected_completions_per_row} completions for {row_id!r}, " f"got {len(completions)}"
+                f"Unexpected sampling config counts for {row_id!r}: "
+                f"expected {expected_config_counts}, got {actual_config_counts}"
             )
 
     path = os.path.join(config.output_path, "validation.SUCCESS")
@@ -134,6 +164,7 @@ def make_validation_step(
     completions_path,
     n_problems: int,
     n_samples: int,
+    sampling_configs: tuple[IIDSamplingConfig, ...],
 ) -> ExecutorStep:
     return ExecutorStep(
         name=name,
@@ -142,7 +173,8 @@ def make_validation_step(
             output_path=this_output_path(),
             completions_path=version_path(completions_path),  # type: ignore[arg-type]
             expected_rows=versioned(n_problems),  # type: ignore[arg-type]
-            expected_completions_per_row=versioned(n_samples),  # type: ignore[arg-type]
+            expected_samples_per_config=versioned(n_samples),  # type: ignore[arg-type]
+            expected_sampling_configs=versioned(sampling_configs),  # type: ignore[arg-type]
         ),
     )
 
@@ -184,6 +216,7 @@ def build_run_steps(
         completions_path=output_path_of(completions) / COMPLETIONS_FILENAME,
         n_problems=n_problems,
         n_samples=n_samples,
+        sampling_configs=SAMPLING_CONFIGS,
     )
     return [validation]
 
