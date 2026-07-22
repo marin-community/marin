@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from types import SimpleNamespace
 
 from fray.cluster import ResourceConfig
 
 from experiments.grug import dispatch
+from experiments.grug.moe import launch_cw_scale
 
 
 def _entrypoint(config: str) -> None:
@@ -20,11 +22,12 @@ def _capture_request(monkeypatch, **arguments):
         "current_client",
         lambda: SimpleNamespace(submit=lambda request: requests.append(request) or handle),
     )
+    resources = arguments.pop("resources", ResourceConfig.with_gpu("GB200", count=4))
     dispatch.dispatch_grug_training_run(
         run_id="probe-test",
         config="config",
         local_entrypoint=_entrypoint,
-        resources=ResourceConfig.with_gpu("GB200", count=4),
+        resources=resources,
         **arguments,
     )
     assert len(requests) == 1
@@ -55,3 +58,56 @@ def test_dispatch_with_probe_builds_and_preloads_worker_library(monkeypatch) -> 
     assert request.environment.env_vars["MARIN_CUDA_MODULE_PROBE_PROFILE"] == "trace_sync_split"
     assert request.environment.setup_scripts is not None
     assert len(request.environment.setup_scripts) == 3
+
+
+def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(monkeypatch) -> None:
+    request = _capture_request(
+        monkeypatch,
+        resources=ResourceConfig.with_gpu("GB200", count=4, image="nvcr.io/nvidia/jax:26.06-py3"),
+    )
+
+    assert request.environment.setup_scripts is not None
+    script = request.environment.setup_scripts[0]
+    excluded = set(re.findall(r"--no-install-package ([a-z0-9-]+)", script))
+    assert {
+        "jax",
+        "jaxlib",
+        "jax-cuda13-pjrt",
+        "jax-cuda13-plugin",
+        "cuda-python",
+        "nvidia-cublas",
+        "nvidia-cudnn-cu13",
+        "nvidia-cutlass-dsl",
+        "nvidia-nccl-cu13",
+    } <= excluded
+    assert "venv --system-site-packages" in script
+    assert "--active --inexact" in script
+    assert "--package marin-root" in script
+    assert "--package marin-root --no-group dev" not in script
+    assert "ngc-jax-before.sha256" in script
+    assert "ngc-jax-after.sha256" in script
+
+
+def test_dispatch_with_nvidia_jax_image_and_probe_keeps_guarded_overlay(monkeypatch) -> None:
+    request = _capture_request(
+        monkeypatch,
+        resources=ResourceConfig.with_gpu("GB200", count=4, image="nvcr.io/nvidia/jax:26.06-py3"),
+        env_vars={
+            "MARIN_CUDA_MODULE_PROBE_PROFILE": "trace_sync_split",
+            "MARIN_CUDA_MODULE_PROBE_LOG_DIR": "/tmp/cubin-probe",
+        },
+    )
+
+    assert request.environment.setup_scripts is not None
+    assert "venv --system-site-packages" in request.environment.setup_scripts[0]
+    assert len(request.environment.setup_scripts) == 3
+
+
+def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> None:
+    image = "nvcr.io/nvidia/jax:26.06-py3"
+    monkeypatch.setenv("SCALE_TASK_IMAGE", image)
+    monkeypatch.setenv("RUN_ID", "ngc-image-test")
+
+    step = launch_cw_scale.build_scale_checkpoint()
+
+    assert step.runtime_args["train_resources"].image == image

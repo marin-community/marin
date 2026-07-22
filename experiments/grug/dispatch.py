@@ -32,6 +32,101 @@ _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 _PROBE_LIBRARY_PATH = "/app/.venv/lib/libmarin_cuda_module_probe.so"
 _PROBE_SOURCE_PATH = "/app/experiments/grug/moe/standalone/cuda_module_probe.cc"
+_NVIDIA_JAX_IMAGE_PREFIX = "nvcr.io/nvidia/jax:"
+_NVIDIA_JAX_UV_VERSION = "0.11.21"
+_NVIDIA_JAX_PROTECTED_PACKAGES = (
+    "jax",
+    "jaxlib",
+    "jax-cuda13-pjrt",
+    "jax-cuda13-plugin",
+    "cuda-bindings",
+    "cuda-pathfinder",
+    "cuda-python",
+    "cuda-toolkit",
+    "nvidia-cublas",
+    "nvidia-cublas-cu12",
+    "nvidia-cuda-crt",
+    "nvidia-cuda-cupti",
+    "nvidia-cuda-cupti-cu12",
+    "nvidia-cuda-nvcc",
+    "nvidia-cuda-nvrtc",
+    "nvidia-cuda-nvrtc-cu12",
+    "nvidia-cuda-runtime",
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-cudnn-cu12",
+    "nvidia-cudnn-cu13",
+    "nvidia-cufft",
+    "nvidia-cufft-cu12",
+    "nvidia-cufile",
+    "nvidia-cufile-cu12",
+    "nvidia-curand",
+    "nvidia-curand-cu12",
+    "nvidia-cusolver",
+    "nvidia-cusolver-cu12",
+    "nvidia-cusparse",
+    "nvidia-cusparse-cu12",
+    "nvidia-cusparselt-cu12",
+    "nvidia-cusparselt-cu13",
+    "nvidia-cutlass-dsl",
+    "nvidia-cutlass-dsl-libs-base",
+    "nvidia-cutlass-dsl-libs-cu13",
+    "nvidia-nccl-cu12",
+    "nvidia-nccl-cu13",
+    "nvidia-nvjitlink",
+    "nvidia-nvjitlink-cu12",
+    "nvidia-nvshmem-cu12",
+    "nvidia-nvshmem-cu13",
+    "nvidia-nvtx",
+    "nvidia-nvtx-cu12",
+    "nvidia-nvvm",
+)
+
+
+def nvidia_jax_overlay_setup_script() -> str:
+    """Build a Marin overlay without replacing an NGC image's accelerator stack."""
+    protected_flags = " \\\n+  ".join(f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES)
+    return f"""set -eu
+cd "$IRIS_WORKDIR"
+test ! -e "$IRIS_VENV"
+sha256sum \\
+  /opt/jax/jax/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/_jax.so \\
+  /opt/jaxlibs/jaxlib/jaxlib/libjax_common.so \\
+  > /tmp/ngc-jax-before.sha256
+/usr/bin/python -m pip install \\
+  --disable-pip-version-check --no-deps --prefix /tmp/marin-ngc-uv \\
+  uv=={_NVIDIA_JAX_UV_VERSION}
+uv=/tmp/marin-ngc-uv/local/bin/uv
+test -x "$uv"
+"$uv" venv --system-site-packages --python /usr/bin/python "$IRIS_VENV"
+export VIRTUAL_ENV="$IRIS_VENV"
+export PATH="$IRIS_VENV/bin:$PATH"
+"$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
+  --python "$IRIS_VENV/bin/python" --package marin-root \\
+  {protected_flags}
+"$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
+  --python "$IRIS_VENV/bin/python" --package marin-levanter --no-group dev --extra gpu \\
+  {protected_flags}
+sha256sum \\
+  /opt/jax/jax/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/_jax.so \\
+  /opt/jaxlibs/jaxlib/jaxlib/libjax_common.so \\
+  > /tmp/ngc-jax-after.sha256
+diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
+"$IRIS_VENV/bin/python" - <<'PY'
+import jax
+import jaxlib
+
+assert jax.__file__.startswith("/opt/jax/"), jax.__file__
+assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
+print(f"preserved NGC JAX {{jax.__version__}} from {{jax.__file__}}")
+print(f"preserved NGC JAXLIB {{jaxlib.__version__}} from {{jaxlib.__file__}}")
+PY
+"""
 
 
 def _probe_build_script() -> str:
@@ -69,15 +164,19 @@ def dispatch_grug_training_run(
     safe_run_id = _safe_job_suffix(run_id)
     explicit_env = dict(env_vars or {})
     child_env = resolve_training_env(base_env={**_forwarded_env_vars(), **explicit_env}, resources=resources)
-    setup_scripts = None
+    setup_scripts = (
+        [nvidia_jax_overlay_setup_script()]
+        if resources.image is not None and resources.image.startswith(_NVIDIA_JAX_IMAGE_PREFIX)
+        else None
+    )
     if "MARIN_CUDA_MODULE_PROBE_PROFILE" in explicit_env:
         child_env["LD_PRELOAD"] = _PROBE_LIBRARY_PATH
-        extras = extras_for_resources(resources)
-        setup_scripts = [
-            default_setup_script(extras=extras, python_version=f"{sys.version_info.major}.{sys.version_info.minor}"),
-            cuda_toolchain_setup_script(),
-            _probe_build_script(),
-        ]
+        if setup_scripts is None:
+            extras = extras_for_resources(resources)
+            setup_scripts = [
+                default_setup_script(extras=extras, python_version=f"{sys.version_info.major}.{sys.version_info.minor}"),
+            ]
+        setup_scripts.extend([cuda_toolchain_setup_script(), _probe_build_script()])
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
