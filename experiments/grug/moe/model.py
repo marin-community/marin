@@ -120,6 +120,8 @@ class GrugModelConfig:
     num_kv_heads: int = 1
     head_dim: int | None = None
     max_seq_len: int = 8192
+    # Sliding-window attention applied to every layer. 0 (default) = full causal.
+    sliding_window: int = 0
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -451,15 +453,16 @@ class Transformer(eqx.Module):
             # to an involuntary full-remat scatter to [num_devices, 1], which serializes through
             # device 0 and can wedge the MoE all-to-all (collective rendezvous timeout at scale).
             segment_ids = _batch_reshard(segment_ids)
-        causal_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        sliding_window = cfg.sliding_window or None
+        causal_mask = AttentionMask(is_causal=True, sliding_window=sliding_window, segment_ids=segment_ids)
 
-        # Precompute the FA4 per-token metadata for the (single) full-causal mask OUTSIDE the scan and
-        # attach it via ``with_fa4_bounds``, keeping the FA4 pure_callback's device-0-pinned metadata
-        # out of the scan body (an in-body callback forces an involuntary full rematerialization that
-        # serializes through device 0 and wedges the MoE all-to-all at 8+ racks).
+        # Precompute the FA4 per-token metadata for the (single) mask OUTSIDE the scan and attach it
+        # via ``with_fa4_bounds``, keeping the FA4 pure_callback's device-0-pinned metadata out of the
+        # scan body (an in-body callback forces an involuntary full rematerialization that serializes
+        # through device 0 and wedges the MoE all-to-all at 8+ racks).
         batch_size, seq_len = hidden.shape[0], hidden.shape[1]
         lower_bounds, valid = fa4_cute_segment_bounds(
-            causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window
         )
         layer_mask = causal_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
 
