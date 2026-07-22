@@ -95,6 +95,8 @@ class GrugMoeLaunchConfig:
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
     (multi-controller) via the iris.runtime.multigpu supervisor; 1 keeps the
     single-process-per-node model."""
+    max_retries_failure: int = 3
+    """Number of failed worker-job attempts Fray may retry."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
@@ -183,6 +185,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        max_retries_failure=config.max_retries_failure,
     )
     run_grug(run_config)
 

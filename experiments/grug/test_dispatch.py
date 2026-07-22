@@ -41,6 +41,8 @@ def test_dispatch_preserves_default_environment(monkeypatch) -> None:
     assert request.max_retries_failure == 3
     assert request.environment.setup_scripts is None
     assert "LD_PRELOAD" not in request.environment.env_vars
+
+
 def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(monkeypatch) -> None:
     request = _capture_request(
         monkeypatch,
@@ -88,9 +90,11 @@ def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> Non
 
 def test_scale_checkpoint_can_skip_final_checkpoint(monkeypatch) -> None:
     monkeypatch.setenv("SCALE_FINAL_CHECKPOINT", "skip")
+    monkeypatch.setenv("SCALE_MAX_RETRIES_FAILURE", "0")
     monkeypatch.setenv("RUN_ID", "skip-final-checkpoint-test")
 
     step = launch_cw_scale.build_scale_checkpoint()
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
 
     assert config.grug_trainer.final_checkpoint.value == "skip"
+    assert config.max_retries_failure == 0

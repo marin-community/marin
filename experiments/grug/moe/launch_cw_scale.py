@@ -42,6 +42,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         slow S3 commit must not wedge the end-of-run barrier
     SCALE_FINAL_CHECKPOINT  save (default) | skip. skip is for disposable
                         diagnostics that must terminate immediately after training.
+    SCALE_MAX_RETRIES_FAILURE  failed worker-job retries (default 3). Set to 0
+                        for diagnostic trials where every allocation must count.
     SCALE_TASK_IMAGE    optional train-worker image override. NVIDIA JAX NGC
                         images use a guarded dependency overlay that preserves
                         the image's JAX/JAXLIB and CUDA/NVIDIA packages.
@@ -311,6 +313,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
+            max_retries_failure=env_int("SCALE_MAX_RETRIES_FAILURE", 3),
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,

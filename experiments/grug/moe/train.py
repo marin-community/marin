@@ -7,7 +7,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -108,6 +107,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
+    max_retries_failure: int = 3
 
 
 def build_train_dataset(
@@ -618,6 +618,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=config.max_retries_failure,
         processes_per_task=config.processes_per_task,
     )
 
