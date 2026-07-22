@@ -221,22 +221,22 @@ def test_status_survives_a_scrape_and_is_replaced_not_appended(client):
 
 
 @pytest.mark.parametrize(
-    ("metric_name", "source_label", "expected"),
+    ("metric_name", "expected"),
     [
-        ("levanter_train_loss", None, "levanter"),
-        ("zephyr_item_count", None, "zephyr"),
-        ("iris_task_reconciles", None, "iris"),
-        ("process_cpu_seconds_total", None, "process"),
-        ("levanter_train_loss", "custom", "custom"),
+        ("levanter_train_loss", "levanter"),
+        ("zephyr_item_count", "zephyr"),
+        ("iris_task_reconciles", "iris"),
+        ("process_cpu_seconds_total", "process"),
+        ("vllm:prompt_tokens_total", "process"),
     ],
 )
-def test_source_prefers_explicit_label_then_name_prefix(metric_name, source_label, expected):
-    assert telltale._source_for(metric_name, source_label) == expected
+def test_source_falls_back_to_the_name_prefix(metric_name, expected):
+    assert telltale._source_from_name(metric_name) == expected
 
 
 def test_scrape_flattens_identity_and_run_source_into_columns(name, clean_global_labels):
     telltale.gauge(name, "d").set(2.0)
-    telltale.set_global_labels(run="r1", source="levanter")
+    telltale.set_global_labels(run="r1", source="levanter", cluster="us-central2")
 
     identity = telltale.MetricIdentity(job_id="/a/b", task_index=3, attempt=1)
     row = _one(name, telltale.scrape_metrics(identity, _TS))
@@ -246,8 +246,9 @@ def test_scrape_flattens_identity_and_run_source_into_columns(name, clean_global
     assert row.source == "levanter"
     assert row.run == "r1"
     assert row.job_id == "/a/b" and row.task_index == 3 and row.attempt == 1
-    # run/source are lifted out of the label map; identity is set on the row.
-    assert row.labels == {}
+    # run/source are lifted out of the label map and identity is set on the row;
+    # every other global still rides along in the map.
+    assert row.labels == {"cluster": "us-central2"}
 
 
 def test_scrape_identity_is_authoritative_over_a_colliding_metric_label(name):
@@ -258,6 +259,54 @@ def test_scrape_identity_is_authoritative_over_a_colliding_metric_label(name):
 
     assert row.worker == "real"
     assert row.labels["worker"] == "evil"  # the raw label survives; the column is authoritative
+
+
+def test_scrape_keeps_a_metrics_own_source_and_run_labels(name, clean_global_labels):
+    # Same guarantee as the identity columns above: the producer's globals own the
+    # `source`/`run` columns, and the metric's own labels of those names survive in
+    # the map. vLLM's `prompt_tokens_by_source` breaks down by a `source` label; if
+    # the globals clobbered it, its series would be indistinguishable once stored.
+    telltale.counter(name, "d", ["source", "run"]).labels("local_cache_hit", "leg-3").inc(9)
+    telltale.set_global_labels(source="vllm", run="serve-1")
+
+    row = _one(f"{name}_total", telltale.scrape_metrics(telltale.MetricIdentity(), _TS))
+
+    assert row.source == "vllm" and row.run == "serve-1"
+    assert row.labels == {"source": "local_cache_hit", "run": "leg-3"}
+
+
+def test_scrape_keeps_sibling_series_distinguishable_by_their_own_source_label(name, clean_global_labels):
+    counter = telltale.counter(name, "d", ["source"])
+    counter.labels("local_compute").inc(9)
+    counter.labels("local_cache_hit").inc(4)
+    telltale.set_global_labels(source="vllm")
+
+    rows = [r for r in telltale.scrape_metrics(telltale.MetricIdentity(), _TS) if r.name == f"{name}_total"]
+
+    assert {r.labels["source"]: r.value for r in rows} == {"local_compute": 9.0, "local_cache_hit": 4.0}
+    assert all(r.source == "vllm" for r in rows)  # the label never reaches the column
+
+
+def test_scrape_ignores_a_metrics_own_source_and_run_when_the_producer_set_no_globals(clean_global_labels):
+    # The producer names itself; a metric labelling its own series cannot stand in
+    # for that. With no globals set, `source` falls back to the name prefix and
+    # `run` stays empty — both raw labels survive in the map regardless.
+    telltale.counter("levanter_test_own_identity", "d", ["source", "run"]).labels("evil", "spoofed").inc()
+
+    row = _one("levanter_test_own_identity_total", telltale.scrape_metrics(telltale.MetricIdentity(), _TS))
+
+    assert row.source == "levanter"
+    assert row.run is None
+    assert row.labels == {"source": "evil", "run": "spoofed"}
+
+
+def test_scrape_lets_a_metrics_own_label_win_over_a_global_of_the_same_name(name, clean_global_labels):
+    telltale.counter(name, "d", ["cluster"]).labels("us-east-02a").inc()
+    telltale.set_global_labels(cluster="us-central2")
+
+    row = _one(f"{name}_total", telltale.scrape_metrics(telltale.MetricIdentity(), _TS))
+
+    assert row.labels == {"cluster": "us-east-02a"}
 
 
 def test_scrape_drops_created_and_keeps_histogram_le_in_the_map(name):
