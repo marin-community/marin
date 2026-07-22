@@ -10,7 +10,12 @@ from typing import TypeVar
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
-from iris.cluster.setup_scripts import default_setup_script, setup_is_quiet
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    setup_is_quiet,
+    wants_gpu_extra,
+)
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
@@ -64,8 +69,10 @@ def dispatch_grug_training_run(
     if post_setup_scripts:
         setup_scripts = [
             default_setup_script(extras=extras, quiet=setup_is_quiet(env_vars)),
-            *post_setup_scripts,
         ]
+        if wants_gpu_extra(extras):
+            setup_scripts.append(cuda_toolchain_setup_script())
+        setup_scripts.extend(post_setup_scripts)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
