@@ -76,7 +76,46 @@ JaxPPSchedule = Literal[
 ]
 JaxPPImplementation = Literal["auto", "explicit_mpmd"]
 JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority", "input_gradient_first"]
+ExplicitMpmdPipelineWireFormat = Literal["bf16", "fp8"]
+Fp8PipelineWireDtype = Literal["e4m3", "e5m2"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
+
+
+def _fp8_pipeline_wire_dtype(dtype: Fp8PipelineWireDtype) -> jnp.dtype:
+    if dtype == "e4m3":
+        return jnp.dtype(jnp.float8_e4m3fn)
+    if dtype == "e5m2":
+        return jnp.dtype(jnp.float8_e5m2)
+    raise ValueError(f"unknown FP8 pipeline wire dtype: {dtype}")
+
+
+def pack_fp8_pipeline_wire(value: jax.Array, dtype: Fp8PipelineWireDtype) -> jax.Array:
+    """Pack per-token FP8 values and their FP32 scales into one uint8 tensor."""
+    if value.ndim < 1 or value.shape[-1] == 0:
+        raise ValueError(f"pipeline wire values require a non-empty hidden axis, got shape {value.shape}")
+    fp8_dtype = _fp8_pipeline_wire_dtype(dtype)
+    value_f32 = value.astype(jnp.float32)
+    amax = jnp.max(jnp.abs(value_f32), axis=-1)
+    fp8_max = jnp.asarray(jnp.finfo(fp8_dtype).max, dtype=jnp.float32)
+    dequant_scale = jnp.where(amax > 0, amax / fp8_max, jnp.ones_like(amax))
+    quantized = (value_f32 / dequant_scale[..., None]).astype(fp8_dtype)
+    value_bytes = jax.lax.bitcast_convert_type(quantized, jnp.uint8)
+    scale_bytes = jax.lax.bitcast_convert_type(dequant_scale, jnp.uint8)
+    return jnp.concatenate((value_bytes, scale_bytes), axis=-1)
+
+
+def unpack_fp8_pipeline_wire(packed: jax.Array, dtype: Fp8PipelineWireDtype) -> jax.Array:
+    """Unpack a single-tensor FP8 pipeline payload to BF16 activations."""
+    if packed.dtype != jnp.uint8:
+        raise TypeError(f"packed pipeline wire values must have dtype uint8, got {packed.dtype}")
+    if packed.ndim < 1 or packed.shape[-1] <= 4:
+        raise ValueError(f"packed pipeline wire values require FP8 data plus four scale bytes, got {packed.shape}")
+    fp8_dtype = _fp8_pipeline_wire_dtype(dtype)
+    value_bytes = packed[..., :-4]
+    scale_bytes = packed[..., -4:]
+    quantized = jax.lax.bitcast_convert_type(value_bytes, fp8_dtype)
+    dequant_scale = jax.lax.bitcast_convert_type(scale_bytes, jnp.float32)
+    return (quantized.astype(jnp.float32) * dequant_scale[..., None]).astype(jnp.bfloat16)
 
 
 @dataclass(frozen=True)
@@ -91,6 +130,7 @@ class GrugJaxPPConfig:
     stage_axis_name: str = "pipeline"
     stage_layer_counts: tuple[int, ...] | None = None
     explicit_mpmd_schedule_mode: JaxPPExplicitMpmdScheduleMode = "default"
+    explicit_mpmd_pipeline_wire_format: ExplicitMpmdPipelineWireFormat = "bf16"
     sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
 
     def __post_init__(self) -> None:
@@ -98,6 +138,8 @@ class GrugJaxPPConfig:
             raise ValueError(f"unknown explicit MPMD schedule mode: {self.explicit_mpmd_schedule_mode}")
         if self.sonic_fsdp_materialization not in ("per_task", "staged_per_step"):
             raise ValueError(f"unknown Sonic FSDP materialization mode: {self.sonic_fsdp_materialization}")
+        if self.explicit_mpmd_pipeline_wire_format not in ("bf16", "fp8"):
+            raise ValueError(f"unknown explicit MPMD pipeline wire format: {self.explicit_mpmd_pipeline_wire_format}")
         if self.stages <= 0:
             raise ValueError(f"stages must be positive, got {self.stages}")
         if self.microbatches <= 0:
@@ -150,6 +192,14 @@ class GrugJaxPPConfig:
                     "input_gradient_first requires microbatches >= stages; "
                     f"got microbatches={self.microbatches}, stages={self.stages}"
                 )
+        if self.explicit_mpmd_pipeline_wire_format == "fp8":
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "FP8 explicit MPMD pipeline wire format requires "
+                    "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if self.microbatches == 1:
+                raise ValueError("FP8 explicit MPMD pipeline wire format requires microbatches > 1")
         if self.sonic_fsdp_materialization == "staged_per_step":
             if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
                 raise ValueError(
@@ -1833,6 +1883,44 @@ def _make_explicit_mpmd_train_step(
         materialization_token_futures = {}
         prioritize_transfers = pipeline.explicit_mpmd_schedule_mode == "transfer_priority"
 
+        def send_pipeline_wire_value(
+            value,
+            source_stage_index: int,
+            target_stage_index: int,
+            *,
+            fp8_dtype: Fp8PipelineWireDtype,
+            name: str,
+        ):
+            if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
+                return value
+            if pipeline.explicit_mpmd_pipeline_wire_format == "bf16":
+                return mpmd.transfer(value, out_shardings=activation_shardings[target_stage_index])
+            packed = mpmd.task(
+                functools.partial(pack_fp8_pipeline_wire, dtype=fp8_dtype),
+                name=f"{name}_pack_fp8",
+                out_shardings=activation_shardings[source_stage_index],
+            )(value)
+            return mpmd.transfer(packed, out_shardings=activation_shardings[target_stage_index])
+
+        def receive_pipeline_wire_value(
+            value_or_future,
+            source_stage_index: int,
+            target_stage_index: int,
+            *,
+            fp8_dtype: Fp8PipelineWireDtype,
+            name: str,
+        ):
+            if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
+                return value_or_future
+            transferred = value_or_future.done()
+            if pipeline.explicit_mpmd_pipeline_wire_format == "bf16":
+                return transferred
+            return mpmd.task(
+                functools.partial(unpack_fp8_pipeline_wire, dtype=fp8_dtype),
+                name=f"{name}_unpack_fp8",
+                out_shardings=activation_shardings[target_stage_index],
+            )(transferred)
+
         def stage_compute_params(stage_index: int):
             if stage_index in compute_params:
                 return compute_params[stage_index]
@@ -1872,9 +1960,12 @@ def _make_explicit_mpmd_train_step(
                     out_shardings=(activation_shardings[0], qb_shardings[0]),
                 )(stage_params, qb_betas[0], microbatches[0])
                 if prioritize_transfers:
-                    forward_futures[(1, microbatch_index)] = mpmd.transfer(
+                    forward_futures[(1, microbatch_index)] = send_pipeline_wire_value(
                         hidden,
-                        out_shardings=activation_shardings[1],
+                        0,
+                        1,
+                        fp8_dtype="e4m3",
+                        name=f"grug_1f1b_mb{microbatch_index}_stage0_forward_wire",
                     )
                 qb_betas_next[0] = accumulate_or_set(
                     qb_betas_next[0],
@@ -1883,15 +1974,24 @@ def _make_explicit_mpmd_train_step(
                     out_shardings=qb_shardings[0],
                 )
                 if not prioritize_transfers:
-                    forward_futures[(1, microbatch_index)] = mpmd.transfer(
+                    forward_futures[(1, microbatch_index)] = send_pipeline_wire_value(
                         hidden,
-                        out_shardings=activation_shardings[1],
+                        0,
+                        1,
+                        fp8_dtype="e4m3",
+                        name=f"grug_1f1b_mb{microbatch_index}_stage0_forward_wire",
                     )
                 forward_done.add(key)
                 return
 
             ensure_forward(stage_index - 1, microbatch_index)
-            hidden = forward_futures[key].done()
+            hidden = receive_pipeline_wire_value(
+                forward_futures[key],
+                stage_index - 1,
+                stage_index,
+                fp8_dtype="e4m3",
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
+            )
             stage_inputs[key] = hidden
             if stage_index == num_stages - 1:
                 forward_done.add(key)
@@ -1903,9 +2003,12 @@ def _make_explicit_mpmd_train_step(
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
             )(stage_params, qb_betas[stage_index], hidden, microbatches[stage_index])
             if prioritize_transfers:
-                forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
+                forward_futures[(stage_index + 1, microbatch_index)] = send_pipeline_wire_value(
                     hidden,
-                    out_shardings=activation_shardings[stage_index + 1],
+                    stage_index,
+                    stage_index + 1,
+                    fp8_dtype="e4m3",
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
                 )
             qb_betas_next[stage_index] = accumulate_or_set(
                 qb_betas_next[stage_index],
@@ -1914,9 +2017,12 @@ def _make_explicit_mpmd_train_step(
                 out_shardings=qb_shardings[stage_index],
             )
             if not prioritize_transfers:
-                forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
+                forward_futures[(stage_index + 1, microbatch_index)] = send_pipeline_wire_value(
                     hidden,
-                    out_shardings=activation_shardings[stage_index + 1],
+                    stage_index,
+                    stage_index + 1,
+                    fp8_dtype="e4m3",
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
                 )
             forward_done.add(key)
 
@@ -1946,9 +2052,12 @@ def _make_explicit_mpmd_train_step(
                     microbatches[stage_index],
                 )
                 if prioritize_transfers:
-                    d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                         d_hidden,
-                        out_shardings=activation_shardings[stage_index - 1],
+                        stage_index,
+                        stage_index - 1,
+                        fp8_dtype="e5m2",
+                        name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
                     )
                 loss_sum = accumulate_or_set(
                     loss_sum,
@@ -1969,15 +2078,24 @@ def _make_explicit_mpmd_train_step(
                     out_shardings=param_shardings[stage_index],
                 )
                 if not prioritize_transfers:
-                    d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                         d_hidden,
-                        out_shardings=activation_shardings[stage_index - 1],
+                        stage_index,
+                        stage_index - 1,
+                        fp8_dtype="e5m2",
+                        name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
                     )
                 backward_done.add(key)
                 return
 
             ensure_backward(stage_index + 1, microbatch_index)
-            d_hidden = d_hidden_futures[key].done()
+            d_hidden = receive_pipeline_wire_value(
+                d_hidden_futures[key],
+                stage_index + 1,
+                stage_index,
+                fp8_dtype="e5m2",
+                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+            )
             if stage_index == 0:
                 stage_grads = mpmd.task(
                     stage0_backward,
@@ -2006,9 +2124,12 @@ def _make_explicit_mpmd_train_step(
                 d_hidden,
             )
             if prioritize_transfers:
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                     d_hidden,
-                    out_shardings=activation_shardings[stage_index - 1],
+                    stage_index,
+                    stage_index - 1,
+                    fp8_dtype="e5m2",
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
                 )
             grads[stage_index] = accumulate_or_set(
                 grads[stage_index],
@@ -2017,9 +2138,12 @@ def _make_explicit_mpmd_train_step(
                 out_shardings=param_shardings[stage_index],
             )
             if not prioritize_transfers:
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                     d_hidden,
-                    out_shardings=activation_shardings[stage_index - 1],
+                    stage_index,
+                    stage_index - 1,
+                    fp8_dtype="e5m2",
+                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
                 )
             backward_done.add(key)
 
@@ -2048,9 +2172,12 @@ def _make_explicit_mpmd_train_step(
                     stage_inputs[key],
                     microbatches[stage_index],
                 )
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                     d_hidden,
-                    out_shardings=activation_shardings[stage_index - 1],
+                    stage_index,
+                    stage_index - 1,
+                    fp8_dtype="e5m2",
+                    name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_wire",
                 )
                 backward_residuals[key] = residuals
                 loss_sum = accumulate_or_set(
@@ -2069,7 +2196,13 @@ def _make_explicit_mpmd_train_step(
                 return
 
             ensure_input_backward(stage_index + 1, microbatch_index)
-            d_hidden = d_hidden_futures[key].done()
+            d_hidden = receive_pipeline_wire_value(
+                d_hidden_futures[key],
+                stage_index + 1,
+                stage_index,
+                fp8_dtype="e5m2",
+                name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_wire",
+            )
             if stage_index == 0:
                 stage_grads = mpmd.task(
                     stage0_backward,
@@ -2101,9 +2234,12 @@ def _make_explicit_mpmd_train_step(
                 microbatches[stage_index],
                 d_hidden,
             )
-            d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+            d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
                 d_hidden,
-                out_shardings=activation_shardings[stage_index - 1],
+                stage_index,
+                stage_index - 1,
+                fp8_dtype="e5m2",
+                name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_wire",
             )
             backward_residuals[key] = residuals
             input_backward_done.add(key)
@@ -2847,6 +2983,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "ExplicitMpmdPipelineWireFormat",
     "GrugEvalConfig",
     "GrugJaxPPConfig",
     "GrugPipelineTrainState",
@@ -2857,5 +2994,7 @@ __all__ = [
     "JaxPPImplementation",
     "initial_state",
     "jaxpp_setup_scripts",
+    "pack_fp8_pipeline_wire",
     "run_grug",
+    "unpack_fp8_pipeline_wire",
 ]

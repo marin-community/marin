@@ -22,6 +22,7 @@ RUN_ID=""
 SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
 EXPLICIT_MPMD_SCHEDULE_MODE="default"
+EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT="bf16"
 SONIC_FSDP_MATERIALIZATION="per_task"
 PIPELINE="true"
 PHYSICAL_STAGES=4
@@ -74,6 +75,9 @@ Options:
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
   --explicit-mpmd-schedule-mode NAME
                             default, transfer_priority, or input_gradient_first (default: default).
+  --explicit-mpmd-pipeline-wire-format NAME
+                            bf16 or fp8; fp8 uses packed E4M3 activations and E5M2 gradients
+                            with explicit-MPMD std_1f1b only (default: bf16).
   --sonic-fsdp-materialization NAME
                             per_task or staged_per_step (default: per_task).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
@@ -128,6 +132,7 @@ while [ "$#" -gt 0 ]; do
         --schedule) SCHEDULE="$2"; shift 2 ;;
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
         --explicit-mpmd-schedule-mode) EXPLICIT_MPMD_SCHEDULE_MODE="$2"; shift 2 ;;
+        --explicit-mpmd-pipeline-wire-format) EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT="$2"; shift 2 ;;
         --sonic-fsdp-materialization) SONIC_FSDP_MATERIALIZATION="$2"; shift 2 ;;
         --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
@@ -193,6 +198,25 @@ case "$EXPLICIT_MPMD_SCHEDULE_MODE" in
         exit 1
         ;;
 esac
+
+case "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT" in
+    bf16|fp8) ;;
+    *)
+        echo "ERROR: unsupported explicit MPMD pipeline wire format: $EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT" = fp8 ]; then
+    if [ "$PIPELINE" != true ] || [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
+        echo "ERROR: fp8 pipeline wire format requires pipeline, --implementation explicit_mpmd, and --schedule std_1f1b" >&2
+        exit 1
+    fi
+    if [ "$MICROBATCHES" -le 1 ]; then
+        echo "ERROR: fp8 pipeline wire format requires --microbatches greater than 1" >&2
+        exit 1
+    fi
+fi
 
 if [ "$EXPLICIT_MPMD_SCHEDULE_MODE" = input_gradient_first ]; then
     if [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
@@ -341,6 +365,7 @@ ENV_ARGS=(
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
     -e PP_IMPLEMENTATION "$IMPLEMENTATION"
     -e PP_EXPLICIT_MPMD_SCHEDULE_MODE "$EXPLICIT_MPMD_SCHEDULE_MODE"
+    -e PP_EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT"
     -e PP_SONIC_FSDP_MATERIALIZATION "$SONIC_FSDP_MATERIALIZATION"
     -e PP_SCHEDULE "$SCHEDULE"
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
@@ -436,6 +461,7 @@ gpus_per_replica: $GPUS_PER_REPLICA
 schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
 explicit_mpmd_schedule_mode: $EXPLICIT_MPMD_SCHEDULE_MODE
+explicit_mpmd_pipeline_wire_format: $EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT
 sonic_fsdp_materialization: $SONIC_FSDP_MATERIALIZATION
 pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES

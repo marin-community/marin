@@ -30,6 +30,7 @@ from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_bool, env_int, run_grug_moe_trial
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import (
+    ExplicitMpmdPipelineWireFormat,
     GrugJaxPPConfig,
     GrugTrainerConfig,
     JaxPPExplicitMpmdScheduleMode,
@@ -242,6 +243,10 @@ def build_pipeline_config() -> GrugJaxPPConfig:
         explicit_mpmd_schedule_mode=cast(
             JaxPPExplicitMpmdScheduleMode,
             os.environ.get("PP_EXPLICIT_MPMD_SCHEDULE_MODE", "default"),
+        ),
+        explicit_mpmd_pipeline_wire_format=cast(
+            ExplicitMpmdPipelineWireFormat,
+            os.environ.get("PP_EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT", "bf16"),
         ),
         sonic_fsdp_materialization=cast(
             SonicFsdpMaterialization,
