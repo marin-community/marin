@@ -2,7 +2,7 @@
 
 # Source-free GPU task image. NVIDIA owns the accelerator stack; Iris overlays
 # the submitted workspace at runtime.
-FROM ghcr.io/nvidia/jax:jax-2026-06-27@sha256:15c3f15baf88af18e295b37c6417521f74ebf7bf2449ea09ab64d388be914343
+FROM ghcr.io/nvidia/jax:jax-2026-07-18@sha256:5eaf737a4d598313b83087b0e508e835ca882bc0915a57c30320575b8b10e775
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="Iris GPU task base image backed by NVIDIA JAX-Toolbox"
