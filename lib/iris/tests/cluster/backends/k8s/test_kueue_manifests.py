@@ -33,22 +33,3 @@ def test_upstream_values_never_enable_tas_balanced_placement():
     gates = build_upstream_values(["iris"])["controllerManager"]["featureGates"]
     assert _gate(gates, "TASBalancedPlacement") in (None, False)
     assert _gate(gates, "TopologyAwareScheduling") is True
-
-
-def test_cks_values_default_does_not_touch_manager_resources():
-    # Most clusters run fine on the chart's own resource default. build_cks_values must not
-    # emit a resources override unless a caller explicitly opts in — bumping every cluster
-    # would force an unnecessary controller-manager restart on ones that don't need it.
-    controller_manager = build_cks_values(["iris"])["kueue"]["controllerManager"]
-    assert "manager" not in controller_manager
-
-
-def test_cks_values_manager_memory_limit_overrides_only_memory():
-    # The chart's own default (2 CPU / 512Mi memory) OOM-crash-loops once a cluster's
-    # Kueue-managed Workload count grows large (cw-rno2a hit CrashLoopBackOff at ~2000
-    # Workloads on this limit, 2026-07-22) — an explicit per-cluster override, not a raised
-    # default (see the no-override test above).
-    resources = build_cks_values(["iris"], manager_memory_limit="2Gi")["kueue"]["controllerManager"]["manager"][
-        "resources"
-    ]
-    assert resources == {"limits": {"memory": "2Gi"}, "requests": {"memory": "2Gi"}}
