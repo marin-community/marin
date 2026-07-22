@@ -17,10 +17,13 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    column,
     literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+
+from ops_workflow.state import CaseState, SignalDisposition, SignalState
 
 metadata = MetaData()
 
@@ -70,7 +73,7 @@ signals = Table(
     Column("resolved_at", DateTime(timezone=True)),
     Column("latest_delivery_id", UUID(as_uuid=False), ForeignKey("source_deliveries.id"), nullable=False),
     Column("missing_successful_polls", Integer, nullable=False, server_default=text("0")),
-    CheckConstraint("state IN ('firing', 'resolved')"),
+    CheckConstraint(column("state").in_(tuple(state.value for state in SignalState))),
     CheckConstraint("missing_successful_polls >= 0"),
     UniqueConstraint("source", "fingerprint"),
 )
@@ -86,7 +89,7 @@ delivery_signals = Table(
     ),
     Column("signal_id", UUID(as_uuid=False), ForeignKey("signals.id"), nullable=False),
     Column("disposition", Text, nullable=False),
-    CheckConstraint("disposition IN ('created', 'updated', 'resolved', 'reopened', 'stale')"),
+    CheckConstraint(column("disposition").in_(tuple(disposition.value for disposition in SignalDisposition))),
     PrimaryKeyConstraint("delivery_id", "signal_id"),
 )
 
@@ -110,7 +113,7 @@ cases = Table(
     Column("outcome", Text),
     Column("summary", Text),
     CheckConstraint("trigger IN ('automatic', 'manual')"),
-    CheckConstraint("state IN ('pending', 'investigating', 'waiting_human', 'investigated', 'failed', 'archived')"),
+    CheckConstraint(column("state").in_(tuple(state.value for state in CaseState))),
     CheckConstraint("outcome IN ('no_action', 'action_recommended', 'blocked', 'unknown')"),
     CheckConstraint("(trigger = 'automatic' AND question IS NULL) OR (trigger = 'manual' AND question IS NOT NULL)"),
 )
