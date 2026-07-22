@@ -28,6 +28,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/events                              recent Warning events
     GET /k8s/health                              per-cluster API server reachability + latency
     GET /k8s/overview                            explicit workload issue counts (zeros included)
+    GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
@@ -361,6 +362,9 @@ def create_app(
 
         return k8s_endpoint("overview", compute)
 
+    def k8s_gpu_racks(_: Request) -> JSONResponse:
+        return k8s_endpoint("gpu_racks", k8s_fleet.gpu_racks)
+
     def k8s_alerts_unreachable(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
 
@@ -407,6 +411,7 @@ def create_app(
             Route("/k8s/events", k8s_events),
             Route("/k8s/health", k8s_health),
             Route("/k8s/overview", k8s_overview),
+            Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),

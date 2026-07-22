@@ -252,6 +252,31 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         return [
             {"cluster": "cw-us-east-08a", "queue": "training", "count": 6, "oldest_age_seconds": 540, "error_class": ""}
         ]
+    if path == "/k8s/gpu_racks":
+        return [
+            {
+                "cluster": "cw-us-east-08a",
+                "rack": rack,
+                "rack_name": f"dh1-r{rack}-us-east-08a",
+                "instance_type": "gb200-4x",
+                "trays_total": total,
+                "trays_ready": ready,
+            }
+            for rack, total, ready in (
+                ("122", 17, 17),
+                ("124", 17, 17),
+                ("125", 17, 17),
+                ("126", 18, 18),
+                ("128", 16, 16),
+                ("129", 18, 18),
+                ("136", 17, 17),
+                ("137", 16, 16),
+                ("392", 16, 16),
+                ("393", 16, 16),
+                ("394", 16, 16),
+                ("397", 15, 15),
+            )
+        ]
     if path == "/k8s/events":
         return [
             {

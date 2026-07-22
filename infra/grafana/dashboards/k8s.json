@@ -1,7 +1,7 @@
 {
   "uid": "marin-k8s",
   "title": "K8s control plane",
-  "description": "Current control-plane state of the CoreWeave clusters, read straight from their k8s API servers by the bridge's k8s source: watched components, webhook endpoints, backoff pods, pending/gated pods, Kueue admission backlog, and Warning events. Every table carries a cluster column; a cluster the bridge cannot read shows up in the Cluster health panel with its error class. These panels are current-state only — the bridge stores no history; trends live in the finelog-backed dashboards.",
+  "description": "Current control-plane state of the CoreWeave clusters, read straight from their k8s API servers by the bridge's k8s source: watched components, webhook endpoints, backoff pods, pending/gated pods, Kueue admission backlog, Warning events, and GPU rack tray inventory. Every table carries a cluster column; a cluster the bridge cannot read shows up in the Cluster health panel with its error class. These panels are current-state only — the bridge stores no history; trends live in the finelog-backed dashboards.",
   "tags": [
     "marin",
     "generated"
@@ -712,6 +712,189 @@
               "selector": "message",
               "text": "message",
               "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "GPU rack tray inventory",
+      "description": "GPU nodes (nvidia.com/gpu capacity present) grouped by CoreWeave physical rack: trays currently registered with the k8s API vs. Ready. Thresholds on trays_ready assume the GB200 NVL72 rack spec (18 trays full, 16 minimum) and will misclassify racks of a different instance type. A rack below 16, or with a gap between trays_total and its expected full count, needs a CoreWeave ticket citing rack_name — a tray that never re-registers is invisible here, so this is a floor on down trays, not a guarantee.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trays_ready"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 16
+                    },
+                    {
+                      "color": "green",
+                      "value": 18
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/gpu_racks",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "rack",
+              "text": "rack",
+              "type": "string"
+            },
+            {
+              "selector": "rack_name",
+              "text": "rack_name",
+              "type": "string"
+            },
+            {
+              "selector": "instance_type",
+              "text": "instance_type",
+              "type": "string"
+            },
+            {
+              "selector": "trays_ready",
+              "text": "trays_ready",
+              "type": "number"
+            },
+            {
+              "selector": "trays_total",
+              "text": "trays_total",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "GPU racks — trays ready",
+      "description": "Trays Ready per physical rack (bar height), colored by the same GB200 NVL72 thresholds as the inventory table above: red under 16, orange 16-17, green at the 18-tray full spec. One bar per rack_name, so a rack short of trays reads at a glance without scanning the table.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 18,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 16
+              },
+              {
+                "color": "green",
+                "value": 18
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "rack_name",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/gpu_racks",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "rack_name",
+              "text": "rack_name",
+              "type": "string"
+            },
+            {
+              "selector": "trays_ready",
+              "text": "trays_ready",
+              "type": "number"
             }
           ]
         }

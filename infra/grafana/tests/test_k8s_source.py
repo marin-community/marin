@@ -18,6 +18,7 @@ from conftest import (
     healthy_k8s_routes,
     k8s_api,
     make_k8s_source,
+    node,
     pod,
 )
 from github_source import GithubSource
@@ -328,6 +329,58 @@ def test_terminating_rejects_an_invalid_gpu_quantity():
         make_k8s_source(k8s_api(routes)).termination_candidates()
 
 
+def test_gpu_racks_groups_by_rack_and_counts_ready():
+    routes = {
+        "/api/v1/nodes": [
+            node("g1", rack="169", rack_name="dh1-r169-us-east-08a", instance_type="gb200-4x", gpu_capacity=4),
+            node("g2", rack="169", rack_name="dh1-r169-us-east-08a", instance_type="gb200-4x", gpu_capacity=4),
+            node(
+                "g3", rack="397", rack_name="dh1-r397-us-east-08a", instance_type="gb200-4x", gpu_capacity=4, ready=False
+            ),
+        ]
+    }
+    rows = make_k8s_source(k8s_api(routes)).gpu_racks()
+    assert rows == [
+        {
+            "rack": "169",
+            "rack_name": "dh1-r169-us-east-08a",
+            "instance_type": "gb200-4x",
+            "trays_total": 2,
+            "trays_ready": 2,
+        },
+        {
+            "rack": "397",
+            "rack_name": "dh1-r397-us-east-08a",
+            "instance_type": "gb200-4x",
+            "trays_total": 1,
+            "trays_ready": 0,
+        },
+    ]
+
+
+def test_gpu_racks_excludes_non_gpu_and_unlabeled_nodes():
+    routes = {
+        "/api/v1/nodes": [
+            node("cpu-1", rack="122", gpu_capacity=0),
+            node("no-rack-label", gpu_capacity=4),
+            node("g1", rack="169", gpu_capacity=4),
+        ]
+    }
+    rows = make_k8s_source(k8s_api(routes)).gpu_racks()
+    assert [row["rack"] for row in rows] == ["169"]
+
+
+def test_gpu_racks_sorts_numerically_not_lexically():
+    routes = {
+        "/api/v1/nodes": [
+            node("g1", rack="10", gpu_capacity=4),
+            node("g2", rack="9", gpu_capacity=4),
+        ]
+    }
+    rows = make_k8s_source(k8s_api(routes)).gpu_racks()
+    assert [row["rack"] for row in rows] == ["9", "10"]
+
+
 # --- K8sFleet ---------------------------------------------------------------
 
 
@@ -428,17 +481,30 @@ def _client(fleet: K8sFleet) -> TestClient:
 
 
 def test_k8s_routes_serve_fleet_rows():
-    client = _client(_fleet(("cw-a", k8s_api(healthy_k8s_routes()))))
+    routes = healthy_k8s_routes()
+    routes["/api/v1/nodes"] = [node("g1", rack="169", instance_type="gb200-4x", gpu_capacity=4)]
+    client = _client(_fleet(("cw-a", k8s_api(routes))))
     for path in (
         "/k8s/control_plane",
         "/k8s/crashloops",
         "/k8s/pending",
         "/k8s/kueue",
         "/k8s/events",
+        "/k8s/gpu_racks",
     ):
         assert client.get(path).status_code == 200
     health = client.get("/k8s/health").json()
     assert health[0]["cluster"] == "cw-a" and health[0]["reachable"] is True
+
+    (rack,) = client.get("/k8s/gpu_racks").json()
+    assert rack == {
+        "cluster": "cw-a",
+        "rack": "169",
+        "rack_name": "",
+        "instance_type": "gb200-4x",
+        "trays_total": 1,
+        "trays_ready": 1,
+    }
 
 
 def test_stuck_termination_routes_return_classification_and_alert_projection():

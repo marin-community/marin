@@ -57,6 +57,30 @@ def pod(
     }
 
 
+def node(
+    name: str,
+    *,
+    rack: str | None = None,
+    rack_name: str = "",
+    instance_type: str = "",
+    gpu_capacity: int = 0,
+    ready: bool = True,
+) -> dict:
+    labels = {}
+    if rack is not None:
+        labels["node.coreweave.cloud/rack"] = rack
+        labels["ds.coreweave.com/physical-topology.rack-name"] = rack_name
+    if instance_type:
+        labels["node.kubernetes.io/instance-type"] = instance_type
+    return {
+        "metadata": {"name": name, "labels": labels},
+        "status": {
+            "capacity": {"nvidia.com/gpu": str(gpu_capacity)},
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        },
+    }
+
+
 def k8s_api(routes: dict):
     """A MockTransport handler serving canned bodies by path.
 

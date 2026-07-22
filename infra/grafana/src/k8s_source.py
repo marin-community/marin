@@ -61,6 +61,12 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 _IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
 
+# CoreWeave physical-topology labels a GPU node carries: which rack it lives in,
+# the rack's full CoreWeave-assigned name, and its instance type.
+_RACK_LABEL = "node.coreweave.cloud/rack"
+_RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
+_INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
@@ -429,6 +435,48 @@ class K8sSource:
         rows.sort(key=lambda row: row["last_seen"] or 0, reverse=True)
         return rows[:_EVENT_LIMIT]
 
+    def gpu_racks(self) -> list[dict]:
+        """One row per physical rack of GPU nodes: trays registered vs. Ready.
+
+        Only nodes advertising nvidia.com/gpu capacity carry the CoreWeave rack
+        topology labels that map to a physical tray; CPU/storage nodes are excluded.
+        """
+        racks: dict[str, dict] = {}
+        for node in self._list("/api/v1/nodes"):
+            if _node_gpu_capacity(node) <= 0:
+                continue
+            labels = (node.get("metadata") or {}).get("labels") or {}
+            rack = labels.get(_RACK_LABEL)
+            if rack is None:
+                continue
+            bucket = racks.setdefault(
+                rack,
+                {
+                    "rack": rack,
+                    "rack_name": labels.get(_RACK_NAME_LABEL, ""),
+                    "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
+                    "trays_total": 0,
+                    "trays_ready": 0,
+                },
+            )
+            bucket["trays_total"] += 1
+            if _node_ready(node):
+                bucket["trays_ready"] += 1
+        return [racks[rack] for rack in sorted(racks, key=int)]
+
+
+def _node_gpu_capacity(node: dict) -> int:
+    raw = ((node.get("status") or {}).get("capacity") or {}).get(_GPU_RESOURCE, 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _node_ready(node: dict) -> bool:
+    conditions = (node.get("status") or {}).get("conditions") or []
+    return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+
 
 def _container_statuses(pod: dict) -> list[dict]:
     status = pod.get("status") or {}
@@ -561,6 +609,9 @@ class K8sFleet:
 
     def warning_events(self) -> list[dict]:
         return self._fan_out(lambda s: s.warning_events(), self._error_row)
+
+    def gpu_racks(self) -> list[dict]:
+        return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
 
     def health(self) -> list[dict]:
         """One row per cluster: reachable, error class, and API server latency."""

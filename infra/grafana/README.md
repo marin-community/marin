@@ -38,6 +38,7 @@ GET /k8s/control_plane | crashloops | pending     CW control-plane state, all cl
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
 GET /k8s/overview                                 explicit pending/crashloop counts
+GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
      webhook_ready,degraded,stuck_gpu_pods}       numeric, >=1 row per cluster
 GET /health                                       bridge liveness
@@ -87,6 +88,14 @@ finalizers. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-
 CoreWeave's per-node daemons are thousands of pods of someone else's infrastructure,
 while the namespaces we operate hold about a hundred. These are current-state reads —
 the bridge stores no history; trends come from the finelog-backed rows.
+
+`gpu_racks` lists every node with `nvidia.com/gpu` capacity, grouped by its
+CoreWeave `node.coreweave.cloud/rack` label, with the rack's full name
+(`ds.coreweave.com/physical-topology.rack-name`), instance type, and how many of
+its trays are registered vs. Ready. A tray that never re-registers with the k8s
+API — the common failure mode after hardware maintenance — is invisible here, so
+a rack short of its physical capacity (18 trays for a GB200 NVL72 rack, one CoreWeave
+rack) is a floor on what's down, not a guarantee.
 
 The `/k8s/alerts/*` routes exist for Grafana's table-alert contract: string label
 columns plus exactly one numeric column, and always at least one row per cluster — an
