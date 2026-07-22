@@ -159,7 +159,7 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
 
 
 @pulumi.runtime.test
-def test_phase_a_models_durable_resources_without_secret_payloads():
+def test_adoption_models_durable_resources_without_secret_payloads():
     infrastructure = make_infrastructure()
 
     def check(_: object) -> None:
@@ -189,7 +189,7 @@ def test_phase_a_models_durable_resources_without_secret_payloads():
 
 
 @pulumi.runtime.test
-def test_phase_a_creates_the_repository_without_building_an_image():
+def test_unstaged_release_creates_the_repository_without_building_an_image():
     infrastructure = make_infrastructure()
 
     def check(_: object) -> None:

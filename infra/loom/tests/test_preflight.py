@@ -28,8 +28,13 @@ def installations() -> dict:
                 "app_slug": "loom-oa-dev",
                 "target_type": "Organization",
                 "repository_selection": "all",
-                "permissions": dict(preflight.EXPECTED_PERMISSIONS),
-                "events": sorted(preflight.EXPECTED_EVENTS),
+                "permissions": {
+                    "contents": "write",
+                    "issues": "write",
+                    "metadata": "read",
+                    "pull_requests": "write",
+                },
+                "events": ["issue_comment", "pull_request_review_comment"],
             }
         ]
     }
@@ -88,7 +93,9 @@ def test_buildx_preflight_requires_linux_amd64() -> None:
 
 def test_registry_preflight_accepts_inline_registry_auth() -> None:
     config = {"auths": {"us-central1-docker.pkg.dev": {"auth": "opaque"}}}
-    assert preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev") == "inline"
+    with patch.object(preflight.subprocess, "run") as run:
+        preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev")
+    run.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -104,7 +111,7 @@ def test_registry_preflight_invokes_the_selected_credential_helper(config: dict,
         "run",
         return_value=subprocess.CompletedProcess([], 0, '{"Username":"token","Secret":"redacted"}', ""),
     ) as run:
-        assert preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev") == helper
+        preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev")
     assert run.call_args.args[0] == [f"docker-credential-{helper}", "get"]
     assert run.call_args.kwargs["input"] == "us-central1-docker.pkg.dev\n"
 

@@ -237,7 +237,10 @@ def reattachment_failed(host: RemoteHost) -> bool:
 @click.option(
     "--allow-legacy-cutover",
     is_flag=True,
-    help="Allow the first DockerRunner rollout to stop legacy in-container supervisors.",
+    help=(
+        "Allow the first DockerRunner rollout to stop legacy in-container supervisors; "
+        "the command rejects this flag once any DockerRunner session exists."
+    ),
 )
 def main(
     stack: str | None,

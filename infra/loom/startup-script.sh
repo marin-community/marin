@@ -233,15 +233,16 @@ docker compose up -d
 # workload identities — never secret values. Apply it through Loom's REST API
 # from inside the container, where the machine-local credential already exists.
 DEPLOYMENT_FILE=/run/loom-deployment.json
+HEALTH_URL=http://127.0.0.1:7878/api/health
 if meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE" 2>/dev/null && [ -s "$DEPLOYMENT_FILE" ]; then
   echo "== waiting for loom before deployment reconciliation =="
   for _ in $(seq 1 60); do
-    if curl -fsS http://127.0.0.1:7878/api/health >/dev/null; then
+    if curl -fsS "$HEALTH_URL" >/dev/null; then
       break
     fi
     sleep 2
   done
-  if ! curl -fsS http://127.0.0.1:7878/api/health >/dev/null; then
+  if ! curl -fsS "$HEALTH_URL" >/dev/null; then
     echo "loom startup-script: loom did not become healthy for reconciliation" >&2
     exit 1
   fi

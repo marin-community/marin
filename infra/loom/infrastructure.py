@@ -178,6 +178,8 @@ class DeploymentConfig:
     operator_cidr: str
     dns_zone_id: str
     build_commit: str | None = None
+    # False leaves imported VM metadata untouched. Once enabled for the first
+    # activation, this remains true so Pulumi owns every later rollout.
     manage_runtime: bool = False
     buildx_builder: str | None = None
     network: str = DEFAULT_NETWORK

@@ -90,13 +90,13 @@ def validate_buildx(builder: str | None) -> None:
         raise ValueError(f"Docker buildx builder does not support linux/amd64: {platform_line}")
 
 
-def validate_registry_credentials(config: dict[str, Any], registry: str) -> str:
+def validate_registry_credentials(config: dict[str, Any], registry: str) -> None:
     helpers = config.get("credHelpers", {})
     helper = helpers.get(registry) if isinstance(helpers, dict) else None
     auths = config.get("auths", {})
     registry_auth = auths.get(registry) if isinstance(auths, dict) else None
     if isinstance(registry_auth, dict) and registry_auth.get("auth"):
-        return "inline"
+        return
     helper = helper or config.get("credsStore")
     if not isinstance(helper, str) or not helper:
         raise ValueError(f"Docker has no credential helper for {registry}; run gcloud auth configure-docker {registry}")
@@ -108,7 +108,6 @@ def validate_registry_credentials(config: dict[str, Any], registry: str) -> str:
     )
     if result.returncode:
         raise ValueError(f"Docker credential helper {helper!r} cannot authenticate {registry}")
-    return helper
 
 
 def stack_build_config(stack: str) -> tuple[str | None, str]:
