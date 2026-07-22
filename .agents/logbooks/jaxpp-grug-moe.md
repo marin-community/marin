@@ -2354,3 +2354,24 @@ author: dlwh
   - A blind retry is not justified because the second attempt reached the same deterministic stage program and remained inside backend compilation without an infrastructure error.
 - Next action:
   - Minimize stage-3 loss-backward compilation outside the full four-stage run, preserving the FP8 overwrite-state and microbatch-accumulation structure. Package an upstream-ready reproducer in Marin and file only against Marin before asking NVIDIA/JaxPP maintainers for a fix. Resume the paired performance gate only after the minimized program compiles or yields an actionable compiler error.
+
+### 2026-07-22 14:22 PDT - isolated FP8 routed-MLP backward does not reproduce the stage-3 stall
+- Hypothesis: The production FP8 expert GEMMs, delayed-scaling overwrite state, ring EP8 collectives, microbatch accumulation, and JaxPP task localization are sufficient to reproduce the stage-3 loss-backward compile stall without the rest of the Grug block or loss task.
+- Commit Hashes:
+  - `b496935ca7` adds the bounded direct/JaxPP FP8 expert-backward reproducer and watchdog event log.
+  - `2c3b080dbf` adds the distributed-direct topology control.
+  - `27aa048d06` preserves production ring sharding, collectives, and FP8 overwrite-state `pmax` semantics.
+  - `1abcff61fc` adds the two-host external-worker mode used for eight devices per stage.
+- Commands: exact fresh-name Iris commands, dependency pins, watchdog settings, and the topology ramp are recorded in `experiments/grug/moe/repro_jaxpp_fp8_expert_compile.README.md` at `1abcff61fc`. All GPU gates used JAX/JAXLIB `0.10.1`, JaxPP `7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`, CUDA 13, and `XLA_PYTHON_CLIENT_MEM_FRACTION=.50`.
+- Results:
+  - The one-device-per-stage ramp passed through L2, four microbatches, eight experts, hidden/intermediate `2560/1280`, and 65,536 tokens. The largest isolated JaxPP case compiled and executed in about `18.9s`; direct and distributed-direct controls stayed near `5.2-5.4s`.
+  - Ring-sharded JaxPP FP8 passed with two devices per stage in `7.962s` and four devices per stage in `8.538s`. Matched distributed-direct BF16/FP8 and JaxPP BF16 controls also passed.
+  - External two-host BF16 ring control `/dlwh/jaxpp-fp8-ring-dps8-bf16-20260722-211636` passed on 16 H100s. Rank 0/1 lower times were `0.0956/0.0925s`; JaxPP `eval_local` compile-and-execute times were `2.4112/4.5819s`.
+  - Matched minimum FP8 ring `/dlwh/jaxpp-fp8-ring-dps8-fp8-20260722-211914` passed. Rank 0/1 lower times were `0.2500/0.2438s`; compile-and-execute times were `4.9585/9.8064s`, about `2.1x` the BF16 control.
+  - Restored production expert-stage shape `/dlwh/jaxpp-fp8-ring-dps8-prodshape-20260722-212047` also passed: L2, four microbatches, 64 experts, top-k4, 32,768 tokens, hidden `2560`, intermediate `1280`, and eight devices per stage. Rank 0/1 lower times were `1.8194/1.8742s`; compile-and-execute times were `8.7470/24.3969s`.
+  - Every job and task is terminal successful. No watchdog stack, timeout, OOM, compiler exception, resubmission, or cluster mutation occurred.
+- Interpretation:
+  - The isolated routed-MLP backward is insufficient to reproduce the production hang even at the production expert topology, capacity, width, layer count, microbatch count, and FP8 state shape. The result rules out those ingredients as a sufficient cause; it does not rule out an interaction with the complete stage-3 loss task.
+  - FP8 increases localized compile-and-execute time materially, especially on rank 1, but the bounded cases complete in seconds. Packaging this version upstream would misrepresent the production failure because it has no failing case.
+- Next action:
+  - Add the smallest omitted stage-3 boundary, prioritizing the real language-model head/loss and complete value-and-grad output tree. Retain matched BF16 and direct controls, external dps8 topology, and hard watchdogs. File a separate Marin issue only after the minimized program reproduces or reaches a clearly actionable compiler failure; do not file NVIDIA upstream.
