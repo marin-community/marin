@@ -55,6 +55,8 @@ SLACK_MAX_ATTEMPTS = 5
 SLACK_MAX_RETRY_DELAY = 300
 MAX_PERSISTED_ERROR_CHARS = 4_000
 MAX_EVENT_ERROR_CHARS = 1_000
+MANUAL_QUESTION_PRIORITY = 120
+FOLLOW_UP_PRIORITY = 110
 
 
 class TurnPendingError(RuntimeError):
@@ -99,6 +101,19 @@ class TouchedSignal:
     state: SignalState
     disposition: SignalDisposition
     alert: GrafanaAlert
+
+
+@dataclass(frozen=True)
+class ClaimedTurn:
+    """One durable turn claimed for agent dispatch."""
+
+    id: str
+    case_id: str
+    prompt: str
+    requested_by: str
+    title: str
+    loom_session_id: str | None
+    loom_session_url: str | None
 
 
 class OpsRepository:
@@ -335,7 +350,7 @@ class OpsRepository:
                     group_key=group_key,
                     grouping_rule="manual",
                     state="pending",
-                    priority=120,
+                    priority=MANUAL_QUESTION_PRIORITY,
                     title=text[:160],
                     question=text,
                     opened_at=now,
@@ -349,7 +364,7 @@ class OpsRepository:
                     session_id=session_id,
                     kind="question",
                     state="queued",
-                    priority=120,
+                    priority=MANUAL_QUESTION_PRIORITY,
                     requested_by=actor,
                     client_request_id=f"manual:{case_id}",
                     prompt=text,
@@ -389,7 +404,7 @@ class OpsRepository:
                     session_id=session["id"],
                     kind="follow_up",
                     state="queued",
-                    priority=110,
+                    priority=FOLLOW_UP_PRIORITY,
                     requested_by=actor,
                     client_request_id=f"{actor}:{uuid.uuid4()}",
                     prompt=text,
@@ -401,7 +416,7 @@ class OpsRepository:
             await self._event(connection, case_id, "follow_up_queued", actor, {"turn_id": turn_id})
         return turn_id
 
-    async def claim_next_turn(self) -> dict[str, object] | None:
+    async def claim_next_turn(self) -> ClaimedTurn | None:
         """Claim one queued turn after proving no other turn is globally active."""
 
         async with self._engine.begin() as connection:
@@ -415,13 +430,13 @@ class OpsRepository:
                 return None
             turn_result = await connection.execute(
                 select(
-                    *agent_turns.c,
+                    agent_turns.c.id,
+                    agent_turns.c.prompt,
+                    agent_turns.c.requested_by,
                     agent_sessions.c.case_id,
                     agent_sessions.c.loom_session_id,
                     agent_sessions.c.loom_session_url,
                     cases.c.title,
-                    cases.c.trigger,
-                    cases.c.question,
                 )
                 .select_from(
                     agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id).join(
@@ -458,7 +473,15 @@ class OpsRepository:
                 {"turn_id": str(turn["id"])},
                 turn_id=str(turn["id"]),
             )
-            return dict(turn)
+            return ClaimedTurn(
+                id=str(turn["id"]),
+                case_id=str(turn["case_id"]),
+                prompt=str(turn["prompt"]),
+                requested_by=str(turn["requested_by"]),
+                title=str(turn["title"]),
+                loom_session_id=cast(str | None, turn["loom_session_id"]),
+                loom_session_url=cast(str | None, turn["loom_session_url"]),
+            )
 
     async def turn_started(
         self,
@@ -1020,7 +1043,6 @@ class OpsRepository:
     ) -> str:
         case_id = str(uuid.uuid4())
         priority = max(severity_priority(item.alert.severity) for item in touched if item.state == SignalState.FIRING)
-        title = notification.title or notification.common_annotations.get("summary") or _case_title(touched)
         await connection.execute(
             cases.insert().values(
                 id=case_id,
@@ -1030,7 +1052,7 @@ class OpsRepository:
                 grouping_rule=GROUPING_RULE,
                 state="pending",
                 priority=priority,
-                title=title,
+                title=notification.title,
                 opened_at=func.now(),
                 updated_at=func.now(),
             )
@@ -1320,15 +1342,6 @@ def _mapping(value: object, field: str) -> Mapping[str, str]:
 def _common_strings(values: Sequence[Mapping[str, str]]) -> Mapping[str, str]:
     first = values[0]
     return {key: item for key, item in first.items() if all(value.get(key) == item for value in values[1:])}
-
-
-def _case_title(touched: Sequence[TouchedSignal]) -> str:
-    alerts = [item.alert for item in touched if item.state == SignalState.FIRING]
-    if not alerts:
-        return "Resolved Grafana alert group"
-    first = alerts[0]
-    suffix = f" (+{len(alerts) - 1})" if len(alerts) > 1 else ""
-    return f"{first.alert_name}: {first.summary}{suffix}"
 
 
 def json_evidence(detail: Mapping[str, object]) -> str:

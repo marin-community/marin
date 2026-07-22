@@ -82,7 +82,7 @@ async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running(
     turn = await repository.claim_next_turn()
     assert turn is not None
     await repository.turn_started(
-        turn_id=str(turn["id"]),
+        turn_id=turn.id,
         loom_session_id="loom-test",
         loom_session_url="https://loom.test/s/loom-test",
         loom_turn_number=0,
@@ -211,7 +211,7 @@ async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation
 
     turn = await repository.claim_next_turn()
     assert turn is not None
-    turn_id = str(turn["id"])
+    turn_id = turn.id
     await repository.turn_started(
         turn_id=turn_id,
         loom_session_id="loom-test",
@@ -238,7 +238,7 @@ async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation
     )
     follow_up = await repository.claim_next_turn()
     assert follow_up is not None
-    assert str(follow_up["id"]) == follow_up_id
+    assert follow_up.id == follow_up_id
     await repository.turn_started(
         turn_id=follow_up_id,
         loom_session_id="loom-test",

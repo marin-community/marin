@@ -52,38 +52,40 @@ class OpsService:
             turn = await self.repository.claim_next_turn()
             if turn is None:
                 return
-            turn_id = str(turn["id"])
+            turn_id = turn.id
             external_turn_started = False
             try:
-                detail = await self.repository.case_detail(str(turn["case_id"]))
+                detail = await self.repository.case_detail(turn.case_id)
                 if detail is None:
-                    raise RuntimeError(f"case {turn['case_id']} disappeared")
+                    raise RuntimeError(f"case {turn.case_id} disappeared")
                 evidence = json_evidence(detail)
-                case_id = str(turn["case_id"])
+                case_id = turn.case_id
                 prompt = OPS_PROMPT.format(
                     case_id=case_id,
                     turn_id=turn_id,
-                    operator_request=str(turn["prompt"]),
+                    operator_request=turn.prompt,
                     evidence=evidence,
                 )
-                loom_session_id = turn.get("loom_session_id")
-                if isinstance(loom_session_id, str) and loom_session_id:
+                loom_session_id = turn.loom_session_id
+                if loom_session_id:
+                    loom_url = turn.loom_session_url
+                    if not loom_url:
+                        raise RuntimeError(f"session {loom_session_id} has no URL")
                     loom_turn = await self.gateway.prompt(
                         loom_session_id,
                         AgentPrompt(
                             text=prompt,
-                            actor=str(turn["requested_by"]),
+                            actor=turn.requested_by,
                             case_id=case_id,
                             turn_id=turn_id,
                         ),
                     )
-                    loom_url = str(turn["loom_session_url"])
                     external_turn_started = True
                 else:
                     session = await self.gateway.create_session(
                         AgentSessionRequest(
-                            name=f"ops-case-{turn['case_id']}",
-                            title=f"Ops: {turn['title']}",
+                            name=f"ops-case-{turn.case_id}",
+                            title=f"Ops: {turn.title}",
                             goal=prompt,
                             case_id=case_id,
                             turn_id=turn_id,
