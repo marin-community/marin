@@ -148,7 +148,9 @@ targets:
   routine monitoring. (Runbook LIVENESS has the method.)
 - **Heartbeats report two placement spans:** chips/regions/slices (a) **submitted** to iris (any state)
   and (b) **running per W&B** (`state=running`).
-- **Iris job-name = `<wandb_run_id>-<slice>-<unique>`** — the W&B run id, then placement and a unique
-  attempt token; every submission is unique. Resume comes from the region checkpoint, not the name.
+- **Iris job-name = `<wandb_run_id>-<slice>-<unique>`; every submission is unique — there is NO in-place
+  "resubmit".** Any change (same-target restart, relocation, slice/region change) = stop the old iris
+  job and submit a NEW unique one; resume comes from the region checkpoint, not the name. (Runbook has
+  the mechanics.)
 - **Invariant: at most one active dispatch per `(point, region)`** — else two jobs co-write the region
   checkpoint and corrupt it.
