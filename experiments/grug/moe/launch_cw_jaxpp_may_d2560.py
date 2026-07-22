@@ -278,7 +278,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             f"got {pipeline.stage_layer_counts} (sum={sum(pipeline.stage_layer_counts)})"
         )
     post_setup_scripts = ()
-    if pipeline is not None:
+    if pipeline is not None or model.moe_implementation == "ring_quack_approx":
         post_setup_scripts = jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
     if model.moe_implementation == "deepep":
         source_root = os.environ.get("DEEPEP_SRC_ROOT")
