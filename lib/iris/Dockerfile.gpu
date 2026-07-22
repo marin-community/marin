@@ -27,11 +27,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 ENV PATH="/root/.cargo/bin:$PATH"
 
 # CUTLASS DSL imports Torch for dtype and tensor adapters even when Marin runs
-# only JAX kernels. Keep a CPU Torch in the image so the overlay does not pull a
-# CUDA-12 Torch stack into the CUDA-13 Toolbox runtime.
+# only JAX kernels. Keep a matching CPU Torch/Torchvision pair in the image so
+# the overlay does not pull a CUDA-12 Torch stack into the CUDA-13 runtime.
 RUN python3 -m pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.11.0+cpu
+    torch==2.11.0+cpu \
+    torchvision==0.26.0+cpu
 
 # The setup script records which declared distributions exist before syncing
 # and excludes every name from the overlay venv. Keep this list to one coherent
@@ -48,6 +49,7 @@ candidates = (
     "transformer-engine",
     "transformer-engine-jax",
     "torch",
+    "torchvision",
     "cuda-bindings",
     "cuda-core",
     "cuda-pathfinder",
