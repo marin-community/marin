@@ -48,11 +48,97 @@ The auxiliary values are a minimal activation-dependent stand-in for router
 betas. Attention, learned router logits and z-loss, optimizer state, and the
 full pipeline schedule remain excluded. Nothing has been filed upstream.
 
-## Next-token dps8 gate
+`--remat-mode save_moe` adds the exact non-effectful ring-MoE checkpoint
+boundary used by `TransformerPipelineStage.run_block`: one
+`eqx.filter_checkpoint` per block, default `prevent_cse=True`, with
+`jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)`. The
+ring backend already emits those production checkpoint names around dispatch,
+expert hidden state, and dispatch output. `--remat-mode recompute_all` uses the
+same boundary with no save policy. `--remat-mode none` remains the default so
+all completed gates keep their previous lowering.
 
-These are the matched next gates. They retain the reduced production stage-3
-shape and differ only in BF16 versus FP8 expert GEMMs. Each invocation creates
-a fresh Iris job name.
+This matches the non-effectful branch selected by the production `ring`
+backend. The separate DeepEP branch checkpoints attention and leaves the
+effectful MoE outside remat, so it is intentionally not modeled here. Within
+the checkpoint, this gate retains only the residual routed expert computation
+and its auxiliary output. Attention, per-block RMS/gated norms, learned
+routing, the shared expert, attention mask/static flags, optimizer state, and
+the full pipeline schedule remain excluded.
+
+## Block-remat dps8 gate
+
+These matched jobs add only the production `save_moe` block checkpoint around
+the completed next-token shape. Each invocation creates a fresh Iris job name.
+
+BF16 control:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-remat-dps8-bf16-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel bf16_ring \
+      --loss-boundary next_token --remat-mode save_moe \
+      --devices-per-stage 8 --layers 2 --microbatches 4 \
+      --experts 64 --top-k 4 --tokens 32768 --sequence-length 4096 \
+      --vocab-size 8192 --hidden 2560 --intermediate 1280 \
+      --amax-history 1024 --timeout 1200 --stack-after 120 \
+      --coordinator-port 5793 --dump-dir /tmp/jaxpp-remat/dps8-bf16
+  '
+```
+
+FP8 candidate:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-remat-dps8-fp8-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel fp8_ring \
+      --loss-boundary next_token --remat-mode save_moe \
+      --devices-per-stage 8 --layers 2 --microbatches 4 \
+      --experts 64 --top-k 4 --tokens 32768 --sequence-length 4096 \
+      --vocab-size 8192 --hidden 2560 --intermediate 1280 \
+      --amax-history 1024 --timeout 1200 --stack-after 120 \
+      --coordinator-port 5793 --dump-dir /tmp/jaxpp-remat/dps8-fp8
+  '
+```
+
+If `save_moe` passes, repeat only the FP8 command with a fresh
+`jaxpp-remat-all-dps8-fp8-${STAMP}` name and `--remat-mode recompute_all` to
+test full expert-dispatch recomputation.
+
+## Completed next-token dps8 gate
+
+Both matched next-token jobs passed without watchdog, OOM, or error. BF16 job
+`/dlwh/jaxpp-last-stage-dps8-bf16-20260722-213810` returned lower/`eval_local`
+times of 0.532/6.005 seconds on rank 0 and 0.538/17.552 seconds on rank 1. FP8
+job `/dlwh/jaxpp-last-stage-dps8-fp8-20260722-214009` returned 1.920/10.940
+seconds on rank 0 and 1.922/30.621 seconds on rank 1. This rules out final
+norms, the LM head, fused next-token loss, and the complete task result tree in
+combination with the isolated FP8 expert backward.
+
+The commands below retain the completed configuration for reference.
 
 BF16 control:
 
@@ -272,10 +358,11 @@ production ring capacity calculation.
   the issue is below JaxPP in distributed JAX/XLA compilation of the FP8 ring
   custom VJP.
 - Direct FP8 ring stalls: the issue is stage-local and below distributed setup.
-- The completed dps8 expert-only cases pass at the reduced production shape:
-  that boundary is insufficient. A next-token failure would isolate the final
-  norm/head/loss or complete task-output structure; a next-token pass would
-  move the minimum missing structure back into the block/router path.
+- The completed expert-only and next-token dps8 cases pass at the reduced
+  production shape. The next isolated candidate is the production block-level
+  `save_moe` remat interaction. If it also passes, the minimum missing
+  structure remains in attention, learned routing, their block-level
+  interaction, or the full pipeline schedule.
 
 `--stop-after lower` proves Python tracing and JaxPP MPMD localization without
 entering XLA compilation. The full direct paths log separate lower, compile,

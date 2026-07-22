@@ -47,7 +47,7 @@ from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp.experimental import mpmd as jaxpp_mpmd
-from levanter.grug.grug_moe import MoeRaggedDotOps, moe_mlp
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, MoeRaggedDotOps, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
@@ -57,6 +57,7 @@ WorkerMode = Literal["local", "external"]
 StopAfter = Literal["lower", "execute"]
 Bootstrap = Literal["jax_environment", "iris_job_info"]
 LossBoundary = Literal["mse", "next_token"]
+RematMode = Literal["none", "recompute_all", "save_moe"]
 _FP8_ALIGNMENT = 128
 _GATED_NORM_RANK = 128
 _RMS_NORM_EPS = 1e-5
@@ -110,6 +111,7 @@ class Config:
     hidden: int
     intermediate: int
     loss_boundary: LossBoundary
+    remat_mode: RematMode
     sequence_length: int
     vocab_size: int
     top_k: int
@@ -512,10 +514,22 @@ def _expert_stack_forward(
         )
     group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
     qb_betas = []
+
+    def isolated_block(block_layer: ExpertLayer, block_hidden: jax.Array) -> tuple[jax.Array, jax.Array]:
+        update = _layer_forward(block_layer, block_hidden, group_sizes, config, mesh)
+        block_hidden = block_hidden + update
+        qb_beta = jnp.broadcast_to(jnp.mean(update.astype(jnp.float32)), (config.experts,))
+        return block_hidden, qb_beta
+
     for layer in layers:
-        update = _layer_forward(layer, activation, group_sizes, config, mesh)
-        activation = activation + update
-        qb_betas.append(jnp.broadcast_to(jnp.mean(update.astype(jnp.float32)), (config.experts,)))
+        if config.remat_mode == "none":
+            activation, qb_beta = isolated_block(layer, activation)
+        else:
+            remat_policy = None
+            if config.remat_mode == "save_moe":
+                remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            activation, qb_beta = eqx.filter_checkpoint(isolated_block, policy=remat_policy)(layer, activation)
+        qb_betas.append(qb_beta)
     qb_beta_per_layer = jax.lax.stop_gradient(jnp.stack(qb_betas, axis=0))
     if len(original_shape) == 3:
         activation = jnp.reshape(
@@ -1176,6 +1190,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--intermediate", type=int, default=128)
     parser.add_argument("--loss-boundary", choices=("mse", "next_token"), default="mse")
+    parser.add_argument("--remat-mode", choices=("none", "recompute_all", "save_moe"), default="none")
     parser.add_argument("--sequence-length", type=int, default=128)
     parser.add_argument("--vocab-size", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=1)
