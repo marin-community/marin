@@ -1,0 +1,523 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bounded JaxPP reproducer for an FP8 expert-GEMM backward compile stall.
+
+The production failure occurs while JaxPP compiles the last pipeline stage's
+first loss-and-backward task. This script keeps that task's essential shape:
+one or more grouped expert MLP layers, a scalar loss, FP8 delayed-scaling state
+returned as overwrite gradients, and optional microbatch gradient reduction.
+It removes routing, attention, optimizer state, and pipeline scheduling.
+
+``--runtime direct`` compiles each task with ordinary ``jax.jit`` on one H100.
+``--runtime jaxpp`` places the same tasks on the second rank of a two-rank,
+two-H100 MPMD mesh. Every compiler boundary emits a JSON event and a watchdog
+terminates a stuck worker with exit status 124.
+"""
+
+from __future__ import annotations
+
+import argparse
+import faulthandler
+import importlib.metadata
+import json
+import multiprocessing as mp
+import os
+import platform
+import sys
+import threading
+import time
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+from haliax.quantization import Fp8RaggedDotOp, OverwriteWithGradient, apply_updates, partition_for_grad_overwrite
+from jax.experimental import multihost_utils
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+from jaxpp.experimental import mpmd as jaxpp_mpmd
+
+JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+Kernel = Literal["bf16", "fp8"]
+Runtime = Literal["direct", "jaxpp"]
+StopAfter = Literal["lower", "execute"]
+_FP8_ALIGNMENT = 128
+
+
+def event(name: str, **fields: Any) -> None:
+    """Emit one machine-readable diagnostic event."""
+    print(json.dumps({"time": time.time(), "event": name, **fields}, default=str), flush=True)
+
+
+def package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
+def jaxpp_revision() -> str:
+    try:
+        distribution = importlib.metadata.distribution("jaxpp")
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+    direct_url = distribution.read_text("direct_url.json")
+    if direct_url is None:
+        return "unknown"
+    return json.loads(direct_url).get("vcs_info", {}).get("commit_id", "unknown")
+
+
+@dataclass(frozen=True)
+class Config:
+    runtime: Runtime
+    kernel: Kernel
+    layers: int
+    experts: int
+    tokens: int
+    hidden: int
+    intermediate: int
+    microbatches: int
+    amax_history: int
+    timeout: int
+    stack_after: int
+    coordinator_port: int
+    stop_after: StopAfter
+    dump_dir: str | None
+
+    @property
+    def tokens_per_expert(self) -> int:
+        return self.tokens // self.experts
+
+    def validate(self) -> None:
+        positive = {
+            "layers": self.layers,
+            "experts": self.experts,
+            "tokens": self.tokens,
+            "hidden": self.hidden,
+            "intermediate": self.intermediate,
+            "microbatches": self.microbatches,
+            "amax_history": self.amax_history,
+            "timeout": self.timeout,
+            "stack_after": self.stack_after,
+        }
+        for name, value in positive.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
+        if self.tokens % self.experts:
+            raise ValueError(f"tokens={self.tokens} must be divisible by experts={self.experts}")
+        if self.kernel == "fp8":
+            aligned = {
+                "tokens": self.tokens,
+                "hidden": self.hidden,
+                "intermediate": self.intermediate,
+            }
+            for name, value in aligned.items():
+                if value % _FP8_ALIGNMENT:
+                    raise ValueError(f"FP8 {name}={value} must be divisible by {_FP8_ALIGNMENT}")
+
+
+class Bf16ExpertLayer(eqx.Module):
+    w13: jax.Array
+    w2: jax.Array
+
+
+class Fp8ExpertLayer(eqx.Module):
+    w13: jax.Array
+    w2: jax.Array
+    w13_op: Fp8RaggedDotOp
+    w2_op: Fp8RaggedDotOp
+
+
+ExpertLayer = Bf16ExpertLayer | Fp8ExpertLayer
+Parameters = tuple[ExpertLayer, ...]
+
+
+def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
+    return Fp8RaggedDotOp(
+        input_scale=array((1,), jnp.float32, 1.0),
+        output_grad_scale=array((1,), jnp.float32, 1.0),
+        kernel_scale=array((1,), jnp.float32, 1.0),
+        input_amax_history=array((amax_history,), jnp.float32, 0.0),
+        output_grad_amax_history=array((amax_history,), jnp.float32, 0.0),
+        kernel_amax_history=array((amax_history,), jnp.float32, 0.0),
+        compute_dtype=None,
+        fwd_dtype=jnp.float8_e4m3fn,
+        rev_dtype=jnp.float8_e4m3fn,
+    )
+
+
+def abstract_parameters(config: Config, sharding: NamedSharding) -> Parameters:
+    def array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=sharding)
+
+    layers: list[ExpertLayer] = []
+    for _ in range(config.layers):
+        w13 = array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.0)
+        w2 = array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.0)
+        if config.kernel == "fp8":
+            layers.append(
+                Fp8ExpertLayer(
+                    w13=w13,
+                    w2=w2,
+                    w13_op=_fp8_op(config.amax_history, array),
+                    w2_op=_fp8_op(config.amax_history, array),
+                )
+            )
+        else:
+            layers.append(Bf16ExpertLayer(w13=w13, w2=w2))
+    return tuple(layers)
+
+
+def _make_array(shape: tuple[int, ...], dtype: jnp.dtype, fill: float, sharding: NamedSharding) -> jax.Array:
+    if not any(device.process_index == jax.process_index() for device in sharding.mesh.devices.flat):
+        return jax.make_array_from_single_device_arrays(shape, sharding, [], dtype=dtype)
+    with jax.set_mesh(sharding.mesh):
+        return jax.jit(
+            lambda: jnp.full(shape, fill, dtype),
+            out_shardings=sharding,
+        )()
+
+
+def materialize_parameters(config: Config, sharding: NamedSharding) -> Parameters:
+    def array(shape, dtype, fill):
+        return _make_array(shape, dtype, fill, sharding)
+
+    layers: list[ExpertLayer] = []
+    for _ in range(config.layers):
+        w13 = array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.01)
+        w2 = array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01)
+        if config.kernel == "fp8":
+            layers.append(
+                Fp8ExpertLayer(
+                    w13=w13,
+                    w2=w2,
+                    w13_op=_fp8_op(config.amax_history, array),
+                    w2_op=_fp8_op(config.amax_history, array),
+                )
+            )
+        else:
+            layers.append(Bf16ExpertLayer(w13=w13, w2=w2))
+    return tuple(layers)
+
+
+def _bf16_grouped_dot(lhs: jax.Array, rhs: jax.Array, config: Config) -> jax.Array:
+    grouped = lhs.reshape(config.experts, config.tokens_per_expert, lhs.shape[-1])
+    return jnp.einsum("etk,ekn->etn", grouped, rhs).reshape(config.tokens, rhs.shape[-1])
+
+
+def _layer_forward(layer: ExpertLayer, x: jax.Array, group_sizes: jax.Array, config: Config) -> jax.Array:
+    if isinstance(layer, Fp8ExpertLayer):
+        hidden = layer.w13_op(x, layer.w13, group_sizes)
+        gate, up = jnp.split(hidden, 2, axis=-1)
+        return layer.w2_op(jax.nn.silu(gate) * up, layer.w2, group_sizes)
+    hidden = _bf16_grouped_dot(x, layer.w13, config)
+    gate, up = jnp.split(hidden, 2, axis=-1)
+    return _bf16_grouped_dot(jax.nn.silu(gate) * up, layer.w2, config)
+
+
+def loss_and_gradients(
+    params: Parameters,
+    x: jax.Array,
+    dependency: jax.Array,
+    config: Config,
+) -> tuple[jax.Array, Parameters, jax.Array]:
+    """Return the scalar loss, parameter gradients, and activation gradient."""
+    group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
+
+    def loss_fn(stage_params, activation):
+        activation = activation + dependency.astype(activation.dtype)
+        for layer in stage_params:
+            activation = activation + _layer_forward(layer, activation, group_sizes, config)
+        return jnp.mean(jnp.square(activation.astype(jnp.float32)))
+
+    loss, (grads, dx) = jax.value_and_grad(loss_fn, argnums=(0, 1))(params, x)
+    return loss, grads, dx
+
+
+def _is_overwrite(value: Any) -> bool:
+    return isinstance(value, OverwriteWithGradient)
+
+
+def accumulate_gradients(accumulated: Parameters, value: Parameters) -> Parameters:
+    """Add trainable gradients and max delayed-scaling overwrite state."""
+    accumulated_overwrites, _ = partition_for_grad_overwrite(accumulated)
+    overwrites, ordinary = partition_for_grad_overwrite(value)
+    max_overwrites = jax.tree.map(jnp.maximum, accumulated_overwrites, overwrites)
+    return apply_updates(accumulated, ordinary, max_overwrites)
+
+
+def average_gradients(grads: Parameters, microbatches: int) -> Parameters:
+    """Average trainable gradients without scaling overwrite state."""
+    overwrites, ordinary = partition_for_grad_overwrite(grads)
+    scale = jnp.asarray(1.0 / microbatches, dtype=jnp.float32)
+    averaged = jax.tree.map(lambda value: value * scale, ordinary)
+    return eqx.combine(overwrites, averaged, is_leaf=_is_overwrite)
+
+
+def _configure_worker(config: Config, process_id: int) -> None:
+    if config.dump_dir is not None:
+        dump_dir = os.path.join(config.dump_dir, f"rank-{process_id}")
+        os.makedirs(dump_dir, exist_ok=True)
+        dump_flags = (
+            f"--xla_dump_to={dump_dir} --xla_dump_hlo_as_text " "--xla_dump_hlo_as_proto --xla_dump_hlo_as_long_text"
+        )
+        os.environ["XLA_FLAGS"] = f"{os.environ.get('XLA_FLAGS', '')} {dump_flags}".strip()
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(config.stack_after, repeat=True)
+
+    def hard_stop() -> None:
+        event("watchdog_timeout", process_id=process_id, timeout=config.timeout)
+        os._exit(124)
+
+    timer = threading.Timer(config.timeout, hard_stop)
+    timer.daemon = True
+    timer.start()
+
+
+def _environment() -> dict[str, Any]:
+    backend = jax.extend.backend.get_backend()
+    return {
+        "python": sys.version,
+        "platform": platform.platform(),
+        "jax": jax.__version__,
+        "jaxlib": package_version("jaxlib"),
+        "jaxpp": package_version("jaxpp"),
+        "jaxpp_revision": jaxpp_revision(),
+        "backend_platform": backend.platform,
+        "backend_platform_version": backend.platform_version,
+        "devices": [str(device) for device in jax.devices()],
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "xla_python_client_mem_fraction": os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION", ""),
+    }
+
+
+def _output_shardings(tree: Any, sharding: NamedSharding) -> Any:
+    return jax.tree.map(lambda _value: sharding, tree)
+
+
+def run_direct_worker(config: Config, process_id: int) -> None:
+    _configure_worker(config, process_id)
+    if len(jax.devices()) != 1:
+        raise ValueError(f"direct runtime requires exactly one visible GPU, got {len(jax.devices())}")
+    mesh = Mesh(np.asarray(jax.devices(), dtype=object), ("device",), axis_types=(AxisType.Explicit,))
+    replicated = NamedSharding(mesh, P())
+    params = materialize_parameters(config, replicated)
+    xs = tuple(
+        _make_array((config.tokens, config.hidden), jnp.bfloat16, 0.02 + index * 0.001, replicated)
+        for index in range(config.microbatches)
+    )
+    dependency = _make_array((), jnp.float32, 0.0, replicated)
+    backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config))
+    event("environment", process_id=process_id, config=asdict(config), environment=_environment())
+    event("direct_loss_backward_lower_entered", process_id=process_id)
+    started = time.perf_counter()
+    lowered = backward.lower(params, xs[0], dependency)
+    event("direct_loss_backward_lower_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+    if config.stop_after == "lower":
+        return
+
+    event("direct_loss_backward_compile_entered", process_id=process_id)
+    started = time.perf_counter()
+    compiled_backward = lowered.compile()
+    event("direct_loss_backward_compile_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+
+    accumulated = None
+    loss_sum = jnp.asarray(0.0, jnp.float32)
+    for microbatch_index, x in enumerate(xs):
+        event("direct_loss_backward_execute_entered", process_id=process_id, microbatch=microbatch_index)
+        started = time.perf_counter()
+        loss, grads, dx = compiled_backward(params, x, dependency)
+        jax.block_until_ready((loss, grads, dx))
+        event(
+            "direct_loss_backward_execute_returned",
+            process_id=process_id,
+            microbatch=microbatch_index,
+            elapsed=time.perf_counter() - started,
+        )
+        loss_sum = loss_sum + loss
+        accumulated = grads if accumulated is None else accumulate_gradients(accumulated, grads)
+    assert accumulated is not None
+    averaged = jax.jit(average_gradients)(accumulated, config.microbatches)
+    jax.block_until_ready((loss_sum, averaged))
+    event("direct_training_step_returned", process_id=process_id, loss=float(loss_sum / config.microbatches))
+
+
+def run_jaxpp_worker(config: Config, process_id: int) -> None:
+    _configure_worker(config, process_id)
+    actual_revision = jaxpp_revision()
+    if actual_revision != JAXPP_REVISION:
+        raise RuntimeError(f"expected JaxPP revision {JAXPP_REVISION}, got {actual_revision}")
+    jax.distributed.initialize(
+        coordinator_address=f"127.0.0.1:{config.coordinator_port}",
+        num_processes=2,
+        process_id=process_id,
+        local_device_ids=[process_id],
+        cluster_detection_method="deactivate",
+    )
+    try:
+        if len(jax.devices()) != 2:
+            raise ValueError(f"jaxpp runtime requires exactly two visible GPUs, got {len(jax.devices())}")
+        devices = np.asarray(jax.devices(), dtype=object).reshape(1, 2, 1)
+        mpmd_mesh = jaxpp_mpmd.MpmdMesh(
+            Mesh(devices, ("replica", "pp", "device"), axis_types=(AxisType.Explicit,) * 3),
+            "pp",
+        )
+        source = NamedSharding(mpmd_mesh.unstack[0], P())
+        compute = NamedSharding(mpmd_mesh.unstack[1], P())
+        param_shapes = abstract_parameters(config, compute)
+        param_shardings = _output_shardings(param_shapes, compute)
+        x_shapes = tuple(
+            jax.ShapeDtypeStruct((config.tokens, config.hidden), jnp.bfloat16, sharding=compute)
+            for _ in range(config.microbatches)
+        )
+        x_shardings = tuple(compute for _ in x_shapes)
+        scalar_shape = jax.ShapeDtypeStruct((), jnp.float32, sharding=source)
+
+        @jaxpp_mpmd.mpmd(
+            mpmd_mesh,
+            in_shardings=(source, param_shardings, x_shardings),
+            infer_donation=False,
+        )
+        def program(seed, params, xs):
+            seed = jaxpp_mpmd.task(lambda value: value + 1, name="repro_source", out_shardings=source)(seed)
+            dependency = jaxpp_mpmd.transfer(seed, out_shardings=compute).done()
+            accumulated = None
+            loss_sum = None
+            for microbatch_index, x in enumerate(xs):
+                loss, grads, _dx = jaxpp_mpmd.task(
+                    lambda p, value, dep: loss_and_gradients(p, value, dep, config),
+                    name=f"repro_mb{microbatch_index}_loss_backward",
+                    out_shardings=(compute, param_shardings, compute),
+                )(params, x, dependency)
+                if accumulated is None:
+                    accumulated = grads
+                    loss_sum = loss
+                else:
+                    accumulated = jaxpp_mpmd.task(
+                        accumulate_gradients,
+                        name=f"repro_mb{microbatch_index}_accumulate_grads",
+                        out_shardings=param_shardings,
+                    )(accumulated, grads)
+                    loss_sum = jaxpp_mpmd.task(
+                        lambda left, right: left + right,
+                        name=f"repro_mb{microbatch_index}_accumulate_loss",
+                        out_shardings=compute,
+                    )(loss_sum, loss)
+            assert accumulated is not None
+            assert loss_sum is not None
+            averaged = jaxpp_mpmd.task(
+                lambda value: average_gradients(value, config.microbatches),
+                name="repro_average_grads",
+                out_shardings=param_shardings,
+            )(accumulated)
+            mean_loss = jaxpp_mpmd.task(
+                lambda value: value / config.microbatches,
+                name="repro_average_loss",
+                out_shardings=compute,
+            )(loss_sum)
+            return mean_loss, averaged
+
+        event("environment", process_id=process_id, config=asdict(config), environment=_environment())
+        event("jaxpp_lower_entered", process_id=process_id)
+        started = time.perf_counter()
+        lowered = program.lower(scalar_shape, param_shapes, x_shapes)
+        event("jaxpp_lower_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+        if config.stop_after == "lower":
+            multihost_utils.sync_global_devices("jaxpp_fp8_repro_lower_complete")
+            return
+
+        seed = _make_array((), jnp.float32, 0.0, source)
+        params = materialize_parameters(config, compute)
+        xs = tuple(
+            _make_array((config.tokens, config.hidden), jnp.bfloat16, 0.02 + index * 0.001, compute)
+            for index in range(config.microbatches)
+        )
+        flat_args, _ = jax.tree_util.tree_flatten((seed, params, xs))
+        local_jaxpr = lowered._local_jaxpr
+        local_args = [flat_args[index] for index in local_jaxpr.global_invar_indices]
+        event(
+            "jaxpp_eval_local_compile_execute_entered",
+            process_id=process_id,
+            local_inputs=len(local_args),
+        )
+        started = time.perf_counter()
+        result = lowered.eval_local(*local_args)
+        jax.block_until_ready(result)
+        event(
+            "jaxpp_eval_local_compile_execute_returned",
+            process_id=process_id,
+            elapsed=time.perf_counter() - started,
+        )
+        multihost_utils.sync_global_devices("jaxpp_fp8_repro_complete")
+        event("jaxpp_completion_barrier_returned", process_id=process_id)
+    finally:
+        jax.distributed.shutdown()
+
+
+def run_supervised(config: Config) -> int:
+    context = mp.get_context("spawn")
+    worker = run_direct_worker if config.runtime == "direct" else run_jaxpp_worker
+    process_count = 1 if config.runtime == "direct" else 2
+    processes = [context.Process(target=worker, args=(config, process_id)) for process_id in range(process_count)]
+    for process in processes:
+        process.start()
+    deadline = time.monotonic() + config.timeout + 30
+    try:
+        while any(process.is_alive() for process in processes) and time.monotonic() < deadline:
+            if any(process.exitcode not in (None, 0) for process in processes):
+                break
+            time.sleep(0.25)
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+        for process in processes:
+            process.join(timeout=10)
+        for process in processes:
+            if process.is_alive():
+                process.kill()
+                process.join()
+    exit_codes = [process.exitcode for process in processes]
+    if all(code == 0 for code in exit_codes):
+        event("verdict", verdict="pass", exit_codes=exit_codes)
+        return 0
+    timed_out = any(code == 124 for code in exit_codes)
+    event("verdict", verdict="compile_stall" if timed_out else "error", exit_codes=exit_codes)
+    if timed_out:
+        return 124
+    return next((code for code in exit_codes if code not in (None, 0)), 1)
+
+
+def parse_config(argv: Sequence[str] | None = None) -> Config:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runtime", choices=("direct", "jaxpp"), required=True)
+    parser.add_argument("--kernel", choices=("bf16", "fp8"), default="fp8")
+    parser.add_argument("--layers", type=int, default=1)
+    parser.add_argument("--experts", type=int, default=1)
+    parser.add_argument("--tokens", type=int, default=128)
+    parser.add_argument("--hidden", type=int, default=128)
+    parser.add_argument("--intermediate", type=int, default=128)
+    parser.add_argument("--microbatches", type=int, default=1)
+    parser.add_argument("--amax-history", type=int, default=16)
+    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--stack-after", type=int, default=120)
+    parser.add_argument("--coordinator-port", type=int, default=5793)
+    parser.add_argument("--stop-after", choices=("lower", "execute"), default="execute")
+    parser.add_argument("--dump-dir")
+    args = parser.parse_args(argv)
+    config = Config(**vars(args))
+    config.validate()
+    return config
+
+
+def main() -> None:
+    config = parse_config()
+    raise SystemExit(run_supervised(config))
+
+
+if __name__ == "__main__":
+    main()
