@@ -199,16 +199,15 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         return [
             {
                 "cluster": cluster,
-                "kind": "deployment",
-                "namespace": namespace,
-                "name": name,
-                "desired": 1,
+                "kind": "component",
+                "component": component,
                 "ready": 1,
-                "up": 1,
-                "error_class": "",
+                "desired": 1,
+                "restarts": 0,
+                "waiting_reason": "",
             }
             for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
-            for namespace, name in (("iris", "iris-controller"), ("kueue-system", "kueue-controller-manager"))
+            for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
         ]
     if path == "/k8s/pending":
         return [
@@ -216,11 +215,9 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "cluster": "cw-us-east-08a",
                 "namespace": "iris",
                 "pod": "trainer-queued",
-                "phase": "Pending",
+                "state": "pending",
                 "reason": "Unschedulable",
                 "age_seconds": 420,
-                "scope": "workload",
-                "error_class": "",
             }
         ]
     if path == "/k8s/crashloops":
@@ -249,9 +246,7 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             }
         ]
     if path == "/k8s/kueue":
-        return [
-            {"cluster": "cw-us-east-08a", "queue": "training", "count": 6, "oldest_age_seconds": 540, "error_class": ""}
-        ]
+        return [{"cluster": "cw-us-east-08a", "queue": "training", "unadmitted": 6, "oldest_age_seconds": 540}]
     if path == "/k8s/gpu_racks":
         return [
             {
@@ -282,12 +277,11 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             {
                 "cluster": "cw-us-east-08a",
                 "namespace": "training",
-                "involved_object": "trainer-queued",
+                "object": "Pod/trainer-queued",
                 "reason": "FailedScheduling",
                 "message": "waiting for H100 capacity",
                 "count": 2,
                 "last_seen": round(_NOW.timestamp() * 1000),
-                "error_class": "",
             }
         ]
     if path.startswith("/wandb/"):

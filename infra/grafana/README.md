@@ -127,8 +127,10 @@ src/discovery.py       GCE label -> internal IP
 src/config.py          cluster targets, watched components, and bridge settings
 src/cache.py           TTL cache with in-flight coalescing
 src/errors.py          UpstreamError -> 5xx
+src/dashboard_stitch.py  resolves dashboards/*.json panelRef markers into full panel bodies
 provisioning/          datasources (finelog, iris, github, k8s), dashboards, alerting
-dashboards/            dashboard JSON — reviewed like code
+dashboards/            dashboard JSON source — reviewed like code; see "Adding a dashboard"
+dashboards/panels/     panel bodies shared across dashboards, referenced by panelRef
 marin-infra-panel/     internal React panel for the matrix, CI strip, and W&B charts
 Dockerfile             Grafana + bridge venv + pinned Infinity and internal panel plugins
 entrypoint.sh          runs both; if either dies the container dies
@@ -302,3 +304,33 @@ Write the window into the SQL as `{{from}}` / `{{to}}`, and bin the time axis wi
 `date_bin(INTERVAL '${__interval_ms} milliseconds', ts)` so Grafana sizes the
 buckets to the panel — see `dashboards/iris.json`. All dashboards use the
 `${cluster}` datasource variable so one serves marin and marin-dev.
+
+## Sharing a panel across dashboards
+
+A panel that belongs on more than one dashboard (e.g. the k8s workload-issue
+tables that also appear on the `infra.json` cockpit) is a single fragment file
+under `dashboards/panels/<name>.json` — the panel's full body (type, title,
+description, datasource, fieldConfig, options, targets) with `id` and `gridPos`
+omitted, since those two fields are the only ones that legitimately vary by
+placement. Each dashboard references it with a stitch marker instead of the full
+body:
+
+```json
+{ "id": 4, "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 }, "panelRef": "control_plane_components" }
+```
+
+`src/dashboard_stitch.py` resolves every `panelRef` marker into its fragment body
+at image build time (Dockerfile), the same way the `marin-infra-panel` build above
+resolves TSX into JS — the fragment is the reviewed source, the merged dashboard
+JSON `/etc/grafana/dashboards` ships to the container is derived, not committed.
+`uv run pytest` runs the same resolution before asserting datasource UIDs, filter
+expressions, and stat-panel schemas, so a stitching mistake fails locally, not
+after a deploy. This was the fix for `infra.json`'s k8s panels drifting from the
+bridge's actual field names (`phase`/`count`/`involved_object` that the routes no
+longer return) — a panel shared this way can only go stale in one place.
+
+Deliberately not a Grafana library panel: those live in Grafana's Postgres state,
+not git, and only sync through the Library Elements HTTP API — no file-based
+provisioning exists for them as of Grafana 13.x. A `panelRef` fragment stays
+100% file-provisioned like everything else here, at the cost of only resolving
+at build time rather than being editable through the Grafana UI.

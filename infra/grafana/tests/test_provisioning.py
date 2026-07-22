@@ -6,7 +6,6 @@ datasource UIDs and refIds, every rule's query URL answers on the bridge, and
 dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
-import json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,6 +13,7 @@ from urllib.parse import urlsplit
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
+from dashboard_stitch import stitch_all
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -22,9 +22,20 @@ from wandb_source import WandbSource
 
 ROOT = Path(__file__).resolve().parent.parent
 ALERTING = ROOT / "provisioning" / "alerting"
+DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
 VALID_SEVERITIES = {"critical", "warning"}
+
+
+def _stitched_dashboards() -> dict[str, dict]:
+    """Every dashboard as Grafana actually renders it: panelRef markers resolved.
+
+    The checks below assert on the deployed shape, not the templated source —
+    a panel's real datasource/columns/thresholds live in its fragment file once
+    it's been extracted behind a panelRef.
+    """
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
 
 def _load(path: Path) -> dict:
@@ -133,8 +144,7 @@ def test_dashboard_filter_expressions_reference_selected_columns():
     # Infinity's backend parser applies filterExpression to the frame built from
     # `columns`, so every field a filter references must also be selected.
     literals = {"true", "false", "null"}
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             for target in panel.get("targets", []):
                 expression = target.get("filterExpression")
@@ -144,26 +154,24 @@ def test_dashboard_filter_expressions_reference_selected_columns():
                 selected = {c["text"] for c in columns} | {c["selector"] for c in columns}
                 fields = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"'[^']*'", "", expression))) - literals
                 missing = fields - selected
-                assert not missing, f"{path.name} panel {panel.get('id')}: filter references unselected {missing}"
+                assert not missing, f"{name} panel {panel.get('id')}: filter references unselected {missing}"
 
 
 def test_dashboard_datasource_uids_are_provisioned():
     uids = set(_datasources())
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             uid = (panel.get("datasource") or {}).get("uid")
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
-            assert uid in uids, f"{path.name} panel {panel.get('id')}: unknown datasource {uid!r}"
+            assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             if panel.get("type") != "stat":
                 continue
             reduce_options = panel.get("options", {}).get("reduceOptions", {})
-            assert "calc" not in reduce_options, f"{path.name} panel {panel['id']}: use calcs, not calc"
-            assert reduce_options.get("calcs"), f"{path.name} panel {panel['id']}: missing reduction"
+            assert "calc" not in reduce_options, f"{name} panel {panel['id']}: use calcs, not calc"
+            assert reduce_options.get("calcs"), f"{name} panel {panel['id']}: missing reduction"

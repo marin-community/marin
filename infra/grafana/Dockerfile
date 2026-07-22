@@ -47,7 +47,14 @@ RUN cd /opt/bridge \
     && UV_PROJECT_ENVIRONMENT=/opt/bridge/venv uv sync --frozen --no-dev --compile-bytecode
 
 COPY provisioning /etc/grafana/provisioning
-COPY dashboards /etc/grafana/dashboards
+# dashboards/*.json holds panelRef markers for panels shared across dashboards
+# (see src/dashboard_stitch.py); this resolves them into the full panel bodies
+# Grafana actually loads, the same way the infra-panel build above resolves
+# TSX into JS. The source stays git-reviewable; only the resolved output ships.
+COPY dashboards /tmp/dashboards-src
+RUN /opt/bridge/venv/bin/python -m dashboard_stitch \
+    --src-dir /tmp/dashboards-src --panels-dir /tmp/dashboards-src/panels --out-dir /etc/grafana/dashboards \
+    && rm -rf /tmp/dashboards-src
 COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh && chown -R grafana:root /opt/bridge /etc/grafana/dashboards
 
