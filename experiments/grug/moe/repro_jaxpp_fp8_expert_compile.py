@@ -10,9 +10,11 @@ returned as overwrite gradients, and optional microbatch gradient reduction.
 It removes routing, attention, optimizer state, and pipeline scheduling.
 
 ``--runtime direct`` compiles each task with ordinary ``jax.jit`` on one H100.
-``--runtime jaxpp`` places the same tasks on the second rank of a two-rank,
-two-H100 MPMD mesh. Every compiler boundary emits a JSON event and a watchdog
-terminates a stuck worker with exit status 124.
+``--runtime distributed_direct`` initializes the same two ranks as JaxPP but
+runs ordinary ``jax.jit`` only on the compute rank. ``--runtime jaxpp`` wraps
+that computation in a task on a two-H100 MPMD mesh. Every compiler boundary
+emits a JSON event and a watchdog terminates a stuck worker with exit status
+124.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ from jaxpp.experimental import mpmd as jaxpp_mpmd
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 Kernel = Literal["bf16", "fp8"]
-Runtime = Literal["direct", "jaxpp"]
+Runtime = Literal["direct", "distributed_direct", "jaxpp"]
 StopAfter = Literal["lower", "execute"]
 _FP8_ALIGNMENT = 128
 
@@ -299,11 +301,10 @@ def _output_shardings(tree: Any, sharding: NamedSharding) -> Any:
     return jax.tree.map(lambda _value: sharding, tree)
 
 
-def run_direct_worker(config: Config, process_id: int) -> None:
-    _configure_worker(config, process_id)
-    if len(jax.devices()) != 1:
-        raise ValueError(f"direct runtime requires exactly one visible GPU, got {len(jax.devices())}")
-    mesh = Mesh(np.asarray(jax.devices(), dtype=object), ("device",), axis_types=(AxisType.Explicit,))
+def _run_direct(config: Config, process_id: int, devices: list[jax.Device], event_prefix: str) -> None:
+    if len(devices) != 1:
+        raise ValueError(f"{config.runtime} runtime requires one compute device, got {len(devices)}")
+    mesh = Mesh(np.asarray(devices, dtype=object), ("device",), axis_types=(AxisType.Explicit,))
     replicated = NamedSharding(mesh, P())
     params = materialize_parameters(config, replicated)
     xs = tuple(
@@ -312,28 +313,35 @@ def run_direct_worker(config: Config, process_id: int) -> None:
     )
     dependency = _make_array((), jnp.float32, 0.0, replicated)
     backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config))
-    event("environment", process_id=process_id, config=asdict(config), environment=_environment())
-    event("direct_loss_backward_lower_entered", process_id=process_id)
+    event(f"{event_prefix}_loss_backward_lower_entered", process_id=process_id)
     started = time.perf_counter()
     lowered = backward.lower(params, xs[0], dependency)
-    event("direct_loss_backward_lower_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+    event(
+        f"{event_prefix}_loss_backward_lower_returned",
+        process_id=process_id,
+        elapsed=time.perf_counter() - started,
+    )
     if config.stop_after == "lower":
         return
 
-    event("direct_loss_backward_compile_entered", process_id=process_id)
+    event(f"{event_prefix}_loss_backward_compile_entered", process_id=process_id)
     started = time.perf_counter()
     compiled_backward = lowered.compile()
-    event("direct_loss_backward_compile_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+    event(
+        f"{event_prefix}_loss_backward_compile_returned",
+        process_id=process_id,
+        elapsed=time.perf_counter() - started,
+    )
 
     accumulated = None
     loss_sum = jnp.asarray(0.0, jnp.float32)
     for microbatch_index, x in enumerate(xs):
-        event("direct_loss_backward_execute_entered", process_id=process_id, microbatch=microbatch_index)
+        event(f"{event_prefix}_loss_backward_execute_entered", process_id=process_id, microbatch=microbatch_index)
         started = time.perf_counter()
         loss, grads, dx = compiled_backward(params, x, dependency)
         jax.block_until_ready((loss, grads, dx))
         event(
-            "direct_loss_backward_execute_returned",
+            f"{event_prefix}_loss_backward_execute_returned",
             process_id=process_id,
             microbatch=microbatch_index,
             elapsed=time.perf_counter() - started,
@@ -343,7 +351,46 @@ def run_direct_worker(config: Config, process_id: int) -> None:
     assert accumulated is not None
     averaged = jax.jit(average_gradients)(accumulated, config.microbatches)
     jax.block_until_ready((loss_sum, averaged))
-    event("direct_training_step_returned", process_id=process_id, loss=float(loss_sum / config.microbatches))
+    event(
+        f"{event_prefix}_training_step_returned",
+        process_id=process_id,
+        loss=float(loss_sum / config.microbatches),
+    )
+
+
+def run_direct_worker(config: Config, process_id: int) -> None:
+    _configure_worker(config, process_id)
+    if len(jax.devices()) != 1:
+        raise ValueError(f"direct runtime requires exactly one visible device, got {len(jax.devices())}")
+    event("environment", process_id=process_id, config=asdict(config), environment=_environment())
+    _run_direct(config, process_id, jax.devices(), "direct")
+
+
+def _distributed_local_device_ids(process_id: int) -> list[int]:
+    if os.environ.get("JAX_PLATFORMS") == "cpu":
+        return [0]
+    return [process_id]
+
+
+def run_distributed_direct_worker(config: Config, process_id: int) -> None:
+    _configure_worker(config, process_id)
+    jax.distributed.initialize(
+        coordinator_address=f"127.0.0.1:{config.coordinator_port}",
+        num_processes=2,
+        process_id=process_id,
+        local_device_ids=_distributed_local_device_ids(process_id),
+        cluster_detection_method="deactivate",
+    )
+    try:
+        if len(jax.devices()) != 2:
+            raise ValueError(f"distributed_direct runtime requires exactly two global devices, got {len(jax.devices())}")
+        event("environment", process_id=process_id, config=asdict(config), environment=_environment())
+        if process_id == 1:
+            _run_direct(config, process_id, jax.local_devices(), "distributed_direct")
+        multihost_utils.sync_global_devices("distributed_direct_fp8_repro_complete")
+        event("distributed_direct_completion_barrier_returned", process_id=process_id)
+    finally:
+        jax.distributed.shutdown()
 
 
 def run_jaxpp_worker(config: Config, process_id: int) -> None:
@@ -355,7 +402,7 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
         coordinator_address=f"127.0.0.1:{config.coordinator_port}",
         num_processes=2,
         process_id=process_id,
-        local_device_ids=[process_id],
+        local_device_ids=_distributed_local_device_ids(process_id),
         cluster_detection_method="deactivate",
     )
     try:
@@ -460,7 +507,12 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
 
 def run_supervised(config: Config) -> int:
     context = mp.get_context("spawn")
-    worker = run_direct_worker if config.runtime == "direct" else run_jaxpp_worker
+    workers = {
+        "direct": run_direct_worker,
+        "distributed_direct": run_distributed_direct_worker,
+        "jaxpp": run_jaxpp_worker,
+    }
+    worker = workers[config.runtime]
     process_count = 1 if config.runtime == "direct" else 2
     processes = [context.Process(target=worker, args=(config, process_id)) for process_id in range(process_count)]
     for process in processes:
@@ -494,7 +546,7 @@ def run_supervised(config: Config) -> int:
 
 def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime", choices=("direct", "jaxpp"), required=True)
+    parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), required=True)
     parser.add_argument("--kernel", choices=("bf16", "fp8"), default="fp8")
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--experts", type=int, default=1)

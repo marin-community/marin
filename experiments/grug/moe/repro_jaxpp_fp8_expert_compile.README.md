@@ -12,8 +12,9 @@ Nothing has been filed upstream. The H100 result still needs to be collected.
 ## Smallest RNO2A allocation
 
 This exact command requests one fractional two-H100 allocation and runs the
-wrapper control, the direct FP8 control, and the JaxPP FP8 case. It intentionally
-does not submit unless run by the parent investigation owner.
+wrapper control, the single-process FP8 control, the matched two-rank direct
+control, and the JaxPP FP8 case. It intentionally does not submit unless run by
+the parent investigation owner.
 
 ```bash
 uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
@@ -35,6 +36,10 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
       --dump-dir /tmp/jaxpp-fp8-repro/direct
     CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u \
       experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --runtime distributed_direct --kernel fp8 --timeout 600 --stack-after 120 \
+      --dump-dir /tmp/jaxpp-fp8-repro/distributed-direct
+    CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u \
+      experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
       --runtime jaxpp --kernel fp8 --timeout 600 --stack-after 120 \
       --dump-dir /tmp/jaxpp-fp8-repro/jaxpp
   '
@@ -48,6 +53,16 @@ Run direct JAX on one H100 first:
 CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
   uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
   --runtime direct --kernel fp8 --dump-dir /tmp/jaxpp-fp8-repro/direct
+```
+
+The matched distributed control initializes those same two ranks and devices,
+but runs the ordinary JAX loss/backward only on the compute rank:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
+  uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+  --runtime distributed_direct --kernel fp8 \
+  --dump-dir /tmp/jaxpp-fp8-repro/distributed-direct
 ```
 
 Then run the same backward through JaxPP on two local H100 ranks:
@@ -96,10 +111,12 @@ newer. A CUDA toolchain containing `ptxas` and `nvlink` must be on `PATH`.
 
 ## Interpretation
 
-- Direct FP8 passes, JaxPP FP8 stalls: JaxPP `apply_task`/localized compilation
-  is essential.
-- Direct and JaxPP FP8 both stall: the failure is below JaxPP in the Mosaic/XLA
-  compiler path.
+- Direct FP8 and distributed-direct FP8 pass while JaxPP FP8 stalls: JaxPP
+  wrapping/localized `apply_task` compilation is essential.
+- Distributed-direct FP8 stalls: the failure is below JaxPP in distributed
+  JAX, Mosaic, or XLA compilation.
+- Single-process direct FP8 stalls: the failure is below distributed runtime
+  setup in the Mosaic/XLA compiler path.
 - JaxPP BF16 passes while JaxPP FP8 stalls: the FP8 custom VJP/kernel graph is
   essential.
 - The one-microbatch case stalls: gradient accumulation is not causal. If only
