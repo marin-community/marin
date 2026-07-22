@@ -76,7 +76,7 @@ class GrafanaNotification:
 
 @dataclass(frozen=True)
 class GrafanaDelivery:
-    """A normalized, deterministic delivery derived from a SQL poll."""
+    """A normalized, deterministic delivery derived from an active-alert poll."""
 
     notification: GrafanaNotification
     source_timestamp: datetime

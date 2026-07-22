@@ -4,7 +4,7 @@
 
 The instance has a public IP with no authorized networks. Consumers connect through the Cloud SQL connector or auth proxy. Cloud Run mounts the connector socket under `/cloudsql` through `CloudRunService.cloudsql_instances`.
 
-Pulumi owns the instance, logical databases, PostgreSQL roles and grants, Secret Manager secrets, and bucket. The three ops login passwords and the deployment administrator password are generated as encrypted Pulumi outputs and published as Secret Manager versions. Grafana and evals retain their existing externally managed passwords.
+Pulumi owns the instance, logical databases, PostgreSQL roles and grants, Secret Manager secrets, and bucket. The two ops login passwords and the deployment administrator password are generated as encrypted Pulumi outputs and published as Secret Manager versions. Grafana and evals retain their existing externally managed passwords.
 
 ## Deploy
 
@@ -24,19 +24,18 @@ The password secrets are:
 - `cloudsql-grafana-password`;
 - `cloudsql-evals-password`;
 - `cloudsql-ops-app-password`;
-- `cloudsql-ops-grafana-reader-password`;
 - `cloudsql-ops-migrator-password`;
 - `cloudsql-pulumi-admin-password`.
 
-The deployment identity needs Cloud SQL connection access and permission to read `cloudsql-grafana-password`. The PostgreSQL provider connects through the Cloud SQL connector with Application Default Credentials. It uses the dedicated `pulumi_db_admin` database login for cluster and `ops` policy, and the Grafana owner login only for grants on Grafana-owned alert tables.
+The deployment identity needs Cloud SQL connection access. The PostgreSQL provider connects through the Cloud SQL connector with Application Default Credentials and uses the dedicated `pulumi_db_admin` database login for cluster and `ops` policy.
 
 ## Ops roles and credentials
 
-Cloud SQL grants `cloudsqlsuperuser` to a built-in user created without an explicit database role. The ops logins instead inherit narrow `NOLOGIN` roles created directly in PostgreSQL. This keeps schema ownership separate from the runtime and limits the Grafana reader to two tables. See Google's [user-role behavior](https://cloud.google.com/sql/docs/postgres/users).
+Cloud SQL grants `cloudsqlsuperuser` to a built-in user created without an explicit database role. The ops logins instead inherit narrow `NOLOGIN` roles created directly in PostgreSQL. This keeps schema ownership separate from the runtime. See Google's [user-role behavior](https://cloud.google.com/sql/docs/postgres/users).
 
-`pulumi-postgresql` manages the three `NOLOGIN` group roles, the three login roles, login-time role selection and search paths, `ops.public` ownership, database and schema grants, default table and sequence privileges, and read access to Grafana's `alert_instance` and `alert_rule` tables. The login defaults make objects created by `ops_migrator` belong to `ops_migrator_role`; the application and reader never inherit schema-owner privileges.
+`pulumi-postgresql` manages the two `NOLOGIN` group roles, the two login roles, login-time role selection and search paths, `ops.public` ownership, database and schema grants, and default table and sequence privileges. The login defaults make objects created by `ops_migrator` belong to `ops_migrator_role`; the application never inherits schema-owner privileges.
 
-`OPS_PASSWORD_GENERATION` in `infra/cloudsql/__main__.py` controls coordinated rotation of the three ops passwords. The Cloud SQL stack exports it and the ops stack places it in the Cloud Run environment, so applying `infra/ops` creates a revision that resolves the new `latest` secret versions. Do not change `ADMIN_PASSWORD_GENERATION` in an ordinary update because the PostgreSQL providers authenticate with that password while planning the update.
+`OPS_PASSWORD_GENERATION` in `infra/cloudsql/__main__.py` controls coordinated rotation of the two ops passwords. The Cloud SQL stack exports it and the ops stack places it in the Cloud Run environment, so applying `infra/ops` creates a revision that resolves the new `latest` secret versions. Do not change `ADMIN_PASSWORD_GENERATION` in an ordinary update because the PostgreSQL providers authenticate with that password while planning the update.
 
 ## Migrations and grants
 
@@ -54,22 +53,4 @@ The migration runner takes an advisory lock, records each file digest, and rejec
 
 ## Verify the privilege boundaries
 
-Connect as each login rather than relying on the owner to emulate its membership. The reader's positive checks must succeed:
-
-```sql
-SELECT session_user, current_user;
-SELECT count(*) FROM public.alert_instance;
-SELECT count(*) FROM public.alert_rule;
-```
-
-`current_user` must be `ops_grafana_reader_role`. Each negative check must fail:
-
-```sql
-UPDATE public.alert_instance SET current_state = current_state;
-SELECT count(*) FROM public.user;
-CREATE TABLE public.reader_must_not_create (id integer);
-```
-
-Similarly, `ops_app` must be able to read and update workflow rows but must fail to create a table or read Grafana. `ops_migrator` is the only ops identity with schema-creation privileges. None of the three login users should be a member of `cloudsqlsuperuser`.
-
-Grafana owns its alert tables. If a Grafana migration recreates them, apply the Cloud SQL stack before restarting the poller so Pulumi restores the reader grants. The adapter fails closed on an incompatible schema or serialization.
+Connect as each login rather than relying on the owner to emulate its membership. `ops_app` must be able to read and update workflow rows but must fail to create a table or read Grafana. `ops_migrator` is the only ops identity with schema-creation privileges. Neither login user should be a member of `cloudsqlsuperuser`.

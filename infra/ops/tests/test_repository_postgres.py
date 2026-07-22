@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 import pytest
-from ops_workflow.grafana_source import snapshot_from_rows
+from ops_workflow.grafana_source import snapshot_from_api_alerts
 from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
 from ops_workflow.repository import ArchiveResult, OpsRepository
@@ -40,20 +40,23 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _poll_row() -> dict[str, object]:
+def _api_alert() -> dict[str, object]:
     return {
-        "rule_org_id": 1,
-        "rule_uid": "dns-config-forming",
-        "labels": '[["cluster","cw-us-east-08a"],["kind","Pod"],["namespace","kube-system"]]',
-        "labels_hash": "2b05ef3b1641c79a",
-        "current_state_since": 1_784_647_897,
-        "last_eval_time": 1_784_647_957,
-        "fired_at": 1_784_647_897,
-        "instance_annotations": '{"summary":"Nameserver limits were exceeded"}',
-        "last_result": '{"values":{"A":6548,"C":1}}',
-        "rule_title": "DNSConfigForming",
-        "rule_labels": '{"severity":"warning"}',
-        "rule_annotations": "{}",
+        "annotations": {"summary": "Nameserver limits were exceeded"},
+        "endsAt": "2026-07-21T17:00:00Z",
+        "fingerprint": "2b05ef3b1641c79a",
+        "generatorURL": "https://grafana.oa.dev/alerting/grafana/dns-config-forming/view?orgId=1",
+        "labels": {
+            "alertname": "DNSConfigForming",
+            "cluster": "cw-us-east-08a",
+            "kind": "Pod",
+            "namespace": "kube-system",
+            "severity": "warning",
+        },
+        "receivers": [{"name": "ops-critical"}],
+        "startsAt": "2026-07-21T15:31:37Z",
+        "status": {"inhibitedBy": [], "silencedBy": [], "state": "active"},
+        "updatedAt": "2026-07-21T15:32:37Z",
     }
 
 
@@ -62,7 +65,7 @@ async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running(
     assert DATABASE_URL is not None
     repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
-    first = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     assert len(first) == 1
     first_result = first[0]
     assert len(first_result.case_ids) == 1
@@ -77,23 +80,22 @@ async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running(
         loom_turn_number=0,
     )
 
-    new_row = {
-        **_poll_row(),
-        "labels_hash": "83b8bf0c924cbb8e",
-        "labels": (
-            '[["cluster","cw-us-east-08a"],["kind","Pod"],'
-            '["name","dirty-frag-mit-f4826"],["namespace","kube-system"]]'
-        ),
-        "instance_annotations": '{"summary":"Nameserver limits exceeded for dirty-frag-mit"}',
+    original_labels = _api_alert()["labels"]
+    assert isinstance(original_labels, dict)
+    new_alert = {
+        **_api_alert(),
+        "fingerprint": "83b8bf0c924cbb8e",
+        "labels": {**original_labels, "name": "dirty-frag-mit-f4826"},
+        "annotations": {"summary": "Nameserver limits exceeded for dirty-frag-mit"},
     }
     second_results = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([_poll_row(), new_row], observed_at=now + timedelta(minutes=1))
+        snapshot_from_api_alerts([_api_alert(), new_alert], observed_at=now + timedelta(minutes=1))
     )
     assert len(second_results) == 1
     second = second_results[0]
 
     assert second.case_ids == (case_id,)
-    assert second.signal_dispositions["1:dns-config-forming:83b8bf0c924cbb8e"] == "created"
+    assert second.signal_dispositions["83b8bf0c924cbb8e"] == "created"
     assert second.queued_case_ids == (case_id,)
     detail = await repository.case_detail(case_id)
     assert detail is not None
@@ -108,21 +110,21 @@ async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_ins
     repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
-    first = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     assert len(first) == 1
-    assert first[0].signal_dispositions == {"1:dns-config-forming:2b05ef3b1641c79a": "created"}
+    assert first[0].signal_dispositions == {"2b05ef3b1641c79a": "created"}
     assert len(first[0].queued_case_ids) == 1
     case_id = first[0].case_ids[0]
 
     unchanged = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([_poll_row()], observed_at=now + timedelta(minutes=1))
+        snapshot_from_api_alerts([_api_alert()], observed_at=now + timedelta(minutes=1))
     )
     assert unchanged[0].case_ids == (case_id,)
-    assert unchanged[0].signal_dispositions == {"1:dns-config-forming:2b05ef3b1641c79a": "updated"}
+    assert unchanged[0].signal_dispositions == {"2b05ef3b1641c79a": "updated"}
     assert unchanged[0].queued_case_ids == ()
 
     first_absence = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([], observed_at=now + timedelta(minutes=2))
+        snapshot_from_api_alerts([], observed_at=now + timedelta(minutes=2))
     )
     assert first_absence == ()
     detail = await repository.case_detail(case_id)
@@ -133,9 +135,9 @@ async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_ins
     assert signals[0]["missing_successful_polls"] == 1
 
     resolved = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([], observed_at=now + timedelta(minutes=3))
+        snapshot_from_api_alerts([], observed_at=now + timedelta(minutes=3))
     )
-    assert resolved[0].signal_dispositions == {"1:dns-config-forming:2b05ef3b1641c79a": "resolved"}
+    assert resolved[0].signal_dispositions == {"2b05ef3b1641c79a": "resolved"}
     detail = await repository.case_detail(case_id)
     assert detail is not None
     signals = detail["signals"]
@@ -143,9 +145,9 @@ async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_ins
     assert signals[0]["state"] == "resolved"
 
     reopened = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([_poll_row()], observed_at=now + timedelta(minutes=4))
+        snapshot_from_api_alerts([_api_alert()], observed_at=now + timedelta(minutes=4))
     )
-    assert reopened[0].signal_dispositions == {"1:dns-config-forming:2b05ef3b1641c79a": "reopened"}
+    assert reopened[0].signal_dispositions == {"2b05ef3b1641c79a": "reopened"}
     assert reopened[0].queued_case_ids == (case_id,)
     detail = await repository.case_detail(case_id)
     assert detail is not None
@@ -160,9 +162,9 @@ async def test_only_one_service_instance_reconciles_each_poll_minute():
     repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
-    first = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     competing = await repository.reconcile_grafana_snapshot(
-        snapshot_from_rows([], observed_at=now + timedelta(seconds=20))
+        snapshot_from_api_alerts([], observed_at=now + timedelta(seconds=20))
     )
 
     assert len(first) == 1
@@ -180,7 +182,7 @@ async def test_archive_distinguishes_active_already_archived_and_missing_cases()
     repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
-    result = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    result = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     case_id = result[0].case_ids[0]
     assert await repository.archive_case(case_id=case_id, actor="test@example.com") == ArchiveResult.ARCHIVED
     assert await repository.archive_case(case_id=case_id, actor="test@example.com") == ArchiveResult.ALREADY_ARCHIVED
@@ -204,7 +206,7 @@ async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation
     assert DATABASE_URL is not None
     repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
-    ingested = await repository.reconcile_grafana_snapshot(snapshot_from_rows([_poll_row()], observed_at=now))
+    ingested = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     case_id = ingested[0].case_ids[0]
 
     turn = await repository.claim_next_turn()

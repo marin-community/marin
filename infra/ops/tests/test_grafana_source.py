@@ -3,50 +3,76 @@
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
-from ops_workflow.grafana_source import snapshot_from_rows
+from ops_workflow.grafana_source import GrafanaApiAlertSource, snapshot_from_api_alerts
 
-NOW = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
+NOW = datetime(2026, 7, 22, 1, 14, 27, tzinfo=UTC)
 
 
-def _row(*, labels_hash: str = "2b05ef3b1641c79a") -> dict[str, object]:
+class StaticTokenSource:
+    def get_token(self) -> str:
+        return "test-iap-jwt"
+
+
+def _alert(*, fingerprint: str = "4798bb3") -> dict[str, object]:
     return {
-        "rule_org_id": 1,
-        "rule_uid": "dns-config-forming",
-        "labels": '[["cluster","cw-us-east-08a"],["namespace","kube-system"],["kind","Pod"]]',
-        "labels_hash": labels_hash,
-        "current_state_since": 1_784_647_897,
-        "last_eval_time": 1_784_647_957,
-        "fired_at": 1_784_647_897,
-        "instance_annotations": '{"summary":"Nameserver limits were exceeded"}',
-        "last_result": '{"condition":"C","values":{"A":6548,"C":1}}',
-        "rule_title": "DNSConfigForming",
-        "rule_labels": '{"severity":"warning"}',
-        "rule_annotations": '{"runbook_url":"https://example.test/runbook"}',
+        "annotations": {
+            "summary": "cw-rno2a: a watched control-plane component is in backoff",
+            "runbook_url": "https://example.test/runbook",
+        },
+        "endsAt": "2026-07-22T01:19:12Z",
+        "fingerprint": fingerprint,
+        "generatorURL": "https://grafana.oa.dev/alerting/grafana/k8s-control-plane-crashloop/view?orgId=1",
+        "labels": {
+            "alertname": "ControlPlaneCrashLooping",
+            "cluster": "cw-rno2a",
+            "grafana_folder": "Alerts",
+            "severity": "critical",
+        },
+        "receivers": [{"name": "ops-critical"}],
+        "startsAt": "2026-07-22T01:08:12Z",
+        "status": {"inhibitedBy": [], "silencedBy": [], "state": "active"},
+        "updatedAt": "2026-07-22T01:14:12Z",
     }
 
 
-def test_snapshot_uses_grafana_rule_and_instance_identity_for_grouping() -> None:
-    snapshot = snapshot_from_rows([_row()], observed_at=NOW)
+@pytest.mark.anyio
+async def test_snapshot_reads_active_alerts_through_iap() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/alertmanager/grafana/api/v2/alerts"
+        assert request.headers["proxy-authorization"] == "Bearer test-iap-jwt"
+        return httpx.Response(200, json=[_alert()])
 
-    assert snapshot.observed_at == NOW
+    source = GrafanaApiAlertSource(
+        "https://grafana.example.test",
+        StaticTokenSource(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    snapshot = await source.snapshot()
+
     assert len(snapshot.alerts) == 1
     item = snapshot.alerts[0]
-    assert item.alert.fingerprint == "1:dns-config-forming:2b05ef3b1641c79a"
+    assert item.alert.fingerprint == "4798bb3"
     assert item.alert.labels == {
-        "severity": "warning",
-        "cluster": "cw-us-east-08a",
-        "namespace": "kube-system",
-        "kind": "Pod",
-        "alertname": "DNSConfigForming",
-        "grafana_rule_uid": "dns-config-forming",
+        "alertname": "ControlPlaneCrashLooping",
+        "cluster": "cw-rno2a",
+        "grafana_folder": "Alerts",
+        "severity": "critical",
     }
-    assert item.alert.annotations["summary"] == "Nameserver limits were exceeded"
-    assert item.alert.values == {"A": 6548, "C": 1}
-    assert item.group_labels == {"alertname": "DNSConfigForming", "cluster": "cw-us-east-08a"}
-    assert item.group_key == '{"alertname":"DNSConfigForming","cluster":"cw-us-east-08a"}'
+    assert item.alert.annotations["summary"] == "cw-rno2a: a watched control-plane component is in backoff"
+    assert item.alert.values == {}
+    assert item.alert.starts_at == datetime(2026, 7, 22, 1, 8, 12, tzinfo=UTC)
+    assert item.group_labels == {"alertname": "ControlPlaneCrashLooping", "cluster": "cw-rno2a"}
+    assert item.group_key == '{"alertname":"ControlPlaneCrashLooping","cluster":"cw-rno2a"}'
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 def test_snapshot_rejects_duplicate_grafana_instance_identity() -> None:
     with pytest.raises(ValueError, match="duplicate alert fingerprints"):
-        snapshot_from_rows([_row(), _row()], observed_at=NOW)
+        snapshot_from_api_alerts([_alert(), _alert()], observed_at=NOW)

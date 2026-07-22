@@ -52,7 +52,7 @@ useAutoRefresh(refresh)
     <div class="overflow-hidden rounded-xl border border-[#d5dad2] bg-white shadow-[0_2px_8px_rgba(25,38,31,.04)]">
       <div class="flex items-center justify-between border-b border-[#e1e4df] px-5 py-4">
         <h3 class="font-semibold">Grafana polling</h3>
-        <span class="text-xs text-[#77817b]">Postgres · newest first</span>
+        <span class="text-xs text-[#77817b]">Alertmanager API · newest first</span>
       </div>
       <div v-if="!diagnostics?.polls.length" class="px-5 py-10 text-center text-sm text-[#78817c]">No polls.</div>
       <div v-else class="overflow-x-auto">

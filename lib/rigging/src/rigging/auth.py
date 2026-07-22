@@ -35,6 +35,7 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from typing import Protocol, cast
+from urllib.parse import quote
 
 import google.auth
 import google.auth.credentials
@@ -47,6 +48,8 @@ import google.oauth2.credentials
 import google.oauth2.id_token
 
 _REFRESH_MARGIN_SECONDS = 300
+_IAP_SERVICE_ACCOUNT_JWT_LIFETIME_SECONDS = 3600
+_IAM_SIGN_JWT_URL = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{service_account}:signJwt"
 
 # Impersonation mints the ID token through the IAM Credentials API, which needs
 # the cloud-platform scope on the source (user) credentials.
@@ -237,6 +240,65 @@ class IapServiceAccountTokenProvider:
         )
         id_creds.refresh(request)
         return cast(str, id_creds.token)
+
+
+class IapServiceAccountJwtProvider:
+    """Signs a URL-scoped service-account JWT for an IAP-protected application.
+
+    This is the machine-auth path for an IAP application using Google's managed
+    OAuth client, where an OAuth client ID is unavailable to the caller. The
+    attached service account must have ``roles/iam.serviceAccountTokenCreator``
+    on itself and IAP access to the target application. The signed JWT is cached
+    until five minutes before expiry.
+    """
+
+    def __init__(self, audience: str, service_account_email: str):
+        self._audience = audience
+        self._service_account_email = service_account_email
+        self._cached_token: str | None = None
+        self._expires_at: float = 0.0
+
+    def get_token(self) -> str | None:
+        if self._cached_token is not None and time.monotonic() < self._expires_at:
+            return self._cached_token
+
+        token = self._mint_jwt()
+        claims = google.auth.jwt.decode(token, verify=False)
+        self._cached_token = token
+        self._expires_at = _monotonic_expiry(claims.get("exp"))
+        return self._cached_token
+
+    def _mint_jwt(self) -> str:
+        try:
+            credentials, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
+        except google.auth.exceptions.DefaultCredentialsError as exc:
+            raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE) from exc
+
+        issued_at = int(time.time())
+        payload = json.dumps(
+            {
+                "iss": self._service_account_email,
+                "sub": self._service_account_email,
+                "aud": self._audience,
+                "iat": issued_at,
+                "exp": issued_at + _IAP_SERVICE_ACCOUNT_JWT_LIFETIME_SECONDS,
+            },
+            separators=(",", ":"),
+        )
+        session = google.auth.transport.requests.AuthorizedSession(credentials)
+        try:
+            response = session.post(
+                _IAM_SIGN_JWT_URL.format(service_account=quote(self._service_account_email, safe="")),
+                json={"payload": payload},
+                timeout=10,
+            )
+            response.raise_for_status()
+            signed_jwt = response.json().get("signedJwt")
+        finally:
+            session.close()
+        if not isinstance(signed_jwt, str) or not signed_jwt:
+            raise RuntimeError("IAM signJwt response omitted signedJwt")
+        return signed_jwt
 
 
 class IapRefreshTokenProvider:

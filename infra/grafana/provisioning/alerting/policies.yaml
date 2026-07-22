@@ -3,7 +3,7 @@
 #
 # The notification policy tree. Grafana is canonical for grouping, deduplication,
 # repeat timing, and resolution. Warnings are muted for notifications but remain
-# visible in alert_instance for the ops agent poller. Critical/error alerts reach
+# visible through the active-alert API for the ops agent poller. Critical/error alerts reach
 # email and Slack. Instances group by (alertname, cluster).
 apiVersion: 1
 

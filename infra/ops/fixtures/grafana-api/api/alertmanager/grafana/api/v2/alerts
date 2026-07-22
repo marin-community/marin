@@ -1,0 +1,42 @@
+[
+  {
+    "annotations": {
+      "summary": "Nameserver limits were exceeded; validate node-local DNS configuration"
+    },
+    "endsAt": "2026-07-21T17:00:00Z",
+    "fingerprint": "2b05ef3b1641c79a",
+    "generatorURL": "https://grafana.oa.dev/alerting/grafana/dns-config-forming/view?orgId=1",
+    "labels": {
+      "alertname": "DNSConfigForming",
+      "cluster": "cw-us-east-08a",
+      "kind": "Pod",
+      "name": "node-local-dns-dcb4s",
+      "namespace": "kube-system",
+      "severity": "warning"
+    },
+    "receivers": [{"name": "ops-critical"}],
+    "startsAt": "2026-07-21T15:31:37Z",
+    "status": {"inhibitedBy": [], "silencedBy": [], "state": "active"},
+    "updatedAt": "2026-07-21T15:32:37Z"
+  },
+  {
+    "annotations": {
+      "summary": "Nameserver limits were exceeded; validate pod DNS configuration"
+    },
+    "endsAt": "2026-07-21T17:00:00Z",
+    "fingerprint": "ef356383208c86c5",
+    "generatorURL": "https://grafana.oa.dev/alerting/grafana/dns-config-forming/view?orgId=1",
+    "labels": {
+      "alertname": "DNSConfigForming",
+      "cluster": "cw-us-east-08a",
+      "kind": "Pod",
+      "name": "nvidia-imex-xkljx",
+      "namespace": "cw-nvidia-imex",
+      "severity": "warning"
+    },
+    "receivers": [{"name": "ops-critical"}],
+    "startsAt": "2026-07-21T15:31:35Z",
+    "status": {"inhibitedBy": [], "silencedBy": [], "state": "active"},
+    "updatedAt": "2026-07-21T15:32:35Z"
+  }
+]

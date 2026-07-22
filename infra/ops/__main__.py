@@ -16,8 +16,9 @@ SERVICE = "marin-ops-ui"
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 CLOUDSQL_STACK = "organization/marin-cloudsql/marin-cloudsql"
-GRAFANA_READER_USER = "ops_grafana_reader"
-GRAFANA_READER_SECRET = "cloudsql-ops-grafana-reader-password"
+GRAFANA_STACK = "organization/marin-grafana/marin-grafana"
+GRAFANA_SERVICE = "marin-grafana"
+OPS_SERVICE_ACCOUNT_EMAIL = f"{SERVICE}@{PROJECT}.iam.gserviceaccount.com"
 SLACK_WEBHOOK_SECRET = "marin-grafana-slack-webhook"
 
 
@@ -36,24 +37,22 @@ def main() -> None:
     cloudsql = pulumi.StackReference(CLOUDSQL_STACK)
     connection_name = cloudsql.get_output("connection_name")
     password_generation = cloudsql.get_output("ops_password_generation")
-    grafana_database_url = connection_name.apply(
-        lambda name: f"postgresql://{GRAFANA_READER_USER}@/grafana?host=%2Fcloudsql%2F{name}"
-    )
+    grafana = pulumi.StackReference(GRAFANA_STACK)
     env = {
         "PGHOST": connection_name.apply(lambda name: f"/cloudsql/{name}"),
         "PGDATABASE": "ops",
         "PGUSER": "ops_app",
-        "GRAFANA_DATABASE_URL": grafana_database_url,
+        "GRAFANA_API_URL": grafana.get_output("url"),
         "GRAFANA_POLL_INTERVAL": "60",
         "OPS_AGENT_MODE": agent_mode,
         "OPS_REPO_REVISION": repo_revision,
         "OPS_SKILL_REVISION": skill_revision,
         "OPS_PUBLIC_URL": public_url,
         "OPS_PASSWORD_GENERATION": password_generation,
+        "OPS_SERVICE_ACCOUNT_EMAIL": OPS_SERVICE_ACCOUNT_EMAIL,
     }
     secrets = [
         SecretEnv(name="PGPASSWORD", secret="cloudsql-ops-app-password"),
-        SecretEnv(name="GRAFANA_PGPASSWORD", secret=GRAFANA_READER_SECRET),
         SecretEnv(name="OPS_SLACK_WEBHOOK", secret=SLACK_WEBHOOK_SECRET),
     ]
     if agent_mode == "loom":
@@ -83,6 +82,25 @@ def main() -> None:
     )
     pulumi.export("ui_url", ui.uri)
     pulumi.export("image", ui.image_ref)
+
+    ops_service_account_id = ui.service_account_email.apply(lambda email: f"projects/{PROJECT}/serviceAccounts/{email}")
+    ops_service_account_member = ui.service_account_email.apply(lambda email: f"serviceAccount:{email}")
+    gcp.serviceaccount.IAMMember(
+        "ops-self-token-creator",
+        service_account_id=ops_service_account_id,
+        role="roles/iam.serviceAccountTokenCreator",
+        member=ops_service_account_member,
+        opts=pulumi.ResourceOptions(provider=provider),
+    )
+    gcp.iap.WebCloudRunServiceIamMember(
+        "ops-grafana-iap-access",
+        project=PROJECT,
+        location=REGION,
+        cloud_run_service_name=GRAFANA_SERVICE,
+        role="roles/iap.httpsResourceAccessor",
+        member=ops_service_account_member,
+        opts=pulumi.ResourceOptions(provider=provider),
+    )
 
     if custom_domain:
         dns_zone_id = config.require("dns_zone_id")

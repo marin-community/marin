@@ -6,8 +6,7 @@ set -eu
 set -- serve \
   --database-url postgresql:// \
   --migrations /app/migrations \
-  --grafana-database-url-env GRAFANA_DATABASE_URL \
-  --grafana-database-password-env GRAFANA_PGPASSWORD \
+  --grafana-api-url "${GRAFANA_API_URL}" \
   --grafana-poll-interval "${GRAFANA_POLL_INTERVAL:-60}" \
   --public-url "${OPS_PUBLIC_URL}" \
   --slack-webhook-url-env OPS_SLACK_WEBHOOK \
@@ -17,6 +16,12 @@ set -- serve \
   --static-dir /app/dashboard \
   --repo-revision "${OPS_REPO_REVISION}" \
   --skill-revision "${OPS_SKILL_REVISION}"
+
+if [ -n "${GRAFANA_API_TOKEN:-}" ]; then
+  set -- "$@" --grafana-api-token-env GRAFANA_API_TOKEN
+else
+  set -- "$@" --grafana-iap-service-account-email "${OPS_SERVICE_ACCOUNT_EMAIL}"
+fi
 
 if [ "${OPS_AGENT_MODE}" = "stub" ]; then
   exec ops-workflow "$@" --agent-mode stub

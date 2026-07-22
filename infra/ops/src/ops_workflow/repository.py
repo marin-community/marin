@@ -33,7 +33,7 @@ SOURCE = "grafana"
 GROUPING_RULE = "grafana:alertname+cluster"
 AUTOMATIC_REQUESTER = "grafana"
 MISSING_POLLS_TO_RESOLVE = 2
-POLL_KEY_ID = "grafana-postgres-reader"
+POLL_KEY_ID = "grafana-api-reader"
 OPS_SERVICE_ACTOR = "ops-service"
 TURN_LEASE_DURATION = timedelta(minutes=10)
 TURN_TIMEOUT = timedelta(minutes=20)
@@ -97,7 +97,7 @@ class OpsRepository:
         self._skill_revision = skill_revision
 
     async def reconcile_grafana_snapshot(self, snapshot: GrafanaSnapshot) -> tuple[IngestResult, ...]:
-        """Atomically reconcile one complete, successful Grafana SQL snapshot."""
+        """Atomically reconcile one complete, successful Grafana API snapshot."""
 
         grouped: dict[tuple[str, str], list[PolledGrafanaAlert]] = defaultdict(list)
         for item in snapshot.alerts:

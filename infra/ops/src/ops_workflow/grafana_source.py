@@ -1,43 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read-only projection of firing alert instances from Grafana PostgreSQL."""
+"""Read-only projection of active alerts from Grafana's Alertmanager API."""
 
+import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Protocol
 
-import psycopg
-from psycopg.rows import dict_row
+import httpx
+from rigging.auth import TokenProvider
 
-from ops_workflow.grafana import GRAFANA_BASE_URL, GrafanaAlert, grafana_group_metadata
+from ops_workflow.grafana import GrafanaAlert, grafana_group_metadata
 
-ACTIVE_GRAFANA_STATE = "Alerting"
+GRAFANA_ALERTS_PATH = "/api/alertmanager/grafana/api/v2/alerts"
 OPS_RECEIVER = "ops-agent"
-SOURCE_VERSION = "grafana-postgres-v1"
-
-ALERT_INSTANCE_QUERY = """
-    SELECT
-        instance.rule_org_id,
-        instance.rule_uid,
-        instance.labels,
-        instance.labels_hash,
-        instance.current_state_since,
-        instance.last_eval_time,
-        instance.fired_at,
-        instance.annotations AS instance_annotations,
-        instance.last_result,
-        rule.title AS rule_title,
-        rule.labels AS rule_labels,
-        rule.annotations AS rule_annotations
-    FROM public.alert_instance AS instance
-    JOIN public.alert_rule AS rule
-      ON rule.org_id = instance.rule_org_id AND rule.uid = instance.rule_uid
-    WHERE instance.current_state = %s
-    ORDER BY instance.rule_org_id, instance.rule_uid, instance.labels_hash
-"""
+SOURCE_VERSION = "grafana-api-v1"
 
 
 @dataclass(frozen=True)
@@ -53,7 +33,7 @@ class PolledGrafanaAlert:
 
 @dataclass(frozen=True)
 class GrafanaSnapshot:
-    """A complete, successfully read snapshot of firing Grafana instances."""
+    """A complete, successfully read snapshot of active Grafana instances."""
 
     observed_at: datetime
     alerts: tuple[PolledGrafanaAlert, ...]
@@ -63,79 +43,75 @@ class GrafanaAlertSource(Protocol):
     """Source capable of returning one complete Grafana alert snapshot."""
 
     async def snapshot(self) -> GrafanaSnapshot:
-        """Return all currently firing alert instances."""
+        """Return all currently active alert instances."""
 
 
-class PostgresGrafanaAlertSource:
-    """Read active Grafana instances through a dedicated PostgreSQL role."""
+class GrafanaApiAlertSource:
+    """Read active alerts from Grafana through an IAP-authenticated API request."""
 
-    def __init__(self, database_url: str, *, password: str | None = None) -> None:
-        self._database_url = database_url
-        self._password = password
+    def __init__(
+        self,
+        base_url: str,
+        token_provider: TokenProvider,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._url = f"{base_url.rstrip('/')}{GRAFANA_ALERTS_PATH}"
+        self._token_provider = token_provider
+        self._transport = transport
 
     async def snapshot(self) -> GrafanaSnapshot:
-        connection = await psycopg.AsyncConnection.connect(
-            self._database_url,
-            password=self._password,
-            row_factory=dict_row,
-            connect_timeout=10,
-            options="-c statement_timeout=10000",
-        )
-        typed = cast(psycopg.AsyncConnection[dict[str, Any]], connection)
-        async with typed:
-            async with typed.transaction():
-                await typed.execute("SET TRANSACTION READ ONLY")
-                cursor = await typed.execute(ALERT_INSTANCE_QUERY, (ACTIVE_GRAFANA_STATE,))
-                rows = await cursor.fetchall()
-        observed_at = datetime.now(UTC)
-        return snapshot_from_rows(rows, observed_at=observed_at)
+        token = await asyncio.to_thread(self._token_provider.get_token)
+        if not token:
+            raise RuntimeError("IAP token provider returned no token")
+        async with httpx.AsyncClient(
+            transport=self._transport,
+            timeout=10,
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(self._url, headers={"Proxy-Authorization": f"Bearer {token}"})
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("Grafana alerts response must be an array")
+        return snapshot_from_api_alerts(payload, observed_at=datetime.now(UTC))
 
 
-def snapshot_from_rows(rows: Sequence[Mapping[str, object]], *, observed_at: datetime) -> GrafanaSnapshot:
-    """Normalize Grafana's SQL serialization into workflow alert instances."""
+def snapshot_from_api_alerts(alerts: Sequence[object], *, observed_at: datetime) -> GrafanaSnapshot:
+    """Normalize Grafana Alertmanager API alerts into workflow instances."""
 
     if observed_at.tzinfo is None:
         raise ValueError("observed_at must be timezone-aware")
-    alerts = tuple(_alert_from_row(row) for row in rows)
-    fingerprints = [item.alert.fingerprint for item in alerts]
+    normalized = tuple(_alert_from_api(item) for item in alerts)
+    fingerprints = [item.alert.fingerprint for item in normalized]
     if len(fingerprints) != len(set(fingerprints)):
         raise ValueError("Grafana snapshot contains duplicate alert fingerprints")
-    return GrafanaSnapshot(observed_at=observed_at.astimezone(UTC), alerts=alerts)
+    return GrafanaSnapshot(observed_at=observed_at.astimezone(UTC), alerts=normalized)
 
 
-def _alert_from_row(row: Mapping[str, object]) -> PolledGrafanaAlert:
-    org_id = _integer(row, "rule_org_id")
-    rule_uid = _string(row, "rule_uid")
-    alert_name = _string(row, "rule_title")
-    labels = {
-        **_string_object(row.get("rule_labels"), "rule_labels"),
-        **_tuple_labels(row.get("labels")),
-        "alertname": alert_name,
-        "grafana_rule_uid": rule_uid,
-    }
-    annotations = {
-        **_string_object(row.get("rule_annotations"), "rule_annotations"),
-        **_string_object(row.get("instance_annotations"), "instance_annotations"),
-    }
-    result = _object(row.get("last_result"), "last_result", empty={})
-    values = result.get("values", {})
-    if not isinstance(values, dict):
-        raise ValueError("last_result.values must be an object")
-
-    labels_hash = _string(row, "labels_hash")
-    fingerprint = f"{org_id}:{rule_uid}:{labels_hash}"
-    starts_at = _optional_unix_time(row.get("fired_at")) or _unix_time(row, "current_state_since")
+def _alert_from_api(value: object) -> PolledGrafanaAlert:
+    if not isinstance(value, Mapping):
+        raise ValueError("Grafana alert must be an object")
+    labels = _string_map(value.get("labels"), "labels")
+    annotations = _string_map(value.get("annotations"), "annotations")
+    alert_name = labels.get("alertname")
+    if not alert_name:
+        raise ValueError("Grafana alert labels must include alertname")
+    fingerprint = _string(value.get("fingerprint"), "fingerprint")
+    generator_url = value.get("generatorURL", "")
+    if not isinstance(generator_url, str):
+        raise ValueError("generatorURL must be a string")
+    starts_at = _timestamp(value.get("startsAt"), "startsAt")
     cluster = labels.get("cluster", "")
     group = grafana_group_metadata(alert_name, cluster)
     group_key = json.dumps(group.labels, sort_keys=True, separators=(",", ":"))
-    generator_url = f"{GRAFANA_BASE_URL}/alerting/grafana/{rule_uid}/view"
     return PolledGrafanaAlert(
         alert=GrafanaAlert(
             fingerprint=fingerprint,
             status="firing",
             labels=labels,
             annotations=annotations,
-            values=values,
+            values={},
             starts_at=starts_at,
             ends_at=None,
             generator_url=generator_url,
@@ -150,70 +126,26 @@ def _alert_from_row(row: Mapping[str, object]) -> PolledGrafanaAlert:
     )
 
 
-def _decoded(value: object, field: str, *, empty: object) -> object:
-    if value is None or value == "":
-        return empty
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"{field} is not valid JSON") from error
-    return value
-
-
-def _object(value: object, field: str, *, empty: dict[str, object]) -> dict[str, object]:
-    decoded = _decoded(value, field, empty=empty)
-    if not isinstance(decoded, dict):
-        raise ValueError(f"{field} must be an object")
-    return decoded
-
-
-def _string_object(value: object, field: str) -> dict[str, str]:
-    decoded = _object(value, field, empty={})
-    if not all(isinstance(key, str) and isinstance(item, str) for key, item in decoded.items()):
+def _string_map(value: object, field: str) -> dict[str, str]:
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    ):
         raise ValueError(f"{field} must contain string keys and values")
-    return cast(dict[str, str], decoded)
+    return dict(value)
 
 
-def _tuple_labels(value: object) -> dict[str, str]:
-    decoded = _decoded(value, "labels", empty=[])
-    if not isinstance(decoded, list):
-        raise ValueError("labels must be an array of [name, value] pairs")
-    labels: dict[str, str] = {}
-    for pair in decoded:
-        if not isinstance(pair, list) or len(pair) != 2 or not all(isinstance(item, str) for item in pair):
-            raise ValueError("labels must be an array of [name, value] pairs")
-        name, label_value = pair
-        if name in labels:
-            raise ValueError(f"labels contains duplicate key {name!r}")
-        labels[name] = label_value
-    return labels
-
-
-def _string(row: Mapping[str, object], field: str) -> str:
-    value = row.get(field)
+def _string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
     return value
 
 
-def _integer(row: Mapping[str, object], field: str) -> int:
-    value = row.get(field)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{field} must be an integer")
-    return value
-
-
-def _unix_time(row: Mapping[str, object], field: str) -> datetime:
-    value = row.get(field)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{field} must be Unix seconds")
-    return datetime.fromtimestamp(value, tz=UTC)
-
-
-def _optional_unix_time(value: object) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("fired_at must be Unix seconds or null")
-    return datetime.fromtimestamp(value, tz=UTC)
+def _timestamp(value: object, field: str) -> datetime:
+    text = _string(value, field)
+    try:
+        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field} must be an ISO 8601 timestamp") from error
+    if timestamp.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return timestamp.astimezone(UTC)

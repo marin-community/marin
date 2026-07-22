@@ -143,14 +143,14 @@ Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard-only because they have expected benign causes. `severity=critical` and
 `severity=error` route to `ops-critical` (email ops@openathena.ai and Slack).
 `severity=warning` matches an always-active notification mute timing while remaining
-in Grafana's `alert_instance` table for the ops workflow's read-only poller. Every rule sets
+visible through Grafana's active-alert API for the ops workflow's read-only poller. Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
 resolving.
 
 The ops workflow does not add a receiver or HTTP integration to Grafana. Its backend
-polls `alert_instance` and `alert_rule` through a dedicated two-table PostgreSQL reader.
-Grafana remains the canonical evaluator; the poller never writes to this database.
+polls `/api/alertmanager/grafana/api/v2/alerts` through IAP using the ops service account.
+Grafana remains the canonical evaluator; the poller has Viewer access and cannot change alerts.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it

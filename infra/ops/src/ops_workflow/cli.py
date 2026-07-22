@@ -11,9 +11,10 @@ from typing import cast
 
 import psycopg
 import uvicorn
+from rigging.auth import IapServiceAccountJwtProvider, StaticTokenProvider
 from rigging.log_setup import LogBuffer, configure_logging
 
-from ops_workflow.grafana_source import PostgresGrafanaAlertSource
+from ops_workflow.grafana_source import GRAFANA_ALERTS_PATH, GrafanaApiAlertSource
 from ops_workflow.loom import LoomGateway, StubAgentGateway
 from ops_workflow.migrations import Connection as MigrationConnection
 from ops_workflow.migrations import apply_migrations, migration_plan
@@ -52,11 +53,11 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--database-url", required=True)
     serve.add_argument("--migrations", type=Path, default=DEFAULT_MIGRATIONS)
     serve.add_argument("--migrate-on-start", action="store_true")
-    grafana_url = serve.add_mutually_exclusive_group(required=True)
-    grafana_url.add_argument("--grafana-database-url")
-    grafana_url.add_argument("--grafana-database-url-env")
-    serve.add_argument("--grafana-database-password")
-    serve.add_argument("--grafana-database-password-env")
+    serve.add_argument("--grafana-api-url", required=True)
+    grafana_auth = serve.add_mutually_exclusive_group(required=True)
+    grafana_auth.add_argument("--grafana-iap-service-account-email")
+    grafana_auth.add_argument("--grafana-api-token")
+    grafana_auth.add_argument("--grafana-api-token-env")
     serve.add_argument("--grafana-poll-interval", type=float, default=60.0)
     serve.add_argument("--public-url", default="http://127.0.0.1:8088")
     serve.add_argument("--slack-webhook-url-env")
@@ -86,17 +87,21 @@ def _migrate(database_url: str, migrations: Path) -> None:
 def _serve(args: argparse.Namespace, log_buffer: LogBuffer) -> None:
     if args.auth_mode == "local" and args.host not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit("local auth mode may only bind to loopback")
-    grafana_database_url = _secret_argument(
-        value=args.grafana_database_url,
-        environment_name=args.grafana_database_url_env,
-        option="--grafana-database-url",
+    grafana_api_token = _secret_argument(
+        value=args.grafana_api_token,
+        environment_name=args.grafana_api_token_env,
+        option="--grafana-api-token",
     )
-    assert grafana_database_url is not None
-    grafana_database_password = _secret_argument(
-        value=args.grafana_database_password,
-        environment_name=args.grafana_database_password_env,
-        option="--grafana-database-password",
-    )
+    if grafana_api_token:
+        grafana_token_provider = StaticTokenProvider(grafana_api_token)
+    elif args.grafana_iap_service_account_email:
+        grafana_endpoint = f"{args.grafana_api_url.rstrip('/')}{GRAFANA_ALERTS_PATH}"
+        grafana_token_provider = IapServiceAccountJwtProvider(
+            grafana_endpoint,
+            args.grafana_iap_service_account_email,
+        )
+    else:
+        raise SystemExit("Grafana API token cannot be empty")
     loom_token = _secret_argument(
         value=args.loom_token,
         environment_name=args.loom_token_env,
@@ -134,7 +139,7 @@ def _serve(args: argparse.Namespace, log_buffer: LogBuffer) -> None:
     app = create_app(
         OpsService(repository, gateway, public_url=args.public_url),
         repository,
-        PostgresGrafanaAlertSource(grafana_database_url, password=grafana_database_password),
+        GrafanaApiAlertSource(args.grafana_api_url, grafana_token_provider),
         log_buffer,
         slack_dispatcher,
         WebConfig(

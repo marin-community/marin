@@ -7,7 +7,7 @@
 #
 # ops-critical carries email and Slack. Warning instances are muted in the
 # notification policy while remaining canonical Grafana alert instances for the
-# ops dashboard's read-only PostgreSQL poller.
+# ops dashboard's read-only API poller.
 # $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
 # Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
 # SMTP credentials — without them email is inert while Slack still receives

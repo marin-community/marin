@@ -30,7 +30,6 @@ def main() -> None:
                 "cloudsql-grafana-password",
                 "cloudsql-evals-password",
                 "cloudsql-ops-app-password",
-                "cloudsql-ops-grafana-reader-password",
                 "cloudsql-ops-migrator-password",
                 PULUMI_ADMIN_SECRET,
             ),

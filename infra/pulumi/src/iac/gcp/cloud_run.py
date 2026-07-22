@@ -134,12 +134,13 @@ def _member_slug(member: str) -> str:
 class CloudRunService(pulumi.ComponentResource):
     """Build, push, and run a Dockerfile as an IAP-gated Cloud Run v2 service.
 
-    Exposes ``uri`` (the service URL, reachable only through IAP) and ``image_ref`` (the
-    digest-pinned image the service runs).
+    Exposes ``uri`` (the service URL, reachable only through IAP), ``image_ref``
+    (the digest-pinned image), and ``service_account_email`` (the runtime identity).
     """
 
     uri: pulumi.Output[str]
     image_ref: pulumi.Output[str]
+    service_account_email: pulumi.Output[str]
 
     def __init__(
         self,
@@ -327,4 +328,11 @@ class CloudRunService(pulumi.ComponentResource):
 
         self.uri = service.uri
         self.image_ref = image.ref
-        self.register_outputs({"uri": self.uri, "image_ref": self.image_ref})
+        self.service_account_email = service_account.email
+        self.register_outputs(
+            {
+                "uri": self.uri,
+                "image_ref": self.image_ref,
+                "service_account_email": self.service_account_email,
+            }
+        )

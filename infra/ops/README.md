@@ -1,15 +1,15 @@
 # Marin Ops Workflow
 
-This directory contains the vertical slice behind `ops.oa.dev`: a read-only Grafana PostgreSQL poller, durable alert and agent state, a globally serialized ACP queue, a server-side Loom adapter, and a Vue case dashboard.
+This directory contains the vertical slice behind `ops.oa.dev`: a read-only Grafana Alertmanager API poller, durable alert and agent state, a globally serialized ACP queue, a server-side Loom adapter, and a Vue case dashboard.
 
-Grafana remains canonical. The backend polls firing `alert_instance` rows every minute and joins `alert_rule` metadata. Warning notifications are muted; error and critical notifications continue to Slack and email. All three severities can wake the read-only ops agent.
+Grafana remains canonical. The backend polls Grafana's active-alert API every minute. Warning notifications are muted; error and critical notifications continue to Slack and email. All three severities can wake the read-only ops agent.
 
-## Local spike
+## Local development
 
-Start the ops database and the Grafana-shaped fixture database:
+Start the ops database and the static Grafana API fixture:
 
 ```bash
-docker compose -f infra/ops/compose.yaml up -d --wait postgres grafana-postgres
+docker compose -f infra/ops/compose.yaml up -d --wait postgres grafana-api
 uv run --project infra/ops ops-workflow migrate \
   --database-url postgresql://ops:local-ops@127.0.0.1:55432/ops
 npm --prefix infra/ops/dashboard ci
@@ -21,7 +21,8 @@ Run the dashboard with the deterministic agent stub:
 ```bash
 uv run --project infra/ops ops-workflow serve \
   --database-url postgresql://ops:local-ops@127.0.0.1:55432/ops \
-  --grafana-database-url postgresql://grafana_reader:local-grafana-read@127.0.0.1:55433/grafana \
+  --grafana-api-url http://127.0.0.1:55433 \
+  --grafana-api-token local-fixture-token \
   --grafana-poll-interval 60 \
   --agent-mode stub \
   --static-dir infra/ops/dashboard/dist
@@ -42,7 +43,8 @@ Use a local Loom ACP server instead of the stub with:
 ```bash
 uv run --project infra/ops ops-workflow serve \
   --database-url postgresql://ops:local-ops@127.0.0.1:55432/ops \
-  --grafana-database-url postgresql://grafana_reader:local-grafana-read@127.0.0.1:55433/grafana \
+  --grafana-api-url http://127.0.0.1:55433 \
+  --grafana-api-token local-fixture-token \
   --agent-mode loom \
   --loom-api-url "$WEAVER_API" \
   --loom-token "$LOOM_TOKEN" \
@@ -66,12 +68,9 @@ config:
 
 The wildcard becomes `domain:openathena.ai`. Google Workspace reports `ops@openathena.ai` as a Group, so the explicit entry must keep its `group:` prefix. Run `pulumi preview` after a membership change. Each entry owns one `roles/iap.httpsResourceAccessor` grant, so Pulumi changes only the added or removed member.
 
-The service has no alert receiver. It reaches the shared Cloud SQL instance through the connector socket and uses separate credentials:
+The service has no alert receiver. It polls Grafana's active-alert API through IAP. The ops service account has `roles/iap.httpsResourceAccessor` on the Grafana Cloud Run service and `roles/iam.serviceAccountTokenCreator` on itself. Each request carries a short-lived, URL-scoped service-account JWT in `Proxy-Authorization`. Grafana receives the IAP identity as a Viewer. No Grafana API token or database password is mounted into the service.
 
-- `ops_app` reads and writes the `ops` workflow database;
-- `ops_grafana_reader` can select only `grafana.public.alert_instance` and `grafana.public.alert_rule`.
-
-The separate `ops_migrator` identity owns schema objects but is never mounted into the service. Create all three logins and their custom database roles using [`../cloudsql/README.md`](../cloudsql/README.md). The Grafana owner and migrator passwords are never mounted into the ops service.
+The service reaches the shared Cloud SQL instance through the connector socket. `ops_app` reads and writes the `ops` workflow database. The separate `ops_migrator` identity owns schema objects but is never mounted into the service. Create both logins and their custom database roles using [`../cloudsql/README.md`](../cloudsql/README.md).
 
 The service reuses the `marin-grafana-slack-webhook` Secret Manager secret for agent-requested escalations. The webhook is not passed to Loom or the agent. The backend validates the `ops-result` artifact, suppresses escalations for Grafana error/critical alerts that already notified Slack, deduplicates warning escalations by fingerprint generation, and sends through a durable retrying outbox.
 
@@ -98,6 +97,6 @@ OPS_TEST_DATABASE_URL=postgresql://ops:local-ops@127.0.0.1:55432/ops_test \
   uv run --project infra/ops pytest infra/ops/tests/test_repository_postgres.py
 ```
 
-Production rollout applies migrations before starting the restricted runtime, then verifies that `last_poll_at` advances on an empty snapshot before enabling the warning mute policy.
+Production rollout applies migrations before starting the restricted runtime, then verifies that `last_poll_at` advances and the Diagnostics page reports the active-alert count returned by Grafana.
 
-The checked-in first-rollout `agent_mode` is `stub`. Change it to `loom` only after a managed Loom API is reachable from Cloud Run and `marin-ops-loom-token` has a secret version; then add the explicit Loom URL, repository root, and base to stack configuration.
+The checked-in `agent_mode` is `stub`. Change it to `loom` only after a managed Loom API is reachable from Cloud Run and `marin-ops-loom-token` has a secret version; then add the explicit Loom URL, repository root, and base to stack configuration.

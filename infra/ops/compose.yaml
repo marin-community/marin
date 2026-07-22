@@ -15,23 +15,23 @@ services:
     volumes:
       - ops-postgres:/var/lib/postgresql/data
 
-  grafana-postgres:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: grafana
-      POSTGRES_USER: grafana_reader
-      POSTGRES_PASSWORD: local-grafana-read
+  grafana-api:
+    image: python:3.12-slim
+    working_dir: /fixtures
+    command: ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0"]
     ports:
-      - "127.0.0.1:55433:5432"
+      - "127.0.0.1:55433:8000"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U grafana_reader -d grafana"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/alertmanager/grafana/api/v2/alerts')"
       interval: 1s
       timeout: 3s
       retries: 30
     volumes:
-      - grafana-postgres:/var/lib/postgresql/data
-      - ./fixtures/grafana-polling.sql:/docker-entrypoint-initdb.d/001-grafana-polling.sql:ro
+      - ./fixtures/grafana-api:/fixtures:ro
 
 volumes:
   ops-postgres:
-  grafana-postgres:

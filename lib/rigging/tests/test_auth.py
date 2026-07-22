@@ -16,6 +16,7 @@ from rigging.auth import (
     IapCredentialsUnavailable,
     IapLoginRequired,
     IapRefreshTokenProvider,
+    IapServiceAccountJwtProvider,
     IapServiceAccountTokenProvider,
     read_desktop_client,
 )
@@ -158,6 +159,52 @@ def test_iap_id_token_provider_refetches_after_expiry(monkeypatch):
     assert fetch_calls == 1
     assert provider.get_token() == "id-token"
     assert fetch_calls == 2
+
+
+def test_iap_service_account_jwt_provider_signs_url_scoped_token_and_caches(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"signedJwt": "signed-jwt"}
+
+    requests: list[tuple[str, dict[str, str], int]] = []
+
+    class FakeSession:
+        def __init__(self, credentials):
+            assert credentials == "ambient-credentials"
+
+        def post(self, url, *, json, timeout):
+            requests.append((url, json, timeout))
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: ("ambient-credentials", "proj"))
+    monkeypatch.setattr("google.auth.transport.requests.AuthorizedSession", FakeSession)
+    monkeypatch.setattr("google.auth.jwt.decode", lambda token, verify: {"exp": time.time() + 3600})
+    monkeypatch.setattr("time.time", lambda: 1_784_683_200.0)
+
+    provider = IapServiceAccountJwtProvider(
+        "https://grafana.example.test/api/alertmanager/grafana/api/v2/alerts",
+        "marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
+    )
+
+    assert provider.get_token() == "signed-jwt"
+    assert provider.get_token() == "signed-jwt"
+    assert len(requests) == 1
+    url, body, timeout = requests[0]
+    assert url.endswith("/marin-ops-ui%40hai-gcp-models.iam.gserviceaccount.com:signJwt")
+    assert timeout == 10
+    assert json.loads(body["payload"]) == {
+        "iss": "marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
+        "sub": "marin-ops-ui@hai-gcp-models.iam.gserviceaccount.com",
+        "aud": "https://grafana.example.test/api/alertmanager/grafana/api/v2/alerts",
+        "iat": 1_784_683_200,
+        "exp": 1_784_686_800,
+    }
 
 
 def _raise_no_creds(*args, **kwargs):

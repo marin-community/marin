@@ -6,8 +6,8 @@ test('a polled Grafana group becomes one visible agent investigation', async ({ 
   await page.getByText(/DNSConfigForming.*cw-us-east-08a/).last().click()
 
   await expect(page.getByRole('heading', { name: /DNSConfigForming.*cw-us-east-08a/ })).toBeVisible()
-  await expect(page.getByText('fp 1:dns-config-forming:2b05ef3b1641c79a', { exact: true })).toBeVisible()
-  await expect(page.getByText('fp 1:dns-config-forming:ef356383208c86c5', { exact: true })).toBeVisible()
+  await expect(page.getByText('fp 2b05ef3b1641c79a', { exact: true })).toBeVisible()
+  await expect(page.getByText('fp ef356383208c86c5', { exact: true })).toBeVisible()
   const chat = page.locator('aside')
   await expect(chat.getByText('Agent session')).toBeVisible()
 

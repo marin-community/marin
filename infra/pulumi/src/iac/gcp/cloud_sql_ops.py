@@ -17,8 +17,6 @@ POSTGRES_CONNECT_TIMEOUT = 15
 POSTGRES_MAX_CONNECTIONS = 4
 PASSWORD_LENGTH = 32
 PULUMI_ADMIN = "pulumi_db_admin"
-GRAFANA_USER = "grafana"
-GRAFANA_SECRET = "cloudsql-grafana-password"
 OPS_SCHEMA = "public"
 
 
@@ -49,12 +47,6 @@ LOGIN_ROLES = (
         group="ops_app_role",
         secret="cloudsql-ops-app-password",
         search_paths=("public", "pg_catalog"),
-    ),
-    LoginRole(
-        name="ops_grafana_reader",
-        group="ops_grafana_reader_role",
-        secret="cloudsql-ops-grafana-reader-password",
-        search_paths=("pg_catalog",),
     ),
 )
 
@@ -154,20 +146,6 @@ def configure_ops_database(
         depends_on=[admin_user, postgres.databases["ops"]],
     )
 
-    grafana_secret = gcp.secretmanager.get_secret_version_output(
-        secret=GRAFANA_SECRET,
-        project=project,
-        opts=pulumi.InvokeOutputOptions(provider=gcp_provider),
-    )
-    grafana_owner = postgres_provider(
-        "grafana-owner",
-        database="grafana",
-        connection_name=postgres.connection_name,
-        username=GRAFANA_USER,
-        password=pulumi.Output.secret(grafana_secret.secret_data),
-        depends_on=[postgres.databases["grafana"]],
-    )
-
     group_roles: dict[str, postgresql.Role] = {}
     for login in LOGIN_ROLES:
         group_roles[login.group] = postgresql.Role(
@@ -203,7 +181,6 @@ def configure_ops_database(
 
     migrator_role = group_roles["ops_migrator_role"]
     app_role = group_roles["ops_app_role"]
-    reader_role = group_roles["ops_grafana_reader_role"]
 
     postgresql.Grant(
         "ops-migrator-database",
@@ -221,15 +198,6 @@ def configure_ops_database(
         privileges=["CONNECT"],
         opts=pulumi.ResourceOptions(provider=ops_admin),
     )
-    postgresql.Grant(
-        "grafana-reader-database",
-        database="grafana",
-        object_type="database",
-        role=reader_role.name,
-        privileges=["CONNECT"],
-        opts=pulumi.ResourceOptions(provider=grafana_owner),
-    )
-
     ops_schema = postgresql.Schema(
         "ops-public",
         database="ops",
@@ -279,24 +247,4 @@ def configure_ops_database(
         role=app_role.name,
         privileges=["USAGE", "SELECT", "UPDATE"],
         opts=pulumi.ResourceOptions(provider=ops_admin, depends_on=[ops_schema]),
-    )
-
-    postgresql.Grant(
-        "grafana-reader-schema",
-        database="grafana",
-        schema="public",
-        object_type="schema",
-        role=reader_role.name,
-        privileges=["USAGE"],
-        opts=pulumi.ResourceOptions(provider=grafana_owner),
-    )
-    postgresql.Grant(
-        "grafana-reader-alert-tables",
-        database="grafana",
-        schema="public",
-        object_type="table",
-        objects=["alert_instance", "alert_rule"],
-        role=reader_role.name,
-        privileges=["SELECT"],
-        opts=pulumi.ResourceOptions(provider=grafana_owner),
     )
