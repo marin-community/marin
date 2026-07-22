@@ -187,6 +187,41 @@ _QKV_SPEC = P("data", "model")
 _O_SPEC = P("model", "data")
 
 
+def _qkv_projection_pipelined(
+    x: Float[Array, "B S D"],
+    w_q: Float[Array, "D NH"],
+    w_k: Float[Array, "D MH"],
+    w_v: Float[Array, "D MH"],
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Gather each QKV weight immediately before its projection (SCALE_ATTN_PIPELINE=1).
+
+    The default path emits q/k/v as three independent einsums; XLA front-loads all three FSDP
+    weight all-gathers (serial on one comm stream) before any projection, so the projections stall
+    at the layer opening. Here the gather and its consuming matmul live in one shard_map body, in
+    sequence, so the k/v gathers can overlap the q/k projection GEMMs instead of all being exposed.
+    """
+    mesh = get_abstract_mesh()
+    x_spec = _batch_spec()
+    out_spec = P(_BATCH_AXES, None, "model")
+
+    def local(x_l, wq_l, wk_l, wv_l):
+        wq = jax.lax.all_gather(wq_l, "data", axis=0, tiled=True)
+        q = jnp.einsum("bsh,hd->bsd", x_l, wq)
+        wk = jax.lax.all_gather(wk_l, "data", axis=0, tiled=True)
+        k = jnp.einsum("bsh,hd->bsd", x_l, wk)
+        wv = jax.lax.all_gather(wv_l, "data", axis=0, tiled=True)
+        v = jnp.einsum("bsh,hd->bsd", x_l, wv)
+        return q, k, v
+
+    return shard_map(
+        local,
+        mesh=mesh,
+        in_specs=(x_spec, _QKV_SPEC, _QKV_SPEC, _QKV_SPEC),
+        out_specs=(out_spec, out_spec, out_spec),
+        check_vma=False,
+    )(reshard(x, x_spec), w_q, w_k, w_v)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -215,9 +250,15 @@ class CausalSelfAttention(eqx.Module):
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        if os.environ.get("SCALE_ATTN_PIPELINE") == "1":
+            q_flat, k_flat, v_flat = _qkv_projection_pipelined(x, self.w_q, self.w_k, self.w_v)
+        else:
+            q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+            k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+            v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
 
         q = rms_norm(q)
         k = rms_norm(k)
