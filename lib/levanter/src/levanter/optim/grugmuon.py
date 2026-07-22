@@ -386,6 +386,15 @@ def _newtonschulz_4d_distributed(
     ``LE / shards`` *full* matrices), local NS, then reverse. Splitting the axis merge from
     the cross-axis migration lets XLA do each cheaply instead of materializing the full stack.
     """
+    if os.environ.get("SCALE_MOE_EXPERT_ESHARD") == "1":
+        # Experts are stored sharded E-over-data (leaf P(None, "data", None, None)) with D/I full per
+        # chip, so every chip already owns whole expert matrices. NS runs fully local -- no reshard,
+        # no all-to-all -- via a plain vmap over the (L, E) leading dims (E-over-data keeps it per-chip).
+        if os.environ.get("SCALE_MUON_SYRK") == "1":
+            return jax.vmap(lambda stack: _newtonschulz_batched_syrk(stack, steps, eps, coefficient_type))(x)
+        ns2d = lambda m: _zeropower_via_newtonschulz_local(m, steps, eps, coefficient_type)
+        return jax.vmap(jax.vmap(ns2d))(x)
+
     mesh = jax.sharding.get_abstract_mesh()
     if mesh.empty:
         return x

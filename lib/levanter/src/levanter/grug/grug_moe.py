@@ -27,6 +27,7 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
+    default_moe_expert_pspecs,
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
@@ -86,8 +87,10 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
-        pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
+        pspecs: MoEExpertMlpPspecs | None = None,
     ) -> "MoEExpertMlp":
+        if pspecs is None:
+            pspecs = default_moe_expert_pspecs()
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
@@ -287,7 +290,12 @@ def moe_mlp(
             return out, dropped
         return out
 
-    chunk_sizes = _resolve_expert_chunk_sizes(num_experts)
+    # SCALE_MOE_EXPERT_ESHARD shards experts over the data axis (whole experts per chip). The chunked
+    # path gathers the hidden dim per expert-chunk, which does not apply when the expert dim itself is
+    # the sharded axis -- a single all-gather over data reconstructs all experts. Fall through to the
+    # non-chunked path (reshard experts to replicated), which is that single gather.
+    eshard = os.environ.get("SCALE_MOE_EXPERT_ESHARD") == "1"
+    chunk_sizes = None if eshard else _resolve_expert_chunk_sizes(num_experts)
     if chunk_sizes is not None and resolved_implementation == "sonic_cute":
         out, dropped = _moe_mlp_chunked_no_ep(
             x,
@@ -313,8 +321,15 @@ def moe_mlp(
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
-    w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-    w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+    if eshard:
+        # Experts are sharded E-over-data; reshard to fully replicated -- one all-gather over the
+        # data axis reconstructs all experts on every chip for the local grouped GEMM. (Without this,
+        # _value_spec_or_default would keep the E-sharded spec and feed partial experts into the GEMM.)
+        w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
+        w_down_spec = P(*(None for _ in range(w_down.ndim)))
+    else:
+        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
+        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
