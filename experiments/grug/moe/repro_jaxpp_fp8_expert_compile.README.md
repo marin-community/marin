@@ -14,6 +14,13 @@ runs one process per task and joins them through either Iris job-info discovery
 or a complete JAX distributed environment. Local worker mode remains the
 default for the single-task dps2/dps4 gates.
 
+The external dps8 BF16 minimum, FP8 minimum, and FP8 production expert shape
+also passed. At L2/m4/e64/top-k4/t32768/h2560/i1280, rank 0 lowered in 1.819
+seconds and returned from `eval_local` in 8.747 seconds; rank 1 lowered in 1.874
+seconds and returned in 24.397 seconds. No watchdog fired. This rules out the
+isolated expert backward, including production expert-axis width and FP8
+overwrite state.
+
 The `*_ring` modes add the smallest omitted production structure:
 
 - a stage mesh named `(replica_dcn, data, expert, model)`, with all stage
@@ -25,10 +32,87 @@ The `*_ring` modes add the smallest omitted production structure:
 - replicated FP8 overwrite state at the `shard_map` boundary, whose custom VJP
   performs the production stage-mesh `pmax` cotangent reduction.
 
-Attention, learned routing, optimizer state, the language-model head, and the
-pipeline scheduler remain excluded. Nothing has been filed upstream.
+`--loss-boundary next_token` adds the next production boundary without adding
+attention or learned routing:
 
-## Dps8 external-worker gate
+- sequence-shaped `[batch, sequence, hidden]` stage input and matching
+  activation cotangent;
+- the final RMSNorm and rank-128 gated norm parameters;
+- shifted token labels, per-token loss weights, the replicated language-model
+  head, and the production XLA fused linear cross-entropy path; and
+- the complete last-stage `value_and_grad` result: scalar loss, dynamic
+  `[layers, experts]` auxiliary output, the mixed expert/FP8/final/head
+  parameter-gradient tree, and every microbatch input cotangent.
+
+The auxiliary values are a minimal activation-dependent stand-in for router
+betas. Attention, learned router logits and z-loss, optimizer state, and the
+full pipeline schedule remain excluded. Nothing has been filed upstream.
+
+## Next-token dps8 gate
+
+These are the matched next gates. They retain the reduced production stage-3
+shape and differ only in BF16 versus FP8 expert GEMMs. Each invocation creates
+a fresh Iris job name.
+
+BF16 control:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-last-stage-dps8-bf16-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel bf16_ring \
+      --loss-boundary next_token --devices-per-stage 8 \
+      --layers 2 --microbatches 4 --experts 64 --top-k 4 \
+      --tokens 32768 --sequence-length 4096 --vocab-size 8192 \
+      --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-last-stage/dps8-bf16
+  '
+```
+
+FP8 candidate:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-last-stage-dps8-fp8-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel fp8_ring \
+      --loss-boundary next_token --devices-per-stage 8 \
+      --layers 2 --microbatches 4 --experts 64 --top-k 4 \
+      --tokens 32768 --sequence-length 4096 --vocab-size 8192 \
+      --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-last-stage/dps8-fp8
+  '
+```
+
+For a matched distributed-JAX control, use the FP8 command with a fresh
+`jaxpp-last-stage-dps8-fp8-direct-${STAMP}` job name and replace `--runtime
+jaxpp` with `--runtime distributed_direct`.
+
+## Completed dps8 expert-only gate
 
 Run the BF16 and FP8 gates as separate jobs. Each command generates a fresh
 name, requests two gang-scheduled H100x8 tasks, and runs one JAX process with
@@ -188,9 +272,10 @@ production ring capacity calculation.
   the issue is below JaxPP in distributed JAX/XLA compilation of the FP8 ring
   custom VJP.
 - Direct FP8 ring stalls: the issue is stage-local and below distributed setup.
-- All dps8 cases pass at the reduced production shape: this isolated expert
-  backward is still insufficient; the next candidates are full block remat,
-  the stage-3 language-model head/loss, or the complete task output tree.
+- The completed dps8 expert-only cases pass at the reduced production shape:
+  that boundary is insufficient. A next-token failure would isolate the final
+  norm/head/loss or complete task-output structure; a next-token pass would
+  move the minimum missing structure back into the block/router path.
 
 `--stop-after lower` proves Python tracing and JaxPP MPMD localization without
 entering XLA compilation. The full direct paths log separate lower, compile,

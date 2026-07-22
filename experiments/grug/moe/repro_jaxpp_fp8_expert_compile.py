@@ -48,6 +48,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp.experimental import mpmd as jaxpp_mpmd
 from levanter.grug.grug_moe import MoeRaggedDotOps, moe_mlp
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 Kernel = Literal["bf16", "fp8", "bf16_ring", "fp8_ring"]
@@ -55,7 +56,10 @@ Runtime = Literal["direct", "distributed_direct", "jaxpp"]
 WorkerMode = Literal["local", "external"]
 StopAfter = Literal["lower", "execute"]
 Bootstrap = Literal["jax_environment", "iris_job_info"]
+LossBoundary = Literal["mse", "next_token"]
 _FP8_ALIGNMENT = 128
+_GATED_NORM_RANK = 128
+_RMS_NORM_EPS = 1e-5
 _STAGE_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _JAX_DISTRIBUTED_ENV_KEYS = (
@@ -105,6 +109,9 @@ class Config:
     tokens: int
     hidden: int
     intermediate: int
+    loss_boundary: LossBoundary
+    sequence_length: int
+    vocab_size: int
     top_k: int
     devices_per_stage: int
     microbatches: int
@@ -126,6 +133,8 @@ class Config:
             "tokens": self.tokens,
             "hidden": self.hidden,
             "intermediate": self.intermediate,
+            "sequence_length": self.sequence_length,
+            "vocab_size": self.vocab_size,
             "top_k": self.top_k,
             "devices_per_stage": self.devices_per_stage,
             "microbatches": self.microbatches,
@@ -138,6 +147,14 @@ class Config:
                 raise ValueError(f"{name} must be positive, got {value}")
         if self.worker_mode == "external" and self.runtime == "direct":
             raise ValueError("external worker mode supports only distributed_direct or jaxpp runtime")
+        if self.loss_boundary == "next_token":
+            if self.tokens % self.sequence_length:
+                raise ValueError(f"tokens={self.tokens} must be divisible by sequence_length={self.sequence_length}")
+            if self.batch_size % self.devices_per_stage:
+                raise ValueError(
+                    f"next-token batch size={self.batch_size} must be divisible by "
+                    f"devices_per_stage={self.devices_per_stage}"
+                )
         if self.top_k > self.experts:
             raise ValueError(f"top_k={self.top_k} must be <= experts={self.experts}")
         if self.kernel.endswith("_ring"):
@@ -179,6 +196,10 @@ class Config:
             for name, value in aligned.items():
                 if value % _FP8_ALIGNMENT:
                     raise ValueError(f"FP8 {name}={value} must be divisible by {_FP8_ALIGNMENT}")
+
+    @property
+    def batch_size(self) -> int:
+        return self.tokens // self.sequence_length
 
 
 @dataclass(frozen=True)
@@ -246,14 +267,22 @@ def external_distributed_context(
 @dataclass(frozen=True)
 class StagePartitionSpecs:
     activation: P
+    sequence_activation: P
+    token: P
     weight: P
+    lm_head: P
+    qb_beta: P
     state: P
 
 
 @dataclass(frozen=True)
 class StageShardings:
     activation: NamedSharding
+    sequence_activation: NamedSharding
+    token: NamedSharding
     weight: NamedSharding
+    lm_head: NamedSharding
+    qb_beta: NamedSharding
     state: NamedSharding
 
 
@@ -261,17 +290,33 @@ def stage_partition_specs(config: Config) -> StagePartitionSpecs:
     if config.kernel.endswith("_ring"):
         return StagePartitionSpecs(
             activation=P(_BATCH_AXES, None),
+            sequence_activation=P(_BATCH_AXES, None, None),
+            token=P(_BATCH_AXES, None),
             weight=P("expert", None, None),
+            lm_head=P(("replica_dcn", "data"), "model"),
+            qb_beta=P(None, None),
             state=P(),
         )
-    return StagePartitionSpecs(activation=P(), weight=P(), state=P())
+    return StagePartitionSpecs(
+        activation=P(),
+        sequence_activation=P(),
+        token=P(),
+        weight=P(),
+        lm_head=P(),
+        qb_beta=P(),
+        state=P(),
+    )
 
 
 def stage_shardings(config: Config, mesh: Mesh) -> StageShardings:
     specs = stage_partition_specs(config)
     return StageShardings(
         activation=NamedSharding(mesh, specs.activation),
+        sequence_activation=NamedSharding(mesh, specs.sequence_activation),
+        token=NamedSharding(mesh, specs.token),
         weight=NamedSharding(mesh, specs.weight),
+        lm_head=NamedSharding(mesh, specs.lm_head),
+        qb_beta=NamedSharding(mesh, specs.qb_beta),
         state=NamedSharding(mesh, specs.state),
     )
 
@@ -289,7 +334,17 @@ class Fp8ExpertLayer(eqx.Module):
 
 
 ExpertLayer = Bf16ExpertLayer | Fp8ExpertLayer
-Parameters = tuple[ExpertLayer, ...]
+
+
+class LastStageParameters(eqx.Module):
+    expert_layers: tuple[ExpertLayer, ...]
+    final_norm_weight: jax.Array
+    final_gate_down: jax.Array
+    final_gate_up: jax.Array
+    lm_head: jax.Array
+
+
+Parameters = tuple[ExpertLayer, ...] | LastStageParameters
 
 
 def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
@@ -328,7 +383,20 @@ def abstract_parameters(config: Config, shardings: StageShardings) -> Parameters
             )
         else:
             layers.append(Bf16ExpertLayer(w13=w13, w2=w2))
-    return tuple(layers)
+    expert_layers = tuple(layers)
+    if config.loss_boundary == "mse":
+        return expert_layers
+    return LastStageParameters(
+        expert_layers=expert_layers,
+        final_norm_weight=state_array((config.hidden,), jnp.float32, 1.0),
+        final_gate_down=state_array((config.hidden, _GATED_NORM_RANK), jnp.bfloat16, 0.0),
+        final_gate_up=state_array((_GATED_NORM_RANK, config.hidden), jnp.bfloat16, 0.0),
+        lm_head=jax.ShapeDtypeStruct(
+            (config.hidden, config.vocab_size),
+            jnp.bfloat16,
+            sharding=shardings.lm_head,
+        ),
+    )
 
 
 def _make_array(shape: tuple[int, ...], dtype: jnp.dtype, fill: float, sharding: NamedSharding) -> jax.Array:
@@ -363,7 +431,21 @@ def materialize_parameters(config: Config, shardings: StageShardings) -> Paramet
             )
         else:
             layers.append(Bf16ExpertLayer(w13=w13, w2=w2))
-    return tuple(layers)
+    expert_layers = tuple(layers)
+    if config.loss_boundary == "mse":
+        return expert_layers
+    return LastStageParameters(
+        expert_layers=expert_layers,
+        final_norm_weight=state_array((config.hidden,), jnp.float32, 1.0),
+        final_gate_down=state_array((config.hidden, _GATED_NORM_RANK), jnp.bfloat16, 0.01),
+        final_gate_up=state_array((_GATED_NORM_RANK, config.hidden), jnp.bfloat16, 0.01),
+        lm_head=_make_array(
+            (config.hidden, config.vocab_size),
+            jnp.bfloat16,
+            0.01,
+            shardings.lm_head,
+        ),
+    )
 
 
 def _bf16_grouped_dot(lhs: jax.Array, rhs: jax.Array, config: Config) -> jax.Array:
@@ -415,6 +497,45 @@ def _layer_forward(
     return _bf16_grouped_dot(jax.nn.silu(gate) * up, layer.w2, config)
 
 
+def _expert_stack_forward(
+    layers: tuple[ExpertLayer, ...],
+    activation: jax.Array,
+    config: Config,
+    mesh: Mesh,
+) -> tuple[jax.Array, jax.Array]:
+    original_shape = activation.shape
+    if activation.ndim == 3:
+        activation = jnp.reshape(
+            activation,
+            (config.tokens, config.hidden),
+            out_sharding=NamedSharding(mesh, stage_partition_specs(config).activation),
+        )
+    group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
+    qb_betas = []
+    for layer in layers:
+        update = _layer_forward(layer, activation, group_sizes, config, mesh)
+        activation = activation + update
+        qb_betas.append(jnp.broadcast_to(jnp.mean(update.astype(jnp.float32)), (config.experts,)))
+    qb_beta_per_layer = jax.lax.stop_gradient(jnp.stack(qb_betas, axis=0))
+    if len(original_shape) == 3:
+        activation = jnp.reshape(
+            activation,
+            original_shape,
+            out_sharding=NamedSharding(mesh, stage_partition_specs(config).sequence_activation),
+        )
+    return activation, qb_beta_per_layer
+
+
+def _finalize_hidden(params: LastStageParameters, hidden: jax.Array) -> jax.Array:
+    dtype = hidden.dtype
+    hidden_f32 = hidden.astype(jnp.float32)
+    variance = jnp.mean(jnp.square(hidden_f32), axis=-1, keepdims=True)
+    hidden = (hidden_f32 * jax.lax.rsqrt(variance + _RMS_NORM_EPS) * params.final_norm_weight).astype(dtype)
+    gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", hidden, params.final_gate_down))
+    gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, params.final_gate_up))
+    return hidden * gate.astype(dtype)
+
+
 def loss_and_gradients(
     params: Parameters,
     x: jax.Array,
@@ -423,16 +544,59 @@ def loss_and_gradients(
     mesh: Mesh,
 ) -> tuple[jax.Array, Parameters, jax.Array]:
     """Return the scalar loss, parameter gradients, and activation gradient."""
-    group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
+    if isinstance(params, LastStageParameters):
+        raise ValueError("MSE boundary requires expert-only parameters")
 
     def loss_fn(stage_params, activation):
         activation = activation + dependency.astype(activation.dtype)
-        for layer in stage_params:
-            activation = activation + _layer_forward(layer, activation, group_sizes, config, mesh)
+        activation, _ = _expert_stack_forward(stage_params, activation, config, mesh)
         return jnp.mean(jnp.square(activation.astype(jnp.float32)))
 
     loss, (grads, dx) = jax.value_and_grad(loss_fn, argnums=(0, 1))(params, x)
     return loss, grads, dx
+
+
+def last_stage_loss_and_gradients(
+    params: Parameters,
+    hidden: jax.Array,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    dependency: jax.Array,
+    config: Config,
+    mesh: Mesh,
+) -> tuple[jax.Array, jax.Array, Parameters, jax.Array]:
+    """Mirror the production last-stage loss-and-backward output tree."""
+    if not isinstance(params, LastStageParameters):
+        raise ValueError("next-token boundary requires last-stage parameters")
+
+    def loss_fn(stage_params: LastStageParameters, stage_hidden: jax.Array):
+        stage_hidden = stage_hidden + dependency.astype(stage_hidden.dtype)
+        stage_hidden, qb_beta_per_layer = _expert_stack_forward(
+            stage_params.expert_layers,
+            stage_hidden,
+            config,
+            mesh,
+        )
+        stage_hidden = _finalize_hidden(stage_params, stage_hidden)
+        labels = jnp.concatenate([token_ids[:, 1:], jnp.zeros_like(token_ids[:, :1])], axis=1).astype(jnp.int32)
+        loss = fused_linear_softmax_cross_entropy_loss(
+            stage_hidden,
+            stage_params.lm_head,
+            labels,
+            weight=loss_weight.astype(jnp.float32),
+            reduction="mean",
+            logsumexp_weight=None,
+            dtype=jnp.float32,
+            implementation="xla",
+        )
+        return loss, qb_beta_per_layer
+
+    (loss, qb_beta_per_layer), (grads, d_hidden) = jax.value_and_grad(
+        loss_fn,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return loss, qb_beta_per_layer, grads, d_hidden
 
 
 def _is_overwrite(value: Any) -> bool:
@@ -505,24 +669,81 @@ def _tree_shardings(tree: Any) -> Any:
     return jax.tree.map(lambda value: value.sharding, tree)
 
 
+def _activation_shape(config: Config) -> tuple[int, ...]:
+    if config.loss_boundary == "next_token":
+        return (config.batch_size, config.sequence_length, config.hidden)
+    return (config.tokens, config.hidden)
+
+
+def _activation_sharding(config: Config, shardings: StageShardings) -> NamedSharding:
+    if config.loss_boundary == "next_token":
+        return shardings.sequence_activation
+    return shardings.activation
+
+
+def _materialize_microbatches(
+    config: Config,
+    shardings: StageShardings,
+) -> tuple[tuple[jax.Array, ...], tuple[jax.Array, ...], tuple[jax.Array, ...]]:
+    activation_sharding = _activation_sharding(config, shardings)
+    xs = tuple(
+        _make_array(
+            _activation_shape(config),
+            jnp.bfloat16,
+            0.02 + index * 0.001,
+            activation_sharding,
+        )
+        for index in range(config.microbatches)
+    )
+    if config.loss_boundary == "mse":
+        return xs, (), ()
+    token_ids = tuple(
+        _make_array(
+            (config.batch_size, config.sequence_length),
+            jnp.int32,
+            1 + index,
+            shardings.token,
+        )
+        for index in range(config.microbatches)
+    )
+    loss_weights = tuple(
+        _make_array(
+            (config.batch_size, config.sequence_length),
+            jnp.float32,
+            1.0,
+            shardings.token,
+        )
+        for _ in range(config.microbatches)
+    )
+    return xs, token_ids, loss_weights
+
+
 def _run_direct(config: Config, process_id: int, devices: list[jax.Device], event_prefix: str) -> None:
     mesh = _stage_mesh(config, devices)
     shardings = stage_shardings(config, mesh)
     params = materialize_parameters(config, shardings)
-    xs = tuple(
-        _make_array(
-            (config.tokens, config.hidden),
-            jnp.bfloat16,
-            0.02 + index * 0.001,
-            shardings.activation,
-        )
-        for index in range(config.microbatches)
-    )
+    xs, token_ids, loss_weights = _materialize_microbatches(config, shardings)
     dependency = _make_array((), jnp.float32, 0.0, shardings.state)
-    backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config, mesh))
+    if config.loss_boundary == "next_token":
+        backward = jax.jit(
+            lambda p, x, tokens, weights, d: last_stage_loss_and_gradients(
+                p,
+                x,
+                tokens,
+                weights,
+                d,
+                config,
+                mesh,
+            )
+        )
+        lower_args = (params, xs[0], token_ids[0], loss_weights[0], dependency)
+    else:
+        backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config, mesh))
+        lower_args = (params, xs[0], dependency)
     event(f"{event_prefix}_loss_backward_lower_entered", process_id=process_id)
     started = time.perf_counter()
-    lowered = backward.lower(params, xs[0], dependency)
+    with jax.set_mesh(mesh):
+        lowered = backward.lower(*lower_args)
     event(
         f"{event_prefix}_loss_backward_lower_returned",
         process_id=process_id,
@@ -545,8 +766,18 @@ def _run_direct(config: Config, process_id: int, devices: list[jax.Device], even
     for microbatch_index, x in enumerate(xs):
         event(f"{event_prefix}_loss_backward_execute_entered", process_id=process_id, microbatch=microbatch_index)
         started = time.perf_counter()
-        loss, grads, dx = compiled_backward(params, x, dependency)
-        jax.block_until_ready((loss, grads, dx))
+        if config.loss_boundary == "next_token":
+            loss, qb_beta_per_layer, grads, dx = compiled_backward(
+                params,
+                x,
+                token_ids[microbatch_index],
+                loss_weights[microbatch_index],
+                dependency,
+            )
+            jax.block_until_ready((loss, qb_beta_per_layer, grads, dx))
+        else:
+            loss, grads, dx = compiled_backward(params, x, dependency)
+            jax.block_until_ready((loss, grads, dx))
         event(
             f"{event_prefix}_loss_backward_execute_returned",
             process_id=process_id,
@@ -685,65 +916,164 @@ def run_jaxpp_worker(
         compute = compute_shardings.state
         param_shapes = abstract_parameters(config, compute_shardings)
         param_shardings = _tree_shardings(param_shapes)
+        activation_sharding = _activation_sharding(config, compute_shardings)
         x_shapes = tuple(
             jax.ShapeDtypeStruct(
-                (config.tokens, config.hidden),
+                _activation_shape(config),
                 jnp.bfloat16,
-                sharding=compute_shardings.activation,
+                sharding=activation_sharding,
             )
             for _ in range(config.microbatches)
         )
-        x_shardings = tuple(compute_shardings.activation for _ in x_shapes)
+        x_shardings = tuple(activation_sharding for _ in x_shapes)
         scalar_shape = jax.ShapeDtypeStruct((), jnp.float32, sharding=source)
 
-        @jaxpp_mpmd.mpmd(
-            mpmd_mesh,
-            in_shardings=(source, param_shardings, x_shardings),
-            infer_donation=False,
-        )
-        def program(seed, params, xs):
-            seed = jaxpp_mpmd.task(lambda value: value + 1, name="repro_source", out_shardings=source)(seed)
-            dependency = jaxpp_mpmd.transfer(seed, out_shardings=compute).done()
-            accumulated = None
-            loss_sum = None
-            for microbatch_index, x in enumerate(xs):
-                loss, grads, _dx = jaxpp_mpmd.task(
-                    lambda p, value, dep: loss_and_gradients(p, value, dep, config, compute_mesh),
-                    name=f"repro_mb{microbatch_index}_loss_backward",
-                    out_shardings=(compute, param_shardings, compute_shardings.activation),
-                )(params, x, dependency)
-                if accumulated is None:
-                    accumulated = grads
-                    loss_sum = loss
-                else:
-                    accumulated = jaxpp_mpmd.task(
-                        accumulate_gradients,
-                        name=f"repro_mb{microbatch_index}_accumulate_grads",
-                        out_shardings=param_shardings,
-                    )(accumulated, grads)
-                    loss_sum = jaxpp_mpmd.task(
-                        lambda left, right: left + right,
-                        name=f"repro_mb{microbatch_index}_accumulate_loss",
-                        out_shardings=compute,
-                    )(loss_sum, loss)
-            assert accumulated is not None
-            assert loss_sum is not None
-            averaged = jaxpp_mpmd.task(
-                lambda value: average_gradients(value, config.microbatches),
-                name="repro_average_grads",
-                out_shardings=param_shardings,
-            )(accumulated)
-            mean_loss = jaxpp_mpmd.task(
-                lambda value: value / config.microbatches,
-                name="repro_average_loss",
-                out_shardings=compute,
-            )(loss_sum)
-            return mean_loss, averaged
+        if config.loss_boundary == "next_token":
+            token_shapes = tuple(
+                jax.ShapeDtypeStruct(
+                    (config.batch_size, config.sequence_length),
+                    jnp.int32,
+                    sharding=compute_shardings.token,
+                )
+                for _ in range(config.microbatches)
+            )
+            weight_shapes = tuple(
+                jax.ShapeDtypeStruct(
+                    (config.batch_size, config.sequence_length),
+                    jnp.float32,
+                    sharding=compute_shardings.token,
+                )
+                for _ in range(config.microbatches)
+            )
+            token_shardings = tuple(compute_shardings.token for _ in token_shapes)
+
+            @jaxpp_mpmd.mpmd(
+                mpmd_mesh,
+                in_shardings=(source, param_shardings, x_shardings, token_shardings, token_shardings),
+                infer_donation=False,
+            )
+            def next_token_program(seed, params, xs, token_ids, loss_weights):
+                seed = jaxpp_mpmd.task(lambda value: value + 1, name="repro_source", out_shardings=source)(seed)
+                dependency = jaxpp_mpmd.transfer(seed, out_shardings=compute).done()
+                accumulated = None
+                loss_sum = None
+                qb_beta_sum = None
+                input_gradients = []
+                for microbatch_index, (x, tokens, weights) in enumerate(zip(xs, token_ids, loss_weights, strict=True)):
+                    loss, qb_beta_per_layer, grads, d_hidden = jaxpp_mpmd.task(
+                        lambda p, value, token, weight, dep: last_stage_loss_and_gradients(
+                            p,
+                            value,
+                            token,
+                            weight,
+                            dep,
+                            config,
+                            compute_mesh,
+                        ),
+                        name=f"repro_mb{microbatch_index}_loss_backward",
+                        out_shardings=(
+                            compute,
+                            compute_shardings.qb_beta,
+                            param_shardings,
+                            compute_shardings.sequence_activation,
+                        ),
+                    )(params, x, tokens, weights, dependency)
+                    input_gradients.append(d_hidden)
+                    if accumulated is None:
+                        accumulated = grads
+                        loss_sum = loss
+                        qb_beta_sum = qb_beta_per_layer
+                    else:
+                        accumulated = jaxpp_mpmd.task(
+                            accumulate_gradients,
+                            name=f"repro_mb{microbatch_index}_accumulate_grads",
+                            out_shardings=param_shardings,
+                        )(accumulated, grads)
+                        loss_sum = jaxpp_mpmd.task(
+                            lambda left, right: left + right,
+                            name=f"repro_mb{microbatch_index}_accumulate_loss",
+                            out_shardings=compute,
+                        )(loss_sum, loss)
+                        qb_beta_sum = jaxpp_mpmd.task(
+                            lambda left, right: left + right,
+                            name=f"repro_mb{microbatch_index}_accumulate_qb",
+                            out_shardings=compute_shardings.qb_beta,
+                        )(qb_beta_sum, qb_beta_per_layer)
+                assert accumulated is not None
+                assert loss_sum is not None
+                assert qb_beta_sum is not None
+                averaged = jaxpp_mpmd.task(
+                    lambda value: average_gradients(value, config.microbatches),
+                    name="repro_average_grads",
+                    out_shardings=param_shardings,
+                )(accumulated)
+                mean_loss = jaxpp_mpmd.task(
+                    lambda value: value / config.microbatches,
+                    name="repro_average_loss",
+                    out_shardings=compute,
+                )(loss_sum)
+                mean_qb_beta = jaxpp_mpmd.task(
+                    lambda value: value / config.microbatches,
+                    name="repro_average_qb",
+                    out_shardings=compute_shardings.qb_beta,
+                )(qb_beta_sum)
+                return mean_loss, averaged, mean_qb_beta, tuple(input_gradients)
+
+            program = next_token_program
+            abstract_args = (scalar_shape, param_shapes, x_shapes, token_shapes, weight_shapes)
+        else:
+
+            @jaxpp_mpmd.mpmd(
+                mpmd_mesh,
+                in_shardings=(source, param_shardings, x_shardings),
+                infer_donation=False,
+            )
+            def mse_program(seed, params, xs):
+                seed = jaxpp_mpmd.task(lambda value: value + 1, name="repro_source", out_shardings=source)(seed)
+                dependency = jaxpp_mpmd.transfer(seed, out_shardings=compute).done()
+                accumulated = None
+                loss_sum = None
+                for microbatch_index, x in enumerate(xs):
+                    loss, grads, _dx = jaxpp_mpmd.task(
+                        lambda p, value, dep: loss_and_gradients(p, value, dep, config, compute_mesh),
+                        name=f"repro_mb{microbatch_index}_loss_backward",
+                        out_shardings=(compute, param_shardings, compute_shardings.activation),
+                    )(params, x, dependency)
+                    if accumulated is None:
+                        accumulated = grads
+                        loss_sum = loss
+                    else:
+                        accumulated = jaxpp_mpmd.task(
+                            accumulate_gradients,
+                            name=f"repro_mb{microbatch_index}_accumulate_grads",
+                            out_shardings=param_shardings,
+                        )(accumulated, grads)
+                        loss_sum = jaxpp_mpmd.task(
+                            lambda left, right: left + right,
+                            name=f"repro_mb{microbatch_index}_accumulate_loss",
+                            out_shardings=compute,
+                        )(loss_sum, loss)
+                assert accumulated is not None
+                assert loss_sum is not None
+                averaged = jaxpp_mpmd.task(
+                    lambda value: average_gradients(value, config.microbatches),
+                    name="repro_average_grads",
+                    out_shardings=param_shardings,
+                )(accumulated)
+                mean_loss = jaxpp_mpmd.task(
+                    lambda value: value / config.microbatches,
+                    name="repro_average_loss",
+                    out_shardings=compute,
+                )(loss_sum)
+                return mean_loss, averaged
+
+            program = mse_program
+            abstract_args = (scalar_shape, param_shapes, x_shapes)
 
         event("environment", process_id=process_id, config=asdict(config), environment=_environment())
         event("jaxpp_lower_entered", process_id=process_id)
         started = time.perf_counter()
-        lowered = program.lower(scalar_shape, param_shapes, x_shapes)
+        lowered = program.lower(*abstract_args)
         event("jaxpp_lower_returned", process_id=process_id, elapsed=time.perf_counter() - started)
         if config.stop_after == "lower":
             multihost_utils.sync_global_devices("jaxpp_fp8_repro_lower_complete")
@@ -751,16 +1081,12 @@ def run_jaxpp_worker(
 
         seed = _make_array((), jnp.float32, 0.0, source)
         params = materialize_parameters(config, compute_shardings)
-        xs = tuple(
-            _make_array(
-                (config.tokens, config.hidden),
-                jnp.bfloat16,
-                0.02 + index * 0.001,
-                compute_shardings.activation,
-            )
-            for index in range(config.microbatches)
-        )
-        flat_args, _ = jax.tree_util.tree_flatten((seed, params, xs))
+        xs, token_ids, loss_weights = _materialize_microbatches(config, compute_shardings)
+        if config.loss_boundary == "next_token":
+            runtime_args = (seed, params, xs, token_ids, loss_weights)
+        else:
+            runtime_args = (seed, params, xs)
+        flat_args, _ = jax.tree_util.tree_flatten(runtime_args)
         local_jaxpr = lowered._local_jaxpr
         local_args = [flat_args[index] for index in local_jaxpr.global_invar_indices]
         event(
@@ -849,6 +1175,9 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser.add_argument("--tokens", type=int, default=128)
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--intermediate", type=int, default=128)
+    parser.add_argument("--loss-boundary", choices=("mse", "next_token"), default="mse")
+    parser.add_argument("--sequence-length", type=int, default=128)
+    parser.add_argument("--vocab-size", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=1)
     parser.add_argument("--devices-per-stage", type=int, default=1)
     parser.add_argument("--microbatches", type=int, default=1)

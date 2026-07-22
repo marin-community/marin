@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -12,11 +13,16 @@ from jax.sharding import PartitionSpec as P
 from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     Config,
     Fp8ExpertLayer,
+    LastStageParameters,
+    _stage_mesh,
     accumulate_gradients,
     average_gradients,
     external_distributed_context,
+    last_stage_loss_and_gradients,
+    materialize_parameters,
     parse_config,
     stage_partition_specs,
+    stage_shardings,
 )
 
 
@@ -57,6 +63,7 @@ def test_gradient_reduction_adds_weights_maxes_state_and_averages_only_weights()
     accumulated = accumulate_gradients(first, second)
     averaged = average_gradients(accumulated, microbatches=2)
 
+    assert isinstance(averaged, tuple)
     np.testing.assert_array_equal(averaged[0].w13, jnp.full((1, 2, 4), 3.0))
     np.testing.assert_array_equal(averaged[0].w2, jnp.full((1, 2, 2), 3.0))
     np.testing.assert_array_equal(averaged[0].w13_op.input_scale, jnp.full((1,), 5.0))
@@ -104,6 +111,9 @@ def test_config_rejects_unequal_expert_groups() -> None:
         tokens=10,
         hidden=8,
         intermediate=8,
+        loss_boundary="mse",
+        sequence_length=8,
+        vocab_size=8,
         top_k=1,
         devices_per_stage=1,
         microbatches=1,
@@ -138,8 +148,127 @@ def test_ring_partition_specs_preserve_production_sharding_contract() -> None:
     specs = stage_partition_specs(config)
 
     assert specs.activation == P(("replica_dcn", "data", "expert"), None)
+    assert specs.sequence_activation == P(("replica_dcn", "data", "expert"), None, None)
+    assert specs.token == P(("replica_dcn", "data", "expert"), None)
     assert specs.weight == P("expert", None, None)
+    assert specs.lm_head == P(("replica_dcn", "data"), "model")
+    assert specs.qb_beta == P(None, None)
     assert specs.state == P()
+
+
+def test_next_token_boundary_accepts_production_last_stage_shape() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "jaxpp",
+            "--worker-mode",
+            "external",
+            "--kernel",
+            "fp8_ring",
+            "--loss-boundary",
+            "next_token",
+            "--devices-per-stage",
+            "8",
+            "--layers",
+            "2",
+            "--microbatches",
+            "4",
+            "--experts",
+            "64",
+            "--top-k",
+            "4",
+            "--tokens",
+            "32768",
+            "--sequence-length",
+            "4096",
+            "--hidden",
+            "2560",
+            "--intermediate",
+            "1280",
+            "--vocab-size",
+            "8192",
+            "--amax-history",
+            "1024",
+        ]
+    )
+
+    assert config.batch_size == 8
+    assert config.loss_boundary == "next_token"
+
+
+def test_next_token_boundary_rejects_batch_smaller_than_expert_mesh() -> None:
+    with pytest.raises(ValueError, match="next-token batch size=1 must be divisible by devices_per_stage=2"):
+        parse_config(
+            [
+                "--runtime",
+                "jaxpp",
+                "--kernel",
+                "bf16_ring",
+                "--loss-boundary",
+                "next_token",
+                "--devices-per-stage",
+                "2",
+                "--experts",
+                "2",
+                "--top-k",
+                "2",
+                "--tokens",
+                "4",
+                "--sequence-length",
+                "4",
+            ]
+        )
+
+
+def test_next_token_backward_returns_complete_last_stage_tree() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "direct",
+            "--kernel",
+            "bf16",
+            "--loss-boundary",
+            "next_token",
+            "--experts",
+            "1",
+            "--tokens",
+            "4",
+            "--sequence-length",
+            "4",
+            "--hidden",
+            "4",
+            "--intermediate",
+            "4",
+            "--vocab-size",
+            "8",
+        ]
+    )
+    mesh = _stage_mesh(config, [jax.devices()[0]])
+    shardings = stage_shardings(config, mesh)
+    params = materialize_parameters(config, shardings)
+    hidden = jax.device_put(jnp.full((1, 4, 4), 0.02, jnp.bfloat16), shardings.sequence_activation)
+    token_ids = jax.device_put(jnp.ones((1, 4), jnp.int32), shardings.token)
+    loss_weight = jax.device_put(jnp.ones((1, 4), jnp.float32), shardings.token)
+    dependency = jax.device_put(jnp.asarray(0.0, jnp.float32), shardings.state)
+
+    with jax.set_mesh(mesh):
+        loss, qb_beta_per_layer, grads, d_hidden = last_stage_loss_and_gradients(
+            params,
+            hidden,
+            token_ids,
+            loss_weight,
+            dependency,
+            config,
+            mesh,
+        )
+
+    assert isinstance(grads, LastStageParameters)
+    assert np.isfinite(loss)
+    assert qb_beta_per_layer.shape == (1, 1)
+    assert grads.final_norm_weight.shape == (4,)
+    assert grads.final_gate_down.shape == (4, 128)
+    assert grads.lm_head.shape == (4, 8)
+    assert d_hidden.shape == hidden.shape
 
 
 def test_ring_config_balances_assignments_instead_of_flat_token_groups() -> None:
