@@ -14,6 +14,7 @@ from typing import Any
 
 import pulumi
 import pulumi_cloudflare as cloudflare
+import pulumi_command as command
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 
@@ -33,6 +34,10 @@ DEFAULT_BACKUP_RETENTION_DAYS = 30
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
+STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
+RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
+RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
+BACKUP_SCRIPT = (ROOT / "runtime/backup-sqlite.sh").read_text()
 
 
 def _positive_config_int(value: int | None, default: int, name: str) -> int:
@@ -198,7 +203,6 @@ class DeploymentConfig:
     profiles: dict[str, dict[str, Any]] | None = None
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[dict[str, Any], ...] = ()
-    alert_emails: tuple[str, ...] = ()
     snapshot_retention_days: int = DEFAULT_SNAPSHOT_RETENTION_DAYS
     backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
@@ -259,7 +263,6 @@ class DeploymentConfig:
             profiles=dict(config.get_object("profiles") or {}),
             workloads=tuple(WorkloadIdentityConfig.parse(value) for value in list(config.get_object("workloads") or [])),
             github_federations=tuple(dict(value) for value in list(config.get_object("githubFederations") or [])),
-            alert_emails=tuple(config.get_object("alertEmails") or []),
             snapshot_retention_days=_positive_config_int(
                 config.get_int("snapshotRetentionDays"), DEFAULT_SNAPSHOT_RETENTION_DAYS, "snapshotRetentionDays"
             ),
@@ -276,8 +279,7 @@ class Infrastructure:
     artifact_repository: gcp.artifactregistry.Repository
     backup_bucket: gcp.storage.Bucket
     workload_accounts: tuple[gcp.serviceaccount.Account, ...]
-    uptime_check: gcp.monitoring.UptimeCheckConfig
-    dashboard: gcp.monitoring.Dashboard
+    activation: command.local.Command | None
 
 
 def _enable_apis(project: str) -> list[gcp.projects.Service]:
@@ -286,8 +288,6 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
         "compute.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
-        "logging.googleapis.com",
-        "monitoring.googleapis.com",
         "secretmanager.googleapis.com",
         "sts.googleapis.com",
         "storage.googleapis.com",
@@ -367,20 +367,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         )
     else:
         deployment_manifest = render_deployment_manifest([])
-    vm_observability_grants = [
-        gcp.projects.IAMMember(
-            f"loom-vm-{suffix}",
-            project=config.project,
-            role=role,
-            member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
-            opts=api_options,
-        )
-        for suffix, role in (
-            ("metric-writer", "roles/monitoring.metricWriter"),
-            ("log-writer", "roles/logging.logWriter"),
-        )
-    ]
-
     artifact_repository = gcp.artifactregistry.Repository(
         "loom-images",
         project=config.project,
@@ -551,7 +537,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         )
 
     image: pulumi.Input[str] = ""
-    image_mode = "disabled"
     if config.manage_runtime:
         released_image = gcp.artifactregistry.get_docker_image_output(
             project=config.project,
@@ -563,34 +548,17 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         image = released_image.self_link.apply(
             lambda value: _validated_image_reference(value, config.project, config.region)
         )
-        image_mode = "pull"
     metadata = {
         "loom-domain": config.domain,
-        "repo-url": config.repo_url,
-        "git-ref": config.git_ref,
-        "image-mode": image_mode,
-        "ar-image": image,
+        "release-commit": config.git_ref,
+        "loom-image": image,
         "backup-bucket": backup_bucket.name,
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "loom-deployment": deployment_manifest,
-        "startup-script": (ROOT / "startup-script.sh").read_text(),
-        "loom-ops-agent-config": (
-            """metrics:
-  receivers:
-    loom:
-      type: prometheus
-      config:
-        scrape_configs:
-          - job_name: loom
-            scrape_interval: 30s
-            static_configs:
-              - targets: [\"127.0.0.1:7878\"]
-  service:
-    pipelines:
-      loom:
-        receivers: [loom]
-"""
-        ),
+        "loom-compose": RUNTIME_COMPOSE,
+        "loom-caddyfile": RUNTIME_CADDYFILE,
+        "loom-backup-script": BACKUP_SCRIPT,
+        "startup-script": STARTUP_SCRIPT,
     }
     dependencies: list[pulumi.Resource] = [
         web_firewall,
@@ -603,7 +571,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         vm_backup_writer,
         snapshot_attachment,
         *profile_secret_readers,
-        *vm_observability_grants,
     ]
     dependencies.append(dns_record)
     ignored_instance_changes = (
@@ -649,149 +616,36 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             "email": vm_account.email,
             "scopes": ["cloud-platform"],
         },
-        allow_stopping_for_update=config.manage_runtime,
+        allow_stopping_for_update=False,
         deletion_protection=True,
         opts=instance_options,
     )
 
-    uptime_check = gcp.monitoring.UptimeCheckConfig(
-        "loom-readiness",
-        project=config.project,
-        display_name="Loom readiness",
-        period="60s",
-        timeout="10s",
-        log_check_failures=True,
-        http_check={
-            "path": "/api/ready",
-            "port": 443,
-            "request_method": "GET",
-            "use_ssl": True,
-            "validate_ssl": True,
-        },
-        monitored_resource={
-            "type": "uptime_url",
-            "labels": {"project_id": config.project, "host": config.domain},
-        },
-        opts=pulumi.ResourceOptions(depends_on=[instance]),
-    )
-    notification_channels = [
-        gcp.monitoring.NotificationChannel(
-            f"loom-alert-email-{index}",
-            project=config.project,
-            display_name=f"Loom operator {email}",
-            type="email",
-            labels={"email_address": email},
-            opts=api_options,
-        )
-        for index, email in enumerate(config.alert_emails)
-    ]
-    readiness_alert = gcp.monitoring.AlertPolicy(
-        "loom-readiness-failed",
-        project=config.project,
-        display_name="Loom is not ready",
-        combiner="OR",
-        notification_channels=[channel.name for channel in notification_channels],
-        conditions=[
-            {
-                "display_name": "Public readiness probes are failing",
-                "condition_threshold": {
-                    "filter": (
-                        'metric.type="monitoring.googleapis.com/uptime_check/check_passed" '
-                        'AND resource.type="uptime_url" '
-                        f'AND resource.label.host="{config.domain}"'
-                    ),
-                    "duration": "120s",
-                    "comparison": "COMPARISON_LT",
-                    "threshold_value": 1,
-                    "aggregations": [
-                        {
-                            "alignment_period": "120s",
-                            "per_series_aligner": "ALIGN_NEXT_OLDER",
-                            "cross_series_reducer": "REDUCE_COUNT_TRUE",
-                            "group_by_fields": ["resource.label.host"],
-                        }
-                    ],
-                    "evaluation_missing_data": "EVALUATION_MISSING_DATA_ACTIVE",
-                },
-            }
-        ],
-        alert_strategy={"auto_close": "1800s"},
-        documentation={
-            "content": (
-                f"Loom readiness at {audience}/api/ready has failed for two minutes. "
-                "Inspect /api/diagnostics and the loom startup journal."
-            ),
-            "mime_type": "text/markdown",
-        },
-        opts=pulumi.ResourceOptions(depends_on=[uptime_check]),
-    )
-    dashboard = gcp.monitoring.Dashboard(
-        "loom-operations",
-        project=config.project,
-        dashboard_json=json.dumps(
-            {
-                "displayName": "Loom operations",
-                "mosaicLayout": {
-                    "columns": 12,
-                    "tiles": [
-                        {
-                            "xPos": 0,
-                            "yPos": 0,
-                            "width": 6,
-                            "height": 4,
-                            "widget": {
-                                "title": "Current sessions by state",
-                                "xyChart": {
-                                    "dataSets": [
-                                        {
-                                            "plotType": "LINE",
-                                            "targetAxis": "Y1",
-                                            "timeSeriesQuery": {
-                                                "prometheusQuery": "sum by (status, profile) (loom_sessions_current)"
-                                            },
-                                        }
-                                    ],
-                                    "yAxis": {"label": "sessions", "scale": "LINEAR"},
-                                },
-                            },
-                        },
-                        {
-                            "xPos": 6,
-                            "yPos": 0,
-                            "width": 6,
-                            "height": 4,
-                            "widget": {
-                                "title": "Automation runs by state",
-                                "xyChart": {
-                                    "dataSets": [
-                                        {
-                                            "plotType": "STACKED_BAR",
-                                            "targetAxis": "Y1",
-                                            "timeSeriesQuery": {
-                                                "prometheusQuery": (
-                                                    "sum by (status, source, service, profile) "
-                                                    "(loom_automation_runs_current)"
-                                                )
-                                            },
-                                        }
-                                    ],
-                                    "yAxis": {"label": "runs", "scale": "LINEAR"},
-                                },
-                            },
-                        },
-                    ],
-                },
+    activation = None
+    if config.manage_runtime:
+        activation = command.local.Command(
+            "loom-activate",
+            create="./activate.sh",
+            update="./activate.sh",
+            dir=".",
+            environment={
+                "LOOM_PROJECT": config.project,
+                "LOOM_ZONE": config.zone,
+                "LOOM_INSTANCE": config.instance_name,
+                "LOOM_DOMAIN": config.domain,
             },
-            sort_keys=True,
-        ),
-        # The Monitoring API injects `name` and `etag` into dashboardJson. The
-        # provider then proposes deleting them on every preview even when the
-        # authored dashboard is unchanged.
-        opts=pulumi.ResourceOptions(
-            depends_on=[instance, readiness_alert],
-            ignore_changes=["dashboardJson"],
-        ),
-    )
+            triggers=[
+                config.git_ref,
+                config.dotenv_secret_version,
+                image,
+                deployment_manifest,
+                STARTUP_SCRIPT,
+                RUNTIME_COMPOSE,
+                RUNTIME_CADDYFILE,
+                BACKUP_SCRIPT,
+            ],
+            opts=pulumi.ResourceOptions(depends_on=[instance, dns_record]),
+        )
 
     pulumi.export("address", address.address)
     pulumi.export("url", f"https://{config.domain}/")
@@ -810,13 +664,11 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "workloadClients",
         pulumi.Output.all(*workload_client_outputs) if workload_client_outputs else [],
     )
-    pulumi.export("monitoringDashboard", dashboard.id)
     return Infrastructure(
         address=address,
         instance=instance,
         artifact_repository=artifact_repository,
         backup_bucket=backup_bucket,
         workload_accounts=tuple(workload_accounts),
-        uptime_check=uptime_check,
-        dashboard=dashboard,
+        activation=activation,
     )

@@ -174,9 +174,14 @@ def test_adoption_models_durable_resources_without_secret_payloads():
         assert len(attached) == 1
         assert field(attached[0], "device_name", "deviceName") == "loom-data"
         assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["image-mode"] == "disabled"
+        assert vm.inputs["metadata"]["loom-image"] == ""
         assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
         assert "startup-script" in vm.inputs["metadata"]
+        assert "git clone" not in vm.inputs["metadata"]["startup-script"]
+        assert "git -C" not in vm.inputs["metadata"]["startup-script"]
+        assert "docker compose build" not in vm.inputs["metadata"]["startup-script"]
+        assert "loom-compose" in vm.inputs["metadata"]
+        assert "loom-caddyfile" in vm.inputs["metadata"]
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
@@ -218,7 +223,7 @@ def test_release_build_precedes_the_runtime_rollout():
         assert image.inputs["push"] is True
         vm = by_name("loom")
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
-        assert vm.inputs["metadata"]["image-mode"] == "disabled"
+        assert vm.inputs["metadata"]["loom-image"] == ""
 
     return infrastructure.instance.id.apply(check)
 
@@ -241,6 +246,7 @@ def test_dns_matches_the_existing_unproxied_cloudflare_record():
 @pulumi.runtime.test
 def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
     infrastructure = make_infrastructure(manage_runtime=True)
+    assert infrastructure.activation is not None
 
     def check(_: object) -> None:
         metadata = by_name("loom").inputs["metadata"]
@@ -250,14 +256,14 @@ def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
                 "allow_stopping_for_update",
                 "allowStoppingForUpdate",
             )
-            is True
+            is False
         )
-        assert metadata["git-ref"] == "0123456789abcdef0123456789abcdef01234567"
-        assert metadata["image-mode"] == "pull"
-        assert metadata["ar-image"].endswith("@sha256:" + "b" * 64)
+        assert metadata["release-commit"] == "0123456789abcdef0123456789abcdef01234567"
+        assert metadata["loom-image"].endswith("@sha256:" + "b" * 64)
+        assert by_name("loom-activate").typ == "command:local:Command"
         assert not any(resource.typ == "docker-build:index:Image" for resource in mocks.resources)
 
-    return infrastructure.instance.id.apply(check)
+    return infrastructure.activation.id.apply(check)
 
 
 @pulumi.runtime.test
@@ -268,22 +274,21 @@ def test_next_release_can_build_while_the_previous_commit_stays_deployed():
         image = by_name("loom-release-image")
         assert image.inputs["tags"] == ["us-central1-docker.pkg.dev/example/loom/loom:" + "f" * 40]
         metadata = by_name("loom").inputs["metadata"]
-        assert metadata["git-ref"] == "0123456789abcdef0123456789abcdef01234567"
-        assert metadata["ar-image"].endswith("@sha256:" + "b" * 64)
+        assert metadata["release-commit"] == "0123456789abcdef0123456789abcdef01234567"
+        assert metadata["loom-image"].endswith("@sha256:" + "b" * 64)
 
     return infrastructure.instance.id.apply(check)
 
 
 @pulumi.runtime.test
-def test_profiles_workloads_and_monitoring_render_to_vm_metadata():
+def test_profiles_and_workloads_render_to_vm_metadata():
     infrastructure = make_infrastructure()
 
     def check(_: object) -> None:
-        names = {resource.name for resource in mocks.resources}
-        assert {"loom-workload-marin-ops", "loom-readiness", "loom-readiness-failed", "loom-operations"} <= names
+        assert by_name("loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"
         manifest = json.loads(by_name("loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
 
-    return infrastructure.dashboard.id.apply(check)
+    return infrastructure.instance.id.apply(check)

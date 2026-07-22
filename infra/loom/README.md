@@ -15,17 +15,17 @@ pulumi stack select marin-loom --cwd infra/loom
 ```
 
 The `loom-oa-dev` GitHub App is owned by `marin-community` and installed for all
-organization repositories. The App cannot be created completely through the
-Pulumi GitHub provider: its private key, webhook secret, and client secret have
-separate lifecycles. Verify the public configuration and installation before
-an infrastructure update:
+organization repositories. Its private key, webhook secret, and client secret
+have separate lifecycles and belong only in `LOOM_DOTENV`.
 
 ```sh
-infra/loom/preflight.py
+export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)"
 ```
 
-Store those private values only in the rendered `LOOM_DOTENV` Secret Manager
-payload. The App callback and webhook URL use `https://loom.oa.dev`.
+The Loom stack owns its DNS-only Cloudflare A record through the Pulumi
+Cloudflare provider, matching the `infra/grafana` and `infra/evaldash` stacks.
+The App callback and webhook URL use `https://loom.oa.dev`.
 
 ## Adopt without changing the runtime
 
@@ -64,8 +64,8 @@ pulumi import --cwd infra/loom --stack marin-loom \
 
 Run `pulumi preview --diff` and require zero replacements. Adoption should show
 the existing resources as unchanged or adopted and only additive hardening:
-the image repository, backup bucket, snapshot policy, least-privilege runtime
-IAM, uptime check, alert policy, and dashboard.
+the image repository, backup bucket, snapshot policy, and least-privilege
+runtime IAM. Dashboards and alerting belong to `infra/grafana`, not this stack.
 
 Do not import a Secret Manager version. Render a candidate environment in a
 temporary directory, compare only sorted key names and per-value hashes with
@@ -86,7 +86,7 @@ transcript. Record the numeric version returned by `gcloud` and set
 
 Pulumi builds the release on the operator's Docker daemon from the exact remote
 Git commit, pushes it to Artifact Registry, and records the resulting digest.
-It does not build on the production VM or depend on a GitHub Actions publisher.
+The production VM never checks out source or builds an image.
 Before building, authenticate the host Docker client and make sure its buildx
 builder supports the VM's architecture:
 
@@ -127,16 +127,12 @@ ignored the whole legacy map. It must contain no replacement, deletion,
 boot-disk, data-disk, or network-interface change. The imported `ssh-keys` and
 `enable-osconfig` metadata remain ignored and are not removed.
 
-After reviewing that metadata-only change, run `pulumi up`, then:
-
-```sh
-infra/loom/post_up.py --stack marin-loom
-```
-
-The helper refuses to run while rollout is disabled, inventories live
-supervisors and DockerRunner containers, triggers exactly one startup script
-generation, and checks public liveness, database/migration readiness, container
-identity preservation, and ACP reattachment logs.
+After reviewing that runtime activation, run `pulumi up`. The stack's
+`loom-activate` command restarts the GCE startup unit after metadata is current
+and waits for public readiness. That startup unit is intentionally small: it
+mounts the durable disk, reads the selected Secret Manager version, installs
+the Pulumi-rendered Compose and Caddy files, pulls the immutable image, and runs
+`docker compose up -d`. It does not clone the repository or build on the VM.
 
 The runtime deployment manifest defaults to `pruneDeployment: false`. Enable
 pruning only with a reviewed, non-empty set of profiles, workload identities,
@@ -149,14 +145,10 @@ versions place each new session supervisor in a separately labeled Docker
 container. Recreating the control-plane service preserves those container IDs
 and lets the restarted Loom process discover and adopt them.
 
-Before activating onto a host that still has legacy in-container supervisors,
-take an online SQLite backup and inventory their names. The activation helper
-refuses that cutover by default; after accepting the one-time interruption, run
-it once with `--allow-legacy-cutover`. The helper rejects that option after the
-first DockerRunner session exists. Normal deployments omit it so missing
-supervisors, DockerRunner containers, or ACP reattachments fail verification.
-The legacy cutover skips the ACP reattachment-log gate because those sockets are
-expected to disappear with the old control container.
+Before the first activation, take an online SQLite backup and accept that legacy
+in-container supervisors will stop once. Every session created after that runs
+in a labeled sibling container, so later `docker compose up -d` calls replace
+the control service without removing the session containers.
 
 Roll back by setting `gitRef` to a retained prior commit and pairing it with the
 prior numbered secret version. Pulumi resolves the existing tag to its immutable
