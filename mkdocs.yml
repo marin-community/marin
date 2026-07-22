@@ -88,6 +88,7 @@ nav:
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
+      - Daytona Operations: daytona.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md

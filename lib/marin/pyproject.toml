@@ -188,6 +188,10 @@ harbor = [
     "harbor>=0.1.42",
 ]
 
+daytona = [
+    "daytona==0.200.1",
+]
+
 dedup = [
     # Pure-Python workspace member; it pulls the native marin-dupekit-native
     # kernels transitively (see lib/dupekit/pyproject.toml).

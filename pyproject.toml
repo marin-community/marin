@@ -60,6 +60,9 @@ constraint-dependencies = [
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-semantic-conventions>=0.1b0",
+    "opentelemetry-instrumentation>=0.1b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.1b0",
+    "opentelemetry-util-http>=0.1b0",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
