@@ -235,7 +235,11 @@ cosibling, not a code fault.
   cohort)` — status: planned|dispatched|running|succeeded|failed|halted. `batch_size` is part of
   identity, so `trial_id` encodes all four axes.
 - `dispatches(dispatch_id, trial_id, regional_run_id, region, tpu_slice, chips, state,
-  submission_attempt, iris_job_id, submitted_at)` — **ONE ROW PER IRIS JOB (1:1 with `iris_job_id`).**
+  submission_attempt, iris_job_id, submitted_at, convention)` — **ONE ROW PER IRIS JOB (1:1 with
+  `iris_job_id`).** `convention` marks the schema/naming epoch a row was written under (`v0-legacy` =
+  pre-reboot; `v1-2026-07-22` = current 1:1 model); see the `convention_legend` row in `decisions` for
+  what each value means. **Never delete/move live rows to fix a convention drift — add/set a marker
+  column and move on.**
   EVERY submission (first launch, same-target restart, relocation, slice change, migration) is a NEW
   row. `submission_attempt` is the first-class attempt counter, monotonic per `regional_run_id`
   (point+region), assigned `max+1` at submit, and IS the `-a<n>` token in the iris job-name. Never
