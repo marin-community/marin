@@ -8,11 +8,9 @@ instance carrying several logical databases (Grafana's state, the eval run recor
 only through the Cloud SQL connector/auth-proxy with IAM authentication — the public IP admits
 no authorized network, so nothing dials it directly.
 
-The component owns the instance, one database per name, and one Secret Manager secret *shell*
-per native database user. It never creates the SQL users or holds their passwords: a password
-passed to Pulumi would land in stack state. Users and secret values are set out-of-band with
-`gcloud` (see infra/cloudsql/README.md), and the secret shells created here are what a consumer
-mounts and reads.
+The component owns the instance, one database per name, and one Secret Manager secret shell
+per database login. A stack using the component may attach managed secret versions and
+PostgreSQL roles to those shells.
 
 Exposes ``connection_name`` (project:region:instance, the connector target) and ``public_ip``.
 """
@@ -38,9 +36,8 @@ class CloudSqlPostgresArgs:
 
     # Logical databases created on the instance, one `gcp.sql.Database` each.
     databases: tuple[str, ...]
-    # Secret Manager secret shells to create, one per native database user. The component
-    # creates the empty secret and never its value; the password version is added out-of-band
-    # alongside the matching `gcloud sql users create` (see the project README).
+    # Secret Manager secret shells to create, one per database login. The caller decides
+    # whether each secret version is managed by Pulumi or populated externally.
     password_secrets: tuple[str, ...]
 
     # Machine tier. db-g1-small is a shared-core instance sized for low-traffic metadata.
@@ -53,11 +50,14 @@ class CloudSqlPostgres(pulumi.ComponentResource):
     """Provision a PostgreSQL Cloud SQL instance, its databases, and per-user secret shells.
 
     Exposes ``connection_name`` (the ``project:region:instance`` connector target) and
-    ``public_ip``. It does not create SQL users — those and the secret values are set
-    out-of-band so no password enters Pulumi state.
+    ``public_ip``, plus the child instance, databases, and password secrets so a stack can
+    attach database policy and credentials.
     """
 
     connection_name: pulumi.Output[str]
+    databases: dict[str, gcp.sql.Database]
+    instance: gcp.sql.DatabaseInstance
+    password_secrets: dict[str, gcp.secretmanager.Secret]
     public_ip: pulumi.Output[str]
 
     def __init__(
@@ -71,7 +71,7 @@ class CloudSqlPostgres(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudSqlPostgres", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        instance = gcp.sql.DatabaseInstance(
+        self.instance = gcp.sql.DatabaseInstance(
             "instance",
             name=args.instance_name,
             project=args.project,
@@ -106,17 +106,19 @@ class CloudSqlPostgres(pulumi.ComponentResource):
             opts=child,
         )
 
+        self.databases = {}
         for database in args.databases:
-            gcp.sql.Database(
+            self.databases[database] = gcp.sql.Database(
                 f"db-{database}",
                 name=database,
-                instance=instance.name,
+                instance=self.instance.name,
                 project=args.project,
                 opts=child,
             )
 
+        self.password_secrets = {}
         for secret in args.password_secrets:
-            gcp.secretmanager.Secret(
+            self.password_secrets[secret] = gcp.secretmanager.Secret(
                 f"secret-{secret}",
                 secret_id=secret,
                 project=args.project,
@@ -126,6 +128,6 @@ class CloudSqlPostgres(pulumi.ComponentResource):
                 opts=child,
             )
 
-        self.connection_name = instance.connection_name
-        self.public_ip = instance.public_ip_address
+        self.connection_name = self.instance.connection_name
+        self.public_ip = self.instance.public_ip_address
         self.register_outputs({"connection_name": self.connection_name, "public_ip": self.public_ip})

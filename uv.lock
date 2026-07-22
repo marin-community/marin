@@ -4753,6 +4753,8 @@ deploy = [
     { name = "pulumi-gcp" },
     { name = "pulumi-github" },
     { name = "pulumi-kubernetes" },
+    { name = "pulumi-postgresql" },
+    { name = "pulumi-random" },
 ]
 
 [package.metadata]
@@ -4766,6 +4768,8 @@ requires-dist = [
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-kubernetes", marker = "extra == 'deploy'", specifier = ">=4.18,<5" },
+    { name = "pulumi-postgresql", marker = "extra == 'deploy'", specifier = ">=3.16,<3.17" },
+    { name = "pulumi-random", marker = "extra == 'deploy'", specifier = ">=4,<5" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["deploy"]
@@ -7844,6 +7848,34 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/63/d7/9b397f1328c15711210e06e25e6fead63b308edfc0298955746d23f043bb/pulumi_kubernetes-4.30.0.tar.gz", hash = "sha256:5d488be2a88ac9b3ea99d86c6d4a81be1fad449b3dcb2879f2c7757c63c92a72", size = 1981298, upload-time = "2026-04-25T00:05:30.513Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/ff/7aede0e0a620a878f35c3aebf2d1cf0ed1642b208b38ed94269cf9293d1e/pulumi_kubernetes-4.30.0-py3-none-any.whl", hash = "sha256:e8c2534ed8cd91105edc4ce1c57356259976b1ad5c26eecc7a4456098b61ac7f", size = 3095280, upload-time = "2026-04-25T00:05:26.918Z" },
+]
+
+[[package]]
+name = "pulumi-postgresql"
+version = "3.16.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/20/f2da88b25279054328a6207f9cb1316189c54ec3f063400373dc25258b91/pulumi_postgresql-3.16.3.tar.gz", hash = "sha256:f06b6af501e2d79f662fc34a36fd901770f1a0ecf05597db1ee687e284058ff0", size = 50985, upload-time = "2026-04-10T16:41:54.971Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/ba/9833b06f5578681ed3ea28ef59f00b75e729b17506a4433bd85993c75475/pulumi_postgresql-3.16.3-py3-none-any.whl", hash = "sha256:a37cdc9c112c5c58d92057999aea8dd1359f629beb7c766ebb5e1eabeb957a57", size = 76793, upload-time = "2026-04-10T16:41:53.462Z" },
+]
+
+[[package]]
+name = "pulumi-random"
+version = "4.19.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ff/16/144975d1e7cf980d453e08eaac76ef874a61046e17c08d16d38f6016ded0/pulumi_random-4.19.2.tar.gz", hash = "sha256:5735776efa8364e4c2302c89103ab5eb97ca768fce976adf243f555cf04c15ba", size = 22666, upload-time = "2026-03-30T17:35:02.695Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/8b/533d9c3e312fff8c1c2524687a0edd0176406da04b04a232b416378be175/pulumi_random-4.19.2-py3-none-any.whl", hash = "sha256:479f66f82bbb4a0a30d9290e8cf7842805c6291c67ec191fc976203701052e70", size = 36137, upload-time = "2026-03-30T17:35:00.9Z" },
 ]
 
 [[package]]

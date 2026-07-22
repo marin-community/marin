@@ -4,7 +4,7 @@
 
 The instance has a public IP with no authorized networks. Consumers connect through the Cloud SQL connector or auth proxy. Cloud Run mounts the connector socket under `/cloudsql` through `CloudRunService.cloudsql_instances`.
 
-Pulumi owns the instance, logical databases, Secret Manager secret shells, and bucket. It does not put password values or native PostgreSQL users into stack state. Operators create users, secret versions, and SQL grants out of band.
+Pulumi owns the instance, logical databases, PostgreSQL roles and grants, Secret Manager secrets, and bucket. The three ops login passwords and the deployment administrator password are generated as encrypted Pulumi outputs and published as Secret Manager versions. Grafana and evals retain their existing externally managed passwords.
 
 ## Deploy
 
@@ -17,87 +17,37 @@ pulumi preview
 pulumi up
 ```
 
-The stack uses the shared `marin-iac-key` KMS secrets provider. Its outputs are `connection_name`, `public_ip`, and `eval_bucket`.
+The stack uses the shared `marin-iac-key` KMS secrets provider. Its outputs are `connection_name`, `public_ip`, `eval_bucket`, and `ops_password_generation`.
 
-The password secret shells are:
+The password secrets are:
 
 - `cloudsql-grafana-password`;
 - `cloudsql-evals-password`;
 - `cloudsql-ops-app-password`;
 - `cloudsql-ops-grafana-reader-password`;
-- `cloudsql-ops-migrator-password`.
+- `cloudsql-ops-migrator-password`;
+- `cloudsql-pulumi-admin-password`.
 
-## Ops roles, users, and secret values
+The deployment identity needs Cloud SQL connection access and permission to read `cloudsql-grafana-password`. The PostgreSQL provider connects through the Cloud SQL connector with Application Default Credentials. It uses the dedicated `pulumi_db_admin` database login for cluster and `ops` policy, and the Grafana owner login only for grants on Grafana-owned alert tables.
 
-Cloud SQL grants `cloudsqlsuperuser` to a PostgreSQL user created without an explicit database role. The ops users instead inherit narrow `NOLOGIN` roles. This keeps schema ownership separate from the runtime and limits the Grafana reader to two tables. See Google's [user-role behavior](https://cloud.google.com/sql/docs/postgres/users) and [`--database-roles` guidance](https://cloud.google.com/sdk/gcloud/reference/sql/users/create#--database-roles).
+## Ops roles and credentials
 
-These privileges are PostgreSQL objects, not Cloud SQL IAM resources. The GCP Pulumi
-provider can assign an existing custom role with `gcp.sql.User.database_roles`, but it
-cannot create `NOLOGIN` roles, transfer schema ownership, set login defaults, grant tables,
-or manage default privileges. A PostgreSQL Pulumi provider could manage those objects, but
-would make every preview and update depend on a live Auth Proxy connection and the database
-owner credential. Keep that bootstrap at the SQL boundary.
+Cloud SQL grants `cloudsqlsuperuser` to a built-in user created without an explicit database role. The ops logins instead inherit narrow `NOLOGIN` roles created directly in PostgreSQL. This keeps schema ownership separate from the runtime and limits the Grafana reader to two tables. See Google's [user-role behavior](https://cloud.google.com/sql/docs/postgres/users).
 
-The two scripts reflect the required order. [`ops_roles.sql`](ops_roles.sql) creates the
-custom roles before Cloud SQL creates login users with `--database-roles`;
-[`ops_login_roles.sql`](ops_login_roles.sql) sets login defaults after those users exist.
+`pulumi-postgresql` manages the three `NOLOGIN` group roles, the three login roles, login-time role selection and search paths, `ops.public` ownership, database and schema grants, default table and sequence privileges, and read access to Grafana's `alert_instance` and `alert_rule` tables. The login defaults make objects created by `ops_migrator` belong to `ops_migrator_role`; the application and reader never inherit schema-owner privileges.
 
-Start the Cloud SQL Auth Proxy on `127.0.0.1:55439`. Retrieve the existing Grafana owner password into an environment variable without printing it. After the Pulumi update has created the `ops` database and secret shells, create the custom roles and grants:
-
-```bash
-GRAFANA_ADMIN_PW="$(gcloud secrets versions access latest \
-  --secret=cloudsql-grafana-password --project=hai-gcp-models)"
-PGPASSWORD="$GRAFANA_ADMIN_PW" psql \
-  --host=127.0.0.1 --port=55439 --username=grafana --dbname=grafana \
-  --file=infra/cloudsql/ops_roles.sql
-```
-
-Generate each password once, create the login with its custom role, and publish the same value as a secret version:
-
-```bash
-OPS_MIGRATOR_PW="$(python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_urlsafe(32))')"
-gcloud sql users create ops_migrator --instance=marin-metadata \
-  --project=hai-gcp-models --database-roles=ops_migrator_role \
-  --password="$OPS_MIGRATOR_PW"
-printf '%s' "$OPS_MIGRATOR_PW" | gcloud secrets versions add \
-  cloudsql-ops-migrator-password --project=hai-gcp-models --data-file=-
-
-OPS_APP_PW="$(python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_urlsafe(32))')"
-gcloud sql users create ops_app --instance=marin-metadata \
-  --project=hai-gcp-models --database-roles=ops_app_role \
-  --password="$OPS_APP_PW"
-printf '%s' "$OPS_APP_PW" | gcloud secrets versions add \
-  cloudsql-ops-app-password --project=hai-gcp-models --data-file=-
-
-OPS_READER_PW="$(python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_urlsafe(32))')"
-gcloud sql users create ops_grafana_reader --instance=marin-metadata \
-  --project=hai-gcp-models --database-roles=ops_grafana_reader_role \
-  --password="$OPS_READER_PW"
-printf '%s' "$OPS_READER_PW" | gcloud secrets versions add \
-  cloudsql-ops-grafana-reader-password --project=hai-gcp-models --data-file=-
-```
-
-Do not echo generated passwords or pass them through Pulumi configuration. Finish the role setup after all three users exist:
-
-```bash
-PGPASSWORD="$GRAFANA_ADMIN_PW" psql \
-  --host=127.0.0.1 --port=55439 --username=grafana --dbname=grafana \
-  --file=infra/cloudsql/ops_login_roles.sql
-unset GRAFANA_ADMIN_PW
-```
-
-The login defaults select the corresponding group role at connection time. Objects created by `ops_migrator` therefore belong to the durable `ops_migrator_role`; the application and reader cannot inherit the owner's privileges.
-
-The role bootstrap temporarily grants the schema-owner role to the existing Grafana admin because PostgreSQL requires the current user to be able to `SET ROLE` before transferring schema ownership. The last statement revokes that membership; a failed bootstrap must be rerun through the revocation before continuing.
+`OPS_PASSWORD_GENERATION` in `infra/cloudsql/__main__.py` controls coordinated rotation of the three ops passwords. The Cloud SQL stack exports it and the ops stack places it in the Cloud Run environment, so applying `infra/ops` creates a revision that resolves the new `latest` secret versions. Do not change `ADMIN_PASSWORD_GENERATION` in an ordinary update because the PostgreSQL providers authenticate with that password while planning the update.
 
 ## Migrations and grants
 
-Apply every migration as the dedicated migrator before deploying the service:
+With the Cloud SQL Auth Proxy listening on `127.0.0.1:55439`, apply every migration as the dedicated migrator before deploying the service:
 
 ```bash
+OPS_MIGRATOR_PW="$(gcloud secrets versions access latest \
+  --secret=cloudsql-ops-migrator-password --project=hai-gcp-models)"
 PGPASSWORD="$OPS_MIGRATOR_PW" uv run --project infra/ops ops-workflow migrate \
   --database-url postgresql://ops_migrator@127.0.0.1:55439/ops
-unset OPS_MIGRATOR_PW OPS_APP_PW OPS_READER_PW
+unset OPS_MIGRATOR_PW
 ```
 
 The migration runner takes an advisory lock, records each file digest, and rejects changed applied files. Default privileges grant `ops_app_role` DML on tables and sequence use; the runtime never owns or creates schema objects.
@@ -122,4 +72,4 @@ CREATE TABLE public.reader_must_not_create (id integer);
 
 Similarly, `ops_app` must be able to read and update workflow rows but must fail to create a table or read Grafana. `ops_migrator` is the only ops identity with schema-creation privileges. None of the three login users should be a member of `cloudsqlsuperuser`.
 
-Grafana owns its alert tables. If a future Grafana migration recreates them with different grants, rerun `ops_roles.sql` and reverify this policy before restarting the poller. The adapter fails closed on an incompatible schema or serialization.
+Grafana owns its alert tables. If a Grafana migration recreates them, apply the Cloud SQL stack before restarting the poller so Pulumi restores the reader grants. The adapter fails closed on an incompatible schema or serialization.

@@ -35,6 +35,7 @@ def main() -> None:
 
     cloudsql = pulumi.StackReference(CLOUDSQL_STACK)
     connection_name = cloudsql.get_output("connection_name")
+    password_generation = cloudsql.get_output("ops_password_generation")
     grafana_database_url = connection_name.apply(
         lambda name: f"postgresql://{GRAFANA_READER_USER}@/grafana?host=%2Fcloudsql%2F{name}"
     )
@@ -48,6 +49,7 @@ def main() -> None:
         "OPS_REPO_REVISION": repo_revision,
         "OPS_SKILL_REVISION": skill_revision,
         "OPS_PUBLIC_URL": public_url,
+        "OPS_PASSWORD_GENERATION": password_generation,
     }
     secrets = [
         SecretEnv(name="PGPASSWORD", secret="cloudsql-ops-app-password"),
