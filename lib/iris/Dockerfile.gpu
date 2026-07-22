@@ -26,6 +26,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 
+# CUTLASS DSL imports Torch for dtype and tensor adapters even when Marin runs
+# only JAX kernels. Keep a CPU Torch in the image so the overlay does not pull a
+# CUDA-12 Torch stack into the CUDA-13 Toolbox runtime.
+RUN python3 -m pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.11.0+cpu
+
 # The setup script validates every declared distribution before syncing and
 # excludes it from the overlay venv. Keep this list to one coherent binary
 # stack rather than preserving jax/jaxlib alone.
@@ -40,6 +47,7 @@ candidates = (
     "jax-cuda13-plugin",
     "transformer-engine",
     "transformer-engine-jax",
+    "torch",
     "cuda-bindings",
     "cuda-core",
     "cuda-pathfinder",
