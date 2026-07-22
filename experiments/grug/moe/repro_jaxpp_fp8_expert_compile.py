@@ -8,8 +8,8 @@ first loss-and-backward task. The ``*_ring`` kernels keep that task's expert
 sharding boundary: a production-named stage mesh, sharded expert weights and
 activations, ring collectives inside ``shard_map``, FP8 delayed-scaling state
 returned as overwrite gradients, and optional microbatch gradient reduction.
-They remove attention, learned routing, optimizer state, and pipeline
-scheduling.
+Opt-in boundaries add the production loss, rematerialization, learned routing,
+and full transformer block while retaining the same bounded task wrapper.
 
 ``--runtime direct`` compiles each task with ordinary ``jax.jit`` on one stage.
 ``--runtime distributed_direct`` initializes the same two stage processes as
@@ -48,11 +48,24 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp.experimental import mpmd as jaxpp_mpmd
 from levanter.grug._moe.common import _DEFAULT_EP_CAPACITY_FACTOR
+from levanter.grug.attention import AttentionMask, GrugAttentionImplementation
 from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, MoEExpertMlp, MoeRaggedDotOps, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.utils.activation import ActivationFunctionEnum
 
-from experiments.grug.moe.model import GrugModelConfig, MoEMLP, _stack_router_metrics
+from experiments.grug.moe.model import (
+    _DEFAULT_EP_CAPACITY_FACTOR as _GRUG_MOE_EP_CAPACITY_FACTOR,
+)
+from experiments.grug.moe.model import (
+    Block,
+    CausalSelfAttention,
+    GatedNorm,
+    GrugModelConfig,
+    MoEMLP,
+    RMSNorm,
+    TransformerPipelineStage,
+    _stack_router_metrics,
+)
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 Kernel = Literal["bf16", "fp8", "bf16_ring", "fp8_ring"]
@@ -63,9 +76,12 @@ Bootstrap = Literal["jax_environment", "iris_job_info"]
 LossBoundary = Literal["mse", "next_token"]
 RematMode = Literal["none", "recompute_all", "save_moe"]
 RoutingMode = Literal["fixed", "learned_qb"]
+BlockBoundary = Literal["moe_only", "full"]
+AttentionImplementation = Literal["reference", "gpu_fa4_cute"]
 _FP8_ALIGNMENT = 128
 _GATED_NORM_RANK = 128
 _RMS_NORM_EPS = 1e-5
+_PRODUCTION_PIPELINE_STAGES = 4
 _STAGE_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _JAX_DISTRIBUTED_ENV_KEYS = (
@@ -118,6 +134,12 @@ class Config:
     loss_boundary: LossBoundary
     remat_mode: RematMode
     routing_mode: RoutingMode
+    block_boundary: BlockBoundary
+    attention_implementation: AttentionImplementation
+    num_heads: int
+    num_kv_heads: int
+    total_layers: int
+    sliding_window: int
     sequence_length: int
     vocab_size: int
     top_k: int
@@ -144,6 +166,10 @@ class Config:
             "sequence_length": self.sequence_length,
             "vocab_size": self.vocab_size,
             "top_k": self.top_k,
+            "num_heads": self.num_heads,
+            "num_kv_heads": self.num_kv_heads,
+            "total_layers": self.total_layers,
+            "sliding_window": self.sliding_window,
             "devices_per_stage": self.devices_per_stage,
             "microbatches": self.microbatches,
             "amax_history": self.amax_history,
@@ -172,6 +198,29 @@ class Config:
                 )
             if self.kernel == "fp8":
                 raise ValueError("learned_qb FP8 routing requires the expert-parallel fp8_ring kernel")
+        if self.block_boundary == "full":
+            if self.loss_boundary != "next_token" or self.routing_mode != "learned_qb":
+                raise ValueError("full block boundary requires --loss-boundary next_token and --routing-mode learned_qb")
+            if self.remat_mode != "save_moe":
+                raise ValueError("full block boundary requires --remat-mode save_moe")
+            if self.layers > self.total_layers:
+                raise ValueError(f"local layers={self.layers} must be <= total_layers={self.total_layers}")
+            if self.total_layers - self.layers < _PRODUCTION_PIPELINE_STAGES - 1:
+                raise ValueError(
+                    "full block boundary models pipeline stage 3 and requires at least one layer in each prior stage; "
+                    f"got total_layers={self.total_layers}, local layers={self.layers}"
+                )
+            if self.hidden % self.num_heads:
+                raise ValueError(f"hidden={self.hidden} must be divisible by num_heads={self.num_heads}")
+            if self.num_heads % self.num_kv_heads:
+                raise ValueError(f"num_heads={self.num_heads} must be divisible by num_kv_heads={self.num_kv_heads}")
+            head_dim = self.hidden // self.num_heads
+            if head_dim % 4:
+                raise ValueError(f"full block attention requires head dimension divisible by 4, got {head_dim}")
+            if self.attention_implementation == "gpu_fa4_cute" and head_dim != 128:
+                raise ValueError(f"gpu_fa4_cute requires head dimension 128, got {head_dim}")
+        elif self.attention_implementation != "reference":
+            raise ValueError("non-reference attention requires --block-boundary full")
         if self.top_k > self.experts:
             raise ValueError(f"top_k={self.top_k} must be <= experts={self.experts}")
         if self.kernel.endswith("_ring"):
@@ -287,6 +336,8 @@ class StagePartitionSpecs:
     sequence_activation: P
     token: P
     weight: P
+    attention_input_weight: P
+    attention_output_weight: P
     lm_head: P
     qb_beta: P
     state: P
@@ -298,6 +349,8 @@ class StageShardings:
     sequence_activation: NamedSharding
     token: NamedSharding
     weight: NamedSharding
+    attention_input_weight: NamedSharding
+    attention_output_weight: NamedSharding
     lm_head: NamedSharding
     qb_beta: NamedSharding
     state: NamedSharding
@@ -310,6 +363,8 @@ def stage_partition_specs(config: Config) -> StagePartitionSpecs:
             sequence_activation=P(_BATCH_AXES, None, None),
             token=P(_BATCH_AXES, None),
             weight=P("expert", None, None),
+            attention_input_weight=P("data", "model"),
+            attention_output_weight=P("model", "data"),
             lm_head=P(("replica_dcn", "data"), "model"),
             qb_beta=P(None, None),
             state=P(),
@@ -319,6 +374,8 @@ def stage_partition_specs(config: Config) -> StagePartitionSpecs:
         sequence_activation=P(),
         token=P(),
         weight=P(),
+        attention_input_weight=P(),
+        attention_output_weight=P(),
         lm_head=P(),
         qb_beta=P(),
         state=P(),
@@ -332,6 +389,8 @@ def stage_shardings(config: Config, mesh: Mesh) -> StageShardings:
         sequence_activation=NamedSharding(mesh, specs.sequence_activation),
         token=NamedSharding(mesh, specs.token),
         weight=NamedSharding(mesh, specs.weight),
+        attention_input_weight=NamedSharding(mesh, specs.attention_input_weight),
+        attention_output_weight=NamedSharding(mesh, specs.attention_output_weight),
         lm_head=NamedSharding(mesh, specs.lm_head),
         qb_beta=NamedSharding(mesh, specs.qb_beta),
         state=NamedSharding(mesh, specs.state),
@@ -361,7 +420,7 @@ class LastStageParameters(eqx.Module):
     lm_head: jax.Array
 
 
-Parameters = tuple[ExpertLayer, ...] | LastStageParameters
+Parameters = tuple[ExpertLayer, ...] | LastStageParameters | TransformerPipelineStage
 
 
 def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
@@ -380,25 +439,33 @@ def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
 
 def _routing_model_config(config: Config) -> GrugModelConfig:
     remat_mode = "save_moe" if config.remat_mode == "save_moe" else "recompute_all"
+    full_block = config.block_boundary == "full"
     return GrugModelConfig(
         vocab_size=config.vocab_size,
         hidden_dim=config.hidden,
         intermediate_dim=config.intermediate,
         shared_expert_intermediate_dim=0,
-        num_layers=config.layers,
-        num_heads=1,
-        num_kv_heads=1,
+        num_layers=config.total_layers if full_block else config.layers,
+        num_heads=config.num_heads if full_block else 1,
+        num_kv_heads=config.num_kv_heads if full_block else 1,
         max_seq_len=config.sequence_length,
+        sliding_window=config.sliding_window,
         num_experts=config.experts,
         num_experts_per_token=config.top_k,
         router_z_loss_coef=0.0,
+        attention_implementation=cast(GrugAttentionImplementation, config.attention_implementation),
         moe_implementation="ring" if config.kernel.endswith("_ring") else "scatter",
         loss_implementation="xla",
         remat_mode=remat_mode,
     )
 
 
-def _routed_expert_layer(config: Config, weight_array: Any, state_array: Any) -> MoEMLP:
+def _routed_expert_layer(
+    config: Config,
+    weight_array: Any,
+    state_array: Any,
+    model_config: GrugModelConfig | None = None,
+) -> MoEMLP:
     ragged_dot_ops = None
     if config.kernel.startswith("fp8"):
         ragged_dot_ops = MoeRaggedDotOps(
@@ -414,10 +481,78 @@ def _routed_expert_layer(config: Config, weight_array: Any, state_array: Any) ->
             w_down=weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01),
             implementation="ring" if config.kernel.endswith("_ring") else "scatter",
             activation=ActivationFunctionEnum.silu,
-            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            capacity_factor=(
+                _GRUG_MOE_EP_CAPACITY_FACTOR
+                if model_config is not None and config.block_boundary == "full"
+                else _DEFAULT_EP_CAPACITY_FACTOR
+            ),
             ragged_dot_ops=ragged_dot_ops,
         ),
-        cfg=_routing_model_config(config),
+        cfg=model_config or _routing_model_config(config),
+    )
+
+
+def _full_block_stage(
+    config: Config,
+    weight_array: Any,
+    state_array: Any,
+    attention_input_array: Any,
+    attention_output_array: Any,
+    lm_head_array: Any,
+) -> TransformerPipelineStage:
+    model_config = _routing_model_config(config)
+    head_dim = model_config.inferred_head_dim
+
+    def gated_norm() -> GatedNorm:
+        return GatedNorm(
+            w_down=state_array((config.hidden, _GATED_NORM_RANK), jnp.bfloat16, 0.01),
+            w_up=state_array((_GATED_NORM_RANK, config.hidden), jnp.bfloat16, 0.01),
+        )
+
+    blocks = []
+    for _ in range(config.layers):
+        attention = CausalSelfAttention(
+            w_q=attention_input_array((config.hidden, config.num_heads * head_dim), jnp.bfloat16, 0.01),
+            w_k=attention_input_array((config.hidden, config.num_kv_heads * head_dim), jnp.bfloat16, 0.02),
+            w_v=attention_input_array((config.hidden, config.num_kv_heads * head_dim), jnp.bfloat16, 0.03),
+            w_o=attention_output_array((config.num_heads * head_dim, config.hidden), jnp.bfloat16, 0.04),
+            attn_gate=state_array((config.hidden, config.num_heads), jnp.bfloat16, 0.01),
+            cfg=model_config,
+        )
+        blocks.append(
+            Block(
+                rms_attn=RMSNorm(
+                    weight=state_array((config.hidden,), jnp.float32, 1.0),
+                    eps=model_config.layer_norm_eps,
+                ),
+                attn_gated_norm=gated_norm(),
+                attn=attention,
+                rms_mlp=RMSNorm(
+                    weight=state_array((config.hidden,), jnp.float32, 1.0),
+                    eps=model_config.layer_norm_eps,
+                ),
+                mlp_gated_norm=gated_norm(),
+                mlp=_routed_expert_layer(config, weight_array, state_array, model_config),
+                shared=None,
+            )
+        )
+
+    return TransformerPipelineStage(
+        token_embed=None,
+        embed_norm=None,
+        embed_gated_norm=None,
+        output_proj=lm_head_array((config.hidden, config.vocab_size), jnp.bfloat16, 0.01),
+        blocks=tuple(blocks),
+        final_norm=RMSNorm(
+            weight=state_array((config.hidden,), jnp.float32, 1.0),
+            eps=model_config.layer_norm_eps,
+        ),
+        final_gated_norm=gated_norm(),
+        config=model_config,
+        stage_index=_PRODUCTION_PIPELINE_STAGES - 1,
+        start_layer=config.total_layers - config.layers,
+        end_layer=config.total_layers,
+        pipeline_stages=_PRODUCTION_PIPELINE_STAGES,
     )
 
 
@@ -427,6 +562,25 @@ def abstract_parameters(config: Config, shardings: StageShardings) -> Parameters
 
     def state_array(shape, dtype, _fill):
         return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.state)
+
+    def attention_input_array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.attention_input_weight)
+
+    def attention_output_array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.attention_output_weight)
+
+    def lm_head_array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.lm_head)
+
+    if config.block_boundary == "full":
+        return _full_block_stage(
+            config,
+            weight_array,
+            state_array,
+            attention_input_array,
+            attention_output_array,
+            lm_head_array,
+        )
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
@@ -472,12 +626,41 @@ def _make_array(shape: tuple[int, ...], dtype: jnp.dtype, fill: float, sharding:
         )()
 
 
+def _make_lm_head_array(shape: tuple[int, int], dtype: jnp.dtype, sharding: NamedSharding) -> jax.Array:
+    if not any(device.process_index == jax.process_index() for device in sharding.mesh.devices.flat):
+        return jax.make_array_from_single_device_arrays(shape, sharding, [], dtype=dtype)
+    with jax.set_mesh(sharding.mesh):
+        return jax.jit(
+            lambda: (((jnp.arange(shape[0] * shape[1]).reshape(shape) % 17) - 8) * 0.01).astype(dtype),
+            out_shardings=sharding,
+        )()
+
+
 def materialize_parameters(config: Config, shardings: StageShardings) -> Parameters:
     def weight_array(shape, dtype, fill):
         return _make_array(shape, dtype, fill, shardings.weight)
 
     def state_array(shape, dtype, fill):
         return _make_array(shape, dtype, fill, shardings.state)
+
+    def attention_input_array(shape, dtype, fill):
+        return _make_array(shape, dtype, fill, shardings.attention_input_weight)
+
+    def attention_output_array(shape, dtype, fill):
+        return _make_array(shape, dtype, fill, shardings.attention_output_weight)
+
+    def lm_head_array(shape, dtype, _fill):
+        return _make_lm_head_array(shape, dtype, shardings.lm_head)
+
+    if config.block_boundary == "full":
+        return _full_block_stage(
+            config,
+            weight_array,
+            state_array,
+            attention_input_array,
+            attention_output_array,
+            lm_head_array,
+        )
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
@@ -656,6 +839,57 @@ def _finalize_hidden(params: LastStageParameters, hidden: jax.Array) -> jax.Arra
     return hidden * gate.astype(dtype)
 
 
+def _apply_full_stage_qb_betas(
+    stage: TransformerPipelineStage,
+    qb_betas: jax.Array,
+) -> TransformerPipelineStage:
+    if qb_betas.shape != (len(stage.blocks), stage.config.num_experts):
+        raise ValueError(
+            "full block boundary requires one QB-beta row per local block; "
+            f"got {qb_betas.shape} for {len(stage.blocks)} blocks"
+        )
+    blocks = []
+    for local_index, block in enumerate(stage.blocks):
+        router_bias = -qb_betas[local_index]
+        router_bias = (router_bias - jnp.mean(router_bias)).astype(block.mlp.router_bias.dtype)
+        mlp = eqx.tree_at(lambda module: module.router_bias, block.mlp, router_bias)
+        blocks.append(eqx.tree_at(lambda module: module.mlp, block, mlp))
+    return eqx.tree_at(lambda module: module.blocks, stage, tuple(blocks))
+
+
+def _full_stage_loss_and_gradients(
+    params: TransformerPipelineStage,
+    hidden: jax.Array,
+    qb_betas: jax.Array,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    dependency: jax.Array,
+) -> tuple[jax.Array, jax.Array, TransformerPipelineStage, jax.Array]:
+    def loss_fn(stage_params: TransformerPipelineStage, stage_hidden: jax.Array):
+        compute_stage = _apply_full_stage_qb_betas(stage_params, qb_betas)
+        stage_hidden = stage_hidden + dependency.astype(stage_hidden.dtype)
+        stage_hidden, router_metrics = compute_stage.block_range(stage_hidden, mask=AttentionMask.causal())
+        stage_hidden = compute_stage.finalize_hidden(stage_hidden)
+        loss, metrics = compute_stage.hidden_next_token_loss(
+            stage_hidden,
+            token_ids,
+            loss_weight,
+            router_metrics,
+            reduction="mean",
+            logsumexp_weight=None,
+            loss_dtype=jnp.float32,
+            return_router_metrics=True,
+        )
+        return loss, metrics["qb_beta_per_layer"]
+
+    (loss, next_qb_betas), (grads, d_hidden) = jax.value_and_grad(
+        loss_fn,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return loss, next_qb_betas, grads, d_hidden
+
+
 def loss_and_gradients(
     params: Parameters,
     x: jax.Array,
@@ -687,6 +921,17 @@ def _last_stage_loss_and_gradients(
     mesh: Mesh,
 ) -> tuple[jax.Array, jax.Array, Parameters, jax.Array]:
     """Mirror the production last-stage loss-and-backward output tree."""
+    if isinstance(params, TransformerPipelineStage):
+        if qb_betas is None:
+            raise ValueError("full block boundary requires learned QB betas")
+        return _full_stage_loss_and_gradients(
+            params,
+            hidden,
+            qb_betas,
+            token_ids,
+            loss_weight,
+            dependency,
+        )
     if not isinstance(params, LastStageParameters):
         raise ValueError("next-token boundary requires last-stage parameters")
 
@@ -1445,6 +1690,16 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser.add_argument("--loss-boundary", choices=("mse", "next_token"), default="mse")
     parser.add_argument("--remat-mode", choices=("none", "recompute_all", "save_moe"), default="none")
     parser.add_argument("--routing-mode", choices=("fixed", "learned_qb"), default="fixed")
+    parser.add_argument("--block-boundary", choices=("moe_only", "full"), default="moe_only")
+    parser.add_argument(
+        "--attention-implementation",
+        choices=("reference", "gpu_fa4_cute"),
+        default="reference",
+    )
+    parser.add_argument("--num-heads", type=int, default=1)
+    parser.add_argument("--num-kv-heads", type=int, default=1)
+    parser.add_argument("--total-layers", type=int, default=8)
+    parser.add_argument("--sliding-window", type=int, default=2048)
     parser.add_argument("--sequence-length", type=int, default=128)
     parser.add_argument("--vocab-size", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=1)

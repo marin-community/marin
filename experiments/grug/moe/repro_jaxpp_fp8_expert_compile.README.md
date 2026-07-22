@@ -76,6 +76,123 @@ collectives, and FP8 ragged-dot state. Router z-loss is computed as part of the
 actual statistics path but has coefficient zero, matching the production
 launcher.
 
+The learned-QB dps8 A/B also passed. BF16 job
+`/dlwh/jaxpp-routing-dps8-bf16-20260722-221754` completed both tasks in 96.92
+seconds per task including setup. FP8 job
+`/dlwh/jaxpp-routing-dps8-fp8-20260722-222555` completed both tasks in 122.42
+seconds per task including setup. Neither fired a watchdog or failed a task;
+Finelog did not return the per-phase events. This rules out the complete
+learned QB router and production ring dispatch in combination with the already
+completed remat and loss boundaries.
+
+`--block-boundary full` adds the next localized production boundary. Parameters
+are an actual final `TransformerPipelineStage`, and its `block_range`,
+`finalize_hidden`, and `hidden_next_token_loss` methods execute inside the same
+`value_and_grad` task. Each production `Block` includes:
+
+- attention RMSNorm and GatedNorm, Q/K/V projections, half-RoPE, XSA, head
+  gating, output projection, and the attention residual;
+- pre-MoE RMSNorm and GatedNorm, learned-QB `MoEMLP`, and the MoE residual;
+- the model's production 1.0 routed-expert capacity factor (the earlier
+  standalone routing gate retains its original 1.25-capacity control);
+- the existing production `save_moe` block remat and complete router metrics;
+  and
+- final RMS/GatedNorm, the LM head, fused loss, parameter gradients, and stage
+  input cotangent.
+
+For the matched two-layer last stage, `--total-layers 8` makes the local
+blocks global layers 6 and 7. Layer 6 uses the production 2048-token sliding
+window; final layer 7 is full causal and disables long-layer RoPE. The target
+geometry is 20 query heads, 5 KV heads, and head dimension 128. H100 uses
+`gpu_fa4_cute`, the CuTe FA4 backend that supports this sliding-window
+configuration. CPU gates select `reference` through the same attention API.
+The shared expert remains excluded by setting its independently configurable
+intermediate dimension to zero.
+
+## Full-block CuTe FA4 dps8 gate
+
+These commands add the production attention/norm/residual block to the
+completed learned-routing boundary. They also install the patched multi-device
+JAX TVM FFI dependency used by the production JaxPP launcher and verify the
+CuTe/FA4 imports before starting the reproducer.
+
+BF16 expert control:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-full-block-dps8-bf16-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    cd "$IRIS_WORKDIR"
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    rm -rf /tmp/jax-tvm-ffi
+    git clone --quiet --filter=blob:none https://github.com/NVIDIA/jax-tvm-ffi.git /tmp/jax-tvm-ffi
+    git -C /tmp/jax-tvm-ffi checkout --quiet e238a28483123efc8f56b9de358c2fb8b8de77e5
+    git -C /tmp/jax-tvm-ffi apply "$IRIS_WORKDIR/experiments/grug/moe/jax_tvm_ffi_multidevice.patch"
+    uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel bf16_ring \
+      --loss-boundary next_token --remat-mode save_moe --routing-mode learned_qb \
+      --block-boundary full --attention-implementation gpu_fa4_cute \
+      --num-heads 20 --num-kv-heads 5 --total-layers 8 --sliding-window 2048 \
+      --devices-per-stage 8 --layers 2 --microbatches 4 \
+      --experts 64 --top-k 4 --tokens 32768 --sequence-length 4096 \
+      --vocab-size 8192 --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-full-block/dps8-bf16
+  '
+```
+
+FP8 expert candidate:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-full-block-dps8-fp8-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    cd "$IRIS_WORKDIR"
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    rm -rf /tmp/jax-tvm-ffi
+    git clone --quiet --filter=blob:none https://github.com/NVIDIA/jax-tvm-ffi.git /tmp/jax-tvm-ffi
+    git -C /tmp/jax-tvm-ffi checkout --quiet e238a28483123efc8f56b9de358c2fb8b8de77e5
+    git -C /tmp/jax-tvm-ffi apply "$IRIS_WORKDIR/experiments/grug/moe/jax_tvm_ffi_multidevice.patch"
+    uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel fp8_ring \
+      --loss-boundary next_token --remat-mode save_moe --routing-mode learned_qb \
+      --block-boundary full --attention-implementation gpu_fa4_cute \
+      --num-heads 20 --num-kv-heads 5 --total-layers 8 --sliding-window 2048 \
+      --devices-per-stage 8 --layers 2 --microbatches 4 \
+      --experts 64 --top-k 4 --tokens 32768 --sequence-length 4096 \
+      --vocab-size 8192 --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-full-block/dps8-fp8
+  '
+```
+
+Optimizer state, Sonic materialization, incoming/outgoing pipeline transfers,
+gradient accumulation across stages, and the outer 1F1B scheduler remain
+excluded. The shared expert is not inseparable from `Block`; it is deliberately
+disabled for this gate.
+
 ## Dynamic QB-routing dps8 gate
 
 These matched jobs add only `learned_qb` routing to the completed next-token

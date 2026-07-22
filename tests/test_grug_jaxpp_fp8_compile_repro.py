@@ -10,7 +10,7 @@ import pytest
 from haliax.quantization import Fp8RaggedDotOp
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe.model import MoEMLP
+from experiments.grug.moe.model import MoEMLP, TransformerPipelineStage
 from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     Config,
     Fp8ExpertLayer,
@@ -116,6 +116,12 @@ def test_config_rejects_unequal_expert_groups() -> None:
         loss_boundary="mse",
         remat_mode="none",
         routing_mode="fixed",
+        block_boundary="moe_only",
+        attention_implementation="reference",
+        num_heads=1,
+        num_kv_heads=1,
+        total_layers=8,
+        sliding_window=2048,
         sequence_length=8,
         vocab_size=8,
         top_k=1,
@@ -155,6 +161,8 @@ def test_ring_partition_specs_preserve_production_sharding_contract() -> None:
     assert specs.sequence_activation == P(("replica_dcn", "data", "expert"), None, None)
     assert specs.token == P(("replica_dcn", "data", "expert"), None)
     assert specs.weight == P("expert", None, None)
+    assert specs.attention_input_weight == P("data", "model")
+    assert specs.attention_output_weight == P("model", "data")
     assert specs.lm_head == P(("replica_dcn", "data"), "model")
     assert specs.qb_beta == P(None, None)
     assert specs.state == P()
@@ -203,6 +211,161 @@ def test_learned_qb_boundary_accepts_production_last_stage_shape() -> None:
     assert config.batch_size == 8
     assert config.loss_boundary == "next_token"
     assert config.routing_mode == "learned_qb"
+
+
+def test_full_block_boundary_preserves_production_last_stage_geometry() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "jaxpp",
+            "--worker-mode",
+            "external",
+            "--kernel",
+            "fp8_ring",
+            "--loss-boundary",
+            "next_token",
+            "--remat-mode",
+            "save_moe",
+            "--routing-mode",
+            "learned_qb",
+            "--block-boundary",
+            "full",
+            "--attention-implementation",
+            "gpu_fa4_cute",
+            "--num-heads",
+            "20",
+            "--num-kv-heads",
+            "5",
+            "--total-layers",
+            "8",
+            "--devices-per-stage",
+            "8",
+            "--layers",
+            "2",
+            "--microbatches",
+            "4",
+            "--experts",
+            "64",
+            "--top-k",
+            "4",
+            "--tokens",
+            "32768",
+            "--sequence-length",
+            "4096",
+            "--hidden",
+            "2560",
+            "--intermediate",
+            "1280",
+            "--vocab-size",
+            "8192",
+            "--amax-history",
+            "1024",
+        ]
+    )
+
+    assert config.hidden // config.num_heads == 128
+    assert config.num_heads // config.num_kv_heads == 4
+    assert config.total_layers - config.layers == 6
+    assert config.sliding_window == 2048
+
+
+def test_full_block_boundary_runs_production_attention_norm_moe_and_loss_tree() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "direct",
+            "--kernel",
+            "bf16",
+            "--loss-boundary",
+            "next_token",
+            "--remat-mode",
+            "save_moe",
+            "--routing-mode",
+            "learned_qb",
+            "--block-boundary",
+            "full",
+            "--attention-implementation",
+            "reference",
+            "--num-heads",
+            "2",
+            "--num-kv-heads",
+            "1",
+            "--total-layers",
+            "8",
+            "--layers",
+            "2",
+            "--experts",
+            "2",
+            "--top-k",
+            "1",
+            "--tokens",
+            "8",
+            "--sequence-length",
+            "4",
+            "--hidden",
+            "8",
+            "--intermediate",
+            "4",
+            "--vocab-size",
+            "8",
+            "--sliding-window",
+            "2",
+        ]
+    )
+    mesh = _stage_mesh(config, [jax.devices()[0]])
+    shardings = stage_shardings(config, mesh)
+    params = materialize_parameters(config, shardings)
+    assert isinstance(params, TransformerPipelineStage)
+    assert params.start_layer == 6
+    assert params.end_layer == 8
+    assert params.blocks[0].shared is None
+
+    hidden_values = jnp.arange(64, dtype=jnp.float32).reshape(2, 4, 8) / 64
+    hidden = jax.device_put(hidden_values.astype(jnp.bfloat16), shardings.sequence_activation)
+    qb_betas = jax.device_put(jnp.zeros((2, 2), jnp.float32), shardings.qb_beta)
+    token_ids = jax.device_put(jnp.arange(8, dtype=jnp.int32).reshape(2, 4), shardings.token)
+    loss_weight = jax.device_put(jnp.ones((2, 4), jnp.float32), shardings.token)
+    dependency = jax.device_put(jnp.asarray(0.0, jnp.float32), shardings.state)
+
+    with jax.set_mesh(mesh):
+        backward_jaxpr = jax.make_jaxpr(
+            lambda p, x: routed_last_stage_loss_and_gradients(
+                p,
+                x,
+                qb_betas,
+                token_ids,
+                loss_weight,
+                dependency,
+                config,
+                mesh,
+            )
+        )(params, hidden)
+        loss, next_qb_betas, grads, d_hidden = routed_last_stage_loss_and_gradients(
+            params,
+            hidden,
+            qb_betas,
+            token_ids,
+            loss_weight,
+            dependency,
+            config,
+            mesh,
+        )
+
+    graph = str(backward_jaxpr)
+    assert "top_k" in graph
+    assert "remat2" in graph
+    assert graph.count("dot_general") >= 8
+    assert np.isfinite(loss)
+    assert next_qb_betas.shape == (2, 2)
+    assert isinstance(grads, TransformerPipelineStage)
+    assert grads.blocks[0].attn.w_q.shape == (8, 8)
+    assert np.any(np.asarray(grads.blocks[0].attn.w_q) != 0)
+    assert grads.blocks[0].rms_attn.weight.shape == (8,)
+    assert grads.blocks[0].mlp.router.shape == (8, 2)
+    assert grads.output_proj is not None
+    assert grads.output_proj.shape == (8, 8)
+    assert d_hidden.shape == hidden.shape
+    assert np.any(np.asarray(d_hidden) != 0)
 
 
 def test_learned_qb_boundary_uses_production_router_and_dispatch_graph() -> None:
@@ -332,6 +495,57 @@ def test_learned_qb_config_rejects_incomplete_production_boundaries(
         parse_config(["--runtime", "direct", *arguments])
 
 
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (
+            ("--block-boundary", "full"),
+            "requires --loss-boundary next_token and --routing-mode learned_qb",
+        ),
+        (
+            (
+                "--block-boundary",
+                "full",
+                "--loss-boundary",
+                "next_token",
+                "--routing-mode",
+                "learned_qb",
+                "--experts",
+                "2",
+            ),
+            "requires --remat-mode save_moe",
+        ),
+        (
+            (
+                "--block-boundary",
+                "full",
+                "--loss-boundary",
+                "next_token",
+                "--routing-mode",
+                "learned_qb",
+                "--remat-mode",
+                "save_moe",
+                "--attention-implementation",
+                "gpu_fa4_cute",
+                "--num-heads",
+                "2",
+                "--hidden",
+                "16",
+                "--experts",
+                "2",
+            ),
+            "requires head dimension 128",
+        ),
+    ),
+)
+def test_full_block_config_rejects_partial_production_boundary(
+    arguments: tuple[str, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_config(["--runtime", "direct", "--kernel", "bf16", *arguments])
+
+
 @pytest.mark.parametrize("remat_mode", ("none", "recompute_all", "save_moe"))
 def test_block_remat_wraps_the_differentiated_expert_residual(remat_mode: str) -> None:
     config = parse_config(
@@ -397,6 +611,8 @@ def test_default_mode_does_not_add_a_remat_boundary() -> None:
 
     assert config.remat_mode == "none"
     assert config.routing_mode == "fixed"
+    assert config.block_boundary == "moe_only"
+    assert config.attention_implementation == "reference"
 
 
 def test_next_token_boundary_rejects_batch_smaller_than_expert_mesh() -> None:
