@@ -3,7 +3,7 @@
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -40,6 +40,16 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture
+async def repository() -> AsyncIterator[OpsRepository]:
+    assert DATABASE_URL is not None
+    value = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+    try:
+        yield value
+    finally:
+        await value.close()
+
+
 def _api_alert() -> dict[str, object]:
     return {
         "annotations": {"summary": "Nameserver limits were exceeded"},
@@ -61,9 +71,7 @@ def _api_alert() -> dict[str, object]:
 
 
 @pytest.mark.anyio
-async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running():
-    assert DATABASE_URL is not None
-    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running(repository: OpsRepository):
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
     first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     assert len(first) == 1
@@ -105,9 +113,7 @@ async def test_new_fingerprint_queues_one_follow_up_while_group_turn_is_running(
 
 
 @pytest.mark.anyio
-async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_instance():
-    assert DATABASE_URL is not None
-    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_instance(repository: OpsRepository):
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
     first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
@@ -157,9 +163,7 @@ async def test_successful_snapshots_deduplicate_resolve_and_reopen_a_grafana_ins
 
 
 @pytest.mark.anyio
-async def test_only_one_service_instance_reconciles_each_poll_minute():
-    assert DATABASE_URL is not None
-    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+async def test_only_one_service_instance_reconciles_each_poll_minute(repository: OpsRepository):
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
     first = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
@@ -177,9 +181,7 @@ async def test_only_one_service_instance_reconciles_each_poll_minute():
 
 
 @pytest.mark.anyio
-async def test_archive_distinguishes_active_already_archived_and_missing_cases():
-    assert DATABASE_URL is not None
-    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+async def test_archive_distinguishes_active_already_archived_and_missing_cases(repository: OpsRepository):
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
 
     result = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
@@ -202,9 +204,7 @@ async def test_archive_distinguishes_active_already_archived_and_missing_cases()
 
 
 @pytest.mark.anyio
-async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation():
-    assert DATABASE_URL is not None
-    repository = OpsRepository(DATABASE_URL, repo_revision="test", skill_revision="test")
+async def test_slack_escalation_is_durable_and_deduplicated_by_signal_generation(repository: OpsRepository):
     now = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
     ingested = await repository.reconcile_grafana_snapshot(snapshot_from_api_alerts([_api_alert()], observed_at=now))
     case_id = ingested[0].case_ids[0]

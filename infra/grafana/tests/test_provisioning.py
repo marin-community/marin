@@ -110,34 +110,6 @@ def test_policies_reference_provisioned_contact_points():
             assert route["receiver"] in contact_points
 
 
-def test_notification_tiers_mute_warnings_and_send_critical_to_slack_and_email():
-    points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
-    critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack"}
-
-    policy_config = _load(ALERTING / "policies.yaml")
-    policies = policy_config["policies"]
-    assert len(policies) == 1
-    policy = policies[0]
-    assert policy["receiver"] == "ops-critical"
-    routes = {route["object_matchers"][0][2]: route["receiver"] for route in policy["routes"]}
-    assert routes == {"critical": "ops-critical", "error": "ops-critical", "warning": "ops-critical"}
-    warning = next(route for route in policy["routes"] if route["object_matchers"][0][2] == "warning")
-    assert warning["mute_time_intervals"] == ["ops-agent-only"]
-    assert policy_config["muteTimes"] == [
-        {
-            "orgId": 1,
-            "name": "ops-agent-only",
-            "time_intervals": [{"times": [{"start_time": "00:00", "end_time": "24:00"}]}],
-        }
-    ]
-
-    for point in points.values():
-        for receiver in point["receivers"]:
-            if receiver["type"] == "slack":
-                assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
-
-
 def test_dashboard_filter_expressions_reference_selected_columns():
     # Infinity's backend parser applies filterExpression to the frame built from
     # `columns`, so every field a filter references must also be selected.

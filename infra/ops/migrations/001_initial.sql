@@ -44,7 +44,16 @@ CREATE TABLE signals (
     latest_source_timestamp timestamptz NOT NULL,
     resolved_at timestamptz,
     latest_delivery_id uuid NOT NULL REFERENCES source_deliveries(id),
+    missing_successful_polls integer NOT NULL DEFAULT 0 CHECK (missing_successful_polls >= 0),
     UNIQUE (source, fingerprint)
+);
+
+CREATE TABLE grafana_polls (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    poll_slot timestamptz NOT NULL UNIQUE,
+    observed_at timestamptz NOT NULL,
+    alert_count integer NOT NULL CHECK (alert_count >= 0),
+    created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE delivery_signals (
@@ -170,6 +179,23 @@ CREATE TABLE case_events (
     data jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE slack_escalations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_key text NOT NULL UNIQUE,
+    case_id uuid NOT NULL REFERENCES cases(id),
+    turn_id uuid NOT NULL UNIQUE REFERENCES agent_turns(id),
+    severity text NOT NULL CHECK (severity IN ('error', 'critical')),
+    reason text NOT NULL,
+    message text NOT NULL,
+    state text NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'abandoned')),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    available_at timestamptz NOT NULL DEFAULT now(),
+    lease_expires_at timestamptz,
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    sent_at timestamptz
+);
+
 CREATE INDEX cases_queue_order
     ON cases (priority DESC, next_eligible_at, opened_at)
     WHERE state = 'pending';
@@ -190,3 +216,10 @@ CREATE INDEX agent_turns_expired_leases
 
 CREATE INDEX case_events_timeline
     ON case_events (case_id, created_at, id);
+
+CREATE INDEX slack_escalations_delivery_queue
+    ON slack_escalations (available_at, created_at)
+    WHERE state = 'pending';
+
+CREATE INDEX slack_escalations_case
+    ON slack_escalations (case_id, created_at DESC);

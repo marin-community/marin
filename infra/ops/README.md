@@ -72,6 +72,8 @@ The service has no alert receiver. It polls Grafana's active-alert API through I
 
 The service reaches the shared Cloud SQL instance through the connector socket. `ops_app` reads and writes the `ops` workflow database. The separate `ops_migrator` identity owns schema objects but is never mounted into the service. Create both logins and their custom database roles using [`../cloudsql/README.md`](../cloudsql/README.md).
 
+[`src/ops_workflow/schema.py`](src/ops_workflow/schema.py) is the current SQLAlchemy Core model. The repository uses SQLAlchemy's async psycopg engine for queries and transactions. Files under [`migrations/`](migrations/) carry existing databases forward and run only with `ops_migrator`; the Cloud Run service cannot create or alter tables.
+
 The service reuses the `marin-grafana-slack-webhook` Secret Manager secret for agent-requested escalations. The webhook is not passed to Loom or the agent. The backend validates the `ops-result` artifact, suppresses escalations for Grafana error/critical alerts that already notified Slack, deduplicates warning escalations by fingerprint generation, and sends through a durable retrying outbox.
 
 Pulumi maps the IAP-protected service to `ops.oa.dev` with a DNS-only Cloudflare CNAME. The Cloudflare API token is a deployment credential, not a runtime secret.

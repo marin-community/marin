@@ -82,6 +82,7 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await service.gateway.close()
+            await repository.close()
             if slack_dispatcher is not None:
                 await slack_dispatcher.close()
 

@@ -13,9 +13,10 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, cast
 
-import psycopg
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+from sqlalchemy import case, exists, func, null, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import RowMapping, make_url
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from ops_workflow.grafana import (
     GRAFANA_BASE_URL,
@@ -26,6 +27,18 @@ from ops_workflow.grafana import (
 )
 from ops_workflow.grafana_source import SOURCE_VERSION, GrafanaSnapshot, PolledGrafanaAlert
 from ops_workflow.result import OpsResult
+from ops_workflow.schema import (
+    agent_sessions,
+    agent_turns,
+    case_events,
+    case_signals,
+    cases,
+    delivery_signals,
+    grafana_polls,
+    signals,
+    slack_escalations,
+    source_deliveries,
+)
 from ops_workflow.slack import SlackDelivery, SlackEscalationDraft
 from ops_workflow.state import CaseState, SignalDisposition, SignalState, severity_priority
 
@@ -89,12 +102,23 @@ class TouchedSignal:
 
 
 class OpsRepository:
-    """Small connection-per-operation repository for the ops workflow."""
+    """SQLAlchemy Core repository for the ops workflow."""
 
     def __init__(self, database_url: str, *, repo_revision: str, skill_revision: str) -> None:
-        self._database_url = database_url
+        url = make_url(database_url)
+        if url.get_backend_name() != "postgresql":
+            raise ValueError("ops workflow requires a PostgreSQL database URL")
+        self._engine: AsyncEngine = create_async_engine(
+            url.set(drivername="postgresql+psycopg"),
+            pool_pre_ping=True,
+        )
         self._repo_revision = repo_revision
         self._skill_revision = skill_revision
+
+    async def close(self) -> None:
+        """Close pooled database connections."""
+
+        await self._engine.dispose()
 
     async def reconcile_grafana_snapshot(self, snapshot: GrafanaSnapshot) -> tuple[IngestResult, ...]:
         """Atomically reconcile one complete, successful Grafana API snapshot."""
@@ -104,168 +128,197 @@ class OpsRepository:
             grouped[(item.receiver, item.group_key)].append(item)
         present = {item.alert.fingerprint for item in snapshot.alerts}
 
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                poll_slot = snapshot.observed_at.replace(second=0, microsecond=0)
-                poll_cursor = await connection.execute(
-                    """
-                    INSERT INTO grafana_polls (poll_slot, observed_at, alert_count)
-                    VALUES (%s, %s, %s) ON CONFLICT (poll_slot) DO NOTHING
-                    RETURNING id
-                    """,
-                    (poll_slot, snapshot.observed_at, len(snapshot.alerts)),
-                )
-                if await poll_cursor.fetchone() is None:
-                    return ()
-                results: list[IngestResult] = []
-                for items in grouped.values():
-                    delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="firing")
-                    results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
+        async with self._engine.begin() as connection:
+            poll_slot = snapshot.observed_at.replace(second=0, microsecond=0)
+            poll_result = await connection.execute(
+                pg_insert(grafana_polls)
+                .values(poll_slot=poll_slot, observed_at=snapshot.observed_at, alert_count=len(snapshot.alerts))
+                .on_conflict_do_nothing(index_elements=[grafana_polls.c.poll_slot])
+                .returning(grafana_polls.c.id)
+            )
+            if poll_result.first() is None:
+                return ()
+            results: list[IngestResult] = []
+            for items in grouped.values():
+                delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="firing")
+                results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
 
-                cursor = await connection.execute(
-                    "SELECT * FROM signals WHERE source = %s AND state = 'firing' FOR UPDATE",
-                    (SOURCE,),
-                )
-                firing = await cursor.fetchall()
-                resolving: dict[tuple[str, str], list[PolledGrafanaAlert]] = defaultdict(list)
-                for signal in firing:
-                    fingerprint = str(signal["fingerprint"])
-                    if fingerprint in present:
-                        if signal["missing_successful_polls"]:
-                            await connection.execute(
-                                "UPDATE signals SET missing_successful_polls = 0 WHERE id = %s",
-                                (signal["id"],),
-                            )
-                        continue
-                    missing = int(signal["missing_successful_polls"]) + 1
-                    if missing < MISSING_POLLS_TO_RESOLVE:
+            firing_result = await connection.execute(
+                select(signals).where(signals.c.source == SOURCE, signals.c.state == "firing").with_for_update()
+            )
+            firing = firing_result.mappings().all()
+            resolving: dict[tuple[str, str], list[PolledGrafanaAlert]] = defaultdict(list)
+            for signal in firing:
+                fingerprint = str(signal["fingerprint"])
+                if fingerprint in present:
+                    if signal["missing_successful_polls"]:
                         await connection.execute(
-                            "UPDATE signals SET missing_successful_polls = %s WHERE id = %s",
-                            (missing, signal["id"]),
+                            update(signals).where(signals.c.id == signal["id"]).values(missing_successful_polls=0)
                         )
-                        continue
-                    item = _resolved_polled_alert(signal, observed_at=snapshot.observed_at)
-                    resolving[(item.receiver, item.group_key)].append(item)
+                    continue
+                missing = int(signal["missing_successful_polls"]) + 1
+                if missing < MISSING_POLLS_TO_RESOLVE:
+                    await connection.execute(
+                        update(signals).where(signals.c.id == signal["id"]).values(missing_successful_polls=missing)
+                    )
+                    continue
+                item = _resolved_polled_alert(signal, observed_at=snapshot.observed_at)
+                resolving[(item.receiver, item.group_key)].append(item)
 
-                for items in resolving.values():
-                    delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="resolved")
-                    results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
-                return tuple(results)
+            for items in resolving.values():
+                delivery = _poll_delivery(items, observed_at=snapshot.observed_at, status="resolved")
+                results.append(await self._ingest_delivery(connection, delivery, key_id=POLL_KEY_ID))
+            return tuple(results)
 
     async def overview(self) -> dict[str, object]:
-        async with await self._connection() as connection:
-            counts_cursor = await connection.execute(
-                "SELECT state, count(*) AS count FROM cases GROUP BY state ORDER BY state"
+        async with self._engine.connect() as connection:
+            counts_result = await connection.execute(
+                select(cases.c.state, func.count().label("count")).group_by(cases.c.state).order_by(cases.c.state)
             )
-            count_rows = await counts_cursor.fetchall()
-            active_cursor = await connection.execute(
-                """
-                SELECT c.id AS case_id, c.title, t.started_at, s.loom_session_url
-                FROM agent_turns t
-                JOIN agent_sessions s ON s.id = t.session_id
-                JOIN cases c ON c.id = s.case_id
-                WHERE t.state IN ('launching', 'running')
-                LIMIT 1
-                """
+            count_rows = counts_result.mappings().all()
+            active_result = await connection.execute(
+                select(
+                    cases.c.id.label("case_id"),
+                    cases.c.title,
+                    agent_turns.c.started_at,
+                    agent_sessions.c.loom_session_url,
+                )
+                .select_from(
+                    agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id).join(
+                        cases, cases.c.id == agent_sessions.c.case_id
+                    )
+                )
+                .where(agent_turns.c.state.in_(("launching", "running")))
+                .limit(1)
             )
-            active = await active_cursor.fetchone()
-            freshness_cursor = await connection.execute("SELECT max(observed_at) AS last_poll_at FROM grafana_polls")
-            freshness = await freshness_cursor.fetchone()
+            active = active_result.mappings().first()
+            last_poll_at = await connection.scalar(select(func.max(grafana_polls.c.observed_at)))
         return {
             "case_counts": {row["state"]: row["count"] for row in count_rows},
-            "active_investigation": active,
-            "last_poll_at": freshness["last_poll_at"] if freshness else None,
+            "active_investigation": dict(active) if active is not None else None,
+            "last_poll_at": last_poll_at,
         }
 
     async def recent_grafana_polls(self, *, limit: int = 60) -> list[dict[str, object]]:
         """Return recent successful snapshots for operator diagnostics."""
 
-        async with await self._connection() as connection:
-            cursor = await connection.execute(
-                """
-                SELECT poll_slot, observed_at, alert_count, created_at
-                FROM grafana_polls
-                ORDER BY observed_at DESC
-                LIMIT %s
-                """,
-                (limit,),
+        async with self._engine.connect() as connection:
+            result = await connection.execute(
+                select(
+                    grafana_polls.c.poll_slot,
+                    grafana_polls.c.observed_at,
+                    grafana_polls.c.alert_count,
+                    grafana_polls.c.created_at,
+                )
+                .order_by(grafana_polls.c.observed_at.desc())
+                .limit(limit)
             )
-            rows = await cursor.fetchall()
-        return list(rows)
+        return [dict(row) for row in result.mappings()]
 
     async def list_cases(self, *, include_archived: bool = False) -> list[dict[str, object]]:
-        async with await self._connection() as connection:
-            cursor = await connection.execute(
-                """
-                SELECT c.id, c.trigger, c.state, c.priority, c.title, c.receiver,
-                       c.group_key, c.outcome, c.summary, c.opened_at, c.updated_at,
-                       count(cs.signal_id) AS signal_count,
-                       count(cs.signal_id) FILTER (WHERE s.state = 'firing') AS firing_count,
-                       array_remove(array_agg(DISTINCT s.cluster), NULL) AS clusters,
-                       a.loom_session_url
-                FROM cases c
-                LEFT JOIN case_signals cs ON cs.case_id = c.id
-                LEFT JOIN signals s ON s.id = cs.signal_id AND s.generation = cs.signal_generation
-                LEFT JOIN agent_sessions a ON a.case_id = c.id AND a.state <> 'archived'
-                WHERE %s OR c.state <> 'archived'
-                GROUP BY c.id, a.loom_session_url
-                ORDER BY
-                    CASE WHEN c.state = 'investigating' THEN 0 WHEN c.state = 'pending' THEN 1 ELSE 2 END,
-                    c.priority DESC, c.updated_at DESC
-                LIMIT 200
-                """,
-                (include_archived,),
+        joined = (
+            cases.outerjoin(case_signals, case_signals.c.case_id == cases.c.id)
+            .outerjoin(
+                signals,
+                (signals.c.id == case_signals.c.signal_id) & (signals.c.generation == case_signals.c.signal_generation),
             )
-            rows = await cursor.fetchall()
-        return list(rows)
+            .outerjoin(
+                agent_sessions,
+                (agent_sessions.c.case_id == cases.c.id) & (agent_sessions.c.state != "archived"),
+            )
+        )
+        statement = (
+            select(
+                cases.c.id,
+                cases.c.trigger,
+                cases.c.state,
+                cases.c.priority,
+                cases.c.title,
+                cases.c.receiver,
+                cases.c.group_key,
+                cases.c.outcome,
+                cases.c.summary,
+                cases.c.opened_at,
+                cases.c.updated_at,
+                func.count(case_signals.c.signal_id).label("signal_count"),
+                func.count(case_signals.c.signal_id).filter(signals.c.state == "firing").label("firing_count"),
+                func.array_remove(func.array_agg(func.distinct(signals.c.cluster)), null()).label("clusters"),
+                agent_sessions.c.loom_session_url,
+            )
+            .select_from(joined)
+            .group_by(cases.c.id, agent_sessions.c.loom_session_url)
+            .order_by(
+                case(
+                    (cases.c.state == "investigating", 0),
+                    (cases.c.state == "pending", 1),
+                    else_=2,
+                ),
+                cases.c.priority.desc(),
+                cases.c.updated_at.desc(),
+            )
+            .limit(200)
+        )
+        if not include_archived:
+            statement = statement.where(cases.c.state != "archived")
+        async with self._engine.connect() as connection:
+            result = await connection.execute(statement)
+        return [dict(row) for row in result.mappings()]
 
     async def case_detail(self, case_id: str) -> dict[str, object] | None:
-        async with await self._connection() as connection:
-            case_cursor = await connection.execute(
-                """
-                SELECT c.*, a.id AS agent_session_id, a.loom_session_id,
-                       a.loom_session_url, a.state AS agent_session_state
-                FROM cases c
-                LEFT JOIN agent_sessions a ON a.case_id = c.id AND a.state <> 'archived'
-                WHERE c.id = %s
-                """,
-                (case_id,),
+        async with self._engine.connect() as connection:
+            case_result = await connection.execute(
+                select(
+                    *cases.c,
+                    agent_sessions.c.id.label("agent_session_id"),
+                    agent_sessions.c.loom_session_id,
+                    agent_sessions.c.loom_session_url,
+                    agent_sessions.c.state.label("agent_session_state"),
+                )
+                .select_from(
+                    cases.outerjoin(
+                        agent_sessions,
+                        (agent_sessions.c.case_id == cases.c.id) & (agent_sessions.c.state != "archived"),
+                    )
+                )
+                .where(cases.c.id == case_id)
             )
-            case = await case_cursor.fetchone()
-            if case is None:
+            case_row = case_result.mappings().first()
+            case_record = dict(case_row) if case_row is not None else None
+            if case_record is None:
                 return None
-            signals_cursor = await connection.execute(
-                """
-                SELECT s.*, cs.signal_generation, cs.attached_at
-                FROM case_signals cs
-                JOIN signals s ON s.id = cs.signal_id
-                WHERE cs.case_id = %s AND cs.signal_generation = s.generation
-                ORDER BY s.severity, s.alert_name, s.fingerprint
-                """,
-                (case_id,),
+            signals_result = await connection.execute(
+                select(*signals.c, case_signals.c.signal_generation, case_signals.c.attached_at)
+                .select_from(case_signals.join(signals, signals.c.id == case_signals.c.signal_id))
+                .where(case_signals.c.case_id == case_id, case_signals.c.signal_generation == signals.c.generation)
+                .order_by(signals.c.severity, signals.c.alert_name, signals.c.fingerprint)
             )
-            turns_cursor = await connection.execute(
-                """
-                SELECT t.* FROM agent_turns t
-                JOIN agent_sessions a ON a.id = t.session_id
-                WHERE a.case_id = %s
-                ORDER BY t.created_at
-                """,
-                (case_id,),
+            turns_result = await connection.execute(
+                select(agent_turns)
+                .select_from(agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id))
+                .where(agent_sessions.c.case_id == case_id)
+                .order_by(agent_turns.c.created_at)
             )
-            events_cursor = await connection.execute(
-                "SELECT * FROM case_events WHERE case_id = %s ORDER BY created_at, id",
-                (case_id,),
+            events_result = await connection.execute(
+                select(case_events)
+                .where(case_events.c.case_id == case_id)
+                .order_by(case_events.c.created_at, case_events.c.id)
             )
-            escalations_cursor = await connection.execute(
-                "SELECT * FROM slack_escalations WHERE case_id = %s ORDER BY created_at",
-                (case_id,),
+            escalations_result = await connection.execute(
+                select(slack_escalations)
+                .where(slack_escalations.c.case_id == case_id)
+                .order_by(slack_escalations.c.created_at)
             )
-            signals = await signals_cursor.fetchall()
-            turns = await turns_cursor.fetchall()
-            events = await events_cursor.fetchall()
-            escalations = await escalations_cursor.fetchall()
-        return {"case": case, "signals": signals, "turns": turns, "events": events, "escalations": escalations}
+            signal_records = [dict(row) for row in signals_result.mappings()]
+            turn_records = [dict(row) for row in turns_result.mappings()]
+            event_records = [dict(row) for row in events_result.mappings()]
+            escalation_records = [dict(row) for row in escalations_result.mappings()]
+        return {
+            "case": case_record,
+            "signals": signal_records,
+            "turns": turn_records,
+            "events": event_records,
+            "escalations": escalation_records,
+        }
 
     async def create_question(self, *, text: str, actor: str) -> str:
         case_id = str(uuid.uuid4())
@@ -273,118 +326,139 @@ class OpsRepository:
         session_id = str(uuid.uuid4())
         turn_id = str(uuid.uuid4())
         now = datetime.now(UTC)
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    """
-                    INSERT INTO cases (
-                        id, trigger, receiver, group_key, grouping_rule, state,
-                        priority, title, question, opened_at, updated_at
-                    ) VALUES (%s, 'manual', 'manual', %s, 'manual', 'pending', 120, %s, %s, %s, %s)
-                    """,
-                    (case_id, group_key, text[:160], text, now, now),
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                cases.insert().values(
+                    id=case_id,
+                    trigger="manual",
+                    receiver="manual",
+                    group_key=group_key,
+                    grouping_rule="manual",
+                    state="pending",
+                    priority=120,
+                    title=text[:160],
+                    question=text,
+                    opened_at=now,
+                    updated_at=now,
                 )
-                await self._insert_session(connection, session_id=session_id, case_id=case_id)
-                await connection.execute(
-                    """
-                    INSERT INTO agent_turns (
-                        id, session_id, kind, state, priority, requested_by,
-                        client_request_id, prompt, created_at
-                    ) VALUES (%s, %s, 'question', 'queued', 120, %s, %s, %s, %s)
-                    """,
-                    (turn_id, session_id, actor, f"manual:{case_id}", text, now),
+            )
+            await self._insert_session(connection, session_id=session_id, case_id=case_id)
+            await connection.execute(
+                agent_turns.insert().values(
+                    id=turn_id,
+                    session_id=session_id,
+                    kind="question",
+                    state="queued",
+                    priority=120,
+                    requested_by=actor,
+                    client_request_id=f"manual:{case_id}",
+                    prompt=text,
+                    created_at=now,
                 )
-                await self._event(connection, case_id, "question_queued", actor, {"turn_id": turn_id})
+            )
+            await self._event(connection, case_id, "question_queued", actor, {"turn_id": turn_id})
         return case_id
 
     async def enqueue_follow_up(self, *, case_id: str, text: str, actor: str) -> str:
         turn_id = str(uuid.uuid4())
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                session_cursor = await connection.execute(
-                    """
-                    SELECT a.id FROM agent_sessions a
-                    JOIN cases c ON c.id = a.case_id
-                    WHERE a.case_id = %s AND a.state <> 'archived' AND c.state <> 'archived'
-                    FOR UPDATE
-                    """,
-                    (case_id,),
+        async with self._engine.begin() as connection:
+            session_result = await connection.execute(
+                select(agent_sessions.c.id)
+                .select_from(agent_sessions.join(cases, cases.c.id == agent_sessions.c.case_id))
+                .where(
+                    agent_sessions.c.case_id == case_id,
+                    agent_sessions.c.state != "archived",
+                    cases.c.state != "archived",
                 )
-                session = await session_cursor.fetchone()
-                if session is None:
-                    raise KeyError(case_id)
-                queued_cursor = await connection.execute(
-                    "SELECT id FROM agent_turns WHERE session_id = %s AND state = 'queued'",
-                    (session["id"],),
+                .with_for_update()
+            )
+            session = session_result.mappings().first()
+            if session is None:
+                raise KeyError(case_id)
+            queued_result = await connection.execute(
+                select(agent_turns.c.id).where(
+                    agent_turns.c.session_id == session["id"], agent_turns.c.state == "queued"
                 )
-                queued = await queued_cursor.fetchone()
-                if queued is not None:
-                    raise TurnPendingError(str(queued["id"]))
-                await connection.execute(
-                    """
-                    INSERT INTO agent_turns (
-                        id, session_id, kind, state, priority, requested_by,
-                        client_request_id, prompt
-                    ) VALUES (%s, %s, 'follow_up', 'queued', 110, %s, %s, %s)
-                    """,
-                    (turn_id, session["id"], actor, f"{actor}:{uuid.uuid4()}", text),
+            )
+            queued = queued_result.mappings().first()
+            if queued is not None:
+                raise TurnPendingError(str(queued["id"]))
+            await connection.execute(
+                agent_turns.insert().values(
+                    id=turn_id,
+                    session_id=session["id"],
+                    kind="follow_up",
+                    state="queued",
+                    priority=110,
+                    requested_by=actor,
+                    client_request_id=f"{actor}:{uuid.uuid4()}",
+                    prompt=text,
                 )
-                await connection.execute(
-                    "UPDATE cases SET state = 'pending', updated_at = now() WHERE id = %s",
-                    (case_id,),
-                )
-                await self._event(connection, case_id, "follow_up_queued", actor, {"turn_id": turn_id})
+            )
+            await connection.execute(
+                update(cases).where(cases.c.id == case_id).values(state="pending", updated_at=func.now())
+            )
+            await self._event(connection, case_id, "follow_up_queued", actor, {"turn_id": turn_id})
         return turn_id
 
     async def claim_next_turn(self) -> dict[str, object] | None:
         """Claim one queued turn after proving no other turn is globally active."""
 
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                active_cursor = await connection.execute(
-                    "SELECT id FROM agent_turns WHERE state IN ('launching', 'running') LIMIT 1 FOR UPDATE"
+        async with self._engine.begin() as connection:
+            active_result = await connection.execute(
+                select(agent_turns.c.id)
+                .where(agent_turns.c.state.in_(("launching", "running")))
+                .limit(1)
+                .with_for_update()
+            )
+            if active_result.first() is not None:
+                return None
+            turn_result = await connection.execute(
+                select(
+                    *agent_turns.c,
+                    agent_sessions.c.case_id,
+                    agent_sessions.c.loom_session_id,
+                    agent_sessions.c.loom_session_url,
+                    cases.c.title,
+                    cases.c.trigger,
+                    cases.c.question,
                 )
-                if await active_cursor.fetchone() is not None:
-                    return None
-                cursor = await connection.execute(
-                    """
-                    SELECT t.*, a.case_id, a.loom_session_id, a.loom_session_url,
-                           c.title, c.trigger, c.question
-                    FROM agent_turns t
-                    JOIN agent_sessions a ON a.id = t.session_id
-                    JOIN cases c ON c.id = a.case_id
-                    WHERE t.state = 'queued' AND t.available_at <= now()
-                    ORDER BY t.priority DESC, t.available_at, t.created_at
-                    LIMIT 1
-                    FOR UPDATE OF t SKIP LOCKED
-                    """
+                .select_from(
+                    agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id).join(
+                        cases, cases.c.id == agent_sessions.c.case_id
+                    )
                 )
-                turn = await cursor.fetchone()
-                if turn is None:
-                    return None
-                await connection.execute(
-                    """
-                    UPDATE agent_turns
-                    SET state = 'launching', lease_owner = %s,
-                        lease_expires_at = now() + %s,
-                        started_at = now(), deadline_at = now() + %s
-                    WHERE id = %s
-                    """,
-                    (OPS_SERVICE_ACTOR, TURN_LEASE_DURATION, TURN_TIMEOUT, turn["id"]),
+                .where(agent_turns.c.state == "queued", agent_turns.c.available_at <= func.now())
+                .order_by(agent_turns.c.priority.desc(), agent_turns.c.available_at, agent_turns.c.created_at)
+                .limit(1)
+                .with_for_update(of=agent_turns, skip_locked=True)
+            )
+            turn = turn_result.mappings().first()
+            if turn is None:
+                return None
+            await connection.execute(
+                update(agent_turns)
+                .where(agent_turns.c.id == turn["id"])
+                .values(
+                    state="launching",
+                    lease_owner=OPS_SERVICE_ACTOR,
+                    lease_expires_at=func.now() + TURN_LEASE_DURATION,
+                    started_at=func.now(),
+                    deadline_at=func.now() + TURN_TIMEOUT,
                 )
-                await connection.execute(
-                    "UPDATE cases SET state = 'investigating', updated_at = now() WHERE id = %s",
-                    (turn["case_id"],),
-                )
-                await self._event(
-                    connection,
-                    str(turn["case_id"]),
-                    "turn_claimed",
-                    OPS_SERVICE_ACTOR,
-                    {"turn_id": str(turn["id"])},
-                    turn_id=str(turn["id"]),
-                )
-                return dict(turn)
+            )
+            await connection.execute(
+                update(cases).where(cases.c.id == turn["case_id"]).values(state="investigating", updated_at=func.now())
+            )
+            await self._event(
+                connection,
+                str(turn["case_id"]),
+                "turn_claimed",
+                OPS_SERVICE_ACTOR,
+                {"turn_id": str(turn["id"])},
+                turn_id=str(turn["id"]),
+            )
+            return dict(turn)
 
     async def turn_started(
         self,
@@ -394,42 +468,49 @@ class OpsRepository:
         loom_session_url: str,
         loom_turn_number: int | None,
     ) -> None:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                cursor = await connection.execute(
-                    "SELECT session_id FROM agent_turns WHERE id = %s AND state = 'launching' FOR UPDATE",
-                    (turn_id,),
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                select(agent_turns.c.session_id)
+                .where(agent_turns.c.id == turn_id, agent_turns.c.state == "launching")
+                .with_for_update()
+            )
+            row = result.mappings().first()
+            if row is None:
+                raise KeyError(turn_id)
+            await connection.execute(
+                update(agent_sessions)
+                .where(agent_sessions.c.id == row["session_id"])
+                .values(
+                    loom_session_id=loom_session_id,
+                    loom_session_url=loom_session_url,
+                    state="active",
+                    updated_at=func.now(),
                 )
-                row = await cursor.fetchone()
-                if row is None:
-                    raise KeyError(turn_id)
-                await connection.execute(
-                    """
-                    UPDATE agent_sessions SET loom_session_id = %s, loom_session_url = %s,
-                        state = 'active', updated_at = now() WHERE id = %s
-                    """,
-                    (loom_session_id, loom_session_url, row["session_id"]),
+            )
+            await connection.execute(
+                update(agent_turns)
+                .where(agent_turns.c.id == turn_id)
+                .values(
+                    state="running",
+                    loom_turn_number=loom_turn_number,
+                    lease_expires_at=func.now() + TURN_LEASE_DURATION,
                 )
-                await connection.execute(
-                    """
-                    UPDATE agent_turns SET state = 'running', loom_turn_number = %s,
-                        lease_expires_at = now() + %s WHERE id = %s
-                    """,
-                    (loom_turn_number, TURN_LEASE_DURATION, turn_id),
-                )
+            )
 
     async def running_turn(self) -> dict[str, object] | None:
-        async with await self._connection() as connection:
-            cursor = await connection.execute(
-                """
-                SELECT t.*, a.case_id, a.loom_session_id, a.loom_session_url
-                FROM agent_turns t
-                JOIN agent_sessions a ON a.id = t.session_id
-                WHERE t.state = 'running'
-                LIMIT 1
-                """
+        async with self._engine.connect() as connection:
+            result = await connection.execute(
+                select(
+                    *agent_turns.c,
+                    agent_sessions.c.case_id,
+                    agent_sessions.c.loom_session_id,
+                    agent_sessions.c.loom_session_url,
+                )
+                .select_from(agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id))
+                .where(agent_turns.c.state == "running")
+                .limit(1)
             )
-            row = await cursor.fetchone()
+            row = result.mappings().first()
         return dict(row) if row is not None else None
 
     async def finish_turn(
@@ -440,278 +521,274 @@ class OpsRepository:
         artifact_revision: int,
         escalation: SlackEscalationDraft | None,
     ) -> None:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                cursor = await connection.execute(
-                    """
-                    SELECT t.session_id, a.case_id FROM agent_turns t
-                    JOIN agent_sessions a ON a.id = t.session_id
-                    WHERE t.id = %s AND t.state = 'running' FOR UPDATE OF t
-                    """,
-                    (turn_id,),
+        async with self._engine.begin() as connection:
+            row_result = await connection.execute(
+                select(agent_turns.c.session_id, agent_sessions.c.case_id)
+                .select_from(agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id))
+                .where(agent_turns.c.id == turn_id, agent_turns.c.state == "running")
+                .with_for_update(of=agent_turns)
+            )
+            row = row_result.mappings().first()
+            if row is None:
+                return
+            await connection.execute(
+                update(agent_turns)
+                .where(agent_turns.c.id == turn_id)
+                .values(
+                    state="succeeded",
+                    result=result.as_dict(),
+                    result_artifact_revision=artifact_revision,
+                    completed_at=func.now(),
+                    lease_owner=None,
+                    lease_expires_at=None,
                 )
-                row = await cursor.fetchone()
-                if row is None:
-                    return
-                await connection.execute(
-                    """
-                    UPDATE agent_turns SET state = 'succeeded', result = %s,
-                        result_artifact_revision = %s, completed_at = now(),
-                        lease_owner = NULL, lease_expires_at = NULL
-                    WHERE id = %s
-                    """,
-                    (Jsonb(result.as_dict()), artifact_revision, turn_id),
+            )
+            await connection.execute(
+                update(agent_sessions)
+                .where(agent_sessions.c.id == row["session_id"])
+                .values(state="idle", updated_at=func.now())
+            )
+            await connection.execute(
+                update(cases)
+                .where(cases.c.id == row["case_id"])
+                .values(
+                    state="waiting_human",
+                    outcome=result.outcome.value,
+                    summary=result.summary,
+                    investigated_at=func.now(),
+                    updated_at=func.now(),
                 )
-                await connection.execute(
-                    "UPDATE agent_sessions SET state = 'idle', updated_at = now() WHERE id = %s",
-                    (row["session_id"],),
-                )
-                await connection.execute(
-                    """
-                    UPDATE cases SET state = 'waiting_human', outcome = %s,
-                        summary = %s, investigated_at = now(), updated_at = now()
-                    WHERE id = %s
-                    """,
-                    (result.outcome.value, result.summary, row["case_id"]),
-                )
-                await self._event(
-                    connection,
-                    str(row["case_id"]),
-                    "turn_finished",
-                    OPS_SERVICE_ACTOR,
-                    {"outcome": result.outcome.value, "summary": result.summary},
-                    turn_id=turn_id,
-                )
-                if escalation is not None:
-                    inserted = await connection.execute(
-                        """
-                        INSERT INTO slack_escalations (
-                            incident_key, case_id, turn_id, severity, reason, message, state
-                        ) VALUES (%s, %s, %s, %s, %s, %s, 'pending')
-                        ON CONFLICT (incident_key) DO NOTHING
-                        RETURNING id
-                        """,
-                        (
-                            escalation.incident_key,
-                            row["case_id"],
-                            turn_id,
-                            escalation.severity.value,
-                            escalation.reason,
-                            escalation.message,
-                        ),
+            )
+            await self._event(
+                connection,
+                str(row["case_id"]),
+                "turn_finished",
+                OPS_SERVICE_ACTOR,
+                {"outcome": result.outcome.value, "summary": result.summary},
+                turn_id=turn_id,
+            )
+            if escalation is not None:
+                inserted = await connection.execute(
+                    pg_insert(slack_escalations)
+                    .values(
+                        incident_key=escalation.incident_key,
+                        case_id=row["case_id"],
+                        turn_id=turn_id,
+                        severity=escalation.severity.value,
+                        reason=escalation.reason,
+                        message=escalation.message,
+                        state="pending",
                     )
-                    if await inserted.fetchone() is not None:
-                        await self._event(
-                            connection,
-                            str(row["case_id"]),
-                            "slack_escalation_queued",
-                            OPS_SERVICE_ACTOR,
-                            {"severity": escalation.severity.value},
-                            turn_id=turn_id,
-                        )
+                    .on_conflict_do_nothing(index_elements=[slack_escalations.c.incident_key])
+                    .returning(slack_escalations.c.id)
+                )
+                if inserted.first() is not None:
+                    await self._event(
+                        connection,
+                        str(row["case_id"]),
+                        "slack_escalation_queued",
+                        OPS_SERVICE_ACTOR,
+                        {"severity": escalation.severity.value},
+                        turn_id=turn_id,
+                    )
 
     async def claim_slack_escalation(self) -> SlackDelivery | None:
         """Lease the oldest due Slack escalation for one delivery attempt."""
 
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                await connection.execute(
-                    """
-                    UPDATE slack_escalations
-                    SET state = CASE WHEN attempts >= %s THEN 'abandoned' ELSE 'pending' END,
-                        lease_expires_at = NULL
-                    WHERE state = 'sending' AND lease_expires_at <= now()
-                    """,
-                    (SLACK_MAX_ATTEMPTS,),
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                update(slack_escalations)
+                .where(
+                    slack_escalations.c.state == "sending",
+                    slack_escalations.c.lease_expires_at <= func.now(),
                 )
-                cursor = await connection.execute(
-                    """
-                    SELECT id FROM slack_escalations
-                    WHERE state = 'pending' AND available_at <= now()
-                    ORDER BY available_at, created_at
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT 1
-                    """
+                .values(
+                    state=case(
+                        (slack_escalations.c.attempts >= SLACK_MAX_ATTEMPTS, "abandoned"),
+                        else_="pending",
+                    ),
+                    lease_expires_at=None,
                 )
-                queued = await cursor.fetchone()
-                if queued is None:
-                    return None
-                claimed_cursor = await connection.execute(
-                    """
-                    UPDATE slack_escalations
-                    SET state = 'sending', attempts = attempts + 1,
-                        lease_expires_at = now() + %s
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (SLACK_LEASE_DURATION, queued["id"]),
+            )
+            queued_result = await connection.execute(
+                select(slack_escalations.c.id)
+                .where(
+                    slack_escalations.c.state == "pending",
+                    slack_escalations.c.available_at <= func.now(),
                 )
-                claimed = await claimed_cursor.fetchone()
-                assert claimed is not None
-                return SlackDelivery(
-                    id=str(claimed["id"]),
-                    message=str(claimed["message"]),
-                    attempts=int(claimed["attempts"]),
+                .order_by(slack_escalations.c.available_at, slack_escalations.c.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            queued = queued_result.mappings().first()
+            if queued is None:
+                return None
+            claimed_result = await connection.execute(
+                update(slack_escalations)
+                .where(slack_escalations.c.id == queued["id"])
+                .values(
+                    state="sending",
+                    attempts=slack_escalations.c.attempts + 1,
+                    lease_expires_at=func.now() + SLACK_LEASE_DURATION,
                 )
+                .returning(slack_escalations)
+            )
+            claimed = claimed_result.mappings().first()
+            assert claimed is not None
+            return SlackDelivery(
+                id=str(claimed["id"]),
+                message=str(claimed["message"]),
+                attempts=int(claimed["attempts"]),
+            )
 
     async def slack_escalation_sent(self, escalation_id: str) -> None:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                cursor = await connection.execute(
-                    """
-                    UPDATE slack_escalations
-                    SET state = 'sent', sent_at = now(), lease_expires_at = NULL, last_error = NULL
-                    WHERE id = %s AND state = 'sending'
-                    RETURNING case_id, turn_id
-                    """,
-                    (escalation_id,),
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                update(slack_escalations)
+                .where(slack_escalations.c.id == escalation_id, slack_escalations.c.state == "sending")
+                .values(state="sent", sent_at=func.now(), lease_expires_at=None, last_error=None)
+                .returning(slack_escalations.c.case_id, slack_escalations.c.turn_id)
+            )
+            row = result.mappings().first()
+            if row is not None:
+                await self._event(
+                    connection,
+                    str(row["case_id"]),
+                    "slack_escalation_sent",
+                    OPS_SERVICE_ACTOR,
+                    {},
+                    turn_id=str(row["turn_id"]),
                 )
-                row = await cursor.fetchone()
-                if row is not None:
-                    await self._event(
-                        connection,
-                        str(row["case_id"]),
-                        "slack_escalation_sent",
-                        OPS_SERVICE_ACTOR,
-                        {},
-                        turn_id=str(row["turn_id"]),
-                    )
 
     async def slack_escalation_retry(self, escalation_id: str, error: str) -> None:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                cursor = await connection.execute(
-                    """
-                    SELECT case_id, turn_id, attempts FROM slack_escalations
-                    WHERE id = %s AND state = 'sending' FOR UPDATE
-                    """,
-                    (escalation_id,),
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                select(
+                    slack_escalations.c.case_id,
+                    slack_escalations.c.turn_id,
+                    slack_escalations.c.attempts,
                 )
-                row = await cursor.fetchone()
-                if row is None:
-                    return
-                attempts = int(row["attempts"])
-                state = "abandoned" if attempts >= SLACK_MAX_ATTEMPTS else "pending"
-                retry_delay = timedelta(seconds=min(2**attempts, SLACK_MAX_RETRY_DELAY))
-                await connection.execute(
-                    """
-                    UPDATE slack_escalations
-                    SET state = %s, available_at = now() + %s,
-                        lease_expires_at = NULL, last_error = %s
-                    WHERE id = %s AND state = 'sending'
-                    """,
-                    (state, retry_delay, error[:MAX_PERSISTED_ERROR_CHARS], escalation_id),
+                .where(slack_escalations.c.id == escalation_id, slack_escalations.c.state == "sending")
+                .with_for_update()
+            )
+            row = result.mappings().first()
+            if row is None:
+                return
+            attempts = int(row["attempts"])
+            state = "abandoned" if attempts >= SLACK_MAX_ATTEMPTS else "pending"
+            retry_delay = timedelta(seconds=min(2**attempts, SLACK_MAX_RETRY_DELAY))
+            await connection.execute(
+                update(slack_escalations)
+                .where(slack_escalations.c.id == escalation_id, slack_escalations.c.state == "sending")
+                .values(
+                    state=state,
+                    available_at=func.now() + retry_delay,
+                    lease_expires_at=None,
+                    last_error=error[:MAX_PERSISTED_ERROR_CHARS],
                 )
-                if state == "abandoned":
-                    await self._event(
-                        connection,
-                        str(row["case_id"]),
-                        "slack_escalation_abandoned",
-                        OPS_SERVICE_ACTOR,
-                        {"attempts": attempts, "error": error[:MAX_EVENT_ERROR_CHARS]},
-                        turn_id=str(row["turn_id"]),
-                    )
+            )
+            if state == "abandoned":
+                await self._event(
+                    connection,
+                    str(row["case_id"]),
+                    "slack_escalation_abandoned",
+                    OPS_SERVICE_ACTOR,
+                    {"attempts": attempts, "error": error[:MAX_EVENT_ERROR_CHARS]},
+                    turn_id=str(row["turn_id"]),
+                )
 
     async def recent_slack_escalations(self, *, limit: int = 60) -> list[dict[str, object]]:
-        async with await self._connection() as connection:
-            cursor = await connection.execute(
-                """
-                SELECT id, case_id, turn_id, severity, reason, state, attempts,
-                       available_at, last_error, created_at, sent_at
-                FROM slack_escalations
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
+        async with self._engine.connect() as connection:
+            result = await connection.execute(
+                select(
+                    slack_escalations.c.id,
+                    slack_escalations.c.case_id,
+                    slack_escalations.c.turn_id,
+                    slack_escalations.c.severity,
+                    slack_escalations.c.reason,
+                    slack_escalations.c.state,
+                    slack_escalations.c.attempts,
+                    slack_escalations.c.available_at,
+                    slack_escalations.c.last_error,
+                    slack_escalations.c.created_at,
+                    slack_escalations.c.sent_at,
+                )
+                .order_by(slack_escalations.c.created_at.desc())
+                .limit(limit)
             )
-            rows = await cursor.fetchall()
-        return list(rows)
+        return [dict(row) for row in result.mappings()]
 
     async def fail_turn(self, *, turn_id: str, error: str) -> None:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                cursor = await connection.execute(
-                    """
-                    SELECT t.session_id, a.case_id FROM agent_turns t
-                    JOIN agent_sessions a ON a.id = t.session_id
-                    WHERE t.id = %s AND t.state IN ('launching', 'running') FOR UPDATE OF t
-                    """,
-                    (turn_id,),
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                select(agent_turns.c.session_id, agent_sessions.c.case_id)
+                .select_from(agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id))
+                .where(agent_turns.c.id == turn_id, agent_turns.c.state.in_(("launching", "running")))
+                .with_for_update(of=agent_turns)
+            )
+            row = result.mappings().first()
+            if row is None:
+                return
+            bounded_error = error[:MAX_PERSISTED_ERROR_CHARS]
+            await connection.execute(
+                update(agent_turns)
+                .where(agent_turns.c.id == turn_id)
+                .values(
+                    state="failed",
+                    error=bounded_error,
+                    completed_at=func.now(),
+                    lease_owner=None,
+                    lease_expires_at=None,
                 )
-                row = await cursor.fetchone()
-                if row is None:
-                    return
-                bounded_error = error[:MAX_PERSISTED_ERROR_CHARS]
-                await connection.execute(
-                    """
-                    UPDATE agent_turns SET state = 'failed', error = %s, completed_at = now(),
-                        lease_owner = NULL, lease_expires_at = NULL WHERE id = %s
-                    """,
-                    (bounded_error, turn_id),
-                )
-                await connection.execute(
-                    "UPDATE agent_sessions SET state = 'idle', updated_at = now() WHERE id = %s",
-                    (row["session_id"],),
-                )
-                await connection.execute(
-                    "UPDATE cases SET state = 'failed', summary = %s, updated_at = now() WHERE id = %s",
-                    (bounded_error, row["case_id"]),
-                )
+            )
+            await connection.execute(
+                update(agent_sessions)
+                .where(agent_sessions.c.id == row["session_id"])
+                .values(state="idle", updated_at=func.now())
+            )
+            await connection.execute(
+                update(cases)
+                .where(cases.c.id == row["case_id"])
+                .values(state="failed", summary=bounded_error, updated_at=func.now())
+            )
 
     async def archive_case(self, *, case_id: str, actor: str) -> ArchiveResult:
-        async with await self._connection() as connection:
-            async with connection.transaction():
-                case_cursor = await connection.execute(
-                    "SELECT state FROM cases WHERE id = %s FOR UPDATE",
-                    (case_id,),
-                )
-                case = await case_cursor.fetchone()
-                if case is None:
-                    return ArchiveResult.NOT_FOUND
-                if case["state"] == CaseState.ARCHIVED.value:
-                    return ArchiveResult.ALREADY_ARCHIVED
-                active_cursor = await connection.execute(
-                    """
-                    SELECT t.id FROM agent_turns t JOIN agent_sessions a ON a.id = t.session_id
-                    WHERE a.case_id = %s AND t.state IN ('launching', 'running')
-                    """,
-                    (case_id,),
-                )
-                if await active_cursor.fetchone() is not None:
-                    return ArchiveResult.ACTIVE_TURN
-                await connection.execute(
-                    """
-                    UPDATE cases SET state = 'archived', archived_at = now(), updated_at = now()
-                    WHERE id = %s
-                    """,
-                    (case_id,),
-                )
-                await connection.execute(
-                    """
-                    UPDATE agent_turns SET state = 'cancelled', completed_at = now(),
-                        error = 'Case archived before launch'
-                    WHERE session_id IN (SELECT id FROM agent_sessions WHERE case_id = %s)
-                      AND state = 'queued'
-                    """,
-                    (case_id,),
-                )
-                await connection.execute(
-                    """
-                    UPDATE agent_sessions SET state = 'archived', archived_at = now(), updated_at = now()
-                    WHERE case_id = %s AND state <> 'archived'
-                    """,
-                    (case_id,),
-                )
-                await self._event(connection, case_id, "case_archived", actor, {})
-                return ArchiveResult.ARCHIVED
-
-    async def _connection(self) -> psycopg.AsyncConnection[dict[str, Any]]:
-        connection = await psycopg.AsyncConnection.connect(self._database_url, row_factory=dict_row)
-        return cast(psycopg.AsyncConnection[dict[str, Any]], connection)
+        async with self._engine.begin() as connection:
+            case_result = await connection.execute(select(cases.c.state).where(cases.c.id == case_id).with_for_update())
+            case_row = case_result.mappings().first()
+            if case_row is None:
+                return ArchiveResult.NOT_FOUND
+            if case_row["state"] == CaseState.ARCHIVED.value:
+                return ArchiveResult.ALREADY_ARCHIVED
+            active_result = await connection.execute(
+                select(agent_turns.c.id)
+                .select_from(agent_turns.join(agent_sessions, agent_sessions.c.id == agent_turns.c.session_id))
+                .where(agent_sessions.c.case_id == case_id, agent_turns.c.state.in_(("launching", "running")))
+            )
+            if active_result.first() is not None:
+                return ArchiveResult.ACTIVE_TURN
+            await connection.execute(
+                update(cases)
+                .where(cases.c.id == case_id)
+                .values(state="archived", archived_at=func.now(), updated_at=func.now())
+            )
+            session_ids = select(agent_sessions.c.id).where(agent_sessions.c.case_id == case_id)
+            await connection.execute(
+                update(agent_turns)
+                .where(agent_turns.c.session_id.in_(session_ids), agent_turns.c.state == "queued")
+                .values(state="cancelled", completed_at=func.now(), error="Case archived before launch")
+            )
+            await connection.execute(
+                update(agent_sessions)
+                .where(agent_sessions.c.case_id == case_id, agent_sessions.c.state != "archived")
+                .values(state="archived", archived_at=func.now(), updated_at=func.now())
+            )
+            await self._event(connection, case_id, "case_archived", actor, {})
+            return ArchiveResult.ARCHIVED
 
     async def _ingest_delivery(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         delivery: GrafanaDelivery,
         *,
         key_id: str,
@@ -721,26 +798,21 @@ class OpsRepository:
             return _stored_ingest_result(existing)
 
         delivery_id = str(uuid.uuid4())
-        insert_cursor = await connection.execute(
-            """
-            INSERT INTO source_deliveries (
-                id, source, delivery_key, key_id, source_timestamp,
-                body_sha256, normalized_payload
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source, delivery_key) DO NOTHING
-            RETURNING id
-            """,
-            (
-                delivery_id,
-                SOURCE,
-                delivery.delivery_key,
-                key_id,
-                delivery.source_timestamp,
-                delivery.body_sha256,
-                Jsonb(delivery.normalized_payload),
-            ),
+        insert_result = await connection.execute(
+            pg_insert(source_deliveries)
+            .values(
+                id=delivery_id,
+                source=SOURCE,
+                delivery_key=delivery.delivery_key,
+                key_id=key_id,
+                source_timestamp=delivery.source_timestamp,
+                body_sha256=delivery.body_sha256,
+                normalized_payload=delivery.normalized_payload,
+            )
+            .on_conflict_do_nothing(index_elements=[source_deliveries.c.source, source_deliveries.c.delivery_key])
+            .returning(source_deliveries.c.id)
         )
-        if await insert_cursor.fetchone() is None:
+        if insert_result.first() is None:
             existing = await self._existing_delivery(connection, delivery.delivery_key)
             assert existing is not None
             return _stored_ingest_result(existing)
@@ -768,40 +840,38 @@ class OpsRepository:
             queued_case_ids=queued_case_ids,
         )
         await connection.execute(
-            "UPDATE source_deliveries SET result = %s WHERE id = %s",
-            (Jsonb(result.as_dict()), delivery_id),
+            update(source_deliveries).where(source_deliveries.c.id == delivery_id).values(result=result.as_dict())
         )
         return result
 
-    async def _existing_delivery(
-        self, connection: psycopg.AsyncConnection[dict[str, Any]], delivery_key: str
-    ) -> dict[str, Any] | None:
-        cursor = await connection.execute(
-            "SELECT id, result FROM source_deliveries WHERE source = %s AND delivery_key = %s FOR UPDATE",
-            (SOURCE, delivery_key),
+    async def _existing_delivery(self, connection: AsyncConnection, delivery_key: str) -> RowMapping | None:
+        result = await connection.execute(
+            select(source_deliveries.c.id, source_deliveries.c.result)
+            .where(source_deliveries.c.source == SOURCE, source_deliveries.c.delivery_key == delivery_key)
+            .with_for_update()
         )
-        row = await cursor.fetchone()
-        return dict(row) if row is not None else None
+        return result.mappings().first()
 
     async def _upsert_signal(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         delivery: GrafanaDelivery,
         delivery_id: str,
         alert: GrafanaAlert,
     ) -> TouchedSignal:
-        cursor = await connection.execute(
-            "SELECT * FROM signals WHERE source = %s AND fingerprint = %s FOR UPDATE",
-            (SOURCE, alert.fingerprint),
+        prior_result = await connection.execute(
+            select(signals)
+            .where(signals.c.source == SOURCE, signals.c.fingerprint == alert.fingerprint)
+            .with_for_update()
         )
-        prior = await cursor.fetchone()
+        prior = prior_result.mappings().first()
         if prior is not None and delivery.source_timestamp < prior["latest_source_timestamp"]:
             await connection.execute(
-                """
-                INSERT INTO delivery_signals (delivery_id, signal_id, disposition)
-                VALUES (%s, %s, 'stale')
-                """,
-                (delivery_id, prior["id"]),
+                delivery_signals.insert().values(
+                    delivery_id=delivery_id,
+                    signal_id=prior["id"],
+                    disposition="stale",
+                )
             )
             return TouchedSignal(
                 id=str(prior["id"]),
@@ -827,74 +897,58 @@ class OpsRepository:
                 disposition = SignalDisposition.UPDATED
 
         labels = alert.labels
-        current_fields = (
-            delivery.notification.receiver,
-            delivery.notification.group_key,
-            alert.alert_name,
-            alert.severity,
-            labels.get("cluster"),
-            labels.get("namespace"),
-            labels.get("object_kind") or labels.get("kind"),
-            labels.get("object_name") or labels.get("name") or labels.get("pod") or labels.get("node"),
-            alert.summary,
-            Jsonb(alert.labels),
-            Jsonb(alert.annotations),
-            Jsonb(alert.values),
-            alert.generator_url or None,
-            alert.silence_url or None,
-            alert.dashboard_url or None,
-            alert.panel_url or None,
-            delivery.notification.version,
-            alert.starts_at,
-            delivery.source_timestamp,
-            alert.ends_at if alert.status == "resolved" else None,
-            delivery.source_timestamp,
-            delivery_id,
-        )
+        current_fields = {
+            "receiver": delivery.notification.receiver,
+            "group_key": delivery.notification.group_key,
+            "alert_name": alert.alert_name,
+            "severity": alert.severity,
+            "cluster": labels.get("cluster"),
+            "namespace": labels.get("namespace"),
+            "object_kind": labels.get("object_kind") or labels.get("kind"),
+            "object_name": labels.get("object_name") or labels.get("name") or labels.get("pod") or labels.get("node"),
+            "summary": alert.summary,
+            "labels": dict(alert.labels),
+            "annotations": dict(alert.annotations),
+            "values": dict(alert.values),
+            "generator_url": alert.generator_url or None,
+            "silence_url": alert.silence_url or None,
+            "dashboard_url": alert.dashboard_url or None,
+            "panel_url": alert.panel_url or None,
+            "source_version": delivery.notification.version,
+            "first_seen_at": alert.starts_at,
+            "last_seen_at": delivery.source_timestamp,
+            "resolved_at": alert.ends_at if alert.status == "resolved" else None,
+            "latest_source_timestamp": delivery.source_timestamp,
+            "latest_delivery_id": delivery_id,
+        }
         if prior is None:
             await connection.execute(
-                """
-                INSERT INTO signals (
-                    id, source, fingerprint, generation, state, receiver, group_key,
-                    alert_name, severity, cluster, namespace, object_kind, object_name,
-                    summary, labels, annotations, values, generator_url, silence_url,
-                    dashboard_url, panel_url, source_version, first_seen_at, last_seen_at,
-                    resolved_at, latest_source_timestamp, latest_delivery_id
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                signals.insert().values(
+                    id=signal_id,
+                    source=SOURCE,
+                    fingerprint=alert.fingerprint,
+                    generation=generation,
+                    state=alert.status,
+                    **current_fields,
                 )
-                """,
-                (
-                    signal_id,
-                    SOURCE,
-                    alert.fingerprint,
-                    generation,
-                    alert.status,
-                    *current_fields,
-                ),
             )
         else:
             await connection.execute(
-                """
-                UPDATE signals SET generation = %s, state = %s, receiver = %s,
-                    group_key = %s, alert_name = %s, severity = %s, cluster = %s,
-                    namespace = %s, object_kind = %s, object_name = %s, summary = %s,
-                    labels = %s, annotations = %s, values = %s, generator_url = %s,
-                    silence_url = %s, dashboard_url = %s, panel_url = %s,
-                    source_version = %s, first_seen_at = %s, last_seen_at = %s,
-                    resolved_at = %s, latest_source_timestamp = %s, latest_delivery_id = %s,
-                    missing_successful_polls = 0
-                WHERE id = %s
-                """,
-                (generation, alert.status, *current_fields, signal_id),
+                update(signals)
+                .where(signals.c.id == signal_id)
+                .values(
+                    generation=generation,
+                    state=alert.status,
+                    missing_successful_polls=0,
+                    **current_fields,
+                )
             )
         await connection.execute(
-            """
-            INSERT INTO delivery_signals (delivery_id, signal_id, disposition)
-            VALUES (%s, %s, %s)
-            """,
-            (delivery_id, signal_id, disposition.value),
+            delivery_signals.insert().values(
+                delivery_id=delivery_id,
+                signal_id=signal_id,
+                disposition=disposition.value,
+            )
         )
         return TouchedSignal(
             id=signal_id,
@@ -906,44 +960,45 @@ class OpsRepository:
 
     async def _materialize_case(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         delivery: GrafanaDelivery,
         touched: Sequence[TouchedSignal],
     ) -> tuple[str | None, bool]:
         notification = delivery.notification
-        cursor = await connection.execute(
-            """
-            SELECT * FROM cases
-            WHERE receiver = %s AND group_key = %s AND state <> 'archived'
-            FOR UPDATE
-            """,
-            (notification.receiver, notification.group_key),
+        case_result = await connection.execute(
+            select(cases)
+            .where(
+                cases.c.receiver == notification.receiver,
+                cases.c.group_key == notification.group_key,
+                cases.c.state != "archived",
+            )
+            .with_for_update()
         )
-        case = await cursor.fetchone()
+        case_row = case_result.mappings().first()
         novel_firing = any(
             item.state == SignalState.FIRING
             and item.disposition in (SignalDisposition.CREATED, SignalDisposition.REOPENED)
             for item in touched
         )
-        firing_cursor = await connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM signals
-                WHERE source = %s AND receiver = %s AND group_key = %s AND state = 'firing'
-            ) AS any_firing
-            """,
-            (SOURCE, notification.receiver, notification.group_key),
+        any_firing = bool(
+            await connection.scalar(
+                select(
+                    exists().where(
+                        signals.c.source == SOURCE,
+                        signals.c.receiver == notification.receiver,
+                        signals.c.group_key == notification.group_key,
+                        signals.c.state == "firing",
+                    )
+                )
+            )
         )
-        firing_row = await firing_cursor.fetchone()
-        assert firing_row is not None
-        any_firing = bool(firing_row["any_firing"])
-        if case is None and not novel_firing:
+        if case_row is None and not novel_firing:
             return None, False
-        created = case is None
+        created = case_row is None
         if created:
             case_id = await self._open_case(connection, notification=notification, touched=touched)
         else:
-            case_id = str(case["id"])
+            case_id = str(case_row["id"])
 
         attached_novel = await self._attach_signals(connection, case_id=case_id, touched=touched)
 
@@ -952,13 +1007,13 @@ class OpsRepository:
             return case_id, False
 
         should_queue = created or novel_firing or attached_novel
-        case_state = None if case is None else CaseState(str(case["state"]))
+        case_state = None if case_row is None else CaseState(str(case_row["state"]))
         await self._touch_case(connection, case_id=case_id, requeue=should_queue and not created, state=case_state)
         return case_id, should_queue
 
     async def _open_case(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         notification: GrafanaNotification,
         touched: Sequence[TouchedSignal],
@@ -967,13 +1022,18 @@ class OpsRepository:
         priority = max(severity_priority(item.alert.severity) for item in touched if item.state == SignalState.FIRING)
         title = notification.title or notification.common_annotations.get("summary") or _case_title(touched)
         await connection.execute(
-            """
-            INSERT INTO cases (
-                id, trigger, receiver, group_key, grouping_rule, state,
-                priority, title, opened_at, updated_at
-            ) VALUES (%s, 'automatic', %s, %s, %s, 'pending', %s, %s, now(), now())
-            """,
-            (case_id, notification.receiver, notification.group_key, GROUPING_RULE, priority, title),
+            cases.insert().values(
+                id=case_id,
+                trigger="automatic",
+                receiver=notification.receiver,
+                group_key=notification.group_key,
+                grouping_rule=GROUPING_RULE,
+                state="pending",
+                priority=priority,
+                title=title,
+                opened_at=func.now(),
+                updated_at=func.now(),
+            )
         )
         await self._event(
             connection,
@@ -986,7 +1046,7 @@ class OpsRepository:
 
     async def _attach_signals(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         case_id: str,
         touched: Sequence[TouchedSignal],
@@ -995,52 +1055,57 @@ class OpsRepository:
         for item in touched:
             if item.disposition == SignalDisposition.STALE:
                 continue
-            cursor = await connection.execute(
-                """
-                INSERT INTO case_signals (case_id, signal_id, signal_generation)
-                VALUES (%s, %s, %s)
-                ON CONFLICT DO NOTHING
-                RETURNING signal_id
-                """,
-                (case_id, item.id, item.generation),
+            result = await connection.execute(
+                pg_insert(case_signals)
+                .values(case_id=case_id, signal_id=item.id, signal_generation=item.generation)
+                .on_conflict_do_nothing()
+                .returning(case_signals.c.signal_id)
             )
-            attached_novel = attached_novel or await cursor.fetchone() is not None
+            attached_novel = attached_novel or result.first() is not None
         return attached_novel
 
     async def _resolve_case_group(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         case_id: str,
     ) -> None:
         await connection.execute(
-            """
-            UPDATE cases SET state = CASE WHEN state = 'pending' THEN 'investigated' ELSE state END,
-                outcome = CASE WHEN state = 'pending' THEN 'no_action' ELSE outcome END,
-                summary = CASE
-                    WHEN state = 'pending' THEN 'Grafana resolved the group before investigation'
-                    ELSE summary
-                END,
-                investigated_at = CASE WHEN state = 'pending' THEN now() ELSE investigated_at END,
-                updated_at = now()
-            WHERE id = %s
-            """,
-            (case_id,),
+            update(cases)
+            .where(cases.c.id == case_id)
+            .values(
+                state=case((cases.c.state == "pending", "investigated"), else_=cases.c.state),
+                outcome=case((cases.c.state == "pending", "no_action"), else_=cases.c.outcome),
+                summary=case(
+                    (cases.c.state == "pending", "Grafana resolved the group before investigation"),
+                    else_=cases.c.summary,
+                ),
+                investigated_at=case(
+                    (cases.c.state == "pending", func.now()),
+                    else_=cases.c.investigated_at,
+                ),
+                updated_at=func.now(),
+            )
         )
+        session_ids = select(agent_sessions.c.id).where(agent_sessions.c.case_id == case_id)
         await connection.execute(
-            """
-            UPDATE agent_turns SET state = 'cancelled', completed_at = now(),
-                error = 'Grafana resolved the group before launch'
-            WHERE session_id IN (SELECT id FROM agent_sessions WHERE case_id = %s)
-              AND state = 'queued' AND kind = 'automatic'
-            """,
-            (case_id,),
+            update(agent_turns)
+            .where(
+                agent_turns.c.session_id.in_(session_ids),
+                agent_turns.c.state == "queued",
+                agent_turns.c.kind == "automatic",
+            )
+            .values(
+                state="cancelled",
+                completed_at=func.now(),
+                error="Grafana resolved the group before launch",
+            )
         )
         await self._event(connection, case_id, "grafana_group_resolved", SOURCE, {})
 
     async def _touch_case(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         case_id: str,
         requeue: bool,
@@ -1053,78 +1118,78 @@ class OpsRepository:
         )
         if needs_pending:
             await connection.execute(
-                "UPDATE cases SET state = 'pending', outcome = NULL, updated_at = now() WHERE id = %s",
-                (case_id,),
+                update(cases).where(cases.c.id == case_id).values(state="pending", outcome=None, updated_at=func.now())
             )
             return
-        await connection.execute("UPDATE cases SET updated_at = now() WHERE id = %s", (case_id,))
+        await connection.execute(update(cases).where(cases.c.id == case_id).values(updated_at=func.now()))
 
     async def _enqueue_automatic_turn(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         case_id: str,
         delivery_key: str,
     ) -> bool:
-        cursor = await connection.execute(
-            "SELECT id FROM agent_sessions WHERE case_id = %s AND state <> 'archived' FOR UPDATE",
-            (case_id,),
+        session_result = await connection.execute(
+            select(agent_sessions.c.id)
+            .where(agent_sessions.c.case_id == case_id, agent_sessions.c.state != "archived")
+            .with_for_update()
         )
-        session = await cursor.fetchone()
+        session = session_result.mappings().first()
         if session is None:
             session_id = str(uuid.uuid4())
             await self._insert_session(connection, session_id=session_id, case_id=case_id)
         else:
             session_id = str(session["id"])
-        queued_cursor = await connection.execute(
-            "SELECT id FROM agent_turns WHERE session_id = %s AND state = 'queued'",
-            (session_id,),
+        queued_result = await connection.execute(
+            select(agent_turns.c.id).where(agent_turns.c.session_id == session_id, agent_turns.c.state == "queued")
         )
-        if await queued_cursor.fetchone() is not None:
+        if queued_result.first() is not None:
             return False
-        case_cursor = await connection.execute("SELECT priority FROM cases WHERE id = %s", (case_id,))
-        case = await case_cursor.fetchone()
-        assert case is not None
+        priority = await connection.scalar(select(cases.c.priority).where(cases.c.id == case_id))
+        assert priority is not None
         turn_id = str(uuid.uuid4())
-        await connection.execute(
-            """
-            INSERT INTO agent_turns (
-                id, session_id, kind, state, priority, requested_by,
-                client_request_id, prompt
-            ) VALUES (%s, %s, 'automatic', 'queued', %s, %s, %s, %s)
-            ON CONFLICT (requested_by, client_request_id) DO NOTHING
-            """,
-            (
-                turn_id,
-                session_id,
-                case["priority"],
-                AUTOMATIC_REQUESTER,
-                f"grafana:{case_id}:{delivery_key}",
-                "Investigate the current Grafana alert group using the attached case evidence.",
-            ),
+        insert_result = await connection.execute(
+            pg_insert(agent_turns)
+            .values(
+                id=turn_id,
+                session_id=session_id,
+                kind="automatic",
+                state="queued",
+                priority=priority,
+                requested_by=AUTOMATIC_REQUESTER,
+                client_request_id=f"grafana:{case_id}:{delivery_key}",
+                prompt="Investigate the current Grafana alert group using the attached case evidence.",
+            )
+            .on_conflict_do_nothing(index_elements=[agent_turns.c.requested_by, agent_turns.c.client_request_id])
+            .returning(agent_turns.c.id)
         )
+        if insert_result.first() is None:
+            return False
         await self._event(connection, case_id, "automatic_turn_queued", SOURCE, {"turn_id": turn_id})
         return True
 
     async def _insert_session(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         *,
         session_id: str,
         case_id: str,
     ) -> None:
         await connection.execute(
-            """
-            INSERT INTO agent_sessions (
-                id, case_id, deterministic_name, state, repo_revision, skill_revision
-            ) VALUES (%s, %s, %s, 'new', %s, %s)
-            """,
-            (session_id, case_id, f"ops-case-{case_id}", self._repo_revision, self._skill_revision),
+            agent_sessions.insert().values(
+                id=session_id,
+                case_id=case_id,
+                deterministic_name=f"ops-case-{case_id}",
+                state="new",
+                repo_revision=self._repo_revision,
+                skill_revision=self._skill_revision,
+            )
         )
 
     async def _event(
         self,
-        connection: psycopg.AsyncConnection[dict[str, Any]],
+        connection: AsyncConnection,
         case_id: str,
         event_type: str,
         actor: str,
@@ -1133,8 +1198,13 @@ class OpsRepository:
         turn_id: str | None = None,
     ) -> None:
         await connection.execute(
-            "INSERT INTO case_events (case_id, turn_id, event_type, actor, data) VALUES (%s, %s, %s, %s, %s)",
-            (case_id, turn_id, event_type, actor, Jsonb(data)),
+            case_events.insert().values(
+                case_id=case_id,
+                turn_id=turn_id,
+                event_type=event_type,
+                actor=actor,
+                data=dict(data),
+            )
         )
 
 
