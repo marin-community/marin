@@ -111,7 +111,7 @@ grid.
 
 ```yaml
 placement:
-  # Any slice fits any batch; the trainer derives the data/tensor-parallel split (see runbook).
+  # Any slice fits any batch; the trainer derives the data/tensor-parallel split.
 targets:
   allow:
     - region: us-east5
@@ -145,12 +145,11 @@ targets:
 - **Liveness = the W&B run `state`.** `state=running` ⇔ the trial is training; iris job/child `running`
   is not a reliable signal (a child reads running while its gang tasks coschedule). Deep iris
   parent→child→task drill-down (`iris job summary`) is for ad-hoc single-run debugging only, never
-  routine monitoring. (Runbook LIVENESS has the method.)
+  routine monitoring.
 - **Heartbeats report two placement spans:** chips/regions/slices (a) **submitted** to iris (any state)
   and (b) **running per W&B** (`state=running`).
 - **Iris job-name = `<wandb_run_id>-<slice>-<unique>`; every submission is unique — there is NO in-place
   "resubmit".** Any change (same-target restart, relocation, slice/region change) = stop the old iris
-  job and submit a NEW unique one; resume comes from the region checkpoint, not the name. (Runbook has
-  the mechanics.)
+  job and submit a NEW unique one; resume comes from the region checkpoint, not the name.
 - **Invariant: at most one active dispatch per `(point, region)`** — else two jobs co-write the region
   checkpoint and corrupt it.
