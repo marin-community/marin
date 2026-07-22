@@ -82,15 +82,12 @@ def _fetch_shard(hf_path: str, *, revision: str = HF_REVISION) -> Iterator[str]:
 
 
 def _iter_parquet_batches(local_path: str) -> Iterator[pa.RecordBatch]:
-    """Yield record batches from a locally-downloaded SEC-EDGAR shard.
-
-    Read with DuckDB rather than PyArrow. SEC's multi-MB ``content`` values
-    produce parquet page-header statistics that PyArrow's Thrift decoder cannot
-    deserialize -- ``Couldn't deserialize thrift: No more data to read``
-    (apache/arrow#46404) -- even with raised decoder limits, while DuckDB reads
-    them without issue. The re-encode in :func:`_download_once` then emits
-    pyarrow-readable shards for downstream normalize.
-    """
+    """Yield record batches from a locally-downloaded SEC-EDGAR shard."""
+    # Read with DuckDB, not PyArrow: SEC's multi-MB `content` values produce
+    # parquet page-header statistics that PyArrow 23's Thrift decoder cannot
+    # deserialize ("Couldn't deserialize thrift: No more data to read",
+    # apache/arrow#46404), even with raised decoder limits, while DuckDB reads
+    # them. _download_once re-encodes the batches into pyarrow-readable shards.
     connection = duckdb.connect()
     try:
         reader = connection.execute("SELECT * FROM read_parquet($shard)", {"shard": local_path}).to_arrow_reader(
