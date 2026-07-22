@@ -144,6 +144,7 @@ def build_scale_model() -> GrugModelConfig:
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
+        scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
