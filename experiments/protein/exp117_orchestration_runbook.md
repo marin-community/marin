@@ -162,9 +162,13 @@ job = one point.
      slices gang far more readily than big ones (fewer hosts to coschedule) — bias to them,
      especially for near-done or stalled trials. **No region or family is off limits** — `v5p`
      (us-east5, us-central1) is easy to neglect; include it. When relocating a stalled job, be
-     aggressive: each move must be a slice/region combo **not already tried** for that trial
-     (a big-slice retry that keeps failing to gang is wasted) — walk down in size and across
-     families/regions until one gangs.
+     aggressive **within its region**: each move must be a slice/family combo **not already tried**
+     for that trial (a big-slice retry that keeps failing to gang is wasted) — walk down in size and
+     across families until one gangs. **Do NOT change region** to chase capacity — a region change
+     abandons the checkpoint and restarts from 0, so it is reserved for the `cross_region_restart`
+     (96h) limit or an explicit operator request. A stalled near-done run stays queued in its own
+     region: capacity returns, and re-running elsewhere to finish the last few % is never worth
+     discarding the checkpoint. Stop re-relocating it every pass — queue it and wait.
 5. **Dispatch.** Launch/stop/restart exact work orders. Record prediction+placement+decision in
    `decisions` BEFORE dispatch. One logical trial → at most one objective; never duplicate a
    `(rung,point)`.
