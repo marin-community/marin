@@ -1279,3 +1279,23 @@ gp_ood_coverage (nn distance + bare-kernel error) + epoch_kernel_headtohead per_
 - So the honest two-part read stands: the epoch penalty rescues the EPOCH part of the off-support failure
   (the whole point of the guardrail), but a content-extrapolation residual remains that no epoch machinery
   addresses. Figure now shows both: open ring = bare kernel, solid = + penalty, connector = the pull.
+
+## 2026-07-22 ★ TIER 1: content extrapolation is ROBUST (isolates f43's failure to the epoch axis)
+Code: experiments/datakit/mixture_features/content_extrapolation.py (tracked, lint-clean). Fig f44.
+Leave-one-content-CLUSTER-out (agglomerative on Hellinger d, K=20) on the 800 swarm runs (all normal
+epochs → NO epoch confound), vs random 5-fold. Removing whole content neighbourhoods pushes held-out
+distance up to 0.439 — the SAME distance as the epoch probes (0.44) — but with normal-epoch content runs.
+  target     random-fold rho   LOCO rho    random med|err|   LOCO med|err|   beyond-p95 med|err|
+  zmacro        0.817           0.787         0.161            0.180            0.189
+  humaneval     0.938           0.918         0.0149           0.0167           0.0194
+- LOCO barely degrades: Spearman drops only 0.03/0.02; median |error| rises only 12–30% even at max
+  distance. The LOCO error curve tracks the random-fold curve nearly flat across the whole range.
+- **The decisive contrast — at the SAME distance ~0.44:** content-holdout median |error| ≈ 0.019 bpb
+  (humaneval) vs the epoch probes' 0.4–1.5 bpb (f43) → novel CONTENT is predicted ~20–75× more
+  accurately than epoch-stress at identical distance-from-support. So f43's off-support explosion is
+  ALMOST ENTIRELY the epoch axis, not content extrapolation.
+- **Conclusion: the surrogate generalizes to novel content well** (leave-whole-clusters-out holds up);
+  the only extrapolation failure is along the epoch-repetition axis, which the deployed additive penalty
+  handles (f43 corrected). Mild humaneval uptick at the far edge (0.019→0.028 past 0.40) is the only hint
+  of content-extrapolation cost, and it's small. Tier 2 (a few new far-content normal-epoch runs) would
+  confirm on truly-held-out data, but Tier 1 already answers the skeptic: content generalization is fine.
