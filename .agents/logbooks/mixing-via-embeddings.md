@@ -1250,3 +1250,18 @@ thread-pinning P3's small NLS solves 66s->5.5s + joblib fork backend.)
   methods" answer: aggregate gaps real (bootstrap), per-run gaps < each model's own error bars.
 - Contours (f37/f38): only the kernel shows a non-monotone INTERIOR optimum; P3 bends but stays monotone
   toward the corner; linear/law are flat planes. Artifact: claude.ai/code/artifact/5a9f6c73-...
+
+## 2026-07-22 Generalization vs distance-from-support (answers the extrapolation question directly)
+Code: experiments/datakit/mixture_features/generalization_vs_distance.py (tracked, lint-clean). Fig f43.
+Puts both regimes on one axis (humaneval): in-distribution = 800 swarm runs out-of-fold; off-support =
+the 53 off-design probes (reused verbatim from gp_ood_coverage.json, reconstruction verified 9.4e-15).
+- in-dist: median |error| 0.0149 bpb, median NN-Hellinger 0.310, p95 0.349 (edge of support).
+- off-design: mean |error| 0.585 bpb, mean NN-Hellinger 0.437.
+- **error grows 39x off-support while predicted sd grows only 2.0x** → the model does not know it is
+  extrapolating. Coverage stays ~95% up to the p95 support edge then falls to ~60% by NN 0.52.
+- Honest nuance visible in the figure: transect (n=7) and harm100b (n=3) probes stay near the seed floor
+  even off-support (they're near-anchor); twobucket (n=25) and epochrep (n=18) explode — the failure is
+  concentrated on the EPOCH-repetition axis, exactly the axis the content features do not encode. So
+  "off-support" per se is not the killer; off-support ALONG the epoch direction is.
+- This is a question the DSP/GRP/P3 line (#2403/#6604) never visualized: their plots are interpolation
+  paths (proportional -> optimized) + per-task standardized-effect diagnostics, not error-vs-distance.
