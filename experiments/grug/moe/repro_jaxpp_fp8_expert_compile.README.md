@@ -44,9 +44,9 @@ attention or learned routing:
   `[layers, experts]` auxiliary output, the mixed expert/FP8/final/head
   parameter-gradient tree, and every microbatch input cotangent.
 
-The auxiliary values are a minimal activation-dependent stand-in for router
-betas. Attention, learned router logits and z-loss, optimizer state, and the
-full pipeline schedule remain excluded. Nothing has been filed upstream.
+In fixed-routing mode, the auxiliary values are a minimal
+activation-dependent stand-in for router betas. Nothing has been filed
+upstream.
 
 `--remat-mode save_moe` adds the exact non-effectful ring-MoE checkpoint
 boundary used by `TransformerPipelineStage.run_block`: one
@@ -65,10 +65,93 @@ and its auxiliary output. Attention, per-block RMS/gated norms, learned
 routing, the shared expert, attention mask/static flags, optimizer state, and
 the full pipeline schedule remain excluded.
 
-## Block-remat dps8 gate
+`--routing-mode learned_qb` replaces each fixed expert layer with the actual
+production `MoEMLP` and `MoEExpertMlp` modules. It adds the learned router and
+the stage QB-beta input, applies the production centered negative QB bias,
+computes FP32 router logits and probabilities, biased top-(K+1) selection,
+sigmoid/renormalized top-k combine weights, QB beta and router statistics, and
+then enters the existing 1.25-capacity ring dispatch. The ring implementation
+owns assignment sorting, capacity clipping, group-size construction,
+collectives, and FP8 ragged-dot state. Router z-loss is computed as part of the
+actual statistics path but has coefficient zero, matching the production
+launcher.
 
-These matched jobs add only the production `save_moe` block checkpoint around
-the completed next-token shape. Each invocation creates a fresh Iris job name.
+## Dynamic QB-routing dps8 gate
+
+These matched jobs add only `learned_qb` routing to the completed next-token
+and `save_moe` boundary. Each invocation creates a fresh Iris job name.
+
+BF16 control:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-routing-dps8-bf16-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel bf16_ring \
+      --loss-boundary next_token --remat-mode save_moe \
+      --routing-mode learned_qb --devices-per-stage 8 \
+      --layers 2 --microbatches 4 --experts 64 --top-k 4 \
+      --tokens 32768 --sequence-length 4096 --vocab-size 8192 \
+      --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-routing/dps8-bf16
+  '
+```
+
+FP8 candidate:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-routing-dps8-fp8-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel fp8_ring \
+      --loss-boundary next_token --remat-mode save_moe \
+      --routing-mode learned_qb --devices-per-stage 8 \
+      --layers 2 --microbatches 4 --experts 64 --top-k 4 \
+      --tokens 32768 --sequence-length 4096 --vocab-size 8192 \
+      --hidden 2560 --intermediate 1280 --amax-history 1024 \
+      --timeout 1200 --stack-after 120 --coordinator-port 5793 \
+      --dump-dir /tmp/jaxpp-routing/dps8-fp8
+  '
+```
+
+Attention, attention-side norms/gates, the pre-MoE RMS/gated norm, the shared
+expert, optimizer state, and the full pipeline schedule remain excluded.
+
+## Completed block-remat dps8 gate
+
+Both `save_moe` jobs passed without watchdog, OOM, or error. BF16 job
+`/dlwh/jaxpp-remat-dps8-bf16-20260722-215133` returned lower/`eval_local`
+times of 0.972/5.985 seconds on rank 0 and 0.985/16.984 seconds on rank 1. FP8
+job `/dlwh/jaxpp-remat-dps8-fp8-20260722-215622` returned 2.842/10.440
+seconds on rank 0; rank 1 lowered in 2.837 seconds and returned from
+`eval_local` in less than 30.474 seconds, but Finelog lost the exact return
+event. The successful parent and tasks bound the missing time. This rules out
+the isolated production `save_moe` policy around the fixed routed expert path.
+
+The commands below retain the completed configuration for reference.
 
 BF16 control:
 
@@ -124,9 +207,9 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
   '
 ```
 
-If `save_moe` passes, repeat only the FP8 command with a fresh
-`jaxpp-remat-all-dps8-fp8-${STAMP}` name and `--remat-mode recompute_all` to
-test full expert-dispatch recomputation.
+A separate `recompute_all` control remains available by using a fresh
+`jaxpp-remat-all-dps8-fp8-${STAMP}` name and replacing `--remat-mode save_moe`
+with `--remat-mode recompute_all`.
 
 ## Completed next-token dps8 gate
 
@@ -358,11 +441,11 @@ production ring capacity calculation.
   the issue is below JaxPP in distributed JAX/XLA compilation of the FP8 ring
   custom VJP.
 - Direct FP8 ring stalls: the issue is stage-local and below distributed setup.
-- The completed expert-only and next-token dps8 cases pass at the reduced
-  production shape. The next isolated candidate is the production block-level
-  `save_moe` remat interaction. If it also passes, the minimum missing
-  structure remains in attention, learned routing, their block-level
-  interaction, or the full pipeline schedule.
+- The completed expert-only, next-token, and block-remat dps8 cases pass at the
+  reduced production shape. The next isolated candidate is learned QB routing
+  inside the `save_moe` block. If it also passes, the minimum missing structure
+  remains in the omitted per-block norms/shared expert, attention, their
+  interaction with routing, or the full pipeline schedule.
 
 `--stop-after lower` proves Python tracing and JaxPP MPMD localization without
 entering XLA compilation. The full direct paths log separate lower, compile,

@@ -10,6 +10,7 @@ import pytest
 from haliax.quantization import Fp8RaggedDotOp
 from jax.sharding import PartitionSpec as P
 
+from experiments.grug.moe.model import MoEMLP
 from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     Config,
     Fp8ExpertLayer,
@@ -21,6 +22,7 @@ from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     last_stage_loss_and_gradients,
     materialize_parameters,
     parse_config,
+    routed_last_stage_loss_and_gradients,
     stage_partition_specs,
     stage_shardings,
 )
@@ -113,6 +115,7 @@ def test_config_rejects_unequal_expert_groups() -> None:
         intermediate=8,
         loss_boundary="mse",
         remat_mode="none",
+        routing_mode="fixed",
         sequence_length=8,
         vocab_size=8,
         top_k=1,
@@ -157,7 +160,7 @@ def test_ring_partition_specs_preserve_production_sharding_contract() -> None:
     assert specs.state == P()
 
 
-def test_next_token_boundary_accepts_production_last_stage_shape() -> None:
+def test_learned_qb_boundary_accepts_production_last_stage_shape() -> None:
     config = parse_config(
         [
             "--runtime",
@@ -168,6 +171,10 @@ def test_next_token_boundary_accepts_production_last_stage_shape() -> None:
             "fp8_ring",
             "--loss-boundary",
             "next_token",
+            "--remat-mode",
+            "save_moe",
+            "--routing-mode",
+            "learned_qb",
             "--devices-per-stage",
             "8",
             "--layers",
@@ -195,6 +202,134 @@ def test_next_token_boundary_accepts_production_last_stage_shape() -> None:
 
     assert config.batch_size == 8
     assert config.loss_boundary == "next_token"
+    assert config.routing_mode == "learned_qb"
+
+
+def test_learned_qb_boundary_uses_production_router_and_dispatch_graph() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "direct",
+            "--kernel",
+            "bf16",
+            "--loss-boundary",
+            "next_token",
+            "--remat-mode",
+            "save_moe",
+            "--routing-mode",
+            "learned_qb",
+            "--experts",
+            "2",
+            "--top-k",
+            "1",
+            "--tokens",
+            "4",
+            "--sequence-length",
+            "4",
+            "--hidden",
+            "4",
+            "--intermediate",
+            "4",
+            "--vocab-size",
+            "8",
+        ]
+    )
+    mesh = _stage_mesh(config, [jax.devices()[0]])
+    shardings = stage_shardings(config, mesh)
+    params = materialize_parameters(config, shardings)
+    assert isinstance(params, LastStageParameters)
+    assert isinstance(params.expert_layers[0], MoEMLP)
+    hidden = jax.device_put(jnp.full((1, 4, 4), 0.02, jnp.bfloat16), shardings.sequence_activation)
+    qb_betas = jax.device_put(jnp.zeros((1, 2), jnp.float32), shardings.qb_beta)
+    token_ids = jax.device_put(jnp.ones((1, 4), jnp.int32), shardings.token)
+    loss_weight = jax.device_put(jnp.ones((1, 4), jnp.float32), shardings.token)
+    dependency = jax.device_put(jnp.asarray(0.0, jnp.float32), shardings.state)
+
+    with jax.set_mesh(mesh):
+        routed_jaxpr = jax.make_jaxpr(
+            lambda p, x, qb: routed_last_stage_loss_and_gradients(
+                p,
+                x,
+                qb,
+                token_ids,
+                loss_weight,
+                dependency,
+                config,
+                mesh,
+            )
+        )(params, hidden, qb_betas)
+        loss, next_qb_betas, grads, d_hidden = routed_last_stage_loss_and_gradients(
+            params,
+            hidden,
+            qb_betas,
+            token_ids,
+            loss_weight,
+            dependency,
+            config,
+            mesh,
+        )
+        _, biased_next_qb_betas, _, _ = routed_last_stage_loss_and_gradients(
+            params,
+            hidden,
+            jax.device_put(jnp.asarray([[10.0, -10.0]], jnp.float32), shardings.qb_beta),
+            token_ids,
+            loss_weight,
+            dependency,
+            config,
+            mesh,
+        )
+
+    lowered_text = str(routed_jaxpr)
+    assert "top_k" in lowered_text
+    assert "sort" in lowered_text
+    assert "remat2" in lowered_text
+    assert np.isfinite(loss)
+    assert next_qb_betas.shape == (1, 2)
+    assert not np.array_equal(next_qb_betas, biased_next_qb_betas)
+    assert isinstance(grads, LastStageParameters)
+    assert isinstance(grads.expert_layers[0], MoEMLP)
+    assert grads.expert_layers[0].router.shape == (4, 2)
+    assert d_hidden.shape == hidden.shape
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (("--routing-mode", "learned_qb"), "requires --loss-boundary next_token"),
+        (
+            (
+                "--routing-mode",
+                "learned_qb",
+                "--loss-boundary",
+                "next_token",
+                "--experts",
+                "2",
+                "--top-k",
+                "2",
+            ),
+            "requires top_k < experts",
+        ),
+        (
+            (
+                "--routing-mode",
+                "learned_qb",
+                "--loss-boundary",
+                "next_token",
+                "--kernel",
+                "fp8",
+                "--experts",
+                "2",
+            ),
+            "requires the expert-parallel fp8_ring kernel",
+        ),
+    ),
+)
+def test_learned_qb_config_rejects_incomplete_production_boundaries(
+    arguments: tuple[str, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_config(["--runtime", "direct", *arguments])
 
 
 @pytest.mark.parametrize("remat_mode", ("none", "recompute_all", "save_moe"))
@@ -261,6 +396,7 @@ def test_default_mode_does_not_add_a_remat_boundary() -> None:
     config = parse_config(["--runtime", "direct"])
 
     assert config.remat_mode == "none"
+    assert config.routing_mode == "fixed"
 
 
 def test_next_token_boundary_rejects_batch_smaller_than_expert_mesh() -> None:

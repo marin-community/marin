@@ -47,8 +47,12 @@ from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp.experimental import mpmd as jaxpp_mpmd
-from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, MoeRaggedDotOps, moe_mlp
+from levanter.grug._moe.common import _DEFAULT_EP_CAPACITY_FACTOR
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, MoEExpertMlp, MoeRaggedDotOps, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
+from levanter.utils.activation import ActivationFunctionEnum
+
+from experiments.grug.moe.model import GrugModelConfig, MoEMLP, _stack_router_metrics
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 Kernel = Literal["bf16", "fp8", "bf16_ring", "fp8_ring"]
@@ -58,6 +62,7 @@ StopAfter = Literal["lower", "execute"]
 Bootstrap = Literal["jax_environment", "iris_job_info"]
 LossBoundary = Literal["mse", "next_token"]
 RematMode = Literal["none", "recompute_all", "save_moe"]
+RoutingMode = Literal["fixed", "learned_qb"]
 _FP8_ALIGNMENT = 128
 _GATED_NORM_RANK = 128
 _RMS_NORM_EPS = 1e-5
@@ -112,6 +117,7 @@ class Config:
     intermediate: int
     loss_boundary: LossBoundary
     remat_mode: RematMode
+    routing_mode: RoutingMode
     sequence_length: int
     vocab_size: int
     top_k: int
@@ -157,6 +163,15 @@ class Config:
                     f"next-token batch size={self.batch_size} must be divisible by "
                     f"devices_per_stage={self.devices_per_stage}"
                 )
+        if self.routing_mode == "learned_qb":
+            if self.loss_boundary != "next_token":
+                raise ValueError("learned_qb routing requires --loss-boundary next_token")
+            if self.top_k >= self.experts:
+                raise ValueError(
+                    f"learned_qb routing requires top_k < experts for top-(K+1); got {self.top_k} >= {self.experts}"
+                )
+            if self.kernel == "fp8":
+                raise ValueError("learned_qb FP8 routing requires the expert-parallel fp8_ring kernel")
         if self.top_k > self.experts:
             raise ValueError(f"top_k={self.top_k} must be <= experts={self.experts}")
         if self.kernel.endswith("_ring"):
@@ -335,7 +350,7 @@ class Fp8ExpertLayer(eqx.Module):
     w2_op: Fp8RaggedDotOp
 
 
-ExpertLayer = Bf16ExpertLayer | Fp8ExpertLayer
+ExpertLayer = Bf16ExpertLayer | Fp8ExpertLayer | MoEMLP
 
 
 class LastStageParameters(eqx.Module):
@@ -363,6 +378,49 @@ def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
     )
 
 
+def _routing_model_config(config: Config) -> GrugModelConfig:
+    remat_mode = "save_moe" if config.remat_mode == "save_moe" else "recompute_all"
+    return GrugModelConfig(
+        vocab_size=config.vocab_size,
+        hidden_dim=config.hidden,
+        intermediate_dim=config.intermediate,
+        shared_expert_intermediate_dim=0,
+        num_layers=config.layers,
+        num_heads=1,
+        num_kv_heads=1,
+        max_seq_len=config.sequence_length,
+        num_experts=config.experts,
+        num_experts_per_token=config.top_k,
+        router_z_loss_coef=0.0,
+        moe_implementation="ring" if config.kernel.endswith("_ring") else "scatter",
+        loss_implementation="xla",
+        remat_mode=remat_mode,
+    )
+
+
+def _routed_expert_layer(config: Config, weight_array: Any, state_array: Any) -> MoEMLP:
+    ragged_dot_ops = None
+    if config.kernel.startswith("fp8"):
+        ragged_dot_ops = MoeRaggedDotOps(
+            w13=_fp8_op(config.amax_history, state_array),
+            w2=_fp8_op(config.amax_history, state_array),
+        )
+    return MoEMLP(
+        router=state_array((config.hidden, config.experts), jnp.bfloat16, 0.01),
+        router_bias=state_array((config.experts,), jnp.bfloat16, 0.0),
+        expert_mlp=MoEExpertMlp(
+            w_gate=weight_array((config.experts, config.hidden, config.intermediate), jnp.bfloat16, 0.01),
+            w_up=weight_array((config.experts, config.hidden, config.intermediate), jnp.bfloat16, 0.01),
+            w_down=weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01),
+            implementation="ring" if config.kernel.endswith("_ring") else "scatter",
+            activation=ActivationFunctionEnum.silu,
+            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            ragged_dot_ops=ragged_dot_ops,
+        ),
+        cfg=_routing_model_config(config),
+    )
+
+
 def abstract_parameters(config: Config, shardings: StageShardings) -> Parameters:
     def weight_array(shape, dtype, _fill):
         return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.weight)
@@ -372,6 +430,9 @@ def abstract_parameters(config: Config, shardings: StageShardings) -> Parameters
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
+        if config.routing_mode == "learned_qb":
+            layers.append(_routed_expert_layer(config, weight_array, state_array))
+            continue
         w13 = weight_array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.0)
         w2 = weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.0)
         if config.kernel.startswith("fp8"):
@@ -420,6 +481,9 @@ def materialize_parameters(config: Config, shardings: StageShardings) -> Paramet
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
+        if config.routing_mode == "learned_qb":
+            layers.append(_routed_expert_layer(config, weight_array, state_array))
+            continue
         w13 = weight_array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.01)
         w2 = weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01)
         if config.kernel.startswith("fp8"):
@@ -470,6 +534,8 @@ def _layer_forward(
     config: Config,
     mesh: Mesh,
 ) -> jax.Array:
+    if isinstance(layer, MoEMLP):
+        raise ValueError("learned_qb routing must use the production MoEMLP call path")
     if config.kernel.endswith("_ring"):
         selected_experts, combine_weights = _ring_routing(config)
         ragged_dot_ops = None
@@ -499,6 +565,46 @@ def _layer_forward(
     return _bf16_grouped_dot(jax.nn.silu(gate) * up, layer.w2, config)
 
 
+def _learned_qb_stack_forward(
+    layers: tuple[ExpertLayer, ...],
+    activation: jax.Array,
+    qb_betas: jax.Array | None,
+    config: Config,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    if activation.ndim != 3:
+        raise ValueError(f"learned_qb routing requires rank-3 [B, S, D] activations, got {activation.shape}")
+    if qb_betas is None or qb_betas.shape != (config.layers, config.experts):
+        actual_shape = None if qb_betas is None else qb_betas.shape
+        raise ValueError(
+            f"learned_qb routing requires qb_betas shape {(config.layers, config.experts)}, got {actual_shape}"
+        )
+
+    router_stats_by_layer = []
+
+    def isolated_block(block_layer: MoEMLP, block_hidden: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+        routed, router_stats = block_layer(block_hidden)
+        return block_hidden + routed, router_stats
+
+    for layer_index, layer in enumerate(layers):
+        if not isinstance(layer, MoEMLP):
+            raise ValueError("learned_qb routing requires MoEMLP parameter layers")
+        router_bias = -qb_betas[layer_index]
+        router_bias = (router_bias - jnp.mean(router_bias)).astype(layer.router_bias.dtype)
+        compute_layer = eqx.tree_at(lambda module: module.router_bias, layer, router_bias)
+        if config.remat_mode == "none":
+            activation, router_stats = isolated_block(compute_layer, activation)
+        else:
+            remat_policy = None
+            if config.remat_mode == "save_moe":
+                remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            activation, router_stats = eqx.filter_checkpoint(isolated_block, policy=remat_policy)(
+                compute_layer,
+                activation,
+            )
+        router_stats_by_layer.append(router_stats)
+    return activation, _stack_router_metrics(router_stats_by_layer)
+
+
 def _expert_stack_forward(
     layers: tuple[ExpertLayer, ...],
     activation: jax.Array,
@@ -513,7 +619,7 @@ def _expert_stack_forward(
             out_sharding=NamedSharding(mesh, stage_partition_specs(config).activation),
         )
     group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
-    qb_betas = []
+    proxy_qb_betas = []
 
     def isolated_block(block_layer: ExpertLayer, block_hidden: jax.Array) -> tuple[jax.Array, jax.Array]:
         update = _layer_forward(block_layer, block_hidden, group_sizes, config, mesh)
@@ -529,8 +635,8 @@ def _expert_stack_forward(
             if config.remat_mode == "save_moe":
                 remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
             activation, qb_beta = eqx.filter_checkpoint(isolated_block, policy=remat_policy)(layer, activation)
-        qb_betas.append(qb_beta)
-    qb_beta_per_layer = jax.lax.stop_gradient(jnp.stack(qb_betas, axis=0))
+        proxy_qb_betas.append(qb_beta)
+    qb_beta_per_layer = jax.lax.stop_gradient(jnp.stack(proxy_qb_betas, axis=0))
     if len(original_shape) == 3:
         activation = jnp.reshape(
             activation,
@@ -570,9 +676,10 @@ def loss_and_gradients(
     return loss, grads, dx
 
 
-def last_stage_loss_and_gradients(
+def _last_stage_loss_and_gradients(
     params: Parameters,
     hidden: jax.Array,
+    qb_betas: jax.Array | None,
     token_ids: jax.Array,
     loss_weight: jax.Array,
     dependency: jax.Array,
@@ -585,12 +692,23 @@ def last_stage_loss_and_gradients(
 
     def loss_fn(stage_params: LastStageParameters, stage_hidden: jax.Array):
         stage_hidden = stage_hidden + dependency.astype(stage_hidden.dtype)
-        stage_hidden, qb_beta_per_layer = _expert_stack_forward(
-            stage_params.expert_layers,
-            stage_hidden,
-            config,
-            mesh,
-        )
+        router_z_loss = None
+        if config.routing_mode == "learned_qb":
+            stage_hidden, router_metrics = _learned_qb_stack_forward(
+                stage_params.expert_layers,
+                stage_hidden,
+                qb_betas,
+                config,
+            )
+            qb_beta_per_layer = router_metrics["qb_beta_per_layer"]
+            router_z_loss = jnp.mean(router_metrics["router_z_loss_per_layer"])
+        else:
+            stage_hidden, qb_beta_per_layer = _expert_stack_forward(
+                stage_params.expert_layers,
+                stage_hidden,
+                config,
+                mesh,
+            )
         stage_hidden = _finalize_hidden(stage_params, stage_hidden)
         labels = jnp.concatenate([token_ids[:, 1:], jnp.zeros_like(token_ids[:, :1])], axis=1).astype(jnp.int32)
         loss = fused_linear_softmax_cross_entropy_loss(
@@ -603,6 +721,8 @@ def last_stage_loss_and_gradients(
             dtype=jnp.float32,
             implementation="xla",
         )
+        if router_z_loss is not None:
+            loss = loss + jnp.asarray(0.0, jnp.float32) * router_z_loss
         return loss, qb_beta_per_layer
 
     (loss, qb_beta_per_layer), (grads, d_hidden) = jax.value_and_grad(
@@ -611,6 +731,51 @@ def last_stage_loss_and_gradients(
         has_aux=True,
     )(params, hidden)
     return loss, qb_beta_per_layer, grads, d_hidden
+
+
+def last_stage_loss_and_gradients(
+    params: Parameters,
+    hidden: jax.Array,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    dependency: jax.Array,
+    config: Config,
+    mesh: Mesh,
+) -> tuple[jax.Array, jax.Array, Parameters, jax.Array]:
+    """Run the fixed-routing last-stage boundary retained by completed gates."""
+    return _last_stage_loss_and_gradients(
+        params,
+        hidden,
+        None,
+        token_ids,
+        loss_weight,
+        dependency,
+        config,
+        mesh,
+    )
+
+
+def routed_last_stage_loss_and_gradients(
+    params: Parameters,
+    hidden: jax.Array,
+    qb_betas: jax.Array,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    dependency: jax.Array,
+    config: Config,
+    mesh: Mesh,
+) -> tuple[jax.Array, jax.Array, Parameters, jax.Array]:
+    """Run the production learned-QB routing path inside the last-stage boundary."""
+    return _last_stage_loss_and_gradients(
+        params,
+        hidden,
+        qb_betas,
+        token_ids,
+        loss_weight,
+        dependency,
+        config,
+        mesh,
+    )
 
 
 def _is_overwrite(value: Any) -> bool:
@@ -738,7 +903,23 @@ def _run_direct(config: Config, process_id: int, devices: list[jax.Device], even
     params = materialize_parameters(config, shardings)
     xs, token_ids, loss_weights = _materialize_microbatches(config, shardings)
     dependency = _make_array((), jnp.float32, 0.0, shardings.state)
-    if config.loss_boundary == "next_token":
+    qb_betas = None
+    if config.routing_mode == "learned_qb":
+        qb_betas = _make_array((config.layers, config.experts), jnp.float32, 0.0, shardings.qb_beta)
+        backward = jax.jit(
+            lambda p, x, qb, tokens, weights, d: routed_last_stage_loss_and_gradients(
+                p,
+                x,
+                qb,
+                tokens,
+                weights,
+                d,
+                config,
+                mesh,
+            )
+        )
+        lower_args = (params, xs[0], qb_betas, token_ids[0], loss_weights[0], dependency)
+    elif config.loss_boundary == "next_token":
         backward = jax.jit(
             lambda p, x, tokens, weights, d: last_stage_loss_and_gradients(
                 p,
@@ -780,7 +961,18 @@ def _run_direct(config: Config, process_id: int, devices: list[jax.Device], even
     for microbatch_index, x in enumerate(xs):
         event(f"{event_prefix}_loss_backward_execute_entered", process_id=process_id, microbatch=microbatch_index)
         started = time.perf_counter()
-        if config.loss_boundary == "next_token":
+        if config.routing_mode == "learned_qb":
+            assert qb_betas is not None
+            loss, qb_beta_per_layer, grads, dx = compiled_backward(
+                params,
+                x,
+                qb_betas,
+                token_ids[microbatch_index],
+                loss_weights[microbatch_index],
+                dependency,
+            )
+            jax.block_until_ready((loss, qb_beta_per_layer, grads, dx))
+        elif config.loss_boundary == "next_token":
             loss, qb_beta_per_layer, grads, dx = compiled_backward(
                 params,
                 x,
@@ -961,12 +1153,7 @@ def run_jaxpp_worker(
             )
             token_shardings = tuple(compute_shardings.token for _ in token_shapes)
 
-            @jaxpp_mpmd.mpmd(
-                mpmd_mesh,
-                in_shardings=(source, param_shardings, x_shardings, token_shardings, token_shardings),
-                infer_donation=False,
-            )
-            def next_token_program(seed, params, xs, token_ids, loss_weights):
+            def next_token_program_body(seed, params, xs, token_ids, loss_weights, qb_betas):
                 seed = jaxpp_mpmd.task(lambda value: value + 1, name="repro_source", out_shardings=source)(seed)
                 dependency = jaxpp_mpmd.transfer(seed, out_shardings=compute).done()
                 accumulated = None
@@ -974,24 +1161,41 @@ def run_jaxpp_worker(
                 qb_beta_sum = None
                 input_gradients = []
                 for microbatch_index, (x, tokens, weights) in enumerate(zip(xs, token_ids, loss_weights, strict=True)):
-                    loss, qb_beta_per_layer, grads, d_hidden = jaxpp_mpmd.task(
-                        lambda p, value, token, weight, dep: last_stage_loss_and_gradients(
-                            p,
-                            value,
-                            token,
-                            weight,
-                            dep,
-                            config,
-                            compute_mesh,
-                        ),
-                        name=f"repro_mb{microbatch_index}_loss_backward",
-                        out_shardings=(
-                            compute,
-                            compute_shardings.qb_beta,
-                            param_shardings,
-                            compute_shardings.sequence_activation,
-                        ),
-                    )(params, x, tokens, weights, dependency)
+                    task_shardings = (
+                        compute,
+                        compute_shardings.qb_beta,
+                        param_shardings,
+                        compute_shardings.sequence_activation,
+                    )
+                    if qb_betas is None:
+                        loss, qb_beta_per_layer, grads, d_hidden = jaxpp_mpmd.task(
+                            lambda p, value, token, weight, dep: last_stage_loss_and_gradients(
+                                p,
+                                value,
+                                token,
+                                weight,
+                                dep,
+                                config,
+                                compute_mesh,
+                            ),
+                            name=f"repro_mb{microbatch_index}_loss_backward",
+                            out_shardings=task_shardings,
+                        )(params, x, tokens, weights, dependency)
+                    else:
+                        loss, qb_beta_per_layer, grads, d_hidden = jaxpp_mpmd.task(
+                            lambda p, qb, value, token, weight, dep: routed_last_stage_loss_and_gradients(
+                                p,
+                                value,
+                                qb,
+                                token,
+                                weight,
+                                dep,
+                                config,
+                                compute_mesh,
+                            ),
+                            name=f"repro_mb{microbatch_index}_loss_backward",
+                            out_shardings=task_shardings,
+                        )(params, qb_betas, x, tokens, weights, dependency)
                     input_gradients.append(d_hidden)
                     if accumulated is None:
                         accumulated = grads
@@ -1033,8 +1237,49 @@ def run_jaxpp_worker(
                 )(qb_beta_sum)
                 return mean_loss, averaged, mean_qb_beta, tuple(input_gradients)
 
-            program = next_token_program
-            abstract_args = (scalar_shape, param_shapes, x_shapes, token_shapes, weight_shapes)
+            if config.routing_mode == "learned_qb":
+                qb_beta_shape = jax.ShapeDtypeStruct(
+                    (config.layers, config.experts),
+                    jnp.float32,
+                    sharding=compute_shardings.qb_beta,
+                )
+
+                @jaxpp_mpmd.mpmd(
+                    mpmd_mesh,
+                    in_shardings=(
+                        source,
+                        param_shardings,
+                        x_shardings,
+                        token_shardings,
+                        token_shardings,
+                        compute_shardings.qb_beta,
+                    ),
+                    infer_donation=False,
+                )
+                def routed_next_token_program(seed, params, xs, token_ids, loss_weights, qb_betas):
+                    return next_token_program_body(seed, params, xs, token_ids, loss_weights, qb_betas)
+
+                program = routed_next_token_program
+                abstract_args = (
+                    scalar_shape,
+                    param_shapes,
+                    x_shapes,
+                    token_shapes,
+                    weight_shapes,
+                    qb_beta_shape,
+                )
+            else:
+
+                @jaxpp_mpmd.mpmd(
+                    mpmd_mesh,
+                    in_shardings=(source, param_shardings, x_shardings, token_shardings, token_shardings),
+                    infer_donation=False,
+                )
+                def fixed_next_token_program(seed, params, xs, token_ids, loss_weights):
+                    return next_token_program_body(seed, params, xs, token_ids, loss_weights, None)
+
+                program = fixed_next_token_program
+                abstract_args = (scalar_shape, param_shapes, x_shapes, token_shapes, weight_shapes)
         else:
 
             @jaxpp_mpmd.mpmd(
@@ -1096,7 +1341,15 @@ def run_jaxpp_worker(
         seed = _make_array((), jnp.float32, 0.0, source)
         params = materialize_parameters(config, compute_shardings)
         xs, token_ids, loss_weights = _materialize_microbatches(config, compute_shardings)
-        if config.loss_boundary == "next_token":
+        if config.routing_mode == "learned_qb":
+            qb_betas = _make_array(
+                (config.layers, config.experts),
+                jnp.float32,
+                0.0,
+                compute_shardings.qb_beta,
+            )
+            runtime_args = (seed, params, xs, token_ids, loss_weights, qb_betas)
+        elif config.loss_boundary == "next_token":
             runtime_args = (seed, params, xs, token_ids, loss_weights)
         else:
             runtime_args = (seed, params, xs)
@@ -1191,6 +1444,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser.add_argument("--intermediate", type=int, default=128)
     parser.add_argument("--loss-boundary", choices=("mse", "next_token"), default="mse")
     parser.add_argument("--remat-mode", choices=("none", "recompute_all", "save_moe"), default="none")
+    parser.add_argument("--routing-mode", choices=("fixed", "learned_qb"), default="fixed")
     parser.add_argument("--sequence-length", type=int, default=128)
     parser.add_argument("--vocab-size", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=1)
