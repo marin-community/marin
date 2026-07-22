@@ -1,0 +1,41 @@
+{
+ "k": 1000,
+ "n_buckets": 168,
+ "n_train": 800,
+ "gamma_factor": 0.25,
+ "alpha": 0.1,
+ "phase_fractions": [
+  0.7987,
+  0.2013
+ ],
+ "target_budget_tokens": 10372343704053.0,
+ "kernel": "hellinger_ridge",
+ "prediction": "yhat(w) = K a + ybar + epoch_harm(w);  K=exp(-gamma*mean_phase_sq_hellinger); gamma=gamma_factor/median(train d2)",
+ "target": {
+  "name": "humaneval_bpb",
+  "task": "logprob_humaneval_10shot",
+  "units": "bits_per_byte",
+  "lower_is_better": true,
+  "seed_sigma_bpb": 0.005651438386197603,
+  "ceiling_spearman": 0.9960443
+ },
+ "epoch_harm": {
+  "form": "H(w) = amp(B,d) * sum_g b_g * sum_{j in g} max(e0_j - tau_g, 0);  e0_j = w0_j * f0 * B / T_j  (phase-0 epochs)",
+  "amplitude": "amp(B,d) = (B/ref_budget)^(-budget_exponent) * (d/ref_hidden_dim)^(hidden_dim_exponent)",
+  "groups": [
+   "code",
+   "web"
+  ],
+  "tau_code": 8.854760836166863,
+  "tau_web": 8.854760836166863,
+  "b_code": 0.05209618354674759,
+  "b_web": 0.0147739044356261,
+  "budget_exponent": 0.7275666734151406,
+  "hidden_dim_exponent": 1.6756449047705302,
+  "ref_budget_tokens": 10015997952,
+  "ref_hidden_dim": 512,
+  "note": "Additive bpb guardrail, ALWAYS applied. Self-gating at the real training budget: identically 0 over the entire in-support swarm for budgets 1e10..1e12 (so it never perturbs in-distribution ranking, OOF Spearman held at 0.938), and fires only for genuine over-repetition (high weight on a small bucket). Amplitude decays as B^-0.73, so it is dormant at >=100B and strongest at the 10B calibration budget. tau/b read verbatim from the campaign's dedicated epoch experiments; validated against humaneval in epoch_kernel_headtohead."
+ },
+ "source_branch": "rav/mixing-via-embeddings",
+ "issue": "marin#7067 (design marin#2403/#6969)"
+}
