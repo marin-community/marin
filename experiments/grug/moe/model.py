@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -46,12 +47,16 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, Pfsdp, Plm_head, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
+# SCALE_CAPACITY_FACTOR: EP receive capacity = capacity_factor * tokens_local * topk.
+# At cf=1.0 with top-8 that provisions 8x the local tokens per shard; lowering it shrinks
+# the dispatch/combine buffers proportionally, at the cost of dropping tokens when an expert
+# is oversubscribed (watch train/router/capacity_overflow_rate_mean).
+_DEFAULT_EP_CAPACITY_FACTOR = float(os.environ.get("SCALE_CAPACITY_FACTOR", "1.0"))
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
@@ -144,6 +149,11 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    moe_latent_dim: int = 0
+    """Latent-dispatch bottleneck. 0 disables. When > 0, routed experts operate on a
+    `moe_latent_dim`-wide latent via shared down/up projections, so the a2a moves
+    `moe_latent_dim` instead of `hidden_dim`. Keep active params constant by setting
+    `intermediate_dim = base_intermediate * hidden_dim/moe_latent_dim`."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -316,10 +326,10 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P(Pfsdp, "model")),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P(Pfsdp, "model")),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(Pfsdp, "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", Pfsdp)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -470,9 +480,9 @@ class DenseMLP(eqx.Module):
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P(Pfsdp, "model")),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(Pfsdp, "model")),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", Pfsdp)),
         )
 
     @named_call
@@ -613,6 +623,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                latent_dim=cfg.moe_latent_dim,
             ),
             cfg=cfg,
         )

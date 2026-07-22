@@ -138,6 +138,7 @@ def build_scale_model() -> GrugModelConfig:
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
+        moe_latent_dim=env_int("SCALE_LATENT_DIM", 0),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),

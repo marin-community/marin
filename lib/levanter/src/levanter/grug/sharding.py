@@ -15,10 +15,23 @@ Pbatch = P(("replica_dcn", "data"))
 # vector across all devices -- an all-to-all spanning racks whose NCCL first-call rendezvous wedges
 # at 8+ racks. The replicated table's gradient is a normal DDP all-reduce.
 Pembed_vocab = P(None, None)
-# Shard the lm_head hidden dim over "data" only (replicated over "replica_dcn") so the weight
-# all-gather in the loss matmul stays intra-rack instead of spanning racks. Its gradient is a
-# normal DDP all-reduce over replica_dcn.
-Plm_head = P("data", "model")
+# FSDP axes for the non-expert weights (attention, shared-expert MLP, lm_head).
+#
+# Both "data" and "expert" are intra-rack: compact_grug_mesh lays the axes out as
+# (replica_dcn, data, expert, model) with "expert" fast-varying, so a 64-wide expert axis is
+# exactly one NVLink domain (iris pins 16 nodes per ds.coreweave.com/nvlink.domain slice).
+# The FSDP all-gather therefore stays intra-rack -- the same guarantee the older "data"-only
+# layout was written to give -- and only the replica_dcn gradient sync crosses racks.
+#
+# Why "expert" is needed here: data = devices / (replica * expert), so an expert-parallel run
+# collapses "data" to 1 (e.g. 128 GPUs at expert=64, replica=2). Sharding on "data" alone would
+# then replicate every non-expert weight *and its optimizer state* on all 128 devices -- ~148GiB
+# per GPU at d5120/L48, which OOMs before the first step. Including "expert" shards them 64-way.
+#
+# At expert_axis_size == 1 this is identical to P("data", ...), so pure-FSDP (EP1) runs are
+# unchanged.
+Pfsdp = ("data", "expert")
+Plm_head = P(Pfsdp, "model")
 Plogits = P(Pbatch[0], None, "model")
 
 

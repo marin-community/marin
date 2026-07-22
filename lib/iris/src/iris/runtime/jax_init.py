@@ -311,7 +311,19 @@ def initialize_jax(
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator,
+            job_info.num_tasks,
+            task_index,
+            heartbeat_timeout_seconds=900,
+            shutdown_timeout_seconds=900,
+        )
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator,
+            job_info.num_tasks,
+            task_index,
+            heartbeat_timeout_seconds=900,
+            shutdown_timeout_seconds=900,
+        )

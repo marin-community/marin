@@ -10,7 +10,10 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
+
+from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MOE_OUTPUT
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
     _compact_by_keep_mask,
@@ -89,6 +92,11 @@ def _moe_mlp_ep_ragged_a2a_local(
             local_expert_size=local_experts,
             shard_index=shard_id,
         )
+        # a2a-boundary remat marker: saving the dispatch-a2a output under `save_moe`
+        # skips recomputing the dispatch collective in the backward pass. Paired with
+        # the combine-a2a marker below, both a2a's are saved while only the (cheap,
+        # local, overlappable) expert GEMM recomputes.
+        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
@@ -111,6 +119,9 @@ def _moe_mlp_ep_ragged_a2a_local(
             return_recv_sizes,
             axis_name="expert",
         )
+        # a2a-boundary remat marker: saving the combine-a2a output skips recomputing
+        # the combine collective in the backward pass (pairs with the dispatch marker).
+        returned = tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT)
         returned = _expand_from_keep_mask(returned, keep_mask)
         out_local = _unpermute_from_global_expert(
             returned,

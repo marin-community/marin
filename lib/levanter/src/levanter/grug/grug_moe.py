@@ -48,6 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
+    _batch_spec,
     _batch_spec_from_x,
     _current_mesh,
     _mesh_axis_size,
@@ -60,11 +61,21 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 
 class MoEExpertMlp(eqx.Module):
-    """Expert MLP weights for routed MoE calls."""
+    """Expert MLP weights for routed MoE calls.
+
+    When ``latent_dim > 0`` the experts operate on a compressed latent instead of the
+    full hidden dim: a shared down-projection ``latent_down`` maps ``H -> latent_dim``
+    before the dispatch a2a, the per-expert weights live in latent space, and a shared
+    up-projection ``latent_up`` maps back to ``H`` after combine. The all-to-all then
+    moves ``latent_dim`` instead of ``H``. Keep active params constant by setting
+    ``intermediate_dim = base_intermediate * H/latent_dim``.
+    """
 
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    latent_down: jax.Array | None
+    latent_up: jax.Array | None
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
@@ -80,20 +91,32 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        latent_dim: int = 0,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
-        k_gate, k_up, k_down = jax.random.split(key, 3)
-        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
+        expert_in = latent_dim if latent_dim > 0 else hidden_dim
+        k_gate, k_up, k_down, k_dn, k_up2 = jax.random.split(key, 5)
+        w_gate = _init_weight(k_gate, (num_experts, expert_in, intermediate_dim), initializer_std)
+        w_up = _init_weight(k_up, (num_experts, expert_in, intermediate_dim), initializer_std)
         w_down = _reshard_for_init(
-            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
+            _init_weight(k_down, (num_experts, intermediate_dim, expert_in), initializer_std),
             pspecs.w_down,
         )
+        latent_down = latent_up = None
+        if latent_dim > 0:
+            latent_down = _reshard_for_init(
+                _init_weight(k_dn, (hidden_dim, latent_dim), initializer_std), P(None, None)
+            )
+            latent_up = _reshard_for_init(
+                _init_weight(k_up2, (latent_dim, hidden_dim), initializer_std), P(None, None)
+            )
         return MoEExpertMlp(
             w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
             w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
             w_down=w_down,
+            latent_down=latent_down,
+            latent_up=latent_up,
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
@@ -109,9 +132,12 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+        # Latent dispatch: down-project to the latent so the a2a moves latent_dim instead
+        # of the full hidden dim; up-project after combine.
+        z = x @ self.latent_down if self.latent_down is not None else x
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
-        return moe_mlp(
-            x,
+        result = moe_mlp(
+            z,
             selected_experts,
             combine_weights,
             w_gate_up,
@@ -122,6 +148,12 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
         )
+        if self.latent_up is None:
+            return result
+        if isinstance(result, tuple):
+            out, dropped = result
+            return out @ self.latent_up, dropped
+        return result @ self.latent_up
 
 
 @named_call
@@ -199,6 +231,16 @@ def moe_mlp(
     batch_spec = _batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
+        # EP requires the batch to be sharded over "expert": each shard must own only its
+        # 1/expert_axis_size slice of the tokens, because the dispatch/combine buffers are
+        # sized from x_local.shape[0] (recv_capacity = capacity_factor * tokens_local * topk).
+        # _batch_spec_from_x adopts x's *incoming* spec, which may be the expert-less
+        # P(("replica_dcn", "data")) (cf. Pbatch). Under shard_map that hands every expert
+        # shard the FULL batch, inflating every dispatch buffer by expert_axis_size -- a silent
+        # 64x blowup at EP64 (320GiB instead of 5GiB) that surfaces only as an OOM. Force the
+        # canonical batch spec, which names "expert"; the _reshard_for_shard_map calls below
+        # then move x/selected_experts/combine_weights onto it.
+        batch_spec = _batch_spec(mesh)
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "

@@ -437,8 +437,31 @@ def _newtonschulz_4d_distributed(
     )
 
     x_bf16 = x.astype(jnp.bfloat16)
-    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
-    x_distributed = reshard(x_flat, target_3d_spec)
+    # Expert-parallel case: the leaf's only real sharding is the "expert" axis (dim 1), because
+    # EP leaves data=model=1 (data = devices/(replica*expert)). intermediate_3d_spec names only
+    # data/model, so it is then FULLY REPLICATED, and the (L,E)->LE reshape materializes the whole
+    # [L*E, D, I] bf16 stack on every device before the reshard can redistribute it:
+    #   L48/E256/d5120/i1280 -> 48*256*5120*2560*2B = 300GiB (observed OOM 310GiB)
+    #   L64                  -> 400GiB              (observed OOM 413GiB)
+    # Transposing E to the front makes each expert shard's slice contiguous in the merged axis, so
+    # the merge keeps the expert sharding and lands directly in target_3d_spec -- nothing gathered.
+    # (Non-EP/FSDP runs have data>1 and are unaffected; they keep the original path.)
+    expert_axis_size = int(mesh.shape.get("expert", 1))
+    # Generalized: engage whenever the leaf is expert-sharded and "expert" is one of the axes NS
+    # distributes over. We always land the merge in an *expert-sharded* intermediate
+    # P("expert", None, None) -- never the replicated P(None,"data","model") -- and then let
+    # `reshard` move it to target_3d_spec. When target == P("expert",...) (1 rack, best_axes ==
+    # ("expert",)) that reshard is a no-op; at 2 racks target is P(("replica_dcn","expert"),...)
+    # and it becomes a genuine all-to-all redistribution instead of an all-gather.
+    expert_spec_3d = PartitionSpec("expert", None, None)
+    use_expert_merge = expert_axis_size > 1 and "expert" in best_axes and merged % expert_axis_size == 0
+    if use_expert_merge:
+        x_swapped = jnp.swapaxes(x_bf16, 0, 1)  # (E, L, D, I) -- E stays on the "expert" axis
+        x_expert = jax.lax.reshape(x_swapped, (merged, d, last), out_sharding=expert_spec_3d)
+        x_distributed = x_expert if target_3d_spec == expert_spec_3d else reshard(x_expert, target_3d_spec)
+    else:
+        x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+        x_distributed = reshard(x_flat, target_3d_spec)
     if os.environ.get("SCALE_MUON_SYRK") == "1":
         # Run the batched NS with QuACK's in-kernel-mirror symmetric GEMM per device shard.
         updated_distributed = jax.shard_map(
@@ -451,8 +474,18 @@ def _newtonschulz_4d_distributed(
     else:
         local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
         updated_distributed = jax.vmap(local_ns)(x_distributed)
-    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
-    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    if use_expert_merge:
+        swapped_4d_spec = PartitionSpec("expert", None, None, None)
+        updated_expert = (
+            updated_distributed if target_3d_spec == expert_spec_3d else reshard(updated_distributed, expert_spec_3d)
+        )
+        updated_swapped = jax.lax.reshape(
+            updated_expert, (expert_count, layers, d, last), out_sharding=swapped_4d_spec
+        )
+        updated_bf16 = jnp.swapaxes(updated_swapped, 0, 1)  # back to (L, E, D, I)
+    else:
+        updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+        updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
     return updated_bf16.astype(x.dtype)
 
 

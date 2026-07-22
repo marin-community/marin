@@ -598,7 +598,14 @@ class Trainer:
         if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
                 levanter.callbacks.profile(
-                    str(self.config.log_dir / self.run_id / "profiler"),
+                    # SCALE_PROFILE_PATH lets the trace land on durable storage (e.g. s3://...)
+                    # instead of the pod-local log_dir, which dies with the pod. Not built via
+                    # `log_dir / ...` because pathlib collapses "s3://" to "s3:/".
+                    (
+                        f"{os.environ['SCALE_PROFILE_PATH'].rstrip('/')}/{self.run_id}"
+                        if os.environ.get("SCALE_PROFILE_PATH")
+                        else str(self.config.log_dir / self.run_id / "profiler")
+                    ),
                     profiler.start_step,
                     total_prof_steps,
                     profiler.perfetto_link,
