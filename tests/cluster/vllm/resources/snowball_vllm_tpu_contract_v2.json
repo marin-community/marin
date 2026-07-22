@@ -15,11 +15,11 @@
   "fork_source_revisions": [
     [
       "vllm",
-      "82e158743218550c2590161f299dcaffbdcd7746"
+      "b66e4159789e09a87ce0b9e8bf679c46bb78ffe8"
     ],
     [
       "tpu-inference",
-      "0f60bf64458475cc2deccf12f47d6a048b2277a9"
+      "88674e89b2fa120622448fe06ed00ae5e9b1faef"
     ]
   ],
   "max_probability_error": 0.7,
@@ -65,6 +65,6 @@
   "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
   "requested_attention": "production",
   "requested_moe": "tpu-inference-grug",
-  "runtime_fingerprint_digest": "7a01c600fb4315c049d6a43c63aad2658e05e0bb434200224b8d76e1ab44dfe8",
+  "runtime_fingerprint_digest": "1f3e1cb3c0a97029cbfbb8ffc0e8972b7d9aff6e79af5d9d9d323d5715f4d566",
   "schema_version": 1
 }

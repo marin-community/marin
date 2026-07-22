@@ -167,5 +167,5 @@ def test_production_oracle_is_frozen_from_observed_cache_hits() -> None:
     oracle = read_production_behavior_oracle()
 
     assert oracle.prefix_caching is True
-    assert oracle.runtime_fingerprint_digest == "0fb2b4238bbed2eecdf0ac639addaa8a790c13f64b135e3668bdc78b0fbd0a00"
+    assert oracle.runtime_fingerprint_digest == "9fd69b49defddd4d7115b644a9342fad95bdd1319e87ec52efa1d08ba10e5e7b"
     assert dict(oracle.concurrent_first_tokens)["instruction-ifeval-01"] == 3234

@@ -16,9 +16,9 @@ import re
 # Keep these equal to the ``[tool.uv.sources]`` git/rev for ``vllm`` and ``tpu-inference``
 # in the root pyproject; the sync test enforces it.
 VLLM_FORK_URL = "https://github.com/marin-community/vllm.git"
-VLLM_FORK_REV = "82e158743218550c2590161f299dcaffbdcd7746"
+VLLM_FORK_REV = "b66e4159789e09a87ce0b9e8bf679c46bb78ffe8"
 TPU_INFERENCE_FORK_URL = "https://github.com/marin-community/tpu-inference.git"
-TPU_INFERENCE_FORK_REV = "0f60bf64458475cc2deccf12f47d6a048b2277a9"
+TPU_INFERENCE_FORK_REV = "88674e89b2fa120622448fe06ed00ae5e9b1faef"
 # uvx otherwise resolves unconstrained transitive releases independently on
 # every clean worker. Keep the release universe fixed for this qualified pair
 # of fork revisions; bump it deliberately when refreshing the serving stack.

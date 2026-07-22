@@ -10,21 +10,21 @@
     "instruction-ifeval-02": 578
   },
   "data_parallel_size": 1,
-  "code_digest": "3e2502d34da386747184d5eae7c76a98f781b27894fa818afafa52446d2eaa3d",
+  "code_digest": "3302fc79eb4bebe93368f13f54bbfb52a412c0834fe8b9ef349a9029c1c5badc",
   "discovery": {
-    "code_sha256": "3e2502d34da386747184d5eae7c76a98f781b27894fa818afafa52446d2eaa3d",
-    "report_sha256": "c14a89baa0a50899d595d722082f17aa1579987916381b16a88078524e7e57bb"
+    "code_sha256": "3302fc79eb4bebe93368f13f54bbfb52a412c0834fe8b9ef349a9029c1c5badc",
+    "report_sha256": "b22a483d831059e6b95fc4417bcdf4bff5a62e28e99e566bef7840890ceb945c"
   },
   "model_config_digest": "a7bf00dc7b190025159d2189451e51598853273955181a84553e06f1962abc34",
-  "runtime_fingerprint_digest": "0fb2b4238bbed2eecdf0ac639addaa8a790c13f64b135e3668bdc78b0fbd0a00",
+  "runtime_fingerprint_digest": "9fd69b49defddd4d7115b644a9342fad95bdd1319e87ec52efa1d08ba10e5e7b",
   "fork_source_revisions": [
     [
       "vllm",
-      "82e158743218550c2590161f299dcaffbdcd7746"
+      "b66e4159789e09a87ce0b9e8bf679c46bb78ffe8"
     ],
     [
       "tpu-inference",
-      "0f60bf64458475cc2deccf12f47d6a048b2277a9"
+      "88674e89b2fa120622448fe06ed00ae5e9b1faef"
     ]
   ],
   "max_num_seqs": 8,

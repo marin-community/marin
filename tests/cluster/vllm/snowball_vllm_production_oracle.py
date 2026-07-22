@@ -16,7 +16,7 @@ from tests.cluster.vllm.snowball_vllm_production import (
 )
 
 _RESOURCE_PATH = Path(__file__).parent / "resources" / "snowball_vllm_tpu_production_oracle_v2.json"
-PRODUCTION_ORACLE_SHA256 = "05933de35c273d7684e45cf86f6deb9175cf741db939999f2211f844c9dbb237"
+PRODUCTION_ORACLE_SHA256 = "c4317974ff8ec8bae1eca30357ea7c5054ef42051f8824266ab8c940efbc1acf"
 
 
 @dataclass(frozen=True)
