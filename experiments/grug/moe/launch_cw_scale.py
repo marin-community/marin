@@ -40,6 +40,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_FINAL_CHECKPOINT  save (default) | skip. skip is for disposable
+                        diagnostics that must terminate immediately after training.
     SCALE_TASK_IMAGE    optional train-worker image override. NVIDIA JAX NGC
                         images use a guarded dependency overlay that preserves
                         the image's JAX/JAXLIB and CUDA/NVIDIA packages.
@@ -77,7 +79,7 @@ from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_m
 from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugTrainerConfig
+from experiments.grug.moe.train import FinalCheckpointPolicy, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
@@ -227,6 +229,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        final_checkpoint=FinalCheckpointPolicy(os.environ.get("SCALE_FINAL_CHECKPOINT", "save").lower()),
         **SCALE_TRAINER_DEFAULTS,
     )
 

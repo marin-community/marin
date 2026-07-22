@@ -6,6 +6,8 @@ import functools
 import logging
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -50,6 +52,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 
+class FinalCheckpointPolicy(StrEnum):
+    """Whether a completed diagnostic run writes its final checkpoint."""
+
+    SAVE = "save"
+    SKIP = "skip"
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -59,6 +68,7 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    final_checkpoint: FinalCheckpointPolicy = FinalCheckpointPolicy.SAVE
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -590,7 +600,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
+            if checkpointer is not None and config.trainer.final_checkpoint == FinalCheckpointPolicy.SAVE:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 

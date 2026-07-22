@@ -5,6 +5,7 @@ import re
 from types import SimpleNamespace
 
 from fray.cluster import ResourceConfig
+from marin.execution.lazy import StepContext
 
 from experiments.grug import dispatch
 from experiments.grug.moe import launch_cw_scale
@@ -83,3 +84,13 @@ def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> Non
     step = launch_cw_scale.build_scale_checkpoint()
 
     assert step.runtime_args["train_resources"].image == image
+
+
+def test_scale_checkpoint_can_skip_final_checkpoint(monkeypatch) -> None:
+    monkeypatch.setenv("SCALE_FINAL_CHECKPOINT", "skip")
+    monkeypatch.setenv("RUN_ID", "skip-final-checkpoint-test")
+
+    step = launch_cw_scale.build_scale_checkpoint()
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+
+    assert config.grug_trainer.final_checkpoint.value == "skip"
