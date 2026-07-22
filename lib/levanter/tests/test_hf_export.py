@@ -128,7 +128,7 @@ def test_save_hf_checkpoint_callback_passes_generation_config():
     callback = save_hf_checkpoint_callback("/tmp/export", converter, generation_config=generation_config)
 
     model = object()
-    callback(SimpleNamespace(step=1, eval_model=model))
+    callback(SimpleNamespace(next_step=1, eval_model=model))
 
     assert len(converter.calls) == 1
     saved_model, saved_path, saved_kwargs = converter.calls[0]

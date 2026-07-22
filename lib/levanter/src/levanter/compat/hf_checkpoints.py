@@ -1351,16 +1351,16 @@ def save_hf_checkpoint_callback(
 
     def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
-        if step.step == 0:
+        if step.next_step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()
-            my_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
+            my_upload_kwargs["commit_message"] = f"Upload for step {step.next_step} from Levanter"
         else:
             my_upload_kwargs = hf_upload_kwargs
         converter.save_pretrained(
             cast(ModelWithHfSerializationMixin, step.eval_model),
-            os.path.join(base_path, f"step-{step.step}"),
+            os.path.join(base_path, f"step-{step.next_step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=generation_config,

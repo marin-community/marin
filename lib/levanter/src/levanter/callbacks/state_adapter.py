@@ -67,5 +67,5 @@ class StateCallbackRunner(Generic[S]):
             step_duration=step_duration,
         )
         for hook in self._hooks:
-            if force or (info.step > 1 and info.step % hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % hook.every == 0):
                 hook.fn.on_step(info, force=force)

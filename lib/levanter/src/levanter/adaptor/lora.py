@@ -548,22 +548,22 @@ def save_peft_checkpoint_callback(
 
     def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
-        if step.step == 0:
+        if step.next_step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()
-            my_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
+            my_upload_kwargs["commit_message"] = f"Upload for step {step.next_step} from Levanter"
         else:
             my_upload_kwargs = hf_upload_kwargs
 
-        logger.info(f"Saving PEFT checkpoint for step {step.step} to {base_path}")
+        logger.info(f"Saving PEFT checkpoint for step {step.next_step} to {base_path}")
         model = model_getter(step) if model_getter is not None else step.eval_model
 
         save_peft_pretrained(
             model,
             config,
             base_model_name_or_path,
-            os.path.join(base_path, f"step-{step.step}"),
+            os.path.join(base_path, f"step-{step.next_step}"),
             tokenizer,
             upload_to=upload_to_hf,
             **my_upload_kwargs,
@@ -602,16 +602,16 @@ def save_merged_hf_checkpoint_callback(
     """
 
     def save_merged_hf_model_cb(step: StepInfo):
-        if step.step == 0:
+        if step.next_step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()
-            my_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
+            my_upload_kwargs["commit_message"] = f"Upload for step {step.next_step} from Levanter"
         else:
             my_upload_kwargs = hf_upload_kwargs
 
-        logger.info(f"Saving merged HF model for step {step.step} to {base_path}")
-        path = os.path.join(base_path, f"step-{step.step}")
+        logger.info(f"Saving merged HF model for step {step.next_step} to {base_path}")
+        path = os.path.join(base_path, f"step-{step.next_step}")
 
         model = model_getter(step) if model_getter is not None else step.eval_model
 

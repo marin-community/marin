@@ -749,7 +749,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     )
 
     hook, _ = trainer.hooks[0]
-    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+    hook(SimpleNamespace(next_step=1, eval_model=DpoModel(policy=policy, reference=reference)))
 
     assert len(converter.calls) == 1
     saved_model, _, _ = converter.calls[0]
@@ -777,7 +777,7 @@ def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
     )
 
     hook, _ = trainer.hooks[0]
-    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+    hook(SimpleNamespace(next_step=1, eval_model=DpoModel(policy=policy, reference=reference)))
 
     with safe_open(tmp_path / "step-1" / "adapter_model.safetensors", framework="numpy") as tensors:
         keys = list(tensors.keys())
@@ -804,7 +804,7 @@ def test_separate_reference_hf_export_passes_generation_config():
 
     hook, _ = trainer.hooks[0]
     model = object()
-    hook(SimpleNamespace(step=1, eval_model=model))
+    hook(SimpleNamespace(next_step=1, eval_model=model))
 
     assert len(converter.calls) == 1
     saved_model, _, saved_kwargs = converter.calls[0]
