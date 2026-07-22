@@ -143,12 +143,23 @@ __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.clo
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Dashboards: `infra.json` (the compact cockpit — nightlies, CI and ferries, Iris capacity,
-provisioning, control-plane health, Kubernetes workload state, and hero training), `fleet.json` (canary +
+Dashboards: `home.json` (the landing page — see below), `infra.json` (the compact
+cockpit — nightlies, CI and ferries, Iris capacity, provisioning, control-plane
+health, Kubernetes workload state, and hero training), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
 grouped by run), `k8s.json` (current CW control-plane state from the k8s source).
+
+`home.json` is provisioned as the default home dashboard
+(`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
+the stitcher's output path) — everyone who opens grafana.oa.dev without a
+specific dashboard in mind lands here instead of Grafana's stock welcome page.
+It leads with a native `alertlist` panel (every rule currently Alerting or
+Pending, across every group), then a row of the same GCP/Iris and CoreWeave
+k8s health stats as `infra.json`'s cockpit, the control-plane components
+table, and the GB200 rack tray inventory — all shared `panelRef` fragments, so
+none of it drifts independently of the dashboards those fragments also serve.
 
 ## Alerting
 
@@ -162,9 +173,9 @@ Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
 degraded component, a dead Iris controller, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
-overdue threshold, and a GPU rack with fewer than 16 trays Ready for 15 minutes
-(the GB200 NVL72 rack spec is 18; a floor rather than an outright outage — see
-`gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
+overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
+minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
+see `gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +

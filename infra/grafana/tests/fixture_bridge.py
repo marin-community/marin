@@ -193,6 +193,11 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             {"cluster": cluster, "reachable": True, "up": 1, "latency_ms": 31, "error_class": ""}
             for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
         ]
+    if path == "/k8s/alerts/unreachable":
+        return [
+            {"cluster": cluster, "error_class": "none", "value": 0}
+            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+        ]
     if path == "/k8s/overview":
         return [{"pending_pods": 1, "crashlooping_containers": 1}]
     if path == "/k8s/control_plane":

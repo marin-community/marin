@@ -1,0 +1,200 @@
+{
+  "uid": "marin-home",
+  "title": "Home",
+  "description": "Landing page for grafana.oa.dev: currently firing/pending Grafana alerts, GCP (Iris) and CoreWeave k8s health at a glance, and links to the per-domain dashboards. Provisioned as the default home dashboard (GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH) — everyone who opens the site without a specific dashboard in mind lands here first.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 42,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Fleet",
+      "type": "link",
+      "url": "/d/marin-fleet"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Iris",
+      "type": "link",
+      "url": "/d/marin-iris"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "K8s",
+      "type": "link",
+      "url": "/d/marin-k8s"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Pipelines",
+      "type": "link",
+      "url": "/d/marin-pipelines"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Training",
+      "type": "link",
+      "url": "/d/marin-training"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "GitHub Actions",
+      "type": "link",
+      "url": "https://github.com/marin-community/marin/actions"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "alertlist",
+      "title": "Firing / pending alerts",
+      "description": "Every Grafana alert rule currently Alerting or Pending, across every rule group. Empty means nothing is currently paging.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "viewMode": "list",
+        "groupMode": "default",
+        "groupBy": [],
+        "maxItems": 20,
+        "sortOrder": 3,
+        "dashboardAlerts": false,
+        "alertName": "",
+        "alertInstanceLabelFilter": "",
+        "stateFilter": {
+          "alerting": true,
+          "pending": true,
+          "noData": false,
+          "normal": false,
+          "error": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "panelRef": "iris_controller_up",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 3,
+      "panelRef": "k8s_apis_unreachable",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 4,
+        "y": 8
+      }
+    },
+    {
+      "id": 4,
+      "panelRef": "healthy_workers_count",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "id": 5,
+      "panelRef": "tpu_chips_count",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "id": 6,
+      "panelRef": "pending_pods_count",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 16,
+        "y": 8
+      }
+    },
+    {
+      "id": 7,
+      "panelRef": "crashloops_count",
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      }
+    },
+    {
+      "id": 8,
+      "panelRef": "control_plane_components",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      }
+    },
+    {
+      "id": 9,
+      "panelRef": "gpu_rack_tray_inventory",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      }
+    }
+  ]
+}

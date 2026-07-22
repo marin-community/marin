@@ -86,6 +86,7 @@ ENV GF_SMTP_HOST=smtp.gmail.com:587 \
     GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
 
 ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
+    GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json \
     GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=marin-infra-panel \
     GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \

@@ -218,7 +218,7 @@ groups:
       - uid: k8s-gpu-rack-trays-low
         title: GpuRackTraysBelowMinimum
         condition: C
-        for: 15m
+        for: 5m
         noDataState: Alerting
         execErrState: Alerting
         labels:
