@@ -144,19 +144,19 @@ or GitHub federation mappings; the program rejects an empty pruning manifest.
 
 ## Restart behavior and rollback
 
-The initial adoption preserves the current Compose topology. The planned Loom
-runtime change moves each session supervisor into a separately labeled Docker
-container. Recreating the control-plane service will then preserve session
-container IDs and let the restarted Loom process discover and adopt them.
+The initial adoption preserves the current Compose topology. Released Loom
+versions place each new session supervisor in a separately labeled Docker
+container. Recreating the control-plane service preserves those container IDs
+and lets the restarted Loom process discover and adopt them.
 
-Until that release lands, a control-plane container replacement can still end
-sessions. Take an online SQLite backup before the first activation and
-inventory the legacy supervisor names. The activation helper refuses that
-cutover by default; after accepting the one-time interruption, run it once with
-`--allow-legacy-cutover`. Later deployments must omit that flag so missing
+Before activating onto a host that still has legacy in-container supervisors,
+take an online SQLite backup and inventory their names. The activation helper
+refuses that cutover by default; after accepting the one-time interruption, run
+it once with `--allow-legacy-cutover`. The helper rejects that option after the
+first DockerRunner session exists. Normal deployments omit it so missing
 supervisors, DockerRunner containers, or ACP reattachments fail verification.
-The first cutover skips the ACP reattachment-log gate because legacy ACP sockets
-are expected to disappear with the old control container.
+The legacy cutover skips the ACP reattachment-log gate because those sockets are
+expected to disappear with the old control container.
 
 Roll back by setting `gitRef` to a retained prior commit and pairing it with the
 prior numbered secret version. Pulumi resolves the existing tag to its immutable

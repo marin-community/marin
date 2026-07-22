@@ -41,8 +41,9 @@ def installations() -> dict:
 
 
 def test_github_app_preflight_accepts_the_expected_installation() -> None:
-    installation = preflight.validate_github_app(app(), installations(), "marin-community", "loom-oa-dev")
-    assert installation["app_slug"] == "loom-oa-dev"
+    current_installations = installations()
+    installation = preflight.validate_github_app(app(), current_installations, "marin-community", "loom-oa-dev")
+    assert installation is current_installations["installations"][0]
 
 
 @pytest.mark.parametrize(

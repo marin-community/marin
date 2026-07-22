@@ -117,8 +117,8 @@ fi
 
 # ---- optional persistent data disk for loom_home / caddy_data -------------
 # Redirects Docker's entire data-root onto the separate disk, so the compose
-# file's named volumes (loom_home, caddy_data, ...) land there unmodified —
-# no fork of docker-compose.yml needed. See ../README.md "Durable state".
+# file's named volumes (loom_home, caddy_data, ...) land there unmodified,
+# without a fork of docker-compose.yml.
 if [ -e "$DATA_DISK_DEVICE" ]; then
   if ! blkid "$DATA_DISK_DEVICE" >/dev/null 2>&1; then
     echo "== formatting data disk (first boot) =="
@@ -152,8 +152,8 @@ fi
 
 # ---- get the repo, at the exact code this boot should run -----------------
 # Re-run on every boot (not just clone-if-missing), so re-triggering the
-# startup script (see ../README.md "Operations") actually picks up a changed
-# GIT_REF/REPO_URL instead of silently keeping whatever was checked out first.
+# startup script actually picks up a changed GIT_REF/REPO_URL instead of
+# silently keeping whatever was checked out first.
 if [ ! -d "$REPO_DIR/.git" ]; then
   echo "== initializing ${REPO_DIR} from ${REPO_URL}@${GIT_REF} =="
   mkdir -p "$REPO_DIR"

@@ -34,6 +34,7 @@ STARTUP_UNIT = "google-startup-scripts"
 STARTUP_BANNER = "loom startup-script:"
 STARTUP_DONE = "loom startup-script done"
 STARTUP_FAILURES = ("failed with error", "Failed with result")
+RUNNER_LABEL_FILTER = "label=dev.loom.runner=session"
 
 
 def log(message: str) -> None:
@@ -138,13 +139,13 @@ def supervisor_inventory(host: RemoteHost) -> set[str]:
 
 def runner_session_inventory(host: RemoteHost) -> set[str]:
     return host.lines(
-        "sudo docker ps --filter label=dev.loom.runner=session --format '{{.Label \"dev.loom.session\"}}'",
+        f"sudo docker ps --filter {RUNNER_LABEL_FILTER} --format '{{{{.Label \"dev.loom.session\"}}}}'",
     )
 
 
 def runner_container_inventory(host: RemoteHost) -> set[str]:
     return host.lines(
-        "sudo docker ps --filter label=dev.loom.runner=session --format '{{.ID}}'",
+        f"sudo docker ps --filter {RUNNER_LABEL_FILTER} --format '{{{{.ID}}}}'",
     )
 
 
@@ -242,6 +243,8 @@ def reattachment_failed(host: RemoteHost) -> bool:
         "the command rejects this flag once any DockerRunner session exists."
     ),
 )
+# Delete this option after the production host completes its first successful
+# DockerRunner activation; subsequent state makes the option invalid.
 def main(
     stack: str | None,
     dns_timeout: int,

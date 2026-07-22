@@ -30,6 +30,9 @@ DEFAULT_GIT_REF = "main"
 DEFAULT_DOTENV_SECRET_VERSION = 1
 DEFAULT_SNAPSHOT_RETENTION_DAYS = 14
 DEFAULT_BACKUP_RETENTION_DAYS = 30
+SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
+WEB_FIREWALL_TAG = "loom-web"
+SSH_FIREWALL_TAG = "loom-ssh"
 
 
 def _positive_config_int(value: int | None, default: int, name: str) -> int:
@@ -403,7 +406,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         name=f"{config.instance_name}-allow-web",
         direction="INGRESS",
         source_ranges=["0.0.0.0/0"],
-        target_tags=["loom-web"],
+        target_tags=[WEB_FIREWALL_TAG],
         # Preserve provider-normalized ordering from the imported firewall so
         # equivalent policy does not produce a permanent diff.
         allows=[
@@ -420,7 +423,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         name=f"{config.instance_name}-allow-ssh",
         direction="INGRESS",
         source_ranges=[config.operator_cidr],
-        target_tags=["loom-ssh"],
+        target_tags=[SSH_FIREWALL_TAG],
         allows=[{"protocol": "tcp", "ports": ["22"]}],
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
@@ -486,7 +489,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "loom-vm-secret-reader",
         project=config.project,
         secret_id=dotenv_secret.secret_id,
-        role="roles/secretmanager.secretAccessor",
+        role=SECRET_ACCESSOR_ROLE,
         member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
     )
     profile_secret_readers = []
@@ -497,7 +500,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 f"loom-profile-secret-{suffix}",
                 project=secret_project,
                 secret_id=secret_name,
-                role="roles/secretmanager.secretAccessor",
+                role=SECRET_ACCESSOR_ROLE,
                 member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
                 opts=api_options,
             )
@@ -617,7 +620,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         zone=config.zone,
         name=config.instance_name,
         machine_type=config.machine_type,
-        tags=["loom-web", "loom-ssh"],
+        tags=[WEB_FIREWALL_TAG, SSH_FIREWALL_TAG],
         boot_disk={
             "auto_delete": True,
             "initialize_params": {
