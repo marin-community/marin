@@ -9,7 +9,6 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-import duckdb
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -23,6 +22,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.writers import atomic_rename, ensure_parent_dir, parquet_sink
 
 from marin.datakit.normalize import normalize_step
+from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
 
@@ -71,6 +71,8 @@ def _iter_parquet_batches(hf_path: str, *, revision: str = HF_REVISION) -> Itera
     # apache/arrow#46404), even with raised decoder limits, while DuckDB reads
     # them. _download_once re-encodes the batches into pyarrow-readable shards.
     # DuckDB reads the shard over the fsspec HfFileSystem (no local staging).
+    import duckdb  # noqa: PLC0415  # optional dep: duckdb (datakit extra; requested via pip_dependency_groups)
+
     connection = duckdb.connect()
     try:
         connection.register_filesystem(fsspec.filesystem("hf"))
@@ -169,7 +171,14 @@ def download_sec_edgar(output_path: str) -> None:
 def download_sec_edgar_step() -> StepSpec:
     return StepSpec(
         name="raw/sec-edgar",
-        fn=download_sec_edgar,
+        # Run as a remote job carrying the ``datakit`` extra so the download's
+        # zephyr workers get duckdb (the shard reader); duckdb is not a core
+        # marin dependency.
+        fn=remote(
+            download_sec_edgar,
+            resources=ResourceConfig(cpu=1, ram="2g"),
+            pip_dependency_groups=["datakit"],
+        ),
         hash_attrs={
             "hf_dataset_id": HF_DATASET_ID,
             "revision": HF_REVISION,
