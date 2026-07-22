@@ -17,8 +17,9 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    MoeRaggedDotOps,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.ep_common import _prefix_cap_counts, _resolve_ragged_dot_fns
 from levanter.grug._moe.sonic_quack import quack_mlp_varlen
 from levanter.grug.sharding import _batch_axes
 
@@ -102,6 +103,7 @@ def _bulk_ring_from_routing(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     routing: _RingRouting,
+    ops: MoeRaggedDotOps | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "Tlocal H"]:
@@ -117,12 +119,13 @@ def _bulk_ring_from_routing(
         weight_dispatch = jnp.where(routing.valid, weight, jnp.zeros_like(weight))
 
     group_sizes = _group_sizes_with_padding(routing.accepted_counts, routing.local_capacity)
+    ragged_w13, ragged_w2 = _resolve_ragged_dot_fns(ops)
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(ragged_w13(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            ragged_w2(activation_fn(gate) * up, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
@@ -334,6 +337,7 @@ def _moe_mlp_ep_ring_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    ops: MoeRaggedDotOps | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -352,6 +356,7 @@ def _moe_mlp_ep_ring_local(
         moe_w13_local,
         moe_w2_local,
         routing,
+        ops,
         activation_fn=activation_fn,
     )
     dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))

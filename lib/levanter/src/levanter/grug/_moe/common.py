@@ -7,9 +7,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
+from haliax.quantization import RaggedDotOp
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int, Key
 
@@ -63,6 +65,13 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class MoeRaggedDotOps(eqx.Module):
+    """Stateful grouped-matmul ops for the two expert GEMMs."""
+
+    w13: RaggedDotOp
+    w2: RaggedDotOp
 
 
 @dataclass(frozen=True)

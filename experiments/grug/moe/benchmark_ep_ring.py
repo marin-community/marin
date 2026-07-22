@@ -14,8 +14,10 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+from haliax.quantization import Fp8RaggedDotOp, apply_updates, partition_for_grad_overwrite
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.common import MoeRaggedDotOps
 from levanter.grug._moe.ep_ring import (
     _ep_ring_two_chunk_fast_path_local,
     _moe_mlp_ep_ring_local,
@@ -29,8 +31,10 @@ _BF16_RTOL = 0.1
 _BF16_ATOL = 2e-4
 _QUANTILE_SAMPLE_SIZE = 65_536
 _ERROR_QUANTILES = (0.0, 0.5, 0.9, 0.99, 0.999, 1.0)
+_FP8_ALIGNMENT = 128
 _IMPLEMENTATIONS = {
     "ring": _moe_mlp_ep_ring_local,
+    "ring_fp8_gemm": _moe_mlp_ep_ring_local,
     "ring_quack": _moe_mlp_ep_ring_quack_local,
     "two_chunk": _moe_mlp_ep_ring_two_chunk_local,
 }
@@ -51,6 +55,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=30)
+    parser.add_argument(
+        "--fp8-rev-dtype",
+        choices=("e4m3", "e5m2"),
+        default="e4m3",
+        help="FP8 output-gradient dtype; e4m3 is required by JAX 0.10.x",
+    )
     parser.add_argument("--lower-only", action="store_true")
     parser.add_argument(
         "--parity-mode",
@@ -92,6 +102,17 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("balanced routing requires total assignments to be divisible by num_experts")
     if "two_chunk" in args.implementations and tokens // _EP_SIZE < 2:
         raise ValueError("two_chunk requires at least two tokens per EP shard")
+    if "ring_fp8_gemm" in args.implementations:
+        local_experts = args.num_experts // _EP_SIZE
+        local_capacity = max(local_experts, int(np.ceil(args.capacity_factor * tokens * args.top_k / _EP_SIZE)))
+        fp8_dims = {
+            "local_capacity": local_capacity,
+            "hidden_dim": args.hidden_dim,
+            "intermediate_dim": args.intermediate_dim,
+        }
+        for name, value in fp8_dims.items():
+            if value % _FP8_ALIGNMENT:
+                raise ValueError(f"{name}={value} must be divisible by {_FP8_ALIGNMENT} for ring_fp8_gemm")
 
 
 def _mesh() -> Mesh:
@@ -173,7 +194,9 @@ def _compiled_functions(
     batch_spec = P(("data", "expert"), None)
     expert_spec = P("expert", None, None)
 
-    def runner(local_fn: Callable[..., Any]) -> Callable[..., Any]:
+    def runner(name: str) -> Callable[..., Any]:
+        local_fn = _IMPLEMENTATIONS[name]
+        fp8 = name == "ring_fp8_gemm"
         mapped = jax.shard_map(
             partial(
                 local_fn,
@@ -182,14 +205,18 @@ def _compiled_functions(
                 capacity_factor=capacity_factor,
             ),
             mesh=mesh,
-            in_specs=(batch_spec, batch_spec, batch_spec, expert_spec, expert_spec),
+            in_specs=(
+                (batch_spec, batch_spec, batch_spec, expert_spec, expert_spec, P())
+                if fp8
+                else (batch_spec, batch_spec, batch_spec, expert_spec, expert_spec)
+            ),
             out_specs=(batch_spec, P()),
             check_vma=False,
         )
         return jax.jit(mapped)
 
     names = tuple(dict.fromkeys(("ring", *implementations)))
-    forwards = {name: runner(_IMPLEMENTATIONS[name]) for name in names}
+    forwards = {name: runner(name) for name in names}
     local_experts = num_experts // _EP_SIZE
     gate = jax.jit(
         jax.shard_map(
@@ -210,14 +237,34 @@ def _compiled_functions(
 
 def _loss_with_aux(
     forward: Callable[..., Any],
-    x: jax.Array,
-    selected_experts: jax.Array,
-    combine_weights: jax.Array,
-    w13: jax.Array,
-    w2: jax.Array,
+    *inputs,
 ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
-    out, dropped = forward(x, selected_experts, combine_weights, w13, w2)
+    out, dropped = forward(*inputs)
     return jnp.mean(jnp.square(out.astype(jnp.float32))), (out, dropped)
+
+
+def _fp8_ops(rev_dtype: str) -> MoeRaggedDotOps:
+    dtype = {"e4m3": jnp.float8_e4m3fn, "e5m2": jnp.float8_e5m2}[rev_dtype]
+    return MoeRaggedDotOps(
+        w13=Fp8RaggedDotOp.init(amax_history_length=16, rev_dtype=dtype),
+        w2=Fp8RaggedDotOp.init(amax_history_length=16, rev_dtype=dtype),
+    )
+
+
+def _warm_fp8_state(
+    value_and_grad: Callable[..., Any],
+    inputs: tuple[Any, ...],
+    *,
+    steps: int,
+) -> tuple[Any, ...]:
+    for _ in range(steps):
+        _, gradients = jax.block_until_ready(value_and_grad(*inputs))
+        state_gradient = gradients[-1]
+        overwrites, ordinary = partition_for_grad_overwrite(state_gradient)
+        zero_updates = jax.tree.map(lambda value: None if value is None else jnp.zeros_like(value), ordinary)
+        state = apply_updates(inputs[-1], zero_updates, overwrites)
+        inputs = (*inputs[:-1], state)
+    return inputs
 
 
 def _sampled_quantiles(difference: jax.Array) -> dict[str, Any]:
@@ -315,6 +362,8 @@ def _parity_metrics(
             worst_flat_index,
             jnp.max(jnp.where(worst_mask, jnp.abs(expected_f32), 0)),
             jnp.max(jnp.where(worst_mask, jnp.abs(actual_f32), 0)),
+            jnp.all(jnp.isfinite(actual_f32)),
+            jnp.all(jnp.isfinite(difference)),
         )
     )
     reference_l2_value = float(scalars[3])
@@ -324,6 +373,7 @@ def _parity_metrics(
         "max_abs": float(scalars[0]),
         "mean_abs": float(scalars[1]),
         "allclose": mismatch_count_value == 0,
+        "finite": bool(scalars[9]) and bool(scalars[10]),
         "mismatch_count": mismatch_count_value,
         "mismatch_fraction": mismatch_count_value / actual.size,
         "reference_l2": reference_l2_value,
@@ -374,9 +424,7 @@ def _parity_status(parity: dict[str, Any], *, mode: str) -> dict[str, Any]:
     }
 
 
-def _time(
-    compiled: Callable[..., Any], args: tuple[jax.Array, ...], *, warmup: int, iterations: int
-) -> dict[str, float]:
+def _time(compiled: Callable[..., Any], args: tuple[Any, ...], *, warmup: int, iterations: int) -> dict[str, float]:
     for _ in range(warmup):
         jax.block_until_ready(compiled(*args))
     durations = []
@@ -417,6 +465,11 @@ def _print_result(result: dict[str, Any], output: str) -> None:
             f"groups: min={result['groups']['expert_count_min']}, max={result['groups']['expert_count_max']}, "
             f"local_capacity={result['groups']['local_capacity']}, padding={result['groups']['padding_by_rank']}"
         )
+        if result.get("fp8"):
+            print(
+                f"FP8 GEMMs: fwd={result['fp8']['fwd_dtype']}, rev={result['fp8']['rev_dtype']}, "
+                f"state_warmup_steps={result['fp8']['state_warmup_steps']}"
+            )
         for mode in ("forward", "value_and_grad"):
             fields = []
             ring_median = result["timings"][mode].get("ring", {}).get("median_ms")
@@ -474,7 +527,7 @@ def main() -> None:
         (args.num_experts, args.intermediate_dim, args.hidden_dim),
         dtype=jnp.bfloat16,
     )
-    inputs = (
+    base_inputs = (
         jax.device_put(x, batch_sharding),
         jax.device_put(selected_experts, batch_sharding),
         jax.device_put(combine_weights, batch_sharding),
@@ -489,13 +542,20 @@ def main() -> None:
             num_experts=args.num_experts,
             capacity_factor=args.capacity_factor,
         )
-        value_and_grads = {
-            name: jax.jit(jax.value_and_grad(partial(_loss_with_aux, forward), argnums=(0, 2, 3, 4), has_aux=True))
-            for name, forward in forwards.items()
-        }
-        lowered_forwards = {name: fn.lower(*inputs) for name, fn in forwards.items()}
-        lowered_value_and_grads = {name: fn.lower(*inputs) for name, fn in value_and_grads.items()}
-        gate_lowered = gate.lower(inputs[1])
+        function_inputs: dict[str, tuple[Any, ...]] = {name: base_inputs for name in forwards}
+        if "ring_fp8_gemm" in forwards:
+            replicated = NamedSharding(mesh, P())
+            fp8_state = jax.device_put(_fp8_ops(args.fp8_rev_dtype), replicated)
+            function_inputs["ring_fp8_gemm"] = (*base_inputs, fp8_state)
+        value_and_grads = {}
+        for name, forward in forwards.items():
+            argnums = (0, 2, 3, 4, 5) if name == "ring_fp8_gemm" else (0, 2, 3, 4)
+            value_and_grads[name] = jax.jit(
+                jax.value_and_grad(partial(_loss_with_aux, forward), argnums=argnums, has_aux=True)
+            )
+        lowered_forwards = {name: fn.lower(*function_inputs[name]) for name, fn in forwards.items()}
+        lowered_value_and_grads = {name: fn.lower(*function_inputs[name]) for name, fn in value_and_grads.items()}
+        gate_lowered = gate.lower(base_inputs[1])
 
         if args.lower_only:
             result = {
@@ -515,10 +575,18 @@ def main() -> None:
 
         compiled_forwards = {name: lowered.compile() for name, lowered in lowered_forwards.items()}
         compiled_value_and_grads = {name: lowered.compile() for name, lowered in lowered_value_and_grads.items()}
-        use_fast_path = bool(jax.device_get(gate_lowered.compile()(inputs[1])))
+        fp8_state_warmup_steps = 0
+        if "ring_fp8_gemm" in compiled_value_and_grads:
+            fp8_state_warmup_steps = max(1, args.warmup)
+            function_inputs["ring_fp8_gemm"] = _warm_fp8_state(
+                compiled_value_and_grads["ring_fp8_gemm"],
+                function_inputs["ring_fp8_gemm"],
+                steps=fp8_state_warmup_steps,
+            )
+        use_fast_path = bool(jax.device_get(gate_lowered.compile()(base_inputs[1])))
 
-        ring_forward = jax.block_until_ready(compiled_forwards["ring"](*inputs))
-        ring_vg = jax.block_until_ready(compiled_value_and_grads["ring"](*inputs))
+        ring_forward = jax.block_until_ready(compiled_forwards["ring"](*function_inputs["ring"]))
+        ring_vg = jax.block_until_ready(compiled_value_and_grads["ring"](*function_inputs["ring"]))
         tokens_per_rank = tokens // _EP_SIZE
         token_owner_ids = jnp.arange(tokens, dtype=jnp.int32) // tokens_per_rank
         token_owner_labels = tuple(f"owner_rank={rank}" for rank in range(_EP_SIZE))
@@ -530,8 +598,8 @@ def main() -> None:
         )
         parity = {}
         for name in implementations:
-            actual_forward = jax.block_until_ready(compiled_forwards[name](*inputs))
-            actual_vg = jax.block_until_ready(compiled_value_and_grads[name](*inputs))
+            actual_forward = jax.block_until_ready(compiled_forwards[name](*function_inputs[name]))
+            actual_vg = jax.block_until_ready(compiled_value_and_grads[name](*function_inputs[name]))
             output_parity = _parity_metrics(
                 actual_forward[0],
                 ring_forward[0],
@@ -546,10 +614,11 @@ def main() -> None:
                 (expert_ids, expert_labels),
                 (expert_ids, expert_labels),
             )
+            actual_gradients = actual_vg[1][:4]
             gradient_parity = [
                 _parity_metrics(actual, expected, group_ids=group_ids, group_labels=group_labels)
                 for actual, expected, (group_ids, group_labels) in zip(
-                    actual_vg[1], ring_vg[1], gradient_groups, strict=True
+                    actual_gradients, ring_vg[1], gradient_groups, strict=True
                 )
             ]
             parity[name] = {
@@ -563,12 +632,12 @@ def main() -> None:
 
         timings = {
             "forward": {
-                name: _time(compiled, inputs, warmup=args.warmup, iterations=args.iterations)
+                name: _time(compiled, function_inputs[name], warmup=args.warmup, iterations=args.iterations)
                 for name, compiled in compiled_forwards.items()
                 if name in implementations
             },
             "value_and_grad": {
-                name: _time(compiled, inputs, warmup=args.warmup, iterations=args.iterations)
+                name: _time(compiled, function_inputs[name], warmup=args.warmup, iterations=args.iterations)
                 for name, compiled in compiled_value_and_grads.items()
                 if name in implementations
             },
@@ -594,6 +663,15 @@ def main() -> None:
         "groups": group_statistics,
         "warmup": args.warmup,
         "iterations": args.iterations,
+        "fp8": (
+            {
+                "fwd_dtype": "e4m3",
+                "rev_dtype": args.fp8_rev_dtype,
+                "state_warmup_steps": fp8_state_warmup_steps,
+            }
+            if "ring_fp8_gemm" in implementations
+            else None
+        ),
         "parity": parity,
         "parity_status": parity_status,
         "promotable": parity_status["promotable"],

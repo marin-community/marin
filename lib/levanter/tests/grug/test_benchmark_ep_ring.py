@@ -13,6 +13,7 @@ from experiments.grug.moe.benchmark_ep_ring import (
     _parser,
     _routing_statistics,
     _selected_experts,
+    _validate_args,
 )
 from experiments.grug.moe.repro_quack_grouped_mlp_numerics import _error_metrics
 from levanter.grug._moe.common import resolve_moe_implementation
@@ -92,12 +93,53 @@ def test_parity_metrics_counts_nan_as_mismatch() -> None:
     metrics = _parity_metrics(jnp.asarray([jnp.nan]), jnp.asarray([0.0]))
 
     assert metrics["allclose"] is False
+    assert metrics["finite"] is False
     assert metrics["mismatch_count"] == 1
 
 
 def test_parity_mode_defaults_to_strict_and_accepts_diagnostic() -> None:
     assert _parser().parse_args([]).parity_mode == "strict"
     assert _parser().parse_args(["--parity-mode", "diagnostic"]).parity_mode == "diagnostic"
+
+
+def test_fp8_gate_cli_accepts_exact_target_shape() -> None:
+    args = _parser().parse_args(
+        [
+            "--microbatch-size",
+            "32",
+            "--sequence-length",
+            "4096",
+            "--hidden-dim",
+            "2560",
+            "--intermediate-dim",
+            "1280",
+            "--num-experts",
+            "64",
+            "--top-k",
+            "4",
+            "--capacity-factor",
+            "1.25",
+            "--implementations",
+            "ring",
+            "ring_fp8_gemm",
+            "--routing",
+            "balanced",
+            "--warmup",
+            "5",
+            "--iterations",
+            "30",
+            "--fp8-rev-dtype",
+            "e4m3",
+            "--parity-mode",
+            "diagnostic",
+            "--output",
+            "both",
+        ]
+    )
+
+    _validate_args(args)
+    assert args.microbatch_size * args.sequence_length == 131_072
+    assert args.implementations == ["ring", "ring_fp8_gemm"]
 
 
 def test_diagnostic_parity_failure_is_recorded_as_non_promotable() -> None:

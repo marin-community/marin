@@ -3,9 +3,16 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from collections.abc import Callable
+from functools import partial
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
+
+from haliax.nn.ragged_dot import ragged_dot
+from haliax.quantization import OverwriteWithGradient, partition_for_grad_overwrite
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
@@ -35,6 +42,38 @@ def _sort_activations_custom_bwd(
 
 
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
+
+
+def _pmax_replicated_cotangent(tree):
+    """Combine delayed-scaling state cotangents as a max across a shard map."""
+    mesh = jax.sharding.get_abstract_mesh()
+    axes = tuple(mesh.axis_names)
+    mesh_size = 1
+    for axis in axes:
+        mesh_size *= int(mesh.shape[axis])
+
+    @jax.custom_vjp
+    def _identity(value):
+        return value
+
+    def _identity_fwd(value):
+        return value, None
+
+    def _identity_bwd(_, cotangent):
+        overwrite, rest = partition_for_grad_overwrite(cotangent)
+        overwrite = jax.tree.map(lambda value: jax.lax.pmax(value, axes) / mesh_size, overwrite)
+        combined = eqx.combine(overwrite, rest, is_leaf=lambda value: isinstance(value, OverwriteWithGradient))
+        return (combined,)
+
+    _identity.defvjp(_identity_fwd, _identity_bwd)
+    return _identity(tree)
+
+
+def _resolve_ragged_dot_fns(ops) -> tuple[Callable, Callable]:
+    if ops is None:
+        return ragged_dot, ragged_dot
+    ops = _pmax_replicated_cotangent(ops)
+    return partial(ragged_dot, op=ops.w13), partial(ragged_dot, op=ops.w2)
 
 
 def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
