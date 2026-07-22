@@ -36,6 +36,7 @@ author: dlwh
 - Exact two-chunk bulk ring preserves output/drop/VJP semantics and takes its fast path at the target EP8 microbatch, but direct H100 timing regresses forward by `5.30%` and forward-backward by `13.98%`. XLA latency hiding does not offset doubled collective and Pallas launch counts; do not register this backend for training.
 - EP-local QuACK grouped GEMM is the first direct-kernel result to clear the performance gate: at the exact e64/top-k4/d2560 EP8 microbatch it improves median forward by `16.0%` and forward-backward by `10.8%`. A one-H100 exact-shape repro proves the output difference comes from QuACK's fused SwiGLU fast approximate `exp2`/reciprocal, not the EP adapter or grouped GEMMs: W13 and W2 are bitwise identical with shared inputs, while fused activation numerics reproduce the EP8 error. It remains benchmark-only pending an explicit decision about accepting approximate activation semantics.
 - Approximate SwiGLU is now an explicit opt-in backend, `ring_quack_approx`. A paired 10-step one-node L2 training gate is finite and trajectory-stable: final loss differs by `+0.01356%`, while mean MFU improves from `21.1689` to `22.0161` (`+4.00%`) and median duration falls `4.04%`. The gain is real but insufficient by simple extrapolation to move the current L24 best above 20 MFU, so a reduced JaxPP gate is still required before the exact target.
+- The contemporary reduced JaxPP A/B makes QuACK a pipeline performance negative: after excluding runtime stalls above `300ms`, ring averages `9.4613` MFU and QuACK `9.4786` (`+0.18%`), with p50 changing only `+0.09%`. Do not run L24 QuACK. The next transport hypothesis is FP8 over the existing ring wire, not another ordinary ragged-all-to-all retry.
 
 ## Hypothesis Queue
 
@@ -48,7 +49,6 @@ author: dlwh
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
-- `GRUG-JAXPP-013`: Replace EP-local Pallas expert MLPs with QuACK/Sonic grouped GEMMs while retaining the proven single-chunk ring transport. Approximate SwiGLU was explicitly accepted as research-only semantics and registered as `ring_quack_approx`; a paired one-node 10-step gate improves mean MFU by `4.00%` with final relative loss delta `+0.01356%`. Next test: pinned reduced L8/b32/m4 explicit-MPMD JaxPP performance gate.
 
 ### Falsified / Dead End
 - Delaying data-parallel gradient reduction until after microbatch accumulation is performance-neutral at batch128/m4: mean MFU `7.5648` versus `7.5946` baseline.
@@ -68,6 +68,7 @@ author: dlwh
 - Enqueuing forward and backward pipeline transfers before local accumulation tasks regresses the pinned reduced median MFU by `2.90%` (`8.9006` versus `9.1660`) and increases median duration by `2.98%`. JaxPP task construction order alone does not improve rendezvous overlap.
 - Input-gradient-first backward passes CPU loss, `d_hidden`, parameter-gradient, accumulated-gradient, and Adam-update parity in both remat modes and executes on 32 H100s, but regresses reduced central MFU by `28.75%` (`6.5356` versus `9.1735`). The extra per-block rematerialization dominates the intended bubble reduction.
 - A private exact two-chunk bulk-ring prototype passes BF16 output/drop and four-input VJP parity, including overflow and globally consistent fallback. At the exact e64/top-k4/d2560 EP8 microbatch it regresses median forward from `10.389ms` to `10.939ms` and forward-backward from `22.948ms` to `26.156ms` despite XLA latency hiding.
+- Approximate QuACK improves a one-node L2 whole step by `4.00%`, but the controlled reduced JaxPP A/B is steady-state neutral: clean mean MFU `9.4786` versus `9.4613` (`+0.18%`) and clean p50 `9.4928` versus `9.4843` (`+0.09%`). Pipeline/collective work hides or dominates the local expert-kernel gain.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2181,3 +2182,22 @@ author: dlwh
   - The direct grouped-MLP benchmark's `10.8%` forward-backward gain becomes `4.0%` at whole-step L2. Simple extrapolation would move the L24 `18.2583` baseline only to about `18.99`, below target; pipeline interaction must be measured before paying for the exact run.
 - Next action:
   - Run the pinned reduced L8/d2560/e64/top-k4/seq4096/b32/m4 explicit-MPMD `std_1f1b` QuACK gate against the matching ring baseline. Scale to L24 only if the pipeline gain is materially larger than the one-node whole-step gain or combines with another validated improvement to project above 20 MFU.
+
+### 2026-07-22 10:20 PDT - approximate QuACK is neutral under JaxPP
+- Hypothesis: QuACK's direct `10.8%` forward-backward expert-MLP gain, and `4.0%` one-node whole-step gain, will remain material inside the explicit-MPMD pipeline and justify an exact L24 run.
+- Commit Hash: `51eaa57909` (`[docs] Record approximate QuACK training gate`), with backend implementation at `8bf9459759`.
+- Commands: paired RNO2A 4x8 H100 explicit-MPMD `std_1f1b`, L8/d2560/e64/top-k4/seq4096/vocab8192/b32/m4, CuTe FA4, XLA loss, Pallas-Triton `block_k=32`/8 warps, 10 steps:
+  - Ring parent `/dlwh/iris-run-job-20260722-170523`, W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-v8192-ab2-l8-e64k4-b32-s4096-p4m4-20260722>.
+  - QuACK parent `/dlwh/iris-run-job-20260722-170546`, W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ringquackapprox-v8192-ab2-l8-e64k4-b32-s4096-p4m4-20260722>.
+- Results:
+  - Both parents and all eight child tasks succeeded with zero failures or preemptions; no live jobs remain.
+  - Raw all-sample means are misleading because ring has two runtime stalls (`747.638ms`, `951.211ms`) and QuACK one (`688.421ms`). Raw mean MFU is `7.8723` ring versus `8.7453` QuACK, an outlier-count artifact.
+  - Restricting to observed history rows below `300ms`, ring mean/p50 MFU is `9.4613/9.4843`; QuACK is `9.4786/9.4928`, only `+0.18%/+0.09%`.
+  - Clean mean/p50 duration is `208.433/207.918ms` for ring and `208.050/207.732ms` for QuACK (`-0.18%/-0.09%`). Clean mean throughput changes from `628,870` to `630,024` tokens/s (`+0.18%`).
+  - Loss remains finite and drifts monotonically as expected from approximate activation semantics: over retained steps 2-9, trajectory RMSE is `0.00355255`; final QuACK-minus-ring loss is `+0.004690170`, or `+0.05386%`.
+- Interpretation:
+  - QuACK's local grouped-MLP advantage is hidden by or small relative to pipeline transport, attention, and scheduling. Compile/setup duration differs, but steady-state throughput is neutral.
+  - Do not launch the exact L24 QuACK run. A `+0.18%` reduced gain cannot close the `9.5%` relative gap from `18.2583` to 20 MFU.
+  - Retain `ring_quack_approx` as an explicit research backend and the standalone numerical/training evidence, but stop performance scaling on this path.
+- Next action:
+  - Check current JAX/NVIDIA ragged-all-to-all support and the in-repo FP8-over-the-wire ring work. Prefer a bounded FP8 ring parity/microbenchmark because the prior zero-copy ragged path is already blocked by RNO2A CUDA VMM permissions and unflagged ragged transport was far below ring.
