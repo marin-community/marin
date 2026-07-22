@@ -4,17 +4,19 @@
 """Bounded JaxPP reproducer for an FP8 expert-GEMM backward compile stall.
 
 The production failure occurs while JaxPP compiles the last pipeline stage's
-first loss-and-backward task. This script keeps that task's essential shape:
-one or more grouped expert MLP layers, a scalar loss, FP8 delayed-scaling state
+first loss-and-backward task. The ``*_ring`` kernels keep that task's expert
+sharding boundary: a production-named stage mesh, sharded expert weights and
+activations, ring collectives inside ``shard_map``, FP8 delayed-scaling state
 returned as overwrite gradients, and optional microbatch gradient reduction.
-It removes routing, attention, optimizer state, and pipeline scheduling.
+They remove attention, learned routing, optimizer state, and pipeline
+scheduling.
 
-``--runtime direct`` compiles each task with ordinary ``jax.jit`` on one H100.
-``--runtime distributed_direct`` initializes the same two ranks as JaxPP but
-runs ordinary ``jax.jit`` only on the compute rank. ``--runtime jaxpp`` wraps
-that computation in a task on a two-H100 MPMD mesh. Every compiler boundary
-emits a JSON event and a watchdog terminates a stuck worker with exit status
-124.
+``--runtime direct`` compiles each task with ordinary ``jax.jit`` on one stage.
+``--runtime distributed_direct`` initializes the same two stage processes as
+JaxPP but runs ordinary ``jax.jit`` only on the compute stage. ``--runtime
+jaxpp`` wraps that computation in a task on a two-stage MPMD mesh. Each stage
+owns ``--devices-per-stage`` devices. Every compiler boundary emits a JSON
+event and a watchdog terminates a stuck worker with exit status 124.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -42,12 +44,15 @@ from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxpp.experimental import mpmd as jaxpp_mpmd
+from levanter.grug.grug_moe import MoeRaggedDotOps, moe_mlp
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
-Kernel = Literal["bf16", "fp8"]
+Kernel = Literal["bf16", "fp8", "bf16_ring", "fp8_ring"]
 Runtime = Literal["direct", "distributed_direct", "jaxpp"]
 StopAfter = Literal["lower", "execute"]
 _FP8_ALIGNMENT = 128
+_STAGE_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
+_BATCH_AXES = ("replica_dcn", "data", "expert")
 
 
 def event(name: str, **fields: Any) -> None:
@@ -82,6 +87,8 @@ class Config:
     tokens: int
     hidden: int
     intermediate: int
+    top_k: int
+    devices_per_stage: int
     microbatches: int
     amax_history: int
     timeout: int
@@ -101,6 +108,8 @@ class Config:
             "tokens": self.tokens,
             "hidden": self.hidden,
             "intermediate": self.intermediate,
+            "top_k": self.top_k,
+            "devices_per_stage": self.devices_per_stage,
             "microbatches": self.microbatches,
             "amax_history": self.amax_history,
             "timeout": self.timeout,
@@ -109,17 +118,80 @@ class Config:
         for name, value in positive.items():
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
-        if self.tokens % self.experts:
+        if self.top_k > self.experts:
+            raise ValueError(f"top_k={self.top_k} must be <= experts={self.experts}")
+        if self.kernel.endswith("_ring"):
+            if self.devices_per_stage <= 1:
+                raise ValueError(f"{self.kernel} requires devices_per_stage greater than 1")
+            if self.experts % self.devices_per_stage:
+                raise ValueError(
+                    f"experts={self.experts} must be divisible by devices_per_stage={self.devices_per_stage}"
+                )
+            if self.tokens % self.devices_per_stage:
+                raise ValueError(f"tokens={self.tokens} must be divisible by devices_per_stage={self.devices_per_stage}")
+            assignments = self.tokens * self.top_k
+            if assignments % self.experts:
+                raise ValueError(
+                    "balanced ring routing requires tokens * top_k to be divisible by experts; "
+                    f"got tokens={self.tokens}, top_k={self.top_k}, experts={self.experts}"
+                )
+        elif self.tokens % self.experts:
             raise ValueError(f"tokens={self.tokens} must be divisible by experts={self.experts}")
-        if self.kernel == "fp8":
+        if self.kernel.startswith("fp8"):
             aligned = {
-                "tokens": self.tokens,
                 "hidden": self.hidden,
                 "intermediate": self.intermediate,
             }
+            if self.kernel == "fp8":
+                aligned["tokens"] = self.tokens
+            else:
+                assignments_per_device, remainder = divmod(
+                    self.tokens * self.top_k,
+                    self.devices_per_stage,
+                )
+                if remainder:
+                    raise ValueError(
+                        "ring assignments must divide evenly across devices_per_stage; "
+                        f"got tokens={self.tokens}, top_k={self.top_k}, "
+                        f"devices_per_stage={self.devices_per_stage}"
+                    )
+                aligned["assignments_per_device"] = assignments_per_device
             for name, value in aligned.items():
                 if value % _FP8_ALIGNMENT:
                     raise ValueError(f"FP8 {name}={value} must be divisible by {_FP8_ALIGNMENT}")
+
+
+@dataclass(frozen=True)
+class StagePartitionSpecs:
+    activation: P
+    weight: P
+    state: P
+
+
+@dataclass(frozen=True)
+class StageShardings:
+    activation: NamedSharding
+    weight: NamedSharding
+    state: NamedSharding
+
+
+def stage_partition_specs(config: Config) -> StagePartitionSpecs:
+    if config.kernel.endswith("_ring"):
+        return StagePartitionSpecs(
+            activation=P(_BATCH_AXES, None),
+            weight=P("expert", None, None),
+            state=P(),
+        )
+    return StagePartitionSpecs(activation=P(), weight=P(), state=P())
+
+
+def stage_shardings(config: Config, mesh: Mesh) -> StageShardings:
+    specs = stage_partition_specs(config)
+    return StageShardings(
+        activation=NamedSharding(mesh, specs.activation),
+        weight=NamedSharding(mesh, specs.weight),
+        state=NamedSharding(mesh, specs.state),
+    )
 
 
 class Bf16ExpertLayer(eqx.Module):
@@ -152,21 +224,24 @@ def _fp8_op(amax_history: int, array: Any) -> Fp8RaggedDotOp:
     )
 
 
-def abstract_parameters(config: Config, sharding: NamedSharding) -> Parameters:
-    def array(shape, dtype, _fill):
-        return jax.ShapeDtypeStruct(shape, dtype, sharding=sharding)
+def abstract_parameters(config: Config, shardings: StageShardings) -> Parameters:
+    def weight_array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.weight)
+
+    def state_array(shape, dtype, _fill):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=shardings.state)
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
-        w13 = array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.0)
-        w2 = array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.0)
-        if config.kernel == "fp8":
+        w13 = weight_array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.0)
+        w2 = weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.0)
+        if config.kernel.startswith("fp8"):
             layers.append(
                 Fp8ExpertLayer(
                     w13=w13,
                     w2=w2,
-                    w13_op=_fp8_op(config.amax_history, array),
-                    w2_op=_fp8_op(config.amax_history, array),
+                    w13_op=_fp8_op(config.amax_history, state_array),
+                    w2_op=_fp8_op(config.amax_history, state_array),
                 )
             )
         else:
@@ -184,21 +259,24 @@ def _make_array(shape: tuple[int, ...], dtype: jnp.dtype, fill: float, sharding:
         )()
 
 
-def materialize_parameters(config: Config, sharding: NamedSharding) -> Parameters:
-    def array(shape, dtype, fill):
-        return _make_array(shape, dtype, fill, sharding)
+def materialize_parameters(config: Config, shardings: StageShardings) -> Parameters:
+    def weight_array(shape, dtype, fill):
+        return _make_array(shape, dtype, fill, shardings.weight)
+
+    def state_array(shape, dtype, fill):
+        return _make_array(shape, dtype, fill, shardings.state)
 
     layers: list[ExpertLayer] = []
     for _ in range(config.layers):
-        w13 = array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.01)
-        w2 = array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01)
-        if config.kernel == "fp8":
+        w13 = weight_array((config.experts, config.hidden, 2 * config.intermediate), jnp.bfloat16, 0.01)
+        w2 = weight_array((config.experts, config.intermediate, config.hidden), jnp.bfloat16, 0.01)
+        if config.kernel.startswith("fp8"):
             layers.append(
                 Fp8ExpertLayer(
                     w13=w13,
                     w2=w2,
-                    w13_op=_fp8_op(config.amax_history, array),
-                    w2_op=_fp8_op(config.amax_history, array),
+                    w13_op=_fp8_op(config.amax_history, state_array),
+                    w2_op=_fp8_op(config.amax_history, state_array),
                 )
             )
         else:
@@ -211,7 +289,41 @@ def _bf16_grouped_dot(lhs: jax.Array, rhs: jax.Array, config: Config) -> jax.Arr
     return jnp.einsum("etk,ekn->etn", grouped, rhs).reshape(config.tokens, rhs.shape[-1])
 
 
-def _layer_forward(layer: ExpertLayer, x: jax.Array, group_sizes: jax.Array, config: Config) -> jax.Array:
+def _ring_routing(config: Config) -> tuple[jax.Array, jax.Array]:
+    token = jnp.arange(config.tokens, dtype=jnp.int32)[:, None]
+    route = jnp.arange(config.top_k, dtype=jnp.int32)[None, :]
+    selected_experts = (token * config.top_k + route) % config.experts
+    combine_weights = jnp.full(selected_experts.shape, 1.0 / config.top_k, dtype=jnp.bfloat16)
+    return selected_experts, combine_weights
+
+
+def _layer_forward(
+    layer: ExpertLayer,
+    x: jax.Array,
+    group_sizes: jax.Array,
+    config: Config,
+    mesh: Mesh,
+) -> jax.Array:
+    if config.kernel.endswith("_ring"):
+        selected_experts, combine_weights = _ring_routing(config)
+        ragged_dot_ops = None
+        if isinstance(layer, Fp8ExpertLayer):
+            ragged_dot_ops = MoeRaggedDotOps(w13=layer.w13_op, w2=layer.w2_op)
+        return cast(
+            jax.Array,
+            moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                layer.w13,
+                layer.w2,
+                activation=jax.nn.silu,
+                implementation="ring",
+                mesh=mesh,
+                capacity_factor=1.0,
+                ragged_dot_ops=ragged_dot_ops,
+            ),
+        )
     if isinstance(layer, Fp8ExpertLayer):
         hidden = layer.w13_op(x, layer.w13, group_sizes)
         gate, up = jnp.split(hidden, 2, axis=-1)
@@ -226,6 +338,7 @@ def loss_and_gradients(
     x: jax.Array,
     dependency: jax.Array,
     config: Config,
+    mesh: Mesh,
 ) -> tuple[jax.Array, Parameters, jax.Array]:
     """Return the scalar loss, parameter gradients, and activation gradient."""
     group_sizes = jnp.full((config.experts,), config.tokens_per_expert, dtype=jnp.int32)
@@ -233,7 +346,7 @@ def loss_and_gradients(
     def loss_fn(stage_params, activation):
         activation = activation + dependency.astype(activation.dtype)
         for layer in stage_params:
-            activation = activation + _layer_forward(layer, activation, group_sizes, config)
+            activation = activation + _layer_forward(layer, activation, group_sizes, config, mesh)
         return jnp.mean(jnp.square(activation.astype(jnp.float32)))
 
     loss, (grads, dx) = jax.value_and_grad(loss_fn, argnums=(0, 1))(params, x)
@@ -297,22 +410,34 @@ def _environment() -> dict[str, Any]:
     }
 
 
-def _output_shardings(tree: Any, sharding: NamedSharding) -> Any:
-    return jax.tree.map(lambda _value: sharding, tree)
+def _stage_mesh(config: Config, devices: list[jax.Device]) -> Mesh:
+    if len(devices) != config.devices_per_stage:
+        raise ValueError(
+            f"{config.runtime} runtime requires {config.devices_per_stage} compute devices, got {len(devices)}"
+        )
+    shaped = np.asarray(devices, dtype=object).reshape(1, 1, config.devices_per_stage, 1)
+    return Mesh(shaped, _STAGE_AXIS_NAMES, axis_types=(AxisType.Explicit,) * len(_STAGE_AXIS_NAMES))
+
+
+def _tree_shardings(tree: Any) -> Any:
+    return jax.tree.map(lambda value: value.sharding, tree)
 
 
 def _run_direct(config: Config, process_id: int, devices: list[jax.Device], event_prefix: str) -> None:
-    if len(devices) != 1:
-        raise ValueError(f"{config.runtime} runtime requires one compute device, got {len(devices)}")
-    mesh = Mesh(np.asarray(devices, dtype=object), ("device",), axis_types=(AxisType.Explicit,))
-    replicated = NamedSharding(mesh, P())
-    params = materialize_parameters(config, replicated)
+    mesh = _stage_mesh(config, devices)
+    shardings = stage_shardings(config, mesh)
+    params = materialize_parameters(config, shardings)
     xs = tuple(
-        _make_array((config.tokens, config.hidden), jnp.bfloat16, 0.02 + index * 0.001, replicated)
+        _make_array(
+            (config.tokens, config.hidden),
+            jnp.bfloat16,
+            0.02 + index * 0.001,
+            shardings.activation,
+        )
         for index in range(config.microbatches)
     )
-    dependency = _make_array((), jnp.float32, 0.0, replicated)
-    backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config))
+    dependency = _make_array((), jnp.float32, 0.0, shardings.state)
+    backward = jax.jit(lambda p, x, d: loss_and_gradients(p, x, d, config, mesh))
     event(f"{event_prefix}_loss_backward_lower_entered", process_id=process_id)
     started = time.perf_counter()
     lowered = backward.lower(params, xs[0], dependency)
@@ -360,16 +485,19 @@ def _run_direct(config: Config, process_id: int, devices: list[jax.Device], even
 
 def run_direct_worker(config: Config, process_id: int) -> None:
     _configure_worker(config, process_id)
-    if len(jax.devices()) != 1:
-        raise ValueError(f"direct runtime requires exactly one visible device, got {len(jax.devices())}")
+    if len(jax.devices()) != config.devices_per_stage:
+        raise ValueError(
+            f"direct runtime requires exactly {config.devices_per_stage} visible devices, got {len(jax.devices())}"
+        )
     event("environment", process_id=process_id, config=asdict(config), environment=_environment())
     _run_direct(config, process_id, jax.devices(), "direct")
 
 
-def _distributed_local_device_ids(process_id: int) -> list[int]:
+def _distributed_local_device_ids(config: Config, process_id: int) -> list[int]:
     if os.environ.get("JAX_PLATFORMS") == "cpu":
-        return [0]
-    return [process_id]
+        return list(range(config.devices_per_stage))
+    start = process_id * config.devices_per_stage
+    return list(range(start, start + config.devices_per_stage))
 
 
 def run_distributed_direct_worker(config: Config, process_id: int) -> None:
@@ -378,12 +506,16 @@ def run_distributed_direct_worker(config: Config, process_id: int) -> None:
         coordinator_address=f"127.0.0.1:{config.coordinator_port}",
         num_processes=2,
         process_id=process_id,
-        local_device_ids=_distributed_local_device_ids(process_id),
+        local_device_ids=_distributed_local_device_ids(config, process_id),
         cluster_detection_method="deactivate",
     )
     try:
-        if len(jax.devices()) != 2:
-            raise ValueError(f"distributed_direct runtime requires exactly two global devices, got {len(jax.devices())}")
+        expected_devices = 2 * config.devices_per_stage
+        if len(jax.devices()) != expected_devices:
+            actual_devices = len(jax.devices())
+            raise ValueError(
+                f"distributed_direct runtime requires exactly {expected_devices} global devices, got {actual_devices}"
+            )
         event("environment", process_id=process_id, config=asdict(config), environment=_environment())
         if process_id == 1:
             _run_direct(config, process_id, jax.local_devices(), "distributed_direct")
@@ -402,26 +534,39 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
         coordinator_address=f"127.0.0.1:{config.coordinator_port}",
         num_processes=2,
         process_id=process_id,
-        local_device_ids=_distributed_local_device_ids(process_id),
+        local_device_ids=_distributed_local_device_ids(config, process_id),
         cluster_detection_method="deactivate",
     )
     try:
-        if len(jax.devices()) != 2:
-            raise ValueError(f"jaxpp runtime requires exactly two visible GPUs, got {len(jax.devices())}")
-        devices = np.asarray(jax.devices(), dtype=object).reshape(1, 2, 1)
+        expected_devices = 2 * config.devices_per_stage
+        if len(jax.devices()) != expected_devices:
+            raise ValueError(
+                f"jaxpp runtime requires exactly {expected_devices} global devices, got {len(jax.devices())}"
+            )
+        devices = np.asarray(jax.devices(), dtype=object).reshape(2, 1, 1, config.devices_per_stage, 1)
         mpmd_mesh = jaxpp_mpmd.MpmdMesh(
-            Mesh(devices, ("replica", "pp", "device"), axis_types=(AxisType.Explicit,) * 3),
+            Mesh(
+                devices,
+                ("pp", *_STAGE_AXIS_NAMES),
+                axis_types=(AxisType.Explicit,) * (1 + len(_STAGE_AXIS_NAMES)),
+            ),
             "pp",
         )
         source = NamedSharding(mpmd_mesh.unstack[0], P())
-        compute = NamedSharding(mpmd_mesh.unstack[1], P())
-        param_shapes = abstract_parameters(config, compute)
-        param_shardings = _output_shardings(param_shapes, compute)
+        compute_mesh = mpmd_mesh.unstack[1]
+        compute_shardings = stage_shardings(config, compute_mesh)
+        compute = compute_shardings.state
+        param_shapes = abstract_parameters(config, compute_shardings)
+        param_shardings = _tree_shardings(param_shapes)
         x_shapes = tuple(
-            jax.ShapeDtypeStruct((config.tokens, config.hidden), jnp.bfloat16, sharding=compute)
+            jax.ShapeDtypeStruct(
+                (config.tokens, config.hidden),
+                jnp.bfloat16,
+                sharding=compute_shardings.activation,
+            )
             for _ in range(config.microbatches)
         )
-        x_shardings = tuple(compute for _ in x_shapes)
+        x_shardings = tuple(compute_shardings.activation for _ in x_shapes)
         scalar_shape = jax.ShapeDtypeStruct((), jnp.float32, sharding=source)
 
         @jaxpp_mpmd.mpmd(
@@ -436,9 +581,9 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
             loss_sum = None
             for microbatch_index, x in enumerate(xs):
                 loss, grads, _dx = jaxpp_mpmd.task(
-                    lambda p, value, dep: loss_and_gradients(p, value, dep, config),
+                    lambda p, value, dep: loss_and_gradients(p, value, dep, config, compute_mesh),
                     name=f"repro_mb{microbatch_index}_loss_backward",
-                    out_shardings=(compute, param_shardings, compute),
+                    out_shardings=(compute, param_shardings, compute_shardings.activation),
                 )(params, x, dependency)
                 if accumulated is None:
                     accumulated = grads
@@ -478,9 +623,14 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
             return
 
         seed = _make_array((), jnp.float32, 0.0, source)
-        params = materialize_parameters(config, compute)
+        params = materialize_parameters(config, compute_shardings)
         xs = tuple(
-            _make_array((config.tokens, config.hidden), jnp.bfloat16, 0.02 + index * 0.001, compute)
+            _make_array(
+                (config.tokens, config.hidden),
+                jnp.bfloat16,
+                0.02 + index * 0.001,
+                compute_shardings.activation,
+            )
             for index in range(config.microbatches)
         )
         flat_args, _ = jax.tree_util.tree_flatten((seed, params, xs))
@@ -547,12 +697,14 @@ def run_supervised(config: Config) -> int:
 def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), required=True)
-    parser.add_argument("--kernel", choices=("bf16", "fp8"), default="fp8")
+    parser.add_argument("--kernel", choices=("bf16", "fp8", "bf16_ring", "fp8_ring"), default="fp8")
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--experts", type=int, default=1)
     parser.add_argument("--tokens", type=int, default=128)
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--intermediate", type=int, default=128)
+    parser.add_argument("--top-k", type=int, default=1)
+    parser.add_argument("--devices-per-stage", type=int, default=1)
     parser.add_argument("--microbatches", type=int, default=1)
     parser.add_argument("--amax-history", type=int, default=16)
     parser.add_argument("--timeout", type=int, default=600)

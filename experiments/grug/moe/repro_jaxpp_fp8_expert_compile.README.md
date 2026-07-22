@@ -1,26 +1,40 @@
 # JaxPP FP8 expert-backward compile reproducer
 
 This bounded reproducer isolates the compile stall seen in
-`grug_1f1b_mb0_stage3_loss_backward`. It retains one grouped expert MLP, the
-real Haliax Mosaic FP8 ragged GEMMs and their delayed-scaling overwrite state,
-`value_and_grad` over parameters and the incoming activation, and optional
-microbatch gradient accumulation. It removes attention, routing, expert
-parallel collectives, optimizer state, and the language-model head.
+`grug_1f1b_mb0_stage3_loss_backward`. The original one-device-per-stage
+reproducer retained the FP8 expert GEMMs, delayed-scaling overwrite state,
+`value_and_grad`, and microbatch accumulation, but it did not reproduce. Every
+ramp through L2/m4/e8/t65536/h2560/i1280 passed; at the largest shape, direct
+and distributed-direct compiled in about 5.3 seconds and JaxPP compiled and
+executed in about 18.9 seconds.
 
-Nothing has been filed upstream. The H100 result still needs to be collected.
+The `*_ring` modes add the smallest omitted production structure:
+
+- a stage mesh named `(replica_dcn, data, expert, model)`, with all stage
+  devices on `expert`;
+- activations sharded as `P((replica_dcn, data, expert), None)` and expert
+  weights sharded as `P(expert, None, None)`;
+- the production `moe_mlp(..., implementation="ring")` `shard_map`, including
+  `all_gather` dispatch and `psum_scatter` collection; and
+- replicated FP8 overwrite state at the `shard_map` boundary, whose custom VJP
+  performs the production stage-mesh `pmax` cotangent reduction.
+
+Attention, learned routing, optimizer state, the language-model head, and the
+pipeline scheduler remain excluded. Nothing has been filed upstream.
 
 ## Smallest RNO2A allocation
 
-This exact command requests one fractional two-H100 allocation and runs the
-wrapper control, the single-process FP8 control, the matched two-rank direct
-control, and the JaxPP FP8 case. It intentionally does not submit unless run by
-the parent investigation owner.
+This is the first useful gate: two devices per stage and four H100s total. It
+runs a distributed BF16 ring control, direct and distributed-direct FP8 ring
+controls, a JaxPP BF16 ring control, and the matched JaxPP FP8 ring case. The
+production FP8 history length is retained because its state is part of the
+suspect custom VJP.
 
 ```bash
 uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
-  job run --no-wait --enable-extra-resources --gpu=H100x2 \
-  --cpu=16 --memory=128G --disk=128G --extra=gpu --timeout=2400 \
-  --job-name=jaxpp-fp8-expert-compile-minimal \
+  job run --no-wait --enable-extra-resources --gpu=H100x4 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=3600 \
+  --job-name=jaxpp-fp8-ring-compile-dps2 \
   -- bash -c '
     set -euxo pipefail
     command -v ptxas
@@ -29,98 +43,91 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
-    CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u \
-      experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-      --runtime jaxpp --kernel bf16 --timeout 600 --stack-after 120
-    CUDA_VISIBLE_DEVICES=0 .venv/bin/python -u \
-      experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-      --runtime direct --kernel fp8 --timeout 600 --stack-after 120 \
-      --dump-dir /tmp/jaxpp-fp8-repro/direct
-    CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u \
-      experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-      --runtime distributed_direct --kernel fp8 --timeout 600 --stack-after 120 \
-      --dump-dir /tmp/jaxpp-fp8-repro/distributed-direct
-    CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u \
-      experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-      --runtime jaxpp --kernel fp8 --timeout 600 --stack-after 120 \
-      --dump-dir /tmp/jaxpp-fp8-repro/jaxpp
+    SCRIPT=experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py
+    COMMON="--devices-per-stage 2 --experts 4 --top-k 4 --tokens 128 \
+      --hidden 128 --intermediate 128 --layers 1 --microbatches 1 \
+      --amax-history 1024 --timeout 900 --stack-after 120"
+
+    CUDA_VISIBLE_DEVICES=0,1,2,3 .venv/bin/python -u "$SCRIPT" \
+      --runtime distributed_direct --kernel bf16_ring $COMMON \
+      --coordinator-port 5791 --dump-dir /tmp/jaxpp-fp8-ring/bf16-distributed
+    CUDA_VISIBLE_DEVICES=0,1 .venv/bin/python -u "$SCRIPT" \
+      --runtime direct --kernel fp8_ring $COMMON \
+      --dump-dir /tmp/jaxpp-fp8-ring/fp8-direct
+    CUDA_VISIBLE_DEVICES=0,1,2,3 .venv/bin/python -u "$SCRIPT" \
+      --runtime distributed_direct --kernel fp8_ring $COMMON \
+      --coordinator-port 5792 --dump-dir /tmp/jaxpp-fp8-ring/fp8-distributed
+    CUDA_VISIBLE_DEVICES=0,1,2,3 .venv/bin/python -u "$SCRIPT" \
+      --runtime jaxpp --kernel bf16_ring $COMMON \
+      --coordinator-port 5793 --dump-dir /tmp/jaxpp-fp8-ring/bf16-jaxpp
+    CUDA_VISIBLE_DEVICES=0,1,2,3 .venv/bin/python -u "$SCRIPT" \
+      --runtime jaxpp --kernel fp8_ring $COMMON \
+      --coordinator-port 5794 --dump-dir /tmp/jaxpp-fp8-ring/fp8-jaxpp
   '
 ```
 
-## Smallest test matrix
+The command intentionally does not submit unless run by the parent
+investigation owner. Use a non-login worker shell: `bash -l` can replace Iris's
+staged CUDA toolchain path.
 
-Run direct JAX on one H100 first:
+## Topology-first ramp
 
-```bash
-CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
-  uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-  --runtime direct --kernel fp8 --dump-dir /tmp/jaxpp-fp8-repro/direct
-```
-
-The matched distributed control initializes those same two ranks and devices,
-but runs the ordinary JAX loss/backward only on the compute rank:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
-  uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-  --runtime distributed_direct --kernel fp8 \
-  --dump-dir /tmp/jaxpp-fp8-repro/distributed-direct
-```
-
-Then run the same backward through JaxPP on two local H100 ranks:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
-  uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-  --runtime jaxpp --kernel fp8 --dump-dir /tmp/jaxpp-fp8-repro/jaxpp
-```
-
-The one-flag compiler control replaces only the FP8 grouped GEMMs and overwrite
-state with BF16 grouped `einsum` operations:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 XLA_PYTHON_CLIENT_MEM_FRACTION=.50 \
-  uv run python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
-  --runtime jaxpp --kernel bf16
-```
-
-The defaults are the minimum kernel-valid shape: one layer, one expert, 128
-tokens, hidden size 128, intermediate size 128, one microbatch, and 16 amax
-history entries. If that passes, increase only these dimensions in order:
+If all five dps2 cases pass, change only the expert-axis width. The 8-GPU gate
+uses four devices per stage while retaining one local expert and the minimum
+128 FP8 assignments per device:
 
 ```text
---layers 2
---experts 8 --tokens 1024
---hidden 640 --intermediate 384
---hidden 2560 --intermediate 1280
---microbatches 4
+--devices-per-stage 4 --experts 4 --top-k 4 --tokens 128
 ```
 
-`--stop-after lower` proves that Python/JaxPP tracing and MPMD localization
-finish without entering XLA compilation. The full path logs distinct direct
-lower/compile/execute events. JaxPP's `eval_local` compiles and executes each
-localized `apply_task`, so its combined boundary is named
-`jaxpp_eval_local_compile_execute_entered`. The JaxPP logger identifies the
-individual task being compiled. A watchdog dumps Python stacks periodically,
-emits `watchdog_timeout`, and returns status 124 instead of hanging forever.
+The 16-GPU gate uses eight devices per stage, matching production's expert-axis
+width:
+
+```text
+--devices-per-stage 8 --experts 8 --top-k 4 --tokens 256
+```
+
+For either gate, direct sees one stage's devices; distributed-direct and JaxPP
+see twice that number. Run the same BF16/FP8 matrix and update the Iris GPU
+request and `CUDA_VISIBLE_DEVICES` lists accordingly.
+
+Only if the dps8 minimum passes, restore the reduced production stage-3 shape:
+
+```text
+--devices-per-stage 8 --layers 2 --microbatches 4 \
+--experts 64 --top-k 4 --tokens 32768 \
+--hidden 2560 --intermediate 1280 --amax-history 1024
+```
+
+Here `tokens=32768` is one b32/m4, sequence-4096 pipeline microbatch. Each
+expert shard receives capacity for 16384 routed assignments, matching the
+production ring capacity calculation.
+
+## Interpretation
+
+- Distributed-direct BF16 ring and JaxPP BF16 ring pass, direct and
+  distributed-direct FP8 ring pass, but JaxPP FP8 ring stalls: the essential
+  delta is JaxPP localization/`apply_task` around the FP8 ring custom VJP.
+- JaxPP BF16 ring stalls: the generic JaxPP plus `shard_map` collective graph
+  is sufficient; FP8 state is not required.
+- Distributed-direct BF16 ring passes but distributed-direct FP8 ring stalls:
+  the issue is below JaxPP in distributed JAX/XLA compilation of the FP8 ring
+  custom VJP.
+- Direct FP8 ring stalls: the issue is stage-local and below distributed setup.
+- All dps8 cases pass at the reduced production shape: this isolated expert
+  backward is still insufficient; the next candidates are full block remat,
+  the stage-3 language-model head/loss, or the complete task output tree.
+
+`--stop-after lower` proves Python tracing and JaxPP MPMD localization without
+entering XLA compilation. The full direct paths log separate lower, compile,
+and execute events. JaxPP's `eval_local` combines compile and execute for each
+localized `apply_task`, so the corresponding event is
+`jaxpp_eval_local_compile_execute_entered`. The watchdog emits periodic Python
+stacks, records `watchdog_timeout`, and exits with status 124.
 
 ## Runtime pins
 
 The production observation used JAX/JAXLIB 0.10.1 and NVIDIA/JaxPP revision
-`7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`. The FP8 kernel uses E4M3 for both
-forward and reverse because mixed E4M3/E5M2 Mosaic WGMMA requires JAX 0.11 or
-newer. A CUDA toolchain containing `ptxas` and `nvlink` must be on `PATH`.
-Use a non-login worker shell: `bash -l` can replace Iris's staged toolchain path.
-
-## Interpretation
-
-- Direct FP8 and distributed-direct FP8 pass while JaxPP FP8 stalls: JaxPP
-  wrapping/localized `apply_task` compilation is essential.
-- Distributed-direct FP8 stalls: the failure is below JaxPP in distributed
-  JAX, Mosaic, or XLA compilation.
-- Single-process direct FP8 stalls: the failure is below distributed runtime
-  setup in the Mosaic/XLA compiler path.
-- JaxPP BF16 passes while JaxPP FP8 stalls: the FP8 custom VJP/kernel graph is
-  essential.
-- The one-microbatch case stalls: gradient accumulation is not causal. If only
-  `--microbatches 4` stalls, the overwrite add/max reduction is causal.
+`7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`. The FP8 kernel uses E4M3 in both
+directions because mixed E4M3/E5M2 Mosaic WGMMA requires JAX 0.11 or newer. A
+CUDA toolchain containing `ptxas` and `nvlink` must be on `PATH`.

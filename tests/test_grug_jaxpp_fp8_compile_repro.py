@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from haliax.quantization import Fp8RaggedDotOp
+from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     Config,
@@ -12,6 +13,7 @@ from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     accumulate_gradients,
     average_gradients,
     parse_config,
+    stage_partition_specs,
 )
 
 
@@ -92,6 +94,8 @@ def test_config_rejects_unequal_expert_groups() -> None:
         tokens=10,
         hidden=8,
         intermediate=8,
+        top_k=1,
+        devices_per_stage=1,
         microbatches=1,
         amax_history=4,
         timeout=30,
@@ -103,3 +107,74 @@ def test_config_rejects_unequal_expert_groups() -> None:
 
     with pytest.raises(ValueError, match="tokens=10 must be divisible by experts=3"):
         config.validate()
+
+
+def test_ring_partition_specs_preserve_production_sharding_contract() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "direct",
+            "--kernel",
+            "fp8_ring",
+            "--devices-per-stage",
+            "2",
+            "--experts",
+            "4",
+            "--top-k",
+            "4",
+        ]
+    )
+
+    specs = stage_partition_specs(config)
+
+    assert specs.activation == P(("replica_dcn", "data", "expert"), None)
+    assert specs.weight == P("expert", None, None)
+    assert specs.state == P()
+
+
+def test_ring_config_balances_assignments_instead_of_flat_token_groups() -> None:
+    config = parse_config(
+        [
+            "--runtime",
+            "direct",
+            "--kernel",
+            "bf16_ring",
+            "--devices-per-stage",
+            "2",
+            "--experts",
+            "4",
+            "--top-k",
+            "2",
+            "--tokens",
+            "6",
+        ]
+    )
+
+    assert config.tokens % config.experts != 0
+    assert config.tokens * config.top_k % config.experts == 0
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (("--devices-per-stage", "1"), "requires devices_per_stage greater than 1"),
+        (
+            ("--devices-per-stage", "2", "--experts", "3", "--tokens", "126"),
+            "experts=3 must be divisible",
+        ),
+        (
+            ("--devices-per-stage", "2", "--experts", "4", "--top-k", "1", "--tokens", "6"),
+            "balanced ring routing requires tokens \\* top_k to be divisible by experts",
+        ),
+        (
+            ("--devices-per-stage", "2", "--experts", "4", "--top-k", "2", "--tokens", "64"),
+            "assignments_per_device=64 must be divisible by 128",
+        ),
+    ),
+)
+def test_fp8_ring_config_rejects_non_production_mesh_contracts(
+    arguments: tuple[str, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_config(["--runtime", "direct", "--kernel", "fp8_ring", *arguments])
