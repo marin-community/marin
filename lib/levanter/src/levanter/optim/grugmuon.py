@@ -392,15 +392,25 @@ def _newtonschulz_4d_distributed(
         # chip, so every chip already owns whole expert matrices. Pin the NS to the data axis with a
         # shard_map (manual SPMD) so each chip orthogonalizes ITS experts locally, no reshard. (A plain
         # vmap leaves the sharding to GSPMD, which is free to gather/reshard instead of staying local.)
-        # Dense einsum NS (not the QuACK symmetric GEMM: cutlass_call can't be vmapped, and Muon
-        # compute is ~0.2% so the SYRK speedup is irrelevant here).
-        ns2d = lambda m: _zeropower_via_newtonschulz_local(m, steps, eps, coefficient_type)
-        vmapped = lambda arr: jax.vmap(jax.vmap(ns2d))(arr)
+        # SCALE_MUON_SYRK: use the batched QuACK symmetric GEMM inside the shard_map. It couldn't be
+        # jax.vmap'd (cutlass_call has no vmap rule), but here the shard_map region is single-device, so
+        # we flatten (L, E_local) -> LE and call the *internally-batched* SYRK directly -- no vmap.
+        use_syrk = os.environ.get("SCALE_MUON_SYRK") == "1"
+
+        def _local(arr):  # arr: [L, E_local, D, I] on this chip -- whole experts, NS runs local
+            if use_syrk:
+                layers, e_local, d, i = arr.shape
+                flat = jax.lax.reshape(arr, (layers * e_local, d, i))
+                out = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
+                return jax.lax.reshape(out, (layers, e_local, d, i))
+            ns2d = lambda m: _zeropower_via_newtonschulz_local(m, steps, eps, coefficient_type)
+            return jax.vmap(jax.vmap(ns2d))(arr)
+
         mesh = jax.sharding.get_abstract_mesh()
         if mesh.empty or int(mesh.shape.get("data", 1)) <= 1:
-            return vmapped(x)
+            return _local(x)
         spec = PartitionSpec(None, "data", None, None)
-        return shard_map(vmapped, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False)(x)
+        return shard_map(_local, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False)(x)
 
     mesh = jax.sharding.get_abstract_mesh()
     if mesh.empty:
