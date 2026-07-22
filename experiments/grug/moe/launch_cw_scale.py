@@ -331,7 +331,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             profiler=profiler,
             checkpointer=checkpointer,
             env_vars=probe_env,
-            max_retries_failure=0 if probe_env else 3,
+            max_retries_failure=env_int("SCALE_MAX_RETRIES_FAILURE", 0 if probe_env else 3),
         )
 
     return ArtifactStep(

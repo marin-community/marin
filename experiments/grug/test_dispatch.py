@@ -123,9 +123,11 @@ def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> Non
 
 def test_scale_checkpoint_can_skip_final_checkpoint(monkeypatch) -> None:
     monkeypatch.setenv("SCALE_FINAL_CHECKPOINT", "skip")
+    monkeypatch.setenv("SCALE_MAX_RETRIES_FAILURE", "0")
     monkeypatch.setenv("RUN_ID", "skip-final-checkpoint-test")
 
     step = launch_cw_scale.build_scale_checkpoint()
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
 
     assert config.grug_trainer.final_checkpoint.value == "skip"
+    assert config.max_retries_failure == 0
