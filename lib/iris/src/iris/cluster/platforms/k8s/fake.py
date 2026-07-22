@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from iris.cluster.platforms.k8s.types import (
-    POD_ATTEMPT_UID_LABEL,
     ExecResult,
     K8sResource,
     KubectlError,
@@ -648,21 +647,11 @@ class InMemoryK8sService:
         resource = K8sResource.from_kind(manifest["kind"])
         name = manifest["metadata"]["name"]
 
-        # Pods are create-if-absent (mirrors K8sService._apply_pod): an existing pod
-        # is normally our own attempt, so re-applying on a redrive is a no-op
-        # (overwriting would reset a running pod). The exception is a pod whose
-        # attempt_uid label differs from ours — a leftover from a previous job that
-        # reused this (task_hash, attempt_id) name — which we delete and fail the
-        # apply so a fresh pod replaces it on retry.
+        # Pods are create-if-absent (mirrors K8sService._apply_pod): the pod name
+        # embeds the attempt uid, so a fresh incarnation never collides — an
+        # existing pod is our own attempt, and re-applying on a redrive is a no-op
+        # (overwriting would reset a running pod).
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
-            existing = self._resources[(resource.plural, name)]
-            existing_uid = existing.get("metadata", {}).get("labels", {}).get(POD_ATTEMPT_UID_LABEL)
-            our_uid = manifest.get("metadata", {}).get("labels", {}).get(POD_ATTEMPT_UID_LABEL)
-            terminating = bool(existing.get("metadata", {}).get("deletionTimestamp"))
-            if existing_uid and our_uid and existing_uid != our_uid:
-                if not terminating:
-                    self.delete(resource, name)
-                raise KubectlError("stale pod from a prior attempt deleted; will recreate on next dispatch")
             return
 
         self._resources[(resource.plural, name)] = manifest

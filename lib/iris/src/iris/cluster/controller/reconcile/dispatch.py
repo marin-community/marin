@@ -235,11 +235,15 @@ def drain_for_dispatch(
         order_by_task_id=True,
         backend_id=backend_id,
     )
+    # The K8s provider rebuilds each pod name from (task_id, attempt_id, uid), so
+    # poll must carry the current attempt's uid to target the right incarnation.
+    uids = reads.attempt_uids_for(cur, [(row.task_id, row.current_attempt_id) for row in running_rows])
     running_tasks = [
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
             coscheduled=row.has_coscheduling,
+            attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows
     ]

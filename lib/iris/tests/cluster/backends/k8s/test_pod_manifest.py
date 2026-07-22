@@ -43,7 +43,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     KueueTopologyBinding,
     TopologyMode,
 )
-from iris.cluster.platforms.k8s.types import POD_ATTEMPT_UID_LABEL, parse_k8s_quantity
+from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
@@ -210,16 +210,21 @@ def test_build_pod_manifest_task_hash_label():
     assert labels[_LABEL_TASK_HASH].isalnum()
 
 
-def test_build_pod_manifest_attempt_uid_label():
+def test_pod_name_embeds_attempt_uid():
+    """The uid is part of the pod name, so two incarnations of the same
+    (task, attempt) get distinct names and never collide on create. An empty uid
+    keeps the pre-uid name for back-compat."""
+    task = JobName.from_wire("/test-job/0")
+    with_old = _pod_name(task, 0, "olduid0000000000")
+    with_new = _pod_name(task, 0, "newuid1111111111")
+    assert with_old != with_new
+    assert with_old.endswith("-olduid0000000000")
+    assert _pod_name(task, 0, "") == _pod_name(task, 0)
+
+
+def test_build_pod_manifest_pod_name_carries_uid():
     manifest = _build_pod_manifest(make_run_req("/test-job/0", attempt_uid="abcd1234abcd1234"), pod_config())
-    assert manifest["metadata"]["labels"][POD_ATTEMPT_UID_LABEL] == "abcd1234abcd1234"
-
-
-def test_build_pod_manifest_omits_attempt_uid_label_when_unset():
-    """No uid (older controller / non-dispatch path) => no label, so apply stays
-    create-if-absent instead of treating every pod as a mismatch."""
-    labels = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())["metadata"]["labels"]
-    assert POD_ATTEMPT_UID_LABEL not in labels
+    assert manifest["metadata"]["name"] == _pod_name(JobName.from_wire("/test-job/0"), 0, "abcd1234abcd1234")
 
 
 def test_task_hash_distinct_for_sanitization_collisions():

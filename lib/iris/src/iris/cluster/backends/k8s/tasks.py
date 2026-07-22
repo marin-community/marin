@@ -72,7 +72,6 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
-    POD_ATTEMPT_UID_LABEL,
     K8sResource,
     KubectlError,
     parse_k8s_quantity,
@@ -346,24 +345,31 @@ def _job_id_from_task(task_id: JobName) -> str:
     return _sanitize_label_value(_job_path(task_id))
 
 
-def _pod_name(task_id: JobName, attempt_id: int) -> str:
-    """Build a DNS-label-safe pod name from task_id and attempt_id.
+def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
+    """Build a DNS-label-safe pod name from task_id, attempt_id, and attempt_uid.
 
     k8s pod names must match [a-z0-9][a-z0-9-]* and be at most 253 chars.
     We lowercase and replace non-alphanumeric chars with hyphens, then truncate.
 
-    Both a 8-char task hash and the attempt_id are reserved before truncating
-    the readable prefix, so:
+    A 8-char task hash, the attempt_id, and the attempt_uid are reserved before
+    truncating the readable prefix, so:
     - Different task IDs with the same long prefix cannot share a pod name
       (the task hash distinguishes them).
     - Different retry attempts of the same task cannot share a pod name
       (the attempt_id distinguishes them).
+    - Different incarnations of the same (task, attempt) — a resubmit reuses the
+      task name and resets attempt_id to 0 — cannot share a pod name (the
+      per-attempt uid distinguishes them). This is what lets ``create`` always
+      succeed for a fresh attempt instead of colliding with a previous run's
+      leftover pod. ``attempt_uid`` is empty only off the direct-dispatch path
+      (older controllers, tests), which keeps the pre-uid name.
     """
     task_id_wire = task_id.to_wire()
     # 8-char hash ensures different task IDs produce different pod names
     # even after prefix truncation.
     hash8 = hashlib.sha256(task_id_wire.encode()).hexdigest()[:8]
-    suffix = f"-{hash8}-{attempt_id}"
+    uid_part = f"-{attempt_uid}" if attempt_uid else ""
+    suffix = f"-{hash8}-{attempt_id}{uid_part}"
     prefix_raw = f"iris-{task_id_wire}"
     prefix = re.sub(r"[^a-z0-9-]", "-", prefix_raw.lower())
     prefix = re.sub(r"-{2,}", "-", prefix).strip("-")
@@ -717,7 +723,7 @@ def _build_pod_manifest(
     """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
     task_id = JobName.from_wire(run_req.task_id)
     attempt_id = run_req.attempt_id
-    pod_name = _pod_name(task_id, attempt_id)
+    pod_name = _pod_name(task_id, attempt_id, run_req.attempt_uid)
 
     namespace = config.namespace
     # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
@@ -826,11 +832,6 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
-    # attempt_uid distinguishes this attempt's pod from a stale one a previous job
-    # left at the same (task_hash, attempt_id) name; see CloudK8sService._apply_pod.
-    # Omitted when unset (older controllers, tests) — apply then stays create-if-absent.
-    if run_req.attempt_uid:
-        labels[POD_ATTEMPT_UID_LABEL] = run_req.attempt_uid
     if managed_label:
         labels[managed_label] = "true"
     metadata: dict = {
@@ -2430,7 +2431,7 @@ class K8sTaskProvider:
         the profile duration itself.
         """
         attempt_id = target.attempt_id
-        pod_name = _pod_name(JobName.from_wire(target.task_id), attempt_id)
+        pod_name = _pod_name(JobName.from_wire(target.task_id), attempt_id, target.attempt_uid)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
@@ -2471,7 +2472,7 @@ class K8sTaskProvider:
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
@@ -2495,7 +2496,7 @@ class K8sTaskProvider:
         memory, cpu, thread, and fd counters. Logs are served separately via
         FetchLogs, so ``log_entries`` stays empty.
         """
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
         result = self.kubectl.exec(
             pod_name, ["sh", "-c", _POD_PROC_STATUS_SCRIPT], container="task", timeout=_POD_PROC_STATUS_TIMEOUT
         )
@@ -2552,7 +2553,7 @@ class K8sTaskProvider:
         manifest = _build_pod_manifest(run_req, self.pod_config)
 
         task_id_name = JobName.from_wire(run_req.task_id)
-        pod_name = _pod_name(task_id_name, run_req.attempt_id)
+        pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
 
         init_containers, extra_volumes, configmap_name = _build_init_container_spec(
             run_req,
@@ -2922,7 +2923,7 @@ class K8sTaskProvider:
         # each. Lazy: only fetched on cycles where at least one pod is missing,
         # so steady-state cycles add no call. setdefault keeps the active entry
         # if a name somehow appears in both.
-        if any(_pod_name(entry.task_id, entry.attempt_id) not in pods_by_name for entry in running):
+        if any(_pod_name(entry.task_id, entry.attempt_id, entry.attempt_uid) not in pods_by_name for entry in running):
             for pod in self._list_terminal_pods():
                 pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
 
@@ -2936,7 +2937,7 @@ class K8sTaskProvider:
         event_log = self._ensure_task_event_log()
 
         for entry in running:
-            pod_name = _pod_name(entry.task_id, entry.attempt_id)
+            pod_name = _pod_name(entry.task_id, entry.attempt_id, entry.attempt_uid)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             event_key = (entry.task_id.to_wire(), entry.attempt_id)
             pod = pods_by_name.get(pod_name)

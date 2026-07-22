@@ -2479,11 +2479,20 @@ class ControllerServiceImpl:
         its worker is gone or unhealthy. Shared by ``profile_task`` and
         ``exec_in_container``.
         """
+        # The K8s backend rebuilds the pod name from (task_id, attempt_id, uid);
+        # the uid rides on the attempt rows already attached to ``task``.
+        attempt_uid = next((a.attempt_uid for a in task.attempts if a.attempt_id == attempt_id), "")
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
             if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
-            return TaskTarget(task_id=task.task_id.to_wire(), attempt_id=attempt_id, worker_id=None, address=None)
+            return TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=None,
+                address=None,
+                attempt_uid=attempt_uid,
+            )
         worker = _read_worker(self._db, task_worker_id)
         if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
@@ -2492,6 +2501,7 @@ class ControllerServiceImpl:
             attempt_id=attempt_id,
             worker_id=task_worker_id,
             address=worker.address,
+            attempt_uid=attempt_uid,
         )
 
     @property

@@ -34,7 +34,6 @@ from rigging.log_setup import slow_log
 from rigging.timing import Deadline, ExponentialBackoff
 
 from iris.cluster.platforms.k8s.types import (
-    POD_ATTEMPT_UID_LABEL,
     ExecResult,
     K8sResource,
     KubectlError,
@@ -280,24 +279,17 @@ class CloudK8sService:
                 ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
-        """Create the Pod unless our own attempt already holds its name (create-if-absent).
+        """Create the Pod if it is not already present (create-if-absent).
 
-        A task attempt's pod name is stable and its manifest deterministic, so on a
-        409 an existing pod is normally the attempt we want — in any phase. It must
-        NOT be deleted and recreated: a redrive fires every reconcile tick until a
-        (slower) poll observes the pod, and delete-then-create would destroy a
-        running task and race its own deletion (409 AlreadyExists while the prior
-        pod is still Terminating), churning the task through attempts until it fails.
-
-        The exception is a resubmit: pod names are deterministic in (task_hash,
-        attempt_id) and attempt_id resets to 0 on a job resubmit, so a resubmitted
-        job's fresh attempt collides with the previous run's leftover pod. The
-        controller stamps each pod with its attempt's uid (POD_ATTEMPT_UID_LABEL),
-        unique per incarnation, so a 409 pod whose uid differs from ours is that
-        stale pod — not our own fast-finishing attempt. Delete it and fail the
-        apply; the provider maps the error to WORKER_FAILED and the next dispatch
-        recreates a fresh pod once it is gone. A pod with no uid label (older
-        controller) or a matching uid is left untouched (create-if-absent).
+        The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
+        fresh incarnation — a resubmit that reuses (task_id, attempt_id) but mints a
+        new uid — never collides with a previous run's leftover pod: ``create`` just
+        succeeds. A 409 therefore means our own attempt's pod already exists, in any
+        phase; a redrive fires every reconcile tick until a (slower) poll observes
+        it, and it must be left untouched. Deleting and recreating would destroy a
+        running task and race its own deletion (409 AlreadyExists while the prior pod
+        is still Terminating). The stale pod from a superseded incarnation carries a
+        different name and is reaped by the age-based terminal GC.
         """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
@@ -305,26 +297,11 @@ class CloudK8sService:
         try:
             api.create(body=manifest, **timeout_kw, **ns_kw)
         except ApiException as e:
-            if e.status != 409:
-                raise
-            existing = self.get_json(res, name)
-            if existing is None:
-                # Vanished between create and get; a later reconcile re-applies.
+            if e.status == 409:
+                # Pod already present (or a prior generation still terminating);
+                # leave it. A later reconcile re-applies once any deletion lands.
                 return
-            existing_uid = existing.get("metadata", {}).get("labels", {}).get(POD_ATTEMPT_UID_LABEL)
-            our_uid = manifest.get("metadata", {}).get("labels", {}).get(POD_ATTEMPT_UID_LABEL)
-            if existing_uid and our_uid and existing_uid != our_uid:
-                # A different attempt incarnation holds our name: a stale pod from a
-                # previous job that reused it. Delete it (unless already going) and
-                # fail the apply so the retry creates a fresh pod. The message omits
-                # the manifest-derived name/phase — a pod manifest carries secret
-                # env, so a data-flow scanner flags logging anything read from it;
-                # the provider already logs the failing task id alongside this error.
-                if not existing.get("metadata", {}).get("deletionTimestamp"):
-                    self.delete(res, name, wait=False)
-                raise KubectlError("stale pod from a prior attempt deleted; will recreate on next dispatch") from None
-            # Our own pod (matching or absent uid), in any phase; leave it. A later
-            # reconcile re-applies once any deletion lands.
+            raise
 
     # -- get -----------------------------------------------------------------
 
