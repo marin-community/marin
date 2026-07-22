@@ -160,9 +160,9 @@ already provisioned:
   Pulumi should provision a bucket per cluster or this reuse is the standing choice.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **DNS CNAME** (`iris-cw-<cluster>.oa.dev` → the Traefik LoadBalancer's CoreWeave-allocated
-  hostname): manual (Namecheap Advanced DNS) today. CoreWeave allocates the hostname
-  asynchronously after Traefik comes up, which needs a custom Dynamic Provider to express
-  declaratively, and no Pulumi Namecheap provider is bridged.
+  hostname): manual (Cloudflare) today. CoreWeave allocates the hostname asynchronously after
+  Traefik comes up, which needs a custom Dynamic Provider to express declaratively, and no
+  Cloudflare credential exists in this repo yet.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.
