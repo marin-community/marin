@@ -390,8 +390,8 @@ def _newtonschulz_4d_distributed(
         # Experts are stored sharded E-over-data (leaf P(None, "data", None, None)) with D/I full per
         # chip, so every chip already owns whole expert matrices. NS runs fully local -- no reshard,
         # no all-to-all -- via a plain vmap over the (L, E) leading dims (E-over-data keeps it per-chip).
-        if os.environ.get("SCALE_MUON_SYRK") == "1":
-            return jax.vmap(lambda stack: _newtonschulz_batched_syrk(stack, steps, eps, coefficient_type))(x)
+        # Dense einsum NS (not the QuACK symmetric GEMM: cutlass_call can't be vmapped, and Muon
+        # compute is ~0.2% so the SYRK speedup is irrelevant here).
         ns2d = lambda m: _zeropower_via_newtonschulz_local(m, steps, eps, coefficient_type)
         return jax.vmap(jax.vmap(ns2d))(x)
 
