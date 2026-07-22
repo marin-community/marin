@@ -12,6 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 
 RATE_LIMITED_OUTPUT = "rate_limited"
+WEEKLY_LIMIT_MESSAGE = "You've hit your weekly limit"
 
 
 class ClaudeRunStatus(StrEnum):
@@ -38,7 +39,11 @@ def _result_messages(value: object) -> list[dict[str, object]]:
 def classify_claude_result(value: object) -> ClaudeRunStatus:
     """Classify a CLI envelope or claude-code-action execution trace."""
     messages = _result_messages(value)
-    if any(message.get("is_error") is True and message.get("api_error_status") == 429 for message in messages):
+    if any(
+        message.get("is_error") is True
+        and (message.get("api_error_status") == 429 or WEEKLY_LIMIT_MESSAGE in str(message.get("result", "")))
+        for message in messages
+    ):
         return ClaudeRunStatus.RATE_LIMITED
     if any(message.get("is_error") is True for message in messages):
         return ClaudeRunStatus.FAILED

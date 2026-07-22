@@ -70,7 +70,17 @@ def test_run_claude_other_api_error_raises(tmp_path: Path) -> None:
 
 def test_classify_action_rate_limit_writes_soft_failure_output(tmp_path: Path) -> None:
     execution_file = tmp_path / "execution.json"
-    execution_file.write_text(json.dumps([error_payload(429)]))
+    execution_file.write_text(
+        json.dumps(
+            [
+                {
+                    "type": "result",
+                    "is_error": True,
+                    "result": "You've hit your weekly limit · resets 3am (UTC)",
+                }
+            ]
+        )
+    )
     github_output = tmp_path / "github-output"
 
     classify_action("failure", execution_file, github_output)

@@ -23,6 +23,8 @@ runs:
       env:
         CLAUDE_OUTCOME: ${{ inputs.outcome }}
         CLAUDE_EXECUTION_FILE: ${{ inputs.execution-file }}
+        CLAUDE_EXECUTION_FILE_FALLBACK: ${{ runner.temp }}/claude-execution-output.json
       run: >-
         python "$GITHUB_ACTION_PATH/../../../scripts/ci/claude_runner.py"
-        "$CLAUDE_OUTCOME" "$CLAUDE_EXECUTION_FILE" --github-output "$GITHUB_OUTPUT"
+        "$CLAUDE_OUTCOME" "${CLAUDE_EXECUTION_FILE:-$CLAUDE_EXECUTION_FILE_FALLBACK}"
+        --github-output "$GITHUB_OUTPUT"
