@@ -26,6 +26,10 @@ _FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 _NVIDIA_JAX_IMAGE_PREFIX = "nvcr.io/nvidia/jax:"
 _NVIDIA_JAX_UV_VERSION = "0.11.21"
+_CPU_TORCH_WHEEL = (
+    "https://download.pytorch.org/whl/cpu/"
+    "torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
+)
 _NVIDIA_JAX_PROTECTED_PACKAGES = (
     "jax",
     "jaxlib",
@@ -103,6 +107,7 @@ export PATH="$IRIS_VENV/bin:$PATH"
 "$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
   --python "$IRIS_VENV/bin/python" --package marin-root \\
   {root_protected_flags}
+"$uv" pip install --python "$IRIS_VENV/bin/python" --no-deps "{_CPU_TORCH_WHEEL}"
 "$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
   --python "$IRIS_VENV/bin/python" --package marin-levanter --no-group dev --extra gpu \\
   {gpu_protected_flags}

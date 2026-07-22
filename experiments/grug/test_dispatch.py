@@ -74,5 +74,6 @@ def test_dispatch_with_nvidia_jax_image_preserves_container_jax(monkeypatch) -> 
     gpu_sync = script.split("--package marin-levanter", 1)[1]
     assert "--no-install-package torch" not in root_sync
     assert "--no-install-package torch" in gpu_sync
+    assert "torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl" in script
     assert "assert torch.__file__.startswith(venv)" in script
     assert 'assert "+cpu" in torch.__version__' in script
