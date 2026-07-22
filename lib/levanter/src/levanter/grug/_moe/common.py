@@ -22,6 +22,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ring_quack_approx",  # Bulk ring with QuACK's approximate fused SwiGLU expert MLP.
     "ring_fused",  # Bulk ring with output-oriented gather/reduce combine.
     "ring_local_combine",  # Bulk-ring dispatch + shard-local collective-permute combine.
     "ring_ppermute",  # Expert-parallel streamed collective-permute backend.
@@ -33,6 +34,7 @@ MoeImplementation: TypeAlias = Literal[
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
+    "ring_quack_approx",
     "ring_fused",
     "ring_local_combine",
     "ring_ppermute",

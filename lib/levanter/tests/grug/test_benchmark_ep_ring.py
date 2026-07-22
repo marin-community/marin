@@ -15,6 +15,7 @@ from experiments.grug.moe.benchmark_ep_ring import (
     _selected_experts,
 )
 from experiments.grug.moe.repro_quack_grouped_mlp_numerics import _error_metrics
+from levanter.grug._moe.common import resolve_moe_implementation
 
 
 def test_ep_ring_benchmark_balanced_routing_has_exact_expert_counts():
@@ -162,3 +163,8 @@ def test_quack_numerics_reproducer_reports_absolute_and_relative_error() -> None
     assert metrics["relative_l2_error"] == pytest.approx(
         np.linalg.norm(np.asarray([0.001, 0.5, 1.0])) / np.linalg.norm(expected)
     )
+
+
+def test_approximate_quack_ring_requires_explicit_backend_name() -> None:
+    assert resolve_moe_implementation("ring_quack_approx") == "ring_quack_approx"
+    assert resolve_moe_implementation(None) == "ring"

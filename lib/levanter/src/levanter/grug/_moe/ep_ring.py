@@ -369,7 +369,7 @@ def _moe_mlp_ep_ring_quack_local(
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """Benchmark-only bulk-ring path using the EP-local QuACK expert MLP."""
+    """Bulk-ring path using QuACK's approximate fused SwiGLU expert MLP."""
     _validate_quack_bulk_ring_contract(x_local, moe_w13_local, moe_w2_local, activation_fn=activation_fn)
     routing = _ring_routing_prepass(
         selected_experts_local,
