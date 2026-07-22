@@ -92,7 +92,7 @@ storage:
 #
 # The iris-cw-us-east-08a-signing-key secret does NOT exist yet — mint it with
 # `iris cluster init-keys` and register this cluster's public half in the marin /
-# marin-dev federation_peers before first start (see .agents/projects/iac/gaps.md).
+# marin-dev federation_peers before first start.
 auth:
   signing_key:
     - env:IRIS_SIGNING_KEY
@@ -199,7 +199,7 @@ scale_groups:
       attributes:
         pool: gb200
     # Pinned full reserved fleet: 12 racks x 18 nodes. GB200 NVL72 deploys in whole
-    # racks, so this MUST stay a multiple of 18 (see header + gaps.md).
+    # racks, so this MUST stay a multiple of 18 (see header).
     buffer_slices: 216
     max_slices: 216
     priority: 100

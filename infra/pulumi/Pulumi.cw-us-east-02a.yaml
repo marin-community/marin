@@ -1,5 +1,4 @@
 config:
   marin-iac:cluster: cw-us-east-02a
-  marin-iac:import: "true"
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6bAcl9KU7pB4stOkgpjsiywklD3oNPpghUSx+SbrGA4SSQCdtF6ihMpp7LgyntqnZf26HYeUZkwfLsO3DuzrzbucRxm95OVZdDlWKk31CoAPiU/NLYwxk6PEzMtczuwtj3PftlVhgpBs2VM=

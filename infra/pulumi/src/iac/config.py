@@ -50,12 +50,15 @@ class KueueProvisioningSpec(BaseModel):
     The ResourceFlavor name and the Topology set are canonical constants in
     iris.cluster.platforms.k8s.kueue_manifests (shared with install_kueue.py so IaC and the
     script render identically), not per-cluster knobs. cluster_queue derives from the Iris
-    config. Only the flavor→topology binding varies per cluster and lives here.
+    config. The flavor→topology binding and the controller-manager memory override are the
+    two things that vary per cluster and live here.
     """
 
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
     # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
     flavor_topology: str = "infiniband"
+    # Override controllerManager.manager.resources' memory (requests == limits)
+    manager_memory_limit: str | None = None
 
 
 # Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
@@ -63,8 +66,8 @@ class KueueProvisioningSpec(BaseModel):
 # The federation ingress admits only these; the set is the same for every CW cluster. Modeled
 # as a plain input with these constants for now rather than as a GCP address reservation that
 # the GCP arm looks up (that consolidation is deferred). Mirrors FEDERATION_ALLOW_SOURCES in
-# lib/iris/scripts/install_cw_network.py — keep the two in sync until the federation-ingress
-# component reads this field and that constant is deleted (see .agents/projects/iac/gaps.md).
+# lib/iris/scripts/install_cw_network.py — keep the two in sync until that script's own copy is
+# deleted (see README.md's "Future work").
 MARIN_FEDERATION_EGRESS_SOURCES = ["34.27.183.11", "35.254.13.19"]
 
 

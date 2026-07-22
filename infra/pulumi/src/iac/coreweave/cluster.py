@@ -10,8 +10,9 @@ kubeconfig.
 The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi. Managing or
 adopting it would need the CoreWeave Terraform provider bridged into Pulumi
 (`pulumi package add terraform-provider coreweave/coreweave`) and CoreWeave API credentials,
-neither of which exists here (design.md Open Questions; gaps.md row 3). `CksClusterSpec`
-(`args.cluster`, exported below) records that externally-provisioned cluster as in-tree config.
+neither of which exists here (design.md Open Questions; README.md's "Future work").
+`CksClusterSpec` (`args.cluster`, exported below) records that externally-provisioned cluster
+as in-tree config.
 """
 
 from dataclasses import dataclass

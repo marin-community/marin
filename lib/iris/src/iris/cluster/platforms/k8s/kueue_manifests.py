@@ -189,7 +189,11 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
     }
 
 
-def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
+def build_cks_values(
+    pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
+    *,
+    manager_memory_limit: str | None = None,
+) -> dict:
     """Return the ``cks-kueue`` (CoreWeave) helm values (managerConfig only).
 
     cks-kueue nests the upstream kueue subchart under ``kueue:``. The chart's
@@ -201,14 +205,28 @@ def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> 
     list shape with the crash-prone TASBalancedPlacement gate turned off. The chart
     takes this value as a *list*; overriding it as a map breaks the chart's
     ``kueue.featureGates`` template.
+
+    ``manager_memory_limit``, when set, overrides ``controllerManager.manager.resources``
+    (requests == limits for memory). CPU is left out of the override: Helm deep-merges map
+    values against the chart's own ``values.yaml`` (unlike lists, which replace wholesale —
+    see the featureGates note above), so omitting ``cpu`` here preserves the chart's own CPU
+    request/limit instead of duplicating it.
     """
     config_yaml = yaml.safe_dump(
         build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
     )
+    controller_manager: dict = {"featureGates": CKS_KUEUE_FEATURE_GATES}
+    if manager_memory_limit is not None:
+        controller_manager["manager"] = {
+            "resources": {
+                "limits": {"memory": manager_memory_limit},
+                "requests": {"memory": manager_memory_limit},
+            }
+        }
     return {
         "kueue": {
             "enableKueueViz": False,
-            "controllerManager": {"featureGates": CKS_KUEUE_FEATURE_GATES},
+            "controllerManager": controller_manager,
             "managerConfig": {"controllerManagerConfigYaml": config_yaml},
         },
     }

@@ -88,7 +88,7 @@ class KueueAddon(pulumi.ComponentResource):
             namespace=OPERATOR_NS,
             create_namespace=True,
             repository_opts=k8s.helm.v3.RepositoryOptsArgs(repo=CW_REPO_URL),
-            values=build_cks_values([args.namespace]),
+            values=build_cks_values([args.namespace], manager_memory_limit=args.spec.manager_memory_limit),
             # helm Release import id is "<namespace>/<release-name>".
             opts=child_opts(f"{OPERATOR_NS}/{RELEASE_DEFAULT}"),
         )

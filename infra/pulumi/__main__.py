@@ -10,7 +10,7 @@ which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kue
 the Traefik/cert-manager/federation-ingress stack; GCP declares the reserved federation-egress
 static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
 (object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
-gaps.md.
+README.md's "Future work".
 """
 
 import os
@@ -45,9 +45,9 @@ def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
     (declared below) exposes the controller's RPC surface behind only an IP allowlist — a
     stable identity plus `auth.trusted_cidrs` is what actually makes that enforcing rather
     than permissive (see install_cw_network.py's own NULL-AUTH warning, docs/coreweave.md).
-    Pulumi does not provision the signing-key secret itself (see gaps.md's "finelog auth
-    secrets" — the key material must never pass through Pulumi state); this is purely a
-    read-only reminder pointing at the one command that does.
+    Pulumi does not provision the signing-key secret itself — the key material must never pass
+    through Pulumi state (see README.md's "Unsupported"); this is purely a read-only reminder
+    pointing at the one command that does.
     """
     auth = iris_config.auth
     if auth is not None and auth.signing_key:
