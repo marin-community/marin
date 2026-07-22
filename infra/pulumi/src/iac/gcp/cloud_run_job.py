@@ -17,10 +17,9 @@ on each and mounts them as env vars.
 from dataclasses import dataclass, field
 
 import pulumi
-import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 
-from iac.gcp.cloud_run import SecretEnv, member_slug
+from iac.gcp.cloud_run import SecretEnv, dockerfile_image, runtime_service_account
 
 # The Cloud Run Admin API endpoint Scheduler POSTs to; *.googleapis.com targets take an
 # OAuth token (not OIDC, which is for end-user-facing URLs like Cloud Run services).
@@ -79,56 +78,25 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
         super().__init__("marin:gcp:ScheduledCloudRunJob", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account = gcp.serviceaccount.Account(
-            "sa",
+        service_account = runtime_service_account(
             account_id=args.job_name,
-            project=args.project,
             display_name=f"{args.job_name} (Cloud Run job)",
+            project=args.project,
+            roles=(),
+            secrets=args.secrets,
+            cloudsql_client=bool(args.cloudsql_instances),
             opts=child,
         )
         member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
-        if args.cloudsql_instances:
-            gcp.projects.IAMMember(
-                "sa-cloudsql-client",
-                project=args.project,
-                role="roles/cloudsql.client",
-                member=member,
-                opts=child,
-            )
-        for secret_env in args.secrets:
-            gcp.secretmanager.SecretIamMember(
-                f"secret-{member_slug(secret_env.secret)}",
-                project=args.project,
-                secret_id=secret_env.secret,
-                role="roles/secretmanager.secretAccessor",
-                member=member,
-                opts=child,
-            )
-
-        repo = gcp.artifactregistry.Repository(
-            "repo",
-            project=args.project,
-            location=args.region,
-            repository_id=args.job_name,
-            format="DOCKER",
+        image = dockerfile_image(
+            image_name=args.job_name,
             description=f"Images for the {args.job_name} Cloud Run job.",
-            opts=child,
-        )
-        image_tag = repo.repository_id.apply(
-            lambda repo_id: f"{args.region}-docker.pkg.dev/{args.project}/{repo_id}/{args.job_name}:latest"
-        )
-        image = docker_build.Image(
-            "image",
-            context=docker_build.BuildContextArgs(location=args.build_context),
-            dockerfile=docker_build.DockerfileArgs(location=f"{args.build_context}/{args.dockerfile}"),
-            # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
-            # produces a runnable image.
-            platforms=[docker_build.Platform.LINUX_AMD64],
-            tags=[image_tag],
-            push=True,
-            # Preview plans the graph without invoking buildx; the build + push happen on up.
-            build_on_preview=False,
-            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[repo]),
+            project=args.project,
+            region=args.region,
+            build_context=args.build_context,
+            dockerfile=args.dockerfile,
+            parent=self,
+            gcp_provider=gcp_provider,
         )
 
         cloudsql_volumes = (

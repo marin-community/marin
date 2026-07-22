@@ -33,7 +33,7 @@ SOURCES = ("github", "discord")
 EMBED_DIM = 384
 BATCH = 400
 
-DDL = """
+DDL = f"""
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS chunks (
   id bigint PRIMARY KEY,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   url text NOT NULL,
   text text,
   hash text,
-  embedding vector(384),
+  embedding vector({EMBED_DIM}),
   part int NOT NULL DEFAULT 0,
   n_parts int NOT NULL DEFAULT 1
 );

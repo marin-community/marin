@@ -132,6 +132,97 @@ def member_slug(member: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", member.lower()).strip("-")
 
 
+def runtime_service_account(
+    *,
+    account_id: str,
+    display_name: str,
+    project: str,
+    roles: tuple[str, ...],
+    secrets: tuple[SecretEnv, ...],
+    cloudsql_client: bool,
+    opts: pulumi.ResourceOptions,
+) -> gcp.serviceaccount.Account:
+    """Runtime service account with its project roles, cloudsql.client, and secret accessor grants.
+
+    Shared between the Cloud Run service and job components; child resource names ("sa",
+    "sa-<role>", "sa-cloudsql-client", "secret-<slug>") are part of existing stacks' state,
+    so they must stay stable.
+    """
+    service_account = gcp.serviceaccount.Account(
+        "sa",
+        account_id=account_id,
+        project=project,
+        display_name=display_name,
+        opts=opts,
+    )
+    member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
+    for role in roles:
+        gcp.projects.IAMMember(
+            f"sa-{_role_slug(role)}",
+            project=project,
+            role=role,
+            member=member,
+            opts=opts,
+        )
+    if cloudsql_client:
+        gcp.projects.IAMMember(
+            "sa-cloudsql-client",
+            project=project,
+            role="roles/cloudsql.client",
+            member=member,
+            opts=opts,
+        )
+    for secret_env in secrets:
+        gcp.secretmanager.SecretIamMember(
+            f"secret-{member_slug(secret_env.secret)}",
+            project=project,
+            secret_id=secret_env.secret,
+            role="roles/secretmanager.secretAccessor",
+            member=member,
+            opts=opts,
+        )
+    return service_account
+
+
+def dockerfile_image(
+    *,
+    image_name: str,
+    description: str,
+    project: str,
+    region: str,
+    build_context: str,
+    dockerfile: str,
+    parent: pulumi.ComponentResource,
+    gcp_provider: pulumi.ProviderResource,
+) -> docker_build.Image:
+    """Per-deployable Artifact Registry repo + digest-pinned linux/amd64 image from a Dockerfile."""
+    repo = gcp.artifactregistry.Repository(
+        "repo",
+        project=project,
+        location=region,
+        repository_id=image_name,
+        format="DOCKER",
+        description=description,
+        opts=pulumi.ResourceOptions(parent=parent, provider=gcp_provider),
+    )
+    image_tag = repo.repository_id.apply(
+        lambda repo_id: f"{region}-docker.pkg.dev/{project}/{repo_id}/{image_name}:latest"
+    )
+    return docker_build.Image(
+        "image",
+        context=docker_build.BuildContextArgs(location=build_context),
+        dockerfile=docker_build.DockerfileArgs(location=f"{build_context}/{dockerfile}"),
+        # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
+        # produces a runnable image.
+        platforms=[docker_build.Platform.LINUX_AMD64],
+        tags=[image_tag],
+        push=True,
+        # Preview plans the graph without invoking buildx; the build + push happen on up.
+        build_on_preview=False,
+        opts=pulumi.ResourceOptions(parent=parent, provider=gcp_provider, depends_on=[repo]),
+    )
+
+
 class CloudRunService(pulumi.ComponentResource):
     """Build, push, and run a Dockerfile as an IAP-gated Cloud Run v2 service.
 
@@ -153,64 +244,24 @@ class CloudRunService(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account = gcp.serviceaccount.Account(
-            "sa",
+        service_account = runtime_service_account(
             account_id=args.service_account_id or args.service_name,
-            project=args.project,
             display_name=f"{args.service_name} (Cloud Run)",
-            opts=child,
-        )
-        member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
-        for role in args.service_account_roles:
-            gcp.projects.IAMMember(
-                f"sa-{_role_slug(role)}",
-                project=args.project,
-                role=role,
-                member=member,
-                opts=child,
-            )
-        if args.cloudsql_instances:
-            gcp.projects.IAMMember(
-                "sa-cloudsql-client",
-                project=args.project,
-                role="roles/cloudsql.client",
-                member=member,
-                opts=child,
-            )
-        for secret_env in args.secrets:
-            gcp.secretmanager.SecretIamMember(
-                f"secret-{member_slug(secret_env.secret)}",
-                project=args.project,
-                secret_id=secret_env.secret,
-                role="roles/secretmanager.secretAccessor",
-                member=member,
-                opts=child,
-            )
-
-        repo = gcp.artifactregistry.Repository(
-            "repo",
             project=args.project,
-            location=args.region,
-            repository_id=args.service_name,
-            format="DOCKER",
-            description=f"Images for the {args.service_name} Cloud Run service.",
+            roles=args.service_account_roles,
+            secrets=args.secrets,
+            cloudsql_client=bool(args.cloudsql_instances),
             opts=child,
         )
-        image_tag = repo.repository_id.apply(
-            lambda repo_id: f"{args.region}-docker.pkg.dev/{args.project}/{repo_id}/{args.service_name}:latest"
-        )
-        image = docker_build.Image(
-            "image",
-            context=docker_build.BuildContextArgs(location=args.build_context),
-            dockerfile=docker_build.DockerfileArgs(location=f"{args.build_context}/{args.dockerfile}"),
-            # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
-            # produces a runnable image.
-            platforms=[docker_build.Platform.LINUX_AMD64],
-            tags=[image_tag],
-            push=True,
-            # Preview plans the graph without invoking buildx; the build + push happen on up.
-            build_on_preview=False,
-            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[repo]),
+        image = dockerfile_image(
+            image_name=args.service_name,
+            description=f"Images for the {args.service_name} Cloud Run service.",
+            project=args.project,
+            region=args.region,
+            build_context=args.build_context,
+            dockerfile=args.dockerfile,
+            parent=self,
+            gcp_provider=gcp_provider,
         )
 
         # Cloud SQL connector: a "cloudsql" volume exposes the auth-proxy sockets under
