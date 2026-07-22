@@ -76,7 +76,13 @@ _NVIDIA_JAX_PROTECTED_PACKAGES = (
 
 def nvidia_jax_overlay_setup_script() -> str:
     """Build a Marin overlay without replacing an NGC image's accelerator stack."""
-    protected_flags = (" \\\n  ").join(f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES)
+    root_protected_packages = tuple(
+        package for package in _NVIDIA_JAX_PROTECTED_PACKAGES if package not in {"torch", "torchvision"}
+    )
+    root_protected_flags = (" \\\n  ").join(f"--no-install-package {package}" for package in root_protected_packages)
+    gpu_protected_flags = (" \\\n  ").join(
+        f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES
+    )
     return f"""set -eu
 cd "$IRIS_WORKDIR"
 test ! -e "$IRIS_VENV"
@@ -96,10 +102,10 @@ export VIRTUAL_ENV="$IRIS_VENV"
 export PATH="$IRIS_VENV/bin:$PATH"
 "$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
   --python "$IRIS_VENV/bin/python" --package marin-root \\
-  {protected_flags}
+  {root_protected_flags}
 "$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
   --python "$IRIS_VENV/bin/python" --package marin-levanter --no-group dev --extra gpu \\
-  {protected_flags}
+  {gpu_protected_flags}
 sha256sum \\
   /opt/jax/jax/__init__.py \\
   /opt/jaxlibs/jaxlib/jaxlib/__init__.py \\
@@ -109,7 +115,6 @@ sha256sum \\
 diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
-test ! -e "$IRIS_VENV/lib/python3.12/site-packages/torch/__init__.py"
 test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_cu13-*.dist-info
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
 "$IRIS_VENV/bin/python" - <<'PY'
@@ -118,6 +123,7 @@ import os
 import cutlass
 import jax
 import jaxlib
+import torch
 from cutlass._mlir._mlir_libs import _cutlass_ir
 
 assert jax.__file__.startswith("/opt/jax/"), jax.__file__
@@ -125,6 +131,8 @@ assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
 venv = os.environ["VIRTUAL_ENV"] + "/"
 assert cutlass.__file__.startswith(venv), cutlass.__file__
 assert _cutlass_ir.__file__.startswith(venv), _cutlass_ir.__file__
+assert torch.__file__.startswith(venv), torch.__file__
+assert "+cpu" in torch.__version__, torch.__version__
 print(f"preserved NGC JAX {{jax.__version__}} from {{jax.__file__}}")
 print(f"preserved NGC JAXLIB {{jaxlib.__version__}} from {{jaxlib.__file__}}")
 print(f"overlaid CUDA-13 CUTLASS DSL {{cutlass.__version__}} from {{cutlass.__file__}}")
