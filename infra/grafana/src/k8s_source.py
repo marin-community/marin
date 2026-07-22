@@ -440,6 +440,9 @@ class K8sSource:
 
         Only nodes advertising nvidia.com/gpu capacity carry the CoreWeave rack
         topology labels that map to a physical tray; CPU/storage nodes are excluded.
+
+        Raises:
+            ValueError: A node has a malformed nvidia.com/gpu capacity quantity.
         """
         racks: dict[str, dict] = {}
         for node in self._list("/api/v1/nodes"):
@@ -469,8 +472,8 @@ def _node_gpu_capacity(node: dict) -> int:
     raw = ((node.get("status") or {}).get("capacity") or {}).get(_GPU_RESOURCE, 0)
     try:
         return int(raw)
-    except (TypeError, ValueError):
-        return 0
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"invalid {_GPU_RESOURCE} capacity quantity: {raw!r}") from err
 
 
 def _node_ready(node: dict) -> bool:

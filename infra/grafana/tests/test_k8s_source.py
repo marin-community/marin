@@ -381,6 +381,13 @@ def test_gpu_racks_sorts_numerically_not_lexically():
     assert [row["rack"] for row in rows] == ["9", "10"]
 
 
+def test_gpu_racks_rejects_an_invalid_gpu_capacity_quantity():
+    bad_node = node("g1", rack="169", gpu_capacity=4)
+    bad_node["status"]["capacity"][GPU_RESOURCE] = "many"
+    with pytest.raises(ValueError):
+        make_k8s_source(k8s_api({"/api/v1/nodes": [bad_node]})).gpu_racks()
+
+
 # --- K8sFleet ---------------------------------------------------------------
 
 
