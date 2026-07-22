@@ -279,17 +279,22 @@ class CloudK8sService:
                 ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
-        """Create the Pod if it is not already present (create-if-absent).
+        """Create the Pod if no live pod already holds its name (create-if-live-absent).
 
         A task attempt's pod name is stable and its manifest deterministic, so a
-        pod that already exists — in any phase — is the one we want; we must NOT
-        delete and recreate it. Delete-then-create would destroy a running task
-        on every redrive and, because the delete and the create race, fail with
-        409 AlreadyExists ("object is being deleted") while the prior pod is
-        still Terminating — which the dispatch loop then mistakes for worker loss
-        and retries, churning the task through attempts until it fails. A pod
-        that genuinely needs to change comes from a new attempt (new name); one
-        that should go away is removed by stray-pod GC.
+        live pod (Pending/Running) that already holds this name is the attempt we
+        want; we must NOT delete and recreate it. Delete-then-create would destroy
+        a running task on every redrive and, because the delete and the create
+        race, fail with 409 AlreadyExists ("object is being deleted") while the
+        prior pod is still Terminating — which the dispatch loop then mistakes for
+        worker loss and retries, churning the task through attempts until it fails.
+
+        A *terminal* pod (Succeeded/Failed) is different: pod names are deterministic
+        in (task_hash, attempt_id) and attempt_id resets to 0 on a job resubmit, so
+        a resubmitted job's fresh attempt collides with the previous run's terminal
+        pod. Keeping it would report that dead attempt's verdict against the fresh
+        one. Delete the stale pod and fail the apply; the provider maps the error to
+        WORKER_FAILED and the next dispatch recreates a fresh pod once it is gone.
         """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
@@ -297,11 +302,20 @@ class CloudK8sService:
         try:
             api.create(body=manifest, **timeout_kw, **ns_kw)
         except ApiException as e:
-            if e.status == 409:
-                # Pod already present (or a prior generation still terminating);
-                # leave it. A later reconcile re-applies once any deletion lands.
+            if e.status != 409:
+                raise
+            existing = self.get_json(res, name)
+            if existing is None:
+                # Vanished between create and get; a later reconcile re-applies.
                 return
-            raise
+            phase = existing.get("status", {}).get("phase")
+            terminating = bool(existing.get("metadata", {}).get("deletionTimestamp"))
+            if phase in ("Succeeded", "Failed") and not terminating:
+                logger.info("k8s: deleting stale terminal pod %s (phase=%s) before recreate", name, phase)
+                self.delete(res, name, wait=False)
+                raise KubectlError(f"stale terminal pod {name} (phase={phase}) deleted; will recreate") from None
+            # Live pod, or a prior generation still terminating; leave it. A later
+            # reconcile re-applies once any deletion lands.
 
     # -- get -----------------------------------------------------------------
 

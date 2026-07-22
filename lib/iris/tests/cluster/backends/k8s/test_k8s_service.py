@@ -198,7 +198,7 @@ def test_delete_nonexistent_is_idempotent(svc: InMemoryK8sService):
 
 
 def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
-    """Re-applying an existing pod is a no-op: the live pod is never overwritten.
+    """Re-applying an existing live pod is a no-op: it is never overwritten.
 
     A task attempt's pod name is stable, so a redrive re-applies the same name
     every tick. Overwriting (delete-then-create) would destroy a running pod and
@@ -213,6 +213,31 @@ def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
     assert result is not None
     # Second apply was a no-op — the original pod (no version label) survives.
     assert result["metadata"].get("labels", {}).get("version") is None
+
+
+def test_apply_pod_replaces_stale_terminal_pod(svc: InMemoryK8sService):
+    """A resubmit whose name collides with a previous run's terminal pod gets a
+    fresh pod, not the dead attempt's verdict.
+
+    Pod names are deterministic in (task_hash, attempt_id) and attempt_id resets
+    to 0 on resubmit, so a fresh attempt collides with the prior run's Failed
+    pod. Apply must delete the stale pod and raise (mapped to WORKER_FAILED),
+    then the retry recreates a fresh pod.
+    """
+    svc.apply_json(_pod_manifest("p1", labels={"run": "old"}))
+    svc.transition_pod("p1", "Failed", exit_code=137, reason="OOMKilled")
+
+    with pytest.raises(KubectlError, match="stale terminal pod"):
+        svc.apply_json(_pod_manifest("p1", labels={"run": "new"}))
+    # The stale pod is gone, so the retry's create cannot adopt it.
+    assert svc.get_json(K8sResource.PODS, "p1") is None
+
+    svc.apply_json(_pod_manifest("p1", labels={"run": "new"}))
+    result = svc.get_json(K8sResource.PODS, "p1")
+    assert result is not None
+    # The recreated pod is the fresh manifest, not the dead attempt's Failed pod.
+    assert result["metadata"]["labels"]["run"] == "new"
+    assert result.get("status", {}).get("phase") != "Failed"
 
 
 # ========================================================================

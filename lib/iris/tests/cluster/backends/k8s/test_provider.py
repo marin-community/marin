@@ -135,6 +135,33 @@ def test_redrive_does_not_recreate_running_pod(provider, k8s):
     assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
 
 
+def test_resubmit_replaces_stale_terminal_pod(provider, k8s):
+    """A resubmit inheriting a previous run's Failed pod recreates a fresh pod.
+
+    Pod names are deterministic in (task_hash, attempt_id) and attempt_id resets
+    to 0 on resubmit, so a fresh attempt collides with the prior run's terminal
+    pod. Adopting it reported the dead attempt's verdict against the fresh one.
+    The apply must delete the stale pod and fail as WORKER_FAILED (retryable),
+    then the next tick recreates a fresh pod.
+    """
+    req = make_run_req("/test-job/0")
+    pod_name = _pod_name(JobName.from_wire("/test-job/0"), 0)
+
+    provider.sync(make_batch(tasks_to_run=[req]))
+    k8s.transition_pod(pod_name, "Failed", exit_code=137, reason="OOMKilled")
+
+    # Resubmit: the same attempt-0 name now collides with the stale Failed pod.
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert [u.new_state for u in result] == [job_pb2.TASK_STATE_WORKER_FAILED]
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+    # Retry recreates a fresh pod that no longer carries the Failed verdict.
+    provider.sync(make_batch(tasks_to_run=[req]))
+    pod_after = k8s.get_json(K8sResource.PODS, pod_name)
+    assert pod_after is not None
+    assert pod_after.get("status", {}).get("phase") != "Failed"
+
+
 # ---------------------------------------------------------------------------
 # sync(): stray pod deletion (kill via desired-set diff)
 # ---------------------------------------------------------------------------

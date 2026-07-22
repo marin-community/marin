@@ -647,10 +647,18 @@ class InMemoryK8sService:
         resource = K8sResource.from_kind(manifest["kind"])
         name = manifest["metadata"]["name"]
 
-        # Pods are create-if-absent (mirrors K8sService._apply_pod): an existing
-        # pod — in any phase — is the one we want, so re-applying it on a redrive
-        # is a no-op. Overwriting and rescheduling would reset a running pod.
+        # Pods are create-if-live-absent (mirrors K8sService._apply_pod): a live
+        # pod already holding this name is the attempt we want, so re-applying it
+        # on a redrive is a no-op (overwriting would reset a running pod). A
+        # terminal pod is a leftover from a previous job that reused this name;
+        # delete it and fail the apply so a fresh pod replaces it on retry.
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
+            existing = self._resources[(resource.plural, name)]
+            phase = existing.get("status", {}).get("phase")
+            terminating = bool(existing.get("metadata", {}).get("deletionTimestamp"))
+            if phase in ("Succeeded", "Failed") and not terminating:
+                self.delete(resource, name)
+                raise KubectlError(f"stale terminal pod {name} (phase={phase}) deleted; will recreate")
             return
 
         self._resources[(resource.plural, name)] = manifest
