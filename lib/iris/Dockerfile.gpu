@@ -33,9 +33,9 @@ RUN python3 -m pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu \
     torch==2.11.0+cpu
 
-# The setup script validates every declared distribution before syncing and
-# excludes it from the overlay venv. Keep this list to one coherent binary
-# stack rather than preserving jax/jaxlib alone.
+# The setup script records which declared distributions exist before syncing
+# and excludes every name from the overlay venv. Keep this list to one coherent
+# binary stack rather than preserving jax/jaxlib alone.
 RUN python3 - <<'PY'
 import importlib.metadata as metadata
 import pathlib
@@ -53,6 +53,7 @@ candidates = (
     "cuda-pathfinder",
     "cuda-python",
     "cuda-tile",
+    "cuda-toolkit",
     "nvidia-cublas",
     "nvidia-cublas-cu12",
     "nvidia-cuda-crt",
