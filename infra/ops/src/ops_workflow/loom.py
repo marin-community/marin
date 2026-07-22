@@ -205,7 +205,7 @@ class StubAgentGateway:
         existing = self._sessions_by_name.get(request.name)
         if existing is not None:
             return LoomSession(id=existing.id, url=existing.url, live_turn=existing.turn)
-        session_id = f"stub-{len(self._sessions) + 1}"
+        session_id = f"stub-{request.case_id}"
         session = _StubSession(
             id=session_id,
             url=f"http://127.0.0.1:7878/s/{session_id}",
@@ -220,7 +220,19 @@ class StubAgentGateway:
         return LoomSession(id=session.id, url=session.url, live_turn=0)
 
     async def prompt(self, session_id: str, request: AgentPrompt) -> int | None:
-        session = self._sessions[session_id]
+        session = self._sessions.get(session_id)
+        if session is None:
+            session = _StubSession(
+                id=session_id,
+                url=f"http://127.0.0.1:7878/s/{session_id}",
+                prompts=[request.text],
+                started_at=time.monotonic(),
+                turn=0,
+                case_id=request.case_id,
+                turn_id=request.turn_id,
+            )
+            self._sessions[session_id] = session
+            return session.turn
         session.turn += 1
         session.prompts.append(request.text)
         session.started_at = time.monotonic()
