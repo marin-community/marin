@@ -34,6 +34,12 @@ The corrected GB200 smoke succeeded under JAX 0.10.1. It intercepted 10 real `cu
 
 NVIDIA's `nvcr.io/nvidia/jax:26.06-py3` image also passed a direct GB200 identity/JIT smoke. Its JAX and JAXLIB load from `/opt/jax` and `/opt/jaxlibs`, respectively, under CUDA 13.3 and driver 595.71.05. A guarded system-site-packages overlay then installed the Marin workspace while excluding JAX, JAXLIB, their CUDA plugins, and CUDA/NVIDIA Python packages. Hashes of JAX, JAXLIB, `_jax.so`, and `libjax_common.so` were identical before and after the overlay; the full scale launcher imported and a GPU JIT completed. The exact L48/B512 graph is the remaining container comparison.
 
+The first exact NGC-image run reached graph compilation but failed with `NVVM_ERROR_COMPILATION: unsupported operation`, a different signature from the null-image loader failure. The image installed both the base and CUDA 13 CUTLASS DSL library wheels, which claim the same `_cutlass_ir` files. A package-identity probe confirmed that collision. The guarded overlay now excludes the base wheel and supplies the repository's locked CUDA 13 CUTLASS DSL packages while retaining the container's JAX and JAXLIB. The full dual-quantizer smoke, including the L48/B512 tensor shapes, then passed.
+
+Two corrected exact runs completed the full one-step graph on all 16 ranks. Each processed 2,097,152 tokens with loss `11.804323196411133`; neither emitted a FatBinary loader, NVVM, CUDA, coordination, or OOM error during compilation or execution. Both subsequently attempted to force-save the 248-billion-parameter model checkpoint to local `/tmp`, where rank 0 exited 137 and Iris terminated the remaining ranks. That post-step checkpoint-capacity failure is separate from the successful model step and from the target loader signature.
+
+The exact graph therefore did not reproduce the original null-image failure in two runs under the preserved NVIDIA JAX/JAXLIB stack. This supports a software-image or compilation-stack dependency, but does not isolate the responsible component and does not rule out an upstream OOM in the original stack.
+
 The first multi-host probe attempt reproduced the original `CUDA_ERROR_INVALID_VALUE` at `jit_train_step`, but current Iris provides rank identity through `IRIS_TASK_ID` rather than `IRIS_TASK_INDEX`. All workers consequently used the trace fallback, and the Python uploader raised while resolving its task path. No per-task artifacts survived, so this attempt establishes only that the probed positive control still fails. Task-index derivation now parses the canonical Iris task ID in both the interposer and uploader, with regression coverage for odd-rank sync selection and task-zero CUBIN capture.
 
 The corrected split run produced all 16 task artifacts. Eight trace tasks and eight sync tasks recorded 94,116 `cuModuleLoadFatBinary` calls. Exactly four calls per task returned `CUDA_ERROR_INVALID_VALUE`; the other 94,052 calls succeeded. Every pre-load synchronization on the sync tasks returned success, including the 32 failing sync-profile calls. This rules out an earlier asynchronous CUDA error surfacing at the loader boundary.
@@ -47,3 +53,4 @@ This locates the immediate defect before the CUDA loader. The driver is not reje
 ## Future work
 
 - [ ] Instrument the module-byte producer to pair an empty result with its compiler or assembler status and memory state.
+- [ ] Compare the original stack's module-byte producer and memory telemetry with the passing NVIDIA JAX stack.
