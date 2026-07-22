@@ -118,13 +118,17 @@ job = one point.
      checkpoint) and do not let it drive relocation/escalation or read as a systemic defect, however
      many occur. Investigate further ONLY with a specific reason — a single-host slice, a segfault
      that repeats at step 0 before any training, or a real Python traceback in the log.
-   - **LIVENESS (learned s01, still true):** the W&B **`state` field is UNRELIABLE** — it flips to
-     `crashed` on any heartbeat lapse (preemption/resume/network) while training continues. Ground
-     truth = (a) `_step` **advancing** across passes, and (b) a recent `Progress on:train
-     <k>kit/<N>kit … loss=..` tqdm line (`iris job logs <job> --tail --max-lines 60 | grep
-     'Progress on:train'`). Genuinely stalled ⟺ `_step` frozen across passes AND no recent progress
-     line. Track the no-progress start time in the DB so timeouts measure from last observed
-     progress, not from the pass.
+   - **LIVENESS (learned s01; child-vs-parent clarified 2026-07-22):** the training-now signal is the
+     Iris status of the **child `…/run_levanter_train_lm-<hash>` task**, NOT the parent job. A parent
+     `running` only means a child *can* be scheduled; a **`running` child is the primary "training now"
+     indicator**, and its absence (parent running, no running child) means queued/gang-acquiring, not
+     training. On preemption Fray spawns a NEW child (new hash), so ALWAYS read the CURRENT child from
+     `iris job list` — never a stale stored `iris_job_id`, whose log/`_step` froze at the old
+     preemption and will misread a resumed-and-training job as hung (this caused a wrongful mass-restart
+     2026-07-22). The W&B **`state` field is UNRELIABLE** (flips to `crashed` on any heartbeat lapse).
+     For a definitive stall verdict on the *current* child, confirm `_step` frozen across passes AND no
+     recent `Progress on:train <k>kit/<N>kit … loss=..` line (`iris job logs <job> --tail --max-lines
+     60 | grep 'Progress on:train'`). Track no-progress from last observed progress, not from the pass.
 2. **Converge-check.** `sweep_tools.py check-convergence` over all completed trials (strict one-step
    neighbor dominance *by the best observed point*, one axis at a time; a missing neighbor passes only
    at the axis's hard domain bound). A locally-dominant point never counts as converged while a better

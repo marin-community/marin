@@ -142,3 +142,6 @@ targets:
   grid expansion.
 - A SIGSEGV on a multi-host slice (nearly all slices here) is treated as a preempted gang cosibling
   — retry in place, not a code fault to investigate — absent a specific reason.
+- "Training now" is the **child** `run_levanter_train_lm` task being `running` in Iris; the parent job
+  only gates whether a child can run. Fray respawns the child (new id) on preemption, so read the
+  current child, never a stale stored job id. (Runbook LIVENESS has the full method.)
