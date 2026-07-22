@@ -1226,3 +1226,27 @@ grug/function_contours.{json,md}. Artifact page: claude.ai/code/artifact/5a9f6c7
   shares onto one overall share so 0.5/0.0 and 0.4/0.4 share a column (slice A has no such projection);
   **LightGBM (the literal RegMix model) NOT run — no libgomp on this host**, the linear weights-ridge is
   the stand-in; panels 1-3 share a colour scale within each row, rows scaled independently (~2x ranges).
+
+## 2026-07-22 Method comparison: kernel vs P3 (#2403) vs linear RegMix vs Data Mixing Law
+Code: experiments/datakit/mixture_features/method_comparison.py (tracked, parallelized joblib+thread-pinned).
+Artifacts: grug/method_comparison.{json,md}, figs3/f37-f42. (Serial version died 3x on wall limits; fixed by
+thread-pinning P3's small NLS solves 66s->5.5s + joblib fork backend.)
+- 5-fold OOF, paired bootstrap 4000 resamples. GRP NOT run (no faithfully re-targetable impl — structure is
+  hardcoded to dolma family/quality names, yields 0 quality pairs on our c01q0 buckets; documented, not
+  approximated). Real GBDT RegMix NOT run (no libgomp) — linear is a LOWER BOUND on RegMix, not RegMix.
+- **zmacro OOF Spearman (ceiling 0.909):** kernel 0.818 (90%) > linear 0.722 ~ P3-flat 0.718 ~ P3-epoch 0.705
+  > law-grouped 0.684 > law-full 0.606. **humaneval (ceiling 0.996):** kernel 0.938 (94%) > P3-flat 0.907 ~
+  P3-epoch 0.904 (91%) > linear 0.811 > law-full 0.550 > law-grouped 0.436 (law COLLAPSES on humaneval).
+- **VERDICT: kernel wins BOTH, every kernel-vs-X paired-CI excludes zero.** kernel−P3-epoch dSpearman
+  +0.113 [0.087,0.142] zmacro / +0.034 [0.023,0.046] humaneval — REAL. Only method >90% ceiling on both.
+- P3 is the strongest competitor: genuinely uses its structure (eta 0.5-1.5 two-phase; a 0.23-0.53 saturating
+  dose) and BEATS linear on humaneval (+0.093 real); but TIES linear on zmacro (CI covers zero), and its
+  overexposure penalty is nearly inert (5.6%/2.6% of pred variance) — independent corroboration of our own
+  "epoch harm inert in-regime / vanishes at 100B". c_d ambiguity is real+material (epoch vs flat −0.013 real).
+- Data Mixing Law not competitive: exponent span ~1e-5 (exp bends ~1x) so it degenerates to linear; full-bucket
+  unidentified (335 eff params of 338, beta set by penalty not data). law collapses on humaneval (44% ceiling).
+- Per-run the methods are NEARLY INDISTINGUISHABLE — conformal intervals disjoint on 0-1.8% of runs; the
+  ranking only appears in aggregate over 800 runs, not on any single mixture. This is the "uncertainty between
+  methods" answer: aggregate gaps real (bootstrap), per-run gaps < each model's own error bars.
+- Contours (f37/f38): only the kernel shows a non-monotone INTERIOR optimum; P3 bends but stays monotone
+  toward the corner; linear/law are flat planes. Artifact: claude.ai/code/artifact/5a9f6c73-...
