@@ -29,14 +29,15 @@ The image also declares `/etc/iris/system-cuda-toolchain`. This marker tells the
 
 ### Runtime overlay
 
-`default_setup_script` detects the image files at task runtime. Setup scripts are rendered by the client, so detection must remain shell logic in the generated script. When the preserved-package file exists, setup:
+`default_setup_script` detects the image files at task runtime. Setup scripts are rendered by the client, so detection must remain shell logic in the generated script. This check must not produce separate image-aware and isolated setup implementations. It initializes optional Bash arrays and audit state, then rejoins the existing interpreter selection, venv creation, workspace sync, extra-package installation, and Iris runtime-dependency pipeline. When the preserved-package file exists, the runtime check:
 
 1. validates both manifests and requires every name in the required subset to resolve through the image interpreter;
 2. fails if the requested Python major/minor differs from the image interpreter;
-3. creates `$IRIS_VENV` with `uv venv --system-site-packages`;
-4. builds a Bash array containing one `--no-install-package` argument per distribution;
-5. runs the existing frozen workspace sync with those arguments; and
-6. verifies with `importlib.metadata` that required distributions resolve outside `$IRIS_VENV`, and that explicit exclusions are absent from it.
+3. adds `--system-site-packages` to the shared `uv venv` argument array;
+4. adds one `--no-install-package` argument per distribution to the shared `uv sync` argument array; and
+5. enables a post-sync audit that verifies with `importlib.metadata` that required distributions resolve outside `$IRIS_VENV`, and that explicit exclusions are absent from it.
+
+The common setup commands execute once regardless of whether either array is populated. CUDA staging is the only conditional phase: `/etc/iris/system-cuda-toolchain` skips it, while images without the marker retain the existing staging behavior.
 
 The audit resolves each distribution root with `distribution(name).locate_file("").resolve()` and runs import-origin probes for JAX, its CUDA plugin/PJRT, TransformerEngine, CUTLASS, cuda-tile, Torch, and Torchvision. The task log prints the image digest, package versions, and paths. The result intentionally differs from `uv.lock`; later `uv sync` or `pip install` commands that replace protected packages are unsupported. Normal workspace distributions remain editable in `$IRIS_VENV`. Custom setup scripts keep their current contract.
 

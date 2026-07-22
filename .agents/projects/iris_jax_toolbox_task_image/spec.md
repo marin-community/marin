@@ -39,19 +39,28 @@ def default_setup_script(
     """Render the standard uv-based setup script as a Bash string."""
 ```
 
-When the manifests are absent, the rendered script keeps the existing isolated
-venv behavior. When they are present, the script:
+The rendered script contains one setup pipeline. It initializes empty venv and
+sync argument arrays plus disabled audit state, conditionally populates them
+from the image manifests, and then executes the existing interpreter selection,
+venv creation, frozen workspace sync, `pip_packages` installation, and Iris
+runtime-dependency installation exactly once. It must not render duplicate
+image-aware and isolated setup blocks.
+
+When the manifests are present, the runtime prelude:
 
 1. rejects an empty preserved manifest, invalid names, extras, version
    specifiers, URLs, duplicates after PEP 503 normalization, and required names
    absent from the preserved manifest;
 2. rejects a requested Python major/minor that differs from the image Python;
 3. requires every required entry to resolve through the image interpreter;
-4. creates `$IRIS_VENV` with `uv venv --system-site-packages`;
-5. passes one `--no-install-package <name>` argument per preserved entry to the
-   existing frozen `uv sync` command;
-6. verifies that each required entry still resolves outside `$IRIS_VENV`; and
-7. verifies that each explicit exclusion remains absent from `$IRIS_VENV`.
+4. appends `--system-site-packages` to the shared venv argument array;
+5. appends one `--no-install-package <name>` pair per preserved entry to the
+   shared sync argument array; and
+6. enables the final audit, which verifies that each required entry resolves
+   outside `$IRIS_VENV` and each explicit exclusion remains absent from it.
+
+Absent manifests leave the arrays empty and the audit disabled, reproducing the
+current isolated-venv behavior through the same commands.
 
 A failure exits setup nonzero with an `[iris setup]` prefix and names the
 offending distribution. Distribution roots are computed with
