@@ -2375,3 +2375,21 @@ author: dlwh
   - FP8 increases localized compile-and-execute time materially, especially on rank 1, but the bounded cases complete in seconds. Packaging this version upstream would misrepresent the production failure because it has no failing case.
 - Next action:
   - Add the smallest omitted stage-3 boundary, prioritizing the real language-model head/loss and complete value-and-grad output tree. Retain matched BF16 and direct controls, external dps8 topology, and hard watchdogs. File a separate Marin issue only after the minimized program reproduces or reaches a clearly actionable compiler failure; do not file NVIDIA upstream.
+
+### 2026-07-22 14:43 PDT - last-stage head, loss, and full output tree still do not reproduce
+- Hypothesis: Adding the production final normalization, language-model head, fused next-token loss, and complete last-stage value-and-grad result tree to the FP8 routed-MLP reproducer will trigger the stage-3 backend compile stall while a matched BF16 control completes.
+- Commit Hash: `886326965c` (`[grug] Add last-stage FP8 compile repro boundary`).
+- Config: two RNO2A H100x8 tasks, one JAX process and one JaxPP stage per task, L2/m4/e64/top-k4, 32,768 tokens as batch 8 by sequence 4096, hidden/intermediate `2560/1280`, vocab 8192, production ring EP8 sharding, JAX/JAXLIB `0.10.1`, JaxPP `7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`, XLA preallocation `.50`, stack dump after 120 seconds, and hard timeout after 1,200 seconds. The only A/B axis was BF16 versus E4M3 expert GEMMs and their delayed-scaling overwrite state.
+- Runs:
+  - BF16 control `/dlwh/jaxpp-last-stage-dps8-bf16-20260722-213810`.
+  - FP8 candidate `/dlwh/jaxpp-last-stage-dps8-fp8-20260722-214009`.
+- Results:
+  - Both parents and all four tasks succeeded with exit `0`, zero failures or preemptions, and no live resources remaining.
+  - BF16 rank 0/1 lower times were `0.53194/0.53780s`; JaxPP `eval_local` compile-and-execute times were `6.00513/17.55211s`.
+  - FP8 rank 0/1 lower times were `1.92003/1.92225s`; compile-and-execute times were `10.93991/30.62062s`.
+  - FP8 was about `3.6x` slower to lower and `1.7-1.8x` slower in localized compile-and-execute. Neither run emitted a watchdog stack, OOM, compiler error, traceback, timeout, or resubmit.
+- Interpretation:
+  - Final RMSNorm, gated norm, LM head, shifted labels, fused XLA cross-entropy, dynamic auxiliary output, full parameter-gradient tree, and all microbatch input cotangents are not sufficient to reproduce the production hang.
+  - The monotonic FP8 compile penalty remains real, especially on rank 1, but the bounded task completes in about 31 seconds. The smallest missing production interaction now lies inside the transformer block/router/rematerialization path rather than at the head/loss or outer result-tree boundary.
+- Next action:
+  - Add the exact production block-rematerialization boundary around the routed MLP while keeping learned routing and attention excluded. Run another matched BF16/FP8 dps8 gate before adding a second structural axis.
