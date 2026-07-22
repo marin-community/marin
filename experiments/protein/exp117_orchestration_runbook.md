@@ -103,24 +103,31 @@ experiments.protein.exp117_sweep`. Ambient `HUGGING_FACE_HUB_TOKEN` is STALE —
 point shape with it. The lightweight CPU driver acquires the TPU internally via Fray
 (`ResourceConfig.with_tpu`); one job = one point.
 
-**Job-name convention (2026-07-22): iris job-name = `<wandb_run_id>-<slice>-<attempt>`.** Take the W&B
-run id verbatim (`prot-exp117-cv1-s02-1_5b-e16-lr<..>-wd<..>-bs<..>-<region>`), then append the slice
-and a short monotonic attempt token — e.g. `prot-exp117-cv1-s02-1_5b-e16-lr3p162e-3-wd0p2-bs256-
-europe-west4-v5litepod-8-a3`. So the iris name always `startswith` the W&B run id (trivial iris↔W&B
-mapping) and **every submission is unique** — never reuse a name. Resume is NOT via the job-name: it is
-marin's `step_runner` on the region-keyed checkpoint (`gs://marin-<region>/{run_id}/…`), so a fresh
-unique name still resumes the same checkpoint. **INVARIANT — at most ONE active dispatch per
-`(point, region)`:** stop and confirm the current one terminal before submitting another, or two jobs
-write the same checkpoint and corrupt it.
+**Job-name convention (2026-07-22): iris job-name = `<wandb_run_id>-<slice>-a<attempt>`.** Take the W&B
+run id verbatim (`prot-exp117-cv1-s02-1_5b-e16-lr<..>-wd<..>-bs<..>-<region>`), append the slice, then
+`-a<attempt>` where **`<attempt>` is the DB `dispatches.submission_attempt` assigned to THIS
+submission** — a first-class DB counter, monotonic per `regional_run_id` (= per point+region),
+assigned as `max(submission_attempt)+1` for that regional_run_id at submit time. NEVER hand-pick it or
+parse it back out of a name; the DB owns it. e.g.
+`prot-exp117-cv1-s02-1_5b-e16-lr3p162e-3-wd0p2-bs256-europe-west4-v5litepod-8-a3`. The iris name always
+`startswith` the W&B run id (trivial iris↔W&B mapping) and, because the DB owns the counter, **every
+submission is unique**. Resume is NOT via the job-name: it is marin's `step_runner` on the region-keyed
+checkpoint (`gs://marin-<region>/{run_id}/…`), so a fresh unique name still resumes the same checkpoint.
+**INVARIANT — at most ONE active dispatch per `(point, region)`:** stop and confirm the current one
+terminal before submitting another, or two jobs write the same checkpoint and corrupt it.
 
-**Every change to a trial is a NEW iris job + a stop of the old one — iris jobs are never edited,
-reused, or "re-run" in place.** This applies uniformly to *all* change types: slice change,
-same-target restart, within-region relocation, cross-region migration, or any resubmit whatsoever.
-Each one = (1) `iris job stop` the current job and confirm it terminal, then (2) submit a fresh job
-with a new unique name (bump the `-a<n>` attempt token). The ONLY thing that differs across the cases
-is whether the checkpoint carries over: same-region (any slice) → resumes the region checkpoint;
-cross-region → fresh run from step 0. "Same-target restart" and "resume the same run" refer to the
-region-keyed checkpoint being reused, NOT the iris job — the iris job is always new.
+**Every change to a trial is a NEW iris job + a NEW `dispatches` row + a stop of the old one — iris jobs
+are never edited, reused, or "re-run" in place, and there is NO resubmitting a job under an existing
+name (assume it is impossible; we never do it).** This applies uniformly to *all* change types: slice
+change, same-target restart, within-region relocation, cross-region migration, or any resubmit. Each
+one = (1) `iris job stop` the current job and confirm it terminal, then (2) INSERT a new `dispatches`
+row (its `submission_attempt` = next for this regional_run_id) and submit a fresh iris job named
+`<wandb_run_id>-<slice>-a<that attempt>`. **Every iris job has exactly ONE `dispatches` row (1:1 on
+`iris_job_id`); never mutate an existing row's `iris_job_id` or `submission_attempt`.** The ONLY thing
+that differs across the change types is checkpoint carry-over: same-region (any slice) → resumes the
+region checkpoint; cross-region → fresh from step 0. "Same-target restart" / "resume the same run"
+refer to the region-keyed CHECKPOINT being reused, NOT the iris job — the iris job (and its DB row) is
+always new.
 
 ## One pass
 1. **Reconcile.** For each active dispatch: `iris job list --prefix /eczech/<job>` for state; read
@@ -211,10 +218,10 @@ now) — including a SIGSEGV, which on our multi-host slices is almost always a 
 cosibling, not a code fault.
 - **`startup_relocation_timeout` 3h** — never appeared in W&B → same-region **relocation** (new slice).
 - **`same_target_restart_timeout` 6h** — W&B-registered, iris still `running`, no progress → **restart
-  on the SAME target**: `iris job stop` the old job, then submit a NEW unique job (bump `-a<n>`) on the
-  same slice/region. Resumes the region checkpoint; keeps the logical trial, regional run, dispatch_id,
-  checkpoint, and chip charge (the DB `submission_attempt` increments on the same dispatch, but the iris
-  job is new); releases + may requeue the slice. Cheapest recourse and the FIRST thing to try for an
+  on the SAME target**: `iris job stop` the old job, then INSERT a new `dispatches` row (next
+  `submission_attempt`) and submit a NEW unique iris job named with that `-a<n>` on the same
+  slice/region. Resumes the region checkpoint; keeps the logical trial and regional run; releases + may
+  requeue the slice. Cheapest recourse and the FIRST thing to try for an
   ambiguous "running but stalled" run. **Wait the full 6h** — most stalls self-recover as preemptions, and restarting forces a
   re-queue (hours). A restart resets only its submission's running-stall window, NOT the regional
   clock — so it can't defer relocation forever.
@@ -228,8 +235,12 @@ cosibling, not a code fault.
   cohort)` — status: planned|dispatched|running|succeeded|failed|halted. `batch_size` is part of
   identity, so `trial_id` encodes all four axes.
 - `dispatches(dispatch_id, trial_id, regional_run_id, region, tpu_slice, chips, state,
-  submission_attempt, iris_job_id, submitted_at)` — a same-target restart increments
-  `submission_attempt` on the SAME `dispatch_id`; a relocation is a new dispatch.
+  submission_attempt, iris_job_id, submitted_at)` — **ONE ROW PER IRIS JOB (1:1 with `iris_job_id`).**
+  EVERY submission (first launch, same-target restart, relocation, slice change, migration) is a NEW
+  row. `submission_attempt` is the first-class attempt counter, monotonic per `regional_run_id`
+  (point+region), assigned `max+1` at submit, and IS the `-a<n>` token in the iris job-name. Never
+  mutate a row's `iris_job_id`/`submission_attempt`. Reconcile keeps 1:1 — every iris job (active or
+  terminal) has exactly one row.
 - `observations(dispatch_id, observed_at, wandb_run_id, run_progress, objective_value)`.
 - `decisions(at, kind, detail)` — audit log (predictions, placements, extensions, restarts).
 
