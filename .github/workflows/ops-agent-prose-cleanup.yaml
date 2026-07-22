@@ -1,4 +1,4 @@
-name: "Ops - Agent Prose Cleanup"
+name: "Ops - Agent Prose Cleanup (disabled)"
 
 on:
   issues:
@@ -12,9 +12,8 @@ concurrency:
 
 jobs:
   rewrite:
-    if: >-
-      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-generated')) ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'agent-generated'))
+    # Re-enable only after the marin-style cleanup action is reviewed. Owner: Marin maintainers.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
