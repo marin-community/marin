@@ -28,8 +28,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
-    SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (one compiled
-                        layer subgraph instead of num_layers of them); default off
+    SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (default); 0
+                        emits one unrolled layer graph per block
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -144,6 +144,7 @@ def build_scale_model() -> GrugModelConfig:
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
+        scan_layers=os.environ.get("SCALE_SCAN_LAYERS", "1") == "1",
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
@@ -208,7 +209,13 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
     resources = ResourceConfig.with_gpu(
-        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+        gpu_type,
+        count=gpus_per_node,
+        cpu=32,
+        ram="256g",
+        disk="256g",
+        replicas=replicas,
+        image=os.environ.get("SCALE_TASK_IMAGE") or None,
     )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"

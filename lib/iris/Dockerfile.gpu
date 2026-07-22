@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+
+# Source-free GPU task image. NVIDIA owns the accelerator stack; Iris overlays
+# the submitted workspace at runtime.
+FROM ghcr.io/nvidia/jax:jax-2026-06-27@sha256:15c3f15baf88af18e295b37c6417521f74ebf7bf2449ea09ab64d388be914343
+
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris GPU task base image backed by NVIDIA JAX-Toolbox"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    ffmpeg \
+    git \
+    lldb \
+    openssh-client \
+    unzip \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# The setup script validates every declared distribution before syncing and
+# excludes it from the overlay venv. Keep this list to one coherent binary
+# stack rather than preserving jax/jaxlib alone.
+RUN python3 - <<'PY'
+import importlib.metadata as metadata
+import pathlib
+
+candidates = (
+    "jax",
+    "jaxlib",
+    "jax-cuda13-pjrt",
+    "jax-cuda13-plugin",
+    "transformer-engine",
+    "transformer-engine-jax",
+    "cuda-bindings",
+    "cuda-core",
+    "cuda-pathfinder",
+    "cuda-python",
+    "cuda-tile",
+    "nvidia-cublas",
+    "nvidia-cuda-nvrtc",
+    "nvidia-cuda-runtime",
+    "nvidia-cusolver",
+    "nvidia-cusolvermp-cu13",
+    "nvidia-cusparse",
+    "nvidia-cutlass-dsl",
+    "nvidia-cutlass-dsl-libs-base",
+    "nvidia-cutlass-dsl-libs-core",
+    "nvidia-cutlass-dsl-libs-cu13",
+    "nvidia-nccl-cu13",
+    "nvidia-nvjitlink",
+)
+installed = []
+for name in candidates:
+    try:
+        metadata.distribution(name)
+    except metadata.PackageNotFoundError:
+        continue
+    installed.append(name)
+
+required = {"jax", "jaxlib", "jax-cuda13-pjrt", "jax-cuda13-plugin"}
+missing = required.difference(installed)
+if missing:
+    raise SystemExit(f"JAX-Toolbox image is missing required distributions: {sorted(missing)}")
+
+iris_dir = pathlib.Path("/etc/iris")
+iris_dir.mkdir(parents=True, exist_ok=True)
+(iris_dir / "preserved-python-packages").write_text("\n".join(installed) + "\n")
+(iris_dir / "system-cuda-toolchain").touch()
+PY
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+
+WORKDIR /app

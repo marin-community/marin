@@ -99,6 +99,7 @@ def default_setup_script(
             target,
             "--no-group dev",
             extra_flags,
+            '"${_preserve_flags[@]}"',
         ]
         if part
     )
@@ -106,6 +107,53 @@ def default_setup_script(
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
+        "_preserve_file=/etc/iris/preserved-python-packages",
+        "_preserved_packages=()",
+        "_preserve_flags=()",
+        'if [ -f "$_preserve_file" ]; then',
+        ' _preserved_text="$(python3 - "$_preserve_file" <<\'PY\'',
+        "import importlib.metadata as metadata",
+        "import pathlib",
+        "import re",
+        "import sys",
+        "",
+        "path = pathlib.Path(sys.argv[1])",
+        "names = []",
+        "for raw_line in path.read_text().splitlines():",
+        '    name = raw_line.split("#", 1)[0].strip()',
+        "    if not name:",
+        "        continue",
+        '    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):',
+        '        raise SystemExit(f"invalid preserved distribution name: {name!r}")',
+        "    if name in names:",
+        '        raise SystemExit(f"duplicate preserved distribution name: {name}")',
+        "    try:",
+        "        distribution = metadata.distribution(name)",
+        "    except metadata.PackageNotFoundError:",
+        '        raise SystemExit(f"preserved distribution is not installed in the image: {name}") from None',
+        "    print(name)",
+        "    names.append(name)",
+        "if not names:",
+        '    raise SystemExit("preserved package file has no distribution names")',
+        "PY",
+        ' )"',
+        ' mapfile -t _preserved_packages <<< "$_preserved_text"',
+        ' test "${#_preserved_packages[@]}" -gt 0',
+        ' _image_python="$(command -v python3)"',
+        (
+            ' _image_python_version="$("$_image_python" -c '
+            '\'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")\')"'
+        ),
+        (
+            f' test "$_image_python_version" = {shlex.quote(python_version)} || {{ '
+            f'echo "image Python $_image_python_version does not match requested Python {python_version}" >&2; '
+            "exit 1; }"
+            if python_version
+            else ":"
+        ),
+        ' uv venv --python "$_image_python" --system-site-packages "$IRIS_VENV"',
+        ' for _package in "${_preserved_packages[@]}"; do _preserve_flags+=(--no-install-package "$_package"); done',
+        "fi",
         "echo 'syncing deps'",
         sync_cmd,
         # uv sync writes .pth links for editable path sources but does not invoke
@@ -123,6 +171,24 @@ def default_setup_script(
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)
         pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, link_mode_flag, pip_args] if part)
         lines += ["echo 'installing pip deps'", pip_cmd]
+    lines += [
+        'if [ "${#_preserved_packages[@]}" -gt 0 ]; then',
+        ' "$IRIS_VENV/bin/python" - "$IRIS_VENV" "${_preserved_packages[@]}" <<\'PY\'',
+        "import importlib.metadata as metadata",
+        "import pathlib",
+        "import sys",
+        "",
+        "venv = pathlib.Path(sys.argv[1]).resolve()",
+        "for name in sys.argv[2:]:",
+        "    distribution = metadata.distribution(name)",
+        '    location = pathlib.Path(distribution.locate_file("")).resolve()',
+        "    if location.is_relative_to(venv):",
+        '        raise SystemExit(f"preserved distribution was installed into the overlay venv: '
+        '{name} ({location})")',
+        '    print(f"[iris setup] preserved {name}=={distribution.version} from {location}")',
+        "PY",
+        "fi",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -149,6 +215,10 @@ def cuda_toolchain_setup_script() -> str:
     CUDA toolchain.
     """
     return rf"""set -e
+if [ -e /etc/iris/system-cuda-toolchain ]; then
+  echo 'using image CUDA toolchain'
+  exit 0
+fi
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
   if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
