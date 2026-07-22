@@ -13,7 +13,7 @@ if [ ! -f "$DEFAULT_ENV_FILE" ] && [ -f "$HOME/.config/marin/cloudflare-r2.env" 
 fi
 ENV_FILE="${MARIN_R2_ENV_FILE:-$DEFAULT_ENV_FILE}"
 ENV_FILE_EXPLICIT=false
-KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
+KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris}"
 MARIN_PREFIX="s3://marin-na/marin"
 OBJECT_STORAGE_ENDPOINT="https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
 SUBMIT=false
