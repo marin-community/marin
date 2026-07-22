@@ -129,7 +129,7 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -478,15 +478,15 @@ class ScenarioRunner:
                     "max": 0.0,
                 }
             else:
-                p50, p95, p99, _p999, mx = _percentiles_ms(all_latencies)
+                percentiles = _percentiles_ms(all_latencies)
                 results[load.name] = {
                     "n": n,
                     "errors": len(all_errors),
                     "actual_rps": n / elapsed,
-                    "p50": p50,
-                    "p95": p95,
-                    "p99": p99,
-                    "max": mx,
+                    "p50": percentiles.p50,
+                    "p95": percentiles.p95,
+                    "p99": percentiles.p99,
+                    "max": percentiles.maximum,
                 }
         return results
 
@@ -2063,15 +2063,24 @@ def benchmark_control_isolation(db: ControllerDB) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float, float]:
+@dataclasses.dataclass(frozen=True)
+class LatencyPercentiles:
+    p50: float
+    p95: float
+    p99: float
+    p999: float
+    maximum: float
+
+
+def _percentiles_ms(latencies: list[float]) -> LatencyPercentiles:
     latencies.sort()
     n = len(latencies)
-    return (
-        latencies[n // 2],
-        latencies[int(n * 0.95)],
-        latencies[int(n * 0.99)],
-        latencies[min(int(n * 0.999), n - 1)],
-        latencies[-1],
+    return LatencyPercentiles(
+        p50=latencies[n // 2],
+        p95=latencies[int(n * 0.95)],
+        p99=latencies[int(n * 0.99)],
+        p999=latencies[min(int(n * 0.999), n - 1)],
+        maximum=latencies[-1],
     )
 
 
@@ -2408,9 +2417,10 @@ class ProxyBenchmarkResult:
         return self.bytes_transferred / self.elapsed / 1024**2
 
     @property
-    def health_percentiles_ms(self) -> tuple[float, float, float, float, float]:
+    def health_percentiles_ms(self) -> LatencyPercentiles:
         if not self.health_latencies_ms:
-            return (float("nan"),) * 5
+            nan = float("nan")
+            return LatencyPercentiles(p50=nan, p95=nan, p99=nan, p999=nan, maximum=nan)
         return _percentiles_ms(list(self.health_latencies_ms))
 
 
@@ -2426,15 +2436,15 @@ class ProxyExerciseResult:
 _PROXY_ASYNCIO_LOOP = "asyncio"
 _PROXY_AUTO_LOOP = "auto"
 _PROXY_LOOPS = (_PROXY_ASYNCIO_LOOP, _PROXY_AUTO_LOOP)
+_PROXY_BENCHMARK_BACKLOG = 2048
+_PROXY_BENCHMARK_KEEPALIVE = 120
 
 
 def _wait_for_uvicorn(server: uvicorn.Server) -> None:
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if server.started:
-            return
-        time.sleep(0.01)
-    raise RuntimeError("benchmark server did not start within 10 seconds")
+    ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+        lambda: server.started,
+        timeout=Duration.from_seconds(10),
+    )
 
 
 def _proxy_benchmark_upstream(*, chunks: int, chunk_bytes: int, chunk_interval: float) -> Starlette:
@@ -2550,8 +2560,8 @@ def _run_proxy_trial(
             http="httptools",
             log_level="error",
             log_config=None,
-            backlog=2048,
-            timeout_keep_alive=120,
+            backlog=_PROXY_BENCHMARK_BACKLOG,
+            timeout_keep_alive=_PROXY_BENCHMARK_KEEPALIVE,
         )
     )
     proxy = uvicorn.Server(
@@ -2563,8 +2573,8 @@ def _run_proxy_trial(
             http="httptools",
             log_level="error",
             log_config=None,
-            backlog=2048,
-            timeout_keep_alive=120,
+            backlog=_PROXY_BENCHMARK_BACKLOG,
+            timeout_keep_alive=_PROXY_BENCHMARK_KEEPALIVE,
         )
     )
     _install_rpc_executor(proxy, max_workers=_RPC_HANDLER_THREADS)
@@ -2630,12 +2640,13 @@ def proxy_cmd(
                     trial=trial,
                 )
                 results.append(result)
-                p50, _, p99, _, maximum = result.health_percentiles_ms
+                percentiles = result.health_percentiles_ms
                 print(
                     f"{connection_count:5d}  {loop:>7}  {result.loop_class:>10}  {trial:5d}  "
                     f"{result.elapsed:7.3f}s  {result.streams_per_second:9.1f}  "
-                    f"{result.mebibytes_per_second:8.1f}  {p50:9.1f}ms  {p99:7.1f}ms  "
-                    f"{maximum:7.1f}ms  {len(result.health_latencies_ms):6d}  {len(result.health_errors):4d}"
+                    f"{result.mebibytes_per_second:8.1f}  {percentiles.p50:9.1f}ms  {percentiles.p99:7.1f}ms  "
+                    f"{percentiles.maximum:7.1f}ms  {len(result.health_latencies_ms):6d}  "
+                    f"{len(result.health_errors):4d}"
                 )
                 for error in result.health_errors:
                     print(f"         health error: {error}")
@@ -2647,8 +2658,8 @@ def proxy_cmd(
         }
         baseline = statistics.median(r.streams_per_second for r in by_loop[_PROXY_ASYNCIO_LOOP])
         treatment = statistics.median(r.streams_per_second for r in by_loop[_PROXY_AUTO_LOOP])
-        baseline_p99 = statistics.median(r.health_percentiles_ms[2] for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment_p99 = statistics.median(r.health_percentiles_ms[2] for r in by_loop[_PROXY_AUTO_LOOP])
+        baseline_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_ASYNCIO_LOOP])
+        treatment_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_AUTO_LOOP])
         baseline_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_ASYNCIO_LOOP])
         treatment_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_AUTO_LOOP])
         print(

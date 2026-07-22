@@ -6,9 +6,9 @@
 Reads the target cluster from stack config (`marin-iac:cluster`), loads its Iris config +
 typed `provisioning:` section, and declares that cluster's resources. One stack per cluster;
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
-which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects, and
-the Traefik/cert-manager/federation-ingress stack; GCP declares the reserved federation-egress
-static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
+which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
+the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
+the reserved federation-egress static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
 (object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
 README.md's "Future work".
 """
