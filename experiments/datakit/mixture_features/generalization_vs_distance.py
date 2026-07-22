@@ -70,12 +70,30 @@ def in_distribution(d2: np.ndarray, y: np.ndarray) -> dict:
 
 
 def offdesign() -> list[dict]:
+    """Join the OOD table (distance, BARE-kernel error) with the head-to-head table (kernel +
+    additive epoch-PENALTY error), keyed by run_id. The bare kernel is content-only and blind to
+    epochs; the penalty form is the deployed guardrail built for exactly these high-epoch runs. So
+    the fair curve is the penalty form -- the bare kernel is the wrong model for these points."""
     with open(GRUG / "gp_ood_coverage.json") as fh:
-        d = json.load(fh)
-    return [
-        {"group": r["group"], "abs_err": abs(r["miss"]), "sd": r["gp_sd"], "nn_hellinger": r["nn_hellinger"]}
-        for r in d["humaneval"]["per_run"]
-    ]
+        ood = {r["run_id"]: r for r in json.load(fh)["humaneval"]["per_run"]}
+    with open(GRUG / "epoch_kernel_headtohead.json") as fh:
+        h2h = {r["run_id"]: r for r in json.load(fh)["per_run"]}
+    out = []
+    for rid, o in ood.items():
+        b = h2h.get(rid)
+        if b is None:
+            continue
+        out.append(
+            {
+                "group": o["group"],
+                "nn_hellinger": o["nn_hellinger"],
+                "bare_abs_err": abs(o["miss"]),
+                "bare_sd": o["gp_sd"],
+                "penalty_abs_err": abs(b["b_content_plus_harm_miss"]),
+                "penalty_sd": b["b_content_plus_harm_sd"],
+            }
+        )
+    return out
 
 
 def _binned(x, yv, edges):
@@ -115,20 +133,42 @@ def main():
     # predicted sd trend (does uncertainty track the error?)
     _, sm, _, _ = _binned(ind["nn_hellinger"], ind["sd"], edges)
     ax.plot(bx, sm, "--", color="#0f7a3d", lw=2.0, label="in-dist median predicted sd")
+    # off-design shown TWICE: BARE content kernel (open ring, the wrong model for these) vs
+    # kernel + epoch PENALTY (solid, the deployed guardrail). Connector shows the penalty's pull.
+    for r in off:
+        ax.plot(
+            [r["nn_hellinger"], r["nn_hellinger"]],
+            [r["bare_abs_err"], r["penalty_abs_err"]],
+            "-",
+            color="0.65",
+            lw=0.6,
+            zorder=3,
+        )
     for g in GROUP_COLORS:
         pts = [r for r in off if r["group"] == g]
         if pts:
             ax.scatter(
                 [r["nn_hellinger"] for r in pts],
-                [r["abs_err"] for r in pts],
-                s=60,
+                [r["bare_abs_err"] for r in pts],
+                s=42,
+                facecolors="none",
+                edgecolors=GROUP_COLORS[g],
+                lw=1.2,
+                zorder=4,
+            )
+            ax.scatter(
+                [r["nn_hellinger"] for r in pts],
+                [r["penalty_abs_err"] for r in pts],
+                s=55,
                 c=GROUP_COLORS[g],
                 edgecolor="k",
                 lw=0.4,
-                zorder=5,
-                label=f"off-design: {g} (n={len(pts)})",
+                zorder=6,
+                label=f"{g} (n={len(pts)})",
             )
-    off_sd = np.mean([r["sd"] for r in off])
+    ax.scatter([], [], s=42, facecolors="none", edgecolors="0.3", label="bare kernel (content only)")
+    ax.scatter([], [], s=55, c="0.3", edgecolor="k", lw=0.4, label="+ epoch penalty (deployed)")
+    off_sd = float(np.mean([r["penalty_sd"] for r in off]))
     ax.axvline(p95, color="k", ls=":", lw=1.5)
     ax.text(p95, ax.get_ylim()[1] * 0.96, " in-dist p95\n (edge of support)", fontsize=10, va="top")
     ax.axhline(noise, color="#888", ls="-", lw=1, alpha=0.7)
@@ -136,16 +176,16 @@ def main():
     ax.set_xlabel("nearest-training-run Hellinger distance  (further right = more extrapolation)", fontsize=12)
     ax.set_ylabel("|prediction error|  (humaneval bpb)", fontsize=12)
     ax.set_title(
-        "Generalization decays with distance from the training data\n"
-        "error explodes off-support while predicted uncertainty barely moves",
+        "Generalization vs distance from the training data\n"
+        "bare content kernel fails off-support; the deployed epoch penalty rescues most of it",
         fontsize=12.5,
     )
-    ax.legend(fontsize=9.5, loc="upper left", framealpha=0.95)
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.95, ncol=2)
     ax.grid(alpha=0.25)
 
-    # ---- RIGHT: calibration (coverage@2sd) vs distance ----
+    # ---- RIGHT: calibration (coverage@2sd) vs distance -- off-design scored with the PENALTY form ----
     all_nn = np.concatenate([ind["nn_hellinger"], [r["nn_hellinger"] for r in off]])
-    all_z = np.concatenate([ind["abs_err"] / ind["sd"], [r["abs_err"] / r["sd"] for r in off]])
+    all_z = np.concatenate([ind["abs_err"] / ind["sd"], [r["penalty_abs_err"] / r["penalty_sd"] for r in off]])
     qedges = np.quantile(all_nn, np.linspace(0, 1, 8))
     cx, cov = [], []
     for b in range(len(qedges) - 1):
@@ -175,10 +215,15 @@ def main():
         "in_dist_p95_nn_hellinger": p95,
         "offdesign_mean_nn_hellinger": float(np.mean([r["nn_hellinger"] for r in off])),
         "in_dist_median_abs_err": float(np.nanmedian(ind["abs_err"])),
-        "offdesign_mean_abs_err": float(np.mean([r["abs_err"] for r in off])),
+        "offdesign_mean_abs_err_bare_kernel": float(np.mean([r["bare_abs_err"] for r in off])),
+        "offdesign_mean_abs_err_with_penalty": float(np.mean([r["penalty_abs_err"] for r in off])),
         "in_dist_median_sd": float(np.nanmedian(ind["sd"])),
-        "offdesign_mean_sd": float(off_sd),
-        "err_growth_factor": float(np.mean([r["abs_err"] for r in off]) / np.nanmedian(ind["abs_err"])),
+        "offdesign_mean_penalty_sd": float(off_sd),
+        "err_growth_bare_kernel": float(np.mean([r["bare_abs_err"] for r in off]) / np.nanmedian(ind["abs_err"])),
+        "err_growth_with_penalty": float(np.mean([r["penalty_abs_err"] for r in off]) / np.nanmedian(ind["abs_err"])),
+        "penalty_reduces_offdesign_err_by": float(
+            1 - np.mean([r["penalty_abs_err"] for r in off]) / np.mean([r["bare_abs_err"] for r in off])
+        ),
         "sd_growth_factor": float(off_sd / np.nanmedian(ind["sd"])),
     }
     with open(GRUG / "generalization_vs_distance.json", "w") as fh:

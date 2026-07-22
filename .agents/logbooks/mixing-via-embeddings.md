@@ -1265,3 +1265,17 @@ the 53 off-design probes (reused verbatim from gp_ood_coverage.json, reconstruct
   "off-support" per se is not the killer; off-support ALONG the epoch direction is.
 - This is a question the DSP/GRP/P3 line (#2403/#6604) never visualized: their plots are interpolation
   paths (proportional -> optimized) + per-task standardized-effect diagnostics, not error-vs-distance.
+
+## 2026-07-22 f43 corrected: use the DEPLOYED model (kernel + epoch penalty) on the epoch probes
+Per rav: f43/f33 scored the epoch probes with the BARE content kernel, which is blind to epochs by
+construction -- the wrong model for those points. The deployed model is kernel + additive epoch penalty
+(the guardrail built for exactly these runs). Rebuilt f43 from two JSONs joined on run_id (no re-run):
+gp_ood_coverage (nn distance + bare-kernel error) + epoch_kernel_headtohead per_run (penalty-form error).
+- off-design mean |error|: bare kernel 0.585 (39x in-dist median) -> with penalty 0.390 (26x) =
+  **penalty cuts off-design error 33%** (RMSE view from the head-to-head was 0.785->0.488, 38%).
+- BUT it does not fully close: residual ~26x remains, because much of it is the OOD CONTENT offset
+  (degenerate 2-bucket mixtures are content-extrapolation, which the epoch penalty does not touch), plus
+  the natural-arm points where w and epochs are confounded (harm term's w-dependence unidentified).
+- So the honest two-part read stands: the epoch penalty rescues the EPOCH part of the off-support failure
+  (the whole point of the guardrail), but a content-extrapolation residual remains that no epoch machinery
+  addresses. Figure now shows both: open ring = bare kernel, solid = + penalty, connector = the pull.
