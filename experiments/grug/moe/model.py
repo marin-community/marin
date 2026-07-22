@@ -18,6 +18,7 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
+from haliax.quantization import Fp8RaggedDotOp
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
@@ -41,6 +42,7 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
+    MoeRaggedDotOps,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -57,6 +59,7 @@ except ModuleNotFoundError:
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_FP8_EXPERT_GEMM_ALIGNMENT = 128
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -77,6 +80,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+Fp8ExpertGemmRevDtype = Literal["e4m3", "e5m2"]
 
 
 def _batch_spec() -> P:
@@ -172,6 +176,24 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 
 
 @dataclass(frozen=True)
+class ResearchFp8ExpertGemmConfig:
+    """Research-only delayed-scaling FP8 for the two routed expert GEMMs.
+
+    This path uses Hopper-only Mosaic GPU kernels and is not a portable model
+    default. The E4M3 reverse dtype matches the benchmarked JAX 0.10.x setup.
+    """
+
+    amax_history_length: int = 1024
+    rev_dtype: Fp8ExpertGemmRevDtype = "e4m3"
+
+    def __post_init__(self) -> None:
+        if self.amax_history_length <= 0:
+            raise ValueError("FP8 expert GEMM amax_history_length must be positive")
+        if self.rev_dtype not in ("e4m3", "e5m2"):
+            raise ValueError(f"unknown FP8 expert GEMM reverse dtype: {self.rev_dtype}")
+
+
+@dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
@@ -205,6 +227,8 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    research_fp8_expert_gemm: ResearchFp8ExpertGemmConfig | None = None
+    """Opt-in research FP8 expert GEMMs; None preserves the BF16 ring path."""
     loss_implementation: str | tuple[str, ...] | None = None
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -229,6 +253,17 @@ class GrugModelConfig:
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
+        if self.research_fp8_expert_gemm is not None:
+            if resolve_moe_implementation(self.moe_implementation) != "ring":
+                raise ValueError("research FP8 expert GEMMs require moe_implementation='ring'")
+            if (
+                self.hidden_dim % _FP8_EXPERT_GEMM_ALIGNMENT != 0
+                or self.intermediate_dim % _FP8_EXPERT_GEMM_ALIGNMENT != 0
+            ):
+                raise ValueError(
+                    "research FP8 expert GEMMs require hidden_dim and intermediate_dim divisible by "
+                    f"{_FP8_EXPERT_GEMM_ALIGNMENT}"
+                )
 
     @property
     def Embed(self) -> Axis:
@@ -634,6 +669,23 @@ class MoEMLP(eqx.Module):
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
+        ragged_dot_ops = None
+        if cfg.research_fp8_expert_gemm is not None:
+            reverse_dtype = {
+                "e4m3": jnp.float8_e4m3fn,
+                "e5m2": jnp.float8_e5m2,
+            }[cfg.research_fp8_expert_gemm.rev_dtype]
+            ragged_dot_ops = MoeRaggedDotOps(
+                w13=Fp8RaggedDotOp.init(
+                    amax_history_length=cfg.research_fp8_expert_gemm.amax_history_length,
+                    rev_dtype=reverse_dtype,
+                ),
+                w2=Fp8RaggedDotOp.init(
+                    amax_history_length=cfg.research_fp8_expert_gemm.amax_history_length,
+                    rev_dtype=reverse_dtype,
+                ),
+            )
+
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
@@ -647,6 +699,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                ragged_dot_ops=ragged_dot_ops,
             ),
             cfg=cfg,
         )
@@ -1310,6 +1363,7 @@ __all__ = [
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
+    "ResearchFp8ExpertGemmConfig",
     "Transformer",
     "TransformerPipelineStage",
     "debug_mesh_and_token_pspec",

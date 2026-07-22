@@ -21,6 +21,8 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from haliax.quantization import OverwriteWithGradient, partition_for_grad_overwrite
+from haliax.quantization import apply_updates as apply_quantized_updates
 from jax import core
 from jax.interpreters import ad as jax_ad
 from jax.sharding import AxisType, Mesh, NamedSharding
@@ -40,6 +42,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.trainer_state import init_optimizer_for_trainables
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -79,6 +82,7 @@ JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority", "input_g
 ExplicitMpmdPipelineWireFormat = Literal["bf16", "fp8"]
 Fp8PipelineWireDtype = Literal["e4m3", "e5m2"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
+_RESEARCH_FP8_EXPERT_GEMM_SCHEDULES = ("gpipe", "interleaved_gpipe", "std_1f1b")
 
 
 def _fp8_pipeline_wire_dtype(dtype: Fp8PipelineWireDtype) -> jnp.dtype:
@@ -267,6 +271,19 @@ class GrugRunConfig:
     # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
     post_setup_scripts: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.model.research_fp8_expert_gemm is None:
+            return
+        pipeline = self.trainer.pipeline
+        if pipeline is None or pipeline.implementation != "explicit_mpmd":
+            raise ValueError("research FP8 expert GEMMs require the explicit MPMD JaxPP pipeline")
+        if pipeline.schedule not in _RESEARCH_FP8_EXPERT_GEMM_SCHEDULES:
+            raise ValueError(
+                "research FP8 expert GEMMs require gpipe, interleaved_gpipe, or std_1f1b explicit scheduling"
+            )
+        if self.trainer.expert_axis_size <= 1:
+            raise ValueError("research FP8 expert GEMMs require expert_axis_size greater than 1")
 
 
 def build_train_dataset(
@@ -674,6 +691,42 @@ class GrugPipelineTrainState:
     pending_qb_betas: tuple[jax.Array, ...]
 
 
+def _is_overwrite(value) -> bool:
+    return isinstance(value, OverwriteWithGradient)
+
+
+def _cast_preserving_overwrites(tree, cast_fn):
+    overwrites, ordinary = partition_for_grad_overwrite(tree)
+    return eqx.combine(overwrites, cast_fn(ordinary), is_leaf=_is_overwrite)
+
+
+def _accumulate_microbatch_tree(accumulated, value):
+    """Add ordinary leaves and max delayed-scaling state across microbatches."""
+    if accumulated is None:
+        return value
+    accumulated_overwrites, _ = partition_for_grad_overwrite(accumulated)
+    overwrites, ordinary = partition_for_grad_overwrite(value)
+    max_overwrites = jax.tree.map(jnp.maximum, accumulated_overwrites, overwrites)
+    return apply_quantized_updates(accumulated, ordinary, max_overwrites)
+
+
+def _average_microbatch_tree(tree, microbatches: int):
+    """Average ordinary leaves without scaling overwrite-state leaves."""
+    overwrites, ordinary = partition_for_grad_overwrite(tree)
+    scale = jnp.asarray(1.0 / microbatches, dtype=jnp.float32)
+    averaged = jax.tree.map(lambda value: value * scale, ordinary)
+    return eqx.combine(overwrites, averaged, is_leaf=_is_overwrite)
+
+
+def _ema_update(old, new, beta: float):
+    new_overwrites, new_ordinary = partition_for_grad_overwrite(new)
+    _, old_ordinary = partition_for_grad_overwrite(old)
+    ema_ordinary = jax.tree.map(
+        lambda old_value, new_value: beta * old_value + (1.0 - beta) * new_value, old_ordinary, new_ordinary
+    )
+    return eqx.combine(new_overwrites, ema_ordinary, is_leaf=_is_overwrite)
+
+
 def _split_state_for_pipeline(
     state: GrugTrainState,
     *,
@@ -692,7 +745,7 @@ def _split_state_for_pipeline(
     return GrugPipelineTrainState(
         step=state.step,
         params=params,
-        opt_state=tuple(optimizer.init(stage_params) for stage_params in params),
+        opt_state=tuple(init_optimizer_for_trainables(optimizer, stage_params) for stage_params in params),
         ema_params=ema_params,
         pending_qb_betas=pending_qb_betas,
     )
@@ -851,6 +904,7 @@ def _copy_shardable_tree(tree):
 
 
 def _shape_parameter_count(tree) -> int:
+    _, tree = partition_for_grad_overwrite(tree)
     total = 0
     for leaf in jax.tree.leaves(tree):
         shape = getattr(leaf, "shape", None)
@@ -963,7 +1017,7 @@ def _compute_stage(
     qb_betas: jax.Array,
     mp: jmp.Policy,
 ) -> TransformerPipelineStage:
-    return mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+    return _cast_preserving_overwrites(_apply_stage_qb_betas(params, qb_betas), mp.cast_to_compute)
 
 
 def _stack_stage_router_metrics(router_stats: tuple[dict[str, jax.Array], ...]) -> dict[str, jax.Array]:
@@ -1267,13 +1321,13 @@ def _make_explicit_mpmd_train_step(
         return jax.tree.map(apply_one, params, updates, is_leaf=lambda x: x is None)
 
     def stage0_forward(params: TransformerPipelineStage, qb_betas: jax.Array, batch: GrugLmExample):
-        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        compute_params = _compute_stage(params, qb_betas, mp)
         hidden = compute_params.embed_tokens(batch.tokens)
         hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
         return hidden, router_metrics["qb_beta_per_layer"]
 
     def stage_forward(params: TransformerPipelineStage, qb_betas: jax.Array, hidden, batch: GrugLmExample):
-        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        compute_params = _compute_stage(params, qb_betas, mp)
         hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
         return hidden, router_metrics["qb_beta_per_layer"]
 
@@ -1309,7 +1363,7 @@ def _make_explicit_mpmd_train_step(
         hidden,
         batch: GrugLmExample,
     ):
-        compute_params = mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+        compute_params = _compute_stage(params, qb_betas, mp)
         hidden, router_metrics = compute_params.block_range(hidden, mask=batch.attn_mask)
         hidden = compute_params.finalize_hidden(hidden)
         loss, metrics = compute_params.hidden_next_token_loss(
@@ -1370,8 +1424,11 @@ def _make_explicit_mpmd_train_step(
         )
 
     def update_stage(params: TransformerPipelineStage, opt_state: optax.OptState, grads):
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        return apply_stage_updates(params, updates), opt_state
+        overwrites, ordinary_grads = partition_for_grad_overwrite(grads)
+        _, ordinary_params = partition_for_grad_overwrite(params)
+        updates, opt_state = optimizer.update(ordinary_grads, opt_state, ordinary_params)
+        updated_params = apply_stage_updates(ordinary_params, updates)
+        return eqx.combine(overwrites, updated_params, is_leaf=_is_overwrite), opt_state
 
     def keep_step(step: jax.Array):
         return step
@@ -1394,11 +1451,10 @@ def _make_explicit_mpmd_train_step(
         return completion_token
 
     def add_trees(left, right):
-        return jax.tree.map(lambda x, y: x + y, left, right)
+        return _accumulate_microbatch_tree(left, right)
 
     def average_tree(tree):
-        scale = jnp.asarray(1.0 / pipeline.microbatches, dtype=jnp.float32)
-        return jax.tree.map(lambda value: value * scale, tree)
+        return _average_microbatch_tree(tree, pipeline.microbatches)
 
     def average_loss(loss):
         return loss * jnp.asarray(1.0 / pipeline.microbatches, dtype=loss.dtype)
@@ -2374,12 +2430,12 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    params = _cast_preserving_overwrites(Transformer.init(model_config, key=key), mp.cast_to_param)
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=init_optimizer_for_trainables(optimizer, params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -2395,7 +2451,7 @@ def initial_pipeline_state(
     mpmd_mesh,
 ) -> GrugPipelineTrainState:
     """Initialize explicit MPMD pipeline state without materializing full optimizer state."""
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    params = _cast_preserving_overwrites(Transformer.init(model_config, key=key), mp.cast_to_param)
     stage_params = params.split_for_pipeline(pipeline.stages, pipeline.stage_layer_counts)
     stage_mpmd_indices = _pipeline_stage_mpmd_indices(pipeline)
     stage_params = _reshard_to_mpmd(
@@ -2423,7 +2479,7 @@ def initial_pipeline_state(
         step=step,
         params=stage_params,
         opt_state=tuple(
-            _localize_stage_optimizer_state(mpmd_mesh, mpmd_index, optimizer.init(params))
+            _localize_stage_optimizer_state(mpmd_mesh, mpmd_index, init_optimizer_for_trainables(optimizer, params))
             for mpmd_index, params in zip(stage_mpmd_indices, stage_params, strict=True)
         ),
         ema_params=None,
@@ -2468,7 +2524,7 @@ def _make_train_step(
         )
         pipeline_schedule = _pipeline_schedule(pipeline)
 
-    def apply_updates(params, updates):
+    def apply_plain_updates(params, updates):
         if pipeline is None:
             return optax.apply_updates(params, updates)
 
@@ -2490,7 +2546,7 @@ def _make_train_step(
             qb_ema_params = None
 
         def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
+            compute_params = _cast_preserving_overwrites(params, mp.cast_to_compute)
             return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
@@ -2508,7 +2564,7 @@ def _make_train_step(
                 raise ValueError("pipeline_schedule must be initialized when JaxPP pipeline training is enabled")
 
             def microbatch_loss_fn(params, this_microbatch):
-                compute_params = mp.cast_to_compute(params)
+                compute_params = _cast_preserving_overwrites(params, mp.cast_to_compute)
                 this_loss = compute_params.next_token_loss(
                     this_microbatch.tokens,
                     this_microbatch.loss_weight,
@@ -2538,19 +2594,18 @@ def _make_train_step(
                 # QB feedback in place for schedule/MFU probes.
                 "qb_beta_per_layer": state.pending_qb_betas,
             }
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = apply_updates(qb_params, updates)
+        overwrites, grads = partition_for_grad_overwrite(grads)
+        _, ordinary_params = partition_for_grad_overwrite(qb_params)
+        updates, opt_state = optimizer.update(grads, state.opt_state, ordinary_params)
+        updated_params = apply_plain_updates(ordinary_params, updates)
+        params = eqx.combine(overwrites, updated_params, is_leaf=_is_overwrite)
 
         if ema_beta is None:
             ema_params = None
         else:
             if qb_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
-                params,
-            )
+            ema_params = _ema_update(qb_ema_params, params, ema_beta)
 
         watch_stats = None
         if watch_config is not None and compute_watch:
@@ -2560,7 +2615,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=ordinary_params,
                 grads=grads,
                 updates=updates,
                 opt_state=state.opt_state,
@@ -2687,7 +2742,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 path_override=config.trainer.sharding_dump_path,
             )
 
-        parameter_count_value = _shape_parameter_count(state.params) if explicit_mpmd else parameter_count(state.params)
+        if explicit_mpmd:
+            parameter_count_value = _shape_parameter_count(state.params)
+        else:
+            _, ordinary_params = partition_for_grad_overwrite(state.params)
+            parameter_count_value = parameter_count(ordinary_params)
         levanter.tracker.log_summary({"parameter_count": parameter_count_value})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)

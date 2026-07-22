@@ -28,7 +28,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_bool, env_int, run_grug_moe_trial
-from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.model import GrugModelConfig, RematMode, ResearchFp8ExpertGemmConfig
 from experiments.grug.moe.train import (
     ExplicitMpmdPipelineWireFormat,
     GrugJaxPPConfig,
@@ -185,6 +185,9 @@ def build_model() -> GrugModelConfig:
         router_z_loss_coef=0.0,
         attention_implementation=cast(str | None, os.environ.get("MAY_ATTENTION_IMPLEMENTATION") or None),
         moe_implementation=cast(str | None, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
+        research_fp8_expert_gemm=(
+            ResearchFp8ExpertGemmConfig() if env_bool("MAY_RESEARCH_FP8_EXPERT_GEMM", False) else None
+        ),
         loss_implementation=cast(str | None, os.environ.get("MAY_LOSS_IMPLEMENTATION") or None),
         remat_mode=cast(RematMode, remat_mode),
     )
@@ -265,6 +268,13 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     model = build_model()
     pipeline = build_pipeline_config() if env_bool("MAY_PIPELINE", True) else None
+    if model.research_fp8_expert_gemm is not None:
+        if pipeline is None or pipeline.implementation != "explicit_mpmd":
+            raise ValueError("research FP8 expert GEMMs require PP_IMPLEMENTATION=explicit_mpmd")
+        if pipeline.schedule not in ("gpipe", "interleaved_gpipe", "std_1f1b"):
+            raise ValueError("research FP8 expert GEMMs require gpipe, interleaved_gpipe, or std_1f1b")
+        if expert_axis <= 1:
+            raise ValueError("research FP8 expert GEMMs require MAY_EXPERT_AXIS greater than 1")
     if pipeline is not None and pipeline.sonic_fsdp_materialization == "staged_per_step":
         if model.moe_implementation != "sonic":
             raise ValueError("staged_per_step Sonic FSDP materialization requires MAY_MOE_IMPLEMENTATION=sonic")

@@ -33,6 +33,7 @@ from levanter.grug._moe.common import (
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
+    MoeRaggedDotOps,
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
@@ -71,6 +72,7 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    ragged_dot_ops: MoeRaggedDotOps | None = None
 
     @staticmethod
     def init(
@@ -84,6 +86,7 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
+        ragged_dot_ops: MoeRaggedDotOps | None = None,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
@@ -100,6 +103,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            ragged_dot_ops=ragged_dot_ops,
         )
 
     @named_call
@@ -124,6 +128,7 @@ class MoEExpertMlp(eqx.Module):
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            ragged_dot_ops=self.ragged_dot_ops,
         )
 
 
@@ -140,6 +145,7 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    ragged_dot_ops: MoeRaggedDotOps | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -149,6 +155,9 @@ def moe_mlp(
 
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
+
+    `ragged_dot_ops` is a research hook for stateful expert GEMMs such as FP8.
+    It is currently supported only by the expert-parallel ring backend.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -183,6 +192,12 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    has_ep = has_expert_axis and expert_axis_size > 1
+    if ragged_dot_ops is not None and (not has_ep or resolved_implementation != "ring"):
+        raise NotImplementedError(
+            "research FP8 expert GEMMs require the expert-parallel ring backend; "
+            f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+        )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -201,7 +216,7 @@ def moe_mlp(
 
     batch_spec = _batch_spec_from_x(x, mesh)
 
-    if has_expert_axis and expert_axis_size > 1:
+    if has_ep:
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
@@ -236,26 +251,36 @@ def moe_mlp(
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+        if ragged_dot_ops is not None:
+            ragged_dot_ops = jax.tree.map(
+                lambda value: _reshard_for_shard_map(value, mesh, P()) if eqx.is_array(value) else value,
+                ragged_dot_ops,
+            )
 
-        shard_fn = shard_map(
-            partial(
-                shard_local_fn,
-                activation_fn=activation_fn,
-                num_experts=num_experts,
-                capacity_factor=capacity_factor,
-            ),
-            mesh=mesh,
-            in_specs=(
-                batch_spec,
-                batch_spec,
-                batch_spec,
-                w_up_gate_spec,
-                w_down_spec,
-            ),
-            out_specs=(batch_spec, P()),
-            check_vma=False,
+        shard_local_fn = partial(
+            shard_local_fn,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        if ragged_dot_ops is not None:
+            shard_fn = shard_map(
+                shard_local_fn,
+                mesh=mesh,
+                in_specs=(batch_spec, batch_spec, batch_spec, w_up_gate_spec, w_down_spec, P()),
+                out_specs=(batch_spec, P()),
+                check_vma=False,
+            )
+            out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down, ragged_dot_ops)
+        else:
+            shard_fn = shard_map(
+                shard_local_fn,
+                mesh=mesh,
+                in_specs=(batch_spec, batch_spec, batch_spec, w_up_gate_spec, w_down_spec),
+                out_specs=(batch_spec, P()),
+                check_vma=False,
+            )
+            out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         if report_capacity_overflow:
             return out, dropped
         return out
@@ -308,6 +333,7 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "MoeRaggedDotOps",
     "PspecAxis",
     "moe_mlp",
     "resolve_moe_implementation",

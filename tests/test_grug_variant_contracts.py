@@ -24,6 +24,7 @@ import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.quantization import OverwriteWithGradient, partition_for_grad_overwrite
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -44,6 +45,10 @@ from experiments.ferries import canary_ferry
 from experiments.llama import llama3_tokenizer
 
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
+
+
+class _TestOverwriteState(OverwriteWithGradient):
+    value: jax.Array
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -188,6 +193,158 @@ def test_grug_moe_pipeline_split_rejects_incomplete_layer_counts():
 
     with pytest.raises(ValueError, match="must sum to num_layers"):
         model.split_for_pipeline(2, stage_layer_counts=(1, 2))
+
+
+def test_grug_moe_microbatch_accumulation_maxes_overwrites_without_averaging_them():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    first = {"weight": jnp.asarray(2.0), "fp8": _TestOverwriteState(jnp.asarray([11.0, 31.0]))}
+    second = {"weight": jnp.asarray(4.0), "fp8": _TestOverwriteState(jnp.asarray([29.0, 17.0]))}
+
+    accumulated = train_module._accumulate_microbatch_tree(None, first)
+    accumulated = train_module._accumulate_microbatch_tree(accumulated, second)
+    averaged = train_module._average_microbatch_tree(accumulated, 2)
+
+    np.testing.assert_array_equal(averaged["weight"], jnp.asarray(3.0))
+    np.testing.assert_array_equal(averaged["fp8"].value, jnp.asarray([29.0, 31.0]))
+
+
+def test_grug_moe_ema_averages_weights_but_carries_current_overwrite_state():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    old = {"weight": jnp.asarray(2.0), "fp8": _TestOverwriteState(jnp.asarray([11.0, 31.0]))}
+    new = {"weight": jnp.asarray(6.0), "fp8": _TestOverwriteState(jnp.asarray([29.0, 17.0]))}
+
+    ema = train_module._ema_update(old, new, 0.5)
+
+    np.testing.assert_array_equal(ema["weight"], jnp.asarray(4.0))
+    np.testing.assert_array_equal(ema["fp8"].value, jnp.asarray([29.0, 17.0]))
+
+
+def test_grug_moe_fp8_state_stays_f32_and_out_of_optimizer_state():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model = model_module.GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=128,
+        shared_expert_intermediate_dim=0,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=2,
+        num_experts_per_token=1,
+        moe_implementation="ring",
+        research_fp8_expert_gemm=model_module.ResearchFp8ExpertGemmConfig(amax_history_length=4),
+    )
+    optimizer = optax.adam(1e-3)
+    mp = jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=2)
+
+    def initialize():
+        return train_module.initial_state(
+            model,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state = eqx.filter_eval_shape(initialize)
+
+    mlp = state.params.blocks[0].mlp
+    assert mlp is not None
+    ragged_dot_ops = mlp.expert_mlp.ragged_dot_ops
+    assert ragged_dot_ops is not None
+    fp8_state = ragged_dot_ops.w13
+    assert fp8_state.input_scale.dtype == jnp.float32
+    assert fp8_state.input_amax_history.dtype == jnp.float32
+    _, ordinary_params = partition_for_grad_overwrite(state.params)
+    assert jax.tree.structure(state.opt_state) == jax.tree.structure(optimizer.init(ordinary_params))
+
+
+@pytest.mark.parametrize(
+    ("schedule", "stages", "mpmd_dim"),
+    (("gpipe", 2, 2), ("interleaved_gpipe", 4, 2), ("std_1f1b", 2, 2)),
+)
+def test_grug_moe_research_fp8_config_accepts_explicit_mpmd_training_schedules(schedule, stages, mpmd_dim):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model = model_module.GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=128,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=2,
+        moe_implementation="ring",
+        research_fp8_expert_gemm=model_module.ResearchFp8ExpertGemmConfig(),
+    )
+    pipeline = train_module.GrugJaxPPConfig(
+        stages=stages,
+        microbatches=2,
+        schedule=schedule,
+        implementation="explicit_mpmd",
+        mpmd_dim=mpmd_dim,
+    )
+
+    config = train_module.GrugRunConfig(
+        model=model,
+        data=LmDataConfig(tokenizer="passthrough", vocab_size=256, components={}),
+        resources=ResourceConfig.with_cpu(),
+        trainer=train_module.GrugTrainerConfig(expert_axis_size=2, pipeline=pipeline),
+    )
+
+    assert config.model.research_fp8_expert_gemm is not None
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "expert_axis_size"),
+    (
+        (None, 2),
+        ({"implementation": "auto", "schedule": "gpipe"}, 2),
+        ({"implementation": "explicit_mpmd", "schedule": "gpipe"}, 1),
+    ),
+)
+def test_grug_moe_research_fp8_config_rejects_unsupported_training_paths(pipeline, expert_axis_size):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model = model_module.GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=128,
+        num_heads=2,
+        num_kv_heads=2,
+        moe_implementation="ring",
+        research_fp8_expert_gemm=model_module.ResearchFp8ExpertGemmConfig(),
+    )
+    pipeline_config = None
+    if pipeline is not None:
+        pipeline_config = train_module.GrugJaxPPConfig(
+            stages=2,
+            microbatches=2,
+            mpmd_dim=2,
+            **pipeline,
+        )
+
+    with pytest.raises(ValueError, match="research FP8 expert GEMMs require"):
+        train_module.GrugRunConfig(
+            model=model,
+            data=LmDataConfig(tokenizer="passthrough", vocab_size=256, components={}),
+            resources=ResourceConfig.with_cpu(),
+            trainer=train_module.GrugTrainerConfig(expert_axis_size=expert_axis_size, pipeline=pipeline_config),
+        )
+
+
+def test_grug_moe_jaxpp_launcher_requires_explicit_fp8_expert_gemm_opt_in(monkeypatch):
+    launcher = importlib.import_module("experiments.grug.moe.launch_cw_jaxpp_may_d2560")
+    monkeypatch.delenv("MAY_RESEARCH_FP8_EXPERT_GEMM", raising=False)
+    assert launcher.build_model().research_fp8_expert_gemm is None
+
+    monkeypatch.setenv("MAY_RESEARCH_FP8_EXPERT_GEMM", "true")
+    assert launcher.build_model().research_fp8_expert_gemm is not None
+    monkeypatch.setenv("PP_IMPLEMENTATION", "auto")
+    with pytest.raises(ValueError, match="PP_IMPLEMENTATION=explicit_mpmd"):
+        launcher.build_jaxpp_may_checkpoint()
 
 
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():

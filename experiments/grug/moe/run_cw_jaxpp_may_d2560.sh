@@ -40,6 +40,7 @@ NUM_EXPERTS=256
 TOP_K=4
 VOCAB_SIZE=""
 MOE_IMPLEMENTATION="ring"
+RESEARCH_FP8_EXPERT_GEMM=false
 ATTENTION_IMPLEMENTATION="${MAY_ATTENTION_IMPLEMENTATION:-}"
 RAGGED_DOT_IMPLEMENTATION="${RAGGED_DOT_IMPL:-}"
 RAGGED_DOT_BLOCK_K="${HALIAX_RAGGED_DOT_TRITON_BLOCK_K:-}"
@@ -97,6 +98,8 @@ Options:
   --moe-implementation NAME ring, ring_quack_approx, ring_fused, ring_local_combine, ring_ppermute,
                             ragged_all_to_all, deepep, scatter, or sonic
                             (default: ring).
+  --research-fp8-expert-gemm
+                            Use research-only FP8 routed expert GEMMs (default: disabled).
   --attention-implementation NAME
                             reference, gpu_fa4_cute, or gpu_fa4_thd.
                             Omit to use the model default.
@@ -149,6 +152,7 @@ while [ "$#" -gt 0 ]; do
         --batch) BATCH="$2"; shift 2 ;;
         --seq-len) SEQ_LEN="$2"; shift 2 ;;
         --moe-implementation) MOE_IMPLEMENTATION="$2"; shift 2 ;;
+        --research-fp8-expert-gemm) RESEARCH_FP8_EXPERT_GEMM=true; shift ;;
         --attention-implementation) ATTENTION_IMPLEMENTATION="$2"; shift 2 ;;
         --ragged-dot-implementation) RAGGED_DOT_IMPLEMENTATION="$2"; shift 2 ;;
         --ragged-dot-block-k) RAGGED_DOT_BLOCK_K="$2"; shift 2 ;;
@@ -245,6 +249,24 @@ case "$MOE_IMPLEMENTATION" in
         exit 1
         ;;
 esac
+
+if [ "$RESEARCH_FP8_EXPERT_GEMM" = true ]; then
+    if [ "$PIPELINE" != true ] || [ "$IMPLEMENTATION" != explicit_mpmd ]; then
+        echo "ERROR: research FP8 expert GEMMs require pipeline and --implementation explicit_mpmd" >&2
+        exit 1
+    fi
+    case "$SCHEDULE" in
+        gpipe|interleaved_gpipe|std_1f1b) ;;
+        *)
+            echo "ERROR: research FP8 expert GEMMs require gpipe, interleaved_gpipe, or std_1f1b" >&2
+            exit 1
+            ;;
+    esac
+    if [ "$MOE_IMPLEMENTATION" != ring ] || [ "$EXPERT_AXIS" -le 1 ]; then
+        echo "ERROR: research FP8 expert GEMMs require --moe-implementation ring and --expert-axis greater than 1" >&2
+        exit 1
+    fi
+fi
 
 case "$SONIC_FSDP_MATERIALIZATION" in
     per_task|staged_per_step) ;;
@@ -355,6 +377,7 @@ ENV_ARGS=(
     -e MAY_NUM_EXPERTS "$NUM_EXPERTS"
     -e MAY_TOP_K "$TOP_K"
     -e MAY_MOE_IMPLEMENTATION "$MOE_IMPLEMENTATION"
+    -e MAY_RESEARCH_FP8_EXPERT_GEMM "$RESEARCH_FP8_EXPERT_GEMM"
     -e MAY_PIPELINE "$PIPELINE"
     -e MAY_STEPS "$STEPS"
     -e MAY_DATA "$DATA"
@@ -471,6 +494,7 @@ microbatches: $MICROBATCHES
 model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN} vocab=${VOCAB_SIZE:-default}
 batch: $BATCH
 moe_implementation: $MOE_IMPLEMENTATION
+research_fp8_expert_gemm: $RESEARCH_FP8_EXPERT_GEMM
 attention_implementation: ${ATTENTION_IMPLEMENTATION:-default}
 ragged_dot_implementation: ${RAGGED_DOT_IMPLEMENTATION:-auto}
 ragged_dot_block_k: ${RAGGED_DOT_BLOCK_K:-32}
