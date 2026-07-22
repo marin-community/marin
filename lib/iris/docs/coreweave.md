@@ -226,10 +226,11 @@ CoreWeave publishes a wildcard record, `*.<tenant>.coreweave.app`, that resolves
 that LoadBalancer. `install_cw_network.py install --apply` prints the exact CNAME
 record to create, substituting the ingress host's first label into the wildcard
 (`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
-DNS is at Namecheap, Advanced DNS panel. Routing, Host matching, and TLS all key on
-the `oa.dev` name; `coreweave.app` is only the CNAME target.
+DNS is at Cloudflare, as a DNS-only (not proxied) record. Routing, Host matching, and TLS all
+key on the `oa.dev` name; `coreweave.app` is only the CNAME target.
 
-TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+TLS terminates in-cluster (no IAP/edge layer; the record is DNS-only, so Cloudflare never
+proxies or intercepts TLS).
 `install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
@@ -566,8 +567,8 @@ kubectl get svc traefik -n traefik \
   -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
 ```
 
-**(manual)** Create the record in the `oa.dev` registrar (**Namecheap**, Advanced
-DNS panel — not Cloudflare):
+**(manual)** Create the record in the `oa.dev` registrar (**Cloudflare**, DNS-only — do not
+enable the proxy):
 
 ```
 iris-cw-<cluster>.oa.dev   CNAME   iris-cw-<cluster>.<tenant>.coreweave.app
