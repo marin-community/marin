@@ -5,10 +5,10 @@ one reusable action in `marin-style`.
 
 ## Initial status
 
-Marin PR #7515 references
+The Marin workflow branch references
 `marin-community/marin-style/actions/classify-claude@main`, but `main` does not
-contain that action until the dependent marin-style PR merges. The review and
-lint-review jobs fail while downloading the missing action.
+contain that action until the dependent marin-style change merges. The review
+and lint-review jobs fail while downloading the missing action.
 
 ## Hypothesis 1
 
