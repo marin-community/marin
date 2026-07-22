@@ -80,7 +80,7 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        uses: ./.github/actions/classify-claude
+        uses: marin-community/marin-style/actions/classify-claude@main
         with:
           outcome: ${{ steps.claude.outcome }}
           execution-file: ${{ steps.claude.outputs.execution_file }}
@@ -206,7 +206,7 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        uses: ./.github/actions/classify-claude
+        uses: marin-community/marin-style/actions/classify-claude@main
         with:
           outcome: ${{ steps.claude.outcome }}
           execution-file: ${{ steps.claude.outputs.execution_file }}
@@ -279,7 +279,7 @@ jobs:
 
       - name: Classify Claude result
         if: always()
-        uses: marin-community/marin/.github/actions/classify-claude@main
+        uses: marin-community/marin-style/actions/classify-claude@main
         with:
           outcome: ${{ steps.claude.outcome }}
           execution-file: ${{ steps.claude.outputs.execution_file }}

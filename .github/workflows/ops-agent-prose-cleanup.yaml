@@ -86,7 +86,7 @@ jobs:
       - name: Classify Claude result
         id: classify
         if: always()
-        uses: ./.github/actions/classify-claude
+        uses: marin-community/marin-style/actions/classify-claude@main
         with:
           outcome: ${{ steps.rewrite.outcome }}
           execution-file: ${{ steps.rewrite.outputs.execution_file }}
