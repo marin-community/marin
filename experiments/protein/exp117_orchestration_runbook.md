@@ -158,6 +158,13 @@ job = one point.
      allowed region not already saturated with running trials to re-map capacity, then resume
      exploiting proven targets. Drop a probe that never gangs by `startup_relocation` (3h). Never a
      filler — every probe is a meaningful grid point.
+   - **Prefer small slices; use every family and region.** Small **16–32 chip** `v6e`/`v5litepod`
+     slices gang far more readily than big ones (fewer hosts to coschedule) — bias to them,
+     especially for near-done or stalled trials. **No region or family is off limits** — `v5p`
+     (us-east5, us-central1) is easy to neglect; include it. When relocating a stalled job, be
+     aggressive: each move must be a slice/region combo **not already tried** for that trial
+     (a big-slice retry that keeps failing to gang is wasted) — walk down in size and across
+     families/regions until one gangs.
 5. **Dispatch.** Launch/stop/restart exact work orders. Record prediction+placement+decision in
    `decisions` BEFORE dispatch. One logical trial → at most one objective; never duplicate a
    `(rung,point)`.
