@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -12,9 +14,16 @@ from experiments.grug.moe.repro_jaxpp_fp8_expert_compile import (
     Fp8ExpertLayer,
     accumulate_gradients,
     average_gradients,
+    external_distributed_context,
     parse_config,
     stage_partition_specs,
 )
+
+
+@dataclass(frozen=True)
+class FakeIrisJobInfo:
+    task_index: int
+    num_tasks: int
 
 
 def _host_array(shape, dtype, fill):
@@ -88,6 +97,7 @@ def test_bf16_control_accepts_non_fp8_aligned_shapes() -> None:
 def test_config_rejects_unequal_expert_groups() -> None:
     config = Config(
         runtime="direct",
+        worker_mode="local",
         kernel="bf16",
         layers=1,
         experts=3,
@@ -178,3 +188,44 @@ def test_fp8_ring_config_rejects_non_production_mesh_contracts(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         parse_config(["--runtime", "direct", "--kernel", "fp8_ring", *arguments])
+
+
+def test_external_context_prefers_complete_jax_environment() -> None:
+    context = external_distributed_context(
+        {
+            "JAX_COORDINATOR_ADDRESS": "coordinator.internal:8476",
+            "JAX_NUM_PROCESSES": "2",
+            "JAX_PROCESS_ID": "1",
+        },
+        FakeIrisJobInfo(task_index=0, num_tasks=4),
+    )
+
+    assert context.coordinator_address == "coordinator.internal:8476"
+    assert context.num_processes == 2
+    assert context.process_id == 1
+    assert context.bootstrap == "jax_environment"
+
+
+def test_external_context_uses_iris_job_info_without_jax_environment() -> None:
+    context = external_distributed_context({}, FakeIrisJobInfo(task_index=1, num_tasks=2))
+
+    assert context.coordinator_address is None
+    assert context.num_processes == 2
+    assert context.process_id == 1
+    assert context.bootstrap == "iris_job_info"
+
+
+def test_external_context_rejects_partial_jax_environment() -> None:
+    with pytest.raises(ValueError, match="requires all JAX distributed environment variables"):
+        external_distributed_context(
+            {
+                "JAX_COORDINATOR_ADDRESS": "coordinator.internal:8476",
+                "JAX_NUM_PROCESSES": "2",
+            },
+            FakeIrisJobInfo(task_index=0, num_tasks=2),
+        )
+
+
+def test_external_worker_mode_rejects_single_process_runtime() -> None:
+    with pytest.raises(ValueError, match="supports only distributed_direct or jaxpp"):
+        parse_config(["--runtime", "direct", "--worker-mode", "external"])

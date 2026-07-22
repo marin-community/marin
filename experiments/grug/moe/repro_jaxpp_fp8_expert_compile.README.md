@@ -8,6 +8,12 @@ ramp through L2/m4/e8/t65536/h2560/i1280 passed; at the largest shape, direct
 and distributed-direct compiled in about 5.3 seconds and JaxPP compiled and
 executed in about 18.9 seconds.
 
+The later ring gates also pass with two and four devices per stage. Eight
+devices per stage needs two H100x8 Iris tasks, so `--worker-mode external`
+runs one process per task and joins them through either Iris job-info discovery
+or a complete JAX distributed environment. Local worker mode remains the
+default for the single-task dps2/dps4 gates.
+
 The `*_ring` modes add the smallest omitted production structure:
 
 - a stage mesh named `(replica_dcn, data, expert, model)`, with all stage
@@ -22,7 +28,76 @@ The `*_ring` modes add the smallest omitted production structure:
 Attention, learned routing, optimizer state, the language-model head, and the
 pipeline scheduler remain excluded. Nothing has been filed upstream.
 
-## Smallest RNO2A allocation
+## Dps8 external-worker gate
+
+Run the BF16 and FP8 gates as separate jobs. Each command generates a fresh
+name, requests two gang-scheduled H100x8 tasks, and runs one JAX process with
+all eight local devices per task. Iris job info supplies rank and coordinator
+discovery; if all three of `JAX_COORDINATOR_ADDRESS`, `JAX_NUM_PROCESSES`, and
+`JAX_PROCESS_ID` are present, the script uses those values instead.
+
+BF16 JaxPP ring control:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-fp8-ring-dps8-bf16-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel bf16_ring \
+      --devices-per-stage 8 --experts 8 --top-k 4 --tokens 256 \
+      --hidden 128 --intermediate 128 --layers 1 --microbatches 1 \
+      --amax-history 1024 --timeout 900 --stack-after 120 \
+      --coordinator-port 5793 --dump-dir /tmp/jaxpp-fp8-ring/dps8-bf16
+  '
+```
+
+FP8 JaxPP ring candidate:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
+  job run --no-wait --enable-extra-resources --replicas 2 --gpu=H100x8 \
+  --cpu=32 --memory=256G --disk=256G --extra=gpu --timeout=2400 \
+  --job-name="jaxpp-fp8-ring-dps8-fp8-${STAMP}" \
+  -- bash -c '
+    set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
+    uv pip install --link-mode=symlink cupy-cuda13x
+    uv pip install --link-mode=symlink --no-deps \
+      "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
+    .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
+      --worker-mode external --runtime jaxpp --kernel fp8_ring \
+      --devices-per-stage 8 --experts 8 --top-k 4 --tokens 256 \
+      --hidden 128 --intermediate 128 --layers 1 --microbatches 1 \
+      --amax-history 1024 --timeout 900 --stack-after 120 \
+      --coordinator-port 5793 --dump-dir /tmp/jaxpp-fp8-ring/dps8-fp8
+  '
+```
+
+Production BF16 ring and direct FP8 evidence already isolate those controls.
+If a matched multi-host direct control is needed, submit the FP8 command with a
+fresh `jaxpp-fp8-ring-dps8-fp8-direct-${STAMP}` name and replace
+`--runtime jaxpp` with `--runtime distributed_direct`. Rank 1 performs the
+ordinary sharded JAX backward while rank 0 waits at the completion barrier.
+
+Both the Iris timeout and the per-task watchdog are bounded. A worker emits
+periodic Python stacks after 120 seconds and exits 124 after 900 seconds; a
+peer left in distributed initialization or a barrier is bounded independently
+by its own watchdog.
+
+## Completed dps2 allocation
 
 This is the first useful gate: two devices per stage and four H100s total. It
 runs a distributed BF16 ring control, direct and distributed-direct FP8 ring
@@ -72,24 +147,23 @@ staged CUDA toolchain path.
 
 ## Topology-first ramp
 
-If all five dps2 cases pass, change only the expert-axis width. The 8-GPU gate
-uses four devices per stage while retaining one local expert and the minimum
-128 FP8 assignments per device:
+The dps2 and dps4 ring gates pass. The dps4 shape retained one local expert and
+the minimum 128 FP8 assignments per device:
 
 ```text
 --devices-per-stage 4 --experts 4 --top-k 4 --tokens 128
 ```
 
-The 16-GPU gate uses eight devices per stage, matching production's expert-axis
-width:
+The next 16-GPU gate uses the external worker mode and eight devices per stage,
+matching production's expert-axis width:
 
 ```text
 --devices-per-stage 8 --experts 8 --top-k 4 --tokens 256
 ```
 
-For either gate, direct sees one stage's devices; distributed-direct and JaxPP
-see twice that number. Run the same BF16/FP8 matrix and update the Iris GPU
-request and `CUDA_VISIBLE_DEVICES` lists accordingly.
+In local mode, direct sees one stage's devices while distributed-direct and
+JaxPP see twice that number. In external mode, each Iris task sees one stage's
+devices and the distributed mesh combines both tasks.
 
 Only if the dps8 minimum passes, restore the reduced production stage-3 shape:
 

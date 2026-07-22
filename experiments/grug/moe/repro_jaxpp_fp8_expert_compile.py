@@ -15,8 +15,9 @@ scheduling.
 ``--runtime distributed_direct`` initializes the same two stage processes as
 JaxPP but runs ordinary ``jax.jit`` only on the compute stage. ``--runtime
 jaxpp`` wraps that computation in a task on a two-stage MPMD mesh. Each stage
-owns ``--devices-per-stage`` devices. Every compiler boundary emits a JSON
-event and a watchdog terminates a stuck worker with exit status 124.
+owns ``--devices-per-stage`` devices. ``--worker-mode external`` joins two
+Iris tasks instead of spawning local processes. Every compiler boundary emits
+a JSON event and a watchdog terminates a stuck worker with exit status 124.
 """
 
 from __future__ import annotations
@@ -31,15 +32,17 @@ import platform
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.quantization import Fp8RaggedDotOp, OverwriteWithGradient, apply_updates, partition_for_grad_overwrite
+from iris.cluster.client import get_job_info
+from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -49,10 +52,24 @@ from levanter.grug.grug_moe import MoeRaggedDotOps, moe_mlp
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 Kernel = Literal["bf16", "fp8", "bf16_ring", "fp8_ring"]
 Runtime = Literal["direct", "distributed_direct", "jaxpp"]
+WorkerMode = Literal["local", "external"]
 StopAfter = Literal["lower", "execute"]
+Bootstrap = Literal["jax_environment", "iris_job_info"]
 _FP8_ALIGNMENT = 128
 _STAGE_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
 _BATCH_AXES = ("replica_dcn", "data", "expert")
+_JAX_DISTRIBUTED_ENV_KEYS = (
+    "JAX_COORDINATOR_ADDRESS",
+    "JAX_NUM_PROCESSES",
+    "JAX_PROCESS_ID",
+)
+
+
+class _IrisJobInfo(Protocol):
+    num_tasks: int
+
+    @property
+    def task_index(self) -> int: ...
 
 
 def event(name: str, **fields: Any) -> None:
@@ -81,6 +98,7 @@ def jaxpp_revision() -> str:
 @dataclass(frozen=True)
 class Config:
     runtime: Runtime
+    worker_mode: WorkerMode
     kernel: Kernel
     layers: int
     experts: int
@@ -118,6 +136,8 @@ class Config:
         for name, value in positive.items():
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
+        if self.worker_mode == "external" and self.runtime == "direct":
+            raise ValueError("external worker mode supports only distributed_direct or jaxpp runtime")
         if self.top_k > self.experts:
             raise ValueError(f"top_k={self.top_k} must be <= experts={self.experts}")
         if self.kernel.endswith("_ring"):
@@ -159,6 +179,68 @@ class Config:
             for name, value in aligned.items():
                 if value % _FP8_ALIGNMENT:
                     raise ValueError(f"FP8 {name}={value} must be divisible by {_FP8_ALIGNMENT}")
+
+
+@dataclass(frozen=True)
+class ExternalDistributedContext:
+    """Resolved rank and bootstrap source for one external Iris task."""
+
+    coordinator_address: str | None
+    num_processes: int
+    process_id: int
+    bootstrap: Bootstrap
+
+
+def _parse_environment_integer(environment: Mapping[str, str], key: str) -> int:
+    raw = environment[key]
+    try:
+        return int(raw)
+    except ValueError as error:
+        raise ValueError(f"{key} must be an integer, got {raw!r}") from error
+
+
+def external_distributed_context(
+    environment: Mapping[str, str],
+    job_info: _IrisJobInfo | None,
+) -> ExternalDistributedContext:
+    """Resolve and validate the two-task distributed launch boundary."""
+    present = tuple(key for key in _JAX_DISTRIBUTED_ENV_KEYS if environment.get(key, "").strip())
+    if present and len(present) != len(_JAX_DISTRIBUTED_ENV_KEYS):
+        missing = tuple(key for key in _JAX_DISTRIBUTED_ENV_KEYS if key not in present)
+        raise ValueError(f"external worker requires all JAX distributed environment variables; missing {missing}")
+
+    if present:
+        coordinator_address = environment["JAX_COORDINATOR_ADDRESS"]
+        host, separator, raw_port = coordinator_address.rpartition(":")
+        if not separator or not host or not raw_port:
+            raise ValueError(f"JAX_COORDINATOR_ADDRESS must have host:port form, got {coordinator_address!r}")
+        try:
+            port = int(raw_port)
+        except ValueError as error:
+            raise ValueError(f"JAX_COORDINATOR_ADDRESS port must be an integer, got {raw_port!r}") from error
+        if not 1 <= port <= 65535:
+            raise ValueError(f"JAX_COORDINATOR_ADDRESS port must be in [1, 65535], got {port}")
+        context = ExternalDistributedContext(
+            coordinator_address=coordinator_address,
+            num_processes=_parse_environment_integer(environment, "JAX_NUM_PROCESSES"),
+            process_id=_parse_environment_integer(environment, "JAX_PROCESS_ID"),
+            bootstrap="jax_environment",
+        )
+    elif job_info is not None:
+        context = ExternalDistributedContext(
+            coordinator_address=None,
+            num_processes=job_info.num_tasks,
+            process_id=job_info.task_index,
+            bootstrap="iris_job_info",
+        )
+    else:
+        raise ValueError("external worker requires JAX distributed environment variables or an Iris job-info context")
+
+    if context.num_processes != 2:
+        raise ValueError(f"external worker requires exactly 2 processes, got {context.num_processes}")
+    if not 0 <= context.process_id < context.num_processes:
+        raise ValueError(f"JAX process id {context.process_id} is outside num_processes={context.num_processes}")
+    return context
 
 
 @dataclass(frozen=True)
@@ -500,16 +582,62 @@ def _distributed_local_device_ids(config: Config, process_id: int) -> list[int]:
     return list(range(start, start + config.devices_per_stage))
 
 
-def run_distributed_direct_worker(config: Config, process_id: int) -> None:
-    _configure_worker(config, process_id)
-    jax.distributed.initialize(
-        coordinator_address=f"127.0.0.1:{config.coordinator_port}",
-        num_processes=2,
+def _initialize_distributed(
+    config: Config,
+    process_id: int,
+    external_context: ExternalDistributedContext | None,
+) -> None:
+    if external_context is None:
+        jax.distributed.initialize(
+            coordinator_address=f"127.0.0.1:{config.coordinator_port}",
+            num_processes=2,
+            process_id=process_id,
+            local_device_ids=_distributed_local_device_ids(config, process_id),
+            cluster_detection_method="deactivate",
+        )
+        return
+
+    if external_context.process_id != process_id:
+        raise ValueError(
+            f"external context process_id={external_context.process_id} does not match worker process_id={process_id}"
+        )
+    event(
+        "external_worker_bootstrap",
         process_id=process_id,
-        local_device_ids=_distributed_local_device_ids(config, process_id),
+        num_processes=external_context.num_processes,
+        bootstrap=external_context.bootstrap,
+        coordinator_address=external_context.coordinator_address,
+    )
+    if external_context.bootstrap == "iris_job_info":
+        initialize_iris_jax(port=config.coordinator_port, endpoint_name="jaxpp_fp8_repro_coordinator")
+        return
+    assert external_context.coordinator_address is not None
+    jax.distributed.initialize(
+        coordinator_address=external_context.coordinator_address,
+        num_processes=external_context.num_processes,
+        process_id=process_id,
         cluster_detection_method="deactivate",
     )
+
+
+def _validate_local_stage_devices(config: Config) -> None:
+    actual_devices = len(jax.local_devices())
+    if actual_devices != config.devices_per_stage:
+        raise ValueError(
+            f"{config.worker_mode} worker requires exactly {config.devices_per_stage} local devices, "
+            f"got {actual_devices}"
+        )
+
+
+def run_distributed_direct_worker(
+    config: Config,
+    process_id: int,
+    external_context: ExternalDistributedContext | None = None,
+) -> None:
+    _configure_worker(config, process_id)
+    _initialize_distributed(config, process_id, external_context)
     try:
+        _validate_local_stage_devices(config)
         expected_devices = 2 * config.devices_per_stage
         if len(jax.devices()) != expected_devices:
             actual_devices = len(jax.devices())
@@ -525,19 +653,18 @@ def run_distributed_direct_worker(config: Config, process_id: int) -> None:
         jax.distributed.shutdown()
 
 
-def run_jaxpp_worker(config: Config, process_id: int) -> None:
+def run_jaxpp_worker(
+    config: Config,
+    process_id: int,
+    external_context: ExternalDistributedContext | None = None,
+) -> None:
     _configure_worker(config, process_id)
     actual_revision = jaxpp_revision()
     if actual_revision != JAXPP_REVISION:
         raise RuntimeError(f"expected JaxPP revision {JAXPP_REVISION}, got {actual_revision}")
-    jax.distributed.initialize(
-        coordinator_address=f"127.0.0.1:{config.coordinator_port}",
-        num_processes=2,
-        process_id=process_id,
-        local_device_ids=_distributed_local_device_ids(config, process_id),
-        cluster_detection_method="deactivate",
-    )
+    _initialize_distributed(config, process_id, external_context)
     try:
+        _validate_local_stage_devices(config)
         expected_devices = 2 * config.devices_per_stage
         if len(jax.devices()) != expected_devices:
             raise ValueError(
@@ -655,6 +782,24 @@ def run_jaxpp_worker(config: Config, process_id: int) -> None:
         jax.distributed.shutdown()
 
 
+def run_external_worker(config: Config) -> int:
+    job_info = get_job_info()
+    context = external_distributed_context(os.environ, job_info)
+    if config.runtime == "distributed_direct":
+        run_distributed_direct_worker(config, context.process_id, context)
+    elif config.runtime == "jaxpp":
+        run_jaxpp_worker(config, context.process_id, context)
+    else:
+        raise ValueError("external worker mode supports only distributed_direct or jaxpp runtime")
+    event(
+        "verdict",
+        verdict="pass",
+        process_id=context.process_id,
+        worker_mode=config.worker_mode,
+    )
+    return 0
+
+
 def run_supervised(config: Config) -> int:
     context = mp.get_context("spawn")
     workers = {
@@ -697,6 +842,7 @@ def run_supervised(config: Config) -> int:
 def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), required=True)
+    parser.add_argument("--worker-mode", choices=("local", "external"), default="local")
     parser.add_argument("--kernel", choices=("bf16", "fp8", "bf16_ring", "fp8_ring"), default="fp8")
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--experts", type=int, default=1)
@@ -720,6 +866,8 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
 
 def main() -> None:
     config = parse_config()
+    if config.worker_mode == "external":
+        raise SystemExit(run_external_worker(config))
     raise SystemExit(run_supervised(config))
 
 
