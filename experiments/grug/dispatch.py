@@ -115,10 +115,10 @@ sha256sum \\
 diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/torch/__init__.py"
 test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_cu13-*.dist-info
 test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
 "$IRIS_VENV/bin/python" - <<'PY'
-import importlib.util
 import os
 
 import cutlass
@@ -131,7 +131,6 @@ assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
 venv = os.environ["VIRTUAL_ENV"] + "/"
 assert cutlass.__file__.startswith(venv), cutlass.__file__
 assert _cutlass_ir.__file__.startswith(venv), _cutlass_ir.__file__
-assert importlib.util.find_spec("torch") is None
 print(f"preserved NGC JAX {{jax.__version__}} from {{jax.__file__}}")
 print(f"preserved NGC JAXLIB {{jaxlib.__version__}} from {{jaxlib.__file__}}")
 print(f"overlaid CUDA-13 CUTLASS DSL {{cutlass.__version__}} from {{cutlass.__file__}}")

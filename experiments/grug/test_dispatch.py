@@ -78,7 +78,7 @@ def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(mon
     assert 'test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info' in script
     assert "assert cutlass.__file__.startswith(venv)" in script
     assert "assert _cutlass_ir.__file__.startswith(venv)" in script
-    assert 'assert importlib.util.find_spec("torch") is None' in script
+    assert 'test ! -e "$IRIS_VENV/lib/python3.12/site-packages/torch/__init__.py"' in script
 
 
 def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> None:
