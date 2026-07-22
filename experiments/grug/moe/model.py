@@ -122,6 +122,8 @@ class GrugModelConfig:
     max_seq_len: int = 8192
     # Sliding-window attention applied to every layer. 0 (default) = full causal.
     sliding_window: int = 0
+    # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
+    gated_norm: bool = False
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -251,6 +253,30 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
+_GATED_NORM_RANK = 128
+
+
+class GatedNorm(eqx.Module):
+    """Learnable low-rank per-dimension gating applied after RMSNorm (optional; SCALE_GATED_NORM=1)."""
+
+    w_down: jax.Array
+    w_up: jax.Array
+
+    @staticmethod
+    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+        k_down, k_up = random.split(key)
+        return GatedNorm(
+            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
+            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", x, self.w_down))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        return x * gate.astype(x.dtype)
+
+
 class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
@@ -349,14 +375,16 @@ class MoEMLP(eqx.Module):
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm | None
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm | None
     mlp: MoEMLP
     shared: tuple[DenseMLP, ...] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key = random.split(key, 3)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             n = cfg.num_shared_experts
@@ -365,18 +393,29 @@ class Block(eqx.Module):
                 DenseMLP.init(cfg.hidden_dim, per_expert_dim, cfg.initializer_std, key=k)
                 for k in random.split(shared_key, n)
             )
+        attn_gated_norm = (
+            GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key) if cfg.gated_norm else None
+        )
+        mlp_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key) if cfg.gated_norm else None
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn_gated_norm=attn_gated_norm,
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp_gated_norm=mlp_gated_norm,
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        x = x + self.attn(self.rms_attn(x), mask)
+        attn_in = self.rms_attn(x)
+        if self.attn_gated_norm is not None:
+            attn_in = self.attn_gated_norm(attn_in)
+        x = x + self.attn(attn_in, mask)
         mlp_in = self.rms_mlp(x)
+        if self.mlp_gated_norm is not None:
+            mlp_in = self.mlp_gated_norm(mlp_in)
         mlp_out = self.mlp(mlp_in)
         if self.shared is not None:
             for shared_expert in self.shared:
