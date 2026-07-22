@@ -38,6 +38,7 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 
 
 class VllmLauncher(Protocol):
@@ -77,8 +78,8 @@ class VllmType(StrEnum):
 class IsolatedCudaVllm:
     """Provide an isolated CUDA vLLM command and environment.
 
-    Upstream serves standard vLLM architectures. The Marin fork additionally serves Marin-specific
-    architectures and streams checkpoints from the CoreWeave object store.
+    Both variants stream checkpoints from the CoreWeave object store. The Marin fork additionally
+    serves Marin-specific architectures.
     """
 
     source: VllmType = VllmType.UPSTREAM
@@ -114,26 +115,18 @@ class IsolatedCudaVllm:
         # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
         # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
         # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
-        environment = {_FLASHINFER_SAMPLER_ENV_VAR: "0"}
+        # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
+        # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        environment = {
+            _FLASHINFER_SAMPLER_ENV_VAR: "0",
+            _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
+        }
         if self.source is VllmType.MARIN_FORK:
-            environment.update(
-                {
-                    "VLLM_USE_PRECOMPILED": "1",
-                    "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
-                }
-            )
+            environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment
 
 
 def _write_virtual_hosted_s3_config() -> str:
-    """Write a boto3 config forcing virtual-hosted S3 addressing and return its path.
-
-    boto3's S3 addressing style can only be set from a config file (no env var), and the CoreWeave
-    object store rejects the default path-style requests. The fork's Run:ai streamer reads it via
-    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file. Rewritten on every
-    call (once per serve, cheap) rather than reused: a truncated leftover from a crash mid-write would
-    otherwise be kept and silently re-enable the path-style addressing the store rejects.
-    """
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
     with open(path, "w") as handle:
         handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
