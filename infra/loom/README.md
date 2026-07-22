@@ -27,9 +27,9 @@ infra/loom/preflight.py
 Store those private values only in the rendered `LOOM_DOTENV` Secret Manager
 payload. The App callback and webhook URL use `https://loom.oa.dev`.
 
-## Phase A: adopt without rolling the VM
+## Adopt without changing the runtime
 
-`runtimeRolloutEnabled: false` makes the VM ignore metadata and startup-script
+`manageRuntime: false` makes the VM ignore metadata and startup-script
 changes. Imports therefore adopt the live host without changing the process it
 runs. These production resources predate Pulumi and must be imported exactly
 once:
@@ -62,7 +62,7 @@ pulumi import --cwd infra/loom --stack marin-loom \
   "projects/${PROJECT}/zones/${ZONE}/instances/loom"
 ```
 
-Run `pulumi preview --diff` and require zero replacements. Phase A should show
+Run `pulumi preview --diff` and require zero replacements. Adoption should show
 the existing resources as unchanged or adopted and only additive hardening:
 the image repository, backup bucket, snapshot policy, least-privilege runtime
 IAM, uptime check, alert policy, and dashboard.
@@ -82,7 +82,7 @@ transcript. Record the numeric version returned by `gcloud` and set
 `dotenvSecretVersion` to that exact value. The startup script never reads
 `latest`, so a later secret upload cannot change a release implicitly.
 
-## Phase B: immutable release rollout
+## Build and activate immutable releases
 
 Pulumi builds the release on the operator's Docker daemon from the exact remote
 Git commit, pushes it to Artifact Registry, and records the resulting digest.
@@ -113,7 +113,7 @@ release, then arm it in a separate update:
 ```sh
 pulumi config rm --cwd infra/loom --stack marin-loom buildCommit
 pulumi config set --cwd infra/loom --stack marin-loom gitRef "$COMMIT_SHA"
-pulumi config set --cwd infra/loom --stack marin-loom runtimeRolloutEnabled true
+pulumi config set --cwd infra/loom --stack marin-loom manageRuntime true
 pulumi preview --cwd infra/loom --stack marin-loom --diff
 ```
 
@@ -122,7 +122,7 @@ the same commit in one update. Activation resolves the retained full-SHA tag
 from Artifact Registry and feeds its digest reference directly into VM metadata;
 there is no manual digest configuration. Pulumi validates that the real provider
 returns the expected repository's `@sha256:` reference before updating the VM.
-The first rollout contains a large metadata diff because Phase A deliberately
+The first activation contains a large metadata diff because adoption deliberately
 ignored the whole legacy map. It must contain no replacement, deletion,
 boot-disk, data-disk, or network-interface change. The imported `ssh-keys` and
 `enable-osconfig` metadata remain ignored and are not removed.
@@ -150,7 +150,7 @@ container. Recreating the control-plane service will then preserve session
 container IDs and let the restarted Loom process discover and adopt them.
 
 Until that release lands, a control-plane container replacement can still end
-sessions. Take an online SQLite backup before the first Phase B rollout and
+sessions. Take an online SQLite backup before the first activation and
 inventory the legacy supervisor names. The activation helper refuses that
 cutover by default; after accepting the one-time interruption, run it once with
 `--allow-legacy-cutover`. Later deployments must omit that flag so missing

@@ -5,7 +5,7 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
-"""Verify external GitHub prerequisites without placing credentials in Pulumi."""
+"""Verify the external GitHub App and operator-host image build prerequisites."""
 
 from __future__ import annotations
 
@@ -14,15 +14,18 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
-EXPECTED_PERMISSIONS = {
-    "contents": "write",
-    "issues": "write",
-    "metadata": "read",
-    "pull_requests": "write",
-}
-EXPECTED_EVENTS = {"issue_comment", "pull_request_review_comment"}
+EXPECTED_PERMISSIONS = MappingProxyType(
+    {
+        "contents": "write",
+        "issues": "write",
+        "metadata": "read",
+        "pull_requests": "write",
+    }
+)
+EXPECTED_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 PULUMI_DIR = Path(__file__).resolve().parent
 
 
@@ -37,7 +40,9 @@ def gh_json(path: str) -> Any:
     return json.loads(result.stdout)
 
 
-def validate_github_app(app: dict[str, Any], installations: dict[str, Any], organization: str, slug: str) -> None:
+def validate_github_app(
+    app: dict[str, Any], installations: dict[str, Any], organization: str, slug: str
+) -> dict[str, Any]:
     owner = app.get("owner", {}).get("login")
     if owner != organization:
         raise ValueError(f"GitHub App {slug!r} is owned by {owner!r}, expected {organization!r}")
@@ -62,6 +67,7 @@ def validate_github_app(app: dict[str, Any], installations: dict[str, Any], orga
     missing_events = EXPECTED_EVENTS - set(installation.get("events", []))
     if missing_events:
         raise ValueError(f"GitHub App {slug!r} is missing events: {sorted(missing_events)}")
+    return installation
 
 
 def validate_buildx(builder: str | None) -> None:
@@ -84,13 +90,13 @@ def validate_buildx(builder: str | None) -> None:
         raise ValueError(f"Docker buildx builder does not support linux/amd64: {platform_line}")
 
 
-def validate_registry_credentials(config: dict[str, Any], registry: str) -> None:
+def validate_registry_credentials(config: dict[str, Any], registry: str) -> str:
     helpers = config.get("credHelpers", {})
     helper = helpers.get(registry) if isinstance(helpers, dict) else None
     auths = config.get("auths", {})
     registry_auth = auths.get(registry) if isinstance(auths, dict) else None
     if isinstance(registry_auth, dict) and registry_auth.get("auth"):
-        return
+        return "inline"
     helper = helper or config.get("credsStore")
     if not isinstance(helper, str) or not helper:
         raise ValueError(f"Docker has no credential helper for {registry}; run gcloud auth configure-docker {registry}")
@@ -102,6 +108,7 @@ def validate_registry_credentials(config: dict[str, Any], registry: str) -> None
     )
     if result.returncode:
         raise ValueError(f"Docker credential helper {helper!r} cannot authenticate {registry}")
+    return helper
 
 
 def stack_build_config(stack: str) -> tuple[str | None, str]:

@@ -132,7 +132,7 @@ if [ -e "$DATA_DISK_DEVICE" ]; then
   # larger (`gcloud compute disks resize`) since the last boot. This makes
   # enlarging the data disk a resize + reboot, with no manual resize2fs; ext4
   # grows online, so the mount above stays put.
-  resize2fs "$DATA_DISK_DEVICE" 2>/dev/null || true
+  resize2fs "$DATA_DISK_DEVICE"
   if ! grep -q "^${DATA_DISK_DEVICE} " /etc/fstab; then
     echo "${DATA_DISK_DEVICE} ${DATA_MOUNT} ext4 discard,defaults,nofail 0 2" >>/etc/fstab
   fi
@@ -163,8 +163,8 @@ else
   echo "== updating ${REPO_DIR} to ${REPO_URL}@${GIT_REF} =="
   git -C "$REPO_DIR" remote set-url origin "$REPO_URL"
 fi
-# GIT_REF is a full commit SHA for a release and may be a branch during the
-# import-only phase. Fetching it explicitly supports both forms on a fresh VM.
+# GIT_REF is normally a full release commit. Explicit fetch also makes the
+# initial unmanaged metadata safe to inspect without assuming a local branch.
 git -C "$REPO_DIR" fetch --depth 1 origin "$GIT_REF"
 git -C "$REPO_DIR" checkout --detach --force FETCH_HEAD
 git -C "$REPO_DIR" clean -fd

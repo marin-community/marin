@@ -36,7 +36,8 @@ def installations() -> dict:
 
 
 def test_github_app_preflight_accepts_the_expected_installation() -> None:
-    preflight.validate_github_app(app(), installations(), "marin-community", "loom-oa-dev")
+    installation = preflight.validate_github_app(app(), installations(), "marin-community", "loom-oa-dev")
+    assert installation["app_slug"] == "loom-oa-dev"
 
 
 @pytest.mark.parametrize(
@@ -85,31 +86,27 @@ def test_buildx_preflight_requires_linux_amd64() -> None:
         preflight.validate_buildx(None)
 
 
-@pytest.mark.parametrize(
-    "config",
-    [
-        {"auths": {"us-central1-docker.pkg.dev": {"auth": "opaque"}}},
-    ],
-)
-def test_registry_preflight_accepts_docker_credential_sources(config: dict) -> None:
-    preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev")
+def test_registry_preflight_accepts_inline_registry_auth() -> None:
+    config = {"auths": {"us-central1-docker.pkg.dev": {"auth": "opaque"}}}
+    assert preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev") == "inline"
 
 
 @pytest.mark.parametrize(
-    "config",
+    ("config", "helper"),
     [
-        {"credHelpers": {"us-central1-docker.pkg.dev": "gcloud"}},
-        {"credsStore": "desktop"},
+        ({"credHelpers": {"us-central1-docker.pkg.dev": "gcloud"}}, "gcloud"),
+        ({"credsStore": "desktop"}, "desktop"),
     ],
 )
-def test_registry_preflight_invokes_the_selected_credential_helper(config: dict) -> None:
+def test_registry_preflight_invokes_the_selected_credential_helper(config: dict, helper: str) -> None:
     with patch.object(
         preflight.subprocess,
         "run",
         return_value=subprocess.CompletedProcess([], 0, '{"Username":"token","Secret":"redacted"}', ""),
     ) as run:
-        preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev")
-    assert run.call_args.args[0][-1] == "get"
+        assert preflight.validate_registry_credentials(config, "us-central1-docker.pkg.dev") == helper
+    assert run.call_args.args[0] == [f"docker-credential-{helper}", "get"]
+    assert run.call_args.kwargs["input"] == "us-central1-docker.pkg.dev\n"
 
 
 def test_registry_preflight_rejects_missing_credentials() -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "post_up.py"
 SPEC = importlib.util.spec_from_file_location("loom_post_up", MODULE_PATH)
 assert SPEC and SPEC.loader
 post_up = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = post_up
 SPEC.loader.exec_module(post_up)
 
 

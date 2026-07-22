@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Declarative Google Cloud resources for the single-host Loom deployment.
-
-Keep the resource graph in ``create_infrastructure``: tests can run it under
-Pulumi mocks without credentials, while ``__main__.py`` is intentionally only
-the stack entry point.
-"""
+"""Declarative resources and release placement for loom.oa.dev."""
 
 from __future__ import annotations
 
@@ -23,6 +18,18 @@ import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_REGION = "us-central1"
+DEFAULT_NETWORK = "default"
+DEFAULT_INSTANCE_NAME = "loom"
+DEFAULT_VM_SERVICE_ACCOUNT = "loom-vm"
+DEFAULT_MACHINE_TYPE = "e2-highmem-4"
+DEFAULT_BOOT_DISK_GB = 100
+DEFAULT_DATA_DISK_GB = 500
+DEFAULT_REPO_URL = "https://github.com/marin-community/loom.git"
+DEFAULT_GIT_REF = "main"
+DEFAULT_DOTENV_SECRET_VERSION = 1
+DEFAULT_SNAPSHOT_RETENTION_DAYS = 14
+DEFAULT_BACKUP_RETENTION_DAYS = 30
 
 
 def _positive_config_int(value: int | None, default: int, name: str) -> int:
@@ -171,31 +178,31 @@ class DeploymentConfig:
     operator_cidr: str
     dns_zone_id: str
     build_commit: str | None = None
-    runtime_rollout_enabled: bool = False
+    manage_runtime: bool = False
     buildx_builder: str | None = None
-    network: str = "default"
-    instance_name: str = "loom"
-    vm_service_account_name: str = "loom-vm"
-    machine_type: str = "e2-highmem-4"
-    boot_disk_gb: int = 100
-    data_disk_gb: int = 500
-    repo_url: str = "https://github.com/marin-community/loom.git"
-    git_ref: str = "main"
-    dotenv_secret_version: int = 1
+    network: str = DEFAULT_NETWORK
+    instance_name: str = DEFAULT_INSTANCE_NAME
+    vm_service_account_name: str = DEFAULT_VM_SERVICE_ACCOUNT
+    machine_type: str = DEFAULT_MACHINE_TYPE
+    boot_disk_gb: int = DEFAULT_BOOT_DISK_GB
+    data_disk_gb: int = DEFAULT_DATA_DISK_GB
+    repo_url: str = DEFAULT_REPO_URL
+    git_ref: str = DEFAULT_GIT_REF
+    dotenv_secret_version: int = DEFAULT_DOTENV_SECRET_VERSION
     prune_deployment: bool = False
     profiles: dict[str, dict[str, Any]] | None = None
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[dict[str, Any], ...] = ()
     alert_emails: tuple[str, ...] = ()
-    snapshot_retention_days: int = 14
-    backup_retention_days: int = 30
+    snapshot_retention_days: int = DEFAULT_SNAPSHOT_RETENTION_DAYS
+    backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
     def __post_init__(self) -> None:
         if self.build_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", self.build_commit):
             raise ValueError("buildCommit must be a 40-character Git commit")
-        if self.runtime_rollout_enabled and not re.fullmatch(r"[0-9a-f]{40}", self.git_ref):
-            raise ValueError("runtime rollout requires a 40-character gitRef")
-        if self.runtime_rollout_enabled and self.build_commit == self.git_ref:
+        if self.manage_runtime and not re.fullmatch(r"[0-9a-f]{40}", self.git_ref):
+            raise ValueError("managed runtime requires a 40-character gitRef")
+        if self.manage_runtime and self.build_commit == self.git_ref:
             raise ValueError("buildCommit must be staged before the same gitRef is activated")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
@@ -221,7 +228,7 @@ class DeploymentConfig:
         config = pulumi.Config()
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
-        region = config.get("region") or "us-central1"
+        region = config.get("region") or DEFAULT_REGION
         return cls(
             project=project,
             region=region,
@@ -230,26 +237,30 @@ class DeploymentConfig:
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
             build_commit=config.get("buildCommit"),
-            runtime_rollout_enabled=config.get_bool("runtimeRolloutEnabled") or False,
+            manage_runtime=config.get_bool("manageRuntime") or False,
             buildx_builder=config.get("buildxBuilder"),
-            network=config.get("network") or "default",
-            instance_name=config.get("instanceName") or "loom",
-            vm_service_account_name=config.get("vmServiceAccountName") or "loom-vm",
-            machine_type=config.get("machineType") or "e2-highmem-4",
-            boot_disk_gb=_positive_config_int(config.get_int("bootDiskGb"), 100, "bootDiskGb"),
-            data_disk_gb=_positive_config_int(config.get_int("dataDiskGb"), 500, "dataDiskGb"),
-            repo_url=config.get("repoUrl") or "https://github.com/marin-community/loom.git",
-            git_ref=config.get("gitRef") or "main",
-            dotenv_secret_version=_positive_config_int(config.get_int("dotenvSecretVersion"), 1, "dotenvSecretVersion"),
+            network=config.get("network") or DEFAULT_NETWORK,
+            instance_name=config.get("instanceName") or DEFAULT_INSTANCE_NAME,
+            vm_service_account_name=config.get("vmServiceAccountName") or DEFAULT_VM_SERVICE_ACCOUNT,
+            machine_type=config.get("machineType") or DEFAULT_MACHINE_TYPE,
+            boot_disk_gb=_positive_config_int(config.get_int("bootDiskGb"), DEFAULT_BOOT_DISK_GB, "bootDiskGb"),
+            data_disk_gb=_positive_config_int(config.get_int("dataDiskGb"), DEFAULT_DATA_DISK_GB, "dataDiskGb"),
+            repo_url=config.get("repoUrl") or DEFAULT_REPO_URL,
+            git_ref=config.get("gitRef") or DEFAULT_GIT_REF,
+            dotenv_secret_version=_positive_config_int(
+                config.get_int("dotenvSecretVersion"), DEFAULT_DOTENV_SECRET_VERSION, "dotenvSecretVersion"
+            ),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             profiles=dict(config.get_object("profiles") or {}),
             workloads=tuple(WorkloadIdentityConfig.parse(value) for value in list(config.get_object("workloads") or [])),
             github_federations=tuple(dict(value) for value in list(config.get_object("githubFederations") or [])),
             alert_emails=tuple(config.get_object("alertEmails") or []),
             snapshot_retention_days=_positive_config_int(
-                config.get_int("snapshotRetentionDays"), 14, "snapshotRetentionDays"
+                config.get_int("snapshotRetentionDays"), DEFAULT_SNAPSHOT_RETENTION_DAYS, "snapshotRetentionDays"
             ),
-            backup_retention_days=_positive_config_int(config.get_int("backupRetentionDays"), 30, "backupRetentionDays"),
+            backup_retention_days=_positive_config_int(
+                config.get_int("backupRetentionDays"), DEFAULT_BACKUP_RETENTION_DAYS, "backupRetentionDays"
+            ),
         )
 
 
@@ -391,8 +402,8 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         direction="INGRESS",
         source_ranges=["0.0.0.0/0"],
         target_tags=["loom-web"],
-        # Match the legacy resource's provider-normalized ordering so Phase A
-        # adoption does not update an already-equivalent live firewall.
+        # Preserve provider-normalized ordering from the imported firewall so
+        # equivalent policy does not produce a permanent diff.
         allows=[
             {"protocol": "tcp", "ports": ["443"]},
             {"protocol": "udp", "ports": ["443"]},
@@ -536,7 +547,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
 
     image: pulumi.Input[str] = ""
     image_mode = "disabled"
-    if config.runtime_rollout_enabled:
+    if config.manage_runtime:
         released_image = gcp.artifactregistry.get_docker_image_output(
             project=config.project,
             location=config.region,
@@ -591,7 +602,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     ]
     dependencies.append(dns_record)
     ignored_instance_changes = (
-        ["metadata"] if not config.runtime_rollout_enabled else ['metadata["ssh-keys"]', 'metadata["enable-osconfig"]']
+        ["metadata"] if not config.manage_runtime else ['metadata["ssh-keys"]', 'metadata["enable-osconfig"]']
     )
     instance_options = pulumi.ResourceOptions(
         depends_on=dependencies,
@@ -633,7 +644,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             "email": vm_account.email,
             "scopes": ["cloud-platform"],
         },
-        allow_stopping_for_update=config.runtime_rollout_enabled,
+        allow_stopping_for_update=config.manage_runtime,
         deletion_protection=True,
         opts=instance_options,
     )
@@ -785,7 +796,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     pulumi.export("builtImage", built_image.ref if built_image is not None else "")
     pulumi.export("buildCommit", config.build_commit or "")
     pulumi.export("gitRef", config.git_ref)
-    pulumi.export("runtimeRolloutEnabled", config.runtime_rollout_enabled)
+    pulumi.export("manageRuntime", config.manage_runtime)
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
     pulumi.export("backupBucket", backup_bucket.url)
     pulumi.export("tokenAudience", audience)

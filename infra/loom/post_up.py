@@ -9,8 +9,9 @@
 """Verify and activate a loom VM after ``pulumi up``.
 
 Pulumi owns durable resources. This small imperative tail deliberately owns the
-checks that are observations rather than resources: public DNS propagation,
-SSH readiness, the current startup-script journal run, and HTTPS health.
+checks that are observations rather than resources: public DNS and SSH,
+startup-script completion, HTTPS readiness, session-container preservation,
+supervisor preservation, and ACP reattachment.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -80,31 +82,47 @@ def wait_for_dns(domain: str, address: str, timeout: int) -> None:
     fail(f"{domain} does not resolve to {address}; verify the Cloudflare A record before activating loom")
 
 
-def ssh(project: str, zone: str, instance: str, command: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "gcloud",
-            f"--project={project}",
-            "compute",
-            "ssh",
-            instance,
-            f"--zone={zone}",
-            "--quiet",
-            f"--command={command}",
-        ],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=timeout,
-    )
+@dataclass(frozen=True)
+class RemoteHost:
+    project: str
+    zone: str
+    instance: str
+
+    def run(self, command: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "gcloud",
+                f"--project={self.project}",
+                "compute",
+                "ssh",
+                self.instance,
+                f"--zone={self.zone}",
+                "--quiet",
+                f"--command={command}",
+            ],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+
+    def lines(self, command: str) -> set[str]:
+        result = self.run(command)
+        if result.returncode:
+            fail(f"remote inventory command failed: {result.stderr.strip()}")
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+    def journal(self) -> list[str]:
+        result = self.run(f"sudo journalctl -u {STARTUP_UNIT} --no-pager -o cat 2>/dev/null")
+        return result.stdout.splitlines()
 
 
-def wait_for_ssh(project: str, zone: str, instance: str, timeout: int) -> None:
+def wait_for_ssh(host: RemoteHost, timeout: int) -> None:
     log("waiting for SSH")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            if ssh(project, zone, instance, "true", timeout=60).returncode == 0:
+            if host.run("true", timeout=60).returncode == 0:
                 return
         except subprocess.TimeoutExpired:
             pass
@@ -112,61 +130,30 @@ def wait_for_ssh(project: str, zone: str, instance: str, timeout: int) -> None:
     fail("SSH never became reachable; check the operator CIDR firewall rule")
 
 
-def remote_lines(project: str, zone: str, instance: str, command: str) -> set[str]:
-    result = ssh(project, zone, instance, command)
-    if result.returncode:
-        fail(f"remote inventory command failed: {result.stderr.strip()}")
-    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
-
-
-def supervisor_inventory(project: str, zone: str, instance: str) -> set[str]:
-    return remote_lines(
-        project,
-        zone,
-        instance,
+def supervisor_inventory(host: RemoteHost) -> set[str]:
+    return host.lines(
         "cd /opt/loom/deploy/standalone && sudo docker compose exec -T loom tapestry ls",
     )
 
 
-def runner_session_inventory(project: str, zone: str, instance: str) -> set[str]:
-    return remote_lines(
-        project,
-        zone,
-        instance,
+def runner_session_inventory(host: RemoteHost) -> set[str]:
+    return host.lines(
         "sudo docker ps --filter label=dev.loom.runner=session --format '{{.Label \"dev.loom.session\"}}'",
     )
 
 
-def runner_container_inventory(project: str, zone: str, instance: str) -> set[str]:
-    return remote_lines(
-        project,
-        zone,
-        instance,
+def runner_container_inventory(host: RemoteHost) -> set[str]:
+    return host.lines(
         "sudo docker ps --filter label=dev.loom.runner=session --format '{{.ID}}'",
     )
 
 
-def journal(project: str, zone: str, instance: str) -> list[str]:
-    result = ssh(
-        project,
-        zone,
-        instance,
-        f"sudo journalctl -u {STARTUP_UNIT} --no-pager -o cat 2>/dev/null",
-    )
-    return result.stdout.splitlines()
-
-
-def activate_and_monitor(project: str, zone: str, instance: str, timeout: int) -> None:
+def activate_and_monitor(host: RemoteHost, timeout: int) -> None:
     # Anchor monitoring to a newly-triggered generation. Old failure text in the
     # persistent journal must never make this deployment look failed.
-    prior = sum(STARTUP_BANNER in line for line in journal(project, zone, instance))
+    prior = sum(STARTUP_BANNER in line for line in host.journal())
     log("triggering the current startup script")
-    result = ssh(
-        project,
-        zone,
-        instance,
-        f"sudo systemctl restart --no-block {STARTUP_UNIT}.service",
-    )
+    result = host.run(f"sudo systemctl restart --no-block {STARTUP_UNIT}.service")
     if result.returncode:
         fail(f"could not trigger startup script: {result.stderr.strip()}")
 
@@ -174,7 +161,7 @@ def activate_and_monitor(project: str, zone: str, instance: str, timeout: int) -
     deadline = time.monotonic() + timeout
     printed = 0
     while time.monotonic() < deadline:
-        lines = journal(project, zone, instance)
+        lines = host.journal()
         banners = [index for index, line in enumerate(lines) if STARTUP_BANNER in line]
         if len(banners) <= prior:
             time.sleep(15)
@@ -230,11 +217,8 @@ def wait_for_health(domain: str, timeout: int) -> None:
     fail("the startup script succeeded, but Loom health or readiness is not ready")
 
 
-def reattachment_failed(project: str, zone: str, instance: str) -> bool:
-    result = ssh(
-        project,
-        zone,
-        instance,
+def reattachment_failed(host: RemoteHost) -> bool:
+    result = host.run(
         "cd /opt/loom/deploy/standalone && "
         "sudo docker compose logs --no-color loom 2>/dev/null | "
         "grep -Fq 'failed to reattach ACP session'",
@@ -284,34 +268,37 @@ def main(
         instance = string_output(outputs, "instanceName")
         zone = string_output(outputs, "zone")
         domain = string_output(outputs, "url").removeprefix("https://").rstrip("/")
-        rollout_enabled = outputs["runtimeRolloutEnabled"]
+        manage_runtime = outputs["manageRuntime"]
     except (KeyError, subprocess.CalledProcessError) as error:
         fail(f"could not read the Pulumi stack outputs: {error}")
 
-    if rollout_enabled is not True:
-        fail("runtimeRolloutEnabled is false; refusing to trigger the startup script")
+    if manage_runtime is not True:
+        fail("manageRuntime is false; refusing to trigger the startup script")
+    host = RemoteHost(project, zone, instance)
     wait_for_dns(domain, address, dns_timeout)
-    wait_for_ssh(project, zone, instance, ssh_timeout)
-    supervisors_before = supervisor_inventory(project, zone, instance)
-    runner_sessions_before = runner_session_inventory(project, zone, instance)
+    wait_for_ssh(host, ssh_timeout)
+    supervisors_before = supervisor_inventory(host)
+    runner_sessions_before = runner_session_inventory(host)
     legacy_sessions = supervisors_before - runner_sessions_before
+    if allow_legacy_cutover and (runner_sessions_before or not legacy_sessions):
+        fail("--allow-legacy-cutover is valid only before the first DockerRunner session exists")
     if legacy_sessions and not allow_legacy_cutover:
         fail(
             "legacy in-container supervisors would stop during this rollout: "
             f"{', '.join(sorted(legacy_sessions))}; rerun with --allow-legacy-cutover after inventorying them"
         )
-    runner_containers_before = runner_container_inventory(project, zone, instance)
-    activate_and_monitor(project, zone, instance, startup_timeout)
+    runner_containers_before = runner_container_inventory(host)
+    activate_and_monitor(host, startup_timeout)
     wait_for_health(domain, https_timeout)
-    runner_containers_after = runner_container_inventory(project, zone, instance)
+    runner_containers_after = runner_container_inventory(host)
     missing_containers = runner_containers_before - runner_containers_after
     if missing_containers:
         fail(f"session containers disappeared during control restart: {', '.join(sorted(missing_containers))}")
     if not allow_legacy_cutover:
-        missing_supervisors = supervisors_before - supervisor_inventory(project, zone, instance)
+        missing_supervisors = supervisors_before - supervisor_inventory(host)
         if missing_supervisors:
             fail(f"session supervisors disappeared during control restart: {', '.join(sorted(missing_supervisors))}")
-    if not allow_legacy_cutover and reattachment_failed(project, zone, instance):
+    if not allow_legacy_cutover and reattachment_failed(host):
         fail("Loom logged an ACP reattachment failure after restart")
     log(f"loom is live: https://{domain}/")
 

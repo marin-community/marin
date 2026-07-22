@@ -52,7 +52,7 @@ from infra.loom.infrastructure import (  # noqa: E402
 )
 
 
-def deployment_config(*, build_commit: str | None = None, runtime_rollout_enabled: bool = False) -> DeploymentConfig:
+def deployment_config(*, build_commit: str | None = None, manage_runtime: bool = False) -> DeploymentConfig:
     return DeploymentConfig(
         project="example",
         region="us-central1",
@@ -61,7 +61,7 @@ def deployment_config(*, build_commit: str | None = None, runtime_rollout_enable
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
         build_commit=build_commit,
-        runtime_rollout_enabled=runtime_rollout_enabled,
+        manage_runtime=manage_runtime,
         git_ref="0123456789abcdef0123456789abcdef01234567",
         dotenv_secret_version=3,
         prune_deployment=True,
@@ -87,11 +87,9 @@ def deployment_config(*, build_commit: str | None = None, runtime_rollout_enable
     )
 
 
-def make_infrastructure(*, build_commit: str | None = None, runtime_rollout_enabled: bool = False):
+def make_infrastructure(*, build_commit: str | None = None, manage_runtime: bool = False):
     mocks.resources.clear()
-    return create_infrastructure(
-        deployment_config(build_commit=build_commit, runtime_rollout_enabled=runtime_rollout_enabled)
-    )
+    return create_infrastructure(deployment_config(build_commit=build_commit, manage_runtime=manage_runtime))
 
 
 def by_name(name: str) -> MockResourceArgs:
@@ -108,7 +106,7 @@ def test_build_and_runtime_rollout_require_commits() -> None:
         DeploymentConfig(
             **{
                 **base.__dict__,
-                "runtime_rollout_enabled": True,
+                "manage_runtime": True,
                 "git_ref": "main",
             }
         )
@@ -119,7 +117,7 @@ def test_build_and_runtime_rollout_require_commits() -> None:
             **{
                 **base.__dict__,
                 "build_commit": base.git_ref,
-                "runtime_rollout_enabled": True,
+                "manage_runtime": True,
             }
         )
 
@@ -242,7 +240,7 @@ def test_dns_matches_the_existing_unproxied_cloudflare_record():
 
 @pulumi.runtime.test
 def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
-    infrastructure = make_infrastructure(runtime_rollout_enabled=True)
+    infrastructure = make_infrastructure(manage_runtime=True)
 
     def check(_: object) -> None:
         metadata = by_name("loom").inputs["metadata"]
@@ -264,7 +262,7 @@ def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
 
 @pulumi.runtime.test
 def test_next_release_can_build_while_the_previous_commit_stays_deployed():
-    infrastructure = make_infrastructure(build_commit="f" * 40, runtime_rollout_enabled=True)
+    infrastructure = make_infrastructure(build_commit="f" * 40, manage_runtime=True)
 
     def check(_: object) -> None:
         image = by_name("loom-release-image")
