@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   rewrite:
+    # Re-enable only after the marin-style cleanup action is reviewed. Owner: Marin maintainers.
     if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
