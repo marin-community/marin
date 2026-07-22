@@ -38,6 +38,7 @@ author: dlwh
 - Approximate SwiGLU is now an explicit opt-in backend, `ring_quack_approx`. A paired 10-step one-node L2 training gate is finite and trajectory-stable: final loss differs by `+0.01356%`, while mean MFU improves from `21.1689` to `22.0161` (`+4.00%`) and median duration falls `4.04%`. The gain is real but insufficient by simple extrapolation to move the current L24 best above 20 MFU, so a reduced JaxPP gate is still required before the exact target.
 - The contemporary reduced JaxPP A/B makes QuACK a pipeline performance negative: after excluding runtime stalls above `300ms`, ring averages `9.4613` MFU and QuACK `9.4786` (`+0.18%`), with p50 changing only `+0.09%`. Do not run L24 QuACK. The next transport hypothesis is FP8 over the existing ring wire, not another ordinary ragged-all-to-all retry.
 - Packed FP8 inter-stage transfers are a modest directional win in the reduced L8 pipeline gate. Over 16 matched timed steps after excluding the two samples above `300ms`, p50 MFU improves from `9.4926` to `9.6398` (`+1.55%`) and p90 from `9.5406` to `9.6754` (`+1.41%`). All losses are finite and the final relative loss delta is `+0.00395%`. This is not enough to justify the exact m256 target directly; the next gate is L24/b512/m16 at the same 32-sequence microbatch.
+- FP8 pipeline transfer remains positive at realistic L24 stage depth but is too small for the objective. The matched b512/m16 confirmation improves clean p50 MFU from `16.2447` to `16.5358` (`+1.79%`) and p90 by `1.81%`, with finite loss and `+0.0343%` final relative drift. Applying that gain to the `18.2583` m256 best projects only about `18.59` MFU. Do not launch exact m256 FP8; resume with a different transport/overlap mechanism.
 
 ## Hypothesis Queue
 
@@ -47,7 +48,6 @@ author: dlwh
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the best full shape still needs another `9.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, and occupancy scaling reaches `18.2583` at batch8192/m256. Approximate QuACK is finite-step stable but neutral under the reduced pipeline, so it is no longer a scaling candidate.
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 - `GRUG-JAXPP-013`: Transformer Engine `main` with NCCL EP HT mode is the first credible upstream alternative to Marin's EP8 ring because its JAX integration stages payloads instead of requiring XLA's exportable symmetric output allocation. Evidence: [2026-07-22 10:31 PDT - upstream ragged and NCCL EP review](#2026-07-22-1031-pdt---upstream-ragged-and-nccl-ep-review). Next test: benchmark the non-zero-copy TE path against ring on one H100x8 node before any pipeline integration.
-- `GRUG-JAXPP-014`: The profile's dominant inter-stage SendRecv traffic can be halved without adding a second collective by packing per-token-scaled E4M3 forward activations and E5M2 backward gradients into one `uint8` tensor. The reduced L8 gate improves clean matched p50 MFU by `1.55%` with finite loss. Next test: isolate the depth effect at L24/b512/m16 while preserving the same 32-sequence pipeline microbatch; do not launch m256 from the L8 result.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -72,6 +72,7 @@ author: dlwh
 - Input-gradient-first backward passes CPU loss, `d_hidden`, parameter-gradient, accumulated-gradient, and Adam-update parity in both remat modes and executes on 32 H100s, but regresses reduced central MFU by `28.75%` (`6.5356` versus `9.1735`). The extra per-block rematerialization dominates the intended bubble reduction.
 - A private exact two-chunk bulk-ring prototype passes BF16 output/drop and four-input VJP parity, including overflow and globally consistent fallback. At the exact e64/top-k4/d2560 EP8 microbatch it regresses median forward from `10.389ms` to `10.939ms` and forward-backward from `22.948ms` to `26.156ms` despite XLA latency hiding.
 - Approximate QuACK improves a one-node L2 whole step by `4.00%`, but the controlled reduced JaxPP A/B is steady-state neutral: clean mean MFU `9.4786` versus `9.4613` (`+0.18%`) and clean p50 `9.4928` versus `9.4843` (`+0.09%`). Pipeline/collective work hides or dominates the local expert-kernel gain.
+- `GRUG-JAXPP-014`: Packed FP8 pipeline transfers are finite and consistently faster, but the L24/b512/m16 confirmation improves clean matched p50 MFU only `1.79%` (`16.2447 -> 16.5358`). The confirmed gain projects the `18.2583` m256 best to about `18.59`, so exact m256 scaling cannot reach 20 MFU.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2255,3 +2256,22 @@ author: dlwh
   - The L8 result is directional: the exact target has three times as many layers and four times as many tokens per pipeline microbatch. Do not launch the exact L24/b8192/m256 target from this gate.
 - Next action:
   - Run only a paired L24/b512/m16 confirmation, which preserves the 32-sequence microbatch while increasing depth from two to six layers per stage. Scale further only if that confirmation materially exceeds the reduced projection with finite loss.
+
+### 2026-07-22 11:31 PDT - L24 FP8 pipeline-wire confirmation
+- Hypothesis: Increasing stage depth from two to six layers while holding the 32-sequence pipeline microbatch fixed will preserve or amplify the reduced FP8 transfer gain enough to justify the exact m256 target.
+- Commit Hash: run snapshot `cafb45ccf5` (`[docs] Record reduced FP8 pipeline result`), implementation `143fbb8752` (`[grug] Add FP8 pipeline wire experiment`).
+- Commands: paired RNO2A 4x8 H100 explicit-MPMD `std_1f1b`, L24/d2560/e64/top-k4/seq4096/vocab8192/b512/m16, ring EP8, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, XLA loss, `save_moe`, 20 steps, and XLA preallocation `0.70`. The only axis was `explicit_mpmd_pipeline_wire_format={bf16,fp8}`.
+- Runs:
+  - FP8 parent `/dlwh/iris-run-job-20260722-181121`; W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-fp8wire-ab4-l24-e64k4-b512-s4096-p4m16-20260722>.
+  - BF16 parent `/dlwh/iris-run-job-20260722-181105`; W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-bf16wire-ab4-l24-e64k4-b512-s4096-p4m16-20260722>.
+- Results:
+  - Both parents, all eight child tasks, and both W&B runs succeeded at step 19 with zero failures, preemptions, or runtime restarts. The initial concurrent FP8 parent submission collided with BF16's second-resolution autogenerated Iris ID before creating a job; resubmitting FP8 alone succeeded.
+  - Across all 18 matched timed steps, FP8 mean/p50/p90 MFU is `16.1221/16.5358/16.5527`; BF16 is `15.8713/16.2407/16.2651`, or `+1.58%/+1.82%/+1.77%`. Mean duration improves `1.47%` and p50 improves `1.79%`.
+  - The stall filter excludes a matched pair when either axis exceeds its own run-duration median by more than `300ms`. This removes six steps and leaves 12 matched samples. FP8 mean/p50/p90 MFU is `16.5392/16.5358/16.5525`; BF16 is `16.2464/16.2447/16.2587`, or `+1.80%/+1.79%/+1.81%`.
+  - Clean mean/p50 duration falls from `5.72357/5.72417s` to `5.62224/5.62339s` (`-1.77%/-1.76%`). Clean mean tokens/s rises from `366,407` to `373,010` (`+1.80%`).
+  - All 18 logged losses are finite. FP8-minus-BF16 loss RMSE is `0.00213983`, maximum absolute delta is `0.00240803`, and final relative delta is `+0.034324%`. These runs did not emit router or dropped-assignment metrics.
+- Interpretation:
+  - The FP8 gain replicates at realistic stage depth and is stable across mean, p50, and p90. It does not amplify beyond the reduced result.
+  - Applying the clean p50 gain to the best L24/b8192/m256 mean MFU projects about `18.59`, still `1.41` points below the 20-MFU target. The exact m256 FP8 run is not justified.
+- Next action:
+  - Stop scaling packed FP8 pipeline transfer for this objective. Retain it as an explicit research mode and return to a qualitatively different mechanism, led by the one-node Transformer Engine NCCL EP HT gate or a schedule that actually overlaps the exposed SendRecv rendezvous.
