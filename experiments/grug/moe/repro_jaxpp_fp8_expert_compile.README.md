@@ -21,8 +21,10 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
   job run --no-wait --enable-extra-resources --gpu=H100x2 \
   --cpu=16 --memory=128G --disk=128G --extra=gpu --timeout=2400 \
   --job-name=jaxpp-fp8-expert-compile-minimal \
-  -- bash -lc '
+  -- bash -c '
     set -euxo pipefail
+    command -v ptxas
+    command -v nvlink
     uv pip install --link-mode=symlink cupy-cuda13x
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
@@ -108,6 +110,7 @@ The production observation used JAX/JAXLIB 0.10.1 and NVIDIA/JaxPP revision
 `7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`. The FP8 kernel uses E4M3 for both
 forward and reverse because mixed E4M3/E5M2 Mosaic WGMMA requires JAX 0.11 or
 newer. A CUDA toolchain containing `ptxas` and `nvlink` must be on `PATH`.
+Use a non-login worker shell: `bash -l` can replace Iris's staged toolchain path.
 
 ## Interpretation
 
