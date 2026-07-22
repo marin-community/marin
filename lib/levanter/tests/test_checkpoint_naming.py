@@ -153,14 +153,17 @@ def test_force_save_dedup_with_periodic():
         checkpointer = Checkpointer(tmpdir, None, [CheckpointInterval(every=10)])
         for state_step in range(1, 51):  # 50 training steps → periodic save at 50
             _on_step_new_semantics(checkpointer, state_step)
-        # Sanity: periodic just landed at step 50.
-        assert checkpointer._last_save_step == 50
+        checkpointer.wait_until_finished()
+        metadata_path = pathlib.Path(tmpdir) / "step-50" / "metadata.json"
+        mtime_before = metadata_path.stat().st_mtime_ns
 
         # Mimic Trainer.train()'s final run_hooks(info, force=True).
         _on_step_new_semantics(checkpointer, 50, force=True)
         checkpointer.wait_until_finished()
 
-        # Periodic saves at 10/20/30/40/50, and NO dup at 50.
+        # Periodic saves at 10/20/30/40/50, and NO dup at 50: a duplicate write would
+        # land at the same step-50 path, so the listing alone can't detect it — the
+        # unchanged metadata mtime shows the forced call didn't rewrite the checkpoint.
         assert _checkpoint_steps(tmpdir) == [10, 20, 30, 40, 50]
         assert _checkpoint_names(tmpdir) == [
             "step-10",
@@ -169,7 +172,7 @@ def test_force_save_dedup_with_periodic():
             "step-40",
             "step-50",
         ]
-        assert checkpointer._last_save_step == 50
+        assert metadata_path.stat().st_mtime_ns == mtime_before
 
 
 def test_state_step_zero_no_save_without_force():
