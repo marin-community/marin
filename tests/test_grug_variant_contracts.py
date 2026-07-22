@@ -138,22 +138,7 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
-def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
-    model_module = importlib.import_module("experiments.grug.moe.model")
-    mask = GrugAttentionMask.causal().with_segment_ids(
-        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
-        max_segments=3,
-    )
-
-    short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
-
-    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert short_mask.segment_ids is mask.segment_ids
-    assert long_mask.segment_ids is mask.segment_ids
-
-
-def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
+def test_grug_moe_attention_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     if jax.default_backend() != "gpu":
         pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
 
@@ -168,7 +153,6 @@ def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
         num_heads=4,
         num_kv_heads=1,
         max_seq_len=8,
-        sliding_window=8,
         num_experts=4,
         num_experts_per_token=2,
         attention_implementation="gpu_fa4_thd",
