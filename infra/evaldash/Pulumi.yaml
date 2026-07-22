@@ -7,7 +7,7 @@ runtime:
   options:
     virtualenv: ../../.venv
 description: The Marin eval-results dashboard as an IAP-gated Cloud Run service.
-# State backend and secrets provider come from the operator/CI environment, shared with
-# infra/pulumi (see README.md):
+# The state backend is selected by the operator/CI environment and shared with infra/pulumi
+# (see README.md):
 #   pulumi login gs://marin-iac-state
-#   PULUMI_CONFIG_PASSPHRASE from Secret Manager (pulumi-iac-passphrase)
+# Pulumi.marin-evaldash.yaml records the production stack's shared GCP KMS provider.
