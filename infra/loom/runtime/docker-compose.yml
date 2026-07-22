@@ -27,12 +27,18 @@ services:
       LOOM_SESSION_UV_VOLUME: loom_uv
       LOOM_SESSION_DOCKER_GID: ${DOCKER_GID:?DOCKER_GID is required}
       LOOM_SESSION_NETWORK: loom_default
-      LOOM_SESSION_API_URL: http://loom:7878
+      LOOM_SESSION_API_URL: http://loom:${LOOM_PORT:?LOOM_PORT is required}
+    command:
+      - loom
+      - server
+      - run
+      - --addr
+      - 0.0.0.0:${LOOM_PORT:?LOOM_PORT is required}
     depends_on:
       loom-init:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:7878:7878"
+      - "127.0.0.1:${LOOM_PORT:?LOOM_PORT is required}:${LOOM_PORT:?LOOM_PORT is required}"
     group_add:
       - ${DOCKER_GID:?DOCKER_GID is required}
     cap_add:
@@ -69,10 +75,11 @@ services:
         done
 
   caddy:
-    image: caddy:2
+    image: caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     restart: unless-stopped
     environment:
       LOOM_DOMAIN: ${LOOM_DOMAIN:?LOOM_DOMAIN is required}
+      LOOM_PORT: ${LOOM_PORT:?LOOM_PORT is required}
     ports:
       - "80:80"
       - "443:443"

@@ -8,7 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,10 @@ DEFAULT_GIT_REF = "main"
 DEFAULT_DOTENV_SECRET_VERSION = 1
 DEFAULT_SNAPSHOT_RETENTION_DAYS = 14
 DEFAULT_BACKUP_RETENTION_DAYS = 30
+ARTIFACT_REPOSITORY_ID = "loom"
+ARTIFACT_IMAGE_NAME = "loom"
+DOTENV_SECRET_ID = "LOOM_DOTENV"
+LOOM_PORT = 7878
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
@@ -38,6 +44,13 @@ STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
 BACKUP_SCRIPT = (ROOT / "runtime/backup-sqlite.sh").read_text()
+
+
+class RuntimeMode(StrEnum):
+    """Whether Pulumi preserves an adopted runtime or actively reconciles it."""
+
+    ADOPT = "adopt"
+    MANAGED = "managed"
 
 
 def _positive_config_int(value: int | None, default: int, name: str) -> int:
@@ -48,8 +61,12 @@ def _positive_config_int(value: int | None, default: int, name: str) -> int:
     return resolved
 
 
+def _artifact_image_path(project: str, region: str) -> str:
+    return f"{region}-docker.pkg.dev/{project}/{ARTIFACT_REPOSITORY_ID}/{ARTIFACT_IMAGE_NAME}"
+
+
 def _validated_image_reference(value: str, project: str, region: str) -> str:
-    prefix = f"{region}-docker.pkg.dev/{project}/loom/loom@sha256:"
+    prefix = f"{_artifact_image_path(project, region)}@sha256:"
     digest = value.removeprefix(prefix)
     if value == digest or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("Artifact Registry did not resolve gitRef to the expected Loom image digest")
@@ -85,77 +102,179 @@ class WorkloadIdentityConfig:
         return cls(name, profile, service_tag, account_id)
 
 
+@dataclass(frozen=True)
+class ProfileSecretConfig:
+    name: str
+    secret_ref: str
+    project: str
+    secret: str
+
+    @classmethod
+    def parse(cls, name: str, value: object, profile: str) -> ProfileSecretConfig:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name.startswith(("LOOM_", "WEAVER_")):
+            raise ValueError(f"profile {profile!r} has invalid environment name {name!r}")
+        if not isinstance(value, dict):
+            raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
+        secret_ref = str(value.get("secretRef", "")).strip()
+        match = SECRET_REF.fullmatch(secret_ref)
+        if not match:
+            raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
+        return cls(name, secret_ref, match.group("project"), match.group("secret"))
+
+    def manifest(self) -> dict[str, str]:
+        return {"name": self.name, "secret_ref": self.secret_ref}
+
+
+def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"profile {profile!r} {field} must be a list of strings")
+    return tuple(value)
+
+
+def _optional_int(value: object, field: str, profile: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise ValueError(f"profile {profile!r} {field} must be an integer")
+    return value
+
+
+@dataclass(frozen=True)
+class ProfileConfig:
+    name: str
+    agent: str
+    description: str
+    model: str
+    effort: str
+    protocol: str
+    mode: str
+    session_class: str
+    strict: bool
+    env_clear: bool
+    ambient_allowlist: tuple[str, ...]
+    idle_archive_secs: int | None
+    max_concurrent: int
+    turn_budget: int | None
+    prelude: str
+    restricted: bool
+    allowed_tools: tuple[str, ...]
+    env: tuple[ProfileSecretConfig, ...]
+
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> ProfileConfig:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
+            raise ValueError(f"invalid profile name {name!r}")
+        agent = str(value.get("agent", "")).strip()
+        if not agent:
+            raise ValueError(f"profile {name!r} requires agent")
+        raw_env = value.get("env", {})
+        if not isinstance(raw_env, dict):
+            raise ValueError(f"profile {name!r} env must be an object")
+        env = tuple(ProfileSecretConfig.parse(str(key), item, name) for key, item in sorted(raw_env.items()))
+        return cls(
+            name=name,
+            agent=agent,
+            description=str(value.get("description", "")),
+            model=str(value.get("model", "")),
+            effort=str(value.get("effort", "")),
+            protocol=str(value.get("protocol", "")),
+            mode=str(value.get("mode", "auto")),
+            session_class=str(value.get("class", "interactive")),
+            strict=bool(value.get("strict", False)),
+            env_clear=bool(value.get("envClear", False)),
+            ambient_allowlist=_string_tuple(value.get("ambientAllowlist", []), "ambientAllowlist", name),
+            idle_archive_secs=_optional_int(value.get("idleArchiveSeconds"), "idleArchiveSeconds", name),
+            max_concurrent=int(value.get("maxConcurrent", 0)),
+            turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", name),
+            prelude=str(value.get("prelude", "weaver")),
+            restricted=bool(value.get("restricted", False)),
+            allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
+            env=env,
+        )
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "agent_kind": self.agent,
+            "model": self.model,
+            "effort": self.effort,
+            "protocol": self.protocol,
+            "mode": self.mode,
+            "class": self.session_class,
+            "strict": self.strict,
+            "env_clear": self.env_clear,
+            "ambient_allowlist": list(self.ambient_allowlist),
+            "idle_archive_secs": self.idle_archive_secs,
+            "max_concurrent": self.max_concurrent,
+            "turn_budget": self.turn_budget,
+            "prelude": self.prelude,
+            "restricted": self.restricted,
+            "allowed_tools": list(self.allowed_tools),
+        }
+
+
+@dataclass(frozen=True)
+class GitHubFederationConfig:
+    name: str
+    repository_id: str
+    workflow_ref: str
+    profile: str
+    service_tag: str
+    event_name: str | None
+    ref_pattern: str | None
+
+    @classmethod
+    def parse(cls, value: Mapping[str, object]) -> GitHubFederationConfig:
+        required = {
+            field: str(value.get(key, "")).strip()
+            for field, key in (
+                ("name", "name"),
+                ("repository_id", "repositoryId"),
+                ("workflow_ref", "workflowRef"),
+                ("profile", "profile"),
+            )
+        }
+        if not all(required.values()):
+            raise ValueError("githubFederations require name, repositoryId, workflowRef, and profile")
+        event = value.get("event")
+        ref = value.get("ref")
+        return cls(
+            **required,
+            service_tag=str(value.get("serviceTag", "github-actions")),
+            event_name=None if event is None else str(event),
+            ref_pattern=None if ref is None else str(ref),
+        )
+
+    def manifest(self, audience: str) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "provider": "github",
+            "issuer": "https://token.actions.githubusercontent.com",
+            "audience": audience,
+            "service_tag": self.service_tag,
+            "repository_id": self.repository_id,
+            "workflow_ref": self.workflow_ref,
+            "event_name": self.event_name,
+            "ref_pattern": self.ref_pattern,
+            "profiles": [self.profile],
+        }
+
+
 def _profile_manifest(
-    profiles: dict[str, dict[str, Any]],
+    profiles: tuple[ProfileConfig, ...],
 ) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
     """Translate stack-friendly camelCase profiles into Loom's REST contract."""
     result: list[dict[str, Any]] = []
     secret_refs: list[tuple[str, str]] = []
-    for name, raw in sorted(profiles.items()):
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
-            raise ValueError(f"invalid profile name {name!r}")
-        agent = str(raw.get("agent", "")).strip()
-        if not agent:
-            raise ValueError(f"profile {name!r} requires agent")
-        profile = {
-            "name": name,
-            "description": str(raw.get("description", "")),
-            "agent_kind": agent,
-            "model": str(raw.get("model", "")),
-            "effort": str(raw.get("effort", "")),
-            "protocol": str(raw.get("protocol", "")),
-            "mode": str(raw.get("mode", "auto")),
-            "class": str(raw.get("class", "interactive")),
-            "strict": bool(raw.get("strict", False)),
-            "env_clear": bool(raw.get("envClear", False)),
-            "ambient_allowlist": list(raw.get("ambientAllowlist", [])),
-            "idle_archive_secs": raw.get("idleArchiveSeconds"),
-            "max_concurrent": int(raw.get("maxConcurrent", 0)),
-            "turn_budget": raw.get("turnBudget"),
-            "prelude": str(raw.get("prelude", "weaver")),
-            "restricted": bool(raw.get("restricted", False)),
-            "allowed_tools": raw.get("allowedTools", []),
-        }
-        env = []
-        for env_name, env_value in sorted(dict(raw.get("env", {})).items()):
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_name) or env_name.startswith(("LOOM_", "WEAVER_")):
-                raise ValueError(f"profile {name!r} has invalid environment name {env_name!r}")
-            if not isinstance(env_value, dict):
-                raise ValueError(f"profile {name!r} env {env_name!r} must use a full secretRef")
-            secret_ref = str(env_value.get("secretRef", "")).strip()
-            match = SECRET_REF.fullmatch(secret_ref)
-            if not match:
-                raise ValueError(f"profile {name!r} env {env_name!r} must use a full secretRef")
-            env.append({"name": env_name, "secret_ref": secret_ref})
-            secret_refs.append((match.group("project"), match.group("secret")))
-        result.append({"profile": profile, "env": env})
+    for profile in sorted(profiles, key=lambda item: item.name):
+        result.append({"profile": profile.manifest(), "env": [item.manifest() for item in profile.env]})
+        secret_refs.extend((item.project, item.secret) for item in profile.env)
     return result, secret_refs
 
 
-def _github_federation_manifest(mappings: list[dict[str, Any]], audience: str) -> list[dict[str, Any]]:
-    result = []
-    for raw in mappings:
-        name = str(raw.get("name", "")).strip()
-        repository_id = str(raw.get("repositoryId", "")).strip()
-        workflow_ref = str(raw.get("workflowRef", "")).strip()
-        profile = str(raw.get("profile", "")).strip()
-        if not all((name, repository_id, workflow_ref, profile)):
-            raise ValueError("githubFederations require name, repositoryId, workflowRef, and profile")
-        result.append(
-            {
-                "name": name,
-                "provider": "github",
-                "issuer": "https://token.actions.githubusercontent.com",
-                "audience": audience,
-                "service_tag": str(raw.get("serviceTag", "github-actions")),
-                "repository_id": repository_id,
-                "workflow_ref": workflow_ref,
-                "event_name": raw.get("event"),
-                "ref_pattern": raw.get("ref"),
-                "profiles": [profile],
-            }
-        )
-    return result
+def _github_federation_manifest(mappings: tuple[GitHubFederationConfig, ...], audience: str) -> list[dict[str, object]]:
+    return [mapping.manifest(audience) for mapping in mappings]
 
 
 def _google_federation_mapping(
@@ -186,9 +305,7 @@ class DeploymentConfig:
     operator_cidr: str
     dns_zone_id: str
     build_commit: str | None = None
-    # False leaves imported VM metadata untouched. Once enabled for the first
-    # activation, this remains true so Pulumi owns every later rollout.
-    manage_runtime: bool = False
+    runtime_mode: RuntimeMode = RuntimeMode.ADOPT
     buildx_builder: str | None = None
     network: str = DEFAULT_NETWORK
     instance_name: str = DEFAULT_INSTANCE_NAME
@@ -200,18 +317,18 @@ class DeploymentConfig:
     git_ref: str = DEFAULT_GIT_REF
     dotenv_secret_version: int = DEFAULT_DOTENV_SECRET_VERSION
     prune_deployment: bool = False
-    profiles: dict[str, dict[str, Any]] | None = None
+    profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
-    github_federations: tuple[dict[str, Any], ...] = ()
+    github_federations: tuple[GitHubFederationConfig, ...] = ()
     snapshot_retention_days: int = DEFAULT_SNAPSHOT_RETENTION_DAYS
     backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
     def __post_init__(self) -> None:
         if self.build_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", self.build_commit):
             raise ValueError("buildCommit must be a 40-character Git commit")
-        if self.manage_runtime and not re.fullmatch(r"[0-9a-f]{40}", self.git_ref):
+        if self.runtime_mode is RuntimeMode.MANAGED and not re.fullmatch(r"[0-9a-f]{40}", self.git_ref):
             raise ValueError("managed runtime requires a 40-character gitRef")
-        if self.manage_runtime and self.build_commit == self.git_ref:
+        if self.runtime_mode is RuntimeMode.MANAGED and self.build_commit == self.git_ref:
             raise ValueError("buildCommit must be staged before the same gitRef is activated")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
@@ -221,7 +338,7 @@ class DeploymentConfig:
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
             _positive_config_int(value, value, name)
-        profile_names = set((self.profiles or {}).keys())
+        profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
             if workload.name in workload_names:
@@ -229,6 +346,15 @@ class DeploymentConfig:
             if workload.profile not in profile_names:
                 raise ValueError(f"workload {workload.name!r} references unknown profile {workload.profile!r}")
             workload_names.add(workload.name)
+        federation_names: set[str] = set()
+        for federation in self.github_federations:
+            if federation.name in federation_names:
+                raise ValueError(f"duplicate GitHub federation name {federation.name!r}")
+            if federation.profile not in profile_names:
+                raise ValueError(
+                    f"GitHub federation {federation.name!r} references unknown profile {federation.profile!r}"
+                )
+            federation_names.add(federation.name)
         if self.prune_deployment and not (self.profiles or self.workloads or self.github_federations):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
@@ -238,6 +364,30 @@ class DeploymentConfig:
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
         region = config.get("region") or DEFAULT_REGION
+        raw_profiles = config.get_object("profiles") or {}
+        if not isinstance(raw_profiles, dict):
+            raise ValueError("profiles must be an object")
+        raw_workloads = config.get_object("workloads") or []
+        if not isinstance(raw_workloads, list):
+            raise ValueError("workloads must be a list")
+        raw_github_federations = config.get_object("githubFederations") or []
+        if not isinstance(raw_github_federations, list):
+            raise ValueError("githubFederations must be a list")
+        profiles = []
+        for name, value in raw_profiles.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"profile {name!r} must be an object")
+            profiles.append(ProfileConfig.parse(str(name), value))
+        workloads = []
+        for value in raw_workloads:
+            if not isinstance(value, dict):
+                raise ValueError("each workload must be an object")
+            workloads.append(WorkloadIdentityConfig.parse(value))
+        github_federations = []
+        for value in raw_github_federations:
+            if not isinstance(value, dict):
+                raise ValueError("each GitHub federation must be an object")
+            github_federations.append(GitHubFederationConfig.parse(value))
         return cls(
             project=project,
             region=region,
@@ -246,7 +396,7 @@ class DeploymentConfig:
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
             build_commit=config.get("buildCommit"),
-            manage_runtime=config.get_bool("manageRuntime") or False,
+            runtime_mode=RuntimeMode(config.get("runtimeMode") or RuntimeMode.ADOPT),
             buildx_builder=config.get("buildxBuilder"),
             network=config.get("network") or DEFAULT_NETWORK,
             instance_name=config.get("instanceName") or DEFAULT_INSTANCE_NAME,
@@ -260,9 +410,9 @@ class DeploymentConfig:
                 config.get_int("dotenvSecretVersion"), DEFAULT_DOTENV_SECRET_VERSION, "dotenvSecretVersion"
             ),
             prune_deployment=config.get_bool("pruneDeployment") or False,
-            profiles=dict(config.get_object("profiles") or {}),
-            workloads=tuple(WorkloadIdentityConfig.parse(value) for value in list(config.get_object("workloads") or [])),
-            github_federations=tuple(dict(value) for value in list(config.get_object("githubFederations") or [])),
+            profiles=tuple(profiles),
+            workloads=tuple(workloads),
+            github_federations=tuple(github_federations),
             snapshot_retention_days=_positive_config_int(
                 config.get_int("snapshotRetentionDays"), DEFAULT_SNAPSHOT_RETENTION_DAYS, "snapshotRetentionDays"
             ),
@@ -315,7 +465,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         display_name="loom standalone VM",
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    profile_manifest, profile_secret_refs = _profile_manifest(config.profiles or {})
+    profile_manifest, profile_secret_refs = _profile_manifest(config.profiles)
     audience = f"https://{config.domain.rstrip('/')}"
     workload_accounts: list[gcp.serviceaccount.Account] = []
     workload_mapping_outputs: list[pulumi.Output[dict[str, Any]]] = []
@@ -347,7 +497,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 }
             )
         )
-    github_mappings = _github_federation_manifest(list(config.github_federations), audience)
+    github_mappings = _github_federation_manifest(config.github_federations, audience)
 
     def render_deployment_manifest(workload_mappings: list[dict[str, Any]]) -> str:
         return json.dumps(
@@ -371,7 +521,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "loom-images",
         project=config.project,
         location=config.region,
-        repository_id="loom",
+        repository_id=ARTIFACT_REPOSITORY_ID,
         format="DOCKER",
         docker_config={"immutable_tags": True},
         description="Immutable loom deployment images",
@@ -467,7 +617,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     dotenv_secret = gcp.secretmanager.Secret(
         "loom-dotenv",
         project=config.project,
-        secret_id="LOOM_DOTENV",
+        secret_id=DOTENV_SECRET_ID,
         replication={"auto": {}},
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
@@ -517,7 +667,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
 
     built_image: docker_build.Image | None = None
     if config.build_commit is not None:
-        image_tag = f"{config.region}-docker.pkg.dev/{config.project}/loom/loom:{config.build_commit}"
+        image_tag = f"{_artifact_image_path(config.project, config.region)}:{config.build_commit}"
         built_image = docker_build.Image(
             "loom-release-image",
             context=docker_build.BuildContextArgs(location=f"{config.repo_url}#{config.build_commit}"),
@@ -537,12 +687,12 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         )
 
     image: pulumi.Input[str] = ""
-    if config.manage_runtime:
+    if config.runtime_mode is RuntimeMode.MANAGED:
         released_image = gcp.artifactregistry.get_docker_image_output(
             project=config.project,
             location=config.region,
-            repository_id="loom",
-            image_name=f"loom:{config.git_ref}",
+            repository_id=ARTIFACT_REPOSITORY_ID,
+            image_name=f"{ARTIFACT_IMAGE_NAME}:{config.git_ref}",
             opts=pulumi.InvokeOutputOptions(depends_on=[artifact_repository]),
         )
         image = released_image.self_link.apply(
@@ -554,6 +704,8 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "loom-image": image,
         "backup-bucket": backup_bucket.name,
         "dotenv-secret-version": str(config.dotenv_secret_version),
+        "dotenv-secret-id": DOTENV_SECRET_ID,
+        "loom-port": str(LOOM_PORT),
         "loom-deployment": deployment_manifest,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
@@ -574,7 +726,9 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     ]
     dependencies.append(dns_record)
     ignored_instance_changes = (
-        ["metadata"] if not config.manage_runtime else ['metadata["ssh-keys"]', 'metadata["enable-osconfig"]']
+        ["metadata"]
+        if config.runtime_mode is RuntimeMode.ADOPT
+        else ['metadata["ssh-keys"]', 'metadata["enable-osconfig"]']
     )
     instance_options = pulumi.ResourceOptions(
         depends_on=dependencies,
@@ -622,7 +776,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     )
 
     activation = None
-    if config.manage_runtime:
+    if config.runtime_mode is RuntimeMode.MANAGED:
         activation = command.local.Command(
             "loom-activate",
             create="./activate.sh",
@@ -635,6 +789,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 "LOOM_DOMAIN": config.domain,
             },
             triggers=[
+                instance.id,
                 config.git_ref,
                 config.dotenv_secret_version,
                 image,
@@ -655,11 +810,11 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     pulumi.export("builtImage", built_image.ref if built_image is not None else "")
     pulumi.export("buildCommit", config.build_commit or "")
     pulumi.export("gitRef", config.git_ref)
-    pulumi.export("manageRuntime", config.manage_runtime)
+    pulumi.export("runtimeMode", config.runtime_mode)
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
     pulumi.export("backupBucket", backup_bucket.url)
     pulumi.export("tokenAudience", audience)
-    pulumi.export("profileNames", sorted((config.profiles or {}).keys()))
+    pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
     pulumi.export(
         "workloadClients",
         pulumi.Output.all(*workload_client_outputs) if workload_client_outputs else [],

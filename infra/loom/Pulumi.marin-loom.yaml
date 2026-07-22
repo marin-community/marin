@@ -13,7 +13,7 @@ config:
   marin-loom:dataDiskGb: "500"
   marin-loom:repoUrl: https://github.com/marin-community/loom.git
   marin-loom:gitRef: main
-  marin-loom:manageRuntime: "false"
+  marin-loom:runtimeMode: adopt
   marin-loom:dotenvSecretVersion: "3"
   marin-loom:pruneDeployment: "false"
   marin-loom:snapshotRetentionDays: "14"

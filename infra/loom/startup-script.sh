@@ -10,6 +10,8 @@ LOOM_DOMAIN="$(meta instance/attributes/loom-domain)"
 LOOM_IMAGE="$(meta instance/attributes/loom-image)"
 BACKUP_BUCKET="$(meta instance/attributes/backup-bucket)"
 DOTENV_SECRET_VERSION="$(meta instance/attributes/dotenv-secret-version)"
+DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
+LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
 DATA_DISK_DEVICE=/dev/disk/by-id/google-loom-data
 DATA_MOUNT=/mnt/loom-data
@@ -77,9 +79,8 @@ chmod 0755 "${RUNTIME_DIR}/backup-sqlite.sh"
 ENV_FILE="${RUNTIME_DIR}/.env"
 umask 077
 gcloud secrets versions access "$DOTENV_SECRET_VERSION" \
-  --project="$PROJECT" --secret=LOOM_DOTENV >"$ENV_FILE"
+  --project="$PROJECT" --secret="$DOTENV_SECRET_ID" >"$ENV_FILE"
 required_config=(
-  LOOM_DOMAIN
   LOOM_OWNER_GITHUB
   LOOM_GITHUB_APP_ID
   LOOM_GITHUB_APP_SLUG
@@ -94,16 +95,11 @@ for key in "${required_config[@]}"; do
     exit 1
   }
 done
-printf 'LOOM_IMAGE=%s\nDOCKER_GID=%s\nBACKUP_BUCKET=%s\nGCP_PROJECT=%s\n' \
-  "$LOOM_IMAGE" "$(getent group docker | cut -d: -f3)" "$BACKUP_BUCKET" "$PROJECT" >>"$ENV_FILE"
+sed -i -E '/^(LOOM_DOMAIN|LOOM_IMAGE|LOOM_PORT|DOCKER_GID|BACKUP_BUCKET|GCP_PROJECT)=/d' "$ENV_FILE"
+printf 'LOOM_IMAGE=%s\nLOOM_PORT=%s\nDOCKER_GID=%s\nBACKUP_BUCKET=%s\nGCP_PROJECT=%s\n' \
+  "$LOOM_IMAGE" "$LOOM_PORT" "$(getent group docker | cut -d: -f3)" "$BACKUP_BUCKET" "$PROJECT" >>"$ENV_FILE"
+printf 'LOOM_DOMAIN=%s\n' "$LOOM_DOMAIN" >>"$ENV_FILE"
 chmod 0600 "$ENV_FILE"
-
-EXTERNAL_IP="$(meta instance/network-interfaces/0/access-configs/0/external-ip)"
-for _ in $(seq 1 80); do
-  getent ahostsv4 "$LOOM_DOMAIN" | awk '{print $1}' | grep -Fxq "$EXTERNAL_IP" && break
-  sleep 15
-done
-getent ahostsv4 "$LOOM_DOMAIN" | awk '{print $1}' | grep -Fxq "$EXTERNAL_IP"
 
 registry="${LOOM_IMAGE%%/*}"
 gcloud auth configure-docker "$registry" --quiet
@@ -111,15 +107,14 @@ docker compose -f "${RUNTIME_DIR}/docker-compose.yml" pull
 docker compose -f "${RUNTIME_DIR}/docker-compose.yml" up -d
 
 for _ in $(seq 1 60); do
-  curl -fsS http://127.0.0.1:7878/api/health >/dev/null && break
+  curl -fsS "http://127.0.0.1:${LOOM_PORT}/api/health" >/dev/null && break
   sleep 2
 done
-curl -fsS http://127.0.0.1:7878/api/health >/dev/null
+curl -fsS "http://127.0.0.1:${LOOM_PORT}/api/health" >/dev/null
 
 DEPLOYMENT_FILE=/run/loom-deployment.json
-if meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE" && [ -s "$DEPLOYMENT_FILE" ]; then
-  docker compose -f "${RUNTIME_DIR}/docker-compose.yml" exec -T loom \
-    loom deployment apply --file - <"$DEPLOYMENT_FILE"
-fi
+meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE"
+docker compose -f "${RUNTIME_DIR}/docker-compose.yml" exec -T loom \
+  loom deployment apply --file - <"$DEPLOYMENT_FILE"
 rm -f "$DEPLOYMENT_FILE"
 echo "== loom startup-script done =="

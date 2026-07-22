@@ -4,7 +4,7 @@ set -euo pipefail
 : "${BACKUP_BUCKET:?BACKUP_BUCKET is required}"
 : "${GCP_PROJECT:?GCP_PROJECT is required}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_NAME="weaver-${STAMP}.sqlite"
+BACKUP_NAME="loom-${STAMP}.sqlite"
 TMP_DIR="$(mktemp -d /tmp/loom-backup.XXXXXX)"
 HOST_PATH="${TMP_DIR}/${BACKUP_NAME}"
 

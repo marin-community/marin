@@ -1,9 +1,10 @@
 # Loom production deployment
 
 This Pulumi stack adopts and extends the existing `loom.oa.dev` GCE deployment
-in `hai-gcp-models`. Pulumi owns durable infrastructure and non-secret runtime
-placement. The complete rendered Loom environment remains a Secret Manager
-version and never enters Pulumi configuration or state.
+in `hai-gcp-models`. Pulumi owns durable infrastructure and runtime placement.
+The secret-bearing portion of Loom's environment remains a Secret Manager
+version and never enters Pulumi configuration or state; Pulumi metadata supplies
+the domain, image, port, project, and backup bucket.
 
 ## External prerequisites
 
@@ -29,7 +30,7 @@ The App callback and webhook URL use `https://loom.oa.dev`.
 
 ## Adopt without changing the runtime
 
-`manageRuntime: false` makes the VM ignore metadata and startup-script
+`runtimeMode: adopt` makes the VM ignore metadata and startup-script
 changes. Imports therefore adopt the live host without changing the process it
 runs. These production resources predate Pulumi and must be imported exactly
 once:
@@ -113,7 +114,7 @@ release, then arm it in a separate update:
 ```sh
 pulumi config rm --cwd infra/loom --stack marin-loom buildCommit
 pulumi config set --cwd infra/loom --stack marin-loom gitRef "$COMMIT_SHA"
-pulumi config set --cwd infra/loom --stack marin-loom manageRuntime true
+pulumi config set --cwd infra/loom --stack marin-loom runtimeMode managed
 pulumi preview --cwd infra/loom --stack marin-loom --diff
 ```
 
@@ -133,6 +134,9 @@ and waits for public readiness. That startup unit is intentionally small: it
 mounts the durable disk, reads the selected Secret Manager version, installs
 the Pulumi-rendered Compose and Caddy files, pulls the immutable image, and runs
 `docker compose up -d`. It does not clone the repository or build on the VM.
+The Pulumi activation command waits for the startup unit to apply the reviewed
+runtime policy and then gates on public readiness. Ordinary VM boots use the
+same idempotent container and policy reconcile.
 
 The runtime deployment manifest defaults to `pruneDeployment: false`. Enable
 pruning only with a reviewed, non-empty set of profiles, workload identities,
@@ -153,7 +157,7 @@ the control service without removing the session containers.
 Roll back by setting `gitRef` to a retained prior commit and pairing it with the
 prior numbered secret version. Pulumi resolves the existing tag to its immutable
 digest without rebuilding it. Service-only
-restarts preserve DockerRunner containers. Do not run `docker compose down`
+restarts preserve `ContainerRunner` containers. Do not run `docker compose down`
 while sessions are live because it also removes the shared network they use.
 
 Do not add an Artifact Registry cleanup policy to the `loom` repository without
