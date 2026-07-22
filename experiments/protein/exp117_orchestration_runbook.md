@@ -99,10 +99,19 @@ Submit: `uv run iris --cluster marin job run --user "$USERNAME" --no-wait --regi
 "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" -e EPOCHS ..
 -e LR .. -e WD .. -e BATCH_SIZE .. -e TPU .. -e REGION .. -- python -m
 experiments.protein.exp117_sweep`. Ambient `HUGGING_FACE_HUB_TOKEN` is STALE — always forward
-`$HF_TOKEN`. `--job-name` is deterministic so a resubmit is an idempotent resume. `PREVIEW=yes`
-prints identity/steps/batch-fit and submits nothing — sanity-check any new point shape with it.
-The lightweight CPU driver acquires the TPU internally via Fray (`ResourceConfig.with_tpu`); one
-job = one point.
+`$HF_TOKEN`. `PREVIEW=yes` prints identity/steps/batch-fit and submits nothing — sanity-check any new
+point shape with it. The lightweight CPU driver acquires the TPU internally via Fray
+(`ResourceConfig.with_tpu`); one job = one point.
+
+**Job-name convention (2026-07-22): iris job-name = `<wandb_run_id>-<slice>-<attempt>`.** Take the W&B
+run id verbatim (`prot-exp117-cv1-s02-1_5b-e16-lr<..>-wd<..>-bs<..>-<region>`), then append the slice
+and a short monotonic attempt token — e.g. `prot-exp117-cv1-s02-1_5b-e16-lr3p162e-3-wd0p2-bs256-
+europe-west4-v5litepod-8-a3`. So the iris name always `startswith` the W&B run id (trivial iris↔W&B
+mapping) and **every submission is unique** — never reuse a name. Resume is NOT via the job-name: it is
+marin's `step_runner` on the region-keyed checkpoint (`gs://marin-<region>/{run_id}/…`), so a fresh
+unique name still resumes the same checkpoint. **INVARIANT — at most ONE active dispatch per
+`(point, region)`:** stop and confirm the current one terminal before submitting another, or two jobs
+write the same checkpoint and corrupt it.
 
 ## One pass
 1. **Reconcile.** For each active dispatch: `iris job list --prefix /eczech/<job>` for state; read
@@ -118,17 +127,21 @@ job = one point.
      checkpoint) and do not let it drive relocation/escalation or read as a systemic defect, however
      many occur. Investigate further ONLY with a specific reason — a single-host slice, a segfault
      that repeats at step 0 before any training, or a real Python traceback in the log.
-   - **LIVENESS (learned s01; child-vs-parent clarified 2026-07-22):** the training-now signal is the
-     Iris status of the **child `…/run_levanter_train_lm-<hash>` task**, NOT the parent job. A parent
-     `running` only means a child *can* be scheduled; a **`running` child is the primary "training now"
-     indicator**, and its absence (parent running, no running child) means queued/gang-acquiring, not
-     training. On preemption Fray spawns a NEW child (new hash), so ALWAYS read the CURRENT child from
-     `iris job list` — never a stale stored `iris_job_id`, whose log/`_step` froze at the old
-     preemption and will misread a resumed-and-training job as hung (this caused a wrongful mass-restart
-     2026-07-22). The W&B **`state` field is UNRELIABLE** (flips to `crashed` on any heartbeat lapse).
-     For a definitive stall verdict on the *current* child, confirm `_step` frozen across passes AND no
-     recent `Progress on:train <k>kit/<N>kit … loss=..` line (`iris job logs <job> --tail --max-lines
-     60 | grep 'Progress on:train'`). Track no-progress from last observed progress, not from the pass.
+   - **LIVENESS — W&B run `state` is the source of truth (corrected 2026-07-22):** whether a trial is
+     training **right now** is the **W&B run `state`**: `running` ⇔ actively training (the process is
+     heartbeating to W&B); `crashed`/`failed`/`finished` ⇔ not training. W&B state is RELIABLE and is
+     the signal for ALL routine monitoring — do NOT infer "training" from iris job state. (Earlier s01
+     notes calling W&B state unreliable are SUPERSEDED; verified 2026-07-22 that `state=running` maps
+     1:1 to on-device gang tasks.) Iris state is a poor proxy: the iris CASCADE is **parent job**
+     `…-{slice}` (gates scheduling) → **child** `…/run_levanter_train_lm-<hash>` (one attempt) →
+     **tasks** `…/<hash>/<N>` (one per gang host). A child's `State: running` is NOT informative — it
+     reads `running` whether its gang tasks are on-device OR all `pending` (coscheduling). The
+     on-device truth is the TASK states: `iris job summary <child_job>` prints a `Tasks: X/Y completed
+     running=N pending=M` header + a per-task STATE column — training ⇔ tasks `running`, gang-waiting ⇔
+     tasks `pending`. **Use this parent→child→task drill-down ONLY for ad-hoc debugging of a single run
+     — never routine monitoring.** For a definitive stall on a run that IS `state=running`, `_step`
+     frozen across passes + no recent `Progress on:train` log line still applies, but W&B `state` is the
+     first and usually sufficient check.
 2. **Converge-check.** `sweep_tools.py check-convergence` over all completed trials (strict one-step
    neighbor dominance *by the best observed point*, one axis at a time; a missing neighbor passes only
    at the axis's hard domain bound). A locally-dominant point never counts as converged while a better
@@ -173,12 +186,15 @@ job = one point.
      (96h) limit or an explicit operator request. A stalled near-done run stays queued in its own
      region: capacity returns, and re-running elsewhere to finish the last few % is never worth
      discarding the checkpoint. Stop re-relocating it every pass — queue it and wait.
-5. **Dispatch.** Launch/stop/restart exact work orders. Record prediction+placement+decision in
-   `decisions` BEFORE dispatch. One logical trial → at most one objective; never duplicate a
-   `(rung,point)`.
-6. **Report** material events (rung convergence, grid extension, OOM/halt, restart/relocation) +
-   ~weekly rollup. (Operator: fully autonomous after the first-command review; halt only on the
-   corrective conditions.)
+5. **Dispatch.** Launch/stop/restart exact work orders with a UNIQUE job-name (see convention above).
+   Record prediction+placement+decision in `decisions` BEFORE dispatch. **Enforce ≤ 1 active dispatch
+   per `(point, region)`** (checkpoint-corruption guard) — confirm the prior one terminal first. One
+   logical trial → at most one objective; never duplicate a `(rung,point)`.
+6. **Report** material events (new objective/best, rung convergence, grid extension, OOM/halt,
+   restart/relocation) + on each heartbeat TWO placement spans: **(a) submitted to iris** —
+   chips/regions/slices across all submitted jobs (any state); **(b) running per W&B** — the same
+   spans counting only W&B runs in `state=running` (the true training set). ~weekly rollup. (Operator:
+   fully autonomous after the first-command review; halt only on the corrective conditions.)
 
 ## Recovery ladder (tool-computed; honor `rank-targets` `recovery`, don't auto-fire)
 Any observed progress resets the regional no-progress clock. Terminal failures are exempt (retry

@@ -142,6 +142,13 @@ targets:
   grid expansion.
 - A SIGSEGV on a multi-host slice (nearly all slices here) is treated as a preempted gang cosibling
   — retry in place, not a code fault to investigate — absent a specific reason.
-- "Training now" is the **child** `run_levanter_train_lm` task being `running` in Iris; the parent job
-  only gates whether a child can run. Fray respawns the child (new id) on preemption, so read the
-  current child, never a stale stored job id. (Runbook LIVENESS has the full method.)
+- **Liveness = the W&B run `state`.** `state=running` ⇔ the trial is training; iris job/child `running`
+  is not a reliable signal (a child reads running while its gang tasks coschedule). Deep iris
+  parent→child→task drill-down (`iris job summary`) is for ad-hoc single-run debugging only, never
+  routine monitoring. (Runbook LIVENESS has the method.)
+- **Heartbeats report two placement spans:** chips/regions/slices (a) **submitted** to iris (any state)
+  and (b) **running per W&B** (`state=running`).
+- **Iris job-name = `<wandb_run_id>-<slice>-<unique>`** — the W&B run id, then placement and a unique
+  attempt token; every submission is unique. Resume comes from the region checkpoint, not the name.
+- **Invariant: at most one active dispatch per `(point, region)`** — else two jobs co-write the region
+  checkpoint and corrupt it.
