@@ -1,11 +1,12 @@
 # Pulumi infrastructure
 
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
-[`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
+[`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python).
 
-This is the **minimal cut**: it provisions RBAC, reserved NodePools, Kueue objects, and the
-Traefik/cert-manager/federation-ingress stack for a CoreWeave cluster, and is the sole owner of
-all of it — Iris no longer provisions any of these itself (`verify_prerequisites()` in
+Currently just **CoreWeave**: it provisions RBAC, reserved NodePools, Kueue objects, the
+Traefik/cert-manager/federation-ingress stack, and the `oa.dev` CNAME pointing at it, for a
+CoreWeave cluster, and is the sole owner of all of it — Iris no longer provisions any of these
+itself (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
 presence and fails with a `pulumi up` remediation if something is missing). The CKS cluster
 object itself is not yet managed by Pulumi (see `coreweave/cluster.py` and "Future work" below).
@@ -64,7 +65,10 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   per-machine and per-CI-runner (runners are ephemeral).
 - **GCP credentials**: `gcloud auth application-default login`. Decrypting stack secrets is
   authorized by your own GCP credentials against the shared KMS key — see "Backend" below for
-  getting the IAM role granted.
+  getting the IAM role granted. `FederationDns` (the `oa.dev` CNAME) reads its Cloudflare API
+  token straight from Secret Manager (`cloudflare-oa-dns-token` in `hai-gcp-models`, the same
+  one `infra/grafana` uses) under these same credentials — no separate export needed, just
+  `roles/secretmanager.secretAccessor` on that secret.
 - **Backend login**: `pulumi login gs://marin-iac-state`.
 - **Cluster access** (for the k8s dry-run): the CoreWeave kubeconfig at the path in the
   cluster's `platform.coreweave.kubeconfig_path` (typically `~/.kube/coreweave-iris`).
@@ -123,6 +127,27 @@ pulumi config rm marin-iac:import
 pulumi up       # normal run, adopt=false now — creates the remaining components fresh
 ```
 
+### Adopting the DNS record
+
+`FederationDns` computes its CNAME target directly (`iac.coreweave.dns.federation_dns_target`)
+rather than reading it live, so it doesn't need `marin-iac:import` — but Cloudflare identifies a
+`DnsRecord` by its own generated `<zone_id>/<dns_record_id>`, which nothing in our config
+derives, so an already-existing record still needs a one-time import with a separately looked-up
+ID:
+
+```bash
+# Look up the live record's ID (zone_id is the constant OA_DEV_ZONE_ID in dns.py):
+token="$(gcloud secrets versions access latest --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
+curl -s -H "Authorization: Bearer $token" \
+  "https://api.cloudflare.com/client/v4/zones/169959d6aafcbfd77764b8efafa3a509/dns_records?type=CNAME&name=iris-cw-<cluster>.oa.dev" \
+  | jq -r '.result[0].id'
+
+pulumi config set marin-iac:dns_record_import_id '169959d6aafcbfd77764b8efafa3a509/<record_id>'
+pulumi preview   # gate: `import` on the DnsRecord, no diff in content/ttl/proxied
+pulumi up
+pulumi config rm marin-iac:dns_record_import_id   # one-shot, same discipline as marin-iac:import
+```
+
 ### Backend
 
 The shared backend is a GCS bucket + a GCP KMS secrets provider, both in `hai-gcp-models`,
@@ -159,10 +184,6 @@ already provisioned:
   (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
   Pulumi should provision a bucket per cluster or this reuse is the standing choice.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
-- **DNS CNAME** (`iris-cw-<cluster>.oa.dev` → the Traefik LoadBalancer's CoreWeave-allocated
-  hostname): manual (Cloudflare) today. CoreWeave allocates the hostname asynchronously after
-  Traefik comes up, which needs a custom Dynamic Provider to express declaratively, and no
-  Cloudflare credential exists in this repo yet.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.
@@ -173,4 +194,5 @@ already provisioned:
   `install_cw_network.py` directly for this.
 
 Everything else in the original design (RBAC, NodePools, Kueue, Traefik/cert-manager, the
-federation ingress, the GCP static IPs and Artifact Registry mirrors) is landed.
+federation ingress, the `oa.dev` CNAME, the GCP static IPs and Artifact Registry mirrors) is
+landed.

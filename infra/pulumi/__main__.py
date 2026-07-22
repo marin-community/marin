@@ -27,6 +27,7 @@ import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from iac.config import Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
+from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
@@ -63,7 +64,7 @@ def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
     )
 
 
-def _build_coreweave(cluster: str, *, adopt: bool) -> None:
+def _build_coreweave(cluster: str, *, adopt: bool, dns_record_import_id: str | None) -> None:
     provisioning = load_provisioning(cluster)
     assert provisioning.coreweave is not None  # guaranteed by load_provisioning
     coreweave_provisioning = provisioning.coreweave
@@ -149,6 +150,14 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         ),
         k8s_provider=k8s_provider,
     )
+    FederationDns(
+        "dns",
+        FederationDnsArgs(
+            cluster=cluster,
+            cks_cluster=coreweave_provisioning.cluster,
+            import_id=dns_record_import_id,
+        ),
+    )
 
 
 def _build_gcp(cluster: str, *, adopt: bool) -> None:
@@ -184,9 +193,12 @@ def main() -> None:
     # resource so `pulumi preview` shows the real adoption diff (provider- and parent-correct)
     # instead of planning creates. Never run `pulumi up` through a destructive NodePool diff.
     adopt = config.get_bool("import") or False
+    # Same one-shot pattern as `import`, but scoped to just the DNS record (see
+    # FederationDnsArgs.import_id): Cloudflare's own record ID, not derivable from our config.
+    dns_record_import_id = config.get("dns_record_import_id")
     provider = load_provisioning(cluster).provider
     if provider is Provider.COREWEAVE:
-        _build_coreweave(cluster, adopt=adopt)
+        _build_coreweave(cluster, adopt=adopt, dns_record_import_id=dns_record_import_id)
     elif provider is Provider.GCP:
         _build_gcp(cluster, adopt=adopt)
     else:
