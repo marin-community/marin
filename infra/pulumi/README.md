@@ -3,9 +3,10 @@
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
 [`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
 
-This is the **minimal cut**: it provisions RBAC, reserved NodePools, Kueue objects, and the
-Traefik/cert-manager/federation-ingress stack for a CoreWeave cluster, and is the sole owner of
-all of it — Iris no longer provisions any of these itself (`verify_prerequisites()` in
+This is the **minimal cut**: it provisions RBAC, reserved NodePools, Kueue objects, the
+Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for a CoreWeave
+cluster. It is the sole owner of these resources — Iris no longer provisions any of them
+(`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
 presence and fails with a `pulumi up` remediation if something is missing). The CKS cluster
 object itself is not yet managed by Pulumi (see `coreweave/cluster.py` and "Future work" below).
@@ -33,8 +34,9 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
 - NodePools derive from `scale_groups` (`iac.nodepools.derive_nodepools`).
 - Namespace from `kubernetes_provider.namespace`; ClusterQueue name from
   `kubernetes_provider.kueue.cluster_queue`.
-- The residual cluster facts (CKS cluster name, ResourceFlavor, ACME issuers) from the
-  `provisioning:` section in that same file. Iris carries `provisioning:` as an opaque dict;
+- The residual cluster facts (CKS cluster name, ResourceFlavor, ACME issuers, and optional
+  federation CNAME) from the `provisioning:` section in that same file. Iris carries
+  `provisioning:` as an opaque dict;
   `iac.config` owns the typed schema. (The package is `infra/pulumi/src/iac/`, imported as
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
 
@@ -65,6 +67,12 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
 - **GCP credentials**: `gcloud auth application-default login`. Decrypting stack secrets is
   authorized by your own GCP credentials against the shared KMS key — see "Backend" below for
   getting the IAM role granted.
+- **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read
+  `CLOUDFLARE_API_TOKEN`. Load the DNS-only token without copying it into stack config:
+  ```bash
+  export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+    --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
+  ```
 - **Backend login**: `pulumi login gs://marin-iac-state`.
 - **Cluster access** (for the k8s dry-run): the CoreWeave kubeconfig at the path in the
   cluster's `platform.coreweave.kubeconfig_path` (typically `~/.kube/coreweave-iris`).
@@ -159,10 +167,6 @@ already provisioned:
   (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
   Pulumi should provision a bucket per cluster or this reuse is the standing choice.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
-- **DNS CNAME** (`iris-cw-<cluster>.oa.dev` → the Traefik LoadBalancer's CoreWeave-allocated
-  hostname): manual (Cloudflare) today. CoreWeave allocates the hostname asynchronously after
-  Traefik comes up, which needs a custom Dynamic Provider to express declaratively, and no
-  Cloudflare credential exists in this repo yet.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.
@@ -173,4 +177,4 @@ already provisioned:
   `install_cw_network.py` directly for this.
 
 Everything else in the original design (RBAC, NodePools, Kueue, Traefik/cert-manager, the
-federation ingress, the GCP static IPs and Artifact Registry mirrors) is landed.
+federation ingress and DNS, the GCP static IPs, and Artifact Registry mirrors) is landed.

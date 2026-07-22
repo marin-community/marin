@@ -44,14 +44,21 @@ class CksClusterSpec(BaseModel):
     zone: str
 
 
+class KueueClientConnectionSpec(BaseModel):
+    """Kubernetes API client rate limit for the Kueue controller-manager."""
+
+    qps: float = Field(gt=0)
+    burst: int = Field(gt=0)
+
+
 class KueueProvisioningSpec(BaseModel):
     """Cluster-scoped Kueue objects owned by IaC (KueueAddon).
 
     The ResourceFlavor name and the Topology set are canonical constants in
     iris.cluster.platforms.k8s.kueue_manifests (shared with install_kueue.py so IaC and the
     script render identically), not per-cluster knobs. cluster_queue derives from the Iris
-    config. The flavor→topology binding and the controller-manager memory override are the
-    two things that vary per cluster and live here.
+    config. The flavor→topology binding and controller-manager resource overrides are the
+    cluster-specific values that live here.
     """
 
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
@@ -59,6 +66,9 @@ class KueueProvisioningSpec(BaseModel):
     flavor_topology: str = "infiniband"
     # Override controllerManager.manager.resources' memory (requests == limits)
     manager_memory_limit: str | None = None
+    # Override Kueue's default client-side API rate limit. Large clusters can otherwise build
+    # enough reconciliation requests to starve the controller's shared leader-election client.
+    client_connection: KueueClientConnectionSpec | None = None
 
 
 # Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
@@ -87,6 +97,14 @@ class IngressSpec(BaseModel):
     federation_allow_sources: list[str] = Field(default_factory=lambda: list(MARIN_FEDERATION_EGRESS_SOURCES))
 
 
+class FederationDnsSpec(BaseModel):
+    """Cloudflare CNAME for the CoreWeave federation ingress."""
+
+    zone_id: str
+    hostname: str
+    target: str
+
+
 class RbacSpec(BaseModel):
     """Controller RBAC ceded from ensure_rbac(). namespace derives from the Iris config."""
 
@@ -97,6 +115,7 @@ class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
     ingress: IngressSpec
+    federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
 
 

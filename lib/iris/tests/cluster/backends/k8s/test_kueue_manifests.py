@@ -3,6 +3,7 @@
 
 """Regression guards for the Kueue helm values Iris renders."""
 
+import yaml
 from iris.cluster.platforms.k8s.kueue_manifests import build_cks_values, build_upstream_values
 
 
@@ -33,3 +34,12 @@ def test_upstream_values_never_enable_tas_balanced_placement():
     gates = build_upstream_values(["iris"])["controllerManager"]["featureGates"]
     assert _gate(gates, "TASBalancedPlacement") in (None, False)
     assert _gate(gates, "TopologyAwareScheduling") is True
+
+
+def test_cks_values_set_client_connection_rate_limit():
+    values = build_cks_values(["iris"], client_connection_qps=100, client_connection_burst=200)
+
+    config_yaml = values["kueue"]["managerConfig"]["controllerManagerConfigYaml"]
+    config = yaml.safe_load(config_yaml)
+
+    assert config["clientConnection"] == {"qps": 100, "burst": 200}

@@ -41,11 +41,18 @@ provisioning:
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
       manager_memory_limit: 2Gi
+      # Kueue's 20-QPS/30-burst defaults starve its 10-second leader lease when this
+      # cluster's thousands of Pods and Workloads resync after a controller restart.
+      client_connection: { qps: 100, burst: 200 }
     ingress:
       ingress_class: traefik
       acme_email: ops@openathena.ai
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
       active_cluster_issuer: letsencrypt-http01-prod
+    federation_dns:
+      zone_id: 169959d6aafcbfd77764b8efafa3a509
+      hostname: iris-cw-rno2a.oa.dev
+      target: iris-cw-rno2a.208261-marin-rn02a.coreweave.app
     rbac: { service_account: iris-controller }
 
 platform:

@@ -27,6 +27,7 @@ import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from iac.config import Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
+from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
@@ -149,6 +150,22 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         ),
         k8s_provider=k8s_provider,
     )
+
+    federation_dns = coreweave_provisioning.federation_dns
+    if federation_dns is not None:
+        cloudflare_api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+        if not cloudflare_api_token:
+            raise ValueError(
+                "CLOUDFLARE_API_TOKEN is required when provisioning.coreweave.federation_dns is set; "
+                "load cloudflare-oa-dns-token from GCP Secret Manager"
+            )
+        FederationDns(
+            "dns",
+            FederationDnsArgs(
+                spec=federation_dns,
+                api_token=pulumi.Output.secret(cloudflare_api_token),
+            ),
+        )
 
 
 def _build_gcp(cluster: str, *, adopt: bool) -> None:
