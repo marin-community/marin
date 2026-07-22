@@ -64,7 +64,6 @@ _NVIDIA_JAX_PROTECTED_PACKAGES = (
     "nvidia-cusparse-cu12",
     "nvidia-cusparselt-cu12",
     "nvidia-cusparselt-cu13",
-    "nvidia-cutlass-dsl-libs-base",
     "nvidia-nccl-cu12",
     "nvidia-nccl-cu13",
     "nvidia-nvjitlink",
@@ -115,7 +114,7 @@ diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
 test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_cu13-*.dist-info
-test ! -e "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
+test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
 "$IRIS_VENV/bin/python" - <<'PY'
 import os
 

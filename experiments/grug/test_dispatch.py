@@ -60,10 +60,10 @@ def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(mon
         "cuda-python",
         "nvidia-cublas",
         "nvidia-cudnn-cu13",
-        "nvidia-cutlass-dsl-libs-base",
         "nvidia-nccl-cu13",
     } <= excluded
     assert "nvidia-cutlass-dsl" not in excluded
+    assert "nvidia-cutlass-dsl-libs-base" not in excluded
     assert "nvidia-cutlass-dsl-libs-cu13" not in excluded
     assert "venv --system-site-packages" in script
     assert "--active --inexact" in script
@@ -73,7 +73,7 @@ def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(mon
     assert "ngc-jax-before.sha256" in script
     assert "ngc-jax-after.sha256" in script
     assert "nvidia_cutlass_dsl_libs_cu13-*.dist-info" in script
-    assert "nvidia_cutlass_dsl_libs_base-*.dist-info" in script
+    assert 'test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info' in script
     assert "assert cutlass.__file__.startswith(venv)" in script
     assert "assert _cutlass_ir.__file__.startswith(venv)" in script
 
