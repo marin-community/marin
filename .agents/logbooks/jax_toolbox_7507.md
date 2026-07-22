@@ -32,3 +32,9 @@ The bare image `ghcr.io/nvidia/jax@sha256:15c3f15baf88af18e295b37c6417521f74ebf7
 Prototype work started from the exact #7507 commit. The branch adds a nested GPU image override, restores a real scan/no-scan code path, and teaches Iris setup to honor image-owned distributions listed in `/etc/iris/preserved-python-packages` through a system-site-packages overlay venv.
 
 Status: implementation and image build in progress; no full-MoE comparison launched yet.
+
+## 2026-07-22: first control and overlay failure
+
+Control scan A completed on 16 `GB200x4` nodes with median 14.6695 seconds, 285,921 tokens/second, and 25.8327% MFU over steps 5–11 and 15–19. The 12 selected step durations had standard deviation 0.0745 seconds. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-control-scan-a-20260722-195616)
+
+The first Toolbox normal-sync smoke failed before Sonic-CuTe. The overlay preserved every declared distribution, but `uv sync` installed `nvidia-cudnn-cu13==9.19.0.56` beside Toolbox's system cuDNN 9.22. XLA reported the runtime/source mismatch and failed `dnn_support != nullptr` on the first compiled array operation. The preserved list must also exclude CUDA wheel packages that represent image-owned system libraries even when the image has no Python distribution metadata for them.
