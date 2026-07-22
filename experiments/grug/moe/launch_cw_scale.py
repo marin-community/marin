@@ -143,12 +143,9 @@ def build_scale_model() -> GrugModelConfig:
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
-        # Attention sliding-window span; default keeps the heuristic value (2048).
-        sliding_window=env_int("SCALE_SLIDING_WINDOW", base.sliding_window),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
-        use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
     )
 
 

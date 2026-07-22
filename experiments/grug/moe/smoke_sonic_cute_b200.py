@@ -42,7 +42,6 @@ def main() -> None:
         num_experts=256,
         num_experts_per_token=4,
         max_seq_len=256,
-        sliding_window=256,
         moe_implementation="sonic_cute",
         attention_implementation="reference",
     )

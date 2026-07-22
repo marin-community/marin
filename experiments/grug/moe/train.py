@@ -8,7 +8,6 @@ import os
 import time
 from dataclasses import dataclass, field
 
-import equinox as eqx
 import fsspec
 import jax
 import jax.numpy as jnp
@@ -253,28 +252,6 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
-    pending_qb_betas: jax.Array
-
-
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
-    if model.blocks is None:
-        # Scan mode: stacked_blocks.mlp.router_bias is [num_layers, num_experts]; set it in one
-        # vectorized assignment (per-layer mean over experts, matching the unrolled path).
-        new_bias = -qb_betas
-        new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-        return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
-    new_blocks = list(model.blocks)
-    moe_idx = 0
-    for i, block in enumerate(model.blocks):
-        if block.mlp is None:
-            continue
-        new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
-        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
-    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
 def initial_state(
@@ -286,17 +263,11 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    # In scan mode ``blocks`` is None (layers live in ``stacked_blocks``); every grug layer is MoE.
-    if params.blocks is not None:
-        num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
-    else:
-        num_moe_layers = model_config.num_layers
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
 
 
@@ -320,14 +291,6 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
-        # Apply pending QB betas to router biases inside JIT (avoids eager
-        # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-        if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
-        else:
-            qb_ema_params = None
-
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -336,22 +299,21 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
-                return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        metrics = {"train/loss": loss}
+        updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
+        params = optax.apply_updates(state.params, updates)
 
         if ema_beta is None:
             ema_params = None
         else:
-            if qb_ema_params is None:
+            if state.ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
+                state.ema_params,
                 params,
             )
 
@@ -363,7 +325,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=state.params,
                 grads=grads,
                 updates=updates,
                 opt_state=state.opt_state,
@@ -376,7 +338,6 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
@@ -556,19 +517,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
-                    if router_metrics:
-                        levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

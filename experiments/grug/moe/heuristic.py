@@ -228,7 +228,6 @@ class MoeHeuristic:
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             max_seq_len=seq_len,
-            sliding_window=2048,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )

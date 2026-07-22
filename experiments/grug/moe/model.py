@@ -3,38 +3,36 @@
 
 """MoE grug variant model.
 
-Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+Barebones MoE transformer: token embedding, learnable RMSNorm, grouped-query
+causal attention with RoPE, a sigmoid-combine top-k MoE (routed experts plus an
+optional shared dense expert), and an lm_head. All layers are identical
+full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
 """
 
 import dataclasses
-import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
-from jax import core, random
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard
+from jax import random
 from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh, reshard
 
 try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
-    align_kv_heads,
     apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
@@ -48,20 +46,14 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
-from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
-from transformers import PretrainedConfig as HfConfig
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
-_GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
-GRUG_MOE_MODEL_TYPE = "grug_moe"
-GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
-
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -74,15 +66,16 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
-
-
 def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+    return std * random.truncated_normal(key, -3, 3, shape)
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -109,35 +102,9 @@ def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> F
     )(token_embed, token_ids)
 
 
-def _partition_spec_of(x: jax.Array) -> P | None:
-    sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
-    if isinstance(sharding, NamedSharding):
-        return sharding.spec
-    return None
-
-
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
-
-
-class GrugMoeHfConfig(HfConfig):
-    model_type = GRUG_MOE_MODEL_TYPE
-
-
-def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
-    for name in names:
-        if hasattr(config, name):
-            return getattr(config, name)
-    return default
-
-
 @dataclass(frozen=True)
 class GrugModelConfig:
-    """Hyperparameters for the grug MoE transformer.
-
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
-    """
+    """Shape/size hyperparameters for the grug MoE transformer. All layers are MoE."""
 
     vocab_size: int
     hidden_dim: int = 512
@@ -153,19 +120,9 @@ class GrugModelConfig:
     num_kv_heads: int = 1
     head_dim: int | None = None
     max_seq_len: int = 8192
-    sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
-    router_z_loss_coef: float = 0.0
-    disable_pko: bool = True
-    """When True (default), the every-4th + last 'long' layers skip Partial
-    Key Offset (no shift of the second half of K, no doc-start zeroing). Short
-    layers never had PKO. Set to False to re-enable PKO on long layers."""
-    disable_long_rope: bool = True
-    """When True (default), the every-4th + last 'long' layers skip rotary
-    embedding entirely (Q and K go into attention un-rotated). Short layers
-    still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -173,12 +130,6 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    use_array_stacked_blocks: bool = False
-    """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run them
-    through one ``jax.lax.scan``. Collapses the per-layer subgraphs into one scan body so
-    compile time and per-layer overhead stop scaling with ``num_layers``. Requires
-    ``disable_pko=True`` (PKO reads a per-layer flag at trace time, not scan-expressible).
-    The default (False) keeps the unrolled per-layer loop with identical numerics."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -220,96 +171,11 @@ class GrugModelConfig:
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
         return Transformer.init(cfg, key=key)
 
-    def hf_checkpoint_converter(
-        self,
-        ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
-        return HFCheckpointConverter(
-            self.__class__,
-            reference_checkpoint=ref_checkpoint,
-            HfConfigClass=GrugMoeHfConfig,
-            tokenizer=ref_checkpoint,
-        )
 
-    @classmethod
-    def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
-        rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
-        return cls(
-            vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
-            hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
-            intermediate_dim=int(
-                _hf_config_attr(hf_config, ("intermediate_dim", "moe_intermediate_size", "intermediate_size"), 5632)
-            ),
-            shared_expert_intermediate_dim=int(
-                _hf_config_attr(
-                    hf_config,
-                    ("shared_expert_intermediate_dim", "shared_expert_intermediate_size"),
-                    5632,
-                )
-            ),
-            num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
-            num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
-            num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
-            num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
-            num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
-            head_dim=_hf_config_attr(hf_config, ("head_dim", "attention_head_dim")),
-            max_seq_len=int(_hf_config_attr(hf_config, ("max_seq_len", "max_position_embeddings"), 4096)),
-            sliding_window=int(_hf_config_attr(hf_config, ("sliding_window",), 4096)),
-            layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
-            initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
-            qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
-            rope=rope,
-        )
-
-    def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
-        # One name per field: core fields take the universal transformers spelling, MoE fields the
-        # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
-        # stays tolerant of the older spellings so existing artifacts keep loading.
-        config = {
-            "architectures": [GRUG_MOE_ARCHITECTURE],
-            "vocab_size": vocab_size,
-            # core — universal transformers names
-            "hidden_size": self.hidden_dim,
-            "num_hidden_layers": self.num_layers,
-            "num_attention_heads": self.num_heads,
-            "num_key_value_heads": self.num_kv_heads,
-            "head_dim": self.inferred_head_dim,
-            "max_position_embeddings": self.max_seq_len,
-            "sliding_window": self.sliding_window,
-            "rms_norm_eps": self.layer_norm_eps,
-            "initializer_range": self.initializer_std,
-            "rope_theta": self.rope.theta,
-            "tie_word_embeddings": False,
-            # MoE — most common public spelling per field
-            "num_experts": self.num_experts,
-            "num_experts_per_tok": self.num_experts_per_token,
-            "moe_intermediate_size": self.intermediate_dim,
-            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
-            # grug-specific (no public equivalent)
-            "qk_mult": self.qk_mult,
-            "grugmoe_attention_mode": "production",
-            GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
-        }
-        if config_overrides is not None:
-            config.update(config_overrides)
-        return GrugMoeHfConfig(**config)
-
-
-def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
-    """Non-parametric RMS norm over the last dimension."""
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
-
-
-# Attention-projection shardings. The default (FSDP) variant shards the contraction ("data") axis, so
-# XLA inserts a per-layer weight all-gather before the attention matmuls. The ``*_GATHERED`` specs are
-# that gather's result -- the "data" axis replicated, the "model" axis kept -- i.e. exactly what the
-# implicit gather produces, what ``SCALE_REPLICATE_ATTN_WEIGHTS`` leaves the weights as permanently,
-# and what ``SCALE_PREFETCH_ATTN`` reshards to one layer ahead.
+# Attention-projection shardings. The FSDP variant shards the contraction ("data") axis, so XLA
+# inserts a per-layer weight all-gather before the attention matmuls.
 _QKV_SPEC = P("data", "model")
 _O_SPEC = P("model", "data")
-_QKV_GATHERED_SPEC = P(None, "model")
-_O_GATHERED_SPEC = P("model", None)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -317,27 +183,17 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
-        # SCALE_REPLICATE_ATTN_WEIGHTS=1 leaves the FSDP ("data") axis unsharded on the attention
-        # projections, so each device already holds the full contraction dim and XLA emits no per-layer
-        # weight all-gather (which sits exposed at the layer boundary, unhideable across the scan).
-        # Costs replicating the (small) attention weights + their optimizer state instead of 1/data.
-        if os.environ.get("SCALE_REPLICATE_ATTN_WEIGHTS") == "1":
-            qkv_spec, o_spec = _QKV_GATHERED_SPEC, _O_GATHERED_SPEC
-        else:
-            qkv_spec, o_spec = _QKV_SPEC, _O_SPEC
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), qkv_spec),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), qkv_spec),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), qkv_spec),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), o_spec),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _QKV_SPEC),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _QKV_SPEC),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), _QKV_SPEC),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
             cfg=cfg,
         )
 
@@ -346,93 +202,33 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
-        disable_rope: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
-        batch_spec = _batch_spec()
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        # Shift the second half of K's head_dim back by one position so the
-        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
-        # head_dim[half:]. Zero the shifted half at document starts so the
-        # cross-half look-back does not leak across docs. Runs before the
-        # rms_norm on Q/K below.
-        if use_pko:
-            half = head_dim // 2
-            k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if segment_ids is None:
-                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
-                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-            else:
-                q_seg = segment_ids[0]
-                if q_seg.ndim == 1:
-                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-                else:
-                    is_doc_start = jnp.concatenate(
-                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                        axis=1,
-                    )
-            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
-            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
-
         q = rms_norm(q)
         k = rms_norm(k)
-
-        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
-        # (second half is rope-free on every layer). ``disable_rope`` skips
-        # the RoPE step entirely on this layer — used to opt long layers out
-        # of rotary embedding when ``cfg.disable_long_rope`` is set. It may be a
-        # traced scalar bool (per-layer choice inside the layer scan): then RoPE
-        # is always computed and selected with ``jnp.where`` so the scan body has
-        # no ``lax.cond`` (which would pin the FA4 metadata to device 0).
-        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            return (
-                jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
-                jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
-            )
-
-        if isinstance(disable_rope, bool):
-            if not disable_rope:
-                q, k = _rope(q, k)
-        else:
-            q_roped, k_roped = _rope(q, k)
-            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
-            q = jnp.where(keep, q_roped, q)
-            k = jnp.where(keep, k_roped, k)
+        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
+
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_batch_spec())
+
+
+def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
+    """Non-parametric RMS norm over the last dimension."""
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
 class RMSNorm(eqx.Module):
@@ -451,31 +247,6 @@ class RMSNorm(eqx.Module):
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
-
-
-class GatedNorm(eqx.Module):
-    """Learnable per-dimension gating. Compensates for AdamH's bounded activation norms.
-    See https://arxiv.org/abs/2601.22966v1"""
-
-    w_down: jax.Array
-    w_up: jax.Array
-
-    @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
-        k_down, k_up = random.split(key)
-        return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
-        )
-
-    @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
-        # (e.g. compare no activation, relu, etc.).
-        gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
-        return x * gate.astype(x.dtype)
 
 
 class DenseMLP(eqx.Module):
@@ -518,93 +289,10 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _routing_stats(
-    selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
-    *,
-    num_experts: int,
-    num_experts_per_token: int,
-) -> dict[str, jax.Array]:
-    router_probs_f = router_probs.astype(jnp.float32)
-    router_logits_f = router_logits.astype(jnp.float32)
-    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
-    total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
-    assignment_fraction = expert_counts / total_assignments
-    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
-    token_fraction = assignment_fraction * num_experts_per_token
-    p = jnp.mean(router_probs_f, axis=0)
-    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
-    z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
-
-    return {
-        "routing_counts": expert_counts,
-        "routing_entropy": routing_entropy,
-        "load_balancing_loss": load_balancing_loss,
-        "router_z_loss": router_z_loss,
-    }
-
-
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
-    routing_entropy = router_metrics["routing_entropy_per_layer"]
-    routing_counts = router_metrics["routing_counts_per_layer"]
-    load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
-    router_z_loss = router_metrics["router_z_loss_per_layer"]
-    capacity_overflow = router_metrics["capacity_overflow_per_layer"]
-    num_layers = int(routing_entropy.shape[0])
-
-    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
-    assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
-    capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
-
-    out: dict[str, jax.Array | SummaryStats] = {
-        "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
-        "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
-        "train/router/router_z_loss": jnp.mean(router_z_loss),
-        "train/router/routing_counts_per_layer": routing_counts,
-        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
-    }
-    for i in range(num_layers):
-        out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
-        out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
-        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
-        out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
-        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
-    return out
-
-
-def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
-    counts = jnp.asarray(expert_counts, dtype=jnp.float32)
-    num_experts = counts.shape[0]
-    expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
-    num = jnp.sum(counts)
-    sum_values = jnp.sum(counts * expert_ids)
-    sum_squares = jnp.sum(counts * expert_ids * expert_ids)
-    nonzero = counts > 0
-    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min()
-    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
-    min_value = jnp.where(num > 0, min_value, 0.0)
-    max_value = jnp.where(num > 0, max_value, 0.0)
-    bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
-    return SummaryStats.from_reduced_values(
-        min=min_value,
-        max=max_value,
-        num=num,
-        nonzero_count=jnp.sum(nonzero),
-        sum=sum_values,
-        sum_squares=sum_squares,
-        histogram=histogram,
-    )
-
-
 class MoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights."""
+    """Top-k routed MoE with sigmoid combine weights."""
 
     router: jax.Array
-    router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -620,7 +308,6 @@ class MoEMLP(eqx.Module):
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -635,134 +322,39 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+        # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+        # Sigmoid combine weights on the selected logits, renormalized to sum to ``_ROUTING_RENORM_SUM``.
+        combine_weights_f = jax.nn.sigmoid(topk_logits)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
-            num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-        )
-        # Sharded QB: compute beta locally per device, then average. The qb_beta pmean is an
-        # f32 all-reduce whose result only feeds NEXT step's router_bias (train.py:_apply_qb_betas),
-        # never this forward — yet XLA schedules it as a synchronous per-layer collective in the
-        # forward critical path, which can stall the compute stream and block the weight-gather
-        # overlap. SCALE_MOE_SKIP_QB drops it entirely (router_bias stops updating, so loss quality
-        # is invalid under this flag — throughput diagnostic only).
-        if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
-            router_stats["qb_beta"] = jnp.zeros((self.cfg.num_experts,), dtype=jnp.float32)
-        else:
-            mesh = get_abstract_mesh()
-            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-            num_devices = 1
-            for a in _BATCH_AXES:
-                num_devices *= mesh.shape[a]
-            local_tokens = s_minus_alpha.shape[0] // num_devices
-            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-            def _local_qb_beta(s_ma):
-                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-                beta = topk_vals[:, -1]
-                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
-
-            router_stats["qb_beta"] = shard_map(
-                _local_qb_beta,
-                mesh=mesh,
-                in_specs=(P(_BATCH_AXES, None),),
-                out_specs=P(),
-            )(s_minus_alpha)
-
-        routed_flat, dropped_assignments = self.expert_mlp(
+        routed_flat = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
+            report_capacity_overflow=False,
         )
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
-
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
-        return routed, router_stats
-
-
-def _prefetch_expert_weights(mlp: "MoEMLP") -> "MoEMLP":
-    """Reshard the routed-expert weights to fully replicated eagerly, returning an MoEMLP with the
-    gathered weights swapped in. Called before attention so the FSDP all-gather is issued early and
-    overlaps the attention window; moe_mlp's own reshard then sees already-replicated inputs (no-op).
-    """
-    expert = mlp.expert_mlp
-    replicated = P(None, None, None)
-    if expert.w_gate_up is not None:
-        mlp = eqx.tree_at(lambda m: m.expert_mlp.w_gate_up, mlp, reshard(expert.w_gate_up, replicated))
-    else:
-        mlp = eqx.tree_at(
-            lambda m: [m.expert_mlp.w_gate, m.expert_mlp.w_up],
-            mlp,
-            [reshard(expert.w_gate, replicated), reshard(expert.w_up, replicated)],
-        )
-    return eqx.tree_at(lambda m: m.expert_mlp.w_down, mlp, reshard(expert.w_down, replicated))
-
-
-AttnWeights = tuple[jax.Array, jax.Array, jax.Array, jax.Array]
-
-
-def _gather_attn_weights(attn_weights: AttnWeights) -> AttnWeights:
-    """All-gather (w_q, w_k, w_v, w_o) off the FSDP ``data`` axis to their ``*_GATHERED`` specs -- the
-    exact residency the implicit per-layer attention gather produces. Used by the prefetch scan to
-    issue one layer's gather ahead of time."""
-    w_q, w_k, w_v, w_o = attn_weights
-    return (
-        reshard(w_q, _QKV_GATHERED_SPEC),
-        reshard(w_k, _QKV_GATHERED_SPEC),
-        reshard(w_v, _QKV_GATHERED_SPEC),
-        reshard(w_o, _O_GATHERED_SPEC),
-    )
-
-
-def _swap_attn_weights(block: "Block", gathered: AttnWeights) -> "Block":
-    """Return ``block`` with its attention projections replaced by pre-gathered (replicated) weights.
-    The attention matmuls then see already-gathered inputs -- no all-gather at the layer boundary."""
-    gq, gk, gv, go = gathered
-    return eqx.tree_at(
-        lambda b: [b.attn.w_q, b.attn.w_k, b.attn.w_v, b.attn.w_o],
-        block,
-        [gq, gk, gv, go],
-    )
+        return reshard(routed, _batch_spec())
 
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: tuple[DenseMLP, ...] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_key, mlp_key, shared_key = random.split(key, 3)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             n = cfg.num_shared_experts
@@ -773,73 +365,29 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
         )
 
     @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
-        disable_rope: bool | jax.Array = False,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        mlp = self.mlp
-        if os.environ.get("SCALE_PREFETCH_EXPERT_WEIGHTS") == "1":
-            # Issue the expert-weight FSDP all-gather BEFORE attention (the weights don't depend on
-            # the attention output), so the ~attention window overlaps the gather instead of the
-            # gather sitting exposed on the compute stream just before the expert GEMM. moe_mlp's
-            # internal reshard of the already-replicated weights then becomes a no-op.
-            mlp = _prefetch_expert_weights(mlp)
-        # SCALE_MOE_ONLY strips the attention sub-block so each layer is norm -> routed MoE ->
-        # residual only, isolating MoE throughput (pair with SCALE_SHARED_INTERMEDIATE=0 to also
-        # drop the shared expert). The attention-only args (mask/use_pko/disable_rope) go unused.
-        if os.environ.get("SCALE_MOE_ONLY") != "1":
-            attn_in = self.attn_gated_norm(self.rms_attn(x))
-            x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = mlp(mlp_in)
-        if os.environ.get("SCALE_SHARED_AFTER_MOE") == "1" and self.shared is not None:
-            # Serialize the shared expert AFTER the routed MoE: commit the MoE output to the residual
-            # first, then have the shared expert read the updated x (re-normalized). This adds a data
-            # dependency on the MoE result, so XLA cannot co-schedule the shared dense GEMM alongside
-            # the routed expert-weight all-gather; the shared GEMM runs strictly after the MoE.
-            x = x + mlp_out
-            shared_in = self.mlp_gated_norm(self.rms_mlp(x))
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        x = x + self.attn(self.rms_attn(x), mask)
+        mlp_in = self.rms_mlp(x)
+        mlp_out = self.mlp(mlp_in)
+        if self.shared is not None:
             for shared_expert in self.shared:
-                x = x + shared_expert(shared_in, activation=ActivationFunctionEnum.silu)
-        else:
-            if self.shared is not None:
-                for shared_expert in self.shared:
-                    mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
-            x = x + mlp_out
-        return x, router_stats
-
-
-def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] mask marking the 'long' (full causal) layers: every 4th layer
-    plus the last one. Rides into the ``lax.scan`` body as a per-layer scan input so the
-    scan can pick the sliding-window vs full mask at runtime."""
-    idx = jnp.arange(num_layers)
-    return ((idx % 4) == 3) | (idx == num_layers - 1)
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+        return x + mlp_out
 
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    # Exactly one is populated: ``blocks`` (unrolled per-layer) or ``stacked_blocks``
-    # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
-    blocks: tuple[Block, ...] | None
-    stacked_blocks: ArrayStacked[Block] | None
+    stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
-    final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -862,36 +410,19 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        if cfg.use_array_stacked_blocks and not cfg.disable_pko:
-            raise ValueError(
-                "use_array_stacked_blocks=True requires disable_pko=True because "
-                "the attention path reads use_pko at trace time (not scan-expressible)."
-            )
-
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-
-        blocks: tuple[Block, ...] | None
-        stacked_blocks: ArrayStacked[Block] | None
-        if cfg.use_array_stacked_blocks:
-            blocks = None
-            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
-        else:
-            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
-            stacked_blocks = None
+        stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
 
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
-            blocks=blocks,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
         )
 
@@ -904,151 +435,44 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> Float[Array, "B S D"]:
         if mask is None:
             mask = AttentionMask.causal()
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = self.embed_norm(hidden)
 
-        # Short layers: sliding window. Long layers (every 4th + last): full causal.
+        # Every layer is identical full-causal MoE, so the mask is a scan constant.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         if segment_ids is not None:
-            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer-scan
-            # lax.cond. Otherwise they reach the cond as {maximal device=0} and the compiler falls
-            # back to an involuntary full-remat scatter to [num_devices, 1], which serializes through
+            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer scan.
+            # Otherwise they reach the FA4 callback as {maximal device=0} and the compiler falls back
+            # to an involuntary full-remat scatter to [num_devices, 1], which serializes through
             # device 0 and can wedge the MoE all-to-all (collective rendezvous timeout at scale).
             segment_ids = _batch_reshard(segment_ids)
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        causal_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        # Precompute the FA4 per-token metadata for the (single) full-causal mask OUTSIDE the scan and
+        # attach it via ``with_fa4_bounds``, keeping the FA4 pure_callback's device-0-pinned metadata
+        # out of the scan body (an in-body callback forces an involuntary full rematerialization that
+        # serializes through device 0 and wedges the MoE all-to-all at 8+ racks).
+        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+        lower_bounds, valid = fa4_cute_segment_bounds(
+            causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+        )
+        layer_mask = causal_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
 
-        if self.blocks is not None:
-            num_blocks = len(self.blocks)
-            moe_router_stats: list[dict[str, jax.Array]] = []
-            for i, block in enumerate(self.blocks):
-                is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
-                layer_mask = long_mask if is_long else short_mask
-                use_pko = is_long and not cfg.disable_pko
-                disable_rope = is_long and cfg.disable_long_rope
-                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, layer_mask, use_pko, disable_rope
-                )
-                moe_router_stats.append(router_stats)
-            router_metrics = {
-                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-                "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-                "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-                "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-                "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-            }
-        else:
-            assert self.stacked_blocks is not None
-            # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
-            # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
-            # (scan requires disable_pko=True).
-            mask_schedule = _long_layer_schedule(cfg.num_layers)
-            # Precompute the FA4 per-token metadata for both the full-causal (long) and
-            # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
-            # jnp.where inside the body. This removes the lax.cond around the FA4 pure_callback:
-            # a conditional output feeding the callback is pinned to {maximal device=0} and forces
-            # an involuntary full rematerialization that serializes through device 0 and wedges the
-            # MoE all-to-all at 8+ racks. ``valid`` is window-independent, so it is shared;
-            # ``disable_rope`` rides in as a traced per-layer scalar.
-            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
-            long_lower_bounds, valid = fa4_cute_segment_bounds(
-                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
-            )
-            short_lower_bounds, _ = fa4_cute_segment_bounds(
-                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
-            )
-            long_lower_bounds = _batch_reshard(long_lower_bounds)
-            short_lower_bounds = _batch_reshard(short_lower_bounds)
-            valid = _batch_reshard(valid)
+        def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], None]:
+            return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask), None
 
-            # SCALE_SCAN_UNROLL inlines N layers per compiled scan step. With N=2, layer 2i+1's
-            # attention-weight all-gather becomes downstream of layer 2i's compute WITHIN one compiled
-            # block, so XLA can hide it with ordinary within-block latency hiding (no cross-iteration
-            # collective pipelining, which risks the #7407 CUBIN failure). Pure scheduling change; loss
-            # is bit-identical to unroll=1.
-            scan_unroll = int(os.environ.get("SCALE_SCAN_UNROLL", "1"))
-
-            def _layer_mask_and_rope(layer_use_long_mask: jax.Array) -> tuple[AttentionMask, bool | jax.Array]:
-                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
-                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-                disable_rope = use_long if cfg.disable_long_rope else False
-                return layer_mask, disable_rope
-
-            if os.environ.get("SCALE_PREFETCH_ATTN") == "1":
-                # Bounded one-layer-ahead prefetch: iteration i gathers layer i+1's attention weights
-                # while computing layer i, hiding the per-layer attention all-gather under the prior
-                # layer's compute. The carry holds the CURRENT layer's already-gathered weights.
-                stacked = self.stacked_blocks.stacked
-                attn_weights = (stacked.attn.w_q, stacked.attn.w_k, stacked.attn.w_v, stacked.attn.w_o)
-                # xs feeds each iteration the NEXT layer's still-sharded attn weights: roll -1 on the
-                # (unsharded) layer axis so next_attn[i] == attn_weights[i+1]. The final iteration's
-                # wrap-around gather (attn_weights[0]) lands in the discarded final carry -- harmless.
-                next_attn = jax.tree.map(lambda a: jnp.roll(a, -1, axis=0), attn_weights)
-                # Prologue: gather layer 0's attention weights (the same all-gather XLA would otherwise
-                # insert implicitly inside layer 0's attention), seeding the carry.
-                gathered0 = _gather_attn_weights(jax.tree.map(lambda a: a[0], attn_weights))
-
-                def _scan_layers_prefetch(
-                    carry: tuple[Float[Array, "B S D"], AttnWeights],
-                    scan_inputs: tuple[Block, jax.Array, AttnWeights],
-                ) -> tuple[tuple[Float[Array, "B S D"], AttnWeights], dict[str, jax.Array]]:
-                    carry_hidden, gathered_attn = carry
-                    layer, layer_use_long_mask, layer_next_attn = scan_inputs
-                    layer_mask, disable_rope = _layer_mask_and_rope(layer_use_long_mask)
-                    # Issue the NEXT layer's attention all-gather now (independent of carry_hidden) so it
-                    # overlaps THIS layer's attention+MoE compute instead of sitting exposed at the next
-                    # layer boundary. Kept outside the layer's remat region so backward reuses it.
-                    next_gathered = _gather_attn_weights(layer_next_attn)
-                    layer = _swap_attn_weights(layer, gathered_attn)
-                    new_hidden, router_stats = eqx.filter_checkpoint(layer, policy=remat_policy)(
-                        carry_hidden, layer_mask, False, disable_rope
-                    )
-                    return (new_hidden, next_gathered), router_stats
-
-                (hidden, _), stacked_router_stats = jax.lax.scan(
-                    _scan_layers_prefetch,
-                    (hidden, gathered0),
-                    xs=(self.stacked_blocks.stacked, mask_schedule, next_attn),
-                    unroll=scan_unroll,
-                )
-            else:
-
-                def _scan_layers(
-                    carry_hidden: Float[Array, "B S D"],
-                    scan_inputs: tuple[Block, jax.Array],
-                ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                    layer, layer_use_long_mask = scan_inputs
-                    layer_mask, disable_rope = _layer_mask_and_rope(layer_use_long_mask)
-                    return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                        carry_hidden, layer_mask, False, disable_rope
-                    )
-
-                hidden, stacked_router_stats = jax.lax.scan(
-                    _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule), unroll=scan_unroll
-                )
-            router_metrics = {
-                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
-                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
-                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
-                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
-                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
-                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
-            }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
-        return hidden, router_metrics
+        hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked)
+        return self.final_norm(hidden)
 
     @named_call
     def logits(
@@ -1056,12 +480,8 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
-
-    def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
-        return grugmoe_inference_state_dict(self, prefix=prefix)
+        hidden = self(token_ids, mask=mask)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_spec())
 
     def next_token_loss(
         self,
@@ -1072,13 +492,11 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-        return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+    ) -> jax.Array:
+        hidden = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
-
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
+        return fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -1087,21 +505,6 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        # No load-balancing loss; router z-loss only.
-        num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
-        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
-        loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
-            return loss, summarized_metrics
-        return loss
-
-
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * random.truncated_normal(key, -3, 3, shape)
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
@@ -1123,87 +526,14 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
-def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
-
-
-def _linear_inference_tensor(value: jax.Array) -> jax.Array:
-    return jnp.swapaxes(value, -1, -2)
-
-
-def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
-    tensors: dict[str, jax.Array] = {
-        "model.embed_tokens.weight": model.token_embed,
-        "model.embed_norm.weight": model.embed_norm.weight,
-        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
-        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
-        "model.norm.weight": model.final_norm.weight,
-        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
-        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
-        "lm_head.weight": _linear_inference_tensor(model.output_proj),
-    }
-
-    for layer_index, block in enumerate(model.blocks):
-        layer_prefix = f"model.layers.{layer_index}"
-        expert = block.mlp.expert_mlp
-        if expert.w_gate_up is not None:  # fused gate/up storage
-            expert_w_gate, expert_w_up = jnp.split(expert.w_gate_up, 2, axis=-1)
-        else:
-            expert_w_gate, expert_w_up = expert.w_gate, expert.w_up
-        tensors.update(
-            {
-                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
-                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
-                    block.attn_gated_norm.w_down
-                ),
-                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
-                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
-                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
-                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
-                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
-                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
-                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
-                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
-                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(expert_w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(expert_w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
-            }
-        )
-        if block.shared is not None:
-            # Split shared experts (each intermediate I/n) sum to an equivalent single expert of
-            # intermediate I with weights concatenated along the intermediate axis.
-            shared_w_gate = jnp.concatenate([e.w_gate for e in block.shared], axis=1)
-            shared_w_up = jnp.concatenate([e.w_up for e in block.shared], axis=1)
-            shared_w_down = jnp.concatenate([e.w_down for e in block.shared], axis=0)
-            tensors.update(
-                {
-                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(shared_w_gate),
-                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(shared_w_up),
-                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(shared_w_down),
-                }
-            )
-
-    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
-
-
 __all__ = [
-    "GRUG_MOE_ARCHITECTURE",
-    "GRUG_MOE_ARTIFACT_SCHEMA_VERSION",
-    "GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY",
-    "GRUG_MOE_MODEL_TYPE",
     "Block",
     "CausalSelfAttention",
     "DenseMLP",
-    "GatedNorm",
     "GrugModelConfig",
-    "GrugMoeHfConfig",
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
-    "grugmoe_inference_state_dict",
 ]
