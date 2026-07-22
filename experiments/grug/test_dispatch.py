@@ -84,6 +84,7 @@ def test_dispatch_with_nvidia_jax_image_protects_container_accelerator_stack(mon
     assert "--active --inexact" in script
     assert "--package marin-root" in script
     assert "--package marin-root --no-group dev" not in script
+    assert not any(line.lstrip().startswith("+") for line in script.splitlines())
     assert "ngc-jax-before.sha256" in script
     assert "ngc-jax-after.sha256" in script
 

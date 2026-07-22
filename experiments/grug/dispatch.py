@@ -84,7 +84,9 @@ _NVIDIA_JAX_PROTECTED_PACKAGES = (
 
 def nvidia_jax_overlay_setup_script() -> str:
     """Build a Marin overlay without replacing an NGC image's accelerator stack."""
-    protected_flags = " \\\n+  ".join(f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES)
+    protected_flags = (" \\" + "\n  ").join(
+        f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES
+    )
     return f"""set -eu
 cd "$IRIS_WORKDIR"
 test ! -e "$IRIS_VENV"

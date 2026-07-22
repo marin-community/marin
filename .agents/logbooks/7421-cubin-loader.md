@@ -112,3 +112,23 @@ author: mcwitt
 - Artifacts: `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e128-r16-cubin7421-null-classify-l48-b512-004/dev/cuda-module-probe/`.
 - Interpretation: the immediate failure is not a wrong-architecture or malformed CUBIN rejected by the driver. The caller passes a null module image, and the driver reports invalid argument; XLA then renders that as the generic “compiled for a different GPU?” message. An upstream OOM remains consistent with the observations if it causes compilation or assembly to yield no image, but this evidence does not identify why the image is null. Data-direct, pointer-copy, and loader-pressure treatments cannot be informative for a null input.
 - Next action: instrument the producer of the module byte span so that an empty compiler/assembler result is paired with its originating status and memory state before the loader call.
+
+### 2026-07-22 - CUBIN7421-005a NVIDIA JAX 26.06 identity smoke
+
+- Hypothesis: NVIDIA's current JAX container runs on the GB200 fleet without Iris creating a virtual environment or replacing the image's JAX stack.
+- Commit Hash: `d9dcb4d58` (no code changes required for the direct image smoke).
+- Job: `/mwittmann/cubin7421-ngc-identity-2606-001`.
+- Config: one GB200; `nvcr.io/nvidia/jax:26.06-py3`; Iris `--no-sync`; direct image Python; JAX/JAXLIB path and binary hashes; one GPU JIT.
+- Result: succeeded. Python was `/usr/bin/python`; JAX `0.10.1.dev20260605+10439788c` loaded from `/opt/jax`; JAXLIB loaded from `/opt/jaxlibs`; PJRT reported CUDA 13.3; driver 595.71.05; the JIT completed on `cuda:0`. `/app/.venv` was absent from `sys.path`.
+- Interpretation: the unmodified container is compatible with the target node and driver. This does not establish that Marin can run without overlay dependencies.
+- Next action: install only missing Marin dependencies into a system-site-packages overlay and require the container JAX/JAXLIB hashes and import paths to remain unchanged.
+
+### 2026-07-22 - CUBIN7421-005b guarded Marin overlay
+
+- Hypothesis: a system-site-packages venv can add Marin without installing or shadowing the NGC JAX, JAXLIB, CUDA, or NVIDIA Python packages.
+- Commit Hash: `cf174fee8`.
+- Jobs: `/mwittmann/cubin7421-ngc-overlay-2606-001` through `-004`.
+- Config: one GB200; `nvcr.io/nvidia/jax:26.06-py3`; temporary `uv` bootstrap; root and Levanter-GPU syncs with explicit accelerator-package exclusions; pre/post hashes for JAX, JAXLIB, `_jax.so`, and `libjax_common.so`; full scale-launcher import; one GPU JIT.
+- Result: `-001` stopped because the image omits `ensurepip`; `-002` proved both syncs and hash checks but exposed the missing workspace-root `marin-dupekit` dependency; `-003` stopped because `--no-group dev` is invalid for `marin-root`; corrected `-004` succeeded. The four hashes were identical before and after sync, neither `jax` nor `jaxlib` existed under `/app/.venv`, imports still resolved to `/opt`, the full launcher imported, and the JIT completed.
+- Interpretation: the overlay preserves the container accelerator stack while supplying the repository runtime. The staged failures were setup-contract failures before training, not CUDA-loader evidence.
+- Next action: run the exact 16-host L48/B512 one-step graph with the NGC image and zero retries, initially without the loader probe.
