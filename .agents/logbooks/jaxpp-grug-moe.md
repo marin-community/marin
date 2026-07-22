@@ -2393,3 +2393,21 @@ author: dlwh
   - The monotonic FP8 compile penalty remains real, especially on rank 1, but the bounded task completes in about 31 seconds. The smallest missing production interaction now lies inside the transformer block/router/rematerialization path rather than at the head/loss or outer result-tree boundary.
 - Next action:
   - Add the exact production block-rematerialization boundary around the routed MLP while keeping learned routing and attention excluded. Run another matched BF16/FP8 dps8 gate before adding a second structural axis.
+
+### 2026-07-22 15:06 PDT - production save-MoE remat boundary also passes
+- Hypothesis: The target launcher's block-level `save_moe` rematerialization policy interacting with FP8 ragged expert custom VJPs is sufficient to trigger the stage-3 compile stall.
+- Commit Hash: `481bdf7c19` (`[grug] Add block remat FP8 compile repro mode`).
+- Config: the completed next-token dps8 shape from the prior entry, adding only one `eqx.filter_checkpoint` per isolated residual expert block with production `jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)` and default `prevent_cse=True`. This matches the target launcher's non-effectful `ring`/`save_moe` branch. Attention, learned routing, block norms, shared expert, optimizer, and the full scheduler remained excluded.
+- Runs:
+  - BF16 control `/dlwh/jaxpp-remat-dps8-bf16-20260722-215133`.
+  - FP8 candidate `/dlwh/jaxpp-remat-dps8-fp8-20260722-215622`.
+- Results:
+  - Both jobs and all four tasks succeeded with exit `0`, zero failures/preemptions, and no live resources remaining.
+  - BF16 rank 0/1 lower times were `0.97247/0.98491s`; JaxPP `eval_local` times were `5.98515/16.98365s`.
+  - FP8 rank 0/1 lower times were `2.84200/2.83709s`; rank 0 `eval_local` was `10.43978s`. Finelog timed out before returning rank 1's exact completion event, but its successful completion barrier bounds `eval_local` below `30.47376s`.
+  - Neither run emitted a watchdog stack, timeout, OOM, traceback, compiler failure, resubmit, or cluster mutation. The ad hoc post-completion Finelog timeout affected only log retrieval.
+- Interpretation:
+  - The exact production `save_moe` remat boundary around the isolated routed residual is not sufficient. Its compile-and-execute timing is close to the no-remat last-stage case for both BF16 and FP8.
+  - The strongest remaining omitted compiler-shape delta is dynamic learned routing: router logits, top-k selection, capacity/group-size construction, dispatch ordering, combine weights, and router statistics. Pointwise per-block norms are less likely to explain an 18-minute backend stall and should not be bundled into the next test.
+- Next action:
+  - Add an opt-in production QB-routing boundary while keeping attention excluded and retaining `save_moe`, the last-stage loss, and full task result tree. Run a matched BF16/FP8 dps8 gate before adding attention or another structural axis.
