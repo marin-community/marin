@@ -42,3 +42,27 @@ The first Toolbox normal-sync smoke failed before Sonic-CuTe. The overlay preser
 The second smoke excluded the CUDA wheel families and reached four GPUs without the cuDNN mismatch. It failed while importing CUTLASS because the overlay installed `torch==2.11.0+cu128` without the excluded CUDA 12 wheels. The image now supplies and preserves `torch==2.11.0+cpu`; CUTLASS imports Torch for adapters, but Torch is not the accelerator runtime under test.
 
 The third smoke preserved CPU Torch and every `nvidia-*` CUDA distribution. Normal workspace sync completed and JAX enumerated all four GB200 GPUs. CUTLASS then rejected its environment as older than CUDA 13.1 because the overlay had installed the separately named `cuda-toolkit==12.8.1` metapackage. Add that name to the image-owned exclusion list before the next smoke.
+
+Further inspection showed the apparent CUDA-version check was an unconditional stub from an overlapping-wheel bug in CUTLASS DSL 4.5.2, not runtime detection. The current `quack-kernels==0.6.1` also imports IKET, which does not exist in 4.5.2. Repinning to the July 18 Toolbox image supplied JAX `0.11.1.dev20260718`, CUDA 13.3, and CUTLASS DSL 4.6.1. A normal-sync four-GPU Sonic-CuTe forward/backward smoke then succeeded with loss 6.9999.
+
+The first full treatment launch failed during imports, before W&B initialization or compilation. The overlay installed `torchvision==0.26.0+cu128` beside preserved `torch==2.11.0+cpu`; Transformers' `AutoProcessor` import failed because `torchvision::nms` was unavailable. An ephemeral validation replacing it with `torchvision==0.26.0+cpu` imported `AutoProcessor` successfully. The derived image must preserve the matching CPU Torch/Torchvision pair.
+
+## 2026-07-22: stable scan comparison
+
+The exact control → Toolbox → control sequence completed on 16 four-GPU GB200 nodes without retries, preemptions, or failed workers. All three runs used the #7507 model shape (`hidden_dim=6144`, 48 layers, 16 experts, top-2 routing) and the same selected steady-state steps 5–11 and 15–19.
+
+| Run | Median seconds/step | Median tokens/second | Median MFU |
+| --- | ---: | ---: | ---: |
+| [Control A](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-control-scan-a-20260722-195616) | 14.6695 | 285,920.95 | 25.8327% |
+| [Toolbox](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-scan-c-20260722-1523) | 14.8055 | 283,293.64 | 25.5954% |
+| [Control B](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-control-scan-b-20260722-1539) | 14.7376 | 284,600.13 | 25.7134% |
+
+Control A to B drift was -0.462% in throughput and MFU. Relative to the two-control midpoint, Toolbox was 0.690% slower; a linear interpolation at the treatment timestamp estimates a 0.505% throughput and MFU regression and a 0.507% step-time increase. The direction is consistently negative, but the effect is small and passes the proposed 2% adoption gate. The comparison changes the full image stack—JAX/XLA, CUDA, NCCL, CUTLASS, and base OS—rather than isolating one component.
+
+One earlier Toolbox run used the wrong environment variable names and therefore ran `hidden_dim=3072`, 32 experts, and 128 GPUs. Its 10.67% MFU is excluded from the comparison.
+
+## 2026-07-22: exact no-scan probe
+
+The exact 48-layer Toolbox treatment with `SCALE_SCAN_LAYERS=0` failed before step 0 after 16m34s in the first `jit_train_step`. CUDA attempted a 927,668,341,744-byte allocation and JAX reported `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 863.96GiB`; the allocator limit was 138.22 GiB. The run used 16 hosts and 64 devices, had retries disabled, and emitted no in-memory-CUBIN or null-module signature. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-noscan-a-20260722-1553)
+
+This reproduces the known unrolled-layer temporary-arena pathology, not the distinct CUBIN-load failure. JAX-Toolbox therefore does not make this full workload viable without scan, and this probe provides no evidence that it fixes all CUBIN failures. A current-image no-scan repeat would be redundant for that conclusion because both the historical control and the Toolbox treatment terminate at the earlier arena-memory boundary.
