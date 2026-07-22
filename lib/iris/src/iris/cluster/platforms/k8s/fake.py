@@ -658,7 +658,7 @@ class InMemoryK8sService:
             terminating = bool(existing.get("metadata", {}).get("deletionTimestamp"))
             if phase in ("Succeeded", "Failed") and not terminating:
                 self.delete(resource, name)
-                raise KubectlError(f"stale terminal pod {name} (phase={phase}) deleted; will recreate")
+                raise KubectlError("stale terminal pod deleted; will recreate on next dispatch")
             return
 
         self._resources[(resource.plural, name)] = manifest

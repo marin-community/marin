@@ -311,9 +311,12 @@ class CloudK8sService:
             phase = existing.get("status", {}).get("phase")
             terminating = bool(existing.get("metadata", {}).get("deletionTimestamp"))
             if phase in ("Succeeded", "Failed") and not terminating:
-                logger.info("k8s: deleting stale terminal pod %s (phase=%s) before recreate", name, phase)
+                # Do not interpolate the manifest-derived name/phase into the log
+                # or error: a pod manifest carries secret env, so a data-flow
+                # scanner treats anything read from it as sensitive. The provider
+                # already logs the failing task id alongside this error.
                 self.delete(res, name, wait=False)
-                raise KubectlError(f"stale terminal pod {name} (phase={phase}) deleted; will recreate") from None
+                raise KubectlError("stale terminal pod deleted; will recreate on next dispatch") from None
             # Live pod, or a prior generation still terminating; leave it. A later
             # reconcile re-applies once any deletion lands.
 
