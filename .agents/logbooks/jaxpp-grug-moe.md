@@ -2309,3 +2309,48 @@ author: dlwh
   - This remains an explicit approximate research mode. Promotion now depends on finite training, bounded loss drift, and a clean reduced-pipeline p50 gain; no default backend or acceptance tolerance changes.
 - Next action:
   - Add explicit-MPMD accumulation semantics for Haliax `OverwriteWithGradient` FP8 amax/scale state. Overwrite leaves must be updated rather than summed or divided by the microbatch count. Then run matched L8/d2560/e64/top-k4/seq4096/b32/m4 BF16-wire `std_1f1b` ring versus FP8-expert-GEMM training jobs on RNO2A.
+
+### 2026-07-22 12:28 PDT - BF16 control for the FP8 expert-GEMM pipeline gate
+- Hypothesis: The reduced L8 explicit-MPMD control provides a stable matched baseline for deciding whether FP8 expert GEMMs retain at least a `5%` central-throughput gain after pipeline, attention, optimizer, and ring-collective overhead.
+- Commit Hash: `84fc011f7d` (`[grug] Add research FP8 expert GEMM training`).
+- Command: RNO2A 4x8 H100 explicit-MPMD `std_1f1b`, L8/d2560/e64/top-k4/seq4096/vocab8192/b32/m4, BF16 wire, ring EP8, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, XLA loss, `save_moe`, 20 steps, and XLA preallocation `0.70`. Parent `/dlwh/iris-run-job-20260722-192841`; W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-fp8expert-ab1-l8-e64k4-b32-s4096-p4m4-control-20260722>.
+- Results:
+  - Parent, child, and all four tasks succeeded with exit `0`, zero failures, preemptions, OOMs, or resubmits. W&B finished at step 19 and all 18 timed losses are finite; final loss is `8.392844200`.
+  - The run-duration median is `0.208797334s`. Applying the established stall rule, duration greater than the run median plus `300ms`, excludes steps 3 and 10.
+  - Clean mean/p50/p90 MFU is `9.458379/9.457171/9.529986`; clean mean/p50/p90 duration is `0.208492/0.208515/0.209718s`; clean mean/p50 tokens/s is `628,677/628,597`.
+  - No router-load or dropped-assignment metrics were emitted.
+- Interpretation:
+  - The FP8 candidate must reach at least `9.930030` clean-p50 MFU to clear the predeclared `5%` promotion gate.
+- Next action:
+  - Compare the matched E4M3 expert-GEMM candidate using the same stall rule and require all finite losses before scaling.
+
+### 2026-07-22 12:39 PDT - FP8 pipeline attempt 1 exposes missing CUDA staging
+- Hypothesis: The research FP8 expert-GEMM state and explicit microbatch accumulation will compile and execute in the matched reduced JaxPP pipeline.
+- Commit Hashes:
+  - `84fc011f7d` adds the research-only training integration.
+  - `655869c13a` (`[grug] Preserve CUDA setup with custom worker scripts`) fixes the setup failure found by this attempt.
+- Failed run: parent `/dlwh/iris-run-job-20260722-192856`, child `/dlwh/iris-run-job-20260722-192856/grug-train-jaxpp-rno2a-ring-fp8expert-ab1-l8-e64k4-b32-s4096-p4m4-e4m3-20260722`.
+- Result:
+  - The first candidate failed while compiling stage-0 forward before any training step with `JaxRuntimeError: UNAVAILABLE: No PTX compilation provider is available. Neither ptxas/nvlink nor nvjitlink is available.` No FP8 optimizer/state semantics, numerical behavior, memory capacity, or throughput were exercised.
+  - Root cause: Grug's custom JaxPP setup replaced Iris's automatic setup list. The GPU extra installed CUDA packages but omitted `cuda_toolchain_setup_script()`, so `ptxas` and `nvlink` were not staged onto the worker path.
+  - Commit `655869c13a` preserves the default setup, inserts CUDA toolchain staging for GPU extras, and then runs custom JaxPP/DeepEP setup scripts. Pyrefly and changed-files precommit pass.
+  - Relaunch parent `/dlwh/iris-run-job-20260722-193948` logs `staging CUDA toolchain` on all four workers and advances through stage-0, stage-1, and stage-2 compilation to `Compiling grug_1f1b_mb0_stage3_loss_backward`, proving the PTX-provider failure is fixed. As of 12:57 PDT it remains running and log-silent in that compile for about 14 minutes.
+- Interpretation:
+  - Attempt 1 is a setup failure, not a negative FP8 performance or stability result. The relaunch's prolonged stage-3 backward compile is a distinct possible JaxPP/XLA compile-stall result and must be resolved before the training gate can be interpreted.
+- Next action:
+  - Continue babysitting the relaunch without blind resubmission. If compile completes, collect all 20 training steps and compare to the control. If log freshness remains absent for two monitor cadences, collect task/process and compiler diagnostics, stop the failed parent, and package the stage-3 backward compile stall separately.
+
+### 2026-07-22 13:01 PDT - FP8 expert-GEMM pipeline relaunch stalls compiling stage 3
+- Hypothesis: After restoring `ptxas`/`nvlink`, the matched reduced FP8 candidate will compile all four stage programs and expose a finite training/performance result.
+- Commit Hash: `655869c13a` (`[grug] Preserve CUDA setup with custom worker scripts`), with FP8 training integration at `84fc011f7d`.
+- Command: same L8/d2560/e64/top-k4/seq4096/vocab8192/b32/m4, four-stage explicit-MPMD `std_1f1b`, BF16-wire, ring EP8, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, XLA-loss control config, adding only `--research-fp8-expert-gemm`. Parent `/dlwh/iris-run-job-20260722-193948`; W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-fp8expert-ab2-l8-e64k4-b32-s4096-p4m4-e4m3-20260722>.
+- Results:
+  - CUDA toolchain staging ran on all four workers. Compilation advanced at roughly 20-second intervals through stage-0 forward at 19:41:34 UTC, stage-1 forward and stage-0 accumulation at 19:41:54, stage-2 forward at 19:42:14, and stage-3 loss-backward at 19:42:35.
+  - No further application log was emitted for more than 18 minutes. A live Iris thread dump on task 3 showed the main thread blocked in `jax._src.compiler.backend_compile_and_load`, called through `jaxpp.jax_primitives.apply_task`, `jaxpp.experimental._mpmd.eval_local`, and the Grug explicit-MPMD runner.
+  - The run produced zero of 20 training steps, no loss or MFU history, and no PTX-provider, OOM, sharding, model, or Python exception. The W&B run remained marked running with zero rows when compute was stopped.
+  - After two stale monitor cadences, only this parent was stopped. The parent and child are terminal `killed`; all four child tasks are terminal and no live resources remain.
+- Interpretation:
+  - The CUDA setup fix is validated, but the reduced FP8 pipeline training gate is blocked by a stage-3 backward backend compile stall. There is no finite-step or end-to-end performance evidence, so the direct `1.266x` expert-kernel result cannot be promoted or scaled.
+  - A blind retry is not justified because the second attempt reached the same deterministic stage program and remained inside backend compilation without an infrastructure error.
+- Next action:
+  - Minimize stage-3 loss-backward compilation outside the full four-stage run, preserving the FP8 overwrite-state and microbatch-accumulation structure. Package an upstream-ready reproducer in Marin and file only against Marin before asking NVIDIA/JaxPP maintainers for a fix. Resume the paired performance gate only after the minimized program compiles or yields an actionable compiler error.
