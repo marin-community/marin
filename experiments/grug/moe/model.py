@@ -5,8 +5,8 @@
 
 Barebones MoE transformer: token embedding, learnable RMSNorm, grouped-query
 causal attention with RoPE, a sigmoid-combine top-k MoE (routed experts plus an
-optional shared dense expert), and an lm_head. All layers are identical
-full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
+optional shared dense expert), and an lm_head. Layers are stored as either
+independent modules for unrolled execution or one array-stacked ``lax.scan`` body.
 """
 
 import dataclasses
@@ -496,7 +496,8 @@ class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
     output_proj: jax.Array
-    stacked_blocks: ArrayStacked[Block]
+    blocks: tuple[Block, ...] | None
+    stacked_blocks: ArrayStacked[Block] | None
     final_norm: RMSNorm
     config: GrugModelConfig = eqx.field(static=True)
 
@@ -525,12 +526,20 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        blocks: tuple[Block, ...] | None
+        stacked_blocks: ArrayStacked[Block] | None
+        if cfg.scan_layers:
+            blocks = None
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        else:
+            blocks = tuple(Block.init(cfg, key=block_key) for block_key in block_keys)
+            stacked_blocks = None
 
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             output_proj=output_proj,
+            blocks=blocks,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             config=cfg,
@@ -583,9 +592,11 @@ class Transformer(eqx.Module):
             return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask), None
 
         if cfg.scan_layers:
+            assert self.stacked_blocks is not None
             hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll)
         else:
-            for layer in self.stacked_blocks.unstacked():
+            assert self.blocks is not None
+            for layer in self.blocks:
                 hidden = eqx.filter_checkpoint(layer, policy=remat_policy)(hidden, layer_mask)
         return self.final_norm(hidden)
 

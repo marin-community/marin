@@ -49,7 +49,7 @@ The first full treatment launch failed during imports, before W&B initialization
 
 ## 2026-07-22: stable scan comparison
 
-The exact control → Toolbox → control sequence completed on 16 four-GPU GB200 nodes without retries, preemptions, or failed workers. All three runs used the #7507 model shape (`hidden_dim=6144`, 48 layers, 16 experts, top-2 routing) and the same selected steady-state steps 5–11 and 15–19.
+The exact control → Toolbox → control sequence completed on 16 four-GPU GB200 nodes without retries, preemptions, or failed workers. All three runs used the #7507 model shape (`hidden_dim=6144`, 48 layers, 128 experts, top-4 routing) and the same selected steady-state steps 5–11 and 15–19.
 
 | Run | Median seconds/step | Median tokens/second | Median MFU |
 | --- | ---: | ---: | ---: |

@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -31,7 +32,7 @@ from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -346,6 +347,43 @@ def test_grug_moe_model_init_against_single_expert_mesh():
         state_shape = eqx.filter_eval_shape(build)
 
     assert state_shape.params is not None
+
+
+def test_grug_moe_scan_layers_selects_matching_parameter_storage():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    base_cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+
+    def build(scan_layers: bool):
+        cfg = dataclasses.replace(base_cfg, scan_layers=scan_layers)
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        scanned = eqx.filter_eval_shape(build, True)
+        unscanned = eqx.filter_eval_shape(build, False)
+
+    assert scanned.blocks is None
+    assert scanned.stacked_blocks is not None
+    assert unscanned.stacked_blocks is None
+    assert unscanned.blocks is not None
+    assert len(unscanned.blocks) == base_cfg.num_layers
+
+
+def test_grug_moe_scanned_and_unscanned_modules_have_output_parity():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(4, dtype=jnp.int32).reshape(1, 4)
+    forward = eqx.filter_jit(lambda model, token_ids: model.logits(token_ids))
+
+    with jax.set_mesh(mesh):
+        scanned = model_module.Transformer.init(dataclasses.replace(cfg, scan_layers=True), key=key)
+        unscanned = model_module.Transformer.init(dataclasses.replace(cfg, scan_layers=False), key=key)
+        scanned_logits = forward(scanned, tokens)
+        unscanned_logits = forward(unscanned, tokens)
+
+    np.testing.assert_allclose(scanned_logits, unscanned_logits, rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.parametrize(
