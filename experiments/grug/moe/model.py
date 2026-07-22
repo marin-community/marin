@@ -21,14 +21,9 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
-from jax import random
+from jax import random, shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-
-try:
-    from jax.shard_map import shard_map
-except ModuleNotFoundError:
-    from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
