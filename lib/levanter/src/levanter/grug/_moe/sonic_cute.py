@@ -116,10 +116,10 @@ def _moe_mlp_local_sonic_cute_chunked(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-    chunks: int,
+    chunk_sizes: tuple[int, ...],
     data_axis_name: str,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    """Chunked variant that gathers only ``1/chunks`` of the expert weights at a time.
+    """Chunked variant that gathers only one chunk of the expert weights at a time.
 
     The FSDP weights arrive H-sharded over ``data_axis_name`` (``moe_w13_local`` is [E, H/data, 2I],
     ``moe_w2_local`` is [E, I, H/data]). Dispatch runs ONCE (``_prepare_moe_dispatch`` sorts every
@@ -132,13 +132,17 @@ def _moe_mlp_local_sonic_cute_chunked(
     Segment handling (see the module docstring on ``_expert_mlp``): the QuACK kernel and the XLA
     ``ragged_dot`` weight-grad path both index rows relative to row 0 of the buffer they are given, so
     each chunk gets a segment-relative ``x_dispatch`` (sliced to start at ``cu[lo]``) with a rebased
-    ``cu_c``. Segment length is a STATIC ``capacity = (T*K) // chunks`` (1x balanced, drop overflow).
+    ``cu_c``. Each chunk's segment length is a STATIC ``capacity`` that scales with its expert count
+    (``total_assignments * size / num_experts``, 1x balanced, drop overflow), so the per-chunk
+    capacities sum to ``total_assignments`` exactly as the uniform case does. ``chunk_sizes`` need not
+    be equal: e.g. ``(16, 16, 96)`` runs two small gathers (which start the expert GEMMs quickly, and
+    let chunk 0 prefetch under attention via ``w13_pre0``) then one large gather that overlaps them.
     Rows past the chunk's real assignments are folded into the last expert group (so the kernel never
     leaves ungrouped garbage rows) but weight-masked to zero, so they contribute nothing to the
     forward output and route a zero cotangent back to the router in the combine backward.
     """
-    if num_experts % chunks != 0:
-        raise ValueError(f"num_experts={num_experts} must be divisible by SCALE_MOE_EXPERT_CHUNKS={chunks}")
+    if sum(chunk_sizes) != num_experts:
+        raise ValueError(f"chunk_sizes={chunk_sizes} must sum to num_experts={num_experts}")
 
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x, selected_experts, combine_weights, num_experts=num_experts
@@ -146,21 +150,29 @@ def _moe_mlp_local_sonic_cute_chunked(
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
     moe_dim = moe_w2_local.shape[1]
     total_assignments, hidden = x_dispatch.shape
-    per = num_experts // chunks
-    capacity = total_assignments // chunks
+
+    # Expert-group boundaries and a per-chunk static capacity proportional to the chunk's expert
+    # count. The capacities sum to total_assignments (as with equal chunks); a larger chunk holds
+    # proportionally more tokens.
+    bounds = [0]
+    for size in chunk_sizes:
+        bounds.append(bounds[-1] + size)
+    caps = [total_assignments * size // num_experts for size in chunk_sizes]
+    max_cap = max(caps)
     cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
 
-    # Pad the sorted buffers by ``capacity`` rows so ``dynamic_slice(start=cu[lo], size=capacity)``
-    # never clamps its start index (which would silently shift the window and misgroup rows). Padding
-    # carries zero combine weight, so it never contributes to the output or its gradient.
-    x_pad = jnp.pad(x_dispatch, ((0, capacity), (0, 0)))
-    w_pad = jnp.pad(w_dispatch, (0, capacity))
-    token_pad = jnp.pad(token_dispatch, (0, capacity))
+    # Pad the sorted buffers by the LARGEST chunk capacity so every chunk's
+    # ``dynamic_slice(start=cu[lo], size=cap)`` never clamps its start index (which would silently
+    # shift the window and misgroup rows). Padding carries zero combine weight, so it never
+    # contributes to the output or its gradient.
+    x_pad = jnp.pad(x_dispatch, ((0, max_cap), (0, 0)))
+    w_pad = jnp.pad(w_dispatch, (0, max_cap))
+    token_pad = jnp.pad(token_dispatch, (0, max_cap))
 
     out = jnp.zeros_like(x)
-    for c in range(chunks):
-        lo = c * per
-        hi = lo + per
+    for c, cap in enumerate(caps):
+        lo = bounds[c]
+        hi = bounds[c + 1]
         with jax.named_scope("gather_chunk"):
             if c == 0 and w13_pre0 is not None:
                 # Chunk 0 was gathered OUTSIDE the shard_map (operand-gated on the weights only, so it
@@ -172,21 +184,21 @@ def _moe_mlp_local_sonic_cute_chunked(
         w13_il = _interleave_gate_up(w13_chunk, moe_dim)
 
         start = cu[lo]
-        x_seg = jax.lax.dynamic_slice(x_pad, (start, 0), (capacity, hidden))
-        token_seg = jax.lax.dynamic_slice(token_pad, (start,), (capacity,))
-        w_seg = jax.lax.dynamic_slice(w_pad, (start,), (capacity,))
+        x_seg = jax.lax.dynamic_slice(x_pad, (start, 0), (cap, hidden))
+        token_seg = jax.lax.dynamic_slice(token_pad, (start,), (cap,))
+        w_seg = jax.lax.dynamic_slice(w_pad, (start,), (cap,))
 
         # Real assignments for this chunk occupy segment rows [0, count); the rest are padding or
         # rows belonging to later chunks. Mask their combine weight to zero.
         count = cu[hi] - start
-        valid = jnp.arange(capacity, dtype=jnp.int32) < jnp.minimum(count, capacity)
+        valid = jnp.arange(cap, dtype=jnp.int32) < jnp.minimum(count, cap)
         w_seg = jnp.where(valid, w_seg, jnp.zeros_like(w_seg))
 
         # Segment-relative group boundaries. Fold the leftover capacity into the last expert so the
         # kernel writes every row (no ungrouped garbage); those extra rows are weight-masked above.
-        raw = jnp.clip(cu[lo : hi + 1] - start, 0, capacity)
+        raw = jnp.clip(cu[lo : hi + 1] - start, 0, cap)
         group_sizes_c = jnp.diff(raw)
-        group_sizes_c = group_sizes_c.at[-1].add(capacity - raw[-1])
+        group_sizes_c = group_sizes_c.at[-1].add(cap - raw[-1])
         cu_c = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes_c).astype(jnp.int32)])
 
         with jax.named_scope("moe_up_down_quack_chunk"):
