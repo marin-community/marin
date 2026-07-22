@@ -155,10 +155,17 @@ already provisioned:
   (`pulumi package add terraform-provider coreweave/coreweave`).
 - **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
   exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
+  Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
+  (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
+  Pulumi should provision a bucket per cluster or this reuse is the standing choice.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **DNS CNAME** (`iris-cw-<cluster>.oa.dev` → the Traefik LoadBalancer's CoreWeave-allocated
-  hostname): manual (Cloudflare) today. CoreWeave allocates the hostname asynchronously after
-  Traefik comes up, which needs a custom Dynamic Provider to express declaratively.
+  hostname): manual (Namecheap Advanced DNS) today. CoreWeave allocates the hostname
+  asynchronously after Traefik comes up, which needs a custom Dynamic Provider to express
+  declaratively, and no Pulumi Namecheap provider is bridged.
+- **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
+  hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
+  cluster can't be reachable-but-unregistered or registered-but-missing.
 - **Folding `helm repo add coreweave ...` into the program itself**, e.g. via `pulumi_command`'s
   `local.run` invoke.
 - **`FEDERATION_ALLOW_SOURCES`** is still duplicated between `iac/config.py`'s default and
