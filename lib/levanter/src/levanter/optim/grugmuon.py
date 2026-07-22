@@ -17,6 +17,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import optax
+from jax import shard_map
 from jax.sharding import PartitionSpec
 from jax.sharding import reshard
 from optax import tree_utils as otu
@@ -388,12 +389,18 @@ def _newtonschulz_4d_distributed(
     """
     if os.environ.get("SCALE_MOE_EXPERT_ESHARD") == "1":
         # Experts are stored sharded E-over-data (leaf P(None, "data", None, None)) with D/I full per
-        # chip, so every chip already owns whole expert matrices. NS runs fully local -- no reshard,
-        # no all-to-all -- via a plain vmap over the (L, E) leading dims (E-over-data keeps it per-chip).
+        # chip, so every chip already owns whole expert matrices. Pin the NS to the data axis with a
+        # shard_map (manual SPMD) so each chip orthogonalizes ITS experts locally, no reshard. (A plain
+        # vmap leaves the sharding to GSPMD, which is free to gather/reshard instead of staying local.)
         # Dense einsum NS (not the QuACK symmetric GEMM: cutlass_call can't be vmapped, and Muon
         # compute is ~0.2% so the SYRK speedup is irrelevant here).
         ns2d = lambda m: _zeropower_via_newtonschulz_local(m, steps, eps, coefficient_type)
-        return jax.vmap(jax.vmap(ns2d))(x)
+        vmapped = lambda arr: jax.vmap(jax.vmap(ns2d))(arr)
+        mesh = jax.sharding.get_abstract_mesh()
+        if mesh.empty or int(mesh.shape.get("data", 1)) <= 1:
+            return vmapped(x)
+        spec = PartitionSpec(None, "data", None, None)
+        return shard_map(vmapped, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False)(x)
 
     mesh = jax.sharding.get_abstract_mesh()
     if mesh.empty:
