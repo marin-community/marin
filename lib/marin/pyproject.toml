@@ -15,6 +15,7 @@ dependencies = [
     "braceexpand",
     "datasets<5.0.0",
     "draccus>=0.11.6",
+    "duckdb>=1.0.0",
     "fasttext-wheel>=0.9.2",
     "marin-fray",
     "marin-iris",

@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from huggingface_hub import HfFileSystem
+from huggingface_hub import HfFileSystem, hf_hub_download
 from rigging.filesystem import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from zephyr import counters
@@ -33,16 +36,9 @@ _HF_URL_ROOT = StoragePath("hf://datasets") / HF_DATASET_ID
 
 FILING_TYPES = ("10-K", "10-Q", "8-K", "20-F", "S-1", "S-8", "144", "3", "4", "5")
 
-# HF rate-limits aggressively; a small batch reader keeps memory bounded
-# while one big SEC row group (~700 MB decompressed) is in flight.
+# A small batch reader keeps memory bounded while one big SEC row group
+# (~700 MB decompressed) is in flight.
 _ROWS_PER_BATCH = 8
-
-# Lift PyArrow's Thrift decoder caps so page headers carrying multi-MB
-# string statistics (apache/arrow#46404) decode without "Couldn't
-# deserialize thrift" errors. 1 GiB is well above any plausible single
-# page header in SEC's content column (~tens of MB worst case) while
-# still bounded.
-_THRIFT_DECODE_LIMIT_BYTES = 1024 * 1024 * 1024
 
 # Per-file retry policy for HF rate limits and transient network failures.
 _MAX_RETRIES = 20
@@ -62,39 +58,70 @@ class _DownloadResult:
     rows: int
 
 
-def _iter_parquet_batches(hf_path: str, *, revision: str = HF_REVISION) -> Iterator[pa.RecordBatch]:
-    """Yield record batches from one revision-pinned SEC-EDGAR shard."""
-    with StoragePath(hf_path).open("rb", revision=revision) as source:
-        # SEC's multi-MB content values can produce page headers above PyArrow's
-        # default Thrift limits. See https://github.com/marin-community/marin/issues/5334.
-        parquet_file = pq.ParquetFile(
-            source,
-            thrift_string_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
-            thrift_container_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
+def _path_in_repo(hf_path: str) -> str:
+    """Return a shard URL's in-repo path (e.g. ``10-K/<uuid>-<n>.parquet``)."""
+    return str(StoragePath(hf_path).relative_to(_HF_URL_ROOT))
+
+
+@contextmanager
+def _fetch_shard(hf_path: str, *, revision: str = HF_REVISION) -> Iterator[str]:
+    """Download one shard to a local temp file and yield its path.
+
+    DuckDB (the reader in :func:`_iter_parquet_batches`) needs a local file, and
+    ``hf_hub_download`` provides one with a resumable, integrity-checked,
+    revision-pinned transfer.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        yield hf_hub_download(
+            repo_id=HF_DATASET_ID,
+            filename=_path_in_repo(hf_path),
+            revision=revision,
+            repo_type="dataset",
+            local_dir=tmp_dir,
         )
-        yield from parquet_file.iter_batches(batch_size=_ROWS_PER_BATCH)
+
+
+def _iter_parquet_batches(local_path: str) -> Iterator[pa.RecordBatch]:
+    """Yield record batches from a locally-downloaded SEC-EDGAR shard.
+
+    Read with DuckDB rather than PyArrow. SEC's multi-MB ``content`` values
+    produce parquet page-header statistics that PyArrow's Thrift decoder cannot
+    deserialize -- ``Couldn't deserialize thrift: No more data to read``
+    (apache/arrow#46404) -- even with raised decoder limits, while DuckDB reads
+    them without issue. The re-encode in :func:`_download_once` then emits
+    pyarrow-readable shards for downstream normalize.
+    """
+    connection = duckdb.connect()
+    try:
+        reader = connection.execute("SELECT * FROM read_parquet($shard)", {"shard": local_path}).to_arrow_reader(
+            _ROWS_PER_BATCH
+        )
+        yield from reader
+    finally:
+        connection.close()
 
 
 def _download_once(task: _DownloadTask) -> _DownloadResult:
     ensure_parent_dir(task.destination_path)
     count = 0
-    batches = _iter_parquet_batches(task.hf_path)
-    first = next(batches, None)
-    if first is None:
-        counters.pipeline.update_counter("sec_edgar/empty_input", 1)
-        return _DownloadResult(hf_path=task.hf_path, destination_path=task.destination_path, rows=0)
-    with atomic_rename(task.destination_path) as temporary_path:
-        # Route the write through zephyr's sink so the parquet stream reaches a
-        # pyarrow filesystem carrying the S3 endpoint's virtual-host addressing.
-        # A bare s3:// string builds a default path-style client, which CoreWeave
-        # object storage rejects on multipart upload (PathStyleRequestNotAllowed).
-        with parquet_sink(temporary_path) as (where_fd, native_fs):
-            with pq.ParquetWriter(where_fd, first.schema, filesystem=native_fs) as writer:
-                writer.write_batch(first)
-                count += first.num_rows
-                for batch in batches:
-                    writer.write_batch(batch)
-                    count += batch.num_rows
+    with _fetch_shard(task.hf_path) as local_shard:
+        batches = _iter_parquet_batches(local_shard)
+        first = next(batches, None)
+        if first is None:
+            counters.pipeline.update_counter("sec_edgar/empty_input", 1)
+            return _DownloadResult(hf_path=task.hf_path, destination_path=task.destination_path, rows=0)
+        with atomic_rename(task.destination_path) as temporary_path:
+            # Route the write through zephyr's sink so the parquet stream reaches a
+            # pyarrow filesystem carrying the S3 endpoint's virtual-host addressing.
+            # A bare s3:// string builds a default path-style client, which CoreWeave
+            # object storage rejects on multipart upload (PathStyleRequestNotAllowed).
+            with parquet_sink(temporary_path) as (where_fd, native_fs):
+                with pq.ParquetWriter(where_fd, first.schema, filesystem=native_fs) as writer:
+                    writer.write_batch(first)
+                    count += first.num_rows
+                    for batch in batches:
+                        writer.write_batch(batch)
+                        count += batch.num_rows
     counters.pipeline.update_counter("sec_edgar/rows_downloaded", count)
     return _DownloadResult(hf_path=task.hf_path, destination_path=task.destination_path, rows=count)
 
@@ -119,7 +146,7 @@ def _list_hf_parquets() -> list[str]:
             # glob(..., revision=...) embeds the pin in the repo segment
             # (``datasets/<repo>@<rev>/...``); resolve_path recovers the clean
             # in-repo path so the emitted hf:// URL stays revision-free (the pin
-            # is reapplied at open time in _iter_parquet_batches).
+            # is reapplied when the shard is fetched in _fetch_shard).
             relative_path = filesystem.resolve_path(parquet_path).path_in_repo
             paths.append(str(_HF_URL_ROOT / relative_path))
     paths.sort()
@@ -149,7 +176,9 @@ def download_sec_edgar(output_path: str) -> None:
             skip_existing=True,
         )
     )
-    context = ZephyrContext(name="download-sec-edgar", resources=ResourceConfig(cpu=1, ram="16g"))
+    # disk headroom: each shard is now staged to a local temp file for the DuckDB
+    # read + re-encode, so a worker holds one full shard on disk at a time.
+    context = ZephyrContext(name="download-sec-edgar", resources=ResourceConfig(cpu=1, ram="16g", disk="10g"))
     context.execute(pipeline)
 
     write_provenance_json(

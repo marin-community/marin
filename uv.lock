@@ -4133,6 +4133,7 @@ dependencies = [
     { name = "braceexpand" },
     { name = "datasets" },
     { name = "draccus" },
+    { name = "duckdb" },
     { name = "fasttext-wheel" },
     { name = "fsspec" },
     { name = "gcsfs" },
@@ -4294,6 +4295,7 @@ requires-dist = [
     { name = "braceexpand" },
     { name = "datasets", specifier = "<5.0.0" },
     { name = "draccus", specifier = ">=0.11.6" },
+    { name = "duckdb", specifier = ">=1.0.0" },
     { name = "faiss-cpu", marker = "extra == 'datakit'" },
     { name = "fasttext-wheel", specifier = ">=0.9.2" },
     { name = "flash-attn-4", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.0.0b16,<4.1" },
@@ -10945,7 +10947,7 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev1465+gafb267194.tpu"
+version = "1+tpu"
 source = { git = "https://github.com/marin-community/vllm.git?rev=afb26719464d5957e695bde478ae93a160b11d14#afb26719464d5957e695bde478ae93a160b11d14" }
 dependencies = [
     { name = "aiohttp" },
