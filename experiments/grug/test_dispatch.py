@@ -70,4 +70,4 @@ def test_dispatch_with_nvidia_jax_image_preserves_container_jax(monkeypatch) -> 
     assert "nvidia_cutlass_dsl_libs_base-*.dist-info" in script
     assert 'assert jax.__file__.startswith("/opt/jax/")' in script
     assert 'assert jaxlib.__file__.startswith("/opt/jaxlibs/")' in script
-    assert 'assert importlib.util.find_spec("torch") is None' in script
+    assert 'test ! -e "$IRIS_VENV/lib/python3.12/site-packages/torch/__init__.py"' in script
