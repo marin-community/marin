@@ -47,6 +47,10 @@ class CloudSqlPostgresArgs:
     tier: str = "db-g1-small"
     # Initial data-disk size in GB; the instance autoresizes upward from here under pressure.
     disk_size: int = 10
+    # Adoption mode: stamp import_=<live id> on the instance, databases, and secrets so
+    # `pulumi preview` shows the real adoption diff against live resources instead of planning
+    # creates. Set via `marin-iac:import` (one-shot; see infra/pulumi/README.md).
+    adopt: bool = False
 
 
 class CloudSqlPostgres(pulumi.ComponentResource):
@@ -70,6 +74,9 @@ class CloudSqlPostgres(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:gcp:CloudSqlPostgres", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
+
+        def adopt_opts(import_id: str) -> pulumi.ResourceOptions:
+            return pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=import_id if args.adopt else None))
 
         instance = gcp.sql.DatabaseInstance(
             "instance",
@@ -103,7 +110,7 @@ class CloudSqlPostgres(pulumi.ComponentResource):
                     )
                 ],
             ),
-            opts=child,
+            opts=adopt_opts(f"projects/{args.project}/instances/{args.instance_name}"),
         )
 
         for database in args.databases:
@@ -112,7 +119,7 @@ class CloudSqlPostgres(pulumi.ComponentResource):
                 name=database,
                 instance=instance.name,
                 project=args.project,
-                opts=child,
+                opts=adopt_opts(f"projects/{args.project}/instances/{args.instance_name}/databases/{database}"),
             )
 
         for secret in args.password_secrets:
@@ -123,7 +130,7 @@ class CloudSqlPostgres(pulumi.ComponentResource):
                 replication=gcp.secretmanager.SecretReplicationArgs(
                     auto=gcp.secretmanager.SecretReplicationAutoArgs(),
                 ),
-                opts=child,
+                opts=adopt_opts(f"projects/{args.project}/secrets/{secret}"),
             )
 
         self.connection_name = instance.connection_name

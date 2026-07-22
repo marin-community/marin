@@ -1,0 +1,13 @@
+name: marin-context
+runtime:
+  name: python
+  # Pin the shared repo venv (which has the `iac` helper package and the Pulumi GCP/Docker
+  # providers via marin-iac[deploy]). Without this, Pulumi's Auto toolchain would build an
+  # isolated venv with no Pulumi SDK.
+  options:
+    virtualenv: ../../.venv
+description: Shared agent-context Cloud SQL instance (marinmirror corpus + agent work log) and its sync job.
+# The state backend is selected by the operator/CI environment and shared with infra/pulumi
+# (see README.md):
+#   pulumi login gs://marin-iac-state
+# Pulumi.marin-context.yaml records the production stack's shared GCP KMS provider.
