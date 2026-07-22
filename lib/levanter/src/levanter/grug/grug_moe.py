@@ -126,6 +126,8 @@ class MoEExpertMlp(eqx.Module):
         *,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
+        w13_pre0: Float[Array, "per D I2"] | None = None,
+        w2_pre0: Float[Array, "per I D"] | None = None,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
         if self.w_gate_up is not None:
             w_gate_up = self.w_gate_up
@@ -153,6 +155,8 @@ class MoEExpertMlp(eqx.Module):
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            w13_pre0=w13_pre0,
+            w2_pre0=w2_pre0,
         )
 
 
@@ -169,6 +173,8 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    w13_pre0: Float[Array, "per D I2"] | None = None,
+    w2_pre0: Float[Array, "per I D"] | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -293,6 +299,8 @@ def moe_mlp(
             num_experts=num_experts,
             mesh=mesh,
             chunks=chunks,
+            w13_pre0=w13_pre0,
+            w2_pre0=w2_pre0,
         )
         if report_capacity_overflow:
             return out, dropped
@@ -349,6 +357,8 @@ def _moe_mlp_chunked_no_ep(
     num_experts: int,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     chunks: int,
+    w13_pre0: Float[Array, "per D I2"] | None = None,
+    w2_pre0: Float[Array, "per I D"] | None = None,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
     """No-EP chunked sonic_cute path (gate: ``SCALE_MOE_EXPERT_CHUNKS`` > 1).
 
@@ -394,15 +404,15 @@ def _moe_mlp_chunked_no_ep(
         data_axis_name="data",
     )
 
-    # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's expert weights to replicated OUTSIDE the shard_map, so
-    # that all-gather is gated only by the (step-start-ready) weights and can overlap attention -- vs
-    # the in-region gather, which is pinned to the shard_map's x_flat input and can't start until
-    # attention finishes. Chunks 1+ still gather inside the region. Costs holding chunk-0 replicated.
-    if chunk_dim == "expert" and os.environ.get("SCALE_MOE_HOIST_CHUNK0") == "1":
-        per = num_experts // chunks
+    # SCALE_MOE_HOIST_CHUNK0: chunk-0's expert weights are resharded to replicated in the model Block
+    # BEFORE attention (see model.Block) and threaded in here, so that all-gather is emitted ahead of
+    # attention (operand-gated on the step-start-ready weights) and XLA can overlap it -- vs the
+    # in-region gather, pinned to the shard_map's x_flat input, which can't start until attention ends.
+    # Chunks 1+ still gather inside the region. Costs holding chunk-0 replicated across attention.
+    if chunk_dim == "expert" and w13_pre0 is not None:
         replicated3 = P(None, None, None)
-        w13_pre0 = _reshard_for_shard_map(w_up_gate[:per], mesh, replicated3)
-        w2_pre0 = _reshard_for_shard_map(w_down[:per], mesh, replicated3)
+        w13_pre0 = _reshard_for_shard_map(w13_pre0, mesh, replicated3)
+        w2_pre0 = _reshard_for_shard_map(w2_pre0, mesh, replicated3)
         shard_fn = shard_map(
             shard_local,
             mesh=mesh,
