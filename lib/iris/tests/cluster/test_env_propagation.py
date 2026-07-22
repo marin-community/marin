@@ -18,6 +18,7 @@ from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.diagnostics.metadata import DiagnosticJobMetadata, DiagnosticWorkloadKind, metadata_from_environment
 
 
 def dummy_entrypoint():
@@ -120,6 +121,23 @@ def test_no_env_inheritance_without_parent_context(capturing_client):
     client.submit(entrypoint, "no-parent-test", resources)
 
     assert stub.captured_env == {}
+
+
+def test_submit_persists_diagnostic_metadata_in_explicit_environment(capturing_client):
+    client, stub = capturing_client
+    metadata = DiagnosticJobMetadata(
+        workload_kind=DiagnosticWorkloadKind.RL,
+        artifact_uri="s3://marin-us-east-02a/rl/run-1",
+    )
+
+    client.submit(
+        Entrypoint.from_callable(dummy_entrypoint),
+        "diagnostic-metadata",
+        ResourceSpec(cpu=1, memory="1g"),
+        diagnostic_metadata=metadata,
+    )
+
+    assert metadata_from_environment(stub.captured_env) == metadata
 
 
 def test_child_job_inherits_parent_constraints(capturing_client, parent_context):

@@ -462,6 +462,16 @@ class StorageConfig(_Config):
     remote_state_dir: str = ""  # remote URI for checkpoints + worker profiles
 
 
+class DiagnosticsConfig(_Config):
+    """Remote evidence storage for client-side job diagnostics.
+
+    An empty value disables automatic evidence-location construction. Workloads
+    still carry their own typed artifact URI in diagnostic metadata.
+    """
+
+    evidence_root: str = ""
+
+
 class GcpControllerConfig(_Config):
     zone: str = ""
     machine_type: str = ""  # default: "n2-standard-4"
@@ -755,6 +765,7 @@ class IrisClusterConfig(_OneofConfig):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
     controller: ControllerVmConfig = Field(default_factory=ControllerVmConfig)
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
     auth: AuthConfig | None = None

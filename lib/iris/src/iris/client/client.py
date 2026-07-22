@@ -58,6 +58,7 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
+from iris.diagnostics.metadata import DiagnosticJobMetadata, attach_diagnostic_metadata
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
@@ -629,6 +630,7 @@ class IrisClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
+        diagnostic_metadata: DiagnosticJobMetadata | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -658,6 +660,8 @@ class IrisClient:
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
                 admin role at submission when auth is enabled.
+            diagnostic_metadata: Typed workload metadata persisted with the job's
+                explicit environment for portable diagnostic tooling.
 
         Returns:
             Job handle for the submitted job
@@ -744,6 +748,9 @@ class IrisClient:
         # attribute. Stripping here keeps the controller's matching paths unaware of it.
         if constraints:
             constraints = [c for c in constraints if not is_any_region_marker(c)]
+
+        if diagnostic_metadata is not None:
+            environment = attach_diagnostic_metadata(environment, diagnostic_metadata)
 
         # Convert to wire format
         resources_proto = resources.to_proto()
