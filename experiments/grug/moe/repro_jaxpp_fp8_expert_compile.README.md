@@ -188,6 +188,43 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
   '
 ```
 
+### Observed BF16 isolation result
+
+At commit `c1b99d33be`, the BF16 JaxPP command above failed before the FP8
+comparison could run. Job
+`/dlwh/jaxpp-full-block-dps8-bf16-20260722-230118` localized the full
+loss/backward task, then rank 1 exited `139` after 180.2 seconds in the Cutlass
+DSL MLIR type path:
+
+```text
+cutlass/_mlir/dialects/arith.py:44 in _is_float_type
+cutlass/_mlir/extras/types.py:67
+cutlass/base_dsl/typing.py:1594 in from_mlir_type
+Segmentation fault (exit 139)
+```
+
+The isolating control repeats the BF16 command with a fresh job name and only
+one reproducer argument changed:
+
+```text
+--runtime jaxpp
+```
+
+becomes:
+
+```text
+--runtime distributed_direct
+```
+
+Control job `/dlwh/full-block-dps8-bf16-direct-20260722-230952` succeeded on
+both H100x8 tasks with exits `0`; task durations were 100.63 and 167.43
+seconds. It had no Cutlass DSL crash, OOM, watchdog termination, or setup
+failure. This makes JaxPP task localization plus the CuTe FA4 full-block graph
+sufficient to trigger the failure; CuTe FA4 in the equivalent
+distributed-direct computation is not sufficient. Marin bug
+[#7529](https://github.com/marin-community/marin/issues/7529) contains the
+upstream-ready report. No NVIDIA issue has been filed.
+
 Optimizer state, Sonic materialization, incoming/outgoing pipeline transfers,
 gradient accumulation across stages, and the outer 1F1B scheduler remain
 excluded. The shared expert is not inseparable from `Block`; it is deliberately
