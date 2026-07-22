@@ -287,8 +287,8 @@ def moe_mlp(
             return out, dropped
         return out
 
-    chunks = int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
-    if chunks > 1 and resolved_implementation == "sonic_cute":
+    chunk_sizes = _resolve_expert_chunk_sizes(num_experts)
+    if chunk_sizes is not None and resolved_implementation == "sonic_cute":
         out, dropped = _moe_mlp_chunked_no_ep(
             x,
             selected_experts,
@@ -298,7 +298,7 @@ def moe_mlp(
             activation_fn=activation_fn,
             num_experts=num_experts,
             mesh=mesh,
-            chunks=chunks,
+            chunk_sizes=chunk_sizes,
             w13_pre0=w13_pre0,
             w2_pre0=w2_pre0,
         )
@@ -346,6 +346,27 @@ def moe_mlp(
     return out
 
 
+def _resolve_expert_chunk_sizes(num_experts: int) -> tuple[int, ...] | None:
+    """Static expert-chunk sizes for the no-EP chunked path, or ``None`` when unchunked.
+
+    ``SCALE_MOE_CHUNK_SIZES`` overrides with an explicit comma-separated list (e.g. ``"16,16,96"``
+    for a ramp of two small gathers then one large); it must sum to ``num_experts``. Otherwise
+    ``SCALE_MOE_EXPERT_CHUNKS`` gives that many equal chunks (``None`` for 1, i.e. unchunked).
+    """
+    sizes_env = os.environ.get("SCALE_MOE_CHUNK_SIZES")
+    if sizes_env:
+        sizes = tuple(int(s) for s in sizes_env.split(","))
+        if sum(sizes) != num_experts:
+            raise ValueError(f"SCALE_MOE_CHUNK_SIZES={sizes} must sum to num_experts={num_experts}")
+        return sizes if len(sizes) > 1 else None
+    chunks = int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
+    if chunks <= 1:
+        return None
+    if num_experts % chunks != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by SCALE_MOE_EXPERT_CHUNKS={chunks}")
+    return (num_experts // chunks,) * chunks
+
+
 def _moe_mlp_chunked_no_ep(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
@@ -356,7 +377,7 @@ def _moe_mlp_chunked_no_ep(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
-    chunks: int,
+    chunk_sizes: tuple[int, ...],
     w13_pre0: Float[Array, "per D I2"] | None = None,
     w2_pre0: Float[Array, "per I D"] | None = None,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
@@ -379,9 +400,14 @@ def _moe_mlp_chunked_no_ep(
 
     chunk_dim = os.environ.get("SCALE_MOE_CHUNK_DIM", "expert")
     if chunk_dim == "expert":
-        local_fn = _moe_mlp_local_sonic_cute_chunked
+        local_fn = partial(_moe_mlp_local_sonic_cute_chunked, chunk_sizes=chunk_sizes)
     elif chunk_dim == "intermediate":
-        local_fn = _moe_mlp_local_sonic_cute_intermediate_chunked
+        if len(set(chunk_sizes)) != 1:
+            raise ValueError(
+                "SCALE_MOE_CHUNK_DIM=intermediate partitions the intermediate dim uniformly; it does "
+                "not support non-uniform SCALE_MOE_CHUNK_SIZES. Use SCALE_MOE_EXPERT_CHUNKS."
+            )
+        local_fn = partial(_moe_mlp_local_sonic_cute_intermediate_chunked, chunks=len(chunk_sizes))
     else:
         raise ValueError(f"SCALE_MOE_CHUNK_DIM must be 'expert' or 'intermediate', got {chunk_dim!r}")
 
@@ -400,7 +426,6 @@ def _moe_mlp_chunked_no_ep(
         local_fn,
         activation_fn=activation_fn,
         num_experts=num_experts,
-        chunks=chunks,
         data_axis_name="data",
     )
 

@@ -427,7 +427,11 @@ class Block(eqx.Module):
         # MoE, whose chunked path then skips chunk-0's in-region gather. Chunks 1+ still gather in-region.
         w13_pre0 = w2_pre0 = None
         if os.environ.get("SCALE_MOE_HOIST_CHUNK0") == "1":
-            per = self.mlp.cfg.num_experts // int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
+            sizes_env = os.environ.get("SCALE_MOE_CHUNK_SIZES")
+            if sizes_env:
+                per = int(sizes_env.split(",")[0])
+            else:
+                per = self.mlp.cfg.num_experts // int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
             em = self.mlp.expert_mlp
             w_up_gate = em.w_gate_up if em.w_gate_up is not None else jnp.concatenate([em.w_gate, em.w_up], axis=-1)
             w13_pre0 = reshard(w_up_gate[:per], P(None, None, None))
