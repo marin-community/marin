@@ -124,6 +124,10 @@ class GrugModelConfig:
     sliding_window: int = 0
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
+    # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
+    # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
+    # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
+    scan_unroll: int = 1
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -513,7 +517,7 @@ class Transformer(eqx.Module):
         def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], None]:
             return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask), None
 
-        hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked)
+        hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll)
         return self.final_norm(hidden)
 
     @named_call
