@@ -38,6 +38,14 @@ def test_dispatch_preserves_default_environment(monkeypatch) -> None:
     assert request.environment.setup_scripts is None
 
 
+def test_dispatch_forwards_jax_allocator(monkeypatch) -> None:
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "cuda_async")
+
+    request = _capture_request(monkeypatch, ResourceConfig.with_gpu("GB200", count=4))
+
+    assert request.environment.env_vars["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+
+
 def test_dispatch_with_nvidia_jax_image_preserves_container_jax(monkeypatch) -> None:
     request = _capture_request(
         monkeypatch,

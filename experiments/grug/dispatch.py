@@ -22,14 +22,11 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "XLA_PYTHON_CLIENT_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 _NVIDIA_JAX_IMAGE_PREFIX = "nvcr.io/nvidia/jax:"
 _NVIDIA_JAX_UV_VERSION = "0.11.21"
-_CPU_TORCH_WHEEL = (
-    "https://download.pytorch.org/whl/cpu/"
-    "torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
-)
+_CPU_TORCH_WHEEL = "https://download.pytorch.org/whl/cpu/" "torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
 _NVIDIA_JAX_PROTECTED_PACKAGES = (
     "jax",
     "jaxlib",
