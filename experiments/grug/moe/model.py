@@ -477,6 +477,10 @@ class Block(eqx.Module):
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
         x = x + self.attn(attn_in, mask)
+        if os.environ.get("SCALE_ATTN_ONLY") == "1":
+            # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
+            # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
+            return x
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
