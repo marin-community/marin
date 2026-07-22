@@ -168,11 +168,7 @@ def get_global_labels() -> dict[str, str]:
 #: (the default Prometheus process/platform collectors).
 _KNOWN_SOURCES = frozenset({"levanter", "zephyr", "iris"})
 
-#: The global labels that become typed columns on a forwarded row. Read from the
-#: process globals only and never merged into a row's label map, so a metric's
-#: own label of either name keeps both its key and its value (see
-#: ``scrape_metrics``). The ``MetricIdentity`` fields are columns too, but they
-#: never travel as labels, so they need no exclusion here.
+#: Global labels stored as row columns instead of in the label map.
 _GLOBAL_LABEL_COLUMNS = frozenset({"source", "run"})
 
 #: Seconds between registry snapshots. A durable sink typically seals at most one
@@ -250,14 +246,9 @@ def _source_from_name(name: str) -> str:
 def scrape_metrics(identity: MetricIdentity, ts: datetime) -> list[TelltaleMetric]:
     """Snapshot the registry into rows, stamping ``identity`` onto each. Pure; no I/O.
 
-    One rule settles every name collision: the producer owns the columns, and the
-    metric owns its label map. ``source`` and ``run`` come from the process-global
-    labels and the job ``identity`` is set on the row directly, so a metric's own
-    labels can never spoof either. The remaining globals are merged into ``labels``
-    only as defaults for keys the metric does not use — a metric that labels its
-    series ``source=local_cache_hit`` keeps that, and stays distinguishable from its
-    siblings. Prometheus ``_created`` series (a counter's start time, not a metric)
-    are dropped.
+    Process-global ``source`` and ``run`` labels populate row columns. Other global
+    labels fill missing keys in each metric's label map; metric labels take
+    precedence. Prometheus ``_created`` series are dropped.
     """
     global_labels = get_global_labels()
     global_source = global_labels.get("source")
