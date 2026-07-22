@@ -80,9 +80,9 @@ trials but makes small-batch runs lag: bs64 on 32 chips runs at ~¼ the rate of 
 for the same tokens. If per-batch signal is needed sooner (operator-requested 2026-07-18), **upsize
 the lagging small-batch runs to their max-feasible slice** (bs64: 32→64 chips) as chips free from
 completions, BEFORE launching new grid points. Mechanism = a same-region slice change (v6e-32→v6e-64,
-v5litepod-32→v5litepod-64): stop the job, resubmit the same `--job-name`-with-new-slice + same
-`(EPOCHS,LR,WD,BATCH_SIZE,REGION)` → the run_id is unchanged so it **resumes from checkpoint** (no
-restart-from-0). Prioritize the most-progressed runs (soonest objective). Doing this off *freed*
+v5litepod-32→v5litepod-64): stop the old job and submit a NEW unique job (new `-a<n>` attempt,
+new slice) with the same `(EPOCHS,LR,WD,BATCH_SIZE,REGION)` → the run_id is unchanged so it
+**resumes from checkpoint** (no restart-from-0). Prioritize the most-progressed runs (soonest objective). Doing this off *freed*
 chips keeps ≤ `max_inflight_chips` and avoids a sudden reallocation. **Since 2026-07-19 tensor
 parallelism removes the 64-chip ceiling for bs64** (it can use v6e-128/256 etc. via TP), so this same
 upsize mechanism now pushes small batches onto even larger slices — mind the chip budget and TP
@@ -95,7 +95,7 @@ set -a; source ~/marin.env; set +a
 export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"
 ```
 Submit: `uv run iris --cluster marin job run --user "$USERNAME" --no-wait --region <REGION>
---memory=1GB --job-name <deterministic> -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY
+--memory=1GB --job-name <unique: see convention below> -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY
 "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" -e EPOCHS ..
 -e LR .. -e WD .. -e BATCH_SIZE .. -e TPU .. -e REGION .. -- python -m
 experiments.protein.exp117_sweep`. Ambient `HUGGING_FACE_HUB_TOKEN` is STALE — always forward
@@ -112,6 +112,15 @@ marin's `step_runner` on the region-keyed checkpoint (`gs://marin-<region>/{run_
 unique name still resumes the same checkpoint. **INVARIANT — at most ONE active dispatch per
 `(point, region)`:** stop and confirm the current one terminal before submitting another, or two jobs
 write the same checkpoint and corrupt it.
+
+**Every change to a trial is a NEW iris job + a stop of the old one — iris jobs are never edited,
+reused, or "re-run" in place.** This applies uniformly to *all* change types: slice change,
+same-target restart, within-region relocation, cross-region migration, or any resubmit whatsoever.
+Each one = (1) `iris job stop` the current job and confirm it terminal, then (2) submit a fresh job
+with a new unique name (bump the `-a<n>` attempt token). The ONLY thing that differs across the cases
+is whether the checkpoint carries over: same-region (any slice) → resumes the region checkpoint;
+cross-region → fresh run from step 0. "Same-target restart" and "resume the same run" refer to the
+region-keyed checkpoint being reused, NOT the iris job — the iris job is always new.
 
 ## One pass
 1. **Reconcile.** For each active dispatch: `iris job list --prefix /eczech/<job>` for state; read
@@ -202,10 +211,11 @@ now) — including a SIGSEGV, which on our multi-host slices is almost always a 
 cosibling, not a code fault.
 - **`startup_relocation_timeout` 3h** — never appeared in W&B → same-region **relocation** (new slice).
 - **`same_target_restart_timeout` 6h** — W&B-registered, iris still `running`, no progress → **restart
-  in place on the SAME target** (stop + resubmit; resumes checkpoint; keeps logical trial, regional
-  run, dispatch_id, checkpoint, and chip charge; new iris submission attempt; releases + may requeue
-  the slice). Cheapest recourse and the FIRST thing to try for an ambiguous "running but stalled"
-  run. **Wait the full 6h** — most stalls self-recover as preemptions, and restarting forces a
+  on the SAME target**: `iris job stop` the old job, then submit a NEW unique job (bump `-a<n>`) on the
+  same slice/region. Resumes the region checkpoint; keeps the logical trial, regional run, dispatch_id,
+  checkpoint, and chip charge (the DB `submission_attempt` increments on the same dispatch, but the iris
+  job is new); releases + may requeue the slice. Cheapest recourse and the FIRST thing to try for an
+  ambiguous "running but stalled" run. **Wait the full 6h** — most stalls self-recover as preemptions, and restarting forces a
   re-queue (hours). A restart resets only its submission's running-stall window, NOT the regional
   clock — so it can't defer relocation forever.
 - **`same_region_relocation_timeout` 24h** — still stalled → **move to another slice, same region**.
