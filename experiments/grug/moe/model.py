@@ -10,6 +10,7 @@ full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
 """
 
 import dataclasses
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -354,7 +355,12 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        w13_pre0: jax.Array | None = None,
+        w2_pre0: jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
@@ -372,6 +378,8 @@ class MoEMLP(eqx.Module):
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
+            w13_pre0=w13_pre0,
+            w2_pre0=w2_pre0,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         return reshard(routed, _batch_spec())
@@ -413,6 +421,18 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
+        # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
+        # (it will not hoist a collective backward across the whole attention block). Threaded into the
+        # MoE, whose chunked path then skips chunk-0's in-region gather. Chunks 1+ still gather in-region.
+        w13_pre0 = w2_pre0 = None
+        if os.environ.get("SCALE_MOE_HOIST_CHUNK0") == "1":
+            per = self.mlp.cfg.num_experts // int(os.environ.get("SCALE_MOE_EXPERT_CHUNKS", "1"))
+            em = self.mlp.expert_mlp
+            w_up_gate = em.w_gate_up if em.w_gate_up is not None else jnp.concatenate([em.w_gate, em.w_up], axis=-1)
+            w13_pre0 = reshard(w_up_gate[:per], P(None, None, None))
+            w2_pre0 = reshard(em.w_down[:per], P(None, None, None))
+
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
@@ -420,7 +440,7 @@ class Block(eqx.Module):
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
-        mlp_out = self.mlp(mlp_in)
+        mlp_out = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
