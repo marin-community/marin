@@ -2411,3 +2411,20 @@ author: dlwh
   - The strongest remaining omitted compiler-shape delta is dynamic learned routing: router logits, top-k selection, capacity/group-size construction, dispatch ordering, combine weights, and router statistics. Pointwise per-block norms are less likely to explain an 18-minute backend stall and should not be bundled into the next test.
 - Next action:
   - Add an opt-in production QB-routing boundary while keeping attention excluded and retaining `save_moe`, the last-stage loss, and full task result tree. Run a matched BF16/FP8 dps8 gate before adding attention or another structural axis.
+
+### 2026-07-22 15:38 PDT - production learned routing also completes
+- Hypothesis: Dynamic QB routing, top-k selection, assignment sorting/capacity construction, combine weights, and router statistics interacting with `save_moe` and FP8 expert VJPs are sufficient to trigger the stage-3 compile stall.
+- Commit Hash: `e118667915` (`[grug] Add learned routing FP8 compile repro mode`).
+- Config: the completed dps8 next-token/remat shape, replacing fixed balanced assignments with production `MoEMLP`/`MoEExpertMlp`: learned BF16 router parameters with FP32 logits, centered negative QB bias, biased top-(K+1), sigmoid and renormalized top-k combine weights, 1.25-capacity ring dispatch, assignment sorting, QB beta/router statistics, and zero-coefficient router z-loss matching the target launcher. Attention, attention and pre-MoE norms/gates, shared expert, optimizer, and outer scheduler remained excluded.
+- Runs:
+  - BF16 control `/dlwh/jaxpp-routing-dps8-bf16-20260722-221754`.
+  - FP8 candidate `/dlwh/jaxpp-routing-dps8-fp8-20260722-222555`.
+- Results:
+  - Both jobs and all four tasks succeeded with exit `0`, zero failures/preemptions, and no live resources remaining.
+  - BF16 task duration including setup was `96.92s`; FP8 task duration was `122.42s`. Both completed before the in-process 120-second watchdog because dependency setup precedes watchdog installation.
+  - Finelog retrieval repeatedly timed out for these larger logs, so exact per-rank lower and `eval_local` events are unavailable. Structured Iris summaries remained available and are the terminal authority. No watchdog stack, OOM, compiler failure, resubmit, or cluster mutation occurred.
+- Interpretation:
+  - Production learned QB routing, differentiated top-k/sort/capacity, ring dispatch, `save_moe`, FP8 overwrite state, and the complete last-stage loss/output tree still are not sufficient to reproduce the hang.
+  - The remaining major compute graph inside the localized task is the full block attention and normalization path. This is more plausible than the outer optimizer or scheduler because the observed production thread was compiling the localized stage-3 loss-backward task before optimizer execution.
+- Next action:
+  - Add an opt-in production block boundary with attention residual plus attention/pre-MoE RMS and GatedNorm around the learned routed MLP. Retain the target attention backend on H100 and a reference backend for CPU tests; keep optimizer and outer pipeline scheduling excluded.
