@@ -43,8 +43,10 @@ author: dlwh
 ### Active
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
-- `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the best full shape still needs another `9.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, and occupancy scaling reaches `18.2583` at batch8192/m256. EP-local QuACK clears the direct-kernel performance gate but remains blocked on output parity. Next test: isolate that numerical discrepancy before a reduced pipeline gate.
+- `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the best full shape still needs another `9.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, and occupancy scaling reaches `18.2583` at batch8192/m256. Approximate QuACK is finite-step stable but neutral under the reduced pipeline, so it is no longer a scaling candidate.
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
+- `GRUG-JAXPP-013`: Transformer Engine `main` with NCCL EP HT mode is the first credible upstream alternative to Marin's EP8 ring because its JAX integration stages payloads instead of requiring XLA's exportable symmetric output allocation. Evidence: [2026-07-22 10:31 PDT - upstream ragged and NCCL EP review](#2026-07-22-1031-pdt---upstream-ragged-and-nccl-ep-review). Next test: benchmark the non-zero-copy TE path against ring on one H100x8 node before any pipeline integration.
+- `GRUG-JAXPP-014`: The profile's dominant inter-stage SendRecv traffic can be halved without adding a second collective by packing per-token-scaled E4M3 forward activations and E5M2 backward gradients into one `uint8` tensor. Next test: compare the opt-in FP8 wire against unchanged BF16 transfers on the pinned reduced four-stage pipeline, then scale only if the result projects above 20 MFU.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -60,7 +62,7 @@ author: dlwh
 - XLA ragged dot regresses the CuTe FA4 batch512/m16 point from `16.1040` to `8.1438` mean MFU. Pallas-Triton remains the grouped expert GEMM backend.
 - Increasing Pallas-Triton `block_k` from 32 to 64 at eight warps regresses mean MFU from `16.2005` to `16.0189`; halving the kernel's K-loop iterations does not improve the full step.
 - Proper whole-MLP Sonic without EP is operational but reaches only `13.9598` MFU. Staggering once-per-stage materialization regresses the exact target further to `13.8155`; eliminating repeated gather calls does not beat their existing overlap.
-- XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes.
+- XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes. JAX 0.11 keeps symmetric output memory as the implementation, so upgrading JAX alone does not remove this blocker.
 - The first true streamed `ring_ppermute` backend passes CPU output/gradient parity and removes global activation/output tensors, but its H100 smoke is numerically unstable after one finite step and over 1,100x slower on that first timed step because EP8 creates many small native XLA ragged GEMMs and collective permutes.
 - Owner-local bulk-ring combine passes CPU output/gradient parity and removes the 640 MiB global output temporary, but seven owner-directed permutations make even the reduced L8 stage-3 backward graph compile for about 28 minutes without completing. It was stopped without a metric.
 - Expert-axis 4 at e64 reaches every stage's first backward compile but then stalls in accumulation compilation for over 24 minutes; it was stopped after 34m37s with no metric. Doubling local expert state remains operationally intractable.
@@ -2201,3 +2203,35 @@ author: dlwh
   - Retain `ring_quack_approx` as an explicit research backend and the standalone numerical/training evidence, but stop performance scaling on this path.
 - Next action:
   - Check current JAX/NVIDIA ragged-all-to-all support and the in-repo FP8-over-the-wire ring work. Prefer a bounded FP8 ring parity/microbenchmark because the prior zero-copy ragged path is already blocked by RNO2A CUDA VMM permissions and unflagged ragged transport was far below ring.
+
+### 2026-07-22 10:31 PDT - upstream ragged and NCCL EP review
+- Hypothesis: A current upstream JAX or NVIDIA transport may provide variable-count MoE dispatch/combine without the RNO2A exportable-VMM failure or the prior unflagged ragged-all-to-all regression.
+- Commit Hash: research snapshot `f6e9040001` (`[docs] Record reduced QuACK pipeline result`).
+- Sources:
+  - [JAX 0.11.0](https://github.com/jax-ml/jax/releases/tag/jax-v0.11.0) and the OpenXLA changes making [NCCL barrier synchronization](https://github.com/openxla/xla/commit/26072180faecf3a4ee2ad72c55328729a560d050) and [symmetric output memory](https://github.com/openxla/xla/commit/c1fcf2507528eec72374aeb2eddd85d028939cc2) the ragged-all-to-all implementation.
+  - [CUDA virtual memory management](https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__VA.html), which documents the IMEX permission requirement for fabric handles.
+  - [NCCL EP v0.1.0](https://github.com/NVIDIA/nccl/releases/tag/nccl-ep-v0.1.0) and [Transformer Engine JAX NCCL EP integration](https://github.com/NVIDIA/TransformerEngine/pull/3036).
+- Result:
+  - JAX 0.11/OpenXLA does not fix the known RNO2A failure: ragged all-to-all still relies on symmetric/exportable output memory, so the environment's `CUDA_ERROR_NOT_PERMITTED` allocation remains the blocker. A JAX-only upgrade is not a credible next benchmark.
+  - Transformer Engine `main` now exposes NCCL EP HT dispatch/combine through JAX FFI with custom VJPs and sharding rules. Its non-zero-copy path stages payloads and therefore avoids the failed XLA exportable-VMM allocation.
+  - The integration requires one process per GPU, BF16, SM90 or newer, and NCCL 2.30.4 or newer. It is a separate runtime/integration path rather than a drop-in `jax.lax.ragged_all_to_all` improvement.
+- Interpretation:
+  - No released upstream primitive yet has a published end-to-end training win over Marin's EP8 ring at the target shape. Transformer Engine NCCL EP HT is nevertheless the first credible transport candidate that bypasses the established RNO2A blocker.
+- Next action:
+  - First, build a pinned Transformer Engine `main` plus NCCL 2.30.7 environment and benchmark non-zero-copy NCCL EP HT against Marin ring on one H100x8 node at BF16, EP8, d2560, top-k4, and 16,384 local tokens per rank. Sweep `max_num_sms={auto,8,16}` and require at least `10%` lower routed-MLP time with no more than `2%` expert-GEMM regression before integrating it into JaxPP; require at least `5%` matched full-training throughput gain before scaling to the 4x8 target.
+
+### 2026-07-22 10:58 PDT - packed FP8 pipeline-wire implementation
+- Hypothesis: Compressing inter-stage activations and gradients can reduce the profile's dominant SendRecv traffic enough to improve the saturated standard schedule without changing ring EP or adding a second collective.
+- Commit Hash: `143fbb8752` (`[grug] Add FP8 pipeline wire experiment`).
+- Config:
+  - New research-only `explicit_mpmd_pipeline_wire_format="fp8"` mode for explicit-MPMD `std_1f1b` with more than one microbatch; the default remains `bf16`.
+  - Forward activations use per-token current-scale E4M3 and backward `d_hidden` uses E5M2. The FP8 bytes and four FP32 scale bytes per token are packed into one rank-3 `uint8[..., H+4]` tensor, so each edge still issues one JaxPP transfer.
+  - Same-rank edges bypass quantization. Cross-rank `.done()` remains immediately before receiver-side dequantization and the consuming stage task.
+- Validation:
+  - `uv run pytest -q tests/test_grug_moe_pipeline_wire.py`: `8 passed`, covering the byte-level wire shape, exact zero behavior, JIT round trips, and bounded E4M3/E5M2 error.
+  - `uv run pytest -q tests/test_grug_moe_pipeline_wire.py tests/test_grug_moe_input_gradient_first.py`: `12 passed`; the existing split-backward parity suite is unchanged.
+  - Valid and invalid launcher dry runs, shell syntax, Pyrefly, and `./infra/pre-commit.py --changed-files --fix` pass.
+- Interpretation:
+  - The wire payload falls from `2H` BF16 bytes to `H+4` bytes per token, or `50.08%` of baseline at `H=2560`. H100 pack/unpack overhead, MPMD transfer lowering, finite training drift, and end-to-end throughput remain unvalidated.
+- Next action:
+  - Run a paired reduced 4x8-H100 L8/d2560/e64/top-k4/seq4096/b32/m4 explicit `std_1f1b` comparison at the same commit. Scale to L24/b8192/m256 only if the reduced result credibly projects above 20 MFU.
