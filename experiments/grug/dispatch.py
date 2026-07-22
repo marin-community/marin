@@ -67,9 +67,7 @@ _NVIDIA_JAX_PROTECTED_PACKAGES = (
     "nvidia-cusparse-cu12",
     "nvidia-cusparselt-cu12",
     "nvidia-cusparselt-cu13",
-    "nvidia-cutlass-dsl",
     "nvidia-cutlass-dsl-libs-base",
-    "nvidia-cutlass-dsl-libs-cu13",
     "nvidia-nccl-cu12",
     "nvidia-nccl-cu13",
     "nvidia-nvjitlink",
@@ -119,14 +117,24 @@ sha256sum \\
 diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
 test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
+test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_cu13-*.dist-info
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
 "$IRIS_VENV/bin/python" - <<'PY'
+import os
+
+import cutlass
 import jax
 import jaxlib
+from cutlass._mlir._mlir_libs import _cutlass_ir
 
 assert jax.__file__.startswith("/opt/jax/"), jax.__file__
 assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
+venv = os.environ["VIRTUAL_ENV"] + "/"
+assert cutlass.__file__.startswith(venv), cutlass.__file__
+assert _cutlass_ir.__file__.startswith(venv), _cutlass_ir.__file__
 print(f"preserved NGC JAX {{jax.__version__}} from {{jax.__file__}}")
 print(f"preserved NGC JAXLIB {{jaxlib.__version__}} from {{jaxlib.__file__}}")
+print(f"overlaid CUDA-13 CUTLASS DSL {{cutlass.__version__}} from {{cutlass.__file__}}")
 PY
 """
 
