@@ -277,9 +277,20 @@ jobs:
             --max-turns 100
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
 
+      - name: Checkout trusted Claude classifier
+        if: always()
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          path: .trusted-claude-classifier
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/classify-claude
+            scripts/ci/claude_runner.py
+
       - name: Classify Claude result
         if: always()
-        uses: ./.github/actions/classify-claude
+        uses: ./.trusted-claude-classifier/.github/actions/classify-claude
         with:
           outcome: ${{ steps.claude.outcome }}
           execution-file: ${{ steps.claude.outputs.execution_file }}
