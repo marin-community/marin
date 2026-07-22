@@ -20,6 +20,7 @@ to the checkpointer, so a 50000-step run ended with ``step-49000`` (periodic)
 and ``step-49999`` (force-save) — gap 999, off-by-one.
 """
 
+import datetime
 import pathlib
 import tempfile
 
@@ -193,6 +194,38 @@ def test_state_step_zero_saves_when_forced():
         checkpointer.wait_until_finished()
         assert _checkpoint_steps(tmpdir) == [0]
         assert _checkpoint_names(tmpdir) == ["step-0"]
+
+
+def test_forced_final_save_promotes_same_step_temporary_save():
+    """A time-based (temporary) save at the final step must not dedup away the forced save.
+
+    Scenario: no step boundary hits the final step, but ``save_interval`` elapses right
+    before it, writing a temporary checkpoint at step N. The trainer then force-saves at
+    the same N. Only permanent saves arm the dedup guard, so the forced save must still
+    run and promote step-N to a permanent checkpoint — otherwise the run ends with only
+    a temporary artifact, which later cleanup is allowed to delete.
+    """
+    fake_now = datetime.datetime(2026, 1, 1)
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
+        checkpointer = Checkpointer(
+            tmpdir,
+            datetime.timedelta(seconds=10),
+            [CheckpointInterval(every=100)],
+            dt_now_injection=lambda: fake_now,
+        )
+        for state_step in range(1, 8):
+            _on_step_new_semantics(checkpointer, state_step)
+        fake_now += datetime.timedelta(seconds=60)  # save_interval elapses → temporary save at 8
+        _on_step_new_semantics(checkpointer, 8)
+        checkpointer.wait_until_finished()
+        assert _checkpoint_names(tmpdir) == ["step-8"]
+        assert _load_metadata(pathlib.Path(tmpdir) / "step-8")["is_temporary"] is True
+
+        # Mimic Trainer.train()'s final run_hooks(info, force=True) at the same step.
+        _on_step_new_semantics(checkpointer, 8, force=True)
+        checkpointer.wait_until_finished()
+        assert _checkpoint_names(tmpdir) == ["step-8"]
+        assert _load_metadata(pathlib.Path(tmpdir) / "step-8").get("is_temporary", False) is False
 
 
 def test_final_step_naming_matches_count_of_completed_steps():

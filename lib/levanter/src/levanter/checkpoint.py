@@ -559,12 +559,12 @@ class Checkpointer:
                 return  # don't save checkpoint at step 0 unless forced
 
         if step == self._last_save_step:
-            # We've already saved a checkpoint at this step (periodic boundary or earlier
-            # force-save). Skip — re-saving would overwrite an identical artifact, and
+            # We've already saved a PERMANENT checkpoint at this step (periodic boundary or
+            # earlier force-save). Skip — re-saving would overwrite an identical artifact, and
             # the end-of-training force-save is meant to capture the FINAL state, which
             # is already captured if a periodic save just fired at this same step.
-            # `_last_save_step` is None until the first save, so a forced save at step 0
-            # (before anything has been written) is not swallowed here.
+            # `_last_save_step` is None until the first permanent save, so neither a forced
+            # save at step 0 nor one right after a same-step temporary save is swallowed here.
             return
 
         # two reasons we can save: time or step
@@ -734,7 +734,11 @@ class Checkpointer:
             is_temporary=is_temporary,
             debug=self.debug,
         )
-        self._last_save_step = step
+        # Only a permanent save arms the dedup guard: a time-based (temporary) save at the
+        # final step must not swallow the end-of-training forced save, which is the only
+        # thing that promotes that state to a permanent checkpoint.
+        if not is_temporary:
+            self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
