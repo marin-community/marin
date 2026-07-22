@@ -386,14 +386,34 @@ def _moe_mlp_chunked_no_ep(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w13_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w2_spec)
 
+    shard_local = partial(
+        local_fn,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        chunks=chunks,
+        data_axis_name="data",
+    )
+
+    # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's expert weights to replicated OUTSIDE the shard_map, so
+    # that all-gather is gated only by the (step-start-ready) weights and can overlap attention -- vs
+    # the in-region gather, which is pinned to the shard_map's x_flat input and can't start until
+    # attention finishes. Chunks 1+ still gather inside the region. Costs holding chunk-0 replicated.
+    if chunk_dim == "expert" and os.environ.get("SCALE_MOE_HOIST_CHUNK0") == "1":
+        per = num_experts // chunks
+        replicated3 = P(None, None, None)
+        w13_pre0 = _reshard_for_shard_map(w_up_gate[:per], mesh, replicated3)
+        w2_pre0 = _reshard_for_shard_map(w_down[:per], mesh, replicated3)
+        shard_fn = shard_map(
+            shard_local,
+            mesh=mesh,
+            in_specs=(batch_spec, batch_spec, batch_spec, w13_spec, w2_spec, replicated3, replicated3),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        return shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down, w13_pre0, w2_pre0)
+
     shard_fn = shard_map(
-        partial(
-            local_fn,
-            activation_fn=activation_fn,
-            num_experts=num_experts,
-            chunks=chunks,
-            data_axis_name="data",
-        ),
+        shard_local,
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec, w13_spec, w2_spec),
         out_specs=(batch_spec, P()),

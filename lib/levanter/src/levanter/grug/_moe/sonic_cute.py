@@ -111,6 +111,8 @@ def _moe_mlp_local_sonic_cute_chunked(
     combine_weights: Float[Array, "T K"],
     moe_w13_local: Float[Array, "E Hlocal I2"],
     moe_w2_local: Float[Array, "E I Hlocal"],
+    w13_pre0: Float[Array, "per H I2"] | None = None,
+    w2_pre0: Float[Array, "per I H"] | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -160,8 +162,13 @@ def _moe_mlp_local_sonic_cute_chunked(
         lo = c * per
         hi = lo + per
         with jax.named_scope("gather_chunk"):
-            w13_chunk = jax.lax.all_gather(moe_w13_local[lo:hi], data_axis_name, axis=1, tiled=True)
-            w2_chunk = jax.lax.all_gather(moe_w2_local[lo:hi], data_axis_name, axis=2, tiled=True)
+            if c == 0 and w13_pre0 is not None:
+                # Chunk 0 was gathered OUTSIDE the shard_map (operand-gated on the weights only, so it
+                # can overlap attention instead of being pinned to the region's x_flat input).
+                w13_chunk, w2_chunk = w13_pre0, w2_pre0
+            else:
+                w13_chunk = jax.lax.all_gather(moe_w13_local[lo:hi], data_axis_name, axis=1, tiled=True)
+                w2_chunk = jax.lax.all_gather(moe_w2_local[lo:hi], data_axis_name, axis=2, tiled=True)
         w13_il = _interleave_gate_up(w13_chunk, moe_dim)
 
         start = cu[lo]
