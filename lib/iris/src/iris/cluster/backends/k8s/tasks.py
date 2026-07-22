@@ -72,6 +72,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    POD_ATTEMPT_UID_LABEL,
     K8sResource,
     KubectlError,
     parse_k8s_quantity,
@@ -825,6 +826,11 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
+    # attempt_uid distinguishes this attempt's pod from a stale one a previous job
+    # left at the same (task_hash, attempt_id) name; see CloudK8sService._apply_pod.
+    # Omitted when unset (older controllers, tests) — apply then stays create-if-absent.
+    if run_req.attempt_uid:
+        labels[POD_ATTEMPT_UID_LABEL] = run_req.attempt_uid
     if managed_label:
         labels[managed_label] = "true"
     metadata: dict = {

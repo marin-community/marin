@@ -135,31 +135,55 @@ def test_redrive_does_not_recreate_running_pod(provider, k8s):
     assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
 
 
-def test_resubmit_replaces_stale_terminal_pod(provider, k8s):
-    """A resubmit inheriting a previous run's Failed pod recreates a fresh pod.
+def test_resubmit_replaces_stale_pod_from_prior_attempt(provider, k8s):
+    """A resubmit inheriting a previous run's pod recreates a fresh pod.
 
     Pod names are deterministic in (task_hash, attempt_id) and attempt_id resets
     to 0 on resubmit, so a fresh attempt collides with the prior run's terminal
-    pod. Adopting it reported the dead attempt's verdict against the fresh one.
-    The apply must delete the stale pod and fail as WORKER_FAILED (retryable),
-    then the next tick recreates a fresh pod.
+    pod. The stale pod carries the old attempt_uid; the resubmit's differs, so the
+    apply deletes it and fails as WORKER_FAILED (retryable), then the next tick
+    recreates a fresh pod.
     """
-    req = make_run_req("/test-job/0")
     pod_name = _pod_name(JobName.from_wire("/test-job/0"), 0)
+    old = make_run_req("/test-job/0", attempt_uid="olduid0000000000")
+    new = make_run_req("/test-job/0", attempt_uid="newuid1111111111")
 
-    provider.sync(make_batch(tasks_to_run=[req]))
+    provider.sync(make_batch(tasks_to_run=[old]))
     k8s.transition_pod(pod_name, "Failed", exit_code=137, reason="OOMKilled")
 
-    # Resubmit: the same attempt-0 name now collides with the stale Failed pod.
-    result = provider.sync(make_batch(tasks_to_run=[req]))
+    # Resubmit: same attempt-0 name, new uid — the stale Failed pod is not ours.
+    result = provider.sync(make_batch(tasks_to_run=[new]))
     assert [u.new_state for u in result] == [job_pb2.TASK_STATE_WORKER_FAILED]
     assert k8s.get_json(K8sResource.PODS, pod_name) is None
 
     # Retry recreates a fresh pod that no longer carries the Failed verdict.
-    provider.sync(make_batch(tasks_to_run=[req]))
+    provider.sync(make_batch(tasks_to_run=[new]))
     pod_after = k8s.get_json(K8sResource.PODS, pod_name)
     assert pod_after is not None
     assert pod_after.get("status", {}).get("phase") != "Failed"
+
+
+def test_redrive_keeps_own_fast_finished_pod(provider, k8s):
+    """A redrive over the same attempt's just-finished pod keeps the verdict.
+
+    A task stays ASSIGNED (redriven in tasks_to_run) and also sits in
+    running_tasks until poll observes it, so an attempt that finishes before the
+    next scan is re-applied with its OWN attempt_uid. That terminal pod must be
+    left in place — deleting it would destroy a real result and misreport it as
+    WORKER_FAILED infra loss instead of the task's own verdict.
+    """
+    pod_name = _pod_name(JobName.from_wire("/test-job/0"), 0)
+    req = make_run_req("/test-job/0", attempt_uid="sameuid000000000")
+
+    provider.sync(make_batch(tasks_to_run=[req]))
+    k8s.transition_pod(pod_name, "Failed", exit_code=1, reason="Error")
+
+    # Redrive with the same uid: not treated as stale, pod kept for poll to read.
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
+    pod_after = k8s.get_json(K8sResource.PODS, pod_name)
+    assert pod_after is not None
+    assert pod_after["status"]["phase"] == "Failed"
 
 
 # ---------------------------------------------------------------------------

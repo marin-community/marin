@@ -71,10 +71,12 @@ def make_run_req(
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
     priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.attempt_uid = attempt_uid
     req.num_tasks = num_tasks
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.environment.env_vars["IRIS_JOB_ID"] = "test-job"

@@ -9,7 +9,7 @@ that matters to K8sTaskProvider and CoreWeave controller consumers.
 
 import pytest
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
+from iris.cluster.platforms.k8s.types import POD_ATTEMPT_UID_LABEL, K8sResource, KubectlError
 
 
 def _get_pod_phase(svc: InMemoryK8sService, name: str) -> str:
@@ -215,29 +215,48 @@ def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
     assert result["metadata"].get("labels", {}).get("version") is None
 
 
-def test_apply_pod_replaces_stale_terminal_pod(svc: InMemoryK8sService):
-    """A resubmit whose name collides with a previous run's terminal pod gets a
-    fresh pod, not the dead attempt's verdict.
+def test_apply_pod_replaces_stale_pod_from_prior_attempt(svc: InMemoryK8sService):
+    """A resubmit whose name collides with a prior incarnation's pod gets a fresh
+    pod, not the dead attempt's verdict.
 
     Pod names are deterministic in (task_hash, attempt_id) and attempt_id resets
-    to 0 on resubmit, so a fresh attempt collides with the prior run's Failed
-    pod. Apply must delete the stale pod and raise (mapped to WORKER_FAILED),
-    then the retry recreates a fresh pod.
+    to 0 on resubmit, so a fresh attempt collides with the prior run's pod. The
+    two are told apart by attempt_uid: the leftover pod carries the old uid, so
+    apply deletes it and raises (mapped to WORKER_FAILED), then the retry (same
+    new uid, no pod present) recreates a fresh pod.
     """
-    svc.apply_json(_pod_manifest("p1", labels={"run": "old"}))
+    svc.apply_json(_pod_manifest("p1", labels={POD_ATTEMPT_UID_LABEL: "olduid0000000000"}))
     svc.transition_pod("p1", "Failed", exit_code=137, reason="OOMKilled")
 
-    with pytest.raises(KubectlError, match="stale terminal pod"):
-        svc.apply_json(_pod_manifest("p1", labels={"run": "new"}))
+    with pytest.raises(KubectlError, match="stale pod from a prior attempt"):
+        svc.apply_json(_pod_manifest("p1", labels={POD_ATTEMPT_UID_LABEL: "newuid1111111111"}))
     # The stale pod is gone, so the retry's create cannot adopt it.
     assert svc.get_json(K8sResource.PODS, "p1") is None
 
-    svc.apply_json(_pod_manifest("p1", labels={"run": "new"}))
+    svc.apply_json(_pod_manifest("p1", labels={POD_ATTEMPT_UID_LABEL: "newuid1111111111"}))
     result = svc.get_json(K8sResource.PODS, "p1")
     assert result is not None
-    # The recreated pod is the fresh manifest, not the dead attempt's Failed pod.
-    assert result["metadata"]["labels"]["run"] == "new"
+    # The recreated pod is the fresh attempt, not the dead one's Failed pod.
+    assert result["metadata"]["labels"][POD_ATTEMPT_UID_LABEL] == "newuid1111111111"
     assert result.get("status", {}).get("phase") != "Failed"
+
+
+def test_apply_pod_keeps_own_terminal_pod(svc: InMemoryK8sService):
+    """A redrive of the same attempt over its own just-finished pod is a no-op.
+
+    A task stays ASSIGNED and is redriven every tick until poll observes it, so a
+    fast-finishing attempt's own terminal pod is re-applied with the SAME
+    attempt_uid. That pod must be kept (not deleted) so poll can read its verdict;
+    deleting it would destroy a real result and misreport it as infra loss.
+    """
+    svc.apply_json(_pod_manifest("p1", labels={POD_ATTEMPT_UID_LABEL: "sameuid000000000"}))
+    svc.transition_pod("p1", "Succeeded")
+
+    # Redrive with the same uid — no raise, pod untouched.
+    svc.apply_json(_pod_manifest("p1", labels={POD_ATTEMPT_UID_LABEL: "sameuid000000000"}))
+    result = svc.get_json(K8sResource.PODS, "p1")
+    assert result is not None
+    assert result["status"]["phase"] == "Succeeded"
 
 
 # ========================================================================

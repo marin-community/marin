@@ -33,6 +33,15 @@ IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
 )
 
+# Pod label carrying the controller-minted attempt_uid (16 hex chars). It is
+# unique per attempt incarnation — a redrive of the same attempt keeps it, a
+# resubmit under the same name mints a new one — so a pod's attempt_uid tells the
+# current attempt's own pod apart from a stale pod left by a previous job that
+# reused the deterministic (task_hash, attempt_id) name. Shared here because both
+# the backend (which stamps it) and the platform service (which reads it in
+# _apply_pod to decide whether a 409 pod is ours) depend on the same key.
+POD_ATTEMPT_UID_LABEL = "iris.attempt_uid"
+
 
 def build_priority_class_manifest(name: str, value: int, preemption_policy: str) -> dict:
     """Build a cluster-scoped PriorityClass manifest dict."""
