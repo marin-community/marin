@@ -65,7 +65,7 @@ def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="256g", disk="64g"),
             environment=create_environment(
                 extras=["gpu"],
-                sync_packages=["marin-levanter"],
+                sync_packages=["marin-levanter", "marin-core"],
                 env_vars={
                     "JAX_COMPILATION_CACHE_DIR": SNOWBALL_GPU.compilation_cache_dir,
                     # XLA's auxiliary caches require local paths; keep only JAX's LOTA-backed cache.
@@ -105,7 +105,7 @@ def test_snowball_checkpoint_matches_native_tpu_contract(
             ),
             environment=create_environment(
                 extras=["tpu"],
-                sync_packages=["marin-levanter"],
+                sync_packages=["marin-levanter", "marin-core"],
                 env_vars={
                     "JAX_COMPILATION_CACHE_DIR": SNOWBALL_TPU.compilation_cache_dir,
                     "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES": "none",

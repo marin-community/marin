@@ -16,8 +16,10 @@ import numpy as np
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
-from marin.inference.quick_serve import read_attention_heads, select_tensor_parallel_size
-from marin.inference.serving_backend import LevanterBackend, ModelSpec
+from marin.inference.backend import ModelSpec
+from marin.inference.config import LevanterEngineConfig
+from marin.inference.levanter_backend import LevanterBackend
+from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
 from rigging.filesystem import StoragePath
 
 from tests.cluster.vllm import backend_parity as backend_parity_module
@@ -91,7 +93,7 @@ def capture_exported_levanter(
         "moe_implementation": cell.requested_moe,
         "attention_implementation": cell.requested_attention,
     }
-    with LevanterBackend().load_model(spec, config_overrides=config_overrides) as loaded:
+    with LevanterBackend(LevanterEngineConfig()).load_model(spec, config_overrides=config_overrides) as loaded:
         model = loaded.model
         if not isinstance(model, SnowballLMHeadModel):
             raise TypeError(f"Expected SnowballLMHeadModel, found {type(model).__name__}")

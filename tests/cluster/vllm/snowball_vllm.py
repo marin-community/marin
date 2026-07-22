@@ -7,9 +7,10 @@ import argparse
 import hashlib
 import uuid
 
-from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend
+from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
+from marin.inference.config import VllmEngineConfig, VllmLauncherType
 from marin.inference.tpu_vllm_pins import fork_source_revision, tpu_inference_fork_ref, vllm_fork_ref
-from marin.inference.vllm_server import IsolatedTpuVllm
+from marin.inference.vllm_backend import VllmBackend
 from rigging.filesystem import StoragePath
 
 from tests.cluster.vllm import backend_parity as backend_parity_module
@@ -49,8 +50,6 @@ def capture_vllm(
     batch_indices: tuple[int, ...] | None = None,
     case_ids: tuple[str, ...] | None = None,
     goldens: tuple[RepresentativeGolden, ...] | None = None,
-    vllm_ref: str | None = None,
-    tpu_inference_ref: str | None = None,
 ) -> ObservationReport:
     """Start the pinned TPU stack and capture selected OpenAI API requests."""
     if same_process_repeats <= 0:
@@ -87,24 +86,23 @@ def capture_vllm(
         max_model_len=VLLM_MAX_MODEL_LEN,
         chat_template_content=None,
     )
-    vllm_requirement = vllm_fork_ref() if vllm_ref is None else vllm_ref
-    tpu_inference_requirement = tpu_inference_fork_ref() if tpu_inference_ref is None else tpu_inference_ref
+    vllm_requirement = vllm_fork_ref()
+    tpu_inference_requirement = tpu_inference_fork_ref()
     backend = VllmBackend(
-        launcher=IsolatedTpuVllm(
-            vllm_ref=vllm_requirement,
-            tpu_inference_ref=tpu_inference_requirement,
-        ),
-        max_num_batched_tokens=VLLM_MAX_NUM_BATCHED_TOKENS,
-        extra_args=(
-            "--max-num-seqs",
-            "1",
-            # Numerical discovery must execute every prompt. Prefix-cache
-            # behavior is a separate production-serving invariant; mixing a
-            # cache miss with later hits makes same-process repeatability
-            # measure two execution modes rather than kernel noise.
-            "--no-enable-prefix-caching",
-            "--max-logprobs",
-            str(OBSERVATION_TOP_K),
+        VllmEngineConfig(
+            launcher=VllmLauncherType.TPU,
+            max_num_batched_tokens=VLLM_MAX_NUM_BATCHED_TOKENS,
+            extra_args=(
+                "--max-num-seqs",
+                "1",
+                # Numerical discovery must execute every prompt. Prefix-cache
+                # behavior is a separate production-serving invariant; mixing a
+                # cache miss with later hits makes same-process repeatability
+                # measure two execution modes rather than kernel noise.
+                "--no-enable-prefix-caching",
+                "--max-logprobs",
+                str(OBSERVATION_TOP_K),
+            ),
         ),
     )
 
@@ -174,8 +172,6 @@ def main() -> None:
     parser.add_argument("--same-process-repeats", type=int, default=1)
     parser.add_argument("--batch-index", action="append", type=int)
     parser.add_argument("--case-id", action="append")
-    parser.add_argument("--vllm-ref")
-    parser.add_argument("--tpu-inference-ref")
     args = parser.parse_args()
 
     report = capture_vllm(
@@ -183,8 +179,6 @@ def main() -> None:
         same_process_repeats=args.same_process_repeats,
         batch_indices=None if args.batch_index is None else tuple(args.batch_index),
         case_ids=None if args.case_id is None else tuple(args.case_id),
-        vllm_ref=args.vllm_ref,
-        tpu_inference_ref=args.tpu_inference_ref,
     )
     StoragePath(args.output).write_bytes(report.to_json_bytes())
 

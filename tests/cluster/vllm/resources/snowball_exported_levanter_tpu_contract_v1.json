@@ -11,7 +11,7 @@
   },
   "effective_attention": "tpu_splash",
   "effective_moe": "scatter",
-  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "model_config_digest": "a7bf00dc7b190025159d2189451e51598853273955181a84553e06f1962abc34",
   "max_probability_error": 0.2,
   "mesh_shape": [
     [
@@ -20,7 +20,7 @@
     ]
   ],
   "name": "snowball-exported-levanter-tpu-v1",
-  "parameter_digest": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "parameter_digest": "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0",
   "platform": "tpu",
   "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
   "requested_attention": "tpu_splash",

@@ -10,13 +10,15 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend
+from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
+from marin.inference.config import VllmEngineConfig, VllmLauncherType
 from marin.inference.tpu_vllm_pins import fork_source_revision, tpu_inference_fork_ref, vllm_fork_ref
-from marin.inference.vllm_server import IsolatedTpuVllm, VllmRuntimeFingerprint
+from marin.inference.vllm_backend import VllmBackend
+from marin.inference.vllm_server import VllmRuntimeFingerprint
 from rigging.filesystem import StoragePath
 
 from tests.cluster.vllm import snowball as snowball_module
-from tests.cluster.vllm.backend_parity import source_digest
+from tests.cluster.vllm.backend_parity import NextTokenParity, parity_from_logprob_map, source_digest
 from tests.cluster.vllm.snowball import (
     PROMPT_FIXTURE_SHA256,
     SNOWBALL,
@@ -25,6 +27,7 @@ from tests.cluster.vllm.snowball import (
     VLLM_MAX_MODEL_LEN,
     VLLM_MAX_NUM_BATCHED_TOKENS,
     RepresentativeGolden,
+    TokenScore,
     VllmCell,
     read_prompt_fixture,
     read_representative_goldens,
@@ -36,7 +39,7 @@ SEQUENTIAL_REPEATS = 3
 CONCURRENT_WAVES = 2
 ORACLE_CASE_ID = "code-humaneval-01"
 CAPTURE_SOURCE_DIGEST = source_digest(snowball_module.__file__, __file__)
-PRODUCTION_BEHAVIOR_SCHEMA_VERSION = 1
+PRODUCTION_BEHAVIOR_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -45,12 +48,14 @@ class ProductionCompletion:
     wave: int
     token_ids: tuple[int, ...]
     cached_prompt_tokens: int
+    first_token_parity: NextTokenParity
 
 
 @dataclass(frozen=True)
 class _CompletionResult:
     token_ids: tuple[int, ...]
     cached_prompt_tokens: int
+    first_token_parity: NextTokenParity
 
 
 @dataclass(frozen=True)
@@ -97,11 +102,21 @@ class ProductionBehaviorReport:
 
 
 def _completion_from_json(item: dict) -> ProductionCompletion:
+    raw_parity = item["first_token_parity"]
     return ProductionCompletion(
         case_id=item["case_id"],
         wave=int(item["wave"]),
         token_ids=tuple(int(token_id) for token_id in item["token_ids"]),
         cached_prompt_tokens=int(item["cached_prompt_tokens"]),
+        first_token_parity=NextTokenParity(
+            case_id=str(raw_parity["case_id"]),
+            backend_rank=int(raw_parity["backend_rank"]),
+            greedy_token_id=int(raw_parity["greedy_token_id"]),
+            golden_top_token_ids=tuple(int(token_id) for token_id in raw_parity["golden_top_token_ids"]),
+            golden_probability_gap_to_greedy=float(raw_parity["golden_probability_gap_to_greedy"]),
+            max_probability_error=float(raw_parity["max_probability_error"]),
+            top_probability_l1_error=float(raw_parity["top_probability_l1_error"]),
+        ),
     )
 
 
@@ -111,6 +126,7 @@ def _request_completion(
     *,
     case_id: str,
     prompt_token_ids: tuple[int, ...],
+    expected_top_logprobs: tuple[TokenScore, ...],
     max_tokens: int,
     request_id: str,
 ) -> _CompletionResult:
@@ -126,6 +142,8 @@ def _request_completion(
                 "add_special_tokens": False,
                 "temperature": 0.0,
                 "max_tokens": max_tokens,
+                "logprobs": 1024,
+                "return_tokens_as_token_ids": True,
                 "return_token_ids": True,
             },
             timeout=VLLM_HTTP_TIMEOUT,
@@ -136,12 +154,23 @@ def _request_completion(
         assert choice["prompt_token_ids"] == list(prompt_token_ids), case_id
         token_ids = tuple(int(token_id) for token_id in choice["token_ids"])
         assert len(token_ids) == max_tokens, (case_id, token_ids)
+        first_token_logprobs = choice["logprobs"]["top_logprobs"][0]
+        actual_logprobs = {
+            int(token.removeprefix("token_id:")): float(logprob) for token, logprob in first_token_logprobs.items()
+        }
         prompt_token_details = payload["usage"].get("prompt_tokens_details")
         if prompt_token_details is None or prompt_token_details.get("cached_tokens") is None:
             raise ValueError("vLLM did not report cached prompt tokens")
         return _CompletionResult(
             token_ids=token_ids,
             cached_prompt_tokens=int(prompt_token_details["cached_tokens"]),
+            first_token_parity=parity_from_logprob_map(
+                case_id,
+                expected_top_logprobs,
+                token_ids[0],
+                actual_logprobs,
+                backend_rank=0,
+            ),
         )
     except Exception as error:
         error.add_note(f"case={case_id} request={request_id}")
@@ -152,8 +181,6 @@ def capture_production_behavior(
     cell: VllmCell,
     *,
     goldens: tuple[RepresentativeGolden, ...] | None = None,
-    vllm_ref: str | None = None,
-    tpu_inference_ref: str | None = None,
 ) -> ProductionBehaviorReport:
     """Exercise cache miss/hit and concurrent production-shaped requests."""
     if cell.location.name != "tpu":
@@ -179,19 +206,20 @@ def capture_production_behavior(
         max_model_len=VLLM_MAX_MODEL_LEN,
         chat_template_content=None,
     )
-    vllm_requirement = vllm_fork_ref() if vllm_ref is None else vllm_ref
-    tpu_inference_requirement = tpu_inference_fork_ref() if tpu_inference_ref is None else tpu_inference_ref
+    vllm_requirement = vllm_fork_ref()
+    tpu_inference_requirement = tpu_inference_fork_ref()
     backend = VllmBackend(
-        launcher=IsolatedTpuVllm(
-            vllm_ref=vllm_requirement,
-            tpu_inference_ref=tpu_inference_requirement,
-        ),
-        max_num_batched_tokens=VLLM_MAX_NUM_BATCHED_TOKENS,
-        extra_args=(
-            "--max-num-seqs",
-            str(MAX_NUM_SEQS),
-            "--enable-prefix-caching",
-            "--enable-prompt-tokens-details",
+        VllmEngineConfig(
+            launcher=VllmLauncherType.TPU,
+            max_num_batched_tokens=VLLM_MAX_NUM_BATCHED_TOKENS,
+            extra_args=(
+                "--max-num-seqs",
+                str(MAX_NUM_SEQS),
+                "--enable-prefix-caching",
+                "--enable-prompt-tokens-details",
+                "--max-logprobs",
+                "1024",
+            ),
         ),
     )
 
@@ -207,6 +235,7 @@ def capture_production_behavior(
                 served.model_id,
                 case_id=oracle_case.id,
                 prompt_token_ids=oracle_case.prompt_token_ids,
+                expected_top_logprobs=oracle_case.top_logprobs,
                 max_tokens=CONTINUATION_TOKENS,
                 request_id=f"sequential-{repeat}-{oracle_case.id}",
             )
@@ -216,6 +245,7 @@ def capture_production_behavior(
                     wave=repeat,
                     token_ids=result.token_ids,
                     cached_prompt_tokens=result.cached_prompt_tokens,
+                    first_token_parity=result.first_token_parity,
                 )
             )
 
@@ -230,6 +260,7 @@ def capture_production_behavior(
                             served.model_id,
                             case_id=case.id,
                             prompt_token_ids=case.prompt_token_ids,
+                            expected_top_logprobs=case.top_logprobs,
                             max_tokens=1,
                             request_id=f"concurrent-{wave}-{case.id}",
                         ),
@@ -244,6 +275,7 @@ def capture_production_behavior(
                             wave=wave,
                             token_ids=result.token_ids,
                             cached_prompt_tokens=result.cached_prompt_tokens,
+                            first_token_parity=result.first_token_parity,
                         )
                     )
 
@@ -277,15 +309,9 @@ def capture_production_behavior(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
-    parser.add_argument("--vllm-ref")
-    parser.add_argument("--tpu-inference-ref")
     args = parser.parse_args()
 
-    report = capture_production_behavior(
-        SNOWBALL_VLLM_TPU,
-        vllm_ref=args.vllm_ref,
-        tpu_inference_ref=args.tpu_inference_ref,
-    )
+    report = capture_production_behavior(SNOWBALL_VLLM_TPU)
     StoragePath(args.output).write_bytes(report.to_json_bytes())
 
 

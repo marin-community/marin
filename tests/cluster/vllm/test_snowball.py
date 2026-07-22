@@ -70,11 +70,11 @@ def test_vllm_tpu_contract_is_frozen_for_the_production_compiler_policy() -> Non
     assert contract.discovery.repeatability_probability_error == 0.0
     assert contract.discovery.max_probability_error == pytest.approx(0.5840894216142387)
     assert contract.fork_source_revisions == (
-        ("vllm", "40cfab43c208dd9e762e6752fca887bdde69d1c9"),
-        ("tpu-inference", "e9a360537e2c9f8cffaecdbba124685061630550"),
+        ("vllm", "82e158743218550c2590161f299dcaffbdcd7746"),
+        ("tpu-inference", "0f60bf64458475cc2deccf12f47d6a048b2277a9"),
     )
     assert contract.discovery.summary_sha256 == "3a15113cdef58d24ca383c17026df82c959501e7324852666fc7e22539786164"
-    assert contract.runtime_fingerprint_digest == "b39059fe5a26fa9888a79525de7055dd0efb9dd26bd108242afeeebe4fc2ef8a"
+    assert contract.runtime_fingerprint_digest == "7a01c600fb4315c049d6a43c63aad2658e05e0bb434200224b8d76e1ab44dfe8"
 
 
 def test_vllm_tpu_golden_is_frozen_in_the_shared_schema() -> None:

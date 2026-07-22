@@ -11,15 +11,15 @@
   },
   "effective_attention": "production",
   "effective_moe": "tpu-inference-grug",
-  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "model_config_digest": "a7bf00dc7b190025159d2189451e51598853273955181a84553e06f1962abc34",
   "fork_source_revisions": [
     [
       "vllm",
-      "40cfab43c208dd9e762e6752fca887bdde69d1c9"
+      "82e158743218550c2590161f299dcaffbdcd7746"
     ],
     [
       "tpu-inference",
-      "e9a360537e2c9f8cffaecdbba124685061630550"
+      "0f60bf64458475cc2deccf12f47d6a048b2277a9"
     ]
   ],
   "max_probability_error": 0.7,
@@ -60,11 +60,11 @@
     ]
   ],
   "name": "snowball-vllm-tpu-v2",
-  "parameter_digest": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "parameter_digest": "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0",
   "platform": "tpu",
   "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
   "requested_attention": "production",
   "requested_moe": "tpu-inference-grug",
-  "runtime_fingerprint_digest": "b39059fe5a26fa9888a79525de7055dd0efb9dd26bd108242afeeebe4fc2ef8a",
+  "runtime_fingerprint_digest": "7a01c600fb4315c049d6a43c63aad2658e05e0bb434200224b8d76e1ab44dfe8",
   "schema_version": 1
 }

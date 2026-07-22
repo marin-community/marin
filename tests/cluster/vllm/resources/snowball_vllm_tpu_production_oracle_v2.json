@@ -10,25 +10,26 @@
     "instruction-ifeval-02": 578
   },
   "data_parallel_size": 1,
+  "code_digest": "3e2502d34da386747184d5eae7c76a98f781b27894fa818afafa52446d2eaa3d",
   "discovery": {
-    "code_sha256": "b788cdae1f179e088cb38a363c84f0f2162f31a8476f20042591f031a617dd28",
-    "report_sha256": "3f6329176531e6d15390db360fbfb2df67a7ea79c4c97159edb77b5385d977a5"
+    "code_sha256": "3e2502d34da386747184d5eae7c76a98f781b27894fa818afafa52446d2eaa3d",
+    "report_sha256": "c14a89baa0a50899d595d722082f17aa1579987916381b16a88078524e7e57bb"
   },
-  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
-  "runtime_fingerprint_digest": "08a06735a23e90d382d2b6074214e8697143fbad57f7b1f4eb6aa61ab8c36c70",
+  "model_config_digest": "a7bf00dc7b190025159d2189451e51598853273955181a84553e06f1962abc34",
+  "runtime_fingerprint_digest": "0fb2b4238bbed2eecdf0ac639addaa8a790c13f64b135e3668bdc78b0fbd0a00",
   "fork_source_revisions": [
     [
       "vllm",
-      "40cfab43c208dd9e762e6752fca887bdde69d1c9"
+      "82e158743218550c2590161f299dcaffbdcd7746"
     ],
     [
       "tpu-inference",
-      "e9a360537e2c9f8cffaecdbba124685061630550"
+      "0f60bf64458475cc2deccf12f47d6a048b2277a9"
     ]
   ],
   "max_num_seqs": 8,
   "name": "snowball-vllm-tpu-production-v2",
-  "parameter_sha256": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "parameter_sha256": "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0",
   "prefix_caching": true,
   "prompt_fixture_sha256": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
   "schema_version": 1,

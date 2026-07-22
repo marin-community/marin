@@ -72,7 +72,12 @@ def assert_vllm_tpu_matches_contracts(
 
     production_report = capture_production_behavior(SNOWBALL_VLLM_TPU, goldens=gpu_goldens)
     StoragePath(production_report_uri).write_bytes(production_report.to_json_bytes())
-    assert_production_behavior_matches_oracle(production_report, production_oracle)
+    try:
+        assert_production_behavior_matches_oracle(production_report, production_oracle, numerical_contract)
+    except AssertionError as error:
+        raise AssertionError(
+            f"Production report persisted before validation: {production_report_uri}\n\n{error}"
+        ) from error
 
 
 def test_snowball_vllm_tpu_matches_numerical_and_production_contracts(
