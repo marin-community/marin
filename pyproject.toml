@@ -328,6 +328,9 @@ ignore-missing-imports = [
     "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
+    # Installed only with marin-core's optional Daytona provider extra.
+    "daytona",
+    "daytona.*",
     # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
     "upath",
     "upath.*",
