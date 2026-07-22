@@ -24,6 +24,113 @@ ConfigT = TypeVar("ConfigT")
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+_NVIDIA_JAX_IMAGE_PREFIX = "nvcr.io/nvidia/jax:"
+_NVIDIA_JAX_UV_VERSION = "0.11.21"
+_NVIDIA_JAX_PROTECTED_PACKAGES = (
+    "jax",
+    "jaxlib",
+    "jax-cuda13-pjrt",
+    "jax-cuda13-plugin",
+    "cuda-bindings",
+    "cuda-pathfinder",
+    "cuda-python",
+    "cuda-toolkit",
+    "nvidia-cublas",
+    "nvidia-cublas-cu12",
+    "nvidia-cuda-crt",
+    "nvidia-cuda-cupti",
+    "nvidia-cuda-cupti-cu12",
+    "nvidia-cuda-nvcc",
+    "nvidia-cuda-nvrtc",
+    "nvidia-cuda-nvrtc-cu12",
+    "nvidia-cuda-runtime",
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-cudnn-cu12",
+    "nvidia-cudnn-cu13",
+    "nvidia-cufft",
+    "nvidia-cufft-cu12",
+    "nvidia-cufile",
+    "nvidia-cufile-cu12",
+    "nvidia-curand",
+    "nvidia-curand-cu12",
+    "nvidia-cusolver",
+    "nvidia-cusolver-cu12",
+    "nvidia-cusparse",
+    "nvidia-cusparse-cu12",
+    "nvidia-cusparselt-cu12",
+    "nvidia-cusparselt-cu13",
+    "nvidia-cutlass-dsl-libs-base",
+    "nvidia-nccl-cu12",
+    "nvidia-nccl-cu13",
+    "nvidia-nvjitlink",
+    "nvidia-nvjitlink-cu12",
+    "nvidia-nvshmem-cu12",
+    "nvidia-nvshmem-cu13",
+    "nvidia-nvtx",
+    "nvidia-nvtx-cu12",
+    "nvidia-nvvm",
+    "torch",
+    "torchvision",
+)
+
+
+def nvidia_jax_overlay_setup_script() -> str:
+    """Build a Marin overlay without replacing an NGC image's accelerator stack."""
+    protected_flags = (" \\\n  ").join(f"--no-install-package {package}" for package in _NVIDIA_JAX_PROTECTED_PACKAGES)
+    return f"""set -eu
+cd "$IRIS_WORKDIR"
+test ! -e "$IRIS_VENV"
+sha256sum \\
+  /opt/jax/jax/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/_jax.so \\
+  /opt/jaxlibs/jaxlib/jaxlib/libjax_common.so \\
+  > /tmp/ngc-jax-before.sha256
+/usr/bin/python -m pip install \\
+  --disable-pip-version-check --no-deps --prefix /tmp/marin-ngc-uv \\
+  uv=={_NVIDIA_JAX_UV_VERSION}
+uv=/tmp/marin-ngc-uv/local/bin/uv
+test -x "$uv"
+"$uv" venv --system-site-packages --python /usr/bin/python "$IRIS_VENV"
+export VIRTUAL_ENV="$IRIS_VENV"
+export PATH="$IRIS_VENV/bin:$PATH"
+"$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
+  --python "$IRIS_VENV/bin/python" --package marin-root \\
+  {protected_flags}
+"$uv" sync --quiet --active --inexact --frozen --link-mode symlink \\
+  --python "$IRIS_VENV/bin/python" --package marin-levanter --no-group dev --extra gpu \\
+  {protected_flags}
+sha256sum \\
+  /opt/jax/jax/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/__init__.py \\
+  /opt/jaxlibs/jaxlib/jaxlib/_jax.so \\
+  /opt/jaxlibs/jaxlib/jaxlib/libjax_common.so \\
+  > /tmp/ngc-jax-after.sha256
+diff -u /tmp/ngc-jax-before.sha256 /tmp/ngc-jax-after.sha256
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jax"
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/jaxlib"
+test -d "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_cu13-*.dist-info
+test ! -e "$IRIS_VENV/lib/python3.12/site-packages/"nvidia_cutlass_dsl_libs_base-*.dist-info
+"$IRIS_VENV/bin/python" - <<'PY'
+import importlib.util
+import os
+
+import cutlass
+import jax
+import jaxlib
+from cutlass._mlir._mlir_libs import _cutlass_ir
+
+assert jax.__file__.startswith("/opt/jax/"), jax.__file__
+assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
+venv = os.environ["VIRTUAL_ENV"] + "/"
+assert cutlass.__file__.startswith(venv), cutlass.__file__
+assert _cutlass_ir.__file__.startswith(venv), _cutlass_ir.__file__
+assert importlib.util.find_spec("torch") is None
+print(f"preserved NGC JAX {{jax.__version__}} from {{jax.__file__}}")
+print(f"preserved NGC JAXLIB {{jaxlib.__version__}} from {{jaxlib.__file__}}")
+print(f"overlaid CUDA-13 CUTLASS DSL {{cutlass.__version__}} from {{cutlass.__file__}}")
+PY
+"""
 
 
 def _forwarded_env_vars() -> dict[str, str]:
@@ -49,11 +156,20 @@ def dispatch_grug_training_run(
     """Submit a grug train entrypoint through Fray and wait for completion."""
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    setup_scripts = (
+        [nvidia_jax_overlay_setup_script()]
+        if resources.image is not None and resources.image.startswith(_NVIDIA_JAX_IMAGE_PREFIX)
+        else None
+    )
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources),
+            setup_scripts=setup_scripts,
+        ),
         max_retries_failure=max_retries_failure,
         processes_per_task=processes_per_task,
     )
