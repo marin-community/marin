@@ -260,12 +260,14 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
 
 
 @contextmanager
-def _parquet_sink(temp_path: str):
+def parquet_sink(temp_path: str):
     """Yield ``(where_fd, native_fs)`` for ``pq.ParquetWriter``/``pq.write_table``.
 
     Prefers a native pyarrow filesystem for flat-memory streaming; falls back
     to a buffered fsspec handle (``filesystem=None``) for protocols pyarrow
-    cannot address.
+    cannot address. The native filesystem carries the S3-compatible endpoint's
+    virtual-host addressing (``force_virtual_addressing``), which pyarrow cannot
+    infer from a bare ``s3://`` URI — required for CoreWeave object storage.
     """
     native = _pyarrow_filesystem(temp_path)
     if native is not None:
@@ -299,7 +301,7 @@ def write_parquet_file(
     count = 0
 
     with atomic_rename(output_path) as temp_path:
-        with _parquet_sink(temp_path) as (where_fd, native_fs):
+        with parquet_sink(temp_path) as (where_fd, native_fs):
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):

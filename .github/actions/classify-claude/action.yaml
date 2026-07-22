@@ -1,0 +1,30 @@
+name: Classify Claude Result
+description: Treat Claude HTTP 429 responses as skipped while preserving other failures.
+
+inputs:
+  outcome:
+    description: Outcome of the claude-code-action step.
+    required: true
+  execution-file:
+    description: Execution trace written by claude-code-action.
+    required: false
+    default: ''
+
+outputs:
+  rate_limited:
+    description: Whether Claude failed with HTTP 429.
+    value: ${{ steps.classify.outputs.rate_limited }}
+
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        CLAUDE_OUTCOME: ${{ inputs.outcome }}
+        CLAUDE_EXECUTION_FILE: ${{ inputs.execution-file }}
+        CLAUDE_EXECUTION_FILE_FALLBACK: ${{ runner.temp }}/claude-execution-output.json
+      run: >-
+        python "$GITHUB_ACTION_PATH/../../../scripts/ci/claude_runner.py"
+        "$CLAUDE_OUTCOME" "${CLAUDE_EXECUTION_FILE:-$CLAUDE_EXECUTION_FILE_FALLBACK}"
+        --github-output "$GITHUB_OUTPUT"
