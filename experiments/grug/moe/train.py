@@ -556,6 +556,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=int(os.environ.get("SCALE_MAX_RETRIES_FAILURE", "3")),
         processes_per_task=config.processes_per_task,
     )
 

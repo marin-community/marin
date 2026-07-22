@@ -23,6 +23,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
+    SCALE_MAX_RETRIES_FAILURE  child-job retries after a failed task (default 3)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
