@@ -142,12 +142,14 @@ def runtime_service_account(
     secrets: tuple[SecretEnv, ...],
     cloudsql_instances: tuple[str, ...],
     opts: pulumi.ResourceOptions,
-) -> gcp.serviceaccount.Account:
+) -> tuple[gcp.serviceaccount.Account, list[pulumi.Resource]]:
     """Runtime service account with its project roles, cloudsql.client, and secret accessor grants.
 
-    Shared between the Cloud Run service and job components; child resource names ("sa",
-    "sa-<role>", "sa-cloudsql-client", "secret-<slug>") are part of existing stacks' state,
-    so they must stay stable.
+    Returns the account and its IAM grant resources: Cloud Run validates secret access at
+    deploy time, so the service/job resource must depends_on the grants or a fresh deploy
+    can race them. Shared between the Cloud Run service and job components; child resource
+    names ("sa", "sa-<role>", "sa-cloudsql-client", "secret-<slug>") are part of existing
+    stacks' state, so they must stay stable.
     """
     service_account = gcp.serviceaccount.Account(
         "sa",
@@ -157,32 +159,39 @@ def runtime_service_account(
         opts=opts,
     )
     member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
+    grants: list[pulumi.Resource] = []
     for role in roles:
-        gcp.projects.IAMMember(
-            f"sa-{_role_slug(role)}",
-            project=project,
-            role=role,
-            member=member,
-            opts=opts,
+        grants.append(
+            gcp.projects.IAMMember(
+                f"sa-{_role_slug(role)}",
+                project=project,
+                role=role,
+                member=member,
+                opts=opts,
+            )
         )
     if cloudsql_instances:
-        gcp.projects.IAMMember(
-            "sa-cloudsql-client",
-            project=project,
-            role="roles/cloudsql.client",
-            member=member,
-            opts=opts,
+        grants.append(
+            gcp.projects.IAMMember(
+                "sa-cloudsql-client",
+                project=project,
+                role="roles/cloudsql.client",
+                member=member,
+                opts=opts,
+            )
         )
     for secret_env in secrets:
-        gcp.secretmanager.SecretIamMember(
-            f"secret-{resource_slug(secret_env.secret)}",
-            project=project,
-            secret_id=secret_env.secret,
-            role="roles/secretmanager.secretAccessor",
-            member=member,
-            opts=opts,
+        grants.append(
+            gcp.secretmanager.SecretIamMember(
+                f"secret-{resource_slug(secret_env.secret)}",
+                project=project,
+                secret_id=secret_env.secret,
+                role="roles/secretmanager.secretAccessor",
+                member=member,
+                opts=opts,
+            )
         )
-    return service_account
+    return service_account, grants
 
 
 def dockerfile_image(
@@ -245,7 +254,7 @@ class CloudRunService(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account = runtime_service_account(
+        service_account, sa_grants = runtime_service_account(
             account_id=args.service_account_id or args.service_name,
             display_name=f"{args.service_name} (Cloud Run)",
             project=args.project,
@@ -339,7 +348,9 @@ class CloudRunService(pulumi.ComponentResource):
                     )
                 ],
             ),
-            opts=child,
+            # Cloud Run validates secret access at deploy, so the grants must exist before
+            # the service; without the edge a fresh deploy can race them and fail.
+            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=sa_grants)),
         )
 
         # IAP invokes the service as its own service agent; only that agent gets run.invoker.

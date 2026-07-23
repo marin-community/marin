@@ -78,7 +78,7 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
         super().__init__("marin:gcp:ScheduledCloudRunJob", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account = runtime_service_account(
+        service_account, sa_grants = runtime_service_account(
             account_id=args.job_name,
             display_name=f"{args.job_name} (Cloud Run job)",
             project=args.project,
@@ -155,7 +155,9 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     ],
                 ),
             ),
-            opts=child,
+            # Cloud Run validates secret access at job creation, so the grants must exist
+            # before the job; without the edge a fresh deploy can race them and fail.
+            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=sa_grants)),
         )
 
         # Scheduler runs the job as the job's own service account, which therefore needs
