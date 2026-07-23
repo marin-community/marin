@@ -8,8 +8,9 @@ import time
 import cloudpickle
 import pytest
 from connectrpc.errors import ConnectError
-from iris.actor import ActorClient, ActorServer
+from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
+from iris.actor.server import ActorServer
 from iris.rpc import actor_pb2
 
 

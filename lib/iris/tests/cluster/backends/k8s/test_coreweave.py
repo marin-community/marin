@@ -35,9 +35,24 @@ from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
+    PrerequisitesNotProvisionedError,
     configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
+from iris.cluster.platforms.k8s.nodepool_manifests import (
+    compute_target_racks,
+    nodepool_manifest,
+    nodepool_name,
+    nodepool_node_labels,
+)
+from iris.cluster.platforms.k8s.rbac_manifests import (
+    cluster_role_binding_manifest,
+    cluster_role_manifest,
+    cluster_role_name,
+    namespace_manifest,
+    service_account_manifest,
+)
 from iris.cluster.platforms.k8s.types import (
     K8sResource,
     iris_priority_class_manifest,
@@ -158,10 +173,53 @@ def _make_cluster_config(
     return config
 
 
-def test_start_controller_creates_all_resources():
-    """start_controller creates ConfigMap, Deployment, and Service."""
+def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConfig) -> None:
+    """Populate the prerequisites that Pulumi owns in production."""
+    namespace = cluster_config.platform.coreweave.namespace or "iris"
+    label_prefix = cluster_config.platform.label_prefix
+    service_account = "iris-controller"
+
+    k8s.apply_json(namespace_manifest(namespace))
+    k8s.apply_json(service_account_manifest(namespace, service_account))
+    role_name = cluster_role_name(namespace)
+    k8s.apply_json(cluster_role_manifest(role_name))
+    k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
+
+    for name, sg in cluster_config.scale_groups.items():
+        cw = sg.slice_template.coreweave if sg.slice_template is not None else None
+        if cw is None or not cw.instance_type:
+            continue
+        num_vms = max(1, sg.slice_template.num_vms)
+        min_nodes = sg.buffer_slices * num_vms
+        max_nodes = sg.max_slices * num_vms
+        pool_name = nodepool_name(label_prefix, name)
+        k8s.apply_json(
+            nodepool_manifest(
+                pool_name,
+                cw.instance_type,
+                node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
+                min_nodes=min_nodes,
+                max_nodes=max_nodes,
+                target_nodes=min_nodes,
+                target_racks=compute_target_racks(cw.instance_type, max_nodes, name),
+            )
+        )
+
+    cluster_queue = cluster_config.kubernetes_provider.kueue.cluster_queue
+    if cluster_queue:
+        k8s.apply_json(
+            {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ClusterQueue", "metadata": {"name": cluster_queue}}
+        )
+    k8s.apply_json(
+        {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": RESOURCE_FLAVOR_NAME}}
+    )
+
+
+def test_start_controller_creates_controller_resources():
+    """start_controller creates the runtime resources that remain Iris-owned."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -224,6 +282,7 @@ def test_start_controller_local_state_dir_uses_hostpath_not_pvc():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.storage.local_state_dir = "/mnt/local/iris-controller-state"
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -250,6 +309,7 @@ def test_start_controller_injects_operator_env(monkeypatch):
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.defaults.inject_env.append("WANDB_API_KEY")
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -273,6 +333,7 @@ def test_start_controller_s3_storage_creates_task_env_secret():
     """S3 storage alone (no inject_env) still populates the iris-task-env Secret."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -334,6 +395,7 @@ def test_start_controller_reconciles_when_already_available():
     """start_controller reconciles all resources even if Deployment is already available."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     # InMemoryK8sService replaces the full manifest on re-apply, so use auto_ready thread
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
@@ -377,6 +439,7 @@ def test_fresh_start_strips_fresh_from_persisted_deployment():
     """
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     stop = threading.Event()
     t = threading.Thread(target=_keep_deployment_ready, args=(k8s, "iris-controller", stop), daemon=True)
@@ -395,6 +458,7 @@ def test_non_fresh_start_never_includes_fresh():
     """A normal (non-fresh) start deploys a pod command without --fresh."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -416,6 +480,7 @@ def test_start_controller_stops_old_controller_before_reapply():
     """
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     events: list[tuple[str, str]] = []
     real_delete = k8s.delete
@@ -446,7 +511,7 @@ def test_start_controller_stops_old_controller_before_reapply():
 
 
 def test_stop_controller_deletes_resources():
-    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC."""
+    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and PVC."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
@@ -464,6 +529,25 @@ def test_stop_controller_deletes_resources():
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
+    provider.shutdown()
+
+
+def test_stop_controller_leaves_iac_provisioned_rbac_alone():
+    """stop_controller must not delete the ClusterRole/ClusterRoleBinding.
+
+    These are IaC-provisioned (spec.md §4), not created by start_controller anymore;
+    verify_prerequisites hard-fails the next start_controller if they're missing, so
+    deleting them on stop would break a plain `iris cluster stop && iris cluster start`.
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    role_name = provider.rbac_cluster_role_name()
+
+    provider.stop_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.CLUSTER_ROLES, role_name) is not None
+    assert k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is not None
     provider.shutdown()
 
 
@@ -509,38 +593,60 @@ def test_stop_all_dry_run():
 
 
 # ============================================================================
-# Tests: RBAC
+# Tests: verify_prerequisites
 # ============================================================================
 
 
-def test_rbac_isolation_across_namespaces():
-    """Two Iris instances with different namespaces get isolated RBAC; teardown of one doesn't affect the other."""
-    k8s = InMemoryK8sService(namespace="alpha")
-    provider_a, _ = _make_provider(namespace="alpha", k8s=k8s)
-    provider_b, _ = _make_provider(namespace="beta", k8s=k8s)
+def test_verify_prerequisites_raises_when_nothing_provisioned():
+    """A fresh cluster with no IaC-provisioned prerequisites fails fast, enumerating them."""
+    provider, _ = _make_provider()
+    cluster_config = _make_cluster_config()
 
-    provider_a.ensure_rbac()
-    provider_b.ensure_rbac()
+    with pytest.raises(PrerequisitesNotProvisionedError) as exc_info:
+        provider.verify_prerequisites(cluster_config)
 
-    # Each gets a namespace-qualified ClusterRole and ClusterRoleBinding
-    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-alpha") is not None
-    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-beta") is not None
+    message = str(exc_info.value)
+    assert "Namespace/iris" in message
+    assert "ServiceAccount/iris/iris-controller" in message
+    assert "ClusterRole/iris-controller-iris" in message
+    assert "ClusterRoleBinding/iris-controller-iris" in message
+    assert "NodePool/iris-cpu-erapids" in message
+    assert "ClusterQueue/iris-cq" in message
+    assert "ResourceFlavor/cw-ib" in message
+    assert "pulumi up" in message
+    provider.shutdown()
 
-    # Binding references the correct ClusterRole and namespace
-    binding_a = k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-alpha")
-    assert binding_a["roleRef"]["name"] == "iris-controller-alpha"
-    assert binding_a["subjects"][0]["namespace"] == "alpha"
 
-    # Stopping alpha cleans up its RBAC without affecting beta
-    provider_a.stop_controller(_make_cluster_config())
+def test_verify_prerequisites_passes_once_seeded():
+    """Once every IaC-provisioned prerequisite exists, verify_prerequisites is a no-op."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    pools_before = {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)}
 
-    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-alpha") is None
-    assert k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-alpha") is None
-    assert k8s.get_json(K8sResource.CLUSTER_ROLES, "iris-controller-beta") is not None
-    assert k8s.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, "iris-controller-beta") is not None
+    provider.verify_prerequisites(cluster_config)  # must not raise
 
-    provider_a.shutdown()
-    provider_b.shutdown()
+    # Presence-only: verifying must not create, delete, or otherwise touch anything.
+    assert {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)} == pools_before
+    assert k8s.get_json(K8sResource.NAMESPACES, "iris") is not None
+    provider.shutdown()
+
+
+def test_verify_prerequisites_reports_only_the_missing_pieces():
+    """The error names exactly what's absent, not everything."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.NODE_POOLS, "iris-cpu-erapids")
+
+    with pytest.raises(PrerequisitesNotProvisionedError) as exc_info:
+        provider.verify_prerequisites(cluster_config)
+
+    message = str(exc_info.value)
+    assert "NodePool/iris-cpu-erapids" in message
+    assert "Namespace/iris" not in message
+    assert "ClusterRole/iris-controller-iris" not in message
+    provider.shutdown()
 
 
 # ============================================================================
@@ -571,6 +677,7 @@ def test_start_controller_deployment_command_references_config_json():
     """The controller Deployment command uses config.json (not config.yaml)."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -602,6 +709,7 @@ def test_configmap_strips_kubeconfig_path():
     cluster_config = _make_cluster_config()
     cluster_config.platform.coreweave.kubeconfig_path = "/home/user/.kube/coreweave-iris"
     cluster_config.platform.coreweave.kube_context = "marin_LGA1"
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -630,6 +738,7 @@ def test_controller_endpoint_url_in_task_env_secret():
 
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.platform.coreweave.object_storage_endpoint = "https://object.lga1.coreweave.com"
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -688,8 +797,9 @@ def test_start_controller_errors_without_s3_credentials(monkeypatch):
     """start_controller raises when S3 storage is configured but R2 credentials are not set."""
     monkeypatch.delenv("CW_KEY_ID", raising=False)
     monkeypatch.delenv("CW_KEY_SECRET", raising=False)
-    provider, _ = _make_provider()
+    provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
+    _seed_prerequisites(k8s, cluster_config)
 
     with pytest.raises(InfraError, match="CW_KEY_ID and CW_KEY_SECRET"):
         provider.start_controller(cluster_config)
@@ -700,6 +810,7 @@ def test_start_controller_detects_crash_loop_backoff():
     """start_controller fails fast when the controller Pod enters CrashLoopBackOff."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     crash_logs = (
         "ValueError: scale_groups.cpu-erapids.resources has unknown keys: memory_bytes\n"
@@ -752,6 +863,7 @@ def test_start_controller_detects_image_pull_failure():
     """start_controller fails fast on ImagePullBackOff."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     def simulate_image_pull_failure():
         _wait_for_condition(lambda: k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None, timeout=10)
@@ -798,6 +910,7 @@ def test_start_controller_crash_loop_includes_logs():
     """When CrashLoopBackOff is detected, the error includes container logs."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
 
     crash_logs = "ValueError: bad config key\nTraceback ...\n"
 
@@ -849,6 +962,7 @@ def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
     monkeypatch.delenv("CW_KEY_SECRET", raising=False)
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="gs://test-bucket/bundles")
+    _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -863,101 +977,6 @@ def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
     assert "envFrom" not in container
 
     t.join(timeout=5)
-    provider.shutdown()
-
-
-def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
-    """NodePool capacity is counted in nodes, so multihost groups scale by num_vms per slice."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.scale_groups["h100-16x"] = ScaleGroupConfig(
-        buffer_slices=0,
-        max_slices=1,
-        slice_template=SliceConfig(
-            name_prefix="h100-16x",
-            num_vms=2,
-            coreweave=CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
-        ),
-    )
-
-    provider.ensure_nodepools(cluster_config)
-
-    h100_pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-h100-16x")
-    assert h100_pool is not None
-    assert h100_pool["spec"]["minNodes"] == 0
-    assert h100_pool["spec"]["maxNodes"] == 2
-    provider.shutdown()
-
-
-def test_ensure_nodepools_keeps_one_multihost_slice_warm():
-    """Existing multihost pools keep one full slice worth of desired nodes."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.scale_groups["h100-16x"] = ScaleGroupConfig(
-        buffer_slices=0,
-        max_slices=1,
-        slice_template=SliceConfig(
-            name_prefix="h100-16x",
-            num_vms=2,
-            coreweave=CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
-        ),
-    )
-
-    # Pre-create nodepool so _ensure_one_nodepool detects it as existing
-    k8s.apply_json(
-        {
-            "apiVersion": "compute.coreweave.com/v1alpha1",
-            "kind": "NodePool",
-            "metadata": {"name": "iris-h100-16x", "labels": {}},
-            "spec": {
-                "instanceType": "gd-8xh100ib-i128",
-                "minNodes": 0,
-                "maxNodes": 1,
-                "targetNodes": 1,
-            },
-            "status": {"readyNodes": 1, "currentNodes": 1, "conditions": []},
-        }
-    )
-
-    provider.ensure_nodepools(cluster_config)
-
-    h100_pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-h100-16x")
-    assert h100_pool["spec"]["targetNodes"] == 2
-    provider.shutdown()
-
-
-def test_ensure_nodepools_rack_based_uses_target_racks():
-    """NVL72 (GB200) pools deploy in whole racks: spec.targetRacks, no autoscaling/targetNodes."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.scale_groups["gb200"] = ScaleGroupConfig(
-        buffer_slices=36,
-        max_slices=36,  # 36 nodes / 18 per rack = 2 racks
-        slice_template=SliceConfig(
-            name_prefix="gb200",
-            num_vms=1,
-            coreweave=CoreweaveSliceConfig(instance_type="gb200-4x"),
-        ),
-    )
-
-    provider.ensure_nodepools(cluster_config)
-
-    pool = k8s.get_json(K8sResource.NODE_POOLS, "iris-gb200")
-    assert pool is not None
-    assert pool["spec"]["targetRacks"] == 2
-    # Rack-based pools carry none of the node-based scaling fields — CoreWeave rejects
-    # autoscaling and targetNodes on rack instances.
-    assert "targetNodes" not in pool["spec"]
-    assert "autoscaling" not in pool["spec"]
-    assert "minNodes" not in pool["spec"]
-    provider.shutdown()
-
-
-def test_ensure_nodepools_rejects_partial_rack():
-    """A rack-based pool whose node count is not a whole number of racks is rejected."""
-    provider, _ = _make_provider()
-    with pytest.raises(InfraError, match="whole number of 18-node racks"):
-        provider._ensure_one_nodepool("iris-gb200", "gb200-4x", "gb200", min_nodes=20, max_nodes=20, warm_nodes=1)
     provider.shutdown()
 
 

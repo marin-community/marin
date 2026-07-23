@@ -33,6 +33,20 @@ name: cw-rno2a
 finelog:
   config: cw-rno2a
 
+# Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
+provisioning:
+  provider: coreweave
+  coreweave:
+    cluster: { name: marin-rn02a, zone: RNO2A }
+    kueue:
+      flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
+    ingress:
+      ingress_class: traefik
+      acme_email: ops@openathena.ai
+      cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      active_cluster_issuer: letsencrypt-http01-prod
+    rbac: { service_account: iris-controller }
+
 platform:
   label_prefix: cw-rno2a
   coreweave:

@@ -16,16 +16,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
-
-
-class FakeStatsTable:
-    """Records every Table.write call so tests can assert on emitted rows."""
-
-    def __init__(self) -> None:
-        self.writes: list[list[object]] = []
-
-    def write(self, rows) -> None:
-        self.writes.append(list(rows))
+from iris.test_util import FakeStatsTable
 
 
 @pytest.fixture

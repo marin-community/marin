@@ -169,6 +169,18 @@ def _prepare_batch(arrays, item_rank):
     return data, offsets, shapes
 
 
+@contextlib.contextmanager
+def _index_error_on_out_of_range(item):
+    """Translate tensorstore's out-of-bounds ValueError into an ``IndexError`` for ``item``."""
+    try:
+        yield
+    except ValueError as e:
+        # ts raises a ValueError for an index out of bounds OUT_OF_RANGE
+        if "OUT_OF_RANGE" in str(e):
+            raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
+        raise
+
+
 @dataclass
 class JaggedArrayStore:
     """
@@ -447,7 +459,7 @@ class JaggedArrayStore:
         if isinstance(item, slice):
             raise NotImplementedError("Slicing not supported")
         else:
-            try:
+            with _index_error_on_out_of_range(item):
                 start, stop, _ = await self._bounds_for_rows_async(item, item + 1)
                 data = await self.data[start:stop].read()
 
@@ -455,11 +467,6 @@ class JaggedArrayStore:
                     shapes = np.array(self.shapes[item])
                     data = data.reshape(*shapes, -1)
                 return data
-            except ValueError as e:
-                # ts raises a value error for an index out of bounds OUT_OF_RANGE
-                if "OUT_OF_RANGE" in str(e):
-                    raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                raise
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
         # get indices
@@ -508,7 +515,7 @@ class JaggedArrayStore:
             start, stop, step = item.indices(len(self))
             return self.get_batch_sync(list(range(start, stop, step)))
         else:
-            try:
+            with _index_error_on_out_of_range(item):
                 start, stop, _ = self._bounds_for_rows(item, item + 1)
                 data = self.data[start:stop].read().result()
 
@@ -516,11 +523,6 @@ class JaggedArrayStore:
                     shapes = np.array(self.shapes[item])
                     data = data.reshape(*shapes, -1)
                 return data
-            except ValueError as e:
-                # ts raises a value error for an index out of bounds OUT_OF_RANGE
-                if "OUT_OF_RANGE" in str(e):
-                    raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                raise
 
     def _bounds_for_rows(self, start, stop):
         num_rows = self.num_rows

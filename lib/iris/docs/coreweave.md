@@ -146,7 +146,8 @@ Key architectural properties:
   controller calls the same three uniform phase methods regardless. The dashboard
   reflects this via the backend descriptor served by
   `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
-  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
+  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler),
+  and per-node host and GPU readings surface in the **Cluster** panel instead.
   See `docs/architecture.md` "The TaskBackend contract".
 - **Shared NodePool model**: One NodePool per scale group (not per slice). CoreWeave
   autoscaling is enabled (`autoscaling: true`). NodePool names follow
@@ -511,11 +512,11 @@ max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
 deploys in whole racks of 18, so a rack pool's node count must be a multiple of
 18.
 
-**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+**2. Provision the static prerequisites (IaC).** The `infra/pulumi` Pulumi program
 declares the namespace, controller RBAC, the reserved NodePools, and the whole
 cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
 ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
-`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`provisioning:` section of the config. See `infra/pulumi/README.md`. (Pre-IaC path:
 `install_kueue.py --with-queues` for Kueue and let `cluster start` create the
 RBAC + NodePools.)
 
@@ -661,7 +662,7 @@ iris --controller-url=http://localhost:10000 ...
 |--------------|-----------|---------|-------------|
 | `cw-us-east-02a` | `iris` | `iris-controller-svc` | `cw-us-east-02a.yaml` |
 | `cw-rno2a` | `iris` | `iris-controller-svc` | `cw-rno2a.yaml` |
-| `ci-coreweave` | `iris-ci` | `iris-ci-controller-svc` | `ci-coreweave.yaml` (CI only) |
+| `cw-us-west-04a` | `iris-ci` | `iris-ci-controller-svc` | `cw-us-west-04a.yaml` (CI only) |
 
 ### GPU Configs
 
@@ -699,8 +700,11 @@ uv run iris --cluster=<cluster> job run \
   -e SCALE_GPU_REPLICAS 2 -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 8 \
   -e SCALE_NUM_EXPERTS 16 -e SCALE_TOP_K 2 -e SCALE_BATCH 32 \
   -e SCALE_SEQ_LEN 1024 -e SCALE_STEPS 10 -e RUN_ID <run-id> \
-  -- python -m experiments.grug.moe.launch_cw_scale
+  -- python -m experiments.grug.moe.launch_cw_scale --version dev --run
 ```
+
+`--version` sets the checkpoint version (required; `dev` to iterate) and `--run` builds it —
+without `--run` the launcher prints the lowered plan and exits.
 
 Success signals: every replica enters `initialize_jax` with
 `IRIS_NUM_TASKS=<replicas>`, steps complete, a checkpoint commits, and the
@@ -715,9 +719,16 @@ model per node instead of sharding across nodes.
 
 ### KubernetesProvider Operations
 
-On CoreWeave, there are no persistent worker daemons. The controller dispatches
-tasks directly as Kubernetes Pods, `list-workers` returns empty, and the
-`workers` SQL table is empty. Use:
+On CoreWeave, there are no persistent worker daemons: the controller dispatches
+tasks directly as Kubernetes Pods, so the `list-workers` RPC returns empty and
+the controller's `workers` state table stays empty. Node-level telemetry is
+surfaced differently. Each cluster sync the controller scrapes the
+`cw-exporters` DaemonSets — `node-exporter` (host CPU/memory/disk/network over
+the node's hostPort `:9100`) and `dcgm-exporter` (GPU HBM/utilization/
+temperature/power over the pod's `:9400`) — and writes one `iris.worker` finelog
+row per node, keyed by node name. The same readings appear in
+`get-kubernetes-cluster-status` and the dashboard **Cluster** panel's node
+table. Use:
 
 ```bash
 kci get pods -n iris -l iris.managed=true
@@ -761,7 +772,9 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 ### Gotchas
 
 - **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
-- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly.
+- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly; no
+  worker daemons register. Per-node readings live in the `iris.worker` finelog table
+  and the **Cluster** panel, not this RPC.
 - **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
 - **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
 - **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
@@ -853,10 +866,41 @@ in `CoreweavePlatform`):
 | `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
 | `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
 
-> **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
-> as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
+> **Warning — Disk layout**: CoreWeave bare-metal nodes boot a **15 GB RAM disk**
+> as the root filesystem, with the node's NVMe RAID (`/dev/md127`, 7.7 TB on CPU
+> nodes, 15–31 TB on GPU nodes) mounted at `/mnt/local`. The `cache_dir` must
 > point to NVMe (e.g. `/mnt/local/iris-cache`). Using the default root path will
 > fill the RAM disk immediately and cause Pod eviction.
+>
+> Only `cache_dir` needs this: the kubelet root is on the NVMe, so task `emptyDir`
+> volumes (`/app`, `/tmp`) and container writable layers already land there.
+
+### Task storage layout
+
+Task pods use no PVCs — nothing on the task path touches the `shared-vast`
+(distributed) storage class, which backs only the controller state and finelog
+caches. Every task volume is node-local NVMe:
+
+| Container path | Volume | Lifetime |
+|----------------|--------|----------|
+| `/app`, `/tmp` | `emptyDir` (kubelet root) | Pod |
+| `/uv/cache`, `/hf/cache`, `/cargo` | `hostPath` under `cache_dir` | Node |
+| `/dev/shm` | `emptyDir` (memory) | Pod |
+
+Iris points `UV_CACHE_DIR`, `HF_HUB_CACHE`, and `CARGO_HOME` at those
+`hostPath` mounts for every task, including tasks that bring their own image, so
+wheels and model weights are fetched once per node rather than once per task.
+`HF_HOME` is deliberately not among them. It holds the submitter's `HF_TOKEN`, so
+it stays under the pod's own `$HOME` (`iris job run` defaults it to
+`~/.cache/huggingface`) rather than a directory every task on the node can read.
+`HF_HUB_CACHE` covers the part worth sharing: the content-addressed blobs.
+
+The `cache_dir` tree is never pruned; it grows until the node is rebuilt or an
+operator clears it. Watch it on long-lived reserved fleets:
+
+```bash
+kubectl exec -n iris <pod> -c task -- du -sh /uv/cache /hf/cache
+```
 
 ### Startup grace period
 
@@ -1209,6 +1253,13 @@ kubectl logs <pod> -n iris --previous    # Logs from the last crash
 
 If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
 instantly. Fix in config and redeploy.
+
+A pod evicted for `ephemeral-storage` while `cache_dir` is correct is a different
+fault: that limit comes from the task's own `disk` resource request and covers
+only `emptyDir` plus the container layer, not the `hostPath` caches. Either the
+task is writing large files under `/app` or `/tmp`, or it is writing to a cache
+path Iris does not mount (check `env | grep -iE 'CACHE|HF_'` against the task
+storage layout above) and needs a larger `disk` request.
 
 ## 17. References
 

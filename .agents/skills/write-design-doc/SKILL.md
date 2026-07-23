@@ -109,7 +109,17 @@ Show the user a brief summary: what you incorporated (design vs spec), what you'
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Use one
+   commit to add `.agents/projects/<slug>/design.md`, `research.md`, and
+   `spec.md`. Use an imperative PR title such as `[Design] Add finelog
+   persistence`. State the proposed behavior and motivation in the PR body,
+   then link all three files with absolute branch-rooted URLs
+   (relative paths 404 from PR descriptions; see "Linking conventions"). Do not
+   add a stock discussion footer; the design's Open Questions section identifies
+   requested feedback. Follow
+   `.agents/skills/writing-style/pull-requests.md` and
+   `.agents/skills/writing-style/ai-writing-donts.md`. Labels `design` and
+   `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression). Send it; no need to confirm exact text unless asked.
 

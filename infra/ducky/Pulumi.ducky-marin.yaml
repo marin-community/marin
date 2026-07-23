@@ -1,0 +1,35 @@
+# The production ducky stack: /ops/ducky on the marin cluster, pinned to us-east5 on a
+# whole v6e-4 host (DuckDB uses the large CPU/RAM envelope; the chips sit idle — v6e-4 is
+# the largest single-VM v6e, and single-node DuckDB gains nothing from a multi-VM slice).
+# Memory sits below the ~700 GB allocatable so the request schedules.
+#
+# Repository secrets enter the deploy process as environment variables and are resolved at
+# submit time. Plain values are ordinary env config.
+# `deploy_generation` is the forced-redeploy hammer: bump it (or override it via the
+# ops-ducky workflow_dispatch input) to resubmit an otherwise unchanged spec.
+config:
+  ducky:cluster: marin
+  ducky:user: ops
+  ducky:region: us-east5
+  ducky:tpu: v6e-4
+  ducky:cpu: "180"
+  ducky:memory: 690GB
+  ducky:deploy_generation: "0"
+  ducky:env:
+    DUCKY_SCRATCH_BUCKET: gs://marin-us-east5/tmp/ttl=7d
+    DUCKY_RESULT_TTL_DAYS: "7"
+    # Outer read bound: any marin bucket on either backend. Whether an allowed GCS read
+    # is cross-region is decided at query time from live bucket-location metadata and
+    # gated by a `-- cross-region: allow` comment; S3 reads are never cross-region-gated.
+    DUCKY_ALLOWED_BUCKETS: gs://marin-,s3://marin-
+    DUCKY_R2_ENDPOINT: 74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    DUCKY_CW_ENDPOINT: cwobject.com
+    DUCKY_CW_ACCESS_KEY: CWXSLOAORRUJOJKH
+  ducky:secret_env:
+    DUCKY_GCS_HMAC_KEY_ID: env:DUCKY_GCS_HMAC_KEY_ID
+    DUCKY_GCS_HMAC_SECRET: env:DUCKY_GCS_HMAC_SECRET
+    DUCKY_R2_ACCESS_KEY: env:R2_ACCESS_KEY_ID
+    DUCKY_R2_SECRET_KEY: env:R2_SECRET_ACCESS_KEY
+    DUCKY_CW_SECRET_KEY: env:DUCKY_CW_SECRET_KEY
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6aRDsYQ2FS3VJ7N/qENL4tQrvNlhqlCaoVXini2vOpQSSACdtF6iP6ajZwMv19he+MWpHMqfWQ1fP3JPQh2oux4p+QxrtbKeTwhC5bKFZWhFl/2ByVgcBSYdqcixKp19YM17xuE31qiiSQ==

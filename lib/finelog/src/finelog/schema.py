@@ -29,6 +29,12 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 # names in error messages.
 ColumnTypeValue = int
 
+# The Arrow type for ``COLUMN_TYPE_MAP``: a homogeneous string-keyed,
+# string-valued map. ``pa.map_(pa.string(), pa.string())`` is the exact wire
+# form the Rust server declares (entries/key/value field names, a non-null key
+# and a nullable value), so a batch built from it is accepted cast-free.
+MAP_STRING_STRING = pa.map_(pa.string(), pa.string())
+
 _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_STRING: pa.string(),
     stats_pb2.COLUMN_TYPE_INT64: pa.int64(),
@@ -37,6 +43,7 @@ _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_BOOL: pa.bool_(),
     stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: pa.timestamp("ms"),
     stats_pb2.COLUMN_TYPE_BYTES: pa.binary(),
+    stats_pb2.COLUMN_TYPE_MAP: MAP_STRING_STRING,
 }
 
 

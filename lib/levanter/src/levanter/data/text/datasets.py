@@ -48,8 +48,6 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
-    SupervisedLmDatasetFormat,
-    SupervisedTextProcessor,
     TextLmDatasetFormat,
 )
 from levanter.models.lm_model import LmExample
@@ -525,24 +523,6 @@ def dataset_for_component(
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
-            Pos,
-            eos_id=eos_id,
-            block_cross_document_attention=block_cross_document_attention,
-        )
-    elif isinstance(fmt, SupervisedLmDatasetFormat):
-        loss_weights_key = SupervisedTextProcessor.loss_weights_key
-        if pack:
-            max_segments, slice_strategy = _resolve_pack_config(pack)
-            return PackedTokenDataset(
-                cache,
-                Pos,
-                max_segments_per_example=max_segments,
-                slice_strategy=slice_strategy,
-                loss_weights_key=loss_weights_key,
-                block_cross_document_attention=block_cross_document_attention,
-            )
-        return CausalLmDataset(
-            TokenSeqDataset(cache, Pos.size, loss_weights_key=loss_weights_key),
             Pos,
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,

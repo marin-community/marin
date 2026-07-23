@@ -107,6 +107,11 @@ class K8sResource(Enum):
     # Kueue: the namespaced LocalQueue Iris reconciles at controller start to
     # bind its namespace to the admin-provisioned ClusterQueue.
     LOCAL_QUEUES = ("kueue.x-k8s.io", "v1beta1", True, "localqueues", "LocalQueue")
+    # Kueue: the cluster-scoped, admin-provisioned ClusterQueue and ResourceFlavor
+    # (see kueue_manifests.py) — presence-checked by verify_prerequisites, never
+    # created by Iris.
+    CLUSTER_QUEUES = ("kueue.x-k8s.io", "v1beta1", False, "clusterqueues", "ClusterQueue")
+    RESOURCE_FLAVORS = ("kueue.x-k8s.io", "v1beta1", False, "resourceflavors", "ResourceFlavor")
 
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group

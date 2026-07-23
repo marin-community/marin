@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "marin-dupekit-native"
+# Version is read from rust/Cargo.toml by maturin so the release workflow has a
+# single source of truth to stamp (see lib/dupekit/build_package.py).
+dynamic = ["version"]
+description = "Native (Rust) text-deduplication kernels for marin-dupekit."
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+# The arrow crate's `pyarrow` feature converts between arrow-rs and pyarrow at
+# the FFI boundary, so pyarrow must be importable wherever the extension runs.
+dependencies = [
+    "pyarrow>=23.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/marin-community/marin"
+Issues = "https://github.com/marin-community/marin/issues"
+
+[tool.maturin]
+# The cdylib crate is this directory's Cargo.toml (a standalone single crate).
+# We deliberately do NOT set python-source: the pure `dupekit` package ships
+# from the sibling marin-dupekit (hatchling) wheel, so this wheel carries only
+# the top-level `dupekit_native` extension.
+manifest-path = "Cargo.toml"
+module-name = "dupekit_native"
+# Avoid linking libpython, making wheels portable across CPython >= 3.12 (abi3).
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# Rebuild the extension when the Rust sources change, not just pyproject.toml —
+# this is what makes the `scripts/rust_mode.py dev` path source track live edits.
+cache-keys = [
+    "pyproject.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "src/**/*.rs",
+]

@@ -7,10 +7,13 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -18,16 +21,24 @@ import requests
 from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import WORKER_PYTHON_VERSION
+from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
+# Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
+# this is only a convenience snapshot, capped because vLLM logs can be large.
+_NATIVE_LOG_TAIL_LINES = 1000
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# The worker interpreter marin-serve provisions everywhere it controls one: the checkout-free
-# venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
-# worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
-WORKER_PYTHON_VERSION = "3.12"
+# Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
+# vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
+_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
+_CUDA_TORCH_BACKEND = "cu130"
+_FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 
 
 class VllmLauncher(Protocol):
@@ -56,38 +67,70 @@ class WorkspaceVllm:
         return {}
 
 
+class VllmType(StrEnum):
+    """Which CUDA vLLM :class:`IsolatedCudaVllm` provisions."""
+
+    UPSTREAM = "upstream"  # stock PyPI vLLM — any architecture upstream vLLM knows
+    MARIN_FORK = "marin_fork"  # marin-community/vllm — for Marin-custom archs (e.g. grug_moe)
+
+
 @dataclass(frozen=True)
 class IsolatedCudaVllm:
-    """Run CUDA vLLM from a throwaway uv-managed environment via ``uvx``.
+    """Provide an isolated CUDA vLLM command and environment.
 
-    GPU serving pins CUDA vLLM here instead of in the Marin workspace lockfile:
-    vLLM is only ever a ``vllm serve`` subprocess, so ``uvx`` provisions it — and
-    its torch/CUDA wheel tree — in a cached, isolated environment that never
-    enters Marin's own resolution. Bumping the version is therefore just a string,
-    with no workspace re-lock. The ``[runai]`` extra keeps gs://-checkpoint
-    streaming working, at parity with the TPU path.
+    Both variants stream checkpoints from the CoreWeave object store. The Marin fork additionally
+    serves Marin-specific architectures.
     """
 
-    version: str
+    source: VllmType = VllmType.UPSTREAM
+    version: str | None = None
+    """Exact PyPI pin; required for ``UPSTREAM``, ignored for ``MARIN_FORK`` (the fork pin comes
+    from ``tool.uv.sources.vllm``)."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
-    # uv's PyTorch index selector; stock vLLM (>=0.25) targets torch 2.11 / CUDA 13.
-    torch_backend: str = "cu128"
+
+    def __post_init__(self) -> None:
+        if self.source is VllmType.UPSTREAM and not self.version:
+            raise ValueError("IsolatedCudaVllm(UPSTREAM) requires an explicit vLLM version.")
 
     def command(self) -> list[str]:
+        if self.source is VllmType.MARIN_FORK:
+            from_spec, extra = vllm_fork_ref(), ["--with", _RUNAI_STREAMER_REQUIREMENT]
+        else:
+            from_spec, extra = f"vllm[runai]=={self.version}", []
         return [
             "uvx",
             "--from",
-            f"vllm[runai]=={self.version}",
+            from_spec,
+            *extra,
             "--python",
             self.python_version,
             "--torch-backend",
-            self.torch_backend,
+            _CUDA_TORCH_BACKEND,
             "vllm",
         ]
 
     def env(self) -> dict[str, str]:
-        return {}
+        # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
+        # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
+        # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
+        # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
+        # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
+        # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        environment = {
+            _FLASHINFER_SAMPLER_ENV_VAR: "0",
+            _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
+        }
+        if self.source is VllmType.MARIN_FORK:
+            environment["VLLM_USE_PRECOMPILED"] = "1"
+        return environment
+
+
+def _write_virtual_hosted_s3_config() -> str:
+    path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
+    with open(path, "w") as handle:
+        handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
+    return path
 
 
 @dataclass(frozen=True)
@@ -97,7 +140,7 @@ class IsolatedTpuVllm:
     The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
     runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
     provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve --tpu`` runs from outside a checkout.
+    ``marin-serve iris --tpu`` runs from outside a checkout.
     """
 
     vllm_ref: str
@@ -131,6 +174,87 @@ class IsolatedTpuVllm:
         return {"VLLM_TARGET_DEVICE": "tpu"}
 
 
+# Forwarded lines route to the parent's stderr (finelog tags it ERROR) or stdout (INFO) by their
+# own level, not by source stream: vLLM writes all levels to its stderr.
+_ERROR_LEVEL_MARKERS = ("ERROR", "CRITICAL")
+
+
+def _looks_like_error(line: str) -> bool:
+    """Coarse severity check — a substring, not a format parse; a misroute only mislabels the level."""
+    return any(marker in line for marker in _ERROR_LEVEL_MARKERS)
+
+
+class _LogPump:
+    """Forward a vLLM subprocess's stdout/stderr to the parent's fds and to on-disk logs.
+
+    One daemon reader thread per pipe drains the child and, per line, appends it to a capped
+    on-disk log (which backs the failure tail and ``diagnostics()``) and re-emits it to the
+    parent's stdout/stderr by severity. Forwarding goes to the fds directly, not through the
+    logger, so it does not depend on ``rigging.configure_logging`` having run — several callers of
+    this module never call it. A reader must never stall while the child lives: a full pipe blocks
+    the child.
+    """
+
+    def __init__(self, process: subprocess.Popen[str], stdout_path: str, stderr_path: str) -> None:
+        self._process = process
+        # Open for the server's lifetime (closed by close()); line-buffered so the tail stays current.
+        self._stdout_file = open(stdout_path, "w", buffering=1)  # noqa: SIM115
+        self._stderr_file = open(stderr_path, "w", buffering=1)  # noqa: SIM115
+        # Both readers may write to the parent's stdout; serialize so lines don't interleave.
+        self._sink_lock = threading.Lock()
+        assert process.stdout is not None and process.stderr is not None
+        self._threads = (
+            threading.Thread(
+                target=self._pump, args=(process.stdout, self._stdout_file), name="vllm-stdout", daemon=True
+            ),
+            threading.Thread(
+                target=self._pump, args=(process.stderr, self._stderr_file), name="vllm-stderr", daemon=True
+            ),
+        )
+
+    def start(self) -> None:
+        for thread in self._threads:
+            thread.start()
+
+    def _pump(self, stream, log_file) -> None:
+        # A stalled reader deadlocks the child, so a failed write must not break the drain loop:
+        # guard the disk and parent-fd writes independently.
+        try:
+            for line in iter(stream.readline, ""):
+                try:
+                    log_file.write(line)
+                except Exception:
+                    logger.warning("Failed to persist a vLLM log line to %s", log_file.name, exc_info=True)
+                sink = sys.stderr if _looks_like_error(line) else sys.stdout
+                try:
+                    with self._sink_lock:
+                        sink.write(line.rstrip("\r\n") + "\n")
+                        sink.flush()
+                except Exception:
+                    logger.warning("Failed to forward a vLLM log line to the parent process", exc_info=True)
+        finally:
+            # At EOF: flush so a newline-less final fragment (a crash mid-write) reaches the tail,
+            # which reads right after join(); then close the read end so serves don't leak pipe fds.
+            try:
+                log_file.flush()
+            except Exception:
+                logger.debug("Failed to flush a vLLM native log file", exc_info=True)
+            stream.close()
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for both readers to drain and exit, bounded by ``timeout``."""
+        for thread in self._threads:
+            thread.join(timeout=timeout)
+
+    def close(self) -> None:
+        for log_file in (self._stdout_file, self._stderr_file):
+            try:
+                log_file.close()
+            except Exception:
+                # Best-effort during teardown; a close failure must not mask the caller's shutdown.
+                logger.debug("Failed to close a vLLM native log file", exc_info=True)
+
+
 @dataclass(frozen=True)
 class VllmServerHandle:
     """A handle for a running native vLLM server."""
@@ -140,8 +264,16 @@ class VllmServerHandle:
     process: subprocess.Popen[str]
     process_group_id: int | None
     log_dir: str
+    # Owns the reader threads and on-disk log files.
+    log_pump: _LogPump | None = None
+    # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
+    metrics_forwarder: VllmMetricsForwarder | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
+        # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
+        if self.metrics_forwarder is not None:
+            self.metrics_forwarder.stop(timeout=timeout_seconds)
+
         self._signal(signal.SIGTERM)
         try:
             self.process.wait(timeout=timeout_seconds)
@@ -152,6 +284,12 @@ class VllmServerHandle:
         if self._process_group_exists():
             # The API parent can exit before EngineCore does, so check the group after wait().
             self._signal(signal.SIGKILL)
+
+        # Child and group are gone, so the pipes are at EOF; join the readers (bounded, so a
+        # descendant holding a pipe cannot hang teardown) and close the logs.
+        if self.log_pump is not None:
+            self.log_pump.join(timeout=timeout_seconds)
+            self.log_pump.close()
 
     def _signal(self, sig: signal.Signals) -> None:
         if self.process_group_id is not None:
@@ -195,7 +333,7 @@ def _tail_file(path: str, max_lines: int) -> str:
         return f"<failed to read {path}: {exc}>"
 
 
-def _native_logs_tail(log_dir: str | None, *, max_lines: int = 200) -> str:
+def _native_logs_tail(log_dir: str | None, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> str:
     if not log_dir:
         return "<no log directory available for native vLLM server>"
     stdout_path = os.path.join(log_dir, "stdout.log")
@@ -215,7 +353,7 @@ def validate_vllm_mode_env() -> None:
     raise ValueError(_REMOVED_VLLM_MODE_MESSAGE)
 
 
-def _native_diagnostics(handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+def _native_diagnostics(handle: VllmServerHandle, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> dict[str, str]:
     return {
         "vLLM native log dir": handle.log_dir,
         "vLLM native logs (tail)": _native_logs_tail(handle.log_dir, max_lines=max_lines),
@@ -245,6 +383,9 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
+    dtype = engine_kwargs.get("dtype")
+    if dtype is not None:
+        args.extend(["--dtype", str(dtype)])
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])
@@ -400,12 +541,12 @@ class VllmEnvironment:
             "log_dir": self.vllm_server.log_dir if self.vllm_server else None,
         }
 
-    def logs_tail(self, *, max_lines: int = 200) -> str:
+    def logs_tail(self, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> str:
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return _native_logs_tail(self.vllm_server.log_dir, max_lines=max_lines)
 
-    def diagnostics(self, *, max_lines: int = 200) -> dict[str, str]:
+    def diagnostics(self, *, max_lines: int = _NATIVE_LOG_TAIL_LINES) -> dict[str, str]:
         if self.vllm_server is None:
             return {}
         return _native_diagnostics(self.vllm_server, max_lines=max_lines)
@@ -483,29 +624,30 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    # These handles are owned by the long-lived vLLM subprocess below and must
-    # stay open for its lifetime, so a context manager is not applicable here.
-    stdout_f = open(stdout_path, "w")  # noqa: SIM115
-    stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
     # A launcher (e.g. the isolated TPU build) may require extra env, such as the
     # vLLM build target; overlay it after the canonical defaults so it wins.
     native_env.update(launcher.env())
     logger.info(
-        "Starting vLLM native server with "
+        "Starting vLLM native server (output streams to the job log). "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
     process = subprocess.Popen(
         cmd,
-        stdout=stdout_f,
-        stderr=stderr_f,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
         env=native_env,
         # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
         # release the TPU instead of leaving libtpu held by a stale child.
         start_new_session=True,
     )
+    # Pump before readiness polling: vLLM logs heavily during the long weight-load/compile, and an
+    # undrained pipe would block the child mid-startup.
+    log_pump = _LogPump(process, stdout_path, stderr_path)
+    log_pump.start()
     try:
         process_group_id = os.getpgid(process.pid)
     except ProcessLookupError:
@@ -515,8 +657,8 @@ def _start_vllm_native_server(
 
     def _check_process_alive() -> None:
         if process.poll() is not None:
-            stdout_f.close()
-            stderr_f.close()
+            # Child has exited; drain the readers before reading the tail so it has the final lines.
+            log_pump.join(timeout=5)
             logs = _native_logs_tail(log_dir)
             raise RuntimeError(
                 "vLLM server process exited before becoming ready.\n"
@@ -532,6 +674,7 @@ def _start_vllm_native_server(
         process=process,
         process_group_id=process_group_id,
         log_dir=log_dir,
+        log_pump=log_pump,
     )
 
     try:
@@ -543,7 +686,8 @@ def _start_vllm_native_server(
     except Exception:
         handle.stop()
         raise
-    finally:
-        stdout_f.close()
-        stderr_f.close()
-    return handle
+
+    # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
+    # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
+    metrics_url = f"http://{host}:{resolved_port}/metrics"
+    return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))

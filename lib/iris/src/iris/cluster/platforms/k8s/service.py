@@ -54,6 +54,10 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# API error bodies quote the offending manifest; keep enough to identify the
+# verdict without flooding logs.
+_ERROR_BODY_MAX_LEN: int = 500
+
 
 @runtime_checkable
 class K8sService(Protocol):
@@ -270,7 +274,9 @@ class CloudK8sService:
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
-                raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+                raise KubectlError(
+                    f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
+                ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).

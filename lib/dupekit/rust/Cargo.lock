@@ -452,8 +452,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dupekit"
-version = "0.1.0"
+name = "dupekit-native"
+version = "0.1.2"
 dependencies = [
  "arrow",
  "blake2",

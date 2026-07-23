@@ -25,8 +25,9 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import stamp_backend
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
+from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
+from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
@@ -34,6 +35,7 @@ from .conftest import (
     query_attempt,
     query_task,
     query_tasks_for_job,
+    reconcile_once,
     submit_direct_job,
 )
 
@@ -470,6 +472,69 @@ def test_apply_worker_failed_from_assigned(state):
 # =============================================================================
 # Controller-level tests
 # =============================================================================
+
+
+def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
+    """A K8s-only controller enforces execution timeouts (#7431)."""
+    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431")
+    state = ControllerTestState(ctrl._db)
+
+    jid = JobName.root("test-user", "gang-timeout")
+    req = make_direct_job_request("gang-timeout", replicas=1)
+    req.timeout.milliseconds = 1000
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
+
+    # Start the task two hours before the timeout scan.
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
+            now=long_ago,
+        )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
+    reconcile_once(ctrl)
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
+
+
+def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
+    """K8s admission waits do not consume the execution timeout (#7431)."""
+    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431-pending")
+    state = ControllerTestState(ctrl._db)
+
+    jid = JobName.root("test-user", "gang-pending")
+    req = make_direct_job_request("gang-pending", replicas=1)
+    req.timeout.milliseconds = 1000
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
+
+    # K8s reports Pending/SchedulingGated pods as BUILDING.
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_BUILDING)],
+            now=long_ago,
+        )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
+    assert query_attempt(state, task_id, attempt_id).started_at_ms is None
+
+    ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
+    reconcile_once(ctrl)
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
 
 
 def test_drain_multiple_tasks(state):

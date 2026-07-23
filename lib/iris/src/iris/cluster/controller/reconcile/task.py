@@ -415,10 +415,11 @@ def apply_one_transition(
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Stamp started_at_ms on BUILDING so the execution-timeout scan
-        # (gated on started_at_ms IS NOT NULL) can finalize wedged builds.
-        # COALESCE on the RUNNING write preserves this stamp. Issue #6077.
-        started_ms = now_ms
+        # Worker BUILDING runs setup, so start its clock to catch wedged builds
+        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
+        # at RUNNING instead (#7431).
+        if source is TransitionSource.WORKER_RECONCILE:
+            started_ms = now_ms
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,

@@ -16,6 +16,7 @@ import shlex
 import threading
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +26,13 @@ from typing import ClassVar, NamedTuple
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.k8s.node_metrics import (
+    CW_EXPORTERS_NAMESPACE,
+    DEFAULT_NODE_STATS_POLL_INTERVAL,
+    NodeMetrics,
+    NodeStatsCollector,
+    NodeTarget,
+)
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -32,7 +40,7 @@ from iris.cluster.controller.backend import (
     BackendCapability,
     BackendRuntime,
     DeviceCapacity,
-    ProviderUnsupportedError,
+    ProviderError,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
@@ -70,8 +78,11 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.runtime.env import (
+    STANDARD_MOUNTS,
     VENV_PATH,
+    WORKDIR_MOUNT,
     build_common_iris_env,
+    cache_host_dirname,
     normalize_workdir_relative_path,
     render_setup_steps,
 )
@@ -85,8 +96,18 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
+from iris.cluster.runtime.types import MountKind
+from iris.cluster.stats.emitter import PeriodicEmitter
+from iris.cluster.stats.tables import (
+    IrisProfile,
+    IrisTaskStat,
+    ProfileTrigger,
+    TaskEventRow,
+    WorkerStatus,
+    build_task_stat,
+    stats_timestamp,
+)
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.cluster.worker.stats import IrisTaskStat, TaskEventRow, build_task_stat, stats_timestamp
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -351,46 +372,37 @@ def _pod_name(task_id: JobName, attempt_id: int) -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
-_STANDARD_MOUNTS = [
-    # (volume_name, container_path, kind)
-    ("workdir", "/app", "workdir"),
-    ("tmpfs", "/tmp", "tmpfs"),
-    ("uv-cache", "/uv/cache", "cache"),
-    ("cargo-registry", "/root/.cargo/registry", "cache"),
-    ("cargo-target", "/root/.cargo/target", "cache"),
-]
-
-
 def _build_volumes_and_mounts(
     cache_dir: str,
     has_accelerator: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath so they persist
-    across pod restarts on the same node. /dev/shm is memory-backed with a
+    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
+    they persist across pods on the same node. /dev/shm is memory-backed with a
     generous limit for GPU/TPU multi-process communication.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
-    to avoid running out of space installing torch+CUDA.
+    to avoid running out of space installing torch+CUDA. emptyDir is unaffected:
+    it lives under the kubelet root, which is on the node NVMe.
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for name, path, kind in _STANDARD_MOUNTS:
-        if kind in ("workdir", "tmpfs"):
-            volumes.append({"name": name, "emptyDir": {}})
-        else:
+    for spec in STANDARD_MOUNTS:
+        if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
-                    "name": name,
+                    "name": spec.name,
                     "hostPath": {
-                        "path": f"{cache_dir}/{path.strip('/').replace('/', '-')}",
+                        "path": f"{cache_dir}/{cache_host_dirname(spec.container_path)}",
                         "type": "DirectoryOrCreate",
                     },
                 }
             )
-        mounts.append({"name": name, "mountPath": path})
+        else:
+            volumes.append({"name": spec.name, "emptyDir": {}})
+        mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
     if has_accelerator:
@@ -475,8 +487,10 @@ def _build_init_container_spec(
     script_path = Path(__file__).parent / "bundle_fetch.py"
     bundle_script = script_path.read_text()
 
-    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": "/app"}]
-    init_mounts: list[dict] = [{"name": "workdir", "mountPath": "/app"}]
+    # The init container stages the bundle into the same volume the task reads it
+    # from, so both sides take the path and volume name from the one mount spec.
+    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": WORKDIR_MOUNT.container_path}]
+    init_mounts: list[dict] = [{"name": WORKDIR_MOUNT.name, "mountPath": WORKDIR_MOUNT.container_path}]
     extra_volumes: list[dict] = []
     configmap_name: str | None = None
 
@@ -705,10 +719,10 @@ def _build_pod_manifest(
     pod_name = _pod_name(task_id, attempt_id)
 
     namespace = config.namespace
-    default_image = config.default_image
-    # Per-task image override (RunTaskRequest.task_image). The init container
-    # keeps default_image since it runs iris's own bundle_fetch tooling.
-    task_image = run_req.task_image or default_image
+    # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
+    # cluster default. GPU tooling (nsys) is baked into the task image, so a GPU
+    # job needs no special image and iris does not inspect the resource request.
+    task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -781,7 +795,7 @@ def _build_pod_manifest(
         "image": task_image,
         "imagePullPolicy": "IfNotPresent",
         "env": env_list,
-        "workingDir": "/app",
+        "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated
@@ -891,6 +905,11 @@ def _build_pod_manifest(
         "volumes": volumes,
     }
 
+    # gVisor isolates the whole pod via a node RuntimeClass; the container
+    # securityContext stays at the DEFAULT posture (see _security_context).
+    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+        spec["runtimeClassName"] = "gvisor"
+
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         node_selector[managed_label] = "true"
@@ -912,12 +931,9 @@ def _build_pod_manifest(
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-    # Skip activeDeadlineSeconds for gangs only: k8s counts it from pod creation,
-    # including time a gang spends SchedulingGated while it waits for the autoscaler
-    # to provision every node, so a large gang could hit DeadlineExceeded before it
-    # ever runs. Single pods admit quickly and, on a K8s-only cluster, this is their
-    # only timeout enforcement (the controller's execution-timeout scan runs only for
-    # worker-daemon backends), so they keep the deadline.
+    # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
+    # may wait SchedulingGated while nodes provision. The controller times gangs
+    # from execution start; single pods keep the earlier native deadline.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
@@ -1434,6 +1450,140 @@ def _fetch_node_pools(kubectl: K8sService, managed_label: str) -> list[controlle
     return result
 
 
+# Node labels vary by provider; try the standard key first, then the CoreWeave
+# beta alias. Empty when neither is set.
+_INSTANCE_TYPE_LABELS = ("node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type")
+_REGION_LABELS = ("topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region")
+_GPU_MODEL_LABELS = ("gpu.nvidia.com/model",)
+
+
+def _node_label(node: dict, keys: tuple[str, ...]) -> str:
+    labels = node.get("metadata", {}).get("labels", {})
+    for key in keys:
+        if value := labels.get(key):
+            return value
+    return ""
+
+
+def _node_internal_ip(node: dict) -> str:
+    for addr in node.get("status", {}).get("addresses", []):
+        if addr.get("type") == "InternalIP":
+            return addr.get("address", "")
+    return ""
+
+
+def _node_ready(node: dict) -> bool:
+    for cond in node.get("status", {}).get("conditions", []):
+        if cond.get("type") == "Ready":
+            return cond.get("status") == "True"
+    return False
+
+
+def _node_status_summary(node: dict) -> str:
+    """Human-readable readiness like ``kubectl get nodes`` STATUS."""
+    ready = "Ready" if _node_ready(node) else "NotReady"
+    if node.get("spec", {}).get("unschedulable"):
+        return f"{ready},SchedulingDisabled"
+    return ready
+
+
+def _node_cpu_millicores(node: dict) -> int:
+    allocatable = node.get("status", {}).get("allocatable", {})
+    cpu_str = str(allocatable.get("cpu", "0"))
+    cpu_val = parse_k8s_quantity(cpu_str)
+    return cpu_val if cpu_str.endswith("m") else cpu_val * 1000
+
+
+def _node_memory_bytes(node: dict) -> int:
+    return parse_k8s_quantity(node.get("status", {}).get("allocatable", {}).get("memory", "0"))
+
+
+def _node_disk_bytes(node: dict) -> int:
+    return parse_k8s_quantity(node.get("status", {}).get("allocatable", {}).get("ephemeral-storage", "0"))
+
+
+def _node_gpu_count(node: dict) -> int:
+    gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+    return int(parse_k8s_quantity(str(gpu))) if gpu else 0
+
+
+def _running_pods_by_node(pods: list[dict]) -> dict[str, int]:
+    """Count active managed pods per node from ``spec.nodeName``."""
+    counts: dict[str, int] = {}
+    for pod in pods:
+        node_name = pod.get("spec", {}).get("nodeName")
+        if node_name:
+            counts[node_name] = counts.get(node_name, 0) + 1
+    return counts
+
+
+def _node_status_proto(
+    node: dict,
+    *,
+    running_pods: int,
+    cpu_mc: int,
+    mem_bytes: int,
+    metrics: NodeMetrics | None,
+    metrics_ts: int,
+) -> controller_pb2.Controller.NodeStatus:
+    """Build a NodeStatus proto: node identity/liveness + the latest scraped readings."""
+    m = metrics or NodeMetrics()
+    return controller_pb2.Controller.NodeStatus(
+        name=node.get("metadata", {}).get("name", ""),
+        ready=_node_ready(node),
+        schedulable=not node.get("spec", {}).get("unschedulable", False),
+        status_summary=_node_status_summary(node),
+        instance_type=_node_label(node, _INSTANCE_TYPE_LABELS),
+        region=_node_label(node, _REGION_LABELS),
+        gpu_count=m.gpu_count if m.gpu_count is not None else _node_gpu_count(node),
+        gpu_model=m.gpu_model or _node_label(node, _GPU_MODEL_LABELS),
+        cpu_millicores=cpu_mc,
+        memory_bytes=mem_bytes,
+        disk_bytes=_node_disk_bytes(node),
+        running_pods=running_pods,
+        created=node.get("metadata", {}).get("creationTimestamp", ""),
+        metrics_ts=metrics_ts if metrics is not None else 0,
+        cpu_pct=m.cpu_pct or 0.0,
+        mem_used_bytes=m.mem_used_bytes or 0,
+        mem_total_bytes=m.mem_total_bytes or 0,
+        disk_used_bytes=m.disk_used_bytes or 0,
+        disk_total_bytes=m.disk_total_bytes or 0,
+        net_recv_bytes=m.net_recv_bytes or 0,
+        net_sent_bytes=m.net_sent_bytes or 0,
+        hbm_used_bytes=m.hbm_used_bytes or 0,
+        hbm_total_bytes=m.hbm_total_bytes or 0,
+        gpu_util_pct=m.gpu_util_pct or 0.0,
+        gpu_temp_c=m.gpu_temp_c or 0.0,
+        gpu_power_w=m.gpu_power_w or 0.0,
+    )
+
+
+def _node_targets(nodes: list[dict], pods: list[dict]) -> list[NodeTarget]:
+    """Build the per-node scrape targets + row identity from the cached kubectl state."""
+    running = _running_pods_by_node(pods)
+    targets: list[NodeTarget] = []
+    for node in nodes:
+        name = node.get("metadata", {}).get("name", "")
+        if not name:
+            continue
+        occupied = running.get(name, 0)
+        device_type = "gpu" if _node_gpu_count(node) > 0 else "cpu"
+        targets.append(
+            NodeTarget(
+                name=name,
+                internal_ip=_node_internal_ip(node),
+                status=WorkerStatus.RUNNING if occupied else WorkerStatus.IDLE,
+                device_type=device_type,
+                device_variant=_node_label(node, _GPU_MODEL_LABELS),
+                zone=_node_label(node, _REGION_LABELS),
+                cpu_count=_node_cpu_millicores(node) // 1000,
+                memory_bytes=_node_memory_bytes(node),
+                running_pod_count=occupied,
+            )
+        )
+    return targets
+
+
 class ClusterState:
     """Live cluster state maintained by the sync thread.
 
@@ -1452,6 +1602,17 @@ class ClusterState:
         self._nodes: list[dict] = []
         self._workloads: list[dict] = []
         self._node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
+        # Latest per-node host/GPU readings from the node-stats collector's scrape,
+        # folded into the NodeStatus rows so the dashboard shows live utilization
+        # without re-scraping on every status call. Empty until the first scrape.
+        self._node_metrics: dict[str, NodeMetrics] = {}
+        self._node_metrics_ts: int = 0
+
+    def set_node_metrics(self, metrics: dict[str, NodeMetrics], ts_ms: int) -> None:
+        """Replace the cached exporter snapshot (called by the node-stats collector)."""
+        with self._lock:
+            self._node_metrics = dict(metrics)
+            self._node_metrics_ts = ts_ms
 
     def update(
         self,
@@ -1502,24 +1663,35 @@ class ClusterState:
             nodes = self._nodes[:]
             workloads = self._workloads[:]
             node_pools = self._node_pools[:]
+            node_metrics = dict(self._node_metrics)
+            metrics_ts = self._node_metrics_ts
 
         total_nodes = len(nodes)
         schedulable_nodes = 0
         total_cpu_mc = 0
         total_memory_bytes = 0
+        running = _running_pods_by_node(pods)
+        node_statuses: list[controller_pb2.Controller.NodeStatus] = []
         for node in nodes:
             spec = node.get("spec", {})
             taints = spec.get("taints", [])
-            if any(t.get("effect") in ("NoSchedule", "NoExecute") for t in taints):
-                continue
-            schedulable_nodes += 1
-            allocatable = node.get("status", {}).get("allocatable", {})
-            cpu_str = allocatable.get("cpu", "0")
-            cpu_val = parse_k8s_quantity(cpu_str)
-            if not cpu_str.endswith("m"):
-                cpu_val *= 1000
-            total_cpu_mc += cpu_val
-            total_memory_bytes += parse_k8s_quantity(allocatable.get("memory", "0"))
+            cpu_mc = _node_cpu_millicores(node)
+            mem_bytes = _node_memory_bytes(node)
+            if not any(t.get("effect") in ("NoSchedule", "NoExecute") for t in taints):
+                schedulable_nodes += 1
+                total_cpu_mc += cpu_mc
+                total_memory_bytes += mem_bytes
+            name = node.get("metadata", {}).get("name", "")
+            node_statuses.append(
+                _node_status_proto(
+                    node,
+                    running_pods=running.get(name, 0),
+                    cpu_mc=cpu_mc,
+                    mem_bytes=mem_bytes,
+                    metrics=node_metrics.get(name),
+                    metrics_ts=metrics_ts,
+                )
+            )
 
         return controller_pb2.Controller.GetKubernetesClusterStatusResponse(
             namespace=namespace,
@@ -1530,11 +1702,12 @@ class ClusterState:
             pod_statuses=_build_pod_statuses(pods, workloads),
             provider_version="iris-kubernetes/v1",
             node_pools=node_pools,
+            nodes=node_statuses,
         )
 
 
 class ResourceCollector:
-    """Background thread that samples running pods' CPU/memory usage.
+    """Periodic emitter that samples running pods' CPU/memory usage.
 
     The reconcile loop declares the authoritative set of running pods via
     ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
@@ -1558,40 +1731,28 @@ class ResourceCollector:
         self._kubectl = kubectl
         self._table = task_stats_table
         self._labels = labels
-        self._poll_interval = poll_interval
         # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
         # identity needed to build IrisTaskStat without parsing strings.
         self._pods: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
-        self._thread.start()
+        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="resource-collector")
 
     def set_pods(self, pods: dict[tuple[str, int], str]) -> None:
         """Declare the authoritative set of pods to collect resources for."""
         with self._lock:
             self._pods = dict(pods)
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self.collect_once()
-            self._stop.wait(timeout=self._poll_interval)
-
     def collect_once(self) -> None:
         """Sample every tracked pod once and append a stat row per pod with usage.
 
-        Runs each ``poll_interval`` on the background thread; also the unit of
+        Runs each ``poll_interval`` on the emitter thread; also the unit of
         collection tests drive directly.
         """
         with self._lock:
             snapshot = list(self._pods.items())
         if not snapshot:
             return
-        try:
-            usage_by_pod = self._kubectl.top_pods(labels=self._labels)
-        except Exception as e:
-            logger.debug("ResourceCollector: top_pods raised: %s", e)
-            return
+        usage_by_pod = self._kubectl.top_pods(labels=self._labels)
 
         stats: list[IrisTaskStat] = []
         for (task_id_wire, attempt_id), pod_name in snapshot:
@@ -1611,16 +1772,106 @@ class ResourceCollector:
                     ),
                 )
             )
-        if not stats:
-            return
-        try:
+        if stats:
             self._table.write(stats)
-        except Exception:
-            logger.debug("ResourceCollector: write to iris.task failed", exc_info=True)
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=5)
+        self._emitter.close()
+
+
+# Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
+DEFAULT_PROFILE_POLL_INTERVAL = 600.0
+# Cap on concurrent kubectl exec streams a single capture cycle opens, so a large
+# gang is dumped near-simultaneously without exhausting the controller's k8s
+# connection pool.
+DEFAULT_PROFILE_MAX_CONCURRENCY = 8
+
+
+@dataclass(frozen=True)
+class _ProfileTarget:
+    """Identity one periodic thread dump needs: the task/attempt the row is
+    attributed to, the pod to exec into, and the node for the ``k8s/<node>``
+    vm_id (falling back to the pod name when the pod is not yet scheduled)."""
+
+    task_id: str
+    attempt_id: int
+    pod_name: str
+    node_name: str
+
+
+class PeriodicProfiler:
+    """Dumps each running task pod's threads every ``poll_interval`` and appends
+    one ``trigger="periodic"`` ``iris.profile`` row per pod.
+
+    The reconcile loop declares the running-pod set via ``set_pods()``; captures
+    then run on a background thread, off the reconcile path, on a bounded pool so
+    a whole gang is dumped near-simultaneously. Thread dumps rather than CPU
+    samples: a hung process samples no CPU, but a thread dump shows where each
+    rank is blocked.
+    """
+
+    def __init__(
+        self,
+        kubectl: K8sService,
+        profile_table: Table,
+        *,
+        poll_interval: float = DEFAULT_PROFILE_POLL_INTERVAL,
+        max_concurrency: int = DEFAULT_PROFILE_MAX_CONCURRENCY,
+    ):
+        self._kubectl = kubectl
+        self._table = profile_table
+        self._max_concurrency = max(1, max_concurrency)
+        self._targets: dict[tuple[str, int], _ProfileTarget] = {}
+        self._lock = threading.Lock()
+        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="periodic-profiler")
+
+    def set_pods(self, targets: dict[tuple[str, int], _ProfileTarget]) -> None:
+        """Declare the authoritative set of running pods to profile."""
+        with self._lock:
+            self._targets = dict(targets)
+
+    def collect_once(self) -> None:
+        """Dump every tracked pod once and append one profile row per pod.
+
+        Runs each ``poll_interval`` on the emitter thread; also the unit of
+        collection tests drive directly.
+        """
+        with self._lock:
+            snapshot = list(self._targets.values())
+        if not snapshot:
+            return
+        workers = min(self._max_concurrency, len(snapshot))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="k8s-profile") as pool:
+            rows = [row for row in pool.map(self._capture, snapshot) if row is not None]
+        if rows:
+            self._table.write(rows)
+
+    def _capture(self, target: _ProfileTarget) -> IrisProfile | None:
+        """Dump one pod's threads; returns the row, or None on any failure.
+
+        A pod whose venv lacks py-spy, or that vanished between reconcile and
+        capture, fails here and is skipped rather than aborting the cycle.
+        """
+        dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
+        try:
+            data = capture_threads(dispatch, pid="1")
+        except Exception as e:
+            logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
+            return None
+        if not data:
+            return None
+        return build_profile_row(
+            source=target.task_id,
+            attempt_id=target.attempt_id,
+            vm_id=f"k8s/{target.node_name or target.pod_name}",
+            duration_seconds=0,
+            profile_type=job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=False)),
+            profile_data=data,
+            trigger=ProfileTrigger.PERIODIC,
+        )
+
+    def close(self) -> None:
+        self._emitter.close()
 
 
 class TaskEventLog:
@@ -1731,6 +1982,121 @@ class _K8sProfileDispatch:
             logger.warning("SIGCONT sweep failed for pod %s: %s", self.pod_name, e)
 
 
+# Reads the task pod's PID-1 vitals from /proc in one exec, mirroring how profiling
+# reaches the pod (kubectl exec into the ``task`` container). Emits marker-delimited
+# raw file contents; parsing (including the two CPU samples) happens controller-side
+# in ``_parse_pod_proc_status``. The 0.5s gap between the two /proc/1/stat reads is the
+# CPU sampling interval; a container whose sleep rejects fractions just yields ~0 cpu.
+_POD_PROC_STATUS_SCRIPT = r"""
+echo "@@hostname"; cat /proc/sys/kernel/hostname 2>/dev/null
+echo "@@uptime1"; cat /proc/uptime 2>/dev/null
+echo "@@stat1"; cat /proc/1/stat 2>/dev/null
+sleep 0.5 2>/dev/null || sleep 1
+echo "@@uptime2"; cat /proc/uptime 2>/dev/null
+echo "@@stat2"; cat /proc/1/stat 2>/dev/null
+echo "@@statm"; cat /proc/1/statm 2>/dev/null
+echo "@@threads"; grep -i '^Threads:' /proc/1/status 2>/dev/null
+echo "@@fds"; ls /proc/1/fd 2>/dev/null | wc -l
+echo "@@memtotal"; grep -i '^MemTotal:' /proc/meminfo 2>/dev/null
+echo "@@nproc"; nproc 2>/dev/null
+echo "@@clktck"; getconf CLK_TCK 2>/dev/null
+echo "@@pagesize"; getconf PAGE_SIZE 2>/dev/null
+"""
+# kubectl-exec overhead plus the in-pod sampling sleep; a task-pod /proc read is quick.
+_POD_PROC_STATUS_TIMEOUT = 15
+
+
+def _proc_int(text: str, default: int = 0) -> int:
+    try:
+        return int(text.strip())
+    except (ValueError, AttributeError):
+        return default
+
+
+def _stat_fields_after_comm(raw: str) -> list[str]:
+    """Fields of ``/proc/PID/stat`` starting at ``state`` (field 3).
+
+    The ``comm`` field (2) is parenthesized and may itself contain spaces or
+    parens, so index from the last ``)`` rather than splitting the whole line.
+    Returned index ``i`` is stat field ``i + 3``.
+    """
+    rclose = raw.rfind(")")
+    return raw[rclose + 2 :].split() if rclose != -1 else []
+
+
+def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
+    """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
+
+    Reports the OS-level vitals of the pod's main process (the task command).
+    Daemon-specific fields the worker path fills from its own interpreter
+    (``python_version``, build ``provenance``) have no pod equivalent and are left
+    unset. ``cpu_millicores`` is the instantaneous rate across the two samples;
+    ``thread_count`` is the kernel task count, not a Python-level count.
+    """
+    sections: dict[str, str] = {}
+    key: str | None = None
+    buf: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("@@"):
+            if key is not None:
+                sections[key] = "\n".join(buf).strip()
+            key, buf = line[2:], []
+        else:
+            buf.append(line)
+    if key is not None:
+        sections[key] = "\n".join(buf).strip()
+
+    clk_tck = _proc_int(sections.get("clktck", ""), 100) or 100
+    page_size = _proc_int(sections.get("pagesize", ""), 4096) or 4096
+
+    def _uptime(section: str) -> float:
+        try:
+            return float(sections.get(section, "").split()[0])
+        except (ValueError, IndexError):
+            return 0.0
+
+    def _cpu_ticks(fields: list[str]) -> int:
+        # utime (field 14) + stime (field 15) => indices 11, 12 after comm.
+        return _proc_int(fields[11]) + _proc_int(fields[12]) if len(fields) >= 13 else 0
+
+    stat1 = _stat_fields_after_comm(sections.get("stat1", ""))
+    stat2 = _stat_fields_after_comm(sections.get("stat2", ""))
+    uptime1, uptime2 = _uptime("uptime1"), _uptime("uptime2")
+
+    interval = uptime2 - uptime1
+    cpu_millicores = 0
+    if interval > 0 and stat1 and stat2:
+        cpu_millicores = max(0, round((_cpu_ticks(stat2) - _cpu_ticks(stat1)) / clk_tck / interval * 1000))
+
+    uptime_ms = 0
+    if len(stat1) >= 20 and uptime1 > 0:
+        # starttime is field 22 => index 19 after comm.
+        uptime_ms = max(0, round((uptime1 - _proc_int(stat1[19]) / clk_tck) * 1000))
+
+    statm = sections.get("statm", "").split()
+    vms = _proc_int(statm[0]) * page_size if len(statm) >= 1 else 0
+    rss = _proc_int(statm[1]) * page_size if len(statm) >= 2 else 0
+
+    threads_line = sections.get("threads", "")
+    thread_count = _proc_int(threads_line.split(":")[-1]) if ":" in threads_line else 0
+
+    mem_parts = sections.get("memtotal", "").split()  # "MemTotal:  N kB"
+    mem_total = _proc_int(mem_parts[1]) * 1024 if len(mem_parts) >= 2 else 0
+
+    return job_pb2.ProcessInfo(
+        hostname=sections.get("hostname", ""),
+        pid=1,
+        uptime_ms=uptime_ms,
+        memory_rss_bytes=rss,
+        memory_vms_bytes=vms,
+        cpu_millicores=cpu_millicores,
+        thread_count=thread_count,
+        open_fd_count=_proc_int(sections.get("fds", "")),
+        memory_total_bytes=mem_total,
+        cpu_count=_proc_int(sections.get("nproc", "")),
+    )
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -1782,10 +2148,23 @@ class K8sTaskProvider:
     # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
     # None in test mode.
     profile_table: Table | None = None
+    # Pre-resolved iris.worker Table handle. A k8s cluster has no per-node worker
+    # daemon, so the backend writes one iris.worker row per node (host + GPU
+    # readings) here, surfacing nodes as workers. None in tests without finelog.
+    worker_stats_table: Table | None = None
+    # Namespace whose node-exporter/dcgm-exporter DaemonSets the node-stats
+    # collector scrapes (CoreWeave's cw-exporters by default).
+    exporters_namespace: str = CW_EXPORTERS_NAMESPACE
+    # Node-stats scrape cadence, coarser than the reconcile tick (see NodeStatsCollector).
+    node_stats_poll_interval: float = DEFAULT_NODE_STATS_POLL_INTERVAL
     # Resource-usage poll cadence. Defaults to the metrics-server scrape
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
     resource_poll_interval: float = 15.0
+    # Cadence at which PeriodicProfiler dumps each running pod's threads to
+    # iris.profile (trigger=periodic), so a silently hung collective is caught in
+    # the profile timeline even though nothing polls a k8s pod otherwise.
+    profile_poll_interval: float = DEFAULT_PROFILE_POLL_INTERVAL
     # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
     # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
@@ -1806,6 +2185,8 @@ class K8sTaskProvider:
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
+    _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
+    _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
@@ -1824,6 +2205,30 @@ class K8sTaskProvider:
                 poll_interval=self.resource_poll_interval,
             )
         return self._resource_collector
+
+    def _ensure_periodic_profiler(self) -> PeriodicProfiler | None:
+        if self.profile_table is None:
+            return None
+        if self._periodic_profiler is None:
+            self._periodic_profiler = PeriodicProfiler(
+                self.kubectl,
+                self.profile_table,
+                poll_interval=self.profile_poll_interval,
+            )
+        return self._periodic_profiler
+
+    def _ensure_node_stats_collector(self) -> NodeStatsCollector | None:
+        if self.worker_stats_table is None:
+            return None
+        if self._node_stats_collector is None:
+            self._node_stats_collector = NodeStatsCollector(
+                self.kubectl,
+                self.worker_stats_table,
+                exporters_namespace=self.exporters_namespace,
+                poll_interval=self.node_stats_poll_interval,
+                on_snapshot=self._cluster_state.set_node_metrics,
+            )
+        return self._node_stats_collector
 
     def _ensure_task_event_log(self) -> TaskEventLog | None:
         if self.task_event_table is None:
@@ -1994,6 +2399,13 @@ class K8sTaskProvider:
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
+        # Declare the node set for the background scrape (host + GPU readings ->
+        # iris.worker rows). The collector owns the exporter I/O off the reconcile
+        # path; here we only hand it the freshly-synced nodes.
+        node_collector = self._ensure_node_stats_collector()
+        if node_collector is not None:
+            node_collector.set_nodes(_node_targets(nodes, managed_pods))
+
         self._maybe_gc_terminal_resources(managed_pods)
 
         return updates
@@ -2070,11 +2482,28 @@ class K8sTaskProvider:
         target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
-        raise ProviderUnsupportedError("K8s backend does not support per-process status")
+        """Report the task pod's PID-1 vitals, collected via ``kubectl exec``.
+
+        There is no worker daemon in the pod, so — like profiling — this reaches
+        the task container directly and reads ``/proc`` for the main process's
+        memory, cpu, thread, and fd counters. Logs are served separately via
+        FetchLogs, so ``log_entries`` stays empty.
+        """
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        result = self.kubectl.exec(
+            pod_name, ["sh", "-c", _POD_PROC_STATUS_SCRIPT], container="task", timeout=_POD_PROC_STATUS_TIMEOUT
+        )
+        if result.returncode != 0:
+            raise ProviderError(f"process status exec in pod {pod_name} failed: {result.stderr.strip() or 'no output'}")
+        return job_pb2.GetProcessStatusResponse(process_info=_parse_pod_proc_status(result.stdout or ""))
 
     def close(self) -> None:
         if self._resource_collector is not None:
             self._resource_collector.close()
+        if self._periodic_profiler is not None:
+            self._periodic_profiler.close()
+        if self._node_stats_collector is not None:
+            self._node_stats_collector.close()
 
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
@@ -2472,6 +2901,8 @@ class K8sTaskProvider:
         if not running:
             if self._resource_collector is not None:
                 self._resource_collector.set_pods({})
+            if self._periodic_profiler is not None:
+                self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
             return []
@@ -2493,6 +2924,9 @@ class K8sTaskProvider:
         # appended directly to iris.task by the collector; the controller no
         # longer multiplexes them through TaskUpdate.
         resource_pods: dict[tuple[str, int], str] = {}
+        # Same running set, carrying the node name so the periodic profiler can
+        # stamp the k8s/<node> vm_id without a per-pod GET.
+        profile_targets: dict[tuple[str, int], _ProfileTarget] = {}
         event_log = self._ensure_task_event_log()
 
         for entry in running:
@@ -2537,6 +2971,12 @@ class K8sTaskProvider:
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 resource_pods[event_key] = pod_name
+                profile_targets[event_key] = _ProfileTarget(
+                    task_id=entry.task_id.to_wire(),
+                    attempt_id=entry.attempt_id,
+                    pod_name=pod_name,
+                    node_name=pod.get("spec", {}).get("nodeName", "") or "",
+                )
             if event_log is not None:
                 event_log.observe(event_key, _pod_event(pod, workload))
 
@@ -2545,6 +2985,9 @@ class K8sTaskProvider:
         resource_collector = self._ensure_resource_collector()
         if resource_collector is not None:
             resource_collector.set_pods(resource_pods)
+        periodic_profiler = self._ensure_periodic_profiler()
+        if periodic_profiler is not None:
+            periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain({(entry.task_id.to_wire(), entry.attempt_id) for entry in running})
 

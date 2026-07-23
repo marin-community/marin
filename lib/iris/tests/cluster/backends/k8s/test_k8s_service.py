@@ -271,7 +271,7 @@ def test_port_forward_with_explicit_port(svc: InMemoryK8sService):
 
 
 def test_port_forward_failure_injection(svc: InMemoryK8sService):
-    svc.inject_failure("port_forward", KubectlError("tunnel failed", 1))
+    svc.inject_failure("port_forward", KubectlError("tunnel failed"))
     with pytest.raises(KubectlError):
         with svc.port_forward("my-svc", 8080):
             pass

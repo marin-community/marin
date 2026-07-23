@@ -56,7 +56,6 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
-    get_gpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
@@ -452,44 +451,6 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
-# Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
-_MULTIGPU_MODULE = "iris.runtime.multigpu"
-
-
-def _wrap_entrypoint_for_multiprocess(
-    entrypoint: Entrypoint, resources: ResourceSpec, processes_per_task: int
-) -> Entrypoint:
-    """Wrap an entrypoint so each task runs ``processes_per_task`` GPU processes.
-
-    Prepends ``python -m iris.runtime.multigpu --nproc N --devices-per-proc D --``
-    to the command. The supervisor spawns N children, each pinned to a contiguous
-    group of D of the task's GPUs. Requires a GPU device whose count is divisible
-    by ``processes_per_task``.
-    """
-    device = resources.device
-    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
-    if gpu_count <= 0:
-        raise ValueError("processes_per_task > 1 requires a GPU device")
-    if gpu_count % processes_per_task != 0:
-        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    devices_per_proc = gpu_count // processes_per_task
-    wrapper = [
-        "python",
-        "-m",
-        _MULTIGPU_MODULE,
-        "--nproc",
-        str(processes_per_task),
-        "--devices-per-proc",
-        str(devices_per_proc),
-        "--",
-    ]
-    return Entrypoint(
-        command=[*wrapper, *entrypoint.command],
-        workdir_files=entrypoint.workdir_files,
-        workdir_file_refs=entrypoint.workdir_file_refs,
-    )
-
-
 class IrisClient:
     """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
@@ -657,7 +618,6 @@ class IrisClient:
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
-        processes_per_task: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
@@ -681,12 +641,9 @@ class IrisClient:
             scheduling_timeout: Maximum time to wait for scheduling (None = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
-            replicas: Number of tasks to create for gang scheduling (default: 1)
-            processes_per_task: Number of JAX processes to run inside each task,
-                one per GPU group, so ``jax.process_count()`` equals
-                ``replicas * processes_per_task`` (default: 1, one process per
-                task). Must divide the task's GPU count, and requires a GPU
-                device. ``1`` is a strict no-op.
+            replicas: Number of tasks to create for gang scheduling (default: 1).
+                Multi-process GPU execution within a task is composed into the command
+                (``python -m iris.hooks.multigpu_main --nproc N -- <cmd>``), not a submit arg.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             max_task_failures: Cumulative failed task attempts the job tolerates before
@@ -715,10 +672,9 @@ class IrisClient:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device, replicas)
 
-        if processes_per_task < 1:
-            raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        if processes_per_task > 1:
-            entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
+        # iris is a dumb scheduler: it runs the entrypoint verbatim. Multi-process GPU
+        # execution and profiling are composed into the command by the caller
+        # (e.g. `python -m iris.hooks.multigpu_main --nproc N -- <cmd>`).
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -859,6 +815,7 @@ class IrisClient:
         *,
         state: job_pb2.JobState | None = None,
         prefix: str | None = None,
+        limit: int | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
@@ -872,6 +829,10 @@ class IrisClient:
             state: If provided, only return jobs in this state.
             prefix: If provided, only return jobs whose ``job_id`` (wire form,
                 e.g. ``"/alice/foo"``) starts with this string.
+            limit: If provided, return at most this many jobs (the most recent,
+                since the server sorts by submission date descending). ``None``
+                walks every matching job, which requires a filter narrow enough
+                to stay under the server's deep-offset cap.
 
         Returns:
             List of JobStatus matching the filters.
@@ -882,7 +843,7 @@ class IrisClient:
         if prefix:
             query.job_id_prefix = prefix
 
-        return list(self._cluster_client.list_jobs(query=query))
+        return list(self._cluster_client.list_jobs(query=query, limit=limit))
 
     def list_workers(
         self,
@@ -891,30 +852,23 @@ class IrisClient:
         """List workers registered with the controller."""
         return list(self._cluster_client.list_workers(query=query))
 
-    def terminate_prefix(
-        self,
-        prefix: JobName,
-        *,
-        exclude_finished: bool = True,
-    ) -> list[JobName]:
-        """Terminate all jobs matching a prefix.
+    def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
+        """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
+        return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
+
+    def terminate_prefix(self, prefix: str) -> list[JobName]:
+        """Terminate all active jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
-            exclude_finished: If True, skip jobs already in terminal states
+            prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
 
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix.to_wire())
-        terminated = []
-        for job in jobs:
-            if exclude_finished and is_job_finished(job.state):
-                continue
-            job_id = JobName.from_wire(job.job_id)
+        job_ids = self.active_job_names_for_prefix(prefix)
+        for job_id in job_ids:
             self.terminate(job_id)
-            terminated.append(job_id)
-        return terminated
+        return job_ids
 
     def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task.

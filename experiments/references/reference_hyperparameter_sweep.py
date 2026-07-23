@@ -576,7 +576,9 @@ def _suggest_step(
         return VizierSuggestConfig(
             study_owner=SWEEP.study_owner,
             study_id=SWEEP.study_id,
-            input_db_path=(ctx.resolved(prev_update).db_path if prev_update is not None else None),
+            input_db_path=(
+                VizierUpdateArtifact(path=ctx.artifact_path(prev_update)).db_path if prev_update is not None else None
+            ),
             output_path=ctx.output_path,
             num_suggestions=SWEEP.suggestions_per_loop,
             client_id=client_id,
@@ -637,7 +639,7 @@ def _train_step(
             steps_per_eval=500,
         )
         return VizierTrainConfig(
-            suggestions_path=ctx.resolved(suggest).suggestions_path,
+            suggestions_path=VizierSuggestArtifact(path=ctx.artifact_path(suggest)).suggestions_path,
             suggestion_index=trial_index,
             base_launch_config=base,
             target_tokens=SWEEP.target_tokens,
@@ -664,7 +666,7 @@ def _update_step(
     version: str,
 ) -> ArtifactStep[VizierUpdateArtifact]:
     def build_config(ctx: StepContext) -> VizierUpdateConfig:
-        suggest_artifact = ctx.resolved(suggest)
+        suggest_artifact = VizierSuggestArtifact(path=ctx.artifact_path(suggest))
         return VizierUpdateConfig(
             study_id=SWEEP.study_id,
             study_resource_name=SWEEP.study_resource_name,
@@ -697,7 +699,7 @@ def _optimal_step(
         return VizierOptimalConfig(
             study_id=SWEEP.study_id,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=ctx.resolved(final_update).db_path,
+            input_db_path=VizierUpdateArtifact(path=ctx.artifact_path(final_update)).db_path,
             output_path=ctx.output_path,
         )
 

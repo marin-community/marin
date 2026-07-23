@@ -28,6 +28,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -866,6 +867,32 @@ def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, er
         update(jobs_table)
         .where(jobs_table.c.job_id == job_id)
         .values(state=job_pb2.JOB_STATE_UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
+    )
+
+
+@writes_to(job_config_table)
+def insert_mirrored_job_config(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    name: str,
+    resources: job_pb2.ResourceSpecProto,
+) -> None:
+    """Insert the ``job_config`` companion for a job mirrored from a peer.
+
+    Sets the name and the resources the peer reports; the columns describing how to
+    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since
+    the peer runs it and the parent only renders it.
+    """
+    tx.execute(
+        insert(job_config_table).values(
+            job_id=job_id,
+            name=name,
+            res_cpu_millicores=int(resources.cpu_millicores),
+            res_memory_bytes=int(resources.memory_bytes),
+            res_disk_bytes=int(resources.disk_bytes),
+            res_device_json=proto_to_json(resources.device),
+        )
     )
 
 

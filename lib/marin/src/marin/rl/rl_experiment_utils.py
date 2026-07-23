@@ -22,7 +22,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_namespaced_name
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     VLLMEngineConfig,
     VLLMFallbackSamplingConfig,
@@ -104,7 +103,6 @@ class RLExperimentConfig:
     max_output_tokens: int = 512
     n_prompts: int = 64
     n_generations_per_prompt: int = 16
-    train_decoding_top_k: int | None = 4096  # Workaround for vllm-project/tpu-inference#1386
 
     # replay buffer
     replay_buffer_capacity: int = 4096
@@ -211,16 +209,6 @@ def _build_vllm_fallback_sampling_config(config: RLExperimentConfig) -> VLLMFall
     return VLLMFallbackSamplingConfig(
         stop_strings=get_stop_tokens(config.model_config.type),
         include_stop_str_in_output=True,
-    )
-
-
-def default_train_decoding_for_experiment(config: RLExperimentConfig) -> DecodingConfig:
-    """Return builder-side rollout decoding defaults to bake into curriculum lessons."""
-    return DecodingConfig(
-        temperature=1.0,
-        max_output_tokens=config.max_output_tokens,
-        top_k=config.train_decoding_top_k,
-        stop_strings=get_stop_tokens(config.model_config.type),
     )
 
 

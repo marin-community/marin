@@ -20,18 +20,10 @@ if it exists, so a setup that leaves no venv runs in the image's own environment
 """
 
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
-
-# Set this env var (to any non-empty value) to surface uv's output during setup.
-DEBUG_UV_SYNC_ENV = "IRIS_DEBUG_UV_SYNC"
-
-
-def setup_is_quiet(env_vars: Mapping[str, str]) -> bool:
-    """Whether setup scripts should suppress uv output (the default)."""
-    return not env_vars.get(DEBUG_UV_SYNC_ENV)
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -60,9 +52,12 @@ def default_setup_script(
     pip_packages: Sequence[str] = (),
     python_version: str | None = None,
     packages: Sequence[str] | None = None,
-    quiet: bool = True,
 ) -> str:
     """Render the standard uv-based setup script as a bash string.
+
+    uv runs at its default verbosity so its progress (``Resolved``,
+    ``Downloading <pkg>``, ``Installed``) streams into the task logs; this is the
+    only signal a live setup gives, so it is never suppressed.
 
     Args:
         extras: uv extras to enable (``extra`` or ``package:extra``).
@@ -72,12 +67,10 @@ def default_setup_script(
         packages: workspace members to sync. ``None`` syncs every member
             (``--all-packages``); a list scopes the sync to those members so an
             unrelated member that fails to resolve cannot fail the job.
-        quiet: suppress uv output.
 
     Returns:
         A bash snippet that creates and populates the venv at ``$IRIS_VENV``.
     """
-    quiet_flag = "--quiet" if quiet else ""
     python_flag = f"--python {shlex.quote(python_version)}" if python_version else ""
     # --frozen when a lockfile is present skips resolution; ConfigMap-based
     # workdirs may drop uv.lock (>1MB limit), so fall back to a normal resolve.
@@ -92,7 +85,6 @@ def default_setup_script(
         part
         for part in [
             "uv sync",
-            quiet_flag,
             frozen_flag,
             link_mode_flag,
             python_flag,
@@ -115,13 +107,13 @@ def default_setup_script(
         " echo 'rust-dev mode: building native extensions';"
         " for crate in lib/*/pyproject.toml; do"
         ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
-        f' uv pip install {quiet_flag} -e "$(dirname "$crate")";'
+        ' uv pip install -e "$(dirname "$crate")";'
         " done;"
         " fi",
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)
-        pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, link_mode_flag, pip_args] if part)
+        pip_cmd = " ".join(["uv pip install", link_mode_flag, pip_args])
         lines += ["echo 'installing pip deps'", pip_cmd]
     return "\n".join(lines) + "\n"
 
@@ -187,7 +179,7 @@ fi
 """
 
 
-def iris_runtime_setup_script(*, quiet: bool = True) -> str:
+def iris_runtime_setup_script() -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 
     Installs cloudpickle (callable entrypoints) and py-spy/memray (the profiler)
@@ -195,9 +187,8 @@ def iris_runtime_setup_script(*, quiet: bool = True) -> str:
     unless a venv exists (a bring-your-own image is left untouched) and a failed
     install only warns, so it never fails the job.
     """
-    quiet_flag = "--quiet" if quiet else ""
     pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)
-    pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, "--link-mode symlink", pkgs] if part)
+    pip_cmd = " ".join(["uv pip install", "--link-mode symlink", pkgs])
     return (
         'cd "$IRIS_WORKDIR" 2>/dev/null || true\n'
         'if [ -d "$IRIS_VENV" ]; then\n'

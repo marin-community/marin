@@ -37,6 +37,7 @@ from fray.local_backend import LocalClient
 from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from rigging import telltale
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
@@ -430,40 +431,56 @@ class ZephyrCoordinator:
     def _has_active_execution(self) -> bool:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
+    def _publish_telltale(self) -> None:
+        """Publish pipeline counters as gauges on the coordinator's telltale page.
+
+        The coordinator is the only process that both holds the aggregated
+        counters and serves the routes: shards run in short-lived subprocesses
+        under ``SubprocessRunner`` (the distributed default), whose registries
+        nobody scrapes.
+        """
+        for name, value in self.get_counters().items():
+            telltale.publish_gauge(name, value, f"zephyr counter {name}")
+
+    def _build_status_md(self) -> tuple[str, str]:
+        """Render pipeline progress as ``(detail, summary)`` markdown."""
+        with self._lock:
+            current_stage_index = self._current_stage_index
+            plan_stages = self._plan_stages
+            completed = self._completed_shards
+            total_shards = self._total_shards
+            in_flight = len(self._in_flight)
+            queued = len(self._task_queue)
+
+        lines = ["**Stages**\n"]
+        for idx, stage in enumerate(plan_stages):
+            stage_desc = _get_stage_description(stage)
+            bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
+            lines.append(f"{bullet}")
+
+        pct = int(100 * completed / total_shards) if total_shards > 0 else 0
+        lines.append(
+            f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
+        )
+
+        detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+
+        current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
+        summary_lines = [
+            f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})",
+            f"{completed}/{total_shards} shards ({pct}%)",
+        ]
+        return detail_md, "  \n".join(summary_lines)
+
     def _report_task_stats(self) -> None:
-        """Push task status text to the Iris coordinator if available."""
-
-        def build_md() -> tuple[str, str]:
-            with self._lock:
-                current_stage_index = self._current_stage_index
-                plan_stages = self._plan_stages
-                completed = self._completed_shards
-                total_shards = self._total_shards
-                in_flight = len(self._in_flight)
-                queued = len(self._task_queue)
-
-            lines = ["**Stages**\n"]
-            for idx, stage in enumerate(plan_stages):
-                stage_desc = _get_stage_description(stage)
-                bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
-                lines.append(f"{bullet}")
-
-            pct = int(100 * completed / total_shards) if total_shards > 0 else 0
-            lines.append(
-                f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
-            )
-
-            detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
-
-            current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
-            summary_lines = [
-                f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})",
-                f"{completed}/{total_shards} shards ({pct}%)",
-            ]
-            summary_md = "  \n".join(summary_lines)
-            return detail_md, summary_md
-
-        _push_iris_task_status(self._task_stats_limiter, build_md)
+        """Publish pipeline progress to telltale, and to the Iris coordinator if available."""
+        detail_md, summary_md = self._build_status_md()
+        # Eager, unlike the Iris push below: the telltale page is process-local
+        # and serves every run, including the ones outside an Iris task that the
+        # push skips entirely.
+        telltale.set_status(summary_md)
+        self._publish_telltale()
+        _push_iris_task_status(self._task_stats_limiter, lambda: (detail_md, summary_md))
 
     def _log_status(self) -> None:
         with self._lock:
