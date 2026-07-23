@@ -21,11 +21,22 @@ TRAIN_PARQUET_GLOB = "data/*.parquet"
 
 REPO_NAME_TOKEN = "<|repo_name|>"
 FILE_SEPARATOR_TOKEN = "<|file_sep|>"
-SERIALIZATION_FORMAT = "repo_name_file_sep_dfs_v1"
+SERIALIZATION_FORMAT = "repo_name_file_sep_directory_block_dfs_v1"
+
+FILE_SORT_MARKER = 0
+DIRECTORY_SORT_MARKER = 1
+
+
+def _directory_block_dfs_key(file: dict) -> tuple[tuple[int, str], ...]:
+    *directories, filename = PurePosixPath(file["file_path"]).parts
+    return (
+        *((DIRECTORY_SORT_MARKER, directory) for directory in directories),
+        (FILE_SORT_MARKER, filename),
+    )
 
 
 def row_to_doc(row: dict) -> list[dict]:
-    files = sorted(row["files"], key=lambda file: PurePosixPath(file["file_path"]).parts)
+    files = sorted(row["files"], key=_directory_block_dfs_key)
     sections = [f"{REPO_NAME_TOKEN}{row['repo_path']}"]
     sections.extend(f"{FILE_SEPARATOR_TOKEN}{file['file_path']}\n{file['content']}" for file in files)
 
@@ -45,7 +56,7 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    """Serialize each repository in deterministic depth-first file order."""
+    """Serialize repositories with each directory's files kept together."""
     pipeline = (
         Dataset.from_files(prefix_join(input_path, TRAIN_PARQUET_GLOB))
         .flat_map(load_parquet)

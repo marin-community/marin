@@ -22,7 +22,7 @@ def _file(path: str, content: str, content_id: str) -> dict:
     }
 
 
-def test_row_to_doc_serializes_all_files_in_depth_first_order_with_provenance():
+def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
     row = {
         "repo_path": "marin-community/marin",
         "repo_id": 123,
@@ -41,10 +41,10 @@ def test_row_to_doc_serializes_all_files_in_depth_first_order_with_provenance():
 
     assert doc["text"] == (
         "<|repo_name|>marin-community/marin\n"
-        "<|file_sep|>a/nested/x.py\nx\n"
-        "<|file_sep|>a/z.py\nz\n"
         "<|file_sep|>a.py\nroot\n"
-        "<|file_sep|>b.py\nb"
+        "<|file_sep|>b.py\nb\n"
+        "<|file_sep|>a/z.py\nz\n"
+        "<|file_sep|>a/nested/x.py\nx"
     )
     assert doc["source"] == HF_DATASET_ID
     assert doc["repo_path"] == row["repo_path"]
@@ -54,15 +54,15 @@ def test_row_to_doc_serializes_all_files_in_depth_first_order_with_provenance():
     assert doc["num_files"] == row["num_files"]
     assert doc["serialization_format"] == SERIALIZATION_FORMAT
     assert [metadata["file_path"] for metadata in doc["file_metadata"]] == [
-        "a/nested/x.py",
-        "a/z.py",
         "a.py",
         "b.py",
+        "a/z.py",
+        "a/nested/x.py",
     ]
     assert [metadata["content_id"] for metadata in doc["file_metadata"]] == [
-        "x-id",
-        "z-id",
         "root-id",
         "b-id",
+        "z-id",
+        "x-id",
     ]
     assert all("content" not in metadata for metadata in doc["file_metadata"])
