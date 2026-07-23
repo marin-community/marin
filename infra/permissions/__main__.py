@@ -10,6 +10,8 @@ from iac.gcp.permissions import (
     GcpDeployAccount,
     GcpDeployPermissions,
     GcpDeployPermissionsArgs,
+    GcpKmsAccess,
+    GcpStateAccess,
 )
 
 
@@ -24,7 +26,6 @@ def main() -> None:
             project=project,
             project_number=config.require("project_number"),
             workload_identity_pool=config.require("workload_identity_pool"),
-            github_subject=config.require("github_subject"),
             state_bucket=config.require("state_bucket"),
             kms_location=config.require("kms_location"),
             kms_key_ring=config.require("kms_key_ring"),
@@ -32,7 +33,10 @@ def main() -> None:
             accounts=tuple(
                 GcpDeployAccount(
                     service_account=account["service_account"],
+                    github_subject=account["github_subject"],
                     mint_id_tokens=account.get("mint_id_tokens", False),
+                    kms_access=GcpKmsAccess(account.get("kms_access", GcpKmsAccess.ENCRYPT_DECRYPT.value)),
+                    state_access=GcpStateAccess(account.get("state_access", GcpStateAccess.APPLY.value)),
                     secret_metadata_viewer=account.get("secret_metadata_viewer", False),
                     secret_access_secrets=tuple(account.get("secret_access_secrets", [])),
                     secret_iam_secrets=tuple(account.get("secret_iam_secrets", [])),
@@ -44,6 +48,8 @@ def main() -> None:
                         for grant in account.get("artifact_registry_grants", [])
                     ),
                     iap_iam_manager=account.get("iap_iam_manager", False),
+                    create_account=account.get("create_account", False),
+                    display_name=account.get("display_name", ""),
                 )
                 for account in deploy_accounts
             ),

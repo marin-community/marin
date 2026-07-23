@@ -4,13 +4,18 @@
 """Additive GCP permissions for keyless GitHub service deployments."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pulumi
 import pulumi_gcp as gcp
 
 WORKLOAD_IDENTITY_USER = "roles/iam.workloadIdentityUser"
 STATE_WRITER = "roles/storage.objectAdmin"
+STATE_READER = "roles/storage.objectViewer"
+STATE_LOCK_WRITER = "roles/storage.objectUser"
+STATE_LOCKS_PREFIX = ".pulumi/locks/"
 KMS_ENCRYPTER_DECRYPTER = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+KMS_DECRYPTER = "roles/cloudkms.cryptoKeyDecrypter"
 SERVICE_ACCOUNT_TOKEN_CREATOR = "roles/iam.serviceAccountTokenCreator"
 SECRET_METADATA_VIEWER = "roles/secretmanager.viewer"
 SECRET_ACCESSOR = "roles/secretmanager.secretAccessor"
@@ -28,6 +33,26 @@ IAP_IAM_PERMISSIONS = (
 )
 
 
+class GcpKmsAccess(StrEnum):
+    """How far a deploy account's KMS grant reaches on the shared state key."""
+
+    ENCRYPT_DECRYPT = "encrypt_decrypt"  # `pulumi up` — reads and writes stack secrets.
+    DECRYPT_ONLY = "decrypt_only"  # `pulumi preview` — reads stack secrets, never writes them.
+
+
+class GcpStateAccess(StrEnum):
+    """How far a deploy account's grant reaches on the shared state bucket."""
+
+    APPLY = "apply"  # `pulumi up` — full read/write on state objects.
+    PREVIEW = "preview"  # `pulumi preview` — read state, write only the per-stack lock prefix.
+
+
+_KMS_ROLES = {
+    GcpKmsAccess.ENCRYPT_DECRYPT: KMS_ENCRYPTER_DECRYPTER,
+    GcpKmsAccess.DECRYPT_ONLY: KMS_DECRYPTER,
+}
+
+
 @dataclass(frozen=True)
 class GcpArtifactRegistryGrant:
     location: str
@@ -37,12 +62,20 @@ class GcpArtifactRegistryGrant:
 @dataclass(frozen=True)
 class GcpDeployAccount:
     service_account: str
+    github_subject: str
     mint_id_tokens: bool = False
+    kms_access: GcpKmsAccess = GcpKmsAccess.ENCRYPT_DECRYPT
+    state_access: GcpStateAccess = GcpStateAccess.APPLY
     secret_metadata_viewer: bool = False
     secret_access_secrets: tuple[str, ...] = ()
     secret_iam_secrets: tuple[str, ...] = ()
     artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
     iap_iam_manager: bool = False
+    # True for accounts this stack owns end-to-end (net-new, deploy-only identities). False
+    # (default) for accounts that predate this stack and were created out-of-band — this
+    # component only grants IAM on those, per the project README.
+    create_account: bool = False
+    display_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -50,7 +83,6 @@ class GcpDeployPermissionsArgs:
     project: str
     project_number: str
     workload_identity_pool: str
-    github_subject: str
     state_bucket: str
     kms_location: str
     kms_key_ring: str
@@ -67,6 +99,8 @@ class GcpDeployPermissionSet:
     state_bucket: str
     crypto_key_id: str
     mint_id_tokens: bool
+    kms_access: GcpKmsAccess
+    state_access: GcpStateAccess
 
 
 def _account_id(project: str, email: str) -> str:
@@ -80,12 +114,15 @@ def _service_account_member(email: str) -> str:
     return f"serviceAccount:{email}"
 
 
+def _github_principal(project_number: str, workload_identity_pool: str, github_subject: str) -> str:
+    return (
+        f"principal://iam.googleapis.com/projects/{project_number}/locations/global/"
+        f"workloadIdentityPools/{workload_identity_pool}/subject/{github_subject}"
+    )
+
+
 def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPermissionSet, ...]:
     """Resolve stable IAM members and resource IDs for each deployment account."""
-    github_principal = (
-        f"principal://iam.googleapis.com/projects/{args.project_number}/locations/global/"
-        f"workloadIdentityPools/{args.workload_identity_pool}/subject/{args.github_subject}"
-    )
     crypto_key_id = (
         f"projects/{args.project}/locations/{args.kms_location}/keyRings/{args.kms_key_ring}/"
         f"cryptoKeys/{args.kms_key}"
@@ -95,13 +132,36 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
             account_id=_account_id(args.project, account.service_account),
             service_account_id=f"projects/{args.project}/serviceAccounts/{account.service_account}",
             service_account_member=_service_account_member(account.service_account),
-            github_principal=github_principal,
+            github_principal=_github_principal(args.project_number, args.workload_identity_pool, account.github_subject),
             state_bucket=args.state_bucket,
             crypto_key_id=crypto_key_id,
             mint_id_tokens=account.mint_id_tokens,
+            kms_access=account.kms_access,
+            state_access=account.state_access,
         )
         for account in args.accounts
     )
+
+
+def _create_service_accounts(
+    args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions
+) -> tuple[gcp.serviceaccount.Account, ...]:
+    """Create the accounts this stack owns end-to-end (`create_account=True`)."""
+    created = []
+    for account in args.accounts:
+        if not account.create_account:
+            continue
+        account_id = _account_id(args.project, account.service_account)
+        created.append(
+            gcp.serviceaccount.Account(
+                f"{account_id}-account",
+                account_id=account_id,
+                project=args.project,
+                display_name=account.display_name or account_id,
+                opts=opts,
+            )
+        )
+    return tuple(created)
 
 
 def _create_base_permissions(
@@ -124,17 +184,41 @@ def _create_base_permissions(
                 member=permission_set.github_principal,
                 opts=opts,
             )
-        gcp.storage.BucketIAMMember(
-            f"{permission_set.account_id}-pulumi-state",
-            bucket=permission_set.state_bucket,
-            role=STATE_WRITER,
-            member=permission_set.service_account_member,
-            opts=opts,
-        )
+        if permission_set.state_access is GcpStateAccess.APPLY:
+            gcp.storage.BucketIAMMember(
+                f"{permission_set.account_id}-pulumi-state",
+                bucket=permission_set.state_bucket,
+                role=STATE_WRITER,
+                member=permission_set.service_account_member,
+                opts=opts,
+            )
+        else:
+            gcp.storage.BucketIAMMember(
+                f"{permission_set.account_id}-pulumi-state-read",
+                bucket=permission_set.state_bucket,
+                role=STATE_READER,
+                member=permission_set.service_account_member,
+                opts=opts,
+            )
+            gcp.storage.BucketIAMMember(
+                f"{permission_set.account_id}-pulumi-state-locks",
+                bucket=permission_set.state_bucket,
+                role=STATE_LOCK_WRITER,
+                member=permission_set.service_account_member,
+                condition=gcp.storage.BucketIAMMemberConditionArgs(
+                    title=f"{permission_set.account_id}-pulumi-locks",
+                    description="Create/delete stack lock objects only; no access to state content.",
+                    expression=(
+                        f'resource.name.startsWith("projects/_/buckets/{permission_set.state_bucket}'
+                        f'/objects/{STATE_LOCKS_PREFIX}")'
+                    ),
+                ),
+                opts=opts,
+            )
         gcp.kms.CryptoKeyIAMMember(
             f"{permission_set.account_id}-pulumi-kms",
             crypto_key_id=permission_set.crypto_key_id,
-            role=KMS_ENCRYPTER_DECRYPTER,
+            role=_KMS_ROLES[permission_set.kms_access],
             member=permission_set.service_account_member,
             opts=opts,
         )
@@ -229,10 +313,13 @@ def _create_iap_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.Resourc
 
 
 class GcpDeployPermissions(pulumi.ComponentResource):
-    """Grant main-branch GitHub workflows access to deploy through existing accounts.
+    """Grant GitHub workflows access to deploy or preview through existing accounts.
 
-    The component owns custom roles and non-authoritative IAM members. The service accounts,
-    workload identity pool/provider, state bucket, and KMS key are existing shared resources.
+    Each account binds to its own GitHub OIDC subject (e.g. a main-branch push for `pulumi up`,
+    or a `pull_request` event for `pulumi preview`), scoped by `kms_access`/`state_access` to
+    what that trigger needs. The component owns custom roles and non-authoritative IAM members.
+    The service accounts, workload identity pool/provider, state bucket, and KMS key are
+    existing shared resources.
     """
 
     def __init__(
@@ -245,9 +332,16 @@ class GcpDeployPermissions(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:gcp:GcpDeployPermissions", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider, protect=True)
-        _create_base_permissions(deploy_permission_sets(args), child)
-        _create_secret_permissions(args, child)
-        _create_artifact_registry_permissions(args, child)
-        _create_iap_permissions(args, child)
+        created_accounts = _create_service_accounts(args, child)
+        # Grants on a just-created account must wait for the Account resource itself
+        grant_opts = (
+            pulumi.ResourceOptions(parent=self, provider=gcp_provider, protect=True, depends_on=list(created_accounts))
+            if created_accounts
+            else child
+        )
+        _create_base_permissions(deploy_permission_sets(args), grant_opts)
+        _create_secret_permissions(args, grant_opts)
+        _create_artifact_registry_permissions(args, grant_opts)
+        _create_iap_permissions(args, grant_opts)
 
         self.register_outputs({})

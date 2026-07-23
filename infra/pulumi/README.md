@@ -148,6 +148,32 @@ already provisioned:
     --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
   ```
 
+## CI preview
+
+`.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack (CoreWeave and
+`marin`) on PRs that touch `infra/pulumi/**` or `lib/iris/config/**`, and posts each stack's plan
+as a PR comment via `./.github/actions/pulumi-preview`. It's also runnable via
+`workflow_dispatch` (e.g. to check for drift outside a PR); those runs skip the comment, since
+there's no PR to post to, and print the plan to the job logs instead. **CI never runs `pulumi
+up`** — see `spec.md §9`.
+
+It authenticates as `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com` over Workload Identity
+Federation, bound to the `pull_request` OIDC subject (not main-branch push). Both the account and
+its IAM are declared in [`infra/permissions`](../permissions/README.md), deliberately narrower
+than the deploy accounts: `roles/cloudkms.cryptoKeyDecrypter` (read stack secrets, never write
+them) and `roles/storage.objectViewer` plus a `.pulumi/locks/`-scoped `roles/storage.objectUser`
+(read state, take/release the stack lock, never write state content). A compromised preview run
+on a PR cannot mutate state or re-encrypt secrets.
+
+CoreWeave stacks also need a live k8s connection for the Server-Side Apply dry-run — the
+workflow writes the shared `CW_KUBECONFIG` repo secret to `~/.kube/coreweave-iris` before
+calling the action, matching every cluster's `platform.coreweave.kubeconfig_path`.
+
+Adapting this to another Pulumi project (e.g. `infra/grafana`) means a new thin workflow that
+triggers on that project's paths and calls `./.github/actions/pulumi-preview` with its own
+`stack`/`work-dir` — plus, if that stack also needs preview-only access, a `state_access: preview`
+/ `kms_access: decrypt_only` account in `infra/permissions`.
+
 ## Unsupported
 
 - **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
