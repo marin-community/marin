@@ -8,7 +8,12 @@ set -euo pipefail
 
 gcloud --project="$LOOM_PROJECT" compute ssh "$LOOM_INSTANCE" \
   --zone="$LOOM_ZONE" --quiet \
-  --command='sudo systemctl restart google-startup-scripts.service'
+  --command='
+    set -euo pipefail
+    sudo rm -f /run/loom-startup-succeeded
+    sudo systemctl restart google-startup-scripts.service
+    sudo test -f /run/loom-startup-succeeded
+  '
 
 for _ in $(seq 1 90); do
   if curl -fsS "https://${LOOM_DOMAIN}/api/ready" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"'; then

@@ -17,8 +17,10 @@ DATA_DISK_DEVICE="/dev/disk/by-id/google-$(meta instance/attributes/data-disk-de
 DATA_MOUNT=/mnt/loom-data
 DOCKER_CONFIG=/etc/docker/daemon.json
 HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
+STARTUP_SUCCESS=/run/loom-startup-succeeded
 
 echo "== loom startup-script: ${LOOM_DOMAIN} =="
+rm -f "$STARTUP_SUCCESS"
 if [[ "$LOOM_IMAGE" != *@sha256:* ]]; then
   echo "loom startup-script: Pulumi did not supply an immutable image" >&2
   exit 1
@@ -146,7 +148,9 @@ curl -fsS "$HEALTH_URL" >/dev/null
 
 DEPLOYMENT_FILE=/run/loom-deployment.json
 meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE"
-docker compose -f "$COMPOSE_FILE" exec -T loom \
+docker compose -f "$COMPOSE_FILE" exec -T \
+  -e "WEAVER_API=http://127.0.0.1:${LOOM_PORT}" loom \
   loom deployment apply --file - <"$DEPLOYMENT_FILE"
 rm -f "$DEPLOYMENT_FILE"
+touch "$STARTUP_SUCCESS"
 echo "== loom startup-script done =="
