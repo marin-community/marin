@@ -2321,6 +2321,17 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     db.close()
 
 
+_SERVER_START_TIMEOUT = Duration.from_seconds(10)
+
+
+def _wait_for_server_start(condition: Callable[[], bool], error_message: str) -> None:
+    ExponentialBackoff(initial=0.01, maximum=0.1).wait_until_or_raise(
+        condition,
+        timeout=_SERVER_START_TIMEOUT,
+        error_message=error_message,
+    )
+
+
 @main.command("serve")
 @click.option(
     "--db-path",
@@ -2370,14 +2381,14 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         threads=threads,
     )
     controller.start()
-    deadline = time.time() + 10.0
-    while time.time() < deadline:
-        if controller._server is not None and controller._server.started:
-            break
-        time.sleep(0.02)
-    else:
+    try:
+        _wait_for_server_start(
+            lambda: controller._server is not None and controller._server.started,
+            "Controller server did not start within 10s",
+        )
+    except TimeoutError as exc:
         controller.stop()
-        raise click.ClickException("Controller server did not start within 10s")
+        raise click.ClickException(str(exc)) from exc
 
     print(f"READY port={controller.port}", flush=True)
 
@@ -2447,13 +2458,7 @@ _PROXY_LOOPS = (_PROXY_ASYNCIO_LOOP, _PROXY_AUTO_LOOP)
 _PROXY_BENCHMARK_BACKLOG = 2048
 _PROXY_BENCHMARK_HEALTH_ROUTE = "/health"
 _PROXY_BENCHMARK_HOST = "127.0.0.1"
-
-
-def _wait_for_uvicorn(server: uvicorn.Server) -> None:
-    ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-        lambda: server.started,
-        timeout=Duration.from_seconds(10),
-    )
+_PROXY_BENCHMARK_HTTP = "httptools"
 
 
 def _proxy_benchmark_upstream(stream_spec: ProxyStreamSpec) -> Starlette:
@@ -2564,7 +2569,7 @@ def _run_proxy_trial(
             host=_PROXY_BENCHMARK_HOST,
             port=upstream_port,
             loop="uvloop",
-            http="httptools",
+            http=_PROXY_BENCHMARK_HTTP,
             log_level="error",
             log_config=None,
             backlog=_PROXY_BENCHMARK_BACKLOG,
@@ -2577,7 +2582,7 @@ def _run_proxy_trial(
             host=_PROXY_BENCHMARK_HOST,
             port=proxy_port,
             loop=loop,
-            http="httptools",
+            http=_PROXY_BENCHMARK_HTTP,
             log_level="error",
             log_config=None,
             backlog=_PROXY_BENCHMARK_BACKLOG,
@@ -2587,9 +2592,9 @@ def _run_proxy_trial(
     _install_rpc_executor(proxy, max_workers=_RPC_HANDLER_THREADS)
     try:
         threads.spawn_server(upstream, name="proxy-benchmark-upstream")
-        _wait_for_uvicorn(upstream)
+        _wait_for_server_start(lambda: upstream.started, "benchmark upstream did not start within 10s")
         threads.spawn_server(proxy, name="proxy-benchmark-proxy")
-        _wait_for_uvicorn(proxy)
+        _wait_for_server_start(lambda: proxy.started, "benchmark proxy did not start within 10s")
         exercise = asyncio.run(_exercise_proxy(f"http://{_PROXY_BENCHMARK_HOST}:{proxy_port}", connections=connections))
     finally:
         threads.stop(timeout=Duration.from_seconds(30))
@@ -2933,13 +2938,7 @@ def _serve_fake_worker():
     thread = threading.Thread(target=_run, name="fake-worker", daemon=True)
     thread.start()
 
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if server.started:
-            break
-        time.sleep(0.02)
-    else:
-        raise RuntimeError("fake worker did not start in 10s")
+    _wait_for_server_start(lambda: server.started, "fake worker did not start within 10s")
 
     port = None
     for sock in server.servers or []:
