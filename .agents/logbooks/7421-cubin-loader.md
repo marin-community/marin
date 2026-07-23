@@ -18,12 +18,34 @@ author: mcwitt
 
 ### Active
 
-- `H-ASYNC`: a preceding asynchronous CUDA operation failed.
-- `H-API`: raw ELF CUBINs fail specifically through `cuModuleLoadFatBinary`.
-- `H-ORDER`: concurrency before the loader yields a null module image. Concurrent entry into `cuModuleLoadFatBinary`
-  is refuted by CUBIN7421-010.
-- `H-INPUT`: pointer lifetime, mutation, or alignment changes the result.
-- `H-PRESSURE`: a live memory or module resource is exhausted.
+- `H-FUSION2174-EMPTY` (rank 1, established): both failing full serialized executables contain exactly one
+  zero-byte owning custom-kernel CUBIN, `fusion_2174`. Passing B1024-XLA and B832-CuTe controls contain no empty
+  custom CUBINs. Aggregate confidence is about 95% that `fusion_2174`'s compile/ownership path returned or created
+  an empty CUBIN before persistence and XLA accepted it unchecked.
+- `H-SPEC-LOSS` (rank 2): a non-empty `fusion_2174` CUBIN was selectively lost between provider return and
+  `GpuExecutableProto` construction. No source-level loss site is known; repeated identical empty persistence in
+  two independent failures makes this a roughly 4% alternative.
+- `H-OTHER-PRESERIALIZATION` (rank 3): another compiler-side defect created the empty `fusion_2174` spec before
+  persistence. This retains uncertainty about the exact PTX-to-CUBIN provider status and input, not the failure
+  boundary.
+
+### Falsified / Dead End
+
+- `H-ASYNC`: all immediate pre-load synchronizations succeeded, including those before the 64 failed calls.
+- `H-API`: the failed calls receive `image=null`, so raw-CUBIN FatBinary-vs-Data semantics do not explain them.
+- `H-ORDER-LOADER`: process-wide serialization kept `maximum_in_flight=1` and still produced 64 null-image
+  failures.
+- `H-PRODUCER-RACE`: the exact NGC B1024/L24 graph failed under a fresh cache key with
+  `--xla_gpu_force_compilation_parallelism=1`; process 0 therefore compiled with the per-fusion producer
+  serialized.
+- `H-INPUT`: all successful calls have non-null images and all failed calls have null images; pointer lifetime,
+  alignment, or mutation of a valid CUBIN is not the immediate failure.
+- `H-IMAGE`: exact captured CUBIN replay succeeds, and the failed production calls do not contain an image for the
+  driver to reject as malformed or wrong-architecture.
+- `H-BITONIC-EMPTY`: all four bitonic-sort custom CUBINs are non-empty, with identical sizes in the failing and
+  passing full serialized executables.
+- `H-RUNTIME-LOSS`: both failing persistent executables already contain the named zero-byte CUBIN, so cache reads,
+  deserialization, loader-time handoff, and device-HBM state cannot have created it.
 
 ## Entry Log
 
@@ -230,3 +252,148 @@ author: mcwitt
   status, byte-span presence, and allocator state when it returns an empty result; use producer-stage
   serialization only if NVIDIA's hypothesis specifically includes compilation or result handoff before the CUDA
   loader call.
+
+### 2026-07-23 - CUBIN7421-011 hypothesis refresh and parallel investigation
+
+- Hypothesis: the completed loader-boundary, NGC, allocator, shape, topology, and serialization experiments are
+  sufficient to narrow the active search to producer pressure, a CuTe/MXFP8 producer defect, or producer-stage
+  concurrency.
+- Commit Hash: `4429b52db`.
+- Command: reviewed the complete #7421 issue body and comment history through 2026-07-23 17:03 UTC, then reconciled
+  it with CUBIN7421-001 through CUBIN7421-010.
+- Config: no new GPU run; medium-effort contradiction pass over the existing evidence.
+- Result: `H-PRESSURE` ranks first because two independent graph families show allocator-dependent error-surface
+  changes and eventual real-step success after measured memory relief. `H-CUTE-PRODUCER` ranks second because the
+  remaining deterministic B1024/L24 failure is both producer- and batch-dependent despite removal of the planner
+  warning. `H-PRODUCER-RACE` ranks third because direct loader concurrency and process-topology variants are
+  negative, but no experiment has serialized the earlier producer path. The loader API, stale asynchronous error,
+  pointer, malformed-image, and direct-loader-race explanations are no longer active for this reproducer.
+- Interpretation: the next evidence must be captured before the loader receives its image. Successful module-load
+  treatments cannot distinguish the remaining hypotheses.
+- Next action: investigate the top three hypotheses independently, all-gather findings at 15-minute checkpoints,
+  rerank, and reassign the three leading tests until one hypothesis has direct, replicated, discriminating
+  evidence.
+
+### 2026-07-23 - CUBIN7421-012 first parallel checkpoint and rerank
+
+- Hypothesis: tracing the producer and ownership path will distinguish an absent compiler result from pointer
+  publication or loader behavior before another full-scale run.
+- Commit Hash: `4429b52db`.
+- Command: three independent source/evidence tracks covering resource exhaustion, CuTe/MXFP8 producer behavior,
+  and pre-loader concurrency; all-gathered the checkpoint reports and requested independent rerankings.
+- Config: source and retained-artifact analysis only; no new GPU run in the first checkpoint.
+- Result:
+  - OpenXLA's nvPTXCompiler provider propagates non-success statuses, including OOM, but does not reject
+    `CUDA_SUCCESS` with a compiled-program size of zero. The empty vector can flow through
+    `CubinCustomKernelCompiler`, `CreateOwnedCubinCustomKernel`, and `CudaExecutor::LoadKernel` to a null loader
+    argument.
+  - The owning-vector and kernel-reuse-cache path copies or moves the result and keeps it alive through thunk
+    initialization, weakening pointer-publication and lifetime races.
+  - CuTe JAX lowering serializes `cute.compile` and `dump_to_object`, yielding Python bytes before the FFI
+    attribute is built. A normal CuTe compile failure should therefore throw before executable initialization.
+    The opaque FFI prepare/instantiate runtime remains an unobserved boundary.
+  - `--xla_gpu_force_compilation_parallelism=1` creates no per-fusion compilation thread pool and therefore
+    appears to be a real producer-stage serialization treatment. No current exact NGC B1024/L24 treatment with
+    that flag is recorded; CUBIN7421-010 removed the flag from a loader-lock arm without testing it independently.
+  - CUTLASS DSL 4.5.2 in the exact CuTe matrix includes the JAX multi-GPU loader-race fix released in 4.4.2.
+- Interpretation: the aggregate ranking is now (1) deterministic success-plus-empty compiler/result defect,
+  (2) resource exhaustion mistranslated into that empty result, (3) parallel producer compilation triggering the
+  result, and (4) other downstream/ABI loss. The top three are competing triggers for the same immediate mechanism.
+- Next action: in parallel, interpose the compiler result/size boundary, devise a graph-preserving resource
+  discriminator, and run the missing exact current-NGC producer-serialization treatment after a one-node flag
+  gate.
+
+### 2026-07-23 - CUBIN7421-013 serialized XLA producer treatment
+
+- Hypothesis: parallel per-fusion XLA compilation produces the empty custom-kernel CUBIN; forcing compilation
+  parallelism to one should remove the failure.
+- Commit Hash: `4429b52db`.
+- Jobs:
+  - Gate:
+    `/mwittmann/cubin-ngc2606-serialcc-probe-smoke-01/grug-train-cubin-ngc2606-serialcc-probe-smoke-01-20260723`.
+  - Full:
+    `/mwittmann/cubin-ngc2606-b1024-l24-serialcc-01/grug-train-cubin-ngc2606-b1024-l24-serialcc-01-20260723`.
+- Config: NGC 26.06 with guarded overlay; B1024/L24 CuTe/MXFP8/ring graph; 16 four-GB200 hosts; one process per
+  host; `cuda_async`; one model step; no final checkpoint; zero retries. The only full-run runtime delta from the
+  deterministic baseline was `XLA_FLAGS=--xla_gpu_force_compilation_parallelism=1`.
+- Result: the one-node gate completed a real step with loss `11.806539535522461`. The full treatment failed on all
+  16 ranks with the same in-memory CUBIN `CUDA_ERROR_INVALID_VALUE` before step 1. The XLA flag is included in the
+  JAX persistent-cache key and is not in the semantic-exclusion list; no prior exact force=1 job existed, so
+  process 0 compiled under producer serialization before failing.
+- Interpretation: per-fusion producer concurrency is not necessary. A pass would also have been ambiguous with
+  reduced peak compiler pressure, but this failure strongly falsifies the race hypothesis.
+- Next action: inspect compiler output and the owning custom-kernel spec rather than apply more concurrency
+  treatments.
+
+### 2026-07-23 - CUBIN7421-014 custom-kernel cache and source localization
+
+- Hypothesis: the null loader argument comes from an empty owning CUBIN in one `CustomKernelThunk`; schema-aware
+  cache and source tracing can identify whether it is cached, top-level, or directly compiled.
+- Commit Hash: `4429b52db`.
+- Jobs:
+  - CPU cache scans: `/marin/cubin-cache-schema-scan2-7421` and
+    `/mwittmann/cubin-kcache-name-map-01`.
+  - Exact NGC source inventory: `/mwittmann/cubin-ngc-xla-callers-01`.
+- Config: same-region CPU-only analysis of two failed-rank `xla.gpu.CompilationCacheProto` files with schema
+  provenance; read-only exact `/opt/xla` source inspection from NGC 26.06.
+- Result:
+  - `kcache-s2rsxs64.bin`: 76,823,791 bytes, SHA-256
+    `552210b8b430b104b645ccd57f289a5f24cfd9e20436b19fa9cc660f83f3455e`.
+  - `kcache-s2srxs64.bin`: 76,823,819 bytes, SHA-256
+    `b4a5057bfdba8f1729eb61c77e2a4e005107c89e61ee40060360f29a0b90e915`.
+  - Each cache has 6,859/6,859 present, non-empty ELF payloads: 4,177 finalized custom CUBINs and 2,682
+    relocatable `link_binary=true` inputs totaling 29,263,696 bytes. There are zero empty fields.
+  - A top-level empty executable binary would select PTX fallback and cannot explain
+    `cuModuleLoadFatBinary(nullptr)`. Only an empty owning or span CUBIN loader spec can.
+  - Exact NGC XLA revision `385ce9a909ddbd223ec8a9a92ca9b1ab6dc42aed` has one direct
+    cache-bypassing `kernel_compiler()->Compile(...)` caller: LLVM bitonic-sort stages.
+  - The failing optimized dump contains four HLO sorts and four `kCustomKernel` sort thunks at shapes
+    `[65536,64]` and `[65536,5]`. All four have non-empty PTX dumps of about 19--32 KB, placing the earliest
+    possible empty transition after LLVM-to-PTX.
+- Interpretation: all cached per-fusion binaries and relocatable link inputs are non-empty. The leading path is
+  an uncached bitonic custom compile whose PTX-to-CUBIN provider returns success with zero bytes, followed by an
+  unchecked owning-CUBIN construction. Four null loads per four-GPU process fit one bad thunk initialized once on
+  each executor. Serialization/handoff loss remains possible until the full executable proto is inspected.
+- Next action: decode the exact full persistent-cache executable and inspect every named custom-kernel CUBIN
+  length; independently try the generated B1024 bitonic shapes on one GB200.
+
+### 2026-07-23 - CUBIN7421-015 decisive full-executable cache decode
+
+- Hypothesis: the failing serialized executable contains a named zero-byte owning custom-kernel CUBIN before
+  first execution; passing controls do not.
+- Commit Hash: `4429b52db`.
+- Job: CPU-only same-region scan `/marin/cubin-custom-cache-scan-05`, succeeded in 16.39 seconds.
+- Command:
+  `uv run iris --config lib/iris/config/cw-us-east-08a.yaml job logs /marin/cubin-custom-cache-scan-05 --max-lines 10000 --no-tail`.
+- Config: decode JAX zstd wrapper, four-byte big-endian compile time, IFRT metadata envelope,
+  `ExecutableAndOptionsProto`, Riegeli/Snappy `GpuExecutableProto`, and recursive
+  `ThunkProto.custom_kernel_thunk`; compare two failing and two passing full executable artifacts.
+- Result:
+  - Serialized-producer failure:
+    `jit_train_step-0b7e3bb6a4757b4079ac57300037ac702e3c3f8c588df21441f64362362abbc8-cache`;
+    object SHA-256 `d848131f0d68fe3c020efc91010d57a0ff93e6a667a780245f49f38ac5e6091e`;
+    executable SHA-256 `372b06a1e082b25a0985fca9e8f644cb94c8b2529ba0cca7fc576d746f0b6551`;
+    1,327 custom thunks; sole empty CUBIN at `record[18].thunk[404]/287`, name and kernel name
+    `fusion_2174`.
+  - Original CuTe failure:
+    `jit_train_step-90594bf694156627fb573fc59898faf4f9849f093f584400867a555d1c84c52c-cache`;
+    object SHA-256 `63ea8caf5c52fbaf9afb326d68a9a45676bdfcdcfb9b33ce29fbc61aa89accb9`;
+    executable SHA-256 `6bc34f68d144ebe6318af83d1b7e04995cafcbfebb770dcae7a201c2b8af73c7`;
+    1,352 custom thunks; sole empty CUBIN at `record[18].thunk[404]/287`, `fusion_2174`.
+  - Passing B1024-XLA control:
+    `jit_train_step-c8b342a7641f2a6ac83487920b466db397a0018d28c6858441aa868a97a2b17d-cache`;
+    1,385 custom thunks and zero empty CUBINs.
+  - Passing B832-CuTe control:
+    `jit_train_step-cf3ec488ecd382928b27256547fe662a2ce86a57f110740180a85f17abab8f19-cache`;
+    1,331 custom thunks and zero empty CUBINs.
+  - All four bitonic-sort custom CUBINs are non-empty in every artifact, with sizes
+    28,816, 16,480, 28,816, and 16,480 bytes.
+- Interpretation: the exact loader failure is caused by the zero-byte `fusion_2174` owning CUBIN already embedded
+  in both failing executables. XLA faithfully persists the defect and later passes `span.data()==nullptr` to
+  `cuModuleLoadFatBinary`, producing CUDA invalid-value and the misleading different-GPU hint. Four failures per
+  four-GPU process are one bad custom thunk initialized once per executor. Persistent-cache corruption,
+  deserialization, loader concurrency, bitonic sort, and first-execution device HBM are ruled out as the origin
+  for this CuTe B1024/L24 case.
+- Next action: stop the hypothesis loop. The production diagnostic/fix belongs immediately after compiling
+  `fusion_2174`: record provider name, input identity/status/output size, and reject an empty CUBIN before building
+  the custom kernel. A remaining follow-up can determine why this provider returns or creates zero bytes.
