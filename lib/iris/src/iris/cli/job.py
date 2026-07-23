@@ -18,7 +18,7 @@ import time
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Protocol, cast
 
 import click
 import humanfriendly
@@ -1517,12 +1517,20 @@ def logs(
 _JSON_LIST_COLUMNS = frozenset(c.name for c in job_config_table.columns if isinstance(c.type, JSONList))
 
 
-def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> LaunchJobRow | None:
-    """Read the stored config of *job_id* in the shape the reconstructor expects.
+class StoredJobRow(LaunchJobRow, Protocol):
+    """A stored job row, plus the two columns a restore reads outside the reconstructor.
 
-    ``state`` rides along so the caller can report what it replaced; the rest of
-    the row is the ``LaunchJobRow`` read surface.
+    ``job_id`` carries the original case, which ``LaunchJobRow.name`` does not:
+    ``job_config.name`` is stored lowercased, so relaunching under it forks a
+    second job. ``state`` gates the relaunch on the job being terminal.
     """
+
+    job_id: str
+    state: int
+
+
+def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> StoredJobRow | None:
+    """Read the stored config of *job_id* in the shape the reconstructor expects."""
     rows = query_dicts(
         client,
         "SELECT c.*, j.num_tasks, j.state "
@@ -1537,8 +1545,8 @@ def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> LaunchJ
         row[column] = json.loads(value) if isinstance(value, str) else (value or [])
     row["has_coscheduling"] = bool(row.get("has_coscheduling"))
     # The field set comes from `SELECT c.*`, so the schema decides it; the cast
-    # records that this is the reconstructor's row shape without restating it.
-    return cast(LaunchJobRow, SimpleNamespace(**row))
+    # records the row shape without restating it.
+    return cast(StoredJobRow, SimpleNamespace(**row))
 
 
 def _stored_workdir_files(client: ControllerServiceClientSync, job_id: str) -> dict[str, bytes]:
