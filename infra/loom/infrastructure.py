@@ -264,7 +264,7 @@ class GitHubFederationConfig:
 def _profile_manifest(
     profiles: tuple[ProfileConfig, ...],
 ) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """Translate stack-friendly camelCase profiles into Loom's REST contract."""
+    """Return Loom profile manifests and their ``(project, secret)`` IAM targets."""
     result: list[dict[str, Any]] = []
     secret_refs: list[tuple[str, str]] = []
     for profile in sorted(profiles, key=lambda item: item.name):
@@ -424,11 +424,7 @@ class DeploymentConfig:
 
 @dataclass(frozen=True)
 class Infrastructure:
-    address: gcp.compute.Address
     instance: gcp.compute.Instance
-    artifact_repository: gcp.artifactregistry.Repository
-    backup_bucket: gcp.storage.Bucket
-    workload_accounts: tuple[gcp.serviceaccount.Account, ...]
     activation: command.local.Command | None
 
 
@@ -467,7 +463,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     )
     profile_manifest, profile_secret_refs = _profile_manifest(config.profiles)
     audience = f"https://{config.domain.rstrip('/')}"
-    workload_accounts: list[gcp.serviceaccount.Account] = []
     workload_mapping_outputs: list[pulumi.Output[dict[str, Any]]] = []
     workload_client_outputs: list[pulumi.Output[dict[str, str]]] = []
     for workload in config.workloads:
@@ -479,7 +474,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             display_name=f"Loom workload: {workload.name}",
             opts=api_options,
         )
-        workload_accounts.append(account)
         workload_mapping_outputs.append(
             pulumi.Output.all(account.email, account.unique_id).apply(
                 lambda values, workload=workload: _google_federation_mapping(workload, audience, values[0], values[1])
@@ -820,10 +814,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         pulumi.Output.all(*workload_client_outputs) if workload_client_outputs else [],
     )
     return Infrastructure(
-        address=address,
         instance=instance,
-        artifact_repository=artifact_repository,
-        backup_bucket=backup_bucket,
-        workload_accounts=tuple(workload_accounts),
         activation=activation,
     )
