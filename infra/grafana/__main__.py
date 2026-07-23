@@ -44,19 +44,21 @@ BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
 # Slack only.
 SMTP_SECRET = "marin-grafana-smtp-credentials"
 
-# Secret Manager secret Pulumi owns for the "Marin Ops Agent" GitHub App private
-# key. The bridge mints short-lived installation tokens from it (github_app.py),
-# so nothing long-lived expires under the GitHub panels.
+# Secret Manager secret holding the "Marin Ops Agent" GitHub App private key. The
+# bridge mints short-lived installation tokens from it (github_app.py), so nothing
+# long-lived expires under the GitHub panels. Hand-placed like the other runtime
+# secrets — the Cloud Run deploy account is fail-closed on secret creation — and
+# allowlisted for IAM binding in infra/permissions.
 GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
 
-def smtp_secret_exists(provider: gcp.Provider) -> bool:
+def secret_exists(provider: gcp.Provider, secret_id: str) -> bool:
     found = gcp.secretmanager.get_secrets(
         project=PROJECT,
-        filter=f"name:{SMTP_SECRET}",
+        filter=f"name:{secret_id}",
         opts=pulumi.InvokeOptions(provider=provider),
     )
-    return any(secret.secret_id == SMTP_SECRET for secret in found.secrets)
+    return any(secret.secret_id == secret_id for secret in found.secrets)
 
 
 def main() -> None:
@@ -82,8 +84,8 @@ def main() -> None:
     # runtime service account access. CW_READ_TOKEN is the CoreWeave read-role token
     # behind the k8s source; GF_DATABASE_PASSWORD is the grafana Postgres user's
     # password; SLACK_ALERTS_WEBHOOK and GF_SMTP_PASSWORD feed the provisioned
-    # alerting contact points. The GitHub App private key below is the exception —
-    # Pulumi owns that value.
+    # alerting contact points. GF_SMTP_PASSWORD and the GitHub App key are appended
+    # below only when present.
     secrets = [
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
@@ -96,44 +98,33 @@ def main() -> None:
     }
     if custom_domain:
         env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
-    if smtp_secret_exists(provider):
+    if secret_exists(provider, SMTP_SECRET):
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))
         env["GF_SMTP_ENABLED"] = "true"
 
     # The bridge authenticates to GitHub as the "Marin Ops Agent" App: it mints
     # short-lived, read-only installation tokens at runtime (github_app.py), so no
     # long-lived token expires under the ferry/build/nightly panels — the failure
-    # that blanked the build panel. Pulumi owns the private key; the app and
-    # installation ids are not secret and travel as plain env. This is all-or-nothing
-    # and optional (like SMTP above): until it is set the bridge runs unauthenticated
-    # and the build panel shows no data, so the merge-triggered deploy never blocks on
-    # it. Enable it once with:
+    # that blanked the build panel. The private key is a hand-placed secret (the
+    # deploy account cannot create secrets); the app and installation ids are not
+    # secret and travel as plain stack config. Wiring is optional (like SMTP): until
+    # the ids are set and the key secret exists, the bridge runs unauthenticated and
+    # the build panel shows no data, so the merge-triggered deploy never blocks on
+    # it. Enable it once:
+    #   gcloud secrets create marin-grafana-github-app-private-key \
+    #     --project=hai-gcp-models --data-file=key.pem   # (then add infra/permissions grant)
     #   pulumi config set marin-grafana:github_app_id <app-id>
     #   pulumi config set marin-grafana:github_app_installation_id <installation-id>
-    #   pulumi config set --secret marin-grafana:github_app_private_key -- "$(cat key.pem)"
-    depends_on: list[pulumi.Resource] = []
     github_app_id = config.get("github_app_id")
     github_app_installation_id = config.get("github_app_installation_id")
-    github_app_private_key = config.get_secret("github_app_private_key")
-    if github_app_id and github_app_installation_id and github_app_private_key is not None:
-        secret = gcp.secretmanager.Secret(
-            "github-app-private-key",
-            secret_id=GITHUB_APP_PRIVATE_KEY_SECRET,
-            replication=gcp.secretmanager.SecretReplicationArgs(auto=gcp.secretmanager.SecretReplicationAutoArgs()),
-            opts=pulumi.ResourceOptions(provider=provider),
-        )
-        version = gcp.secretmanager.SecretVersion(
-            "github-app-private-key-version",
-            secret=secret.id,
-            secret_data=github_app_private_key,
-            opts=pulumi.ResourceOptions(provider=provider),
-        )
-        depends_on.append(version)
+    if github_app_id and github_app_installation_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
         secrets.append(SecretEnv(name="GITHUB_APP_PRIVATE_KEY", secret=GITHUB_APP_PRIVATE_KEY_SECRET))
         env["GITHUB_APP_ID"] = github_app_id
         env["GITHUB_APP_INSTALLATION_ID"] = github_app_installation_id
     else:
-        pulumi.log.warn("github_app_* config unset; GitHub panels deploy unauthenticated (build panel shows no data)")
+        pulumi.log.warn(
+            "GitHub App auth not configured; GitHub panels deploy unauthenticated (build panel shows no data)"
+        )
 
     service = CloudRunService(
         "grafana",
@@ -153,9 +144,6 @@ def main() -> None:
             iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
-        # The component mounts and IAM-binds GITHUB_APP_PRIVATE_KEY_SECRET by id, so
-        # the Pulumi-owned version (when configured) must exist first.
-        opts=pulumi.ResourceOptions(depends_on=depends_on),
     )
     pulumi.export("url", service.uri)
     pulumi.export("image", service.image_ref)

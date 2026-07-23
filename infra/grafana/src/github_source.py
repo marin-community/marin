@@ -101,9 +101,10 @@ class GithubSource:
             "x-github-api-version": "2022-11-28",
             "user-agent": "marin-grafana-bridge",
         }
-        # auth mints an installation token per request (see github_app.GithubAppAuth).
-        # None leaves requests unauthenticated: the REST ferry/nightly panels still
-        # work but rate-limit fast, and the GraphQL build panel returns no data.
+        # auth attaches a cached GitHub App installation token, refreshed near expiry
+        # (see github_app.GithubAppAuth). None leaves requests unauthenticated: the
+        # REST ferry/nightly panels still work but rate-limit fast, and the GraphQL
+        # build panel returns no data.
         self._client = httpx.Client(timeout=timeout, headers=headers, auth=auth)
 
     def _get(self, url: str, params: dict | None = None) -> dict:

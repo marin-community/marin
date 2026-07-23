@@ -10,6 +10,8 @@ per entry and addresses it by name in the URL path.
 import dataclasses
 import os
 
+from github_app import GithubAppCredentials
+
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
 FINELOG_PORT = 10001
 
@@ -167,15 +169,11 @@ class BridgeConfig:
     k8s_cache_ttl: float
     # HTTP timeout for the controller RPC, GitHub, and k8s API calls, seconds.
     http_timeout: float
-    # "Marin Ops Agent" GitHub App credentials. The bridge mints short-lived
-    # installation tokens from these for the ferry/build/nightly panels (see
-    # github_app.py); all three are set together or the GitHub calls run
-    # unauthenticated and the build panel shows no data. The private key is
-    # Secret-Manager-backed (marin-grafana-github-app-private-key); the ids are
-    # not secret and travel as plain env.
-    github_app_id: str | None
-    github_app_installation_id: str | None
-    github_app_private_key: str | None
+    # "Marin Ops Agent" GitHub App credentials for the ferry/build/nightly panels,
+    # or None when unconfigured (the GitHub calls then run unauthenticated and the
+    # build panel shows no data). The bridge mints short-lived installation tokens
+    # from these (see github_app.py).
+    github_app_credentials: GithubAppCredentials | None
     # CW read-role bearer token for the k8s API servers. None does not fail the boot
     # (that would take Grafana down with it); the k8s routes serve auth error rows
     # and unreachable=1 alert rows instead.
@@ -192,8 +190,20 @@ class BridgeConfig:
             github_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_GITHUB_CACHE_TTL", "60")),
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
             http_timeout=float(os.environ.get("GRAFANA_BRIDGE_HTTP_TIMEOUT", "10")),
-            github_app_id=os.environ.get("GITHUB_APP_ID") or None,
-            github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID") or None,
-            github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY") or None,
+            github_app_credentials=_github_app_credentials(),
             cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
         )
+
+
+def _github_app_credentials() -> GithubAppCredentials | None:
+    """Resolve GitHub App credentials from the environment; fail fast on a partial set."""
+    app_id = os.environ.get("GITHUB_APP_ID") or None
+    installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID") or None
+    private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY") or None
+    if app_id and installation_id and private_key:
+        return GithubAppCredentials(app_id, installation_id, private_key)
+    if app_id or installation_id or private_key:
+        raise ValueError(
+            "GitHub App auth needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY together"
+        )
+    return None

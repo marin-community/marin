@@ -24,9 +24,7 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
         github_cache_ttl=60.0,
         k8s_cache_ttl=30.0,
         http_timeout=5.0,
-        github_app_id=None,
-        github_app_installation_id=None,
-        github_app_private_key=None,
+        github_app_credentials=None,
         cw_read_token=None,
     )
 

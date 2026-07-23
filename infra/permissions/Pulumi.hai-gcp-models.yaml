@@ -17,7 +17,7 @@ config:
       # Keep this permission allowlist explicit: a new runtime secret should fail closed
       # until its deploy-account IAM management is reviewed here.
       secret_iam_secrets:
-        - marin-status-page-github-token
+        - marin-grafana-github-app-private-key
         - cloudsql-grafana-password
         - marin-grafana-cw-read-token
         - marin-grafana-slack-webhook

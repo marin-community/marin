@@ -61,10 +61,8 @@ class GithubAppCredentials:
 class GithubAppAuth(httpx.Auth):
     """An httpx auth flow that mints, caches, and refreshes an installation token.
 
-    The token request rides the same client transport as the panel calls (httpx's
-    "auth flow yields a request" pattern), so it needs no second client and stays
-    fully mockable in tests. A concurrent cold cache mints twice at worst — both
-    tokens are valid — so no lock is needed for what runs about once a minute.
+    It yields the token request through the caller's client (httpx's "auth flow
+    yields a request" pattern) rather than opening a second client.
     """
 
     # auth_flow reads the token response body to cache the token and its expiry.
@@ -78,6 +76,8 @@ class GithubAppAuth(httpx.Auth):
         self._expires_at = 0.0
 
     def auth_flow(self, request: httpx.Request):
+        # No lock: a concurrent cold cache mints twice at worst, and both tokens are
+        # valid. This runs about once a minute, so the contention window is tiny.
         if self._token is None or time.time() >= self._expires_at - _EXPIRY_SKEW:
             try:
                 response = yield self._token_request()

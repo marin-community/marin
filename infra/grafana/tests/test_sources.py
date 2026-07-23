@@ -31,8 +31,8 @@ def _iris(handler) -> IrisSource:
     return source
 
 
-def _github(handler, auth: httpx.Auth | None = None) -> GithubSource:
-    source = GithubSource(auth=auth, timeout=5.0)
+def _github(handler) -> GithubSource:
+    source = GithubSource(auth=None, timeout=5.0)
     source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
     return source
 

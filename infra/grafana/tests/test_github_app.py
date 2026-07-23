@@ -3,14 +3,13 @@
 
 """Behavioral tests for GitHub App installation-token minting."""
 
-import dataclasses
 import json
 import time
 
 import httpx
 import jwt
 import pytest
-from conftest import bridge_config
+from config import _github_app_credentials
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -20,7 +19,6 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from errors import UpstreamError
 from github_app import GithubAppAuth, GithubAppCredentials
-from server import _github_auth
 
 
 def _keypair() -> tuple[str, str]:
@@ -129,19 +127,22 @@ def test_mint_failure_raises_upstream_error(monkeypatch):
     assert excinfo.value.status_code == 502
 
 
-def _config(**overrides):
-    return dataclasses.replace(bridge_config(), **overrides)
+def test_credentials_resolve_when_fully_configured(monkeypatch):
+    monkeypatch.setenv("GITHUB_APP_ID", "1")
+    monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "2")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "pem")
+    assert _github_app_credentials() == GithubAppCredentials("1", "2", "pem")
 
 
-def test_github_auth_builds_when_fully_configured():
-    auth = _github_auth(_config(github_app_id="1", github_app_installation_id="2", github_app_private_key="pem"))
-    assert isinstance(auth, GithubAppAuth)
+def test_credentials_are_none_when_unset(monkeypatch):
+    for key in ("GITHUB_APP_ID", "GITHUB_APP_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    assert _github_app_credentials() is None
 
 
-def test_github_auth_is_none_when_unset():
-    assert _github_auth(_config()) is None
-
-
-def test_github_auth_rejects_partial_config():
+def test_credentials_reject_partial_config(monkeypatch):
+    monkeypatch.setenv("GITHUB_APP_ID", "1")
+    for key in ("GITHUB_APP_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY"):
+        monkeypatch.delenv(key, raising=False)
     with pytest.raises(ValueError):
-        _github_auth(_config(github_app_id="1"))
+        _github_app_credentials()
