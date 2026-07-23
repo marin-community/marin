@@ -7,7 +7,7 @@ import pstats
 import threading
 import time
 from contextlib import contextmanager
-from typing import Optional
+from typing import Callable, Optional
 
 import wandb
 
@@ -28,6 +28,8 @@ from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
 from levanter.data.loader import DataLoader
+from levanter.data.mixture import MixtureDataset
+from levanter.schedule import BatchSchedule
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
@@ -133,6 +135,31 @@ def wandb_xla_logger(config: WandbConfig):
         return log_xla_to_wandb
     else:
         return lambda x: None
+
+
+def mixture_weight_logging_hook(
+    batch_schedule: BatchSchedule, train_dataset: MixtureDataset
+) -> Callable[[StepInfo], None]:
+    """Build a hook that logs mixture component weights whenever the mixture stage advances.
+
+    A stage-scheduled ``MixtureDataset`` changes its component weights at block boundaries.
+    This hook maps the current step to a block, and logs the active weights (and stage index)
+    the first time each stage is seen.
+    """
+    last_stage = -1
+
+    def log_mixture_weights(step_info: StepInfo):
+        nonlocal last_stage
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        stage = train_dataset._get_stage_for_block(seq_index // train_dataset.block_size)
+        if stage != last_stage:
+            weights = train_dataset.weight_stages[stage][1]
+            metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+            metrics["mixture/stage"] = stage
+            levanter.tracker.log(metrics, step=step_info.step)
+            last_stage = stage
+
+    return log_mixture_weights
 
 
 @contextmanager
