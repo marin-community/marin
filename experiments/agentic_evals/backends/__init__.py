@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Pluggable cluster backends for submitting + monitoring eval jobs.
 
 An ``EvalBackend`` abstracts the cluster submission layer (Iris TPU/GPU,
@@ -6,7 +9,6 @@ SkyPilot, SLURM, local). The package ships an :class:`IrisBackend` adapter.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 

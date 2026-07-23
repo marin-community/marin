@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """EVAL-ONLY LocalHarborRunner: Ray + vLLM lifecycle + Harbor exec.
 
 Extracted from OT-Agent ``hpc/local_runner_utils.py``, stripped of all
@@ -11,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import re
 import resource
@@ -19,34 +21,37 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .args import (
-    add_harbor_args,
-    add_model_compute_args,
-    add_ray_vllm_args,
-    add_log_path_args,
-)
-from .docker import setup_docker_runtime_if_needed
-from .vllm_server import build_vllm_cli_args as _build_vllm_cli_args, run_endpoint_health_check
-from ..harness.config import (
-    load_harbor_config,
-    get_harbor_env_from_config,
-    resolve_jobs_dir_path,
-)
+from ..harness._compat import get_orchestrator_field
 from ..harness.command import (
     build_harbor_command,
     load_endpoint_metadata,
     run_harbor_cli,
 )
+from ..harness.config import (
+    load_harbor_config,
+    resolve_jobs_dir_path,
+)
 from ..harness.job_config import load_job_config
-from ..harness._compat import get_orchestrator_field
 from ..harness.trial_prune import prune_refire_errored_trials
-from ..serve.tpu import drop_tpu_unsupported_serve_flags, add_tpu_serve_default_flags
-
+from ..serve.tpu import add_tpu_serve_default_flags, drop_tpu_unsupported_serve_flags
+from .args import (
+    add_harbor_args,
+    add_log_path_args,
+    add_model_compute_args,
+    add_ray_vllm_args,
+)
+from .docker import setup_docker_runtime_if_needed
+from .vllm_server import (
+    build_vllm_cli_args as _build_vllm_cli_args,
+)
+from .vllm_server import (
+    execute_model_timeout_seconds,
+    run_endpoint_health_check,
+)
 
 # ---------------------------------------------------------------------------
 # Inlined trivial helpers (from hpc.launch_utils)
@@ -188,8 +193,7 @@ class FileDescriptorMonitor:
             level = "OK"
         timestamp = time.strftime("%H:%M:%S")
         print(
-            f"[fd-monitor] [{timestamp}] {level}: {current:,} / {soft:,} FDs open "
-            f"({percent:.1f}% of soft limit)",
+            f"[fd-monitor] [{timestamp}] {level}: {current:,} / {soft:,} FDs open ({percent:.1f}% of soft limit)",
             flush=True,
         )
 
@@ -246,7 +250,9 @@ def start_ray(
         object_store_memory = 40 * 1024 * 1024 * 1024
 
     cmd = [
-        "ray", "start", "--head",
+        "ray",
+        "start",
+        "--head",
         f"--node-ip-address={host}",
         f"--port={ray_port}",
         f"--num-gpus={num_gpus}",
@@ -279,6 +285,7 @@ def start_vllm_controller(
     served_model_name: Optional[str] = None,
     extra_cli_args: Optional[List[str]] = None,
     extra_env_vars: Optional[dict] = None,
+    execute_model_timeout: Optional[int] = None,
 ) -> ManagedProcess:
     """Start a vLLM controller process."""
     env = os.environ.copy()
@@ -286,17 +293,28 @@ def start_vllm_controller(
     env["PYTHONUNBUFFERED"] = "1"
     if extra_env_vars:
         env.update(extra_env_vars)
+    if execute_model_timeout is not None:
+        env.setdefault("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", str(execute_model_timeout))
 
     cmd = [
-        sys.executable, str(controller_script),
-        "--ray-address", f"{host}:{ray_port}",
-        "--host", host,
-        "--port", str(api_port),
-        "--model", model,
-        "--tensor-parallel-size", str(tensor_parallel_size),
-        "--pipeline-parallel-size", str(pipeline_parallel_size),
-        "--data-parallel-size", str(data_parallel_size),
-        "--endpoint-json", str(endpoint_path),
+        sys.executable,
+        str(controller_script),
+        "--ray-address",
+        f"{host}:{ray_port}",
+        "--host",
+        host,
+        "--port",
+        str(api_port),
+        "--model",
+        model,
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
+        "--pipeline-parallel-size",
+        str(pipeline_parallel_size),
+        "--data-parallel-size",
+        str(data_parallel_size),
+        "--endpoint-json",
+        str(endpoint_path),
     ]
     if served_model_name:
         cmd.extend(["--served-model-name", served_model_name])
@@ -347,15 +365,24 @@ def start_vllm_iris_controller(
         env.update(extra_env_vars)
 
     cmd = [
-        sys.executable, str(controller_script),
-        "--host", host,
-        "--port", str(api_port),
-        "--model", model,
-        "--ray-port", str(ray_port),
-        "--tensor-parallel-size", str(tensor_parallel_size),
-        "--pipeline-parallel-size", str(pipeline_parallel_size),
-        "--data-parallel-size", str(data_parallel_size),
-        "--endpoint-json", str(endpoint_path),
+        sys.executable,
+        str(controller_script),
+        "--host",
+        host,
+        "--port",
+        str(api_port),
+        "--model",
+        model,
+        "--ray-port",
+        str(ray_port),
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
+        "--pipeline-parallel-size",
+        str(pipeline_parallel_size),
+        "--data-parallel-size",
+        str(data_parallel_size),
+        "--endpoint-json",
+        str(endpoint_path),
     ]
     if served_model_name:
         cmd.extend(["--served-model-name", served_model_name])
@@ -376,9 +403,7 @@ def wait_for_endpoint(
     start = time.time()
     while time.time() - start < timeout:
         if controller.proc.poll() is not None:
-            raise RuntimeError(
-                "vLLM controller exited before writing the endpoint JSON. Check logs."
-            )
+            raise RuntimeError("vLLM controller exited before writing the endpoint JSON. Check logs.")
         if endpoint_path.exists():
             return
         time.sleep(2)
@@ -468,7 +493,10 @@ class LocalHarborRunner:
             type=int,
             default=DEFAULT_FD_MONITOR_INTERVAL,
             metavar="SECONDS",
-            help=f"Interval for file descriptor monitoring (default: {DEFAULT_FD_MONITOR_INTERVAL}s). Set to 0 to disable.",
+            help=(
+                f"Interval for file descriptor monitoring (default: {DEFAULT_FD_MONITOR_INTERVAL}s). "
+                "Set to 0 to disable."
+            ),
         )
         parser.add_argument("--fd-monitor-interval", dest="fd_monitor_interval", help=argparse.SUPPRESS)
 
@@ -505,11 +533,14 @@ class LocalHarborRunner:
         args = self.args
 
         # Initialize eval defaults (no datagen config path in the eval-only runner)
-        args._vllm_cli_args: List[str] = []
-        args._vllm_env_vars: Dict[str, str] = {}
+        vllm_cli_args: List[str] = []
+        vllm_env_vars: Dict[str, str] = {}
+        extra_agent_kwargs: Dict[str, Any] = {}
+        args._vllm_cli_args = vllm_cli_args
+        args._vllm_env_vars = vllm_env_vars
         args._engine_type = "vllm_local"
         args._needs_local_vllm = True
-        args._extra_agent_kwargs: Dict[str, Any] = {}
+        args._extra_agent_kwargs = extra_agent_kwargs
 
         # Apply datagen config defaults if provided (eval's --datagen_config)
         datagen_config = getattr(args, "datagen_config", None)
@@ -569,8 +600,7 @@ class LocalHarborRunner:
         if injected_jobs_dir and "://" not in injected_jobs_dir:
             args._jobs_dir_path = Path(injected_jobs_dir).expanduser()
             print(
-                f"[{self.JOB_PREFIX}-local] jobs-dir override: in-pod upload will read "
-                f"{args._jobs_dir_path}/<job_name>",
+                f"[{self.JOB_PREFIX}-local] jobs-dir override: in-pod upload will read {args._jobs_dir_path}/<job_name>",
                 flush=True,
             )
         args._harbor_config_data = harbor_config_data
@@ -591,18 +621,15 @@ class LocalHarborRunner:
         # Apply n_attempts from harbor config if CLI didn't override
         config_n_attempts = getattr(harbor_job, "n_attempts", None)
         if config_n_attempts is not None and config_n_attempts > 0:
-            if (
-                not _cli_has_option("--n_attempts", "--n-attempts")
-                and getattr(args, "n_attempts", 1) == 1
-            ):
+            if not _cli_has_option("--n_attempts", "--n-attempts") and getattr(args, "n_attempts", 1) == 1:
                 args.n_attempts = int(config_n_attempts)
 
         self.validate_args()
 
     def _apply_datagen_config(self, args: argparse.Namespace, datagen_config: str) -> None:
         """Load a datagen YAML and seed vllm_server / model defaults."""
+
         from ..harness.config import load_harbor_config as _load_yaml
-        import dataclasses
 
         parsed = _load_yaml(datagen_config)
         if not isinstance(parsed, dict):
@@ -757,6 +784,10 @@ class LocalHarborRunner:
                 served_model_name=getattr(args, "_served_model_id", None),
                 extra_cli_args=getattr(args, "_vllm_cli_args", []),
                 extra_env_vars=getattr(args, "_vllm_env_vars", {}),
+                execute_model_timeout=execute_model_timeout_seconds(
+                    args.health_max_attempts,
+                    args.health_retry_delay,
+                ),
             )
             self.processes.append(vllm_proc)
         else:
@@ -766,8 +797,7 @@ class LocalHarborRunner:
             # iris worker ranks: block as Ray worker, skip harbor
             if iris_serve and iris_rank != 0:
                 print(
-                    f"[iris] Worker rank {iris_rank}: acting as Ray worker node; "
-                    "blocking on controller.",
+                    f"[iris] Worker rank {iris_rank}: acting as Ray worker node; blocking on controller.",
                     flush=True,
                 )
                 vllm_proc.proc.wait()
@@ -799,9 +829,9 @@ class LocalHarborRunner:
             # Re-fire: prune infra-errored trials before auto-resume
             refire_types = getattr(args, "refire_filter_error_types", None)
             if refire_types and not args.dry_run:
-                refire_root = _extract_injected_jobs_dir(
-                    getattr(args, "harbor_extra_arg", None)
-                ) or (str(getattr(args, "_jobs_dir_path", "") or "") or None)
+                refire_root = _extract_injected_jobs_dir(getattr(args, "harbor_extra_arg", None)) or (
+                    str(getattr(args, "_jobs_dir_path", "") or "") or None
+                )
                 if refire_root:
                     refire_run_dir = f"{refire_root.rstrip('/')}/{job_name}"
                     prune_refire_errored_trials(

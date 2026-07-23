@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Harbor config loading + agent-kwargs utilities.
 
 Extracted from OT-Agent ``hpc/harbor_utils.py``. These functions have no

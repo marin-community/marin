@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Pluggable result sinks for eval output.
 
 A ``ResultSink`` receives the Harbor job directory + metadata after a run

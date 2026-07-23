@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Launcher CLI: submit an agentic eval job to a cluster.
 
 Adapted from OT-Agent ``eval/cloud/launch_eval_iris.py``. Parses CLI args
@@ -18,31 +21,30 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
+from .harness.config import get_harbor_env_from_config, load_harbor_config
+from .results.infra_errors import INFRA_ERROR_TYPES
 from .runtime.args import (
+    add_database_upload_args,
     add_harbor_args,
     add_harbor_env_arg,
-    add_model_compute_args,
     add_hf_upload_args,
-    add_database_upload_args,
+    add_model_compute_args,
 )
-from .harness.config import load_harbor_config, get_harbor_env_from_config
-from .results.infra_errors import INFRA_ERROR_TYPES
 from .serve.model_config import resolve_model_config
 
-
-DEFAULT_REFIRE_ERROR_TYPES = sorted(
-    set(INFRA_ERROR_TYPES) | {"DaytonaValidationError", "VerifierTimeoutError"}
-)
+DEFAULT_REFIRE_ERROR_TYPES = sorted(set(INFRA_ERROR_TYPES) | {"DaytonaValidationError", "VerifierTimeoutError"})
+DEFAULT_TPU_DISK = "100GB"
+DEFAULT_GPU_DISK = "512GB"
 
 
 def _load_presets() -> Dict[str, dict]:
     """Load preset YAMLs from the presets/ directory."""
     import yaml
+
     preset_dir = Path(__file__).resolve().parent / "presets"
     presets: Dict[str, dict] = {}
     for path in sorted(preset_dir.glob("*.yaml")):
@@ -60,9 +62,7 @@ def _cli_has(*flags: str) -> bool:
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Launch an agentic eval job on a cluster (Iris TPU/GPU)."
-    )
+    parser = argparse.ArgumentParser(description="Launch an agentic eval job on a cluster (Iris TPU/GPU).")
 
     # Harbor + model/compute + upload args
     add_harbor_args(parser, config_required=True)
@@ -107,23 +107,19 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Iris backend args
     iris = parser.add_argument_group("iris")
-    iris.add_argument("--cluster-config", "--cluster_config", default=None,
-                      help="Path to the iris cluster YAML.")
-    iris.add_argument("--task-image", "--task_image", default=None,
-                      help="Container image for the task.")
+    iris.add_argument("--cluster-config", "--cluster_config", default=None, help="Path to the iris cluster YAML.")
+    iris.add_argument("--task-image", "--task_image", default=None, help="Container image for the task.")
     iris.add_argument("--tpu", default="v6e-4", help="TPU variant.")
     iris.add_argument("--gpu", default=None, help="GPU variant (e.g. H100x8).")
     iris.add_argument("--replicas", type=int, default=1)
     iris.add_argument("--cpu", type=float, default=8.0)
     iris.add_argument("--memory", default="256GB")
-    iris.add_argument("--disk", default="100GB")
-    iris.add_argument("--priority", default="interactive",
-                      choices=["production", "interactive", "batch"])
+    iris.add_argument("--disk", default=None)
+    iris.add_argument("--priority", default="interactive", choices=["production", "interactive", "batch"])
     iris.add_argument("--max-retries", "--max_retries", type=int, default=0)
     iris.add_argument("--timeout", type=int, default=0)
     iris.add_argument("--no-wait", "--no_wait", dest="no_wait", action="store_true", default=False)
-    iris.add_argument("--secrets-env", "--secrets_env", default=None,
-                      help="Path to a KEY=VALUE env file.")
+    iris.add_argument("--secrets-env", "--secrets_env", default=None, help="Path to a KEY=VALUE env file.")
 
     return parser
 
@@ -148,14 +144,14 @@ def _apply_preset(args: argparse.Namespace) -> None:
 
     agent_parser = preset.get("agent_parser")
     if agent_parser:
-        existing = {kw.split("=", 1)[0] for kw in (args.agent_kwarg or [])}
+        existing = {kw.split("=", 1)[0] for kw in args.agent_kwarg or []}
         if "parser" not in existing:
             args.agent_kwarg = args.agent_kwarg or []
             args.agent_kwarg.append(f"parser={agent_parser}")
 
     for kw in preset.get("agent_kwargs") or []:
         key = kw.split("=", 1)[0]
-        existing = {k.split("=", 1)[0] for k in (args.agent_kwarg or [])}
+        existing = {k.split("=", 1)[0] for k in args.agent_kwarg or []}
         if key not in existing:
             args.agent_kwarg = args.agent_kwarg or []
             args.agent_kwarg.append(kw)
@@ -198,15 +194,20 @@ def _normalize(args: argparse.Namespace) -> None:
     else:
         args.refire_filter_error_types = list(raw_refire)
 
-    accelerator = args.gpu or args.tpu
+    if args.disk is None:
+        args.disk = DEFAULT_GPU_DISK if args.gpu else DEFAULT_TPU_DISK
 
 
 def build_worker_command(args: argparse.Namespace) -> List[str]:
     """Build the in-pod run_eval.py command."""
     cmd: List[str] = [
-        "python", "-m", "agentic_evals.run_eval",
-        "--harbor_config", args.harbor_config,
-        "--model", args.model,
+        "python",
+        "-m",
+        "agentic_evals.run_eval",
+        "--harbor_config",
+        args.harbor_config,
+        "--model",
+        args.model,
     ]
 
     if args.dataset:
@@ -214,11 +215,16 @@ def build_worker_command(args: argparse.Namespace) -> List[str]:
     elif args.dataset_path:
         cmd.extend(["--dataset_path", args.dataset_path])
 
-    cmd.extend([
-        "--agent", args.agent,
-        "--n_concurrent", str(args.n_concurrent),
-        "--n_attempts", str(args.n_attempts),
-    ])
+    cmd.extend(
+        [
+            "--agent",
+            args.agent,
+            "--n_concurrent",
+            str(args.n_concurrent),
+            "--n_attempts",
+            str(args.n_attempts),
+        ]
+    )
 
     if args.harbor_env:
         cmd.extend(["--harbor_env", args.harbor_env])
@@ -263,7 +269,7 @@ def main() -> None:
         for k in ("tool_call_parser", "reasoning_parser"):
             v = resolved.get(k)
             if v:
-                existing = {kw.split("=", 1)[0] for kw in (args.agent_kwarg or [])}
+                existing = {kw.split("=", 1)[0] for kw in args.agent_kwarg or []}
                 if k not in existing:
                     args.agent_kwarg = args.agent_kwarg or []
                     args.agent_kwarg.append(f"{k}={v}")

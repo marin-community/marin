@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Compatibility shim for Harbor dataset-config + orchestrator classes.
 
 Copied from OT-Agent ``scripts/harbor/_harbor_compat.py``.
@@ -18,9 +21,11 @@ try:
         LocalDatasetConfig,
         RegistryDatasetConfig,
     )
+
     _UNIFIED_DATASET_CONFIG = False
 except ImportError:
     from harbor.models.job.config import DatasetConfig as _DatasetConfig
+
     LocalDatasetConfig = _DatasetConfig
     RegistryDatasetConfig = _DatasetConfig
     _UNIFIED_DATASET_CONFIG = True
@@ -36,11 +41,13 @@ def is_local_dataset(dataset) -> bool:
 
 try:
     from harbor.orchestrators.base import OrchestratorEvent  # type: ignore[import-not-found]
+
     TrialEvent = OrchestratorEvent
     TRIAL_COMPLETED_EVENT = OrchestratorEvent.TRIAL_COMPLETED
     _UNIFIED_ORCHESTRATOR = False
 except ImportError:
     from harbor.trial.hooks import TrialEvent  # type: ignore[attr-defined]
+
     OrchestratorEvent = TrialEvent  # type: ignore[assignment]
     TRIAL_COMPLETED_EVENT = TrialEvent.END
     _UNIFIED_ORCHESTRATOR = True
@@ -48,6 +55,7 @@ except ImportError:
 
 try:
     from harbor.models.job.config import OrchestratorConfig  # type: ignore[attr-defined]
+
     _HAS_ORCHESTRATOR_CONFIG = True
 except ImportError:
     OrchestratorConfig = None  # type: ignore[assignment, misc]

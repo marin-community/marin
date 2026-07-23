@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Harbor ``JobConfig`` loading + metric filtering.
 
 Extracted from OT-Agent ``scripts/harbor/job_config_utils.py`` (only the
@@ -12,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from harbor.models.job.config import JobConfig
 from harbor.models.metric.type import MetricType
 
@@ -101,13 +103,11 @@ def load_job_config(config_path: Path | str) -> JobConfig:
         config = JobConfig.model_validate(raw)
     elif suffix == ".json":
         import json as _json
+
         raw = _filter_supported_metrics(_json.loads(path.read_text()))
         config = JobConfig.model_validate(raw)
     else:
-        raise ValueError(
-            f"Unsupported Harbor job config format '{path.suffix}'. "
-            "Expected one of: .yaml, .yml, .json."
-        )
+        raise ValueError(f"Unsupported Harbor job config format '{path.suffix}'. Expected one of: .yaml, .yml, .json.")
 
     return _normalize_job_config_agent_kwargs(config)
 

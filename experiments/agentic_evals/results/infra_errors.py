@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Single source of truth for infrastructure-error classification.
 
 Copied verbatim from OT-Agent ``database/unified_db/infra_errors.py``.
@@ -52,6 +55,4 @@ def compute_infra_error_stats(stats: Mapping[str, Any]) -> Tuple[int, Dict[str, 
 
 
 def filter_error_type_flags() -> str:
-    return " ".join(
-        f"--filter-error-type {t}" for t in sorted(INFRA_ERROR_TYPES)
-    )
+    return " ".join(f"--filter-error-type {t}" for t in sorted(INFRA_ERROR_TYPES))

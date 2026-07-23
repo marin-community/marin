@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """HFResultSink — uploads Harbor eval traces to HuggingFace.
 
 Uses ``harbor.utils.traces_utils.export_traces`` + ``huggingface_hub`` to upload
@@ -10,6 +13,7 @@ The upload logic is adapted from OT-Agent ``hpc/launch_utils.py``
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 from pathlib import Path
@@ -91,23 +95,34 @@ class HFResultSink:
             print(f"[hf-sink] harbor.utils.traces_utils not importable ({exc}); skipping.")
             return None
 
-        try:
-            from huggingface_hub import HfApi
-        except ImportError as exc:
-            print(f"[hf-sink] huggingface_hub not installed ({exc}); skipping.")
+        if importlib.util.find_spec("huggingface_hub") is None:
+            print("[hf-sink] huggingface_hub not installed; skipping.")
             return None
+        from huggingface_hub import HfApi
 
         print(f"[hf-sink] Exporting traces from {job_path} -> {self.hf_repo_id}")
 
-        # export_traces builds the ShareGPT-format trace dataset from the
-        # Harbor job directory and uploads it to HuggingFace.
-        hf_url = export_traces(
-            job_dir=str(job_path),
-            hf_repo_id=self.hf_repo_id,
-            token=self.hf_token,
+        HfApi(token=self.hf_token).create_repo(
+            repo_id=self.hf_repo_id,
+            repo_type="dataset",
             private=self.hf_private,
-            episodes=self.hf_episodes,
+            exist_ok=True,
         )
+        previous_token = os.environ.get("HUGGINGFACE_TOKEN")
+        os.environ["HUGGINGFACE_TOKEN"] = self.hf_token
+        try:
+            export_traces(
+                root=job_path,
+                episodes=self.hf_episodes,
+                repo_id=self.hf_repo_id,
+                push=True,
+            )
+        finally:
+            if previous_token is None:
+                del os.environ["HUGGINGFACE_TOKEN"]
+            else:
+                os.environ["HUGGINGFACE_TOKEN"] = previous_token
+        hf_url = f"https://huggingface.co/datasets/{self.hf_repo_id}"
         print(f"[hf-sink] Upload complete: {hf_url}")
         return hf_url
 

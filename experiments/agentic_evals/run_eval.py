@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Worker CLI: run an agentic eval inside the cluster pod.
 
 Adapted from OT-Agent ``eval/local/run_eval.py``. Creates an ``EvalRunner``
@@ -19,12 +22,12 @@ import argparse
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .runtime.runner import LocalHarborRunner
-from .runtime.args import add_harbor_env_arg, add_hf_upload_args, add_database_upload_args
 from .harness.config import get_harbor_env_from_config
-from .results import ResultSink, NoOpResultSink
-from .results.local import LocalResultSink
+from .results import ResultSink
 from .results.hf_upload import HFResultSink, derive_benchmark_repo
+from .results.local import LocalResultSink
+from .runtime.args import add_database_upload_args, add_harbor_env_arg, add_hf_upload_args
+from .runtime.runner import LocalHarborRunner
 
 
 class EvalRunner(LocalHarborRunner):
@@ -37,9 +40,7 @@ class EvalRunner(LocalHarborRunner):
 
     @classmethod
     def create_parser(cls) -> argparse.ArgumentParser:
-        parser = argparse.ArgumentParser(
-            description="Run Harbor evals against a local Ray/vLLM server."
-        )
+        parser = argparse.ArgumentParser(description="Run Harbor evals against a local Ray/vLLM server.")
         cls.add_common_arguments(parser)
 
         parser.add_argument(

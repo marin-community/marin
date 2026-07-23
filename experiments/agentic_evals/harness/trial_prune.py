@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prune infra-errored trial dirs so a subsequent ``harbor jobs start`` AUTO-RESUME re-runs them.
 
 Extracted from OT-Agent ``hpc/harbor_utils.py``. The ``upath`` +
@@ -23,15 +26,15 @@ def prune_refire_errored_trials(
     if not filter_error_types:
         return 0, {}
     try:
-        from upath import UPath
         from harbor.models.trial.paths import TrialPaths
         from harbor.models.trial.result import TrialResult
         from harbor.utils.path_compat import safe_rmtree
+        from upath import UPath
     except ImportError as exc:
         print(
-            f"{log_prefix}[refire] WARNING: harbor/upath not importable ({exc}); "
-            "skipping errored-trial prune.",
-            file=sys.stderr, flush=True,
+            f"{log_prefix}[refire] WARNING: harbor/upath not importable ({exc}); skipping errored-trial prune.",
+            file=sys.stderr,
+            flush=True,
         )
         return 0, {}
 
@@ -40,16 +43,15 @@ def prune_refire_errored_trials(
     try:
         if not job_dir.exists():
             print(
-                f"{log_prefix}[refire] no existing run dir at {run_dir_uri}; "
-                "nothing to prune (fresh launch).",
+                f"{log_prefix}[refire] no existing run dir at {run_dir_uri}; nothing to prune (fresh launch).",
                 flush=True,
             )
             return 0, {}
     except Exception as exc:
         print(
-            f"{log_prefix}[refire] WARNING: could not stat {run_dir_uri} "
-            f"({type(exc).__name__}: {exc}); skipping prune.",
-            file=sys.stderr, flush=True,
+            f"{log_prefix}[refire] WARNING: could not stat {run_dir_uri} ({type(exc).__name__}: {exc}); skipping prune.",
+            file=sys.stderr,
+            flush=True,
         )
         return 0, {}
 
@@ -68,28 +70,26 @@ def prune_refire_errored_trials(
                 print(
                     f"{log_prefix}[refire] WARNING: unreadable result for "
                     f"{trial_dir.name} ({type(exc).__name__}); leaving in place.",
-                    file=sys.stderr, flush=True,
+                    file=sys.stderr,
+                    flush=True,
                 )
                 continue
             exc_info = trial_result.exception_info
             if exc_info is not None and exc_info.exception_type in filter_set:
                 safe_rmtree(trial_dir)
                 n_pruned += 1
-                breakdown[exc_info.exception_type] = (
-                    breakdown.get(exc_info.exception_type, 0) + 1
-                )
+                breakdown[exc_info.exception_type] = breakdown.get(exc_info.exception_type, 0) + 1
         except Exception as exc:
             print(
-                f"{log_prefix}[refire] WARNING: error handling {trial_dir} "
-                f"({type(exc).__name__}: {exc}); skipping.",
-                file=sys.stderr, flush=True,
+                f"{log_prefix}[refire] WARNING: error handling {trial_dir} ({type(exc).__name__}: {exc}); skipping.",
+                file=sys.stderr,
+                flush=True,
             )
             continue
 
     if n_pruned:
         print(
-            f"{log_prefix}[refire] pruned {n_pruned} infra-errored trial dir(s) "
-            f"from {run_dir_uri}: {breakdown}",
+            f"{log_prefix}[refire] pruned {n_pruned} infra-errored trial dir(s) from {run_dir_uri}: {breakdown}",
             flush=True,
         )
     else:

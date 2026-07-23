@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared eval preset catalog.
 
 Each preset is a flat dict of eval-run defaults (datasets, n_concurrent,

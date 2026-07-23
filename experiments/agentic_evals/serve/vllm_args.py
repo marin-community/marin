@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Convert a vLLM server-config dict into CLI args + env vars.
 
 Extracted from OT-Agent ``hpc/vllm_utils.py`` (the ``_build_vllm_cli_args``

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Resolver for the unified per-model vLLM serve config.
 
 Extracted from OT-Agent ``model_config/resolver.py``. The YAML data files live
@@ -9,6 +12,7 @@ Resolution merge order (later wins, most-specific):
 Falls back to regex patterns (``models/_patterns.yaml``) when no per-model
 file exists, preserving the eval registry's size-inference defaults.
 """
+
 from __future__ import annotations
 
 import re
@@ -19,14 +23,16 @@ import yaml
 
 MODEL_CONFIG_DIR = Path(__file__).resolve().parent / "models"
 
-INTRINSIC_FIELDS = frozenset({
-    "trust_remote_code",
-    "hf_overrides",
-    "limit_mm_per_prompt",
-    "max_model_len",
-    "tool_call_parser",
-    "reasoning_parser",
-})
+INTRINSIC_FIELDS = frozenset(
+    {
+        "trust_remote_code",
+        "hf_overrides",
+        "limit_mm_per_prompt",
+        "max_model_len",
+        "tool_call_parser",
+        "reasoning_parser",
+    }
+)
 
 
 def _slugify(model: str) -> tuple[str, str]:
@@ -78,9 +84,7 @@ def _resolve_patterns(model: str, subsystem: str, hardware: Optional[str]) -> di
         if active_profile not in profiles:
             continue
         if re.search(regex, model):
-            return _strip_internal_keys(
-                {k: v for k, v in pat.items() if k not in ("match", "profiles", "subsystems")}
-            )
+            return _strip_internal_keys({k: v for k, v in pat.items() if k not in ("match", "profiles", "subsystems")})
     return {}
 
 

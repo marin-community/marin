@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Harbor command building + execution.
 
 Extracted from OT-Agent ``hpc/harbor_utils.py``. Imports ``merge_agent_kwargs``
@@ -138,7 +141,12 @@ def _sync_runtime_fields_into_config_json(
     yaml_retry = yaml_orchestrator.get("retry") if isinstance(yaml_orchestrator, dict) else None
     if isinstance(yaml_retry, dict):
         cj_retry = orchestrator.setdefault("retry", {})
-        for k in ("include_exceptions", "exclude_exceptions", "mask_exceptions", "passthrough_exceptions"):
+        for k in (
+            "include_exceptions",
+            "exclude_exceptions",
+            "mask_exceptions",
+            "passthrough_exceptions",
+        ):
             if k in yaml_retry:
                 cj_retry[k] = yaml_retry[k]
 
@@ -232,9 +240,7 @@ def build_harbor_command(
     else:
         _placeholder = "/replace/with/tasks/path"
         yaml_datasets = modified_config.get("datasets") or []
-        if yaml_datasets and any(
-            d.get("path", "") == _placeholder for d in yaml_datasets if isinstance(d, dict)
-        ):
+        if yaml_datasets and any(d.get("path", "") == _placeholder for d in yaml_datasets if isinstance(d, dict)):
             modified_config.pop("datasets", None)
             modified_config.pop("tasks", None)
             with open(merged_config_path, "w") as f:
@@ -294,9 +300,9 @@ def build_harbor_command(
                     os.fsync(_f.fileno())
             except (OSError, json.JSONDecodeError, ValueError) as exc:
                 print(
-                    f"[build_harbor_command] WARNING: could not sync runtime "
-                    f"fields into {config_json_path}: {exc}",
-                    file=sys.stderr, flush=True,
+                    f"[build_harbor_command] WARNING: could not sync runtime fields into {config_json_path}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
                 )
 
     return cmd

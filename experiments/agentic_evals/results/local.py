@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """LocalResultSink — writes a result.json summary to an output directory.
 
 A lightweight sink that collects Harbor job statistics (trial counts, reward

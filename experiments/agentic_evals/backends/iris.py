@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """IrisBackend — adapter for Marin's Iris TPU/GPU cluster.
 
 Thin wrapper around ``iris.client.IrisClient`` that builds the task spec
@@ -32,29 +35,13 @@ class IrisBackend:
         self.task_image = task_image
 
     def _resolve_controller(self, cluster_config_path: str):
-        """Tunnel to the iris controller and return (client, controller_url)."""
+        """Connect to the Iris controller and return the client and endpoint handle."""
+        from iris.cli.connect import connect_controller
         from iris.client import IrisClient
-        from iris.cluster.config import load_config
-        from iris.cluster.composer import provider_bundle
-        from iris.cluster.local_cluster import LocalCluster
-        from iris.cli.main import client_credentials, resolve_cluster_name
 
-        config = load_config(cluster_config_path)
-        cluster_name = resolve_cluster_name(config, None, Path(cluster_config_path).stem)
-        credentials = client_credentials(config, cluster_name)
-        bundle = provider_bundle(config)
-        if config.controller.controller_kind() == "local":
-            local_cluster = LocalCluster(config)
-            controller_address = local_cluster.start()
-        else:
-            controller_address = (
-                config.controller_address()
-                or bundle.controller.discover_controller(config.controller)
-            )
-        tunnel_ctx = bundle.controller.tunnel(address=controller_address)
-        controller_url = tunnel_ctx.__enter__()
-        client = IrisClient.remote(controller_url, workspace=self.workspace, credentials=credentials)
-        return client, tunnel_ctx, controller_url
+        endpoint = connect_controller(config_file=Path(cluster_config_path))
+        client = IrisClient.remote(endpoint.url, workspace=self.workspace, credentials=endpoint.credentials)
+        return client, endpoint, endpoint.url
 
     def submit(
         self,
@@ -112,8 +99,14 @@ class IrisBackend:
             print("[iris] --dry-run: not submitting", flush=True)
             return 0
 
-        from iris.cluster.types import EnvironmentSpec, Entrypoint
-        from iris.cli.job import build_job_constraints
+        from iris.cli.job import (
+            build_job_constraints,
+            build_resources,
+            build_tpu_alternatives,
+            parse_gpu_spec,
+            resolve_multinode_defaults,
+        )
+        from iris.cluster.types import Entrypoint, EnvironmentSpec
         from iris.rpc import job_pb2
 
         cluster_config_path = self.cluster_config
@@ -123,17 +116,18 @@ class IrisBackend:
         client, tunnel_ctx, _ = self._resolve_controller(cluster_config_path)
 
         try:
-            # Build resources from the accelerator spec. This is a simplified
-            # adapter — the full OT-Agent launcher resolves TPU topology +
-            # chip counts; here we pass the spec through to iris's resource
-            # builder via the client API.
             entrypoint = Entrypoint.from_command(*command)
 
-            # Build constraints (simplified — real launcher resolves TPU variants
-            # and multinode coscheduling from the accelerator spec).
+            try:
+                parse_gpu_spec(accelerator)
+                gpu, tpu = accelerator, None
+            except ValueError:
+                gpu, tpu = None, accelerator
+            resources = build_resources(tpu=tpu, gpu=gpu, cpu=cpu, memory=memory, disk=disk)
+            replicas, coscheduling = resolve_multinode_defaults(tpu=tpu, gpu=gpu, replicas=replicas)
             constraints = build_job_constraints(
-                resources_proto=None,
-                tpu_variants=[accelerator] if not accelerator.startswith("H100") else [],
+                resources_proto=resources.to_proto(),
+                tpu_variants=build_tpu_alternatives(tpu),
                 replicas=replicas,
                 regions=None,
                 zone=None,
@@ -147,15 +141,16 @@ class IrisBackend:
             }
             priority_band = _PRIO.get(priority, job_pb2.PRIORITY_BAND_UNSPECIFIED)
 
-            extras = env_vars.pop("_iris_extras", None) or ["datagen-tpu"]
+            task_env_vars = dict(env_vars)
+            extras = task_env_vars.pop("_iris_extras", None) or ["datagen-tpu"]
 
             job = client.submit(
                 entrypoint=entrypoint,
                 name=job_name,
-                resources=None,
-                environment=EnvironmentSpec(env_vars=env_vars, extras=extras),
+                resources=resources,
+                environment=EnvironmentSpec(env_vars=task_env_vars, extras=extras),
                 constraints=constraints,
-                coscheduling=None,
+                coscheduling=coscheduling,
                 replicas=replicas,
                 max_retries_failure=max_retries,
                 task_image=image,
@@ -189,7 +184,7 @@ class IrisBackend:
             if not line or line.startswith("#"):
                 continue
             if line.startswith("export "):
-                line = line[len("export "):]
+                line = line[len("export ") :]
             if "=" in line:
                 key, _, value = line.partition("=")
                 key = key.strip()
@@ -201,6 +196,7 @@ class IrisBackend:
     @staticmethod
     def _duration(secs: int):
         from rigging.timing import Duration
+
         return Duration.from_seconds(secs)
 
     def query(self, job_id: str) -> Any:

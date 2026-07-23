@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Standalone agentic evaluation package for Marin.
 
 Extracted from OpenThoughts-Agent (#6958). Provides the utilities to run

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Reusable argument groups for agentic-eval launchers.
 
 Copied verbatim from OT-Agent ``hpc/arg_groups.py``. These are pure argparse
@@ -76,7 +79,7 @@ def add_harbor_env_arg(
         default=default,
         choices=["daytona", "docker", "modal", None],
         help="Harbor environment backend: daytona (cloud), docker (local/podman), modal. "
-             "If not specified, inferred from Harbor config YAML.",
+        "If not specified, inferred from Harbor config YAML.",
     )
 
     if legacy_names:

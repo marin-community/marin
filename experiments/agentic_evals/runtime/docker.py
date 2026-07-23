@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Docker runtime detection and configuration for Harbor Docker backend.
 
 Extracted from OT-Agent ``hpc/docker_runtime.py`` (stripped the cloud/SkyPilot
@@ -36,9 +39,7 @@ class DockerRuntimeConfig:
 
 def get_podman_socket_path() -> Optional[str]:
     try:
-        user_id = subprocess.run(
-            ["id", "-u"], capture_output=True, text=True, check=True
-        ).stdout.strip()
+        user_id = subprocess.run(["id", "-u"], capture_output=True, text=True, check=True).stdout.strip()
         return f"/run/user/{user_id}/podman/podman.sock"
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
@@ -50,9 +51,7 @@ def is_podman_hpc_available() -> bool:
 
 def _is_podman_docker() -> bool:
     try:
-        result = subprocess.run(
-            ["docker", "--version"], capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["docker", "--version"], capture_output=True, text=True, timeout=5)
         return "podman" in (result.stdout + result.stderr).lower()
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -161,9 +160,7 @@ def detect_docker_runtime() -> DockerRuntimeConfig:
     return DockerRuntimeConfig(runtime_type=DockerRuntimeType.UNAVAILABLE)
 
 
-def setup_docker_environment(
-    config: DockerRuntimeConfig, env: Optional[Dict[str, str]] = None
-) -> Dict[str, str]:
+def setup_docker_environment(config: DockerRuntimeConfig, env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     if env is None:
         env = {}
     if config.docker_host:
@@ -176,7 +173,9 @@ def try_start_podman_socket(timeout: int = 3) -> bool:
     try:
         subprocess.run(
             ["systemctl", "--user", "start", "podman.socket"],
-            capture_output=True, timeout=timeout, check=False,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
@@ -184,7 +183,9 @@ def try_start_podman_socket(timeout: int = 3) -> bool:
     try:
         subprocess.run(
             ["podman", "system", "service", "--time=0"],
-            capture_output=True, timeout=timeout, check=False,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
@@ -194,23 +195,23 @@ def try_start_podman_socket(timeout: int = 3) -> bool:
 
 def check_docker_connectivity(timeout: int = 5) -> bool:
     try:
-        result = subprocess.run(
-            ["docker", "info"], capture_output=True, timeout=timeout, check=False
-        )
+        result = subprocess.run(["docker", "info"], capture_output=True, timeout=timeout, check=False)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
-def verify_docker_connectivity_with_details(
-    runtime: DockerRuntimeConfig, timeout: int = 10
-) -> tuple[bool, str]:
+def verify_docker_connectivity_with_details(runtime: DockerRuntimeConfig, timeout: int = 10) -> tuple[bool, str]:
     env = os.environ.copy()
     if runtime.docker_host:
         env["DOCKER_HOST"] = runtime.docker_host
     try:
         result = subprocess.run(
-            ["docker", "info"], capture_output=True, text=True, timeout=timeout, env=env,
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
         )
         if result.returncode == 0:
             return True, "Docker daemon is accessible"

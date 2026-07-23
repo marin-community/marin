@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """vLLM server lifecycle management on Ray clusters.
 
 Extracted from OT-Agent ``hpc/vllm_utils.py``. Provides a context manager for
@@ -17,7 +20,9 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
+
+from ..serve.vllm_args import build_vllm_cli_args
 
 
 @runtime_checkable
@@ -35,7 +40,12 @@ class RayClusterProtocol(Protocol):
     def config(self) -> Any: ...
 
 
-from ..serve.vllm_args import build_vllm_cli_args
+EXECUTE_MODEL_TIMEOUT_HEALTHCHECK_RATIO = 1.5
+
+
+def execute_model_timeout_seconds(health_max_attempts: int, health_retry_delay: int) -> int:
+    """Keep vLLM's internal watchdog behind the configured health check."""
+    return int(health_max_attempts * health_retry_delay * EXECUTE_MODEL_TIMEOUT_HEALTHCHECK_RATIO)
 
 
 @dataclass
@@ -96,13 +106,18 @@ class VLLMServer:
             except OSError as e:
                 print(f"  Warning: could not remove stale endpoint file: {e}")
 
-        print(f"=== Starting vLLM Server ===")
+        print("=== Starting vLLM Server ===")
         print(f"  Model: {self.config.model_path}")
-        print(f"  TP/PP/DP: {self.config.tensor_parallel_size}/{self.config.pipeline_parallel_size}/{self.config.data_parallel_size}")
+        parallelism = (
+            f"{self.config.tensor_parallel_size}/"
+            f"{self.config.pipeline_parallel_size}/"
+            f"{self.config.data_parallel_size}"
+        )
+        print(f"  TP/PP/DP: {parallelism}")
         print(f"  Host: {self.ray_cluster.head_ip}")
         print(f"  Port: {self.config.api_port}")
         print(f"  Ray Address: {self.ray_cluster.address}")
-        print(f"============================")
+        print("============================")
 
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +176,15 @@ class VLLMServer:
         if extra_env_vars:
             env.update(extra_env_vars)
             print(f"  Extra vLLM env: {', '.join(f'{k}={v}' for k, v in extra_env_vars.items())}")
-        env.setdefault("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", "7200")
+        env.setdefault(
+            "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS",
+            str(
+                execute_model_timeout_seconds(
+                    self.config.health_max_attempts,
+                    self.config.health_retry_delay,
+                )
+            ),
+        )
         env.setdefault("VLLM_RINGBUFFER_WARNING_INTERVAL", "600")
         env["VLLM_USE_V2_MODEL_RUNNER"] = "0"
         if self.config.data_parallel_size > 1:
@@ -205,18 +228,18 @@ class VLLMServer:
         except Exception as e:
             print(f"  [warmup] non-fatal exception during warmup: {e!r}")
 
-        print(f"=== vLLM Server Ready ===")
+        print("=== vLLM Server Ready ===")
         print(f"  Endpoint: {self.endpoint}")
         print(f"  Metrics: {self.metrics_endpoint}")
-        print(f"=========================")
+        print("=========================")
 
         return self.endpoint
 
     def _warmup_serving(self) -> None:
         """Pre-JIT vLLM-native Triton kernels to avoid mid-inference deadlocks."""
-        import urllib.request
-        import urllib.error
         import json as _json
+        import urllib.error
+        import urllib.request
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         try:
@@ -227,14 +250,16 @@ class VLLMServer:
             return
 
         def _fire(prompt: str, max_tokens: int, label: str) -> tuple[str, float, bool, str]:
-            body = _json.dumps({
-                "model": model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "top_k": 20,
-                "top_p": 0.95,
-                "temperature": 0.7,
-            }).encode()
+            body = _json.dumps(
+                {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "top_k": 20,
+                    "top_p": 0.95,
+                    "temperature": 0.7,
+                }
+            ).encode()
             req = urllib.request.Request(
                 f"{self.base_url}/v1/chat/completions",
                 data=body,
@@ -268,15 +293,13 @@ class VLLMServer:
                 print(f"  [warmup] {label} FAILED: {err}")
 
         concurrent_n = 16
-        long_prompt = (
-            "You are an experienced software engineer. " * 20
-        )
+        long_prompt = "You are an experienced software engineer. " * 20
         batch_prompts = list(seq_prompts) + [long_prompt]
         batch_n_prompts = [batch_prompts[i % len(batch_prompts)] for i in range(concurrent_n)]
         print(f"  [warmup] phase 2: {concurrent_n} concurrent requests (max_tokens=512)...")
         batch_ok = 0
         with ThreadPoolExecutor(max_workers=concurrent_n) as ex:
-            futures = [ex.submit(_fire, p, 512, f"par {i+1}/{concurrent_n}") for i, p in enumerate(batch_n_prompts)]
+            futures = [ex.submit(_fire, p, 512, f"par {i + 1}/{concurrent_n}") for i, p in enumerate(batch_n_prompts)]
             for f in as_completed(futures):
                 label, dt, success, err = f.result()
                 if success:
@@ -321,24 +344,24 @@ class VLLMServer:
         while time.time() - start_time < timeout:
             if self._process and self._process.poll() is not None:
                 raise RuntimeError(
-                    f"vLLM controller exited early (code {self._process.returncode}). "
-                    f"Check logs at {self.log_path}"
+                    f"vLLM controller exited early (code {self._process.returncode}). Check logs at {self.log_path}"
                 )
             if os.path.exists(self.config.endpoint_json_path):
                 print(f"  Endpoint JSON found after {time.time() - start_time:.1f}s")
                 return
             time.sleep(5)
-        raise TimeoutError(
-            f"Endpoint JSON not created at {self.config.endpoint_json_path} after {timeout}s"
-        )
+        raise TimeoutError(f"Endpoint JSON not created at {self.config.endpoint_json_path} after {timeout}s")
 
     def _wait_with_script(self) -> None:
         cmd = [
             sys.executable,
             self.config.wait_for_endpoint_script,
-            "--max-attempts", str(self.config.health_max_attempts),
-            "--retry-delay", str(self.config.health_retry_delay),
-            "--health-path", self.config.health_path,
+            "--max-attempts",
+            str(self.config.health_max_attempts),
+            "--retry-delay",
+            str(self.config.health_retry_delay),
+            "--health-path",
+            self.config.health_path,
         ]
         if self.config.endpoint_json_path:
             cmd.extend(["--endpoint-json", self.config.endpoint_json_path])
@@ -348,20 +371,17 @@ class VLLMServer:
         try:
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"vLLM health check failed after {self.config.health_max_attempts} attempts"
-            ) from e
+            raise RuntimeError(f"vLLM health check failed after {self.config.health_max_attempts} attempts") from e
 
     def _wait_with_http(self) -> None:
-        import urllib.request
         import urllib.error
+        import urllib.request
+
         health_url = f"{self.base_url}/{self.config.health_path}"
         print(f"  Waiting for health endpoint: {health_url}")
         for attempt in range(1, self.config.health_max_attempts + 1):
             if self._process and self._process.poll() is not None:
-                raise RuntimeError(
-                    f"vLLM controller exited early (code {self._process.returncode})"
-                )
+                raise RuntimeError(f"vLLM controller exited early (code {self._process.returncode})")
             try:
                 req = urllib.request.Request(health_url)
                 with urllib.request.urlopen(req, timeout=10) as response:
@@ -372,9 +392,7 @@ class VLLMServer:
                 pass
             if attempt < self.config.health_max_attempts:
                 time.sleep(self.config.health_retry_delay)
-        raise RuntimeError(
-            f"vLLM health check failed after {self.config.health_max_attempts} attempts"
-        )
+        raise RuntimeError(f"vLLM health check failed after {self.config.health_max_attempts} attempts")
 
     def get_endpoint_info(self) -> dict:
         return {

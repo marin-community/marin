@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """TPU-specific serve-flag helpers.
 
 Extracted from OT-Agent ``hpc/local_runner_utils.py`` (the
@@ -6,6 +9,7 @@ functions), renamed to public.
 """
 
 from __future__ import annotations
+
 from typing import List
 
 
