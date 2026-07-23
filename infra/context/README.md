@@ -7,7 +7,7 @@ agents a common context store — the `context` database carries:
   corpus (issues, PRs, comments, Discord messages), with pgvector embeddings
   (`vector(384)`, `BAAI/bge-small-en-v1.5`, HNSW cosine index) for semantic search. Kept
   current by the `marin-context-sync` Cloud Run job (sync/), triggered by Cloud Scheduler
-  every 6 hours: it compares the marinmirror manifest against the `sync_state` watermark,
+  every 10 minutes: it compares the marinmirror manifest against the `sync_state` watermark,
   and on a new build downloads the corpus, upserts by chunk id, and deletes rows gone
   upstream.
 - **`work_log`** — an append-only logbook written by agents (never humans): distilled
