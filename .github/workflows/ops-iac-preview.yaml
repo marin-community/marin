@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+env:
+  PULUMI_CI_SERVICE_ACCOUNT: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+  PULUMI_CI_PROJECT: hai-gcp-models
+
 jobs:
   preview-coreweave:
     # Fork PRs can't reach repo secrets (WIF, kubeconfig); skip rather than fail.
@@ -59,8 +63,8 @@ jobs:
         with:
           stack: ${{ matrix.stack }}
           work-dir: infra/pulumi
-          service-account: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-          gcp-project-id: hai-gcp-models
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-on-pr: ${{ github.event_name == 'pull_request' }}
 
@@ -84,7 +88,7 @@ jobs:
         with:
           stack: marin
           work-dir: infra/pulumi
-          service-account: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-          gcp-project-id: hai-gcp-models
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-on-pr: ${{ github.event_name == 'pull_request' }}
