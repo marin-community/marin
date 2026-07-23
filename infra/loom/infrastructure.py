@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -29,30 +29,19 @@ DEFAULT_MACHINE_TYPE = "e2-highmem-4"
 DEFAULT_BOOT_DISK_GB = 100
 DEFAULT_DATA_DISK_GB = 500
 DEFAULT_REPO_URL = "https://github.com/marin-community/loom.git"
-DEFAULT_GIT_REF = "main"
 DEFAULT_DOTENV_SECRET_VERSION = 1
 DEFAULT_SNAPSHOT_RETENTION_DAYS = 14
-DEFAULT_BACKUP_RETENTION_DAYS = 30
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
 DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
-GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
-BACKUP_SCRIPT = (ROOT / "runtime/backup-sqlite.sh").read_text()
-
-
-class RuntimeMode(StrEnum):
-    """Whether Pulumi preserves an adopted runtime or actively reconciles it."""
-
-    ADOPT = "adopt"
-    MANAGED = "managed"
 
 
 def _positive_config_int(value: int | None, default: int, name: str) -> int:
@@ -72,10 +61,9 @@ def _service_account_member(email: str) -> str:
 
 
 def _validated_image_reference(value: str, project: str, region: str) -> str:
-    prefix = f"{_artifact_image_path(project, region)}@sha256:"
-    digest = value.removeprefix(prefix)
-    if value == digest or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise ValueError("Artifact Registry did not resolve gitRef to the expected Loom image digest")
+    image_path = re.escape(_artifact_image_path(project, region))
+    if not re.fullmatch(rf"{image_path}(?::[^@]+)?@sha256:[0-9a-f]{{64}}", value):
+        raise ValueError("Docker did not produce the expected Loom image digest")
     return value
 
 
@@ -306,37 +294,25 @@ class DeploymentConfig:
     domain: str
     operator_cidr: str
     dns_zone_id: str
-    build_commit: str | None = None
-    runtime_mode: RuntimeMode = RuntimeMode.ADOPT
-    buildx_builder: str | None = None
+    source_path: str
     network: str = DEFAULT_NETWORK
     instance_name: str = DEFAULT_INSTANCE_NAME
     vm_service_account_name: str = DEFAULT_VM_SERVICE_ACCOUNT
     machine_type: str = DEFAULT_MACHINE_TYPE
     boot_disk_gb: int = DEFAULT_BOOT_DISK_GB
     data_disk_gb: int = DEFAULT_DATA_DISK_GB
-    repo_url: str = DEFAULT_REPO_URL
-    git_ref: str = DEFAULT_GIT_REF
     dotenv_secret_version: int = DEFAULT_DOTENV_SECRET_VERSION
     prune_deployment: bool = False
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
     snapshot_retention_days: int = DEFAULT_SNAPSHOT_RETENTION_DAYS
-    backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
     def __post_init__(self) -> None:
-        if self.build_commit is not None and not GIT_COMMIT.fullmatch(self.build_commit):
-            raise ValueError("buildCommit must be a 40-character Git commit")
-        if self.runtime_mode is RuntimeMode.MANAGED and not GIT_COMMIT.fullmatch(self.git_ref):
-            raise ValueError("managed runtime requires a 40-character gitRef")
-        if self.runtime_mode is RuntimeMode.MANAGED and self.build_commit == self.git_ref:
-            raise ValueError("buildCommit must be staged before the same gitRef is activated")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
             ("dataDiskGb", self.data_disk_gb),
             ("snapshotRetentionDays", self.snapshot_retention_days),
-            ("backupRetentionDays", self.backup_retention_days),
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
             _positive_config_int(value, value, name)
@@ -365,6 +341,12 @@ class DeploymentConfig:
         config = pulumi.Config()
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
+        source_path = os.environ.get("LOOM_SOURCE")
+        if source_path is None:
+            raise ValueError("LOOM_SOURCE must point to the Loom worktree to build")
+        source = Path(source_path).expanduser().resolve()
+        if not (source / "Dockerfile").is_file():
+            raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {source}")
         region = config.get("region") or DEFAULT_REGION
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
@@ -397,17 +379,13 @@ class DeploymentConfig:
             domain=config.require("domain"),
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
-            build_commit=config.get("buildCommit"),
-            runtime_mode=RuntimeMode(config.get("runtimeMode") or RuntimeMode.ADOPT),
-            buildx_builder=config.get("buildxBuilder"),
+            source_path=str(source),
             network=config.get("network") or DEFAULT_NETWORK,
             instance_name=config.get("instanceName") or DEFAULT_INSTANCE_NAME,
             vm_service_account_name=config.get("vmServiceAccountName") or DEFAULT_VM_SERVICE_ACCOUNT,
             machine_type=config.get("machineType") or DEFAULT_MACHINE_TYPE,
             boot_disk_gb=_positive_config_int(config.get_int("bootDiskGb"), DEFAULT_BOOT_DISK_GB, "bootDiskGb"),
             data_disk_gb=_positive_config_int(config.get_int("dataDiskGb"), DEFAULT_DATA_DISK_GB, "dataDiskGb"),
-            repo_url=config.get("repoUrl") or DEFAULT_REPO_URL,
-            git_ref=config.get("gitRef") or DEFAULT_GIT_REF,
             dotenv_secret_version=_positive_config_int(
                 config.get_int("dotenvSecretVersion"), DEFAULT_DOTENV_SECRET_VERSION, "dotenvSecretVersion"
             ),
@@ -418,16 +396,13 @@ class DeploymentConfig:
             snapshot_retention_days=_positive_config_int(
                 config.get_int("snapshotRetentionDays"), DEFAULT_SNAPSHOT_RETENTION_DAYS, "snapshotRetentionDays"
             ),
-            backup_retention_days=_positive_config_int(
-                config.get_int("backupRetentionDays"), DEFAULT_BACKUP_RETENTION_DAYS, "backupRetentionDays"
-            ),
         )
 
 
 @dataclass(frozen=True)
 class Infrastructure:
     instance: gcp.compute.Instance
-    activation: command.local.Command | None
+    activation: command.local.Command
 
 
 def _enable_apis(project: str) -> list[gcp.projects.Service]:
@@ -438,7 +413,6 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
         "iamcredentials.googleapis.com",
         "secretmanager.googleapis.com",
         "sts.googleapis.com",
-        "storage.googleapis.com",
     )
     return [
         gcp.projects.Service(
@@ -519,8 +493,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         location=config.region,
         repository_id=ARTIFACT_REPOSITORY_ID,
         format="DOCKER",
-        docker_config={"immutable_tags": True},
-        description="Immutable loom deployment images",
+        description="Loom deployment images",
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
     vm_image_reader = gcp.artifactregistry.RepositoryIamMember(
@@ -638,71 +611,21 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             )
         )
 
-    backup_bucket = gcp.storage.Bucket(
-        "loom-backups",
-        project=config.project,
-        location=config.region,
-        name=pulumi.Output.format("{}-{}-backups", config.project, config.instance_name),
-        uniform_bucket_level_access=True,
-        public_access_prevention="enforced",
-        versioning={"enabled": True},
-        lifecycle_rules=[
-            {
-                "action": {"type": "Delete"},
-                "condition": {"age": config.backup_retention_days},
-            },
-            {
-                "action": {"type": "Delete"},
-                "condition": {"days_since_noncurrent_time": config.backup_retention_days},
-            },
-        ],
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
+    built_image = docker_build.Image(
+        "loom-release-image",
+        context=docker_build.BuildContextArgs(location=config.source_path),
+        build_args={"CARGO_PROFILE": "release"},
+        labels={"org.opencontainers.image.source": DEFAULT_REPO_URL},
+        platforms=[docker_build.Platform.LINUX_AMD64],
+        tags=[image_tag],
+        push=True,
+        opts=pulumi.ResourceOptions(depends_on=[artifact_repository]),
     )
-    vm_backup_writer = gcp.storage.BucketIAMMember(
-        "loom-vm-backup-writer",
-        bucket=backup_bucket.name,
-        role="roles/storage.objectCreator",
-        member=vm_account.email.apply(_service_account_member),
-    )
-
-    built_image: docker_build.Image | None = None
-    if config.build_commit is not None:
-        image_tag = f"{_artifact_image_path(config.project, config.region)}:{config.build_commit}"
-        built_image = docker_build.Image(
-            "loom-release-image",
-            context=docker_build.BuildContextArgs(location=f"{config.repo_url}#{config.build_commit}"),
-            build_args={"CARGO_PROFILE": "release"},
-            labels={
-                "org.opencontainers.image.revision": config.build_commit,
-                "org.opencontainers.image.source": config.repo_url,
-            },
-            platforms=[docker_build.Platform.LINUX_AMD64],
-            tags=[image_tag],
-            push=True,
-            build_on_preview=False,
-            builder=(
-                docker_build.BuilderConfigArgs(name=config.buildx_builder) if config.buildx_builder is not None else None
-            ),
-            opts=pulumi.ResourceOptions(depends_on=[artifact_repository], retain_on_delete=True),
-        )
-
-    image: pulumi.Input[str] = ""
-    if config.runtime_mode is RuntimeMode.MANAGED:
-        released_image = gcp.artifactregistry.get_docker_image_output(
-            project=config.project,
-            location=config.region,
-            repository_id=ARTIFACT_REPOSITORY_ID,
-            image_name=f"{ARTIFACT_IMAGE_NAME}:{config.git_ref}",
-            opts=pulumi.InvokeOutputOptions(depends_on=[artifact_repository]),
-        )
-        image = released_image.self_link.apply(
-            lambda value: _validated_image_reference(value, config.project, config.region)
-        )
+    image = built_image.ref.apply(lambda value: _validated_image_reference(value, config.project, config.region))
     metadata = {
         "loom-domain": config.domain,
-        "release-commit": config.git_ref,
         "loom-image": image,
-        "backup-bucket": backup_bucket.name,
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
@@ -710,7 +633,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "loom-deployment": deployment_manifest,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
-        "loom-backup-script": BACKUP_SCRIPT,
         "startup-script": STARTUP_SCRIPT,
     }
     dependencies: list[pulumi.Resource] = [
@@ -720,21 +642,14 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         dotenv_secret,
         vm_secret_reader,
         vm_image_reader,
-        backup_bucket,
-        vm_backup_writer,
         snapshot_attachment,
         *profile_secret_readers,
     ]
     dependencies.append(dns_record)
-    ignored_instance_changes = (
-        ["metadata"]
-        if config.runtime_mode is RuntimeMode.ADOPT
-        else ['metadata["ssh-keys"]', 'metadata["enable-osconfig"]']
-    )
     instance_options = pulumi.ResourceOptions(
         depends_on=dependencies,
         protect=True,
-        ignore_changes=ignored_instance_changes,
+        ignore_changes=['metadata["ssh-keys"]', 'metadata["enable-osconfig"]'],
     )
     instance = gcp.compute.Instance(
         "loom",
@@ -776,37 +691,31 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         opts=instance_options,
     )
 
-    activation = None
-    if config.runtime_mode is RuntimeMode.MANAGED:
-        activation = command.local.Command(
-            "loom-activate",
-            create="./activate.sh",
-            update="./activate.sh",
-            dir=".",
-            environment={
-                "LOOM_PROJECT": config.project,
-                "LOOM_ZONE": config.zone,
-                "LOOM_INSTANCE": config.instance_name,
-                "LOOM_DOMAIN": config.domain,
-            },
-            triggers=[
-                instance.id,
-                pulumi.Output.json_dumps(metadata),
-            ],
-            opts=pulumi.ResourceOptions(depends_on=[instance, dns_record]),
-        )
+    activation = command.local.Command(
+        "loom-activate",
+        create="./activate.sh",
+        update="./activate.sh",
+        dir=".",
+        environment={
+            "LOOM_PROJECT": config.project,
+            "LOOM_ZONE": config.zone,
+            "LOOM_INSTANCE": config.instance_name,
+            "LOOM_DOMAIN": config.domain,
+        },
+        triggers=[
+            instance.id,
+            pulumi.Output.json_dumps(metadata),
+        ],
+        opts=pulumi.ResourceOptions(depends_on=[instance, dns_record]),
+    )
 
     pulumi.export("address", address.address)
     pulumi.export("url", f"https://{config.domain}/")
     pulumi.export("instanceName", instance.name)
     pulumi.export("zone", config.zone)
     pulumi.export("artifactImage", image)
-    pulumi.export("builtImage", built_image.ref if built_image is not None else "")
-    pulumi.export("buildCommit", config.build_commit or "")
-    pulumi.export("gitRef", config.git_ref)
-    pulumi.export("runtimeMode", config.runtime_mode)
+    pulumi.export("builtImage", built_image.ref)
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
-    pulumi.export("backupBucket", backup_bucket.url)
     pulumi.export("tokenAudience", audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
     pulumi.export(

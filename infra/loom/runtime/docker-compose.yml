@@ -56,28 +56,6 @@ services:
       - loom_home:/home/app
       - uv:/opt/uv
 
-  loom-backup:
-    image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
-    restart: unless-stopped
-    environment:
-      BACKUP_BUCKET: ${BACKUP_BUCKET:?BACKUP_BUCKET is required}
-      GCP_PROJECT: ${GCP_PROJECT:?GCP_PROJECT is required}
-    volumes:
-      - ./backup-sqlite.sh:/usr/local/bin/backup-sqlite:ro
-      - loom_home:/home/app
-    depends_on:
-      - loom
-    entrypoint:
-      - sh
-      - -ceu
-      - |
-        while true; do
-          now=$$(date -u +%s)
-          next=$$(date -u -d 'tomorrow 03:00' +%s)
-          sleep $$((next - now))
-          /usr/local/bin/backup-sqlite
-        done
-
   caddy:
     image: caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     restart: unless-stopped

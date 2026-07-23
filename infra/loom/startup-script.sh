@@ -8,7 +8,6 @@ meta() { curl -fsS -H "Metadata-Flavor: Google" "${META}/$1"; }
 PROJECT="$(meta project/project-id)"
 LOOM_DOMAIN="$(meta instance/attributes/loom-domain)"
 LOOM_IMAGE="$(meta instance/attributes/loom-image)"
-BACKUP_BUCKET="$(meta instance/attributes/backup-bucket)"
 DOTENV_SECRET_VERSION="$(meta instance/attributes/dotenv-secret-version)"
 DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
@@ -90,8 +89,6 @@ fi
 install -d -m 0755 "$RUNTIME_DIR"
 meta instance/attributes/loom-compose >"${RUNTIME_DIR}/docker-compose.yml"
 meta instance/attributes/loom-caddyfile >"${RUNTIME_DIR}/Caddyfile"
-meta instance/attributes/loom-backup-script >"${RUNTIME_DIR}/backup-sqlite.sh"
-chmod 0755 "${RUNTIME_DIR}/backup-sqlite.sh"
 
 ENV_FILE="${RUNTIME_DIR}/.env"
 umask 077
@@ -112,11 +109,11 @@ for key in "${required_config[@]}"; do
     exit 1
   }
 done
-sed -i -E '/^(LOOM_DOMAIN|LOOM_IMAGE|LOOM_PORT|DOCKER_GID|BACKUP_BUCKET|GCP_PROJECT)=/d' "$ENV_FILE"
+sed -i -E '/^(LOOM_DOMAIN|LOOM_IMAGE|LOOM_PORT|DOCKER_GID)=/d' "$ENV_FILE"
 {
   printf '\n'
-  printf 'LOOM_IMAGE=%s\nLOOM_PORT=%s\nDOCKER_GID=%s\nBACKUP_BUCKET=%s\nGCP_PROJECT=%s\n' \
-    "$LOOM_IMAGE" "$LOOM_PORT" "$(getent group docker | cut -d: -f3)" "$BACKUP_BUCKET" "$PROJECT"
+  printf 'LOOM_IMAGE=%s\nLOOM_PORT=%s\nDOCKER_GID=%s\n' \
+    "$LOOM_IMAGE" "$LOOM_PORT" "$(getent group docker | cut -d: -f3)"
   printf 'LOOM_DOMAIN=%s\n' "$LOOM_DOMAIN"
 } >>"$ENV_FILE"
 chmod 0600 "$ENV_FILE"

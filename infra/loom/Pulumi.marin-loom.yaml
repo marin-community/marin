@@ -11,12 +11,8 @@ config:
   marin-loom:machineType: e2-highmem-4
   marin-loom:bootDiskGb: "100"
   marin-loom:dataDiskGb: "500"
-  marin-loom:repoUrl: https://github.com/marin-community/loom.git
-  marin-loom:gitRef: main
-  marin-loom:runtimeMode: adopt
   marin-loom:dotenvSecretVersion: "3"
   marin-loom:pruneDeployment: "false"
   marin-loom:snapshotRetentionDays: "14"
-  marin-loom:backupRetentionDays: "30"
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

@@ -14,7 +14,6 @@ from infra.loom.infrastructure import (
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
-    RuntimeMode,
     WorkloadIdentityConfig,
     _profile_manifest,
     _validated_image_reference,
@@ -52,9 +51,7 @@ class RecordingMocks(Mocks):
         return outputs, []
 
 
-def deployment_config(
-    *, build_commit: str | None = None, runtime_mode: RuntimeMode = RuntimeMode.ADOPT
-) -> DeploymentConfig:
+def deployment_config() -> DeploymentConfig:
     return DeploymentConfig(
         project="example",
         region="us-central1",
@@ -62,9 +59,7 @@ def deployment_config(
         domain="loom.example.com",
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
-        build_commit=build_commit,
-        runtime_mode=runtime_mode,
-        git_ref="0123456789abcdef0123456789abcdef01234567",
+        source_path="/tmp/loom-source",
         dotenv_secret_version=3,
         prune_deployment=True,
         profiles=(
@@ -92,10 +87,10 @@ def deployment_config(
     )
 
 
-def make_infrastructure(*, build_commit: str | None = None, runtime_mode: RuntimeMode = RuntimeMode.ADOPT):
+def make_infrastructure():
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
-    infrastructure = create_infrastructure(deployment_config(build_commit=build_commit, runtime_mode=runtime_mode))
+    infrastructure = create_infrastructure(deployment_config())
     return infrastructure, mocks
 
 
@@ -105,16 +100,6 @@ def by_name(mocks: RecordingMocks, name: str) -> MockResourceArgs:
 
 def field(inputs: dict, snake: str, camel: str):
     return inputs.get(snake, inputs.get(camel))
-
-
-def test_build_and_runtime_rollout_require_commits() -> None:
-    base = deployment_config()
-    with pytest.raises(ValueError, match="40-character gitRef"):
-        replace(base, runtime_mode=RuntimeMode.MANAGED, git_ref="main")
-    with pytest.raises(ValueError, match="buildCommit"):
-        replace(base, build_commit="main")
-    with pytest.raises(ValueError, match="staged before"):
-        replace(base, build_commit=base.git_ref, runtime_mode=RuntimeMode.MANAGED)
 
 
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
@@ -136,8 +121,10 @@ def test_github_federations_require_unique_names_and_known_profiles() -> None:
 
 
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
-    valid = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
-    assert _validated_image_reference(valid, "example", "us-central1") == valid
+    canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
+    tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64
+    assert _validated_image_reference(canonical, "example", "us-central1") == canonical
+    assert _validated_image_reference(tagged, "example", "us-central1") == tagged
     with pytest.raises(ValueError, match="expected Loom image digest"):
         _validated_image_reference("us-central1-docker.pkg.dev/example/loom/loom:main", "example", "us-central1")
 
@@ -161,7 +148,7 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
 
 
 @pulumi.runtime.test
-def test_adoption_models_durable_resources_without_secret_payloads():
+def test_deployment_models_durable_resources_without_secret_payloads():
     infrastructure, mocks = make_infrastructure()
 
     def check(_: object) -> None:
@@ -176,7 +163,7 @@ def test_adoption_models_durable_resources_without_secret_payloads():
         assert len(attached) == 1
         assert field(attached[0], "device_name", "deviceName") == "loom-data"
         assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["loom-image"] == ""
+        assert vm.inputs["metadata"]["loom-image"].endswith("@sha256:" + "a" * 64)
         assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
         assert "startup-script" in vm.inputs["metadata"]
         assert "loom-compose" in vm.inputs["metadata"]
@@ -187,43 +174,30 @@ def test_adoption_models_durable_resources_without_secret_payloads():
 
         secret_reader = by_name(mocks, "loom-vm-secret-reader")
         assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
-        assert by_name(mocks, "loom-backups").inputs["publicAccessPrevention"] == "enforced"
+        assert not any(resource.typ == "gcp:storage/bucket:Bucket" for resource in mocks.resources)
 
     return infrastructure.instance.id.apply(check)
 
 
 @pulumi.runtime.test
-def test_unstaged_release_creates_the_repository_without_building_an_image():
+def test_local_tree_build_drives_the_runtime_rollout():
     infrastructure, mocks = make_infrastructure()
 
     def check(_: object) -> None:
-        repository = by_name(mocks, "loom-images")
-        docker_config = field(repository.inputs, "docker_config", "dockerConfig")
-        assert field(docker_config, "immutable_tags", "immutableTags") is True
-        assert not any(resource.typ == "docker-build:index:Image" for resource in mocks.resources)
-        assert not any(resource.typ == "command:local:Command" for resource in mocks.resources)
-
-    return infrastructure.instance.id.apply(check)
-
-
-@pulumi.runtime.test
-def test_release_build_precedes_the_runtime_rollout():
-    infrastructure, mocks = make_infrastructure(build_commit="0123456789abcdef0123456789abcdef01234567")
-
-    def check(_: object) -> None:
         image = by_name(mocks, "loom-release-image")
-        assert image.inputs["buildOnPreview"] is False
-        assert image.inputs["context"]["location"].endswith(".git#0123456789abcdef0123456789abcdef01234567")
+        assert image.inputs["buildOnPreview"] is True
+        assert image.inputs["context"]["location"] == "/tmp/loom-source"
         assert image.inputs["platforms"] == ["linux/amd64"]
         assert image.inputs["buildArgs"] == {"CARGO_PROFILE": "release"}
         assert image.inputs["labels"] == {
-            "org.opencontainers.image.revision": "0123456789abcdef0123456789abcdef01234567",
-            "org.opencontainers.image.source": "https://github.com/marin-community/loom.git",
+            "org.opencontainers.image.source": "https://github.com/marin-community/loom.git"
         }
+        assert image.inputs["tags"] == ["us-central1-docker.pkg.dev/example/loom/loom:latest"]
         assert image.inputs["push"] is True
         vm = by_name(mocks, "loom")
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
-        assert vm.inputs["metadata"]["loom-image"] == ""
+        assert vm.inputs["metadata"]["loom-image"].endswith("@sha256:" + "a" * 64)
+        assert "release-commit" not in vm.inputs["metadata"]
 
     return infrastructure.instance.id.apply(check)
 
@@ -244,37 +218,21 @@ def test_dns_matches_the_existing_unproxied_cloudflare_record():
 
 
 @pulumi.runtime.test
-def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
-    infrastructure, mocks = make_infrastructure(runtime_mode=RuntimeMode.MANAGED)
-    assert infrastructure.activation is not None
+def test_release_rollout_pins_metadata_to_the_built_image_digest():
+    infrastructure, mocks = make_infrastructure()
 
     def check(_: object) -> None:
         metadata = by_name(mocks, "loom").inputs["metadata"]
-        assert metadata["release-commit"] == "0123456789abcdef0123456789abcdef01234567"
-        assert metadata["loom-image"].endswith("@sha256:" + "b" * 64)
+        assert metadata["loom-image"].endswith("@sha256:" + "a" * 64)
         activation = by_name(mocks, "loom-activate")
         assert activation.typ == "command:local:Command"
         triggers = activation.inputs["triggers"]
         assert "loom_id" in triggers
         serialized_metadata = json.loads(next(trigger for trigger in triggers if trigger != "loom_id"))
         assert serialized_metadata == metadata
-        assert not any(resource.typ == "docker-build:index:Image" for resource in mocks.resources)
+        assert by_name(mocks, "loom-release-image").typ == "docker-build:index:Image"
 
     return infrastructure.activation.id.apply(check)
-
-
-@pulumi.runtime.test
-def test_next_release_can_build_while_the_previous_commit_stays_deployed():
-    infrastructure, mocks = make_infrastructure(build_commit="f" * 40, runtime_mode=RuntimeMode.MANAGED)
-
-    def check(_: object) -> None:
-        image = by_name(mocks, "loom-release-image")
-        assert image.inputs["tags"] == ["us-central1-docker.pkg.dev/example/loom/loom:" + "f" * 40]
-        metadata = by_name(mocks, "loom").inputs["metadata"]
-        assert metadata["release-commit"] == "0123456789abcdef0123456789abcdef01234567"
-        assert metadata["loom-image"].endswith("@sha256:" + "b" * 64)
-
-    return infrastructure.instance.id.apply(check)
 
 
 @pulumi.runtime.test
