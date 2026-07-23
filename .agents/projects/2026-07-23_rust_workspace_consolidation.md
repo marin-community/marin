@@ -248,6 +248,19 @@ Unchanged model, retargeted paths:
   pyext's path dependency on internal crates is resolved through the workspace.
   No `uv sync` compiles Rust unless the package is in dev mode — the extension
   is a pre-built wheel otherwise.
+- The pyext's `[tool.uv] cache-keys` must expand to cover its dependencies.
+  Today each native pyproject lists its own Rust inputs (`src/**/*.rs`,
+  `Cargo.toml`, `Cargo.lock`) so a dev-mode `uv sync` rebuilds the extension when
+  its Rust changes. Once `finelog-pyext` depends on `rust/finelog` and
+  `rust/crates/marin-jwt`, an edit to one of those sibling crates must also
+  invalidate the pyext's cached build, or dev mode silently serves a stale
+  wheel. The cache-keys therefore need to reference the workspace `Cargo.lock`
+  and the dependent component and internal crate sources. One detail to verify at
+  implementation time: whether uv cache-key file globs can escape the project
+  directory (`../finelog/**/*.rs`, `../crates/*/src/**/*.rs`). If they cannot, the
+  fallback is to key on the workspace `Cargo.lock` (which changes on any
+  dependency edit) plus a documented `uv sync --reinstall-package
+  marin-<pkg>-native` for pure source edits to a shared crate.
 
 ## Docker builds
 
@@ -441,10 +454,24 @@ Phase 1b — the mechanical move, all consumers retargeted atomically. In one PR
 `rust/finelog-pyext`, `rust/dupekit-pyext`, `rust/iris-proxy`, `rust/iris-pyext`),
 add the workspace `Cargo.toml`/`rust-toolchain.toml` and the single
 `rust/Cargo.lock`, and in the same commit retarget every consumer that names the
-old paths — `rust_mode.py`, the root `pyproject.toml` exclude/sources,
-`rust-checks.yaml`, each release workflow (working dir + `paths` filters) and its
-`build_package.py`, the finelog and iris Dockerfiles, `select_tests.py`, and
-CODEOWNERS. Leaving `rust-checks.yaml` or a release workflow on a stale
+old paths. The retargeting is grep-driven, not a hand-picked list: `lib/finelog/rust`
+and `lib/dupekit/rust` appear in ~28 places across CI, infra, and deploy today, and
+some scope on `lib/<pkg>/` (the whole package) rather than the crate dir. The set
+includes `rust_mode.py`, the root `pyproject.toml` exclude/sources,
+`rust-checks.yaml`, `select_tests.py`, CODEOWNERS, the finelog and iris
+Dockerfiles, and the ones easy to miss:
+- `unified-unit.yaml`'s `Swatinem/rust-cache` `workspaces:` list
+  (`lib/dupekit/rust`, `lib/finelog/rust`) → the single `rust/` workspace.
+- each release workflow's `build_package.py` working dir and `pull_request`
+  `paths` filters, and its scheduled stale-nightly
+  `git log --since=... -- lib/<pkg>/` check — a rust-only change under top-level
+  `rust/` must still count as a change for that package's nightly, or nightlies
+  silently skip it.
+- `lib/finelog/deploy/Dockerfile.dockerignore`, which re-includes only
+  `!lib/finelog/rust/`; without updating it to re-include the copied `rust/`
+  tree, the build context excludes the sources the Dockerfile copies.
+
+Leaving `rust-checks.yaml` or a release workflow on a stale
 `--manifest-path lib/<pkg>/rust` runs the job against a path that no longer
 exists, so every consumer must move in the same commit. No shared crate and no
 arrow bump yet —
