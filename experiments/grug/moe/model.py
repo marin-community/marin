@@ -57,6 +57,7 @@ except ModuleNotFoundError:
     jaxpp = None
 
 GRUG_MOE_EP_CAPACITY_FACTOR = 1.0
+GRUG_MOE_NCCL_EP_CAPACITY_FACTOR = 1.25
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _FP8_EXPERT_GEMM_ALIGNMENT = 128
@@ -664,6 +665,7 @@ class MoEMLP(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
+        moe_implementation = resolve_moe_implementation(cfg.moe_implementation)
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
@@ -696,9 +698,11 @@ class MoEMLP(eqx.Module):
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
-                implementation=cfg.moe_implementation,
+                implementation=moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=GRUG_MOE_EP_CAPACITY_FACTOR,
+                capacity_factor=(
+                    GRUG_MOE_NCCL_EP_CAPACITY_FACTOR if moe_implementation == "nccl_ep" else GRUG_MOE_EP_CAPACITY_FACTOR
+                ),
                 ragged_dot_ops=ragged_dot_ops,
             ),
             cfg=cfg,
