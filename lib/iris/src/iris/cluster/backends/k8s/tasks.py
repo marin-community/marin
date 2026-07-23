@@ -382,16 +382,11 @@ def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
 def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str) -> list[str]:
     """Pod names an attempt may be running under, current scheme first.
 
-    Pods are created under the uid-embedded name, but an attempt dispatched by a
-    controller predating that scheme is running under a name without the uid.
-    Those pods stay in flight across a controller upgrade, so every lookup that
-    resolves a live attempt to its pod has to accept the pre-uid name as well:
-    recomputing only the current name misses them, and the poll path reads that
-    miss as the pod having vanished.
-
-    The legacy name is consulted only when no uid-named pod exists. A freshly
-    dispatched attempt creates its uid-named pod before it is ever polled, so the
-    fallback cannot re-adopt the leftover pod that the uid exists to disambiguate.
+    Pods are created under the uid-embedded name; attempts dispatched before the
+    name embedded ``attempt_uid`` run under the uid-less name, so lookups must
+    accept it too. It ranks last, so a fresh attempt — whose uid-named pod exists
+    before it is first polled — resolves to its own pod rather than a leftover
+    one. Drop the legacy candidate once no pre-uid attempt can still be running.
     """
     current = _pod_name(task_id, attempt_id, attempt_uid)
     legacy = _pod_name(task_id, attempt_id)
@@ -2453,11 +2448,11 @@ class K8sTaskProvider:
         return updates
 
     def _live_pod_name(self, target: TaskTarget) -> str:
-        """Pod name for *target*, falling back to the pre-uid name when it is live.
+        """Pod name for *target*, preferring the current scheme over the pre-uid name.
 
-        Attempts dispatched before pod names embedded ``attempt_uid`` are still
-        reachable under their original name; probe the current name first and
-        only pay a GET when both schemes are possible.
+        Probes the uid-embedded name and returns it when that pod exists,
+        otherwise returns the pre-uid name unprobed — a target with no pod under
+        either name still yields a name for the caller to fail against.
         """
         candidates = _pod_name_candidates(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
         for name in candidates[:-1]:
