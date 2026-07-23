@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from fray.cluster import ResourceConfig
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_result import (
     EvalchemyResult,
     EvalReport,
@@ -36,7 +37,6 @@ from marin.evaluation.eval_result import (
     compile_eval_report,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact, result_type_name

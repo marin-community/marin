@@ -46,6 +46,7 @@ _DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
     "output_cost_per_token": 0.0,
 }
 
+
 def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     """Return a Harbor-safe canonical name for `hosted_vllm/<canonical>`.
 
