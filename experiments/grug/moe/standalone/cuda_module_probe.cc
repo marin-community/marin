@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -58,6 +59,7 @@ std::atomic<MemAlloc> memory_alloc{nullptr};
 std::atomic<MemFree> memory_free{nullptr};
 std::atomic<std::uint64_t> next_sequence{1};
 std::atomic<unsigned int> in_flight_loads{0};
+std::mutex module_load_mutex;
 thread_local bool resolving_symbol = false;
 
 struct ElfIdentity {
@@ -438,11 +440,15 @@ extern "C" CUresult cuModuleLoadFatBinary(CUmodule* module, const void* image) {
     if (fat_binary == nullptr) {
         return kInvalidValue;
     }
+    const std::string profile = effective_profile();
+    std::unique_lock<std::mutex> serialization_lock;
+    if (profile == "serialize") {
+        serialization_lock = std::unique_lock<std::mutex>(module_load_mutex);
+    }
     const std::uint64_t sequence = next_sequence.fetch_add(1);
     const unsigned int in_flight = in_flight_loads.fetch_add(1) + 1;
     const ElfIdentity identity = elf_identity(image);
     capture_cubin(image, identity);
-    const std::string profile = effective_profile();
     const char* kind = identity.kind == ElfIdentity::Kind::kElf64
                            ? "elf64"
                            : (identity.kind == ElfIdentity::Kind::kInvalidElf64 ? "invalid_elf64" : "unknown");

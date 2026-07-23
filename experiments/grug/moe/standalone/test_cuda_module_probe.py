@@ -206,6 +206,19 @@ def test_concurrent_loads_have_unique_sequences_and_overlap(probe_build: ProbeBu
     assert max(event["in_flight"] for event in enters) == 2
 
 
+def test_serialize_profile_permits_only_one_loader_call_in_flight(probe_build: ProbeBuild) -> None:
+    result = probe_build.run(
+        MARIN_CUDA_MODULE_PROBE_PROFILE="serialize",
+        CLIENT_THREADS="2",
+        FAKE_CUDA_DELAY_US="50000",
+    )
+
+    assert result.returncode == 0, result.stderr
+    enters = [event for event in probe_build.events() if event["event"] == "load_enter"]
+    assert len(enters) == 2
+    assert max(event["in_flight"] for event in enters) == 1
+
+
 def test_task_zero_capture_is_named_by_content_hash(probe_build: ProbeBuild) -> None:
     result = probe_build.run(MARIN_CUDA_MODULE_PROBE_CAPTURE_CUBIN="1", IRIS_TASK_ID="/user/job/0:0")
 

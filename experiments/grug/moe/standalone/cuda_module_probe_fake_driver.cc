@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -60,6 +61,10 @@ extern "C" int cuModuleLoadFatBinary(void** module, const void*) {
         while (barrier_arrivals.load() < 2) {
             std::this_thread::yield();
         }
+    }
+    const char* delay_us = std::getenv("FAKE_CUDA_DELAY_US");
+    if (delay_us != nullptr) {
+        std::this_thread::sleep_for(std::chrono::microseconds(std::strtoul(delay_us, nullptr, 10)));
     }
     record_call("fat", result);
     if (result == 0) {
