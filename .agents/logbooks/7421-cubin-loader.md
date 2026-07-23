@@ -397,3 +397,43 @@ author: mcwitt
 - Next action: stop the hypothesis loop. The production diagnostic/fix belongs immediately after compiling
   `fusion_2174`: record provider name, input identity/status/output size, and reject an empty CUBIN before building
   the custom kernel. A remaining follow-up can determine why this provider returns or creates zero bytes.
+
+### 2026-07-23 - CUBIN7421-016 `fusion_2174` HLO and source origin
+
+- Hypothesis: the sole empty `fusion_2174` CUBIN is produced directly by the CuTe lowering path.
+- Jobs:
+  - Failing B1024/CuTe origin and thunk traces:
+    `/mwittmann/cubin7421-fusion-origin-03` and `/mwittmann/cubin7421-fusion-thunk-fail-02`.
+  - Passing controls:
+    `/mwittmann/cubin7421-fusion-origin-xla-02`,
+    `/mwittmann/cubin7421-fusion-origin-b832-02`,
+    `/mwittmann/cubin7421-fusion-thunk-xla-02`, and
+    `/mwittmann/cubin7421-fusion-thunk-b832-02`.
+- Config: CPU-only, same-region decoding of the optimized HLO and recursive thunk graph embedded in the exact
+  failed and passing JAX persistent-cache executables.
+- Result:
+  - `fusion.2174` is an XLA `kCustom` fusion whose backend kind is `__triton`, with a `[256,5]` output tile,
+    four warps, one CTA, and one stage. It is not a CuTe DSL custom call.
+  - The fused computation has 12 simple HLO instructions: an F32 `[65536,5]` parameter, a width-five reduction,
+    broadcasts, add/divide/multiply, and a final BF16 conversion. The source metadata points to
+    `MoEMLP/convert_element_type`.
+  - The exact Python source is the cast in `experiments/grug/moe/model.py` after renormalizing the five selected
+    routing weights:
+    `combine_weights = combine_weights_f.astype(x.dtype)`. The resulting BF16 `[65536,5]` weights immediately
+    feed the MoE all-gather.
+  - The failing executable contains an ordinary `KernelThunk` for `fusion.2174`, followed later by the
+    rematerialized/deduplicated `loop_convert_fusion.18` as a `CustomKernelThunk` whose reused kernel name is
+    `fusion_2174` and whose owning CUBIN is empty.
+  - The passing B1024/XLA executable contains the same logical `[65536,5]` `__triton` fusion with the same block
+    configuration. Its later `loop_convert_fusion.20` custom-kernel payload is a valid 7,288-byte CUBIN.
+  - The passing B832/CuTe executable contains the analogous `[53248,5]` `__triton` fusion, but the later
+    `loop_convert_fusion.18` remains an ordinary `KernelThunk` rather than an owning custom-kernel thunk.
+- Interpretation: direct CuTe lowering is strongly falsified as the producer of the empty binary. CuTe remains
+  an indirect trigger because it changes the surrounding graph, rematerialization/deduplication choice, or
+  compiler resource profile. The immediate suspect is the XLA Triton block-level fusion plus kernel-reuse/custom
+  ownership path: a rematerialized fusion reuses the `fusion_2174` identity, but the failing graph serializes an
+  empty owned CUBIN. A compiler resource failure that is mistranslated as success-with-empty-output remains
+  plausible upstream of that path.
+- Next action: instrument the exact NGC XLA boundary after the `fusion_2174` cache lookup/compile with annotation,
+  cache-hit state, reused kernel name, compiler provider/status, and returned binary size; reject a zero-byte
+  result before `CreateOwnedCubinCustomKernel`.
