@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.download.stack_v3 import (
-    FILE_SEPARATOR_TOKEN,
     HF_DATASET_ID,
-    REPO_NAME_TOKEN,
     SERIALIZATION_FORMAT,
     row_to_doc,
 )
@@ -42,11 +40,11 @@ def test_row_to_doc_serializes_all_files_in_depth_first_order_with_provenance():
     [doc] = row_to_doc(row)
 
     assert doc["text"] == (
-        f"{REPO_NAME_TOKEN}marin-community/marin\n"
-        f"{FILE_SEPARATOR_TOKEN}a/nested/x.py\nx\n"
-        f"{FILE_SEPARATOR_TOKEN}a/z.py\nz\n"
-        f"{FILE_SEPARATOR_TOKEN}a.py\nroot\n"
-        f"{FILE_SEPARATOR_TOKEN}b.py\nb"
+        "<|repo_name|>marin-community/marin\n"
+        "<|file_sep|>a/nested/x.py\nx\n"
+        "<|file_sep|>a/z.py\nz\n"
+        "<|file_sep|>a.py\nroot\n"
+        "<|file_sep|>b.py\nb"
     )
     assert doc["source"] == HF_DATASET_ID
     assert doc["repo_path"] == row["repo_path"]

@@ -80,7 +80,7 @@ def processed_stack_v3_step() -> StepSpec:
 
 
 def stack_v3_normalize_steps() -> tuple[StepSpec, ...]:
-    """Return the Stack v3 download, repository transform, and normalize chain."""
+    """Return the Stack v3 processed-repository and normalize chain."""
     processed = processed_stack_v3_step()
     return (
         processed,
