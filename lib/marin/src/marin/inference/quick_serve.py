@@ -82,9 +82,14 @@ class QuickServeConfig:
     attention-head count and fits the slice's chip count."""
     chat_template_content: str | None = None
     """Inline Jinja chat template; resolved from a path/URL by the CLI."""
-    cache_ttl_days: int = 14
-    """Mirror HF models to a region-local GCS cache with this lifecycle TTL so repeat
-    serves skip the HuggingFace download. ``0`` disables caching; ignored for gs:// paths."""
+    cache_ttl_days: int | None = None
+    """Optional HF mirror TTL; defaults to 14 days on TPU and disabled on GPU.
+
+    CoreWeave GPU workers have ample local NVMe. Mirroring a normal Hugging Face
+    model there first converts it into an object-store path and unnecessarily
+    selects vLLM's Run:ai streaming loader. An explicit non-zero TTL remains
+    available when a mirror is deliberately desired.
+    """
     timeout_hours: float = 24.0
     proxy_timeout_seconds: float = 600.0
     """Registered as endpoint metadata so the controller proxy waits this long for a
@@ -109,6 +114,13 @@ class QuickServeConfig:
         if self.tpu_type is None:
             raise ValueError("QuickServeConfig requires tpu_type on the TPU path (or gpu_count on the GPU path).")
         return get_tpu_topology(self.tpu_type).chips_per_vm
+
+    @property
+    def resolved_cache_ttl_days(self) -> int:
+        """Resolve the accelerator-specific default without overriding user intent."""
+        if self.cache_ttl_days is not None:
+            return self.cache_ttl_days
+        return 0 if self.gpu_count is not None else 14
 
 
 def select_tensor_parallel_size(
@@ -253,7 +265,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
     # the actual bound port so the controller proxy can reach the endpoint.
     serving_port = serving_socket.getsockname()[1]
 
-    model_path = resolve_model_path(config.model, config.cache_ttl_days)
+    model_path = resolve_model_path(config.model, config.resolved_cache_ttl_days)
     spec = build_model_spec(config, model_path)
     accelerator = config.accelerator_label
 

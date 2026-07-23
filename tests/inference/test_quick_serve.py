@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import (
+    QuickServeConfig,
     resolve_model_path,
     select_tensor_parallel_size,
 )
@@ -86,6 +87,13 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_default_model_cache_is_disabled_on_gpu_but_kept_on_tpu():
+    common = {"model": "Qwen/Qwen3-0.6B", "endpoint_name": "/serve/test", "backend": VllmBackend()}
+    assert QuickServeConfig(**common, gpu_type="H100", gpu_count=8).resolved_cache_ttl_days == 0
+    assert QuickServeConfig(**common, tpu_type="v6e-4").resolved_cache_ttl_days == 14
+    assert QuickServeConfig(**common, gpu_type="H100", gpu_count=8, cache_ttl_days=7).resolved_cache_ttl_days == 7
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
