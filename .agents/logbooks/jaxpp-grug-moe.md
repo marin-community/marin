@@ -2644,3 +2644,18 @@ author: dlwh
   - The fix promotes Grug's existing `1.0` factor to one shared model constant and uses it for both model construction and NCCL_EP bootstrap. This preserves the matched ring model's routing capacity while making the registered and compiled receive bounds exactly `65,536`.
 - Next action:
   - Relaunch the identical reduced smoke with matched bootstrap and model capacity. Require at least one finite training step before scaling or comparing performance.
+
+### 2026-07-23 14:39 PDT - exact-average NCCL_EP capacity is too small for aligned live routing
+- Hypothesis: Matching bootstrap and model receive capacity at Grug's existing factor `1.0` will satisfy the NCCL_EP fixed-shape contract and execute the first forward microbatch.
+- Commit Hash: `df532f2e28` (`[grug] Reserve NCCL EP routing headroom`).
+- Command: unchanged reduced smoke. Parent `/dlwh/iris-run-job-20260723-212224`; child `/dlwh/iris-run-job-20260723-212224/grug-train-jaxpp-rno2a-ncclep-smoke-r8-l8-e64k4-b512-s4096-p4m16-20260723-1424`.
+- Results:
+  - All 32 ranks bootstrapped four EP8 groups with the corrected matching `recv_capacity_per_rank=65,536`. Complete tracing/lowering passed, and stage-0 forward compilation began.
+  - First dispatch failed with NCCL_EP's explicit device assertion: `padded EM slots 66368 > max_recv_tokens_per_rank 65536`.
+  - The assertion poisoned the CUDA contexts; later launch, NCCL, and coordination errors are secondary. No loss, MFU, or duration metric was produced.
+  - Parent, child, and all four tasks are terminal failed. No resources remain live.
+- Interpretation:
+  - Factor `1.0` is only the exact mean assignments/rank. Live learned routing plus NCCL_EP's expert-major alignment required 832 additional rows, or `1.27%` headroom, on this first microbatch.
+  - The standalone transport and full-MLP gates already validated factor `1.25`. The next fix uses that bound for both NCCL_EP model buffers and bootstrap, while retaining Grug's existing factor `1.0` for ring and every other backend.
+- Next action:
+  - Relaunch the identical reduced smoke with the backend-scoped `1.25` receive bound. Require at least one finite training step before any performance comparison.
