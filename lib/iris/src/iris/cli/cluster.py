@@ -7,7 +7,6 @@ All cluster subcommands live here: lifecycle (start/stop/restart/status),
 controller VM management, VM operations via controller RPC, and the dashboard tunnel.
 """
 
-import json
 import signal
 import subprocess
 import threading
@@ -32,6 +31,7 @@ from iris.cli.build import (
     get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
+from iris.cli.raw_query import query_dicts, sql_literal
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -55,7 +55,7 @@ from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_s
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
 from iris.cluster.provenance import provenance_from_proto
-from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
 
@@ -80,18 +80,15 @@ def _fetch_worker_bootstrap_rows(client, worker_ids: list[str]) -> dict[str, Wor
     """
     if not worker_ids:
         return {}
-    quoted = ", ".join("'" + wid.replace("'", "''") + "'" for wid in worker_ids)
+    quoted = ", ".join(sql_literal(wid) for wid in worker_ids)
     sql = f"SELECT worker_id, slice_id, scale_group, md_gce_zone FROM workers WHERE worker_id IN ({quoted})"
-    response = client.execute_raw_query(query_pb2.RawQueryRequest(sql=sql))
-    column_index = {col.name: i for i, col in enumerate(response.columns)}
     rows: dict[str, WorkerBootstrapRow] = {}
-    for raw in response.rows:
-        decoded = json.loads(raw)
+    for decoded in query_dicts(client, sql):
         row = WorkerBootstrapRow(
-            worker_id=decoded[column_index["worker_id"]],
-            slice_id=decoded[column_index["slice_id"]],
-            scale_group=decoded[column_index["scale_group"]],
-            zone=decoded[column_index["md_gce_zone"]],
+            worker_id=decoded["worker_id"],
+            slice_id=decoded["slice_id"],
+            scale_group=decoded["scale_group"],
+            zone=decoded["md_gce_zone"],
         )
         rows[row.worker_id] = row
     return rows
