@@ -21,7 +21,7 @@ uv run ... \
   --trainer.profiler.num_steps 10
 ```
 
-Profiles default to a seven-day lifetime. Set
+Profiles default to a 30-day lifetime. Set
 `--trainer.profiler.upload.ttl_days 3` to request another lifetime or
 `--trainer.profiler.upload.enabled false` for local-only capture. A local
 `MARIN_PREFIX` also disables upload.
@@ -37,7 +37,7 @@ Install local viewers with one of:
 | `--trainer.profiler.start_step` | First profiled training step | `5` |
 | `--trainer.profiler.num_steps` | Number of profiled steps | `25` |
 | `--trainer.profiler.upload.enabled` | Upload to TTL storage and print a hosted link | `true` |
-| `--trainer.profiler.upload.ttl_days` | Remote profile lifetime | `7` |
+| `--trainer.profiler.upload.ttl_days` | Remote profile lifetime | `30` |
 | `--trainer.profiler.process_index` | Capture one JAX process; unset captures all hosts | unset |
 | `--trainer.profiler.create_perfetto_trace` | Also export Perfetto JSON | `false` |
 | `--trainer.profiler.perfetto_link` | Generate the interactive Perfetto URL | `false` |
@@ -47,7 +47,7 @@ XProf run unless `process_index` selects one process.
 
 ### Adding HLO graphs
 
-HLO protobufs enable XProf graph and memory views and increase artifact size:
+HLO metadata enables XProf graph and memory views and increases artifact size:
 
 ```bash
 uv run ... \

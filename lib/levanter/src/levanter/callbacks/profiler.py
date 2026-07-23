@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 AdvancedProfileOptionValue = bool | int | str
 DEFAULT_XPROF_SERVICE_URL = "https://iris.oa.dev/proxy/xprof"
+_XPROF_RUN_PATH = "plugins/profile"
 
 
 def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
@@ -35,32 +36,17 @@ class ProfileOptionsConfig:
     host_tracer_level: int | None = None
     python_tracer_level: int | None = None
     device_tracer_level: int | None = None
-    enable_hlo_proto: bool | None = None
+    enable_hlo_proto: bool = False
     include_dataset_ops: bool | None = None
     advanced_configuration: dict[str, AdvancedProfileOptionValue] = field(default_factory=dict)
 
-    @property
-    def is_configured(self) -> bool:
-        return (
-            self.host_tracer_level is not None
-            or self.python_tracer_level is not None
-            or self.device_tracer_level is not None
-            or self.enable_hlo_proto is not None
-            or self.include_dataset_ops is not None
-            or bool(self.advanced_configuration)
-        )
-
-    def build_jax_profile_options(self) -> jax.profiler.ProfileOptions | None:
-        if not self.is_configured:
-            return None
-
+    def build_jax_profile_options(self) -> jax.profiler.ProfileOptions:
         options = jax.profiler.ProfileOptions()
         if self.host_tracer_level is not None:
             options.host_tracer_level = self.host_tracer_level
         if self.python_tracer_level is not None:
             options.python_tracer_level = self.python_tracer_level
-        if self.enable_hlo_proto is not None:
-            options.enable_hlo_proto = self.enable_hlo_proto
+        options.enable_hlo_proto = self.enable_hlo_proto
         if self.include_dataset_ops is not None:
             options.include_dataset_ops = self.include_dataset_ops
 
@@ -77,7 +63,7 @@ class XprofUploadConfig:
     """XProf upload settings."""
 
     enabled: bool = True
-    ttl_days: int = 7
+    ttl_days: int = 30
     destination: str | None = None
     service_url: str = DEFAULT_XPROF_SERVICE_URL
 
@@ -105,7 +91,7 @@ class ProfilerConfig:
     def is_enabled(self) -> bool:
         return self.enabled and self.num_steps > 0
 
-    def build_jax_profile_options(self) -> jax.profiler.ProfileOptions | None:
+    def build_jax_profile_options(self) -> jax.profiler.ProfileOptions:
         return self.profile_options.build_jax_profile_options()
 
     def resolve_num_profile_steps(self, num_train_steps: int) -> int:
@@ -241,7 +227,7 @@ def profile(
 
 
 def _profile_sessions(profile_path: Path) -> set[Path]:
-    session_root = profile_path / "plugins" / "profile"
+    session_root = profile_path / _XPROF_RUN_PATH
     if not session_root.exists():
         return set()
     return {path for path in session_root.iterdir() if path.is_dir()}
@@ -257,7 +243,7 @@ def _upload_profile_sessions(
     if not new_sessions:
         raise RuntimeError(f"JAX profiler produced no new XPlane session under {profile_path}")
 
-    destination = StoragePath(upload_uri) / "plugins" / "profile" / remote_session_name
+    destination = StoragePath(upload_uri) / _XPROF_RUN_PATH / remote_session_name
     for session_path in sorted(new_sessions):
         destination.upload_from(f"{session_path}/", recursive=True)
     logger.info("Uploaded XProf session to %s", destination)

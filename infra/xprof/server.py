@@ -9,6 +9,7 @@ from pathlib import Path
 from cheroot import wsgi
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.platforms.types import find_free_port
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from xprof import server as xprof_server
 from xprof.convert import _pywrap_profiler_plugin
@@ -48,6 +49,8 @@ def main() -> None:
     if job_info is None:
         raise RuntimeError("No Iris job info available; XProf must run inside an Iris job")
     port = ctx.get_port(PORT_NAME)
+    if port == 0:
+        port = find_free_port()
     address = f"http://{job_info.advertise_host}:{port}"
     endpoint_id = ctx.registry.register(ENDPOINT_NAME, address, {"job_id": ctx.job_id.to_wire()})
     http_server = wsgi.Server((os.environ["IRIS_BIND_HOST"], port), app)

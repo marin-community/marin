@@ -9,7 +9,6 @@ from wsgiref.util import setup_testing_defaults
 
 import pytest
 
-from infra.xprof import gateway as gateway_module
 from infra.xprof.gateway import (
     ProfileCache,
     ProfileSourceError,
@@ -73,8 +72,8 @@ def test_source_policy_only_allows_ttl_xprof_trees_in_named_buckets():
     assert policy.validate("gs://marin-us-east5/tmp/ttl=7d/xprof/run-1") == (
         "gs://marin-us-east5/tmp/ttl=7d/xprof/run-1"
     )
-    assert policy.validate("s3://marin-us-east-02a/tmp/ttl=3d/xprof/run-2") == (
-        "s3://marin-us-east-02a/tmp/ttl=3d/xprof/run-2"
+    assert policy.validate("s3://marin-us-east-02a/marin/tmp/ttl=3d/xprof/run-2") == (
+        "s3://marin-us-east-02a/marin/tmp/ttl=3d/xprof/run-2"
     )
     with pytest.raises(ProfileSourceError, match="not available"):
         policy.validate("gs://other/tmp/ttl=7d/xprof/run")
@@ -84,21 +83,25 @@ def test_source_policy_only_allows_ttl_xprof_trees_in_named_buckets():
         policy.validate("https://marin-us-east5/tmp/ttl=7d/xprof/run")
 
 
-def test_cache_returns_the_session_parent_xprof_expects(monkeypatch, tmp_path):
-    source_uri = "gs://marin-us-east5/tmp/ttl=7d/xprof/run-1"
+def test_cache_returns_the_session_parent_xprof_expects(tmp_path):
+    source = tmp_path / "source" / "run-1"
+    session = source / "plugins" / "profile" / "session-1"
+    session.mkdir(parents=True)
+    (session / "host.xplane.pb").write_bytes(b"xplane")
 
-    def download_to(_source, local_path: str, *, recursive: bool = False) -> None:
-        assert recursive
-        session = Path(local_path) / "plugins" / "profile" / "session-1"
-        session.mkdir(parents=True)
-        (session / "host.xplane.pb").write_bytes(b"xplane")
+    class LocalProfileSourcePolicy(ProfileSourcePolicy):
+        def __init__(self):
+            pass
 
-    monkeypatch.setattr(gateway_module.StoragePath, "download_to", download_to)
+        def validate(self, uri: str) -> str:
+            return uri
+
     cache = ProfileCache(
         tmp_path / "cache",
-        ProfileSourcePolicy(frozenset({"marin-us-east5"})),
+        LocalProfileSourcePolicy(),
     )
 
+    source_uri = f"file://{source}"
     run_path = cache.stage(source_uri)
     assert run_path.name == "profile"
     assert run_path.parent.name == "plugins"
@@ -120,7 +123,7 @@ def test_open_stages_outside_request_then_redirects_to_proxy_path(tmp_path):
         manager.future("gs://marin-us-east5/tmp/ttl=7d/xprof/run-1").result(timeout=1)
         ready = _request(app, "/open", query)
         assert ready["status"] == "303 See Other"
-        assert ready["headers"]["Location"] == f"/proxy/xprof/?{urlencode({'run_path': str(stager.local_path)})}"
+        assert ready["headers"]["Location"] == f"./?{urlencode({'run_path': str(stager.local_path)})}"
     finally:
         app.shutdown()
 

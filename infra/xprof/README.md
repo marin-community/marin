@@ -6,7 +6,7 @@ The always-on Iris job `/ops/xprof` serves:
 https://iris.oa.dev/proxy/xprof
 ```
 
-Levanter writes XPlane and optional HLO files under
+Levanter writes XPlane profiles with optional HLO metadata under
 `tmp/ttl=Nd/xprof/<run_id>` in the `MARIN_PREFIX` backend. The service accepts
 only the buckets in `Pulumi.xprof-marin.yaml` and rejects paths outside that TTL
 prefix. Iris authenticates browser requests. The service uses workload identity

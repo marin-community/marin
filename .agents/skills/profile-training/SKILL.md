@@ -42,7 +42,7 @@ uv run ... \
   --trainer.profiler.enabled true \
   --trainer.profiler.start_step 5 \
   --trainer.profiler.num_steps 10 \
-  --trainer.profiler.upload.ttl_days 7
+  --trainer.profiler.upload.ttl_days 30
 ```
 
 For profiles where xprof/HLO protobuf tables matter, enable JAX profile options
@@ -59,7 +59,7 @@ uv run ... \
   --trainer.profiler.profile_options.enable_hlo_proto true
 ```
 
-HLO protobufs increase artifact size, so keep their profile windows short. The
+HLO metadata increases artifact size, so keep these profile windows short. The
 `XProf profile:` link appears after upload. Set
 `--trainer.profiler.upload.enabled false` for local-only capture. Do not copy
 profiles to another GCS region for inspection.

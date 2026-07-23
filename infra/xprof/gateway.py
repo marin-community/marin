@@ -25,7 +25,7 @@ from infra.xprof.config import HEALTH_PATH
 logger = logging.getLogger(__name__)
 
 _TTL_SEGMENT = re.compile(r"ttl=[1-9][0-9]*d")
-_PROFILE_PREFIX = ("tmp", "xprof")
+_PROFILE_ROOTS = ((), ("marin",))
 _SOURCE_MARKER = ".xprof-source"
 _REWRITE_SUFFIXES = (".html", ".js")
 _XPROF_RUN_PATH = ("plugins", "profile")
@@ -53,13 +53,17 @@ class ProfileSourcePolicy:
             raise ProfileSourceError("profile URI must use gs:// or s3://")
         if source.bucket not in self._allowed_buckets:
             raise ProfileSourceError(f"bucket {source.bucket!r} is not available to the XProf service")
-        if len(source.segments) < 4:
-            raise ProfileSourceError("profile URI must identify a run under tmp/ttl=Nd/xprof/")
-        if source.segments[0] != _PROFILE_PREFIX[0] or not _TTL_SEGMENT.fullmatch(source.segments[1]):
-            raise ProfileSourceError("profile URI must be under tmp/ttl=Nd/")
-        if source.segments[2] != _PROFILE_PREFIX[1]:
-            raise ProfileSourceError("profile URI must be under the xprof TTL prefix")
-        return str(source)
+        for root in _PROFILE_ROOTS:
+            profile_prefix = (*root, "tmp")
+            if source.segments[: len(profile_prefix)] != profile_prefix:
+                continue
+            ttl_index = len(profile_prefix)
+            if len(source.segments) < ttl_index + 3 or not _TTL_SEGMENT.fullmatch(source.segments[ttl_index]):
+                raise ProfileSourceError("profile URI must identify a run under tmp/ttl=Nd/xprof/")
+            if source.segments[ttl_index + 1] != "xprof":
+                raise ProfileSourceError("profile URI must be under the xprof TTL prefix")
+            return str(source)
+        raise ProfileSourceError("profile URI must be under tmp/ttl=Nd/")
 
 
 class ProfileCache:
@@ -85,13 +89,14 @@ class ProfileCache:
                 return self._xprof_run_path(target)
 
             temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=self._cache_dir))
+            downloaded = temporary / "profile"
             try:
-                StoragePath(source_uri).download_to(f"{temporary}/", recursive=True)
-                run_path = self._xprof_run_path(temporary)
+                StoragePath(source_uri).download_to(str(downloaded), recursive=True)
+                run_path = self._xprof_run_path(downloaded)
                 if not any(run_path.glob("*/*.xplane.pb")) and not any(run_path.glob("*/*.xplane.riegeli")):
                     raise FileNotFoundError(f"no XPlane files found under {source_uri}")
-                (temporary / _SOURCE_MARKER).write_text(source_uri)
-                temporary.rename(target)
+                (downloaded / _SOURCE_MARKER).write_text(source_uri)
+                downloaded.rename(target)
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
@@ -202,7 +207,7 @@ class XprofGateway:
                 start_response, "502 Bad Gateway", f"profile staging failed: {exc}\n".encode(), "text/plain"
             )
 
-        location = f"{self._public_path}/?{urlencode({'run_path': str(local_path)})}"
+        location = f"./?{urlencode({'run_path': str(local_path)})}"
         start_response("303 See Other", [("Location", location), ("Content-Length", "0")])
         return [b""]
 

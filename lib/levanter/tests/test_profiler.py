@@ -122,6 +122,12 @@ def test_profiler_config_builds_ttl_destination_and_forwards_hlo_options(monkeyp
     assert captured["profiler_options"].enable_hlo_proto is True
 
 
+def test_plain_profile_disables_hlo_metadata():
+    options = ProfileOptionsConfig().build_jax_profile_options()
+
+    assert options.enable_hlo_proto is False
+
+
 def test_profiler_is_configurable_inline_from_training_cli():
     config = draccus.parse(
         TrainerConfig,
@@ -152,8 +158,8 @@ def test_default_upload_destination_uses_marin_ttl_storage(monkeypatch):
 
     monkeypatch.setattr(profiler_module, "marin_temp_bucket", temp_bucket)
 
-    XprofUploadConfig(ttl_days=3).destination_for_run("run-123")
-    assert calls == [(3, "xprof/run-123")]
+    XprofUploadConfig().destination_for_run("run-123")
+    assert calls == [(30, "xprof/run-123")]
 
 
 def test_profiler_upload_can_be_disabled(monkeypatch, tmp_path):
