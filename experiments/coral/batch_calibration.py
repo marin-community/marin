@@ -4,10 +4,21 @@
 """Estimate dense-transformer HBM and select a TPU batch configuration."""
 
 import math
+from dataclasses import dataclass
 
 from fray.types import get_tpu_topology, tpu_hbm_capacity_bytes
 
 BYTES_PER_GIB = 1024**3
+
+
+@dataclass(frozen=True)
+class TpuBatchConfig:
+    """Parallelism settings selected for a TPU training batch."""
+
+    data_parallelism: int
+    tensor_parallelism: int
+    per_device_parallelism: int
+    gradient_accumulation: int
 
 
 def adam_optimizer_bytes(
@@ -106,55 +117,77 @@ def tpu_batch_config(
     batch_size: int,
     batch_bytes: int,
     *,
-    data_axis_size: int | None = None,
-) -> tuple[int, int]:
-    """Select Levanter batch settings that fit a global batch on a TPU slice.
+    context_parallelism: int = 1,
+    slice_count: int = 1,
+) -> TpuBatchConfig:
+    """Select Levanter parallelism settings that fit a global batch on TPUs.
 
     Args:
         tpu: TPU topology name accepted by Fray, such as ``"v5litepod-8"``.
         batch_size: Global training batch size.
         batch_bytes: HBM needed for the full global batch. When it does not fit, memory is assumed to
             scale linearly with microbatch size.
-        data_axis_size: Chips assigned to Levanter's batch axis. Defaults to the slice chip count. For
-            example, ``"v5p-32"`` has 16 chips, so tensor parallelism of two uses ``data_axis_size=8``.
+        context_parallelism: Number of chips that split each example's sequence positions within a slice.
+        slice_count: Number of identical TPU slices used by the training job.
 
     Returns:
-        A ``(per_device_parallelism, gradient_accumulation)`` tuple. ``per_device_parallelism`` is ``-1``
-        when the full batch fits without microbatching.
+        The effective data, tensor, per-device, and gradient-accumulation parallelism. Tensor parallelism
+        uses the chips not assigned to data or context parallelism. All returned values are positive and
+        explicit, including when the full batch fits in one microstep.
 
     Raises:
-        ValueError: If the inputs are invalid or no microbatch fits the slice.
+        ValueError: If the inputs are invalid or no microbatch fits the requested slices.
     """
     topology = get_tpu_topology(tpu)
-    data_axis_size = _resolve_data_axis_size(topology.chip_count, data_axis_size)
-    _validate_batch_divisible_by_data_axis(batch_size, data_axis_size)
+    _validate_parallelism_inputs(
+        batch_size=batch_size,
+        chips_per_slice=topology.chip_count,
+        context_parallelism=context_parallelism,
+        slice_count=slice_count,
+    )
     if batch_bytes <= 0:
         raise ValueError(f"batch_bytes must be positive, got {batch_bytes}")
 
-    capacity_bytes = tpu_hbm_capacity_bytes(tpu)
-    if batch_bytes <= capacity_bytes:
-        return -1, 1
+    examples_per_slice = batch_size // slice_count
+    parallel_capacity_per_slice = topology.chip_count // context_parallelism
+    data_parallelism_per_slice = math.gcd(examples_per_slice, parallel_capacity_per_slice)
+    data_parallelism = slice_count * data_parallelism_per_slice
+    tensor_parallelism = parallel_capacity_per_slice // data_parallelism_per_slice
 
-    full_per_device_batch = batch_size // data_axis_size
+    capacity_bytes = tpu_hbm_capacity_bytes(tpu) * slice_count
+    if batch_bytes <= capacity_bytes:
+        return TpuBatchConfig(
+            data_parallelism=data_parallelism,
+            tensor_parallelism=tensor_parallelism,
+            per_device_parallelism=batch_size // data_parallelism,
+            gradient_accumulation=1,
+        )
+
+    full_per_device_batch = batch_size // data_parallelism
     for per_device_parallelism in range(full_per_device_batch, 0, -1):
         if full_per_device_batch % per_device_parallelism != 0:
             continue
-        microbatch_size = per_device_parallelism * data_axis_size
+        microbatch_size = per_device_parallelism * data_parallelism
         if _batch_bytes_for_microbatch(batch_bytes, full_batch_size=batch_size, microbatch_size=microbatch_size) <= (
             capacity_bytes
         ):
-            return per_device_parallelism, batch_size // microbatch_size
+            return TpuBatchConfig(
+                data_parallelism=data_parallelism,
+                tensor_parallelism=tensor_parallelism,
+                per_device_parallelism=per_device_parallelism,
+                gradient_accumulation=batch_size // microbatch_size,
+            )
 
     minimum_microbatch_bytes = _batch_bytes_for_microbatch(
         batch_bytes,
         full_batch_size=batch_size,
-        microbatch_size=data_axis_size,
+        microbatch_size=data_parallelism,
     )
     raise ValueError(
         f"Batch does not fit on {tpu}: even per_device_parallelism=1 "
-        f"(microbatch_size={data_axis_size}) needs {_format_gib(minimum_microbatch_bytes)}, "
+        f"(microbatch_size={data_parallelism}) needs {_format_gib(minimum_microbatch_bytes)}, "
         f"but target HBM capacity is {_format_gib(capacity_bytes)}. Use a larger TPU slice, "
-        "reduce model/sequence size, or use more model/context parallelism and pass the resulting data_axis_size."
+        "more slices, a larger batch size, or more model/context parallelism."
     )
 
 
@@ -162,29 +195,23 @@ def _batch_bytes_for_microbatch(batch_bytes: int, *, full_batch_size: int, micro
     return math.ceil(batch_bytes * microbatch_size / full_batch_size)
 
 
-def _resolve_data_axis_size(chip_count: int, data_axis_size: int | None) -> int:
-    if data_axis_size is None:
-        return chip_count
-    if data_axis_size <= 0:
-        raise ValueError(f"data_axis_size must be positive, got {data_axis_size}")
-    if chip_count % data_axis_size != 0:
-        raise ValueError(
-            f"data_axis_size ({data_axis_size}) must divide TPU chip count ({chip_count}). "
-            "For tensor/model/context parallelism, pass the number of chips left on Levanter's batch axis."
-        )
-    return data_axis_size
-
-
-def _validate_batch_divisible_by_data_axis(batch_size: int, data_axis_size: int) -> None:
+def _validate_parallelism_inputs(
+    *,
+    batch_size: int,
+    chips_per_slice: int,
+    context_parallelism: int,
+    slice_count: int,
+) -> None:
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
-    if batch_size % data_axis_size == 0:
-        return
-    next_valid = math.ceil(batch_size / data_axis_size) * data_axis_size
-    raise ValueError(
-        f"batch_size ({batch_size}) must be divisible by data_axis_size ({data_axis_size}) for Levanter "
-        f"microbatching. Use batch_size={next_valid}, choose another batch size, or pass the correct data_axis_size."
-    )
+    if context_parallelism <= 0:
+        raise ValueError(f"context_parallelism must be positive, got {context_parallelism}")
+    if slice_count <= 0:
+        raise ValueError(f"slice_count must be positive, got {slice_count}")
+    if chips_per_slice % context_parallelism != 0:
+        raise ValueError(f"context_parallelism ({context_parallelism}) must divide chips per slice ({chips_per_slice})")
+    if batch_size % slice_count != 0:
+        raise ValueError(f"batch_size ({batch_size}) must be divisible by slice_count ({slice_count})")
 
 
 def _validate_activation_layer_fraction(activation_layer_fraction: float) -> None:

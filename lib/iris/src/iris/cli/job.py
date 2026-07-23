@@ -19,6 +19,8 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
@@ -39,8 +41,6 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.hooks import TaskHook
-from iris.cluster.hooks.nsys import build_profile_hook, profile_cli_options
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -95,16 +95,27 @@ def _remote_client(ctx: click.Context) -> IrisClient:
 def _terminate_jobs(
     client: IrisClient,
     job_ids: tuple[str, ...],
-    include_children: bool,
+    prefix: bool,
 ) -> list[JobName]:
     terminated: list[JobName] = []
     for raw in job_ids:
+        if prefix:
+            terminated.extend(client.terminate_prefix(raw))
+            continue
+
         name = JobName.from_wire(raw)
-        if include_children:
-            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
-        else:
+        try:
             client.terminate(name)
-            terminated.append(name)
+        except ConnectError as exc:
+            if exc.code != Code.NOT_FOUND:
+                raise
+            candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
+            suggestion = ""
+            if candidates:
+                candidate_names = ", ".join(job.job_id for job in candidates)
+                suggestion = f" Did you mean: {candidate_names}?"
+            raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
+        terminated.append(name)
     return terminated
 
 
@@ -621,7 +632,6 @@ def run_iris_job(
     wait: bool = True,
     job_name: str | None = None,
     replicas: int | None = None,
-    processes_per_task: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -636,7 +646,6 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
-    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -748,11 +757,9 @@ def run_iris_job(
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
-        processes_per_task=processes_per_task,
         user=user,
         priority_band=priority_band,
         container_profile=profile,
-        profile_hook=profile_hook,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -776,11 +783,9 @@ def _submit_and_wait_job(
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
-    processes_per_task: int = 1,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
-    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -803,12 +808,10 @@ def _submit_and_wait_job(
             extras=extras or [],
             setup_scripts=setup_scripts,
             sync_packages=sync_packages or [],
-            profile=profile_hook,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
-        processes_per_task=processes_per_task,
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -842,7 +845,7 @@ def _submit_and_wait_job(
     except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
-            terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
+            terminated = _terminate_jobs(client, (str(job.job_id),), prefix=False)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
         return 130
@@ -925,12 +928,6 @@ Examples:
 @click.option(
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
 )
-@click.option(
-    "--processes-per-task",
-    type=int,
-    default=1,
-    help="GPU processes to run inside each task (default 1). >1 fans each task into N JAX processes per GPU group.",
-)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -1004,7 +1001,6 @@ Examples:
         "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )
-@profile_cli_options
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
@@ -1025,7 +1021,6 @@ def run(
     job_name: str | None,
     user: str | None,
     replicas: int | None,
-    processes_per_task: int,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -1039,11 +1034,6 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
-    profile: str | None,
-    profile_output: str | None,
-    profile_tasks: str,
-    profile_trace: str,
-    profile_capture_range: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -1059,19 +1049,6 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
-
-    if profile and no_sync:
-        raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
-    if profile_output and not profile:
-        raise click.UsageError("--profile-output has no effect without --profile.")
-    # The nsys hook owns its --profile* flags and how to build itself from them.
-    profile_hook: TaskHook | None = build_profile_hook(
-        profile,
-        output_uri=profile_output,
-        tasks=profile_tasks,
-        trace=profile_trace,
-        capture_range=profile_capture_range,
-    )
 
     submit_argv = redact_submit_argv(list(sys.argv))
 
@@ -1102,7 +1079,6 @@ def run(
             job_name=job_name,
             user=user,
             replicas=replicas,
-            processes_per_task=processes_per_task,
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
@@ -1117,7 +1093,6 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
-            profile_hook=profile_hook,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
@@ -1134,31 +1109,38 @@ def run(
     sys.exit(exit_code)
 
 
-def _stop_jobs(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def _stop_jobs(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     targets = _collect_targets(job_id, stdin)
     if not targets:
         raise click.UsageError("No jobs given. Pass job ids, or --stdin (or '-') to read them from stdin.")
     if dry_run:
-        click.echo(f"[dry-run] would terminate {len(targets)} job(s):")
-        for t in targets:
-            click.echo(f"  {t}")
+        if prefix:
+            client = _remote_client(ctx)
+            matches = [
+                job_name.to_wire() for target in targets for job_name in client.active_job_names_for_prefix(target)
+            ]
+        else:
+            matches = [JobName.from_wire(target).to_wire() for target in targets]
+        click.echo(f"[dry-run] would terminate {len(matches)} job(s):")
+        for match in matches:
+            click.echo(f"  {match}")
         return
     client = _remote_client(ctx)
-    terminated = _terminate_jobs(client, tuple(targets), include_children)
+    terminated = _terminate_jobs(client, tuple(targets), prefix)
     _print_terminated(terminated)
 
 
 @job.command("stop")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def stop(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs.
 
     Pass ``-`` or ``--stdin`` to read job ids from stdin so a query can pipe in:
@@ -1167,22 +1149,22 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_
       iris query -f csv "SELECT job_id FROM jobs WHERE user_id='alice' AND state=3" \\
         | iris job stop --stdin
     """
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 @job.command("kill")
 @click.argument("job_id", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each job ID as a prefix instead of exactly (default: exact).",
 )
 @click.option("--stdin", is_flag=True, default=False, help="Also read job ids from stdin (one per line; CSV-tolerant).")
 @click.option("--dry-run", is_flag=True, default=False, help="Print the jobs that would be terminated without sending.")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool, stdin: bool, dry_run: bool) -> None:
+def kill(ctx, job_id: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    _stop_jobs(ctx, job_id, include_children, stdin, dry_run)
+    _stop_jobs(ctx, job_id, prefix, stdin, dry_run)
 
 
 _KICK_STATE_MAP = {

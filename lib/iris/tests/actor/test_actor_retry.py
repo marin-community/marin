@@ -4,13 +4,17 @@
 """Tests for actor client and pool retry on transient errors."""
 
 import threading
+from unittest.mock import MagicMock
 
+import iris.actor.client as actor_client_module
+import iris.actor.pool as actor_pool_module
 import pytest
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.pool import ActorPool
 from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS, IRIS_RPC_ZSTD
 from rigging.timing import ExponentialBackoff
 
 
@@ -46,6 +50,35 @@ class SwitchingResolver:
             self._call_count += 1
         resolver = FixedResolver(self._sequence[idx])
         return resolver.resolve(name)
+
+
+def test_actor_client_offers_and_sends_zstd(monkeypatch):
+    constructor = MagicMock()
+    monkeypatch.setattr(actor_client_module, "ActorServiceClientSync", constructor)
+
+    ActorClient(FixedResolver({"counter": "http://counter"}), "counter").rpc_client()
+
+    constructor.assert_called_once_with(
+        address="http://counter",
+        timeout_ms=None,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=IRIS_RPC_ZSTD,
+    )
+
+
+def test_actor_pool_offers_and_sends_zstd(monkeypatch):
+    constructor = MagicMock()
+    monkeypatch.setattr(actor_pool_module, "ActorServiceClientSync", constructor)
+    pool = ActorPool(FixedResolver({"counter": "http://counter"}), "counter")
+
+    pool._get_client(FixedResolver({"counter": "http://counter"}).resolve("counter").first())
+
+    constructor.assert_called_once_with(
+        address="http://counter",
+        timeout_ms=30_000,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=IRIS_RPC_ZSTD,
+    )
 
 
 def test_actor_client_retries_on_transient_rpc_error():

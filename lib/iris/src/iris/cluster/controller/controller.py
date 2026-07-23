@@ -115,23 +115,20 @@ logger = logging.getLogger(__name__)
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
 _RPC_HANDLER_THREADS = 64
+_CONTROLLER_KEEPALIVE = 120
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
     def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
-        try:
-            loop.run_until_complete(server.serve())
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
+        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
+        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
+            runner.get_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
+            )
+            runner.run(server.serve(sockets=sockets))
 
     server.run = run_with_executor
 
@@ -666,7 +663,7 @@ class Controller:
             port=self._config.port,
             log_level="warning",
             log_config=None,
-            timeout_keep_alive=120,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
             proxy_headers=True,
             forwarded_allow_ips="*",
         )
@@ -993,7 +990,6 @@ class Controller:
         each backend reads its own workers, so nothing here is partitioned.
         """
         inputs = _TickInputs()
-        worker_daemon_backends = [bid for bid in self._backend_ids if bid not in self._dispatch_backends]
 
         # Placement-owning backends each drain their own pending dispatch first.
         if run_reconcile:
@@ -1012,9 +1008,10 @@ class Controller:
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
-            # Execution-timeout finalization is controller-owned and global; it
-            # runs alongside the worker-daemon reconcile.
-            if run_reconcile and scan_timeouts and worker_daemon_backends:
+            # Execution-timeout finalization is global across worker-daemon and
+            # K8s backends. K8s gangs rely on it because they omit
+            # activeDeadlineSeconds.
+            if run_reconcile and scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
 

@@ -25,22 +25,31 @@ Follow these steps precisely:
    - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
 3. Launch an opus agent to view the PR and return a summary of the changes. The
-   same agent also checks the PR *description* against the PR-body rules in
-   `.agents/skills/commit/SKILL.md` §8 and returns any problems it finds:
+   same agent also checks the PR title and description against
+   `.agents/skills/writing-style/pull-requests.md` and returns any problems it
+   finds:
 
+   - a title over 72 characters, a non-imperative title, or a conventional-commit
+     prefix such as `feat:` or `fix:`;
+   - a body whose length comes from diff narration, repetition, or background a
+     future reader does not need;
    - a "Testing" / "Validation" / "Test plan" section, or "how I verified it" narration;
    - a templated What/Change/Scope/Testing heading scaffold, or empty boilerplate
      headings (a `## Summary` that restates the title, a `## Changes` that just
      lists the touched files) — markdown is fine when it makes the change clearer,
      the problem is structure that carries no information a reviewer needs;
-   - checkboxes, emoji, self-credit ("written by …" / "Created by Claude"), or a
-     filler opener ("This PR…", "Summary of changes:");
+   - checkboxes, emoji, agent/provider attribution, session URLs, or a filler
+     opener ("This PR…", "Summary of changes:");
+   - a file, symbol, or test inventory that repeats information visible in the
+     diff;
+   - verdict or advocacy language that substitutes emphasis for evidence, such
+     as `why this is correct`, `cleaner`, `provably`, or all-caps claims;
    - a body that buries what-the-change-does under boilerplate instead of leading
      with it.
 
    A terse, plain body for a small change is correct — do not flag mere brevity or
-   the absence of markdown. Flag only descriptions that read like a filled-in form
-   rather than a commit message.
+   the absence of markdown. Flag descriptions that read like a filled-in form or
+   implementation report rather than a commit message.
 
 4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
 

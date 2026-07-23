@@ -16,9 +16,9 @@ from starlette.applications import Starlette
 from iris.client.client import IrisContext, get_iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
+from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.managed_thread import get_thread_container
 
 logger = logging.getLogger(__name__)
@@ -92,14 +92,19 @@ def start() -> str | None:
 
     job_info = get_job_info()
     ctx = get_iris_ctx()
-    if job_info is None or ctx is None or ctx.client is None:
+    if job_info is None:
         logger.debug("no in-cluster Iris job context; skipping telltale")
+        return None
+    if ctx is None or ctx.client is None:
+        logger.warning("telltale: no Iris controller client for task %s; skipping server startup", job_info.task_id)
         return None
 
     # Ephemeral rather than a named port: a named port is allocated per task, so
     # the processes sharing a multi-process host would collide on it, and a fixed
     # port gets taken by whatever co-tenant grabs it first.
     port = find_free_port()
+    address = f"http://{job_info.advertise_host}:{port}"
+    logger.info("telltale: starting HTTP server at %s", address)
 
     app = Starlette(routes=telltale.routes())
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error", log_config=None))
@@ -113,7 +118,6 @@ def start() -> str | None:
         error_message=f"telltale server did not start on port {port}",
     )
 
-    address = f"http://{job_info.advertise_host}:{port}"
     name = _endpoint_name()
     endpoint_id = ctx.registry.register(name, address, {"job_id": ctx.job_id.to_wire()})
     # Match the registrations in jax_init: drop the endpoint on a clean exit so a

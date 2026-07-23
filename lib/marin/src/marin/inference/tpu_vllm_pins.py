@@ -3,7 +3,7 @@
 
 """Pinned Marin TPU-vLLM fork revisions for the isolated (uvx) serving path.
 
-``marin-serve --tpu`` provisions the TPU vLLM stack from these forks when it runs
+``marin-serve iris --tpu`` provisions the TPU vLLM stack from these forks when it runs
 outside a workspace checkout (see :class:`marin.inference.vllm_server.IsolatedTpuVllm`),
 where the root ``pyproject`` is unavailable. They mirror the git sources pinned in that
 ``pyproject``'s ``[tool.uv.sources]``; ``test_tpu_vllm_pins_match_pyproject`` keeps them

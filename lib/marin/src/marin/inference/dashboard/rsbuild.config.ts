@@ -11,7 +11,7 @@ export default defineConfig({
   output: {
     distPath: { root: 'dist' },
     // The dashboard ships as one self-contained HTML file, committed at the
-    // sibling ../quick_serve_dashboard.html and served via importlib.resources —
+    // sibling ../serve_dashboard.html and served via importlib.resources —
     // so every script and stylesheet must inline. scripts/emit.mjs verifies
     // nothing escaped into a separate asset.
     inlineScripts: true,

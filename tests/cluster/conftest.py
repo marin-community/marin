@@ -30,7 +30,7 @@ import pytest
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import JobRequest, JobStatus
-from iris.cli.connect import open_controller_endpoint
+from iris.cli.connect import connect_controller
 from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -77,7 +77,7 @@ def open_cluster_client(cluster_name: str) -> Iterator[IrisClient]:
     """
     with contextlib.ExitStack() as stack:
         try:
-            endpoint = stack.enter_context(open_controller_endpoint(cluster_name=cluster_name))
+            endpoint = stack.enter_context(connect_controller(cluster_name=cluster_name))
             # Mint the IAP edge token now so a credential-less environment skips here rather than
             # erroring at submit time. No-op for kube-fronted clusters, which carry no IAP provider.
             if endpoint.credentials.iap_provider is not None:

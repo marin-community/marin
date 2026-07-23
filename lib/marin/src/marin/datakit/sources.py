@@ -22,12 +22,15 @@ from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
+from marin.datakit.download.common_crawl_focus import common_crawl_focus_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
     davinci_dev_ctx_native_normalize_steps,
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.dolma3_5_code import dolma3_5_code_normalize_steps
+from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
@@ -149,6 +152,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
@@ -262,6 +266,24 @@ def all_sources() -> dict[str, DatakitSource]:
             "finepdfs/ukr_Cyrl": 25.53,
         },
     )
+
+    # Exact counts, measured with marin-community/marin-tokenizer over the
+    # normalized data: 1,221,318,442,892 tokens / 635,390,613 docs and
+    # 65,538,632,427 / 31,179,056. Both came in above their chars/4 estimates
+    # (by 11.7% and 6.0%), which is the bias to expect from the estimates below.
+    dolma3_5_code = _rows_flat(
+        dolma3_5_code_normalize_steps,
+        {
+            "dolma_code": 1221.32,
+            "dolma_code_prose": 65.54,
+        },
+    )
+
+    # dolma3.5_pool PDF subset, minus the finepdfs component we already ingest
+    # separately (see dolma4pdfs.py). Exact count measured over the normalized
+    # data with marin-community/marin-tokenizer: 1,804,002,448,556 tokens over
+    # 137,132,279 documents.
+    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1804.002448556})
 
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
@@ -406,6 +428,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *biocollection,
         *common_pile,
         *finepdfs,
+        *dolma3_5_code,
+        *dolma4pdfs,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,

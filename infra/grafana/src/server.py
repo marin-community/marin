@@ -12,6 +12,8 @@ dashboard never sends admin RPC SQL, and every route feeds Infinity's backend pa
 Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
@@ -19,16 +21,24 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
+    GET /wandb/{chart}                           sampled public hero-report series by chart key
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
+    GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
+    GET /k8s/finelog_events                      recent Warning events involving finelog
     GET /k8s/health                              per-cluster API server reachability + latency
+    GET /k8s/overview                            explicit workload issue counts (zeros included)
+    GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
+    GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
+    GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -42,14 +52,16 @@ threadpool.
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 import pyarrow as pa
 import uvicorn
 from cache import TtlCache
-from config import BRIDGE_PORT, CLUSTERS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
+from config import BRIDGE_PORT, CLUSTERS, FINELOG_SLOW_THRESHOLD_MS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
 from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
+from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_source import GithubSource
 from iris_source import IrisSource
@@ -58,6 +70,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from wandb_source import WandbSource
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +83,44 @@ TO_MACRO = "{{to}}"
 # it into columns under this prefix so a panel can select one as a series.
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
+_K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
+_K8S_EVENTS_CACHE_KEY = "events"
+_K8S_FINELOG_CACHE_KEY = "finelog"
+_FINELOG_FILTER_TOKEN = "finelog"
+_FINELOG_HUB_CLUSTER = "marin"
+
+
+def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
+    """Summarize workload issue rows into one stat-safe row with explicit zeros."""
+    return [
+        {
+            "pending_pods": sum("pod" in row for row in pending_rows),
+            "crashlooping_containers": sum("container" in row for row in crashloop_rows),
+        }
+    ]
+
+
+def finelog_alert_rows(health_rows: list[FinelogHealth]) -> list[dict]:
+    """Project fleet health into Grafana's one-numeric-column alert contract."""
+    alerts = []
+    for row in health_rows:
+        if not row.responsive:
+            state = "unresponsive"
+        elif row.latency_ms is not None and row.latency_ms >= FINELOG_SLOW_THRESHOLD_MS:
+            state = "slow"
+        else:
+            state = "healthy"
+        alerts.append(
+            {
+                "cluster": row.cluster,
+                "server": row.server,
+                "role": row.role,
+                "state": state,
+                "error_class": row.error_class,
+                "value": 0 if state == "healthy" else 1,
+            }
+        )
+    return alerts
 
 
 def _sql_timestamp(at: datetime) -> str:
@@ -239,12 +290,15 @@ def create_app(
     iris_sources: Mapping[str, IrisSource],
     github_source: GithubSource,
     k8s_fleet: K8sFleet,
+    wandb_source: WandbSource,
 ) -> Starlette:
-    """Build the ASGI app serving finelog, Iris, GitHub, and k8s for the configured clusters."""
+    """Build the ASGI app serving finelog, Iris, GitHub, W&B, and k8s sources."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
+    wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
 
     def query(request: Request) -> JSONResponse:
         try:
@@ -253,6 +307,25 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+    def fleet_health_rows() -> list[FinelogHealth]:
+        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        return finelog_health_cache.get_or_compute(
+            "fleet_health",
+            lambda: [finelog_sources[_FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
+        )
+
+    def finelog_fleet_health(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse([asdict(row) for row in fleet_health_rows()])
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+
+    def finelog_alerts_fleet_health(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse(finelog_alert_rows(fleet_health_rows()))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -298,6 +371,15 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
+    def wandb_chart(request: Request) -> JSONResponse:
+        chart = request.path_params["chart"]
+        try:
+            return JSONResponse(wandb_cache.get_or_compute(chart, lambda: wandb_source.points(chart)))
+        except ValueError as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -312,14 +394,44 @@ def create_app(
     def k8s_pending(_: Request) -> JSONResponse:
         return k8s_endpoint("pending", k8s_fleet.pending)
 
+    def k8s_termination_candidates(_: Request) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
+        return JSONResponse([asdict(row) for row in rows])
+
     def k8s_kueue(_: Request) -> JSONResponse:
         return k8s_endpoint("kueue", k8s_fleet.kueue)
 
     def k8s_events(_: Request) -> JSONResponse:
-        return k8s_endpoint("events", k8s_fleet.warning_events)
+        return k8s_endpoint(_K8S_EVENTS_CACHE_KEY, k8s_fleet.warning_events)
+
+    def k8s_finelog(_: Request) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(_K8S_FINELOG_CACHE_KEY, k8s_fleet.finelog_pods)
+        return JSONResponse([asdict(row) for row in rows])
+
+    def k8s_finelog_events(_: Request) -> JSONResponse:
+        events = k8s_cache.get_or_compute(_K8S_EVENTS_CACHE_KEY, k8s_fleet.warning_events)
+        return JSONResponse(
+            [
+                row
+                for row in events
+                if _FINELOG_FILTER_TOKEN in (row.get("object") or "").lower()
+                or _FINELOG_FILTER_TOKEN in (row.get("message") or "").lower()
+            ]
+        )
 
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
+
+    def k8s_overview(_: Request) -> JSONResponse:
+        def compute() -> list[dict]:
+            pending = k8s_cache.get_or_compute("pending", k8s_fleet.pending)
+            crashloops = k8s_cache.get_or_compute("crashloops", k8s_fleet.crashloops)
+            return workload_overview(pending, crashloops)
+
+        return k8s_endpoint("overview", compute)
+
+    def k8s_gpu_racks(_: Request) -> JSONResponse:
+        return k8s_endpoint("gpu_racks", k8s_fleet.gpu_racks)
 
     def k8s_alerts_unreachable(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
@@ -339,6 +451,14 @@ def create_app(
     def k8s_alerts_degraded(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
 
+    def k8s_alerts_gpu_rack_trays(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_gpu_rack_trays", k8s_fleet.alert_gpu_rack_trays)
+
+    def k8s_alerts_stuck_gpu_pods(_: Request) -> JSONResponse:
+        # The dashboard and alert projection share one fleet LIST per cache TTL.
+        rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
+        return JSONResponse(k8s_fleet.alert_stuck_gpu_pods(rows))
+
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
@@ -348,7 +468,10 @@ def create_app(
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
+            Route("/wandb/{chart}", wandb_chart),
             Route("/finelog/{cluster}/query", query),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
@@ -356,13 +479,20 @@ def create_app(
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
             Route("/k8s/pending", k8s_pending),
+            Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),
+            Route("/k8s/finelog", k8s_finelog),
+            Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
+            Route("/k8s/overview", k8s_overview),
+            Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
+            Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
+            Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
         ]
     )
 
@@ -374,10 +504,11 @@ def main() -> None:
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
+    wandb_source = WandbSource(timeout=config.http_timeout)
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

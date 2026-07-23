@@ -20,10 +20,12 @@ then authorizes the forward by the RECEIVED handle the handoff created — the s
 crypto and authorization path the controllers run in production.
 """
 
+import asyncio
 import socket
 from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from threading import Event
 
 import httpx
 import pytest
@@ -38,6 +40,7 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.dashboard_common import on_shutdown
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2
@@ -78,6 +81,21 @@ class UpstreamObservation:
     headers: list[dict[str, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SaturatedUpstream:
+    app: Starlette
+    all_blockers_arrived: Event
+    probe_arrived: Event
+    release_blockers: Event
+
+
+@dataclass(frozen=True)
+class SaturatedRequestResults:
+    probe_reached_upstream: bool
+    blocker_responses: list[httpx.Response]
+    probe_response: httpx.Response
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("", 0))
@@ -113,6 +131,54 @@ def _build_upstream_app(seen: UpstreamObservation) -> Starlette:
     app = Starlette(routes=[Route("/{path:path}", serve, methods=["GET", "POST"])])
     app.router.redirect_slashes = False
     return app
+
+
+def _build_saturated_upstream_app(blocking_requests: int) -> SaturatedUpstream:
+    """Build an upstream that holds ``blocking_requests`` while exposing a probe."""
+    arrived = 0
+    all_blockers_arrived = Event()
+    probe_arrived = Event()
+    release_blockers = Event()
+
+    async def block(_request: Request) -> Response:
+        nonlocal arrived
+        arrived += 1
+        if arrived == blocking_requests:
+            all_blockers_arrived.set()
+        await asyncio.to_thread(release_blockers.wait)
+        return JSONResponse({"status": "released"})
+
+    async def probe(_request: Request) -> Response:
+        probe_arrived.set()
+        return JSONResponse({"status": "reached"})
+
+    return SaturatedUpstream(
+        app=Starlette(
+            routes=[
+                Route("/proxy/{endpoint_name:str}/block", block),
+                Route("/proxy/{endpoint_name:str}/probe", probe),
+            ]
+        ),
+        all_blockers_arrived=all_blockers_arrived,
+        probe_arrived=probe_arrived,
+        release_blockers=release_blockers,
+    )
+
+
+def _build_federated_forwarder(proxy: FederatedEndpointProxy) -> Starlette:
+    async def forward(request: Request) -> Response:
+        return await proxy.dispatch(
+            request,
+            peer_id=PEER_ID,
+            encoded_name=ENDPOINT_PROXY_NAME,
+            sub_path=request.path_params["path"],
+            proxy_prefix=f"/proxy/{ENDPOINT_PROXY_NAME}",
+        )
+
+    return Starlette(
+        routes=[Route("/{path:path}", forward)],
+        lifespan=on_shutdown(proxy.close),
+    )
 
 
 def _federation_auth(requester: str = PARENT_ID):
@@ -231,3 +297,41 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")
         assert gone.status_code == 404
+
+
+def test_federated_proxy_does_not_queue_probe_behind_100_long_requests(threads: ThreadContainer) -> None:
+    blocking_requests = 100
+    upstream = _build_saturated_upstream_app(blocking_requests)
+    upstream_url = _serve(threads, upstream.app, name="saturated-peer")
+    proxy = FederatedEndpointProxy(
+        lambda peer_id: upstream_url if peer_id == PEER_ID else None,
+        lambda: "federation-token",
+        timeout_seconds=5.0,
+    )
+    parent_url = _serve(threads, _build_federated_forwarder(proxy), name="federated-forwarder")
+
+    async def run_requests() -> SaturatedRequestResults:
+        limits = httpx.Limits(max_connections=None)
+        async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
+            blockers = [asyncio.create_task(client.get(f"{parent_url}/block")) for _ in range(blocking_requests)]
+            blockers_reached_upstream = await asyncio.to_thread(upstream.all_blockers_arrived.wait, 5.0)
+            if not blockers_reached_upstream:
+                upstream.release_blockers.set()
+                await asyncio.gather(*blockers, return_exceptions=True)
+                raise AssertionError("blocking requests did not reach the federated upstream")
+
+            probe = asyncio.create_task(client.get(f"{parent_url}/probe"))
+            probe_reached_upstream = await asyncio.to_thread(upstream.probe_arrived.wait, 2.0)
+            upstream.release_blockers.set()
+            blocker_responses = await asyncio.gather(*blockers)
+            return SaturatedRequestResults(
+                probe_reached_upstream=probe_reached_upstream,
+                blocker_responses=blocker_responses,
+                probe_response=await probe,
+            )
+
+    results = asyncio.run(run_requests())
+
+    assert results.probe_reached_upstream
+    assert all(response.status_code == 200 for response in results.blocker_responses)
+    assert results.probe_response.status_code == 200

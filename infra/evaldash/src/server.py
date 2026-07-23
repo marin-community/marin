@@ -56,8 +56,10 @@ from results_db import (
     connect_engine,
     ensure_schema,
     eval_runs,
+    fetch_archived_models,
     fetch_runs,
     resolve_db_config,
+    set_model_archived,
     upsert_record,
 )
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -167,13 +169,59 @@ class RecordStore:
             row["jobs"] = dict(record.jobs) if record else {}
         return rows
 
-    def matrix(self) -> dict:
+    def matrix(self, include_archived: bool = False) -> dict:
+        """The model x eval matrix over the snapshot. Archived models are dropped unless requested;
+        when included, their rows carry ``archived: true`` so the UI can style them apart."""
         records, _by_id = self._snapshot()
-        return build_matrix(records)
+        archived = fetch_archived_models(self._engine)
+        if not include_archived:
+            records = [record for record in records if record.model.name not in archived]
+        return build_matrix(records, frozenset(archived))
 
     def meta(self) -> dict:
         records, _by_id = self._snapshot()
-        return build_meta(records)
+        return build_meta(records, frozenset(fetch_archived_models(self._engine)))
+
+    def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
+        set_model_archived(self._engine, model_name, archived, updated_by)
+
+    def groups(
+        self, *, model: str | None = None, user: str | None = None, limit: int = DEFAULT_RUNS_LIMIT
+    ) -> list[dict]:
+        """Runs collapsed into launches (one per ``group_id``), newest first.
+
+        Each launch carries its model, version label, description, and a per-eval member list (with
+        each member's headline score) so the runs view can show one row per launch and expand it to
+        the individual evals it ran.
+        """
+        records, _by_id = self._snapshot()
+        by_group: dict[str, list[EvalRunRecord]] = {}
+        for record in records:
+            if (model and record.model.name != model) or (user and record.user != user):
+                continue
+            by_group.setdefault(record.group_id, []).append(record)
+        groups: list[dict] = []
+        for group_id, members in by_group.items():
+            ordered = sorted(members, key=lambda record: record.created_at or "")
+            newest = ordered[-1]
+            statuses = {record.status.value for record in members}
+            groups.append(
+                {
+                    "group_id": group_id,
+                    "model_name": newest.model.name,
+                    "version": newest.version,
+                    "description": newest.description,
+                    "user_name": newest.user,
+                    "accelerator": newest.hardware.accelerator,
+                    "created_at": newest.created_at,
+                    "status": _status_rollup(statuses),
+                    "n_evals": len(members),
+                    "n_succeeded": sum(1 for record in members if record.status.value == "succeeded"),
+                    "evals": [_group_member(record) for record in ordered],
+                }
+            )
+        groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
+        return groups[:limit]
 
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
@@ -408,6 +456,29 @@ def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
     return {"store": asdict(store.store_info()), "ingest": ingestor.status()}
 
 
+def _status_rollup(statuses: set[str]) -> str:
+    """Collapse a launch's per-eval statuses into one: all-succeeded, a single shared failure, or mixed."""
+    if statuses == {"succeeded"}:
+        return "succeeded"
+    if "succeeded" not in statuses:
+        return next(iter(statuses)) if len(statuses) == 1 else "failed"
+    return "mixed"
+
+
+def _group_member(record: EvalRunRecord) -> dict:
+    """One eval within a launch: its identity, status, and headline score for the expanded group row."""
+    score = record_score(record)
+    return {
+        "run_id": record.run_id,
+        "eval_name": record.evaluation.name,
+        "status": record.status.value,
+        "created_at": record.created_at,
+        "value": score.value if score else None,
+        "metric": score.metric if score else None,
+        "stderr": score.stderr if score else None,
+    }
+
+
 def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starlette:
     """Build the Starlette app over a store, the built SPA directory, and the cluster gateway."""
     ingestor = Ingestor(store, RECORDS_PREFIXES, INGEST_INTERVAL_SECONDS)
@@ -510,8 +581,26 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         points = await asyncio.to_thread(store.history, model, task)
         return JSONResponse({"model": model, "task": task, "points": points})
 
-    async def api_matrix(_request: Request) -> JSONResponse:
-        return JSONResponse(store.matrix())
+    async def api_matrix(request: Request) -> JSONResponse:
+        include_archived = request.query_params.get("include_archived") in ("1", "true")
+        return JSONResponse(await asyncio.to_thread(store.matrix, include_archived))
+
+    async def api_groups(request: Request) -> JSONResponse:
+        params = request.query_params
+        groups = await asyncio.to_thread(
+            store.groups,
+            model=params.get("model") or None,
+            user=params.get("user") or None,
+            limit=_parse_limit(params.get("limit")),
+        )
+        return JSONResponse(groups)
+
+    async def api_model_archive(request: Request) -> JSONResponse:
+        model_name = request.path_params["model_name"]
+        body = await request.json()
+        archived = bool(body.get("archived", True))
+        await asyncio.to_thread(store.set_model_archived, model_name, archived, _current_user(request))
+        return JSONResponse({"model_name": model_name, "archived": archived})
 
     async def api_meta(request: Request) -> JSONResponse:
         meta = store.meta()
@@ -532,6 +621,8 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
     routes = [
         Route("/healthz", healthz),
         Route("/api/runs", api_runs),
+        Route("/api/groups", api_groups),
+        Route("/api/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
         Route("/api/runs/{run_id:str}/jobs", api_run_jobs),
         Route("/api/runs/{run_id:str}/logs", api_run_logs),
         Route("/api/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),

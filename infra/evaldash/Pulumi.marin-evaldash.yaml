@@ -13,4 +13,5 @@ config:
   # in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
   marin-evaldash:custom_domain: evaldash.oa.dev
   marin-evaldash:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
-encryptionsalt: v1:AONWc+XQ/do=:v1:RRUP8bNePz9TVCoI:Aoz4KiiUDpsxnBGLgCjduulTE0kevA==
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6alqF2aXPeik2V9Y87N0Vt4yJbJ0Kt9y5Kqtt29xg4cSSQCdtF6iA67MRjUX4DFR6u8/bus3nzUsa9UUqSt7ViMi4UHjk0UtyF7yTBRJQeDN5dL8B5PPt9z1Hbv1gYUHIZQxPmk39h514Ac=

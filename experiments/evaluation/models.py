@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from marin.inference.serving_backend import CONCAT_CHAT_TEMPLATE
+from marin.inference.backend import CONCAT_CHAT_TEMPLATE
 
 from experiments.evals.evalchemy.serve_and_eval import ServeBackend
 
@@ -38,7 +38,9 @@ class EvalModelConfig:
     gpu_only: bool = False
     vllm_extra_args: tuple[str, ...] = ()
     tensor_parallel_size: int | None = None
-    max_model_len: int | None = None
+    max_gen_toks: int | None = None
+    """Per-model override of a suite's generation budget. A verbose reasoning model needs a longer
+    budget than the suite default or its chain truncates before the final answer (scoring it wrong)."""
     tokenizer: str | None = None
     fixed_gpu: tuple[str, int] | None = None
     target_cluster: str | None = None
@@ -81,12 +83,34 @@ def _snowball(name: str, location: str, chat_template: str | None = None) -> Eva
     )
 
 
+def _base_hf(name: str, location: str, revision: str, hbm_gb: int) -> EvalModelConfig:
+    """A base (non-chat) HF model, pinned to an immutable revision.
+
+    ``apply_chat_template=False`` (base models ship no chat template), so these run the NLP
+    (lm-eval) suite, not the chat benchmarks. The revision is pinned through ``vllm serve
+    --revision`` so results are reproducible against a fixed checkpoint rather than the HF branch head.
+    """
+    return EvalModelConfig(
+        name=name,
+        location=location,
+        hbm_gb=hbm_gb,
+        apply_chat_template=False,
+        vllm_extra_args=("--revision", revision),
+    )
+
+
 MODELS: dict[str, EvalModelConfig] = {
+    # Base reference models, pinned to the revisions used elsewhere in experiments/models.py.
+    "llama-3.1-8b-base": _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
+    "olmo-2-7b-base": _base_hf("olmo-2-7b-base", "allenai/OLMo-2-1124-7B", "7df9a82", 18),
+    # Qwen3.5-9B is a verbose hybrid-GDN reasoning model; its chains exceed the 8192-token chat
+    # default and truncate before the boxed answer (OlympiadBench scored 0), so give it a 32k budget.
     "qwen3.5-9b": EvalModelConfig(
         name="qwen3.5-9b",
         location="Qwen/Qwen3.5-9B",
         hbm_gb=24,
         apply_chat_template=True,
+        max_gen_toks=32768,
     ),
     "qwen3-8b": EvalModelConfig(
         name="qwen3-8b",
@@ -118,7 +142,7 @@ MODELS: dict[str, EvalModelConfig] = {
     # concat template: a message list rendered as the raw text a base model expects.
     "snowball": _snowball(
         "snowball",
-        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/",
+        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/",
         chat_template=CONCAT_CHAT_TEMPLATE,
     ),
     # The stage-2 (thinking) SFT of the same checkpoint. Its export ships a chat_template.jinja that

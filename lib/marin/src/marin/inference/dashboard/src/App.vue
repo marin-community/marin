@@ -138,9 +138,10 @@ function clearHistory() {
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
+          :streaming="info ? info.streaming : true"
           @persist="persist"
         />
-        <CompletionView v-else :params="params" :model="model" />
+        <CompletionView v-else :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
   </div>

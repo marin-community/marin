@@ -37,11 +37,15 @@ export interface MatrixCell {
 
 export interface MatrixRow {
   model: string
+  version: string | null
+  archived: boolean
   cells: Record<string, MatrixCell>
 }
 
 export interface LeaderboardEntry {
   model: string
+  version: string | null
+  archived: boolean
   score: number | null
   stderr: number | null
   covered: number
@@ -54,9 +58,16 @@ export interface Matrix {
   leaderboard: LeaderboardEntry[]
 }
 
+export interface EvalSuite {
+  suite: string
+  evals: string[]
+}
+
 export interface Meta {
   models: string[]
   evals: string[]
+  suites: EvalSuite[]
+  archived_models: string[]
   users: string[]
   statuses: string[]
   current_user: string | null
@@ -95,6 +106,8 @@ export interface EvalTask {
 export interface EvalRecord {
   run_id: string
   group_id: string
+  version: string | null
+  description: string | null
   created_at: string
   user: string
   model: { name: string; location: string; backend: string }
@@ -265,4 +278,30 @@ export interface GroupSibling {
 export interface GroupResponse {
   group_id: string | null
   siblings: GroupSibling[]
+}
+
+// One eval within a launch (a serve group), with its headline score.
+export interface GroupMember {
+  run_id: string
+  eval_name: string
+  status: string
+  created_at: string
+  value: number | null
+  metric: string | null
+  stderr: number | null
+}
+
+// A launch: all evals run against one model by one serve group, newest first (/api/groups).
+export interface LaunchGroup {
+  group_id: string
+  model_name: string
+  version: string | null
+  description: string | null
+  user_name: string
+  accelerator: string | null
+  created_at: string
+  status: 'succeeded' | 'failed' | 'infra_failed' | 'mixed'
+  n_evals: number
+  n_succeeded: number
+  evals: GroupMember[]
 }

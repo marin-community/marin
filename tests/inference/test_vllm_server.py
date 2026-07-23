@@ -12,7 +12,11 @@ import subprocess
 import sys
 import time
 
-from marin.inference.vllm_server import VllmServerHandle, _LogPump, _native_logs_tail
+from marin.inference.vllm_server import VllmServerHandle, _engine_kwargs_to_cli_args, _LogPump, _native_logs_tail
+
+
+def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
+    assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

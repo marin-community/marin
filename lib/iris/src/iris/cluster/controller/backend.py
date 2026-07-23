@@ -154,14 +154,17 @@ class TaskTarget:
     """Addresses one task attempt for on-demand RPCs (status / profile / exec).
 
     Worker-daemon backends route by :attr:`address`; direct backends route by
-    :attr:`task_id` / :attr:`attempt_id`. Each backend reads the fields it needs;
-    the controller fills them from the DB once at the RPC boundary.
+    :attr:`task_id` / :attr:`attempt_id` / :attr:`attempt_uid`. Each backend reads
+    the fields it needs; the controller fills them from the DB once at the RPC
+    boundary. ``attempt_uid`` is the incarnation key the K8s backend needs to
+    rebuild the pod name (which embeds it); empty for worker-daemon targets.
     """
 
     task_id: str
     attempt_id: int
     worker_id: WorkerId | None
     address: str | None
+    attempt_uid: str = ""
 
 
 @dataclass(frozen=True)

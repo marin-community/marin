@@ -61,6 +61,19 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
+from iris.cluster.platforms.k8s.nodepool_manifests import (
+    compute_target_racks,
+    nodepool_manifest,
+    nodepool_name,
+    nodepool_node_labels,
+)
+from iris.cluster.platforms.k8s.rbac_manifests import (
+    cluster_role_binding_manifest,
+    cluster_role_manifest,
+    cluster_role_name,
+    namespace_manifest,
+    service_account_manifest,
+)
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import Labels, find_free_port
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
@@ -199,18 +212,29 @@ class ControllerTarget:
             time.sleep(5)
         _run(self._kc("create", "namespace", self.namespace), check=False, quiet=True)
 
-    def deploy_controller(self, *, skip_nodepools: bool, local_image: bool, node_selector: dict[str, str]) -> str:
-        """Reconcile RBAC, ConfigMap, (NodePools), LocalQueue, Deployment, Service.
+    def deploy_controller(self, *, local_image: bool, node_selector: dict[str, str]) -> str:
+        """Reconcile RBAC, ConfigMap, LocalQueue, Deployment, Service.
 
-        On kind we skip ensure_nodepools (no CoreWeave NodePool CRD) and use a
-        kind-loaded image (imagePullPolicy IfNotPresent, no scale-group nodeSelector).
+        No CoreWeave NodePool CRD on kind, so this never provisions NodePools — unlike
+        CoreweaveTarget.deploy(), which goes through the real start_controller() (and its
+        verify_prerequisites) against the real CKS cluster instead. Manifests come from
+        the shared iris.cluster.platforms.k8s.rbac_manifests builders, the same ones
+        infra/pulumi's Pulumi program uses, so this never drifts from production RBAC. Uses
+        a kind-loaded image (imagePullPolicy IfNotPresent, no scale-group nodeSelector).
         """
         cfg = self.cfg
         c = self.controller
         port = cfg.controller.coreweave.port or 10000
         svc = cfg.controller.coreweave.service_name or "iris-controller-svc"
 
-        c.ensure_rbac()
+        role_name = cluster_role_name(self.namespace)
+        for manifest in (
+            namespace_manifest(self.namespace),
+            service_account_manifest(self.namespace, "iris-controller"),
+            cluster_role_manifest(role_name),
+            cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+        ):
+            self.kubectl.apply_json(manifest)
         cm = c._config_json_for_configmap(cfg)
         self.kubectl.apply_json(
             {
@@ -220,8 +244,6 @@ class ControllerTarget:
                 "data": {"config.json": cm},
             }
         )
-        if not skip_nodepools:
-            c.ensure_nodepools(cfg)
         c.ensure_kueue_queues(cfg)
 
         # fresh=False: a controller restart must NOT wipe the SQLite DB, or an
@@ -345,7 +367,7 @@ class KindTarget(ControllerTarget):
         logger.info("labeled %d kind worker node(s)", len(nodes))
 
     def deploy(self) -> str:
-        return self.deploy_controller(skip_nodepools=True, local_image=True, node_selector={})
+        return self.deploy_controller(local_image=True, node_selector={})
 
     def job_resources(self) -> tuple[ResourceSpec, list[str]]:
         # kind has no GPUs: CPU-shaped gang, jax CPU via the `cpu` extra.
@@ -384,13 +406,52 @@ class CoreweaveTarget(ControllerTarget):
         if out and self.namespace in ("iris-ci", "iris"):
             raise RuntimeError(f"refusing to run in shared namespace {self.namespace!r}; use a dedicated namespace")
 
+    def _provision_prerequisites(self) -> None:
+        """Apply RBAC + NodePools — the prerequisites infra/pulumi's Pulumi program provisions
+        for a real Iris cluster, ahead of `start_controller()`'s `verify_prerequisites`
+        check (spec.md §4). Built from the same shared manifest builders Pulumi uses.
+        The Kueue ClusterQueue/ResourceFlavor are admin-provisioned on the shared CKS
+        cluster already, so nothing to seed there.
+        """
+        role_name = cluster_role_name(self.namespace)
+        for manifest in (
+            service_account_manifest(self.namespace, "iris-controller"),
+            cluster_role_manifest(role_name),
+            cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+        ):
+            self.kubectl.apply_json(manifest)
+
+        for name, sg in self.cfg.scale_groups.items():
+            cw = sg.slice_template.coreweave if sg.slice_template is not None else None
+            if cw is None or not cw.instance_type:
+                continue
+            num_vms = max(1, sg.slice_template.num_vms)
+            min_nodes = sg.buffer_slices * num_vms
+            max_nodes = sg.max_slices * num_vms
+            pool_name = nodepool_name(self.label_prefix, name)
+            self.kubectl.apply_json(
+                nodepool_manifest(
+                    pool_name,
+                    cw.instance_type,
+                    node_labels=nodepool_node_labels(self.label_prefix, name, min_nodes=min_nodes),
+                    min_nodes=min_nodes,
+                    max_nodes=max_nodes,
+                    # Seeded to 0 (or min_nodes); _set_target_nodes patches the real desired
+                    # count for this run right after start_controller returns. Ignored for a
+                    # rack-based pool (target_racks set instead).
+                    target_nodes=min_nodes,
+                    target_racks=compute_target_racks(cw.instance_type, max_nodes, name),
+                )
+            )
+
     def deploy(self) -> str:
-        # Use the canonical production bring-up: it provisions the S3 credentials
-        # Secret, ConfigMap, NodePools (CPU controller pool + H100 gang pool),
-        # Kueue queues, Deployment (pinned to the controller's CPU scale group via
-        # nodeSelector), Service, and PDB, then waits for readiness. The kind path
-        # can't use this (no NodePool CRD, kind-loaded image), but on real CKS this
-        # is exactly what `iris cluster up` runs.
+        # Use the canonical production bring-up: it provisions the ConfigMap, S3
+        # credentials Secret, Kueue queues, Deployment (pinned to the controller's CPU
+        # scale group via nodeSelector), Service, and PDB, then waits for readiness. The
+        # kind path can't use this (no NodePool CRD, kind-loaded image), but on real CKS
+        # this is exactly what `iris cluster up` runs — RBAC/NodePools are ahead of it,
+        # matching how infra/pulumi's Pulumi program provisions them for a real cluster.
+        self._provision_prerequisites()
         addr = self.controller.start_controller(self.cfg)
         self._set_target_nodes(self.args.replicas)
         return addr
@@ -403,7 +464,7 @@ class CoreweaveTarget(ControllerTarget):
         for name, sg in self.cfg.scale_groups.items():
             if sg.resources.device_type != AcceleratorType.GPU:
                 continue
-            pool = self.controller._nodepool_name(name)
+            pool = nodepool_name(self.label_prefix, name)
             logger.info("setting NodePool %s targetNodes=%d", pool, n)
             _run(self._kc("patch", "nodepools.compute.coreweave.com", pool, "--type=merge", "-p", patch))
 
@@ -430,7 +491,7 @@ class CoreweaveTarget(ControllerTarget):
         # makes deletion unconditional regardless of node state.
         self._delete_namespace()
         for sg in self.cfg.scale_groups:
-            pool = self.controller._nodepool_name(sg)
+            pool = nodepool_name(self.label_prefix, sg)
             logger.info("deleting NodePool %s (async)", pool)
             _run(
                 self._kc("delete", "nodepools.compute.coreweave.com", pool, "--ignore-not-found", "--wait=false"),

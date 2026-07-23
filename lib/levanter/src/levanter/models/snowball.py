@@ -77,6 +77,63 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
+# A published config.json carries exactly one spelling per field. ``from_hf_config`` deliberately
+# accepts more spellings than the exporter may write, so the two lists are not interchangeable:
+# reads are tolerant (old artifacts keep loading), writes are strict. A config carrying both
+# spellings of a field can load as two different models, since backends disagree on which wins.
+#
+# (published name, config attribute) for every field that has more than one accepted spelling.
+GRUG_MOE_CANONICAL_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("hidden_size", "hidden_dim"),
+    ("num_hidden_layers", "num_layers"),
+    ("num_attention_heads", "num_heads"),
+    ("num_key_value_heads", "num_kv_heads"),
+    ("max_position_embeddings", "max_seq_len"),
+    ("rms_norm_eps", "layer_norm_eps"),
+    ("initializer_range", "initializer_std"),
+    ("num_experts", "num_experts"),
+    ("num_experts_per_tok", "num_experts_per_token"),
+    ("moe_intermediate_size", "intermediate_dim"),
+    ("shared_expert_intermediate_size", "shared_expert_intermediate_dim"),
+)
+
+# Spellings the exporter must never emit, though from_hf_config still reads them.
+GRUG_MOE_BANNED_CONFIG_ALIASES = frozenset(
+    {
+        "attention_head_dim",
+        "hidden_dim",
+        "intermediate_dim",
+        "intermediate_size",
+        "shared_expert_intermediate_dim",
+        "num_local_experts",
+        "num_experts_per_token",
+        "num_layers",
+        "num_heads",
+        "num_kv_heads",
+        "max_seq_len",
+        "layer_norm_eps",
+        "initializer_std",
+    }
+)
+
+
+def validate_single_name_config(serialized: dict, config: Any) -> None:
+    """Check a serialized config.json against the single-name contract.
+
+    Each canonical name must be present with the value held by the corresponding attribute of
+    ``config``, and no banned alias may appear. ``config`` may be any object exposing the grug
+    attribute names (``SnowballConfig`` and the experiment ``GrugModelConfig`` both do).
+    """
+    for published, attribute in GRUG_MOE_CANONICAL_CONFIG_FIELDS:
+        expected = getattr(config, attribute)
+        actual = serialized.get(published)
+        if actual != expected:
+            raise ValueError(f"config.json {published}={actual!r}, expected {expected!r}")
+    leaked = GRUG_MOE_BANNED_CONFIG_ALIASES & serialized.keys()
+    if leaked:
+        raise ValueError(f"banned config aliases in config.json: {sorted(leaked)}")
+
+
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
@@ -222,39 +279,33 @@ class SnowballConfig(HFCompatConfig):
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> GrugMoeHfConfig:
+        # One name per field: core fields take the universal transformers spelling, MoE fields the
+        # most common public spelling, and grug-specific extras keep their bare names. Emitting a
+        # second spelling for any of these is what GRUG_MOE_BANNED_CONFIG_ALIASES forbids.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
-            "hidden_dim": self.hidden_dim,
+            # core — universal transformers names
             "hidden_size": self.hidden_dim,
-            "intermediate_dim": self.intermediate_dim,
-            "intermediate_size": self.intermediate_dim,
-            "moe_intermediate_size": self.intermediate_dim,
-            "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
-            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
-            "num_experts": self.num_experts,
-            "num_local_experts": self.num_experts,
-            "num_experts_per_token": self.num_experts_per_token,
-            "num_experts_per_tok": self.num_experts_per_token,
-            "num_layers": self.num_layers,
             "num_hidden_layers": self.num_layers,
-            "num_heads": self.num_heads,
             "num_attention_heads": self.num_heads,
-            "num_kv_heads": self.num_kv_heads,
             "num_key_value_heads": self.num_kv_heads,
             "head_dim": self.inferred_head_dim,
-            "max_seq_len": self.max_seq_len,
             "max_position_embeddings": self.max_seq_len,
             "sliding_window": self.sliding_window,
-            "layer_norm_eps": self.layer_norm_eps,
             "rms_norm_eps": self.layer_norm_eps,
-            "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
+            "rope_theta": self.rope.theta,
+            "tie_word_embeddings": False,
+            # MoE — most common public spelling per field
+            "num_experts": self.num_experts,
+            "num_experts_per_tok": self.num_experts_per_token,
+            "moe_intermediate_size": self.intermediate_dim,
+            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": GRUG_MOE_ATTENTION_MODE,
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
-            "rope_theta": self.rope.theta,
-            "tie_word_embeddings": False,
         }
         if config_overrides is not None:
             config.update(config_overrides)

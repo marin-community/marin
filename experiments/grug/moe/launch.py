@@ -93,7 +93,7 @@ class GrugMoeLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     processes_per_task: int = 1
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
-    (multi-controller) via the iris.runtime.multigpu supervisor; 1 keeps the
+    (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 keeps the
     single-process-per-node model."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves

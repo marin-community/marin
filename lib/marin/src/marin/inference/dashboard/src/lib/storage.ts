@@ -1,7 +1,7 @@
 import type { Conversation, SamplingParams } from './types'
 
-const CONVERSATIONS_KEY = 'marin-quick-serve:conversations:v1'
-const PARAMS_KEY = 'marin-quick-serve:params:v1'
+const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
+const PARAMS_KEY = 'marin-serve:params:v1'
 const MAX_CONVERSATIONS = 100
 
 export const DEFAULT_PARAMS: SamplingParams = { temperature: 0.7, maxTokens: 1024, topP: 1.0 }

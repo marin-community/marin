@@ -41,6 +41,7 @@ class EvalStepConfig:
     limit: int | None
     records_prefix: str
     accelerator: str | None
+    version: str
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> None:
@@ -53,6 +54,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
         limit=config.limit,
         records_prefix=config.records_prefix,
         cluster="ambient",
+        version=config.version,
     )
     run_inline(spec)
 
@@ -78,6 +80,7 @@ def eval_step(
             limit=limit,
             records_prefix=ctx.output_path,
             accelerator=ctx.runtime_arg("accelerator"),
+            version=version,
         )
 
     return ArtifactStep(

@@ -6,28 +6,16 @@
 Centralizes the worker bootstrap script template and generation logic. Worker
 bootstrap handles Docker setup and container startup. TPU metadata discovery
 is performed by the worker environment probe at runtime. The shared registry
-helpers (zone_to_multi_region, rewrite_ghcr_to_ar_remote, render_template)
-live here so controller bootstrap can reuse them.
+helpers (registry_host, rewrite_image_to_mirror, render_template) live here so
+controller bootstrap can reuse them.
 """
 
 import json
 import re
+from collections.abc import Mapping
 
 from iris.cluster.config import WorkerConfig
 from iris.cluster.runtime.docker import EPHEMERAL_PORT_RANGE, RESERVED_HOST_PORTS
-
-# GCP multi-region locations used for AR remote repos that proxy GHCR.
-# Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
-# multi-region location. GCP VMs pull from their continent's cache; egress
-# within a multi-region is free.
-_ZONE_PREFIX_TO_MULTI_REGION = {
-    "us": "us",
-    "europe": "europe",
-}
-
-_UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
-
-GHCR_MIRROR_REPO = "ghcr-mirror"
 
 # gVisor release the worker installs so the GVISOR container profile can run task
 # containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
@@ -36,38 +24,96 @@ GHCR_MIRROR_REPO = "ghcr-mirror"
 RUNSC_VERSION = "20260714.0"
 
 
-def zone_to_multi_region(zone: str) -> str | None:
-    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
+# Canonical ``registry_mirrors`` key for Docker Hub, the implicit default registry.
+DOCKER_HUB = "docker.io"
 
-    Returns None for unknown prefixes. Raises ValueError for zones in regions
-    where AR remote repos are not yet provisioned (asia, me).
+# Host names that all denote Docker Hub.
+_DOCKER_HUB_HOSTS = frozenset({DOCKER_HUB, "index.docker.io", "registry-1.docker.io"})
+
+
+def registry_host(image_tag: str) -> str | None:
+    """Return the registry host named by a container image reference, or None if it names none.
+
+    Applies Docker's default-registry rule: the first ``/``-segment is the
+    registry host only when it looks like one — it contains a ``.`` or ``:``
+    (domain or port) or equals ``localhost``. A reference with no such segment
+    (``ubuntu:24.04``, ``library/python``, ``bitnami/redis``) names no registry and
+    defaults to Docker Hub.
     """
-    prefix = zone.split("-", 1)[0]
-    if prefix in _UNSUPPORTED_ZONE_PREFIXES:
-        raise ValueError(
-            f"Zone {zone!r} is in region prefix {prefix!r} which has no AR remote repo provisioned. "
-            f"Supported prefixes: {sorted(_ZONE_PREFIX_TO_MULTI_REGION)}"
-        )
-    return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
+    if "/" not in image_tag:
+        return None
+    first_segment = image_tag.split("/", 1)[0]
+    if "." in first_segment or ":" in first_segment or first_segment == "localhost":
+        return first_segment
+    return None
 
 
-def rewrite_ghcr_to_ar_remote(
+def docker_hub_repo_path(image_tag: str) -> str | None:
+    """Return the Docker Hub repository path for *image_tag*, or None if it names another registry.
+
+    Official single-name images gain the implicit ``library/`` namespace, matching
+    how Docker Hub stores them:
+
+        ubuntu:24.04                → library/ubuntu:24.04
+        bitnami/redis:latest        → bitnami/redis:latest
+        docker.io/library/python:3  → library/python:3
+        gcr.io/proj/img:v1          → None (another registry)
+        us-docker.pkg.dev/p/r/i:v1  → None (Artifact Registry)
+    """
+    host = registry_host(image_tag)
+    if host is None:
+        # No registry host: a Docker Hub reference. A single-name image (no '/')
+        # gains the implicit 'library/' namespace.
+        return image_tag if "/" in image_tag else f"library/{image_tag}"
+    if host in _DOCKER_HUB_HOSTS:
+        # Explicit Docker Hub host: strip it, keeping (and namespacing) the repo path.
+        remainder = image_tag.split("/", 1)[1]
+        return remainder if "/" in remainder else f"library/{remainder}"
+    return None
+
+
+def upstream_registry(image_tag: str) -> str:
+    """Return the canonical registry key an image reference pulls from.
+
+    Docker Hub aliases (no host, ``docker.io``, ``index.docker.io``,
+    ``registry-1.docker.io``) all collapse to ``docker.io``; any other host is
+    returned as-is. The result indexes ``registry_mirrors``.
+    """
+    host = registry_host(image_tag)
+    # Exact set membership, never a substring/prefix check: a crafted tag cannot
+    # smuggle a trusted host name into an untrusted position.
+    if host is None or host in _DOCKER_HUB_HOSTS:
+        return DOCKER_HUB
+    return host
+
+
+def rewrite_image_to_mirror(
     image_tag: str,
-    multi_region: str,
-    project: str,
-    mirror_repo: str = GHCR_MIRROR_REPO,
+    zone: str,
+    registry_mirrors: Mapping[str, Mapping[str, str]],
 ) -> str:
-    """Rewrite a ghcr.io image tag to pull from an AR remote repo.
+    """Rewrite an image reference to the pull-through mirror for its registry and *zone*.
 
-    ghcr.io/marin-community/iris-worker:v1
-    → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
+    *registry_mirrors* maps upstream registry → zone prefix (the zone's leading
+    dash-separated segment) → mirror repo prefix; see
+    ``GcpPlatformConfig.registry_mirrors``. With::
 
-    Non-GHCR images pass through unchanged.
+        {"docker.io": {"us": "us-docker.pkg.dev/hai-gcp-models/docker-mirror"}}
+
+    ``ubuntu:24.04`` in ``us-central1-a`` becomes
+    ``us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04``.
+    Registries and zone prefixes absent from the map pass through unchanged.
     """
-    if not image_tag.startswith("ghcr.io/"):
+    upstream = upstream_registry(image_tag)
+    mirror = registry_mirrors.get(upstream, {}).get(zone.split("-", 1)[0])
+    if mirror is None:
         return image_tag
-    path = image_tag.removeprefix("ghcr.io/")
-    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
+    if upstream == DOCKER_HUB:
+        path = docker_hub_repo_path(image_tag)
+        assert path is not None  # upstream_registry classified this as a Docker Hub reference
+    else:
+        path = image_tag.split("/", 1)[1]
+    return f"{mirror}/{path}"
 
 
 def render_template(template: str, **variables: str | int) -> str:

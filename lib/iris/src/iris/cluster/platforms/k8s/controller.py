@@ -3,8 +3,10 @@
 
 """K8sControllerProvider: controller lifecycle for Kubernetes (CoreWeave CKS) clusters.
 
-Manages the controller Deployment, Service, ConfigMap, RBAC, NodePools, and
-S3 credential Secrets. Worker pods and node scaling are handled by K8sTaskProvider.
+Manages the controller Deployment, Service, ConfigMap, and S3 credential Secrets.
+The Namespace, RBAC, and NodePools are provisioned by `infra/pulumi`'s Pulumi program
+(spec.md §4) — `verify_prerequisites` only checks they exist, never creates them.
+Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
 import base64
@@ -14,7 +16,6 @@ import os
 import threading
 import time
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf
@@ -30,7 +31,9 @@ from iris.cluster.config import (
 )
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
+from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
+from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
+from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_SYSTEM,
@@ -108,6 +111,25 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 # ============================================================================
 # Controller Deployment manifest builder
 # ============================================================================
+
+
+class PrerequisitesNotProvisionedError(InfraError):
+    """Raised by verify_prerequisites() when one or more IaC-provisioned prerequisites are absent.
+
+    Message enumerates every missing object and prints the `pulumi up` remediation.
+    """
+
+
+def _ingress_class_from_provisioning(config: IrisClusterConfig) -> str | None:
+    """Best-effort read of provisioning.coreweave.ingress.ingress_class.
+
+    `config.provisioning` is an opaque dict Iris never validates (iac.config owns the typed
+    schema) — a missing or malformed section just skips this one check rather than erroring.
+    """
+    coreweave = (config.provisioning or {}).get("coreweave") or {}
+    ingress = coreweave.get("ingress") or {}
+    ingress_class = ingress.get("ingress_class")
+    return ingress_class if isinstance(ingress_class, str) else None
 
 
 def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
@@ -328,7 +350,6 @@ class K8sControllerProvider:
             )
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="coreweave")
         self._s3_enabled = False
 
     @property
@@ -378,7 +399,7 @@ class K8sControllerProvider:
         local_state_hostpath = bool(config.storage.local_state_dir)
         state_mount_path = config.storage.local_state_dir or _DEFAULT_STATE_MOUNT_PATH
 
-        self.ensure_rbac()
+        self.verify_prerequisites(config)
 
         # Build the cluster default env and project it into the controller and
         # every task via the iris-task-env Secret + envFrom. Resolution happens
@@ -406,7 +427,6 @@ class K8sControllerProvider:
         self._kubectl.apply_json(configmap_manifest)
         logger.info("ConfigMap iris-cluster-config applied")
 
-        self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
         if local_state_hostpath:
@@ -530,10 +550,10 @@ class K8sControllerProvider:
         if _projects_controller_env_secret(config):
             self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_ENV_SECRET_NAME)
 
-        cluster_role_name = self.rbac_cluster_role_name()
-        self._kubectl.delete(K8sResource.CLUSTER_ROLE_BINDINGS, cluster_role_name)
-        self._kubectl.delete(K8sResource.CLUSTER_ROLES, cluster_role_name)
-        logger.info("Controller resources deleted (including RBAC %s)", cluster_role_name)
+        # RBAC (ClusterRole/ClusterRoleBinding) is IaC-provisioned (spec.md §4), not deleted
+        # here: verify_prerequisites hard-fails the next start_controller if it's missing, so
+        # deleting it on stop would break a plain `iris cluster stop && iris cluster start`.
+        logger.info("Controller resources deleted")
 
     def stop_all(
         self,
@@ -598,108 +618,59 @@ class K8sControllerProvider:
     def shutdown(self) -> None:
         self._shutdown_event.set()
 
-    # -- RBAC / Namespace Prerequisites ----------------------------------------
+    # -- IaC-provisioned prerequisites -------------------------------------------
 
     def rbac_cluster_role_name(self) -> str:
         """Namespace-qualified ClusterRole name to avoid collisions across Iris instances."""
-        return f"iris-controller-{self._namespace}"
+        return cluster_role_name(self._namespace)
 
-    def ensure_rbac(self) -> None:
-        """Create the namespace, ServiceAccount, ClusterRole, and ClusterRoleBinding.
+    def verify_prerequisites(self, config: IrisClusterConfig) -> None:
+        """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Idempotent (kubectl apply). These were previously manual operator
-        prerequisites; now they're auto-applied at cluster start so a single
-        ``iris cluster start`` is sufficient.
-
-        ClusterRole and ClusterRoleBinding names are qualified with the namespace
-        (e.g. ``iris-controller-iris``) so multiple Iris instances on the same
-        CKS cluster don't collide on these cluster-scoped resources.
+        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
+        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        scale group, the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
+        IngressClass. All of these are provisioned by `infra/pulumi`'s Pulumi program
+        (spec.md §4) — this method creates nothing. Raises PrerequisitesNotProvisionedError
+        enumerating every missing object if any are absent.
         """
-        cluster_role_name = self.rbac_cluster_role_name()
+        missing: list[str] = []
 
-        namespace_manifest = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": self._namespace}}
+        if self._kubectl.get_json(K8sResource.NAMESPACES, self._namespace) is None:
+            missing.append(f"Namespace/{self._namespace}")
+        if self._kubectl.get_json(K8sResource.SERVICE_ACCOUNTS, "iris-controller") is None:
+            missing.append(f"ServiceAccount/{self._namespace}/iris-controller")
+        role_name = self.rbac_cluster_role_name()
+        if self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name) is None:
+            missing.append(f"ClusterRole/{role_name}")
+        if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
+            missing.append(f"ClusterRoleBinding/{role_name}")
 
-        sa_manifest = {
-            "apiVersion": "v1",
-            "kind": "ServiceAccount",
-            "metadata": {"name": "iris-controller", "namespace": self._namespace},
-        }
+        label_prefix = config.platform.label_prefix
+        for name, sg in config.scale_groups.items():
+            cw = sg.slice_template.coreweave if sg.slice_template is not None else None
+            if cw is None or not cw.instance_type:
+                continue
+            pool_name = nodepool_name(label_prefix, name)
+            if self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name) is None:
+                missing.append(f"NodePool/{pool_name}")
 
-        role_manifest = {
-            "apiVersion": "rbac.authorization.k8s.io/v1",
-            "kind": "ClusterRole",
-            "metadata": {"name": cluster_role_name},
-            "rules": [
-                {
-                    "apiGroups": ["compute.coreweave.com"],
-                    "resources": ["nodepools"],
-                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
-                },
-                {
-                    # Bound via ClusterRoleBinding, so this grants pod access in
-                    # ALL namespaces — required for blocker eviction in
-                    # kubernetes_provider.preempt_namespaces, not just the Iris
-                    # namespace.
-                    "apiGroups": [""],
-                    "resources": ["pods", "pods/exec", "pods/log"],
-                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
-                },
-                {
-                    "apiGroups": [""],
-                    "resources": ["nodes"],
-                    "verbs": ["get", "list", "watch"],
-                },
-                {
-                    "apiGroups": [""],
-                    "resources": ["configmaps"],
-                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
-                },
-                {
-                    "apiGroups": ["metrics.k8s.io"],
-                    "resources": ["pods"],
-                    "verbs": ["get", "list"],
-                },
-                {
-                    "apiGroups": ["policy"],
-                    "resources": ["poddisruptionbudgets"],
-                    "verbs": ["get", "list", "create", "update", "patch", "delete"],
-                },
-                {
-                    # Kueue gang admission: Iris deletes the per-pod-group
-                    # Workload to release a torn-down gang's reserved quota
-                    # (Kueue parks it in WaitingForReplacementPods otherwise).
-                    "apiGroups": ["kueue.x-k8s.io"],
-                    "resources": ["workloads"],
-                    "verbs": ["get", "list", "watch", "delete"],
-                },
-                {
-                    # Iris creates iris-{production,interactive,batch} PriorityClass
-                    # objects at startup so pods can be stamped without manual setup.
-                    "apiGroups": ["scheduling.k8s.io"],
-                    "resources": ["priorityclasses"],
-                    "verbs": ["get", "create", "update", "patch", "delete"],
-                },
-            ],
-        }
+        cluster_queue = config.kubernetes_provider.kueue.cluster_queue
+        if cluster_queue and self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue) is None:
+            missing.append(f"ClusterQueue/{cluster_queue}")
+        if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME) is None:
+            missing.append(f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}")
 
-        binding_manifest = {
-            "apiVersion": "rbac.authorization.k8s.io/v1",
-            "kind": "ClusterRoleBinding",
-            "metadata": {"name": cluster_role_name},
-            "subjects": [
-                {"kind": "ServiceAccount", "name": "iris-controller", "namespace": self._namespace},
-            ],
-            "roleRef": {
-                "kind": "ClusterRole",
-                "name": cluster_role_name,
-                "apiGroup": "rbac.authorization.k8s.io",
-            },
-        }
+        ingress_class = _ingress_class_from_provisioning(config)
+        if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
+            missing.append(f"IngressClass/{ingress_class}")
 
-        for manifest in [namespace_manifest, sa_manifest, role_manifest, binding_manifest]:
-            self._kubectl.apply_json(manifest)
-
-        logger.info("RBAC prerequisites applied (namespace=%s, clusterRole=%s)", self._namespace, cluster_role_name)
+        if missing:
+            raise PrerequisitesNotProvisionedError(
+                "IaC-provisioned prerequisites missing: "
+                + ", ".join(missing)
+                + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
+            )
 
     # -- Kueue ------------------------------------------------------------------
 
@@ -756,140 +727,6 @@ class K8sControllerProvider:
             "PriorityClasses applied: %s",
             ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
         )
-
-    # -- NodePool Management ---------------------------------------------------
-
-    def _resource_labels(self, scale_group: str) -> dict[str, str]:
-        return {
-            self._iris_labels.iris_managed: "true",
-            self._iris_labels.iris_scale_group: scale_group,
-        }
-
-    def _nodepool_name(self, scale_group: str) -> str:
-        # NodePool metadata.name must be a valid RFC 1123 subdomain (lowercase alphanumeric, '-', '.')
-        return f"{self._label_prefix}-{scale_group}".replace("_", "-").lower()
-
-    def ensure_nodepools(self, config: IrisClusterConfig) -> None:
-        """Create shared NodePools for all scale groups and delete stale ones.
-
-        Idempotent. After creating/verifying expected NodePools, any managed
-        NodePool not in the current config is deleted (e.g. renamed or removed
-        scale groups).
-        """
-        expected_names: set[str] = set()
-        futures = []
-        for name, sg in config.scale_groups.items():
-            cw = sg.slice_template.coreweave
-            if not cw.instance_type:
-                logger.info("Scale group %r has no coreweave.instance_type; skipping NodePool", name)
-                continue
-            pool_name = self._nodepool_name(name)
-            expected_names.add(pool_name)
-            num_vms = max(1, sg.slice_template.num_vms)
-            min_nodes = sg.buffer_slices * num_vms
-            max_nodes = sg.max_slices * num_vms
-            futures.append(
-                self._executor.submit(
-                    self._ensure_one_nodepool,
-                    pool_name,
-                    cw.instance_type,
-                    name,
-                    min_nodes=min_nodes,
-                    max_nodes=max_nodes,
-                    warm_nodes=num_vms,
-                )
-            )
-        for f in futures:
-            f.result()
-
-        self._delete_stale_nodepools(expected_names)
-
-    def _delete_stale_nodepools(self, expected_names: set[str]) -> None:
-        """Delete managed NodePools that are not in the expected set.
-
-        Uses wait=False because CoreWeave NodePool deletion involves bare-metal
-        deprovisioning that can take many minutes. We don't need to block on it.
-        """
-        existing = self._kubectl.list_json(
-            K8sResource.NODE_POOLS,
-            labels={self._iris_labels.iris_managed: "true"},
-        )
-        for item in existing:
-            pool_name = item.get("metadata", {}).get("name", "")
-            if pool_name and pool_name not in expected_names:
-                logger.info("Deleting stale NodePool %s (async)", pool_name)
-                self._kubectl.delete(K8sResource.NODE_POOLS, pool_name, wait=False)
-
-    def _ensure_one_nodepool(
-        self,
-        pool_name: str,
-        instance_type: str,
-        scale_group_name: str,
-        *,
-        min_nodes: int,
-        max_nodes: int,
-        warm_nodes: int,
-    ) -> None:
-        """Create or reconcile a single NodePool.
-
-        Always applies the manifest so that spec fields (minNodes, maxNodes)
-        are reconciled on every cluster start. Existing pools keep one full
-        slice worth of nodes warm so a transient pod deletion does not collapse
-        multihost desired capacity back to a single node.
-
-        NVL72 (GB200/GB300) instances deploy in whole racks: their pools set
-        spec.targetRacks and do not autoscale (CoreWeave rejects the autoscaler
-        and a partial rack on rack-based instances). Every other instance type
-        is node-based (spec.targetNodes + autoscaling).
-        """
-        node_labels = {
-            self._iris_labels.iris_managed: "true",
-            self._iris_labels.iris_scale_group: scale_group_name,
-            # Pin Konnectivity agents and monitoring pods to always-on nodes
-            # so GPU NodePools can safely scale to zero.
-            **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
-        }
-
-        if is_rack_based(instance_type):
-            if max_nodes % RACK_SIZE != 0:
-                raise InfraError(
-                    f"scale group {scale_group_name!r} is a rack-based ({instance_type}) NVL72 pool, "
-                    f"so its node count must be a whole number of {RACK_SIZE}-node racks; got {max_nodes}"
-                )
-            spec = {
-                "computeClass": "default",
-                "instanceType": instance_type,
-                "targetRacks": max_nodes // RACK_SIZE,
-                "nodeLabels": node_labels,
-            }
-            reconcile_note = f"targetRacks={max_nodes // RACK_SIZE}"
-        else:
-            target_nodes = 0
-            existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
-            if existing is not None:
-                target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
-            spec = {
-                "computeClass": "default",
-                "instanceType": instance_type,
-                "autoscaling": True,
-                "minNodes": min_nodes,
-                "maxNodes": max_nodes,
-                "targetNodes": target_nodes,
-                "nodeLabels": node_labels,
-            }
-            reconcile_note = f"targetNodes={target_nodes}"
-
-        manifest = {
-            "apiVersion": "compute.coreweave.com/v1alpha1",
-            "kind": "NodePool",
-            "metadata": {
-                "name": pool_name,
-                "labels": self._resource_labels(scale_group_name),
-            },
-            "spec": spec,
-        }
-        self._kubectl.apply_json(manifest)
-        logger.info("NodePool %s applied (instance_type=%s, %s)", pool_name, instance_type, reconcile_note)
 
     # -- Storage Detection ----------------------------------------------------
 

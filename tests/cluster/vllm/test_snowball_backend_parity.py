@@ -82,8 +82,10 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
     from haliax import Axis  # noqa: PLC0415
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
     from levanter.models.snowball import SnowballLMHeadModel  # noqa: PLC0415
-    from marin.inference.quick_serve import read_attention_heads, select_tensor_parallel_size  # noqa: PLC0415
-    from marin.inference.serving_backend import LevanterBackend, ModelSpec  # noqa: PLC0415
+    from marin.inference.backend import ModelSpec  # noqa: PLC0415
+    from marin.inference.config import LevanterEngineConfig  # noqa: PLC0415
+    from marin.inference.levanter_backend import LevanterBackend  # noqa: PLC0415
+    from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size  # noqa: PLC0415
 
     prompt_fixture = read_prompt_fixture(goldens)
     num_chips = jax.device_count()
@@ -105,7 +107,7 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
         "moe_implementation": MOE_IMPLEMENTATION,
         "attention_implementation": ATTENTION_IMPLEMENTATION,
     }
-    with LevanterBackend().load_model(spec, config_overrides=config_overrides) as loaded:
+    with LevanterBackend(LevanterEngineConfig()).load_model(spec, config_overrides=config_overrides) as loaded:
         model = loaded.model
         assert isinstance(model, SnowballLMHeadModel)
         assert model.transformer.token_embed.dtype == jnp.bfloat16
@@ -165,8 +167,13 @@ def score_vllm_against_goldens(
 ) -> None:
     """Serve the June export with vLLM and score rank-pinned prompts."""
     import requests  # noqa: PLC0415
-    from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend  # noqa: PLC0415
-    from marin.inference.vllm_server import IsolatedCudaVllm, VllmType  # noqa: PLC0415
+    from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec  # noqa: PLC0415
+    from marin.inference.config import (  # noqa: PLC0415
+        VllmEngineConfig,
+        VllmLauncherType,
+        VllmSource,
+    )
+    from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
 
     prompt_fixture = read_prompt_fixture(goldens)
 
@@ -180,20 +187,23 @@ def score_vllm_against_goldens(
         chat_template_content=None,
     )
     backend = VllmBackend(
-        launcher=IsolatedCudaVllm(source=VllmType.MARIN_FORK),
-        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
-        extra_args=(
-            "--data-parallel-size",
-            str(GPU_COUNT),
-            "--enable-expert-parallel",
-            "--model-loader-extra-config",
-            '{"distributed":true}',
-            "--max-num-seqs",
-            "1",
-            "--max-logprobs",
-            str(RETURNED_LOGPROBS),
-            "--attention-backend",
-            attention_backend,
+        VllmEngineConfig(
+            launcher=VllmLauncherType.CUDA,
+            source=VllmSource.MARIN_FORK,
+            max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+            extra_args=(
+                "--data-parallel-size",
+                str(GPU_COUNT),
+                "--enable-expert-parallel",
+                "--model-loader-extra-config",
+                '{"distributed":true}',
+                "--max-num-seqs",
+                "1",
+                "--max-logprobs",
+                str(RETURNED_LOGPROBS),
+                "--attention-backend",
+                attention_backend,
+            ),
         ),
     )
     parities: list[NextTokenParity] = []

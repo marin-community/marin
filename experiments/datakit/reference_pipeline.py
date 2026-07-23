@@ -50,7 +50,32 @@ Submit the sample-mode end-to-end run on iris::
         --enable-extra-resources -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python -m experiments.datakit.reference_pipeline \\
             --mode sample --sample-prefix s3://.../datakit/sample_100b_8ae7a94f \\
-            --sources all --pool-workers 512
+            --sources all --pool-workers 512 \\
+            --quality-model-version pooled-junkgate2 \\
+            --domain-centroids-version <run-id>
+
+Reproducibility contract
+------------------------
+A step's ``hash_attrs`` is its cross-region identity: it must contain every
+parameter its fn reads, and no region-specific ``gs://`` path (else byte-identical
+data gets a different output path per region). Two consequences:
+
+* External inputs enter the hash as a caller-supplied *version tag*, never their
+  absolute path -- ``quality_model_version`` for the quality model dir and
+  ``centroids_version`` for pre-staged centroids. The HF luxical weights and the
+  tokenizer are pinned to immutable commits (``LUXICAL_REVISION`` /
+  ``TOKENIZER_REVISION``).
+* ``embed`` and ``train_centroids`` are *train-once / replicate* artifacts, not
+  per-region recomputes: luxical inference (float + int8 quantization on
+  heterogeneous CPUs) and faiss K-means (seeded but not bit-stable across machine
+  types / thread counts) can differ bit-for-bit between regions. To reproduce a
+  store exactly, replicate those bytes (pass the trained centroids as
+  ``domain_centroids``) rather than recomputing inline.
+
+Known gap: ``EVAL_ROOT`` (the decontam bloom's eval corpus) is still hashed as a
+``marin_prefix()``-derived path via ``build_eval_bloom_step``, so the bloom (and
+its decontam consumers) re-key per region -- tracked as a follow-up to give the
+eval corpus a version tag.
 """
 
 import argparse
@@ -97,6 +122,7 @@ from experiments.datakit.cluster.quality.fast_transformer.score import score_nor
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
     LUXICAL_REPO,
+    LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
@@ -108,16 +134,20 @@ from experiments.datakit.reports.normalize import normalize_report
 from experiments.datakit.reports.quality import quality_report
 from experiments.datakit.reports.store import store_report
 from experiments.datakit.reports.tokenize import tokenize_report
-from experiments.datakit.store.datakit_store import (
-    ClusteredStoreData,
-    build_clustered_store,
-)
+from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
 
 logger = logging.getLogger(__name__)
 
 
 # Tokenize: canonical Marin tokenizer. Not scale-sensitive.
 TOKENIZER = "marin-community/marin-tokenizer"
+# Immutable HF commit for the tokenizer. Hashed into the tokenize step so a silent
+# upstream retag invalidates the cache instead of changing token ids under a fixed
+# hash. NOTE: ``levanter.tokenizers.load_tokenizer`` does not yet accept a revision
+# (it stages from a Marin GCS mirror, then HF), so this pins the *recipe identity*;
+# byte-level enforcement is tracked in a follow-up to thread ``revision`` through the
+# loader.
+TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
@@ -144,11 +174,21 @@ class ClusterConfig:
     and must be ``k_train`` or one of ``k_views`` -- the assign stage only
     materializes a ``cluster_<K>`` column for those. ``k_train`` must not exceed
     the centroid-training sample size, so shrink it for small inline runs.
+
+    The ``*_seed`` / ``train_n_*`` fields pin the centroid-training recipe so it enters
+    the sample/train hashes. faiss K-means is seeded but not bit-reproducible across
+    machine types / thread counts, so identical bytes across regions require
+    *replicating* the trained centroids (pass them as ``domain_centroids``), not
+    recomputing inline -- see the module docstring's reproducibility note.
     """
 
     k_train: int = 5000
     k_views: tuple[int, ...] = (40, 1000)
     cluster_view: int = 40
+    sample_seed: int = 42
+    train_seed: int = 42
+    train_n_iter: int = 20
+    train_n_redo: int = 3
 
     def __post_init__(self) -> None:
         if self.cluster_view not in (self.k_train, *self.k_views):
@@ -179,6 +219,22 @@ class PoolConfig:
 
 
 @dataclass(frozen=True)
+class MinhashConfig:
+    """Content-determining MinHash / LSH knobs for the fuzzy-dedup stage.
+
+    Not scale-sensitive (a smoke and a full run must agree), but every field shapes
+    the emitted signatures and buckets, so all are hashed into the minhash step -- and
+    thereby, via the minhash deps, into dedup and the store.
+    """
+
+    num_perms: int = 286
+    num_bands: int = 26
+    ngram_size: int = 5
+    text_cap_chars: int | None = 500_000
+    seed: int = 42
+
+
+@dataclass(frozen=True)
 class PipelineScale:
     """Non-resource sizing for :func:`reference_datakit_steps`.
 
@@ -189,6 +245,7 @@ class PipelineScale:
 
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     pool: PoolConfig = field(default_factory=PoolConfig)
+    minhash: MinhashConfig = field(default_factory=MinhashConfig)
     embed_batch_size: int = 4096
     assign_batch_size: int = 4096
     # Inline domain training: ~100 sources x 100k = ~10M-row centroid sample.
@@ -246,6 +303,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
         hash_attrs={
             "luxical_repo": LUXICAL_REPO,
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
+            "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
             "v": 1,
         },
@@ -253,6 +311,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=read_artifact(np, NormalizedData),
+                revision=LUXICAL_REVISION,
                 batch_size=scale.embed_batch_size,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
@@ -288,12 +347,18 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
     sample_step = StepSpec(
         name="datakit/cluster/sample_centroids",
         deps=list(embed_steps.values()),
-        hash_attrs={"n_per_source": scale.n_per_source_for_sample, "format": "parquet", "v": 1},
+        hash_attrs={
+            "n_per_source": scale.n_per_source_for_sample,
+            "seed": cluster.sample_seed,
+            "format": "parquet",
+            "v": 1,
+        },
         fn=remote(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in es.items()},
                 n_per_source=scale.n_per_source_for_sample,
+                seed=cluster.sample_seed,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
                 parallel_sources=scale.sample_parallel_sources,
@@ -309,7 +374,15 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
     return StepSpec(
         name="datakit/cluster/train_centroids",
         deps=[sample_step],
-        hash_attrs={"k_train": cluster.k_train, "k_views": list(cluster.k_views), "n_threads": n_threads, "v": 1},
+        hash_attrs={
+            "k_train": cluster.k_train,
+            "k_views": list(cluster.k_views),
+            "n_threads": n_threads,
+            "seed": cluster.train_seed,
+            "n_iter": cluster.train_n_iter,
+            "n_redo": cluster.train_n_redo,
+            "v": 1,
+        },
         fn=remote(
             lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
@@ -317,6 +390,9 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
                 k_train=cluster.k_train,
                 k_views=cluster.k_views,
                 n_threads=n_threads,
+                n_iter=cluster.train_n_iter,
+                n_redo=cluster.train_n_redo,
+                seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
             pip_dependency_groups=["datakit"],
@@ -327,23 +403,48 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
 def _resolve_centroids(
     domain_centroids: str | StepSpec,
     cluster: ClusterConfig,
-) -> tuple[str, dict[int, str], list[StepSpec], object]:
-    """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign."""
+    centroids_version: str | None,
+) -> tuple[str, dict[int, str], list[StepSpec], str]:
+    """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign.
+
+    ``hash_value`` is the region-independent identity string mixed into the assign
+    hash by construction: an inline StepSpec contributes its ``name_with_hash``
+    (identity, not the ``MARIN_PREFIX``-rooted output path), and a pre-staged path
+    contributes the caller's ``centroids_version`` tag -- never the absolute ``gs://``
+    path -- so identical centroids resolve to the same assign output path in any region.
+    """
     if isinstance(domain_centroids, StepSpec):
         base = domain_centroids.output_path
         return (
             f"{base}/centroids_{cluster.k_train}.npy",
             {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
             [domain_centroids],
-            base,  # already includes a content hash; safe in hash_attrs
+            domain_centroids.name_with_hash,  # region-independent identity (also captured via the dep)
+        )
+    if not centroids_version:
+        raise ValueError(
+            "centroids_version is required when domain_centroids is a pre-staged path: "
+            "the absolute path is region-specific and must not enter the cache hash. "
+            "Pass a stable tag identifying the centroid bytes (e.g. the training run id)."
         )
     base = domain_centroids.rstrip("/")
     return (
         f"{base}/centroids_{cluster.k_train}.npy",
         {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
         [],
-        domain_centroids,
+        centroids_version,
     )
+
+
+def _resolve_quality_model_version(quality_model: str, quality_model_version: str | None) -> str:
+    """Return the region-independent identity tag hashed into the quality step."""
+    if not quality_model_version:
+        raise ValueError(
+            f"quality_model_version is required: the quality model dir ({quality_model}) is "
+            "region-specific and must not enter the cache hash. Pass a stable tag "
+            "identifying the model bytes (e.g. 'pooled-junkgate2')."
+        )
+    return quality_model_version
 
 
 @dataclass(frozen=True)
@@ -365,7 +466,9 @@ def reference_datakit_steps(
     sources: dict[str, StepSpec],
     *,
     quality_model: str,
+    quality_model_version: str | None = None,
     domain_centroids: str | StepSpec | None = None,
+    centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
@@ -381,8 +484,11 @@ def reference_datakit_steps(
             misuse fails loudly the first time a downstream step tries
             ``read_artifact(step.output_path, NormalizedData)``.
         quality_model: Directory holding the pooled fast-transformer scorer
-            artifacts plus the calibration json (immutable by convention --
-            the step hash covers the path, not the bytes).
+            artifacts plus the calibration json (immutable by convention).
+        quality_model_version: Required. A stable tag identifying the model bytes
+            (e.g. ``'pooled-junkgate2'``) -- hashed into the quality step in place
+            of the region-specific ``quality_model`` dir, so the same scorer
+            resolves to one output path across regions.
         domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
             and ``lookup_<k_train>_to_<k>.npy`` for each ``k`` in
             ``scale.cluster.k_views``; a StepSpec whose ``output_path`` will
@@ -391,16 +497,26 @@ def reference_datakit_steps(
             from the per-source embeds. When training inline, ``scale.cluster.k_train``
             must not exceed the centroid sample size -- use a smaller K
             (e.g. ``SMOKE_SCALE``) on small source sets.
+        centroids_version: Required when ``domain_centroids`` is a pre-staged
+            path. A stable tag identifying the centroid bytes (e.g. the training
+            run id) -- hashed into the assign step in place of the region-specific
+            path so identical centroids resolve to one output path across regions.
+            Ignored (and unneeded) for the StepSpec / inline-training case, whose
+            identity comes from the step hash.
         scale: K / fan-out sizing plus the per-stage worker :class:`PoolConfig`.
             ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
             runs the same DAG end-to-end on a testbed sample.
     """
     cluster = scale.cluster
+    mh = scale.minhash
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
         domain_centroids = build_train_centroids_step(embed_steps, scale)
 
-    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids, cluster)
+    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(
+        domain_centroids, cluster, centroids_version
+    )
+    quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
 
     # One combined decontam bloom (no merge step); every per-source decon
     # consumes it directly. Same name/params as the testbed decon arm, so runs
@@ -427,6 +543,7 @@ def reference_datakit_steps(
             train_normalize=normalize_step,
             tokenizer=TOKENIZER,
             tokenizer_backend=TOKENIZER_BACKEND,
+            tokenizer_revision=TOKENIZER_REVISION,
             max_workers=scale.pool.n_workers,
             worker_resources=scale.pool.worker,
         )
@@ -462,7 +579,7 @@ def reference_datakit_steps(
         quality = StepSpec(
             name=f"datakit/quality/{name}",
             deps=[normalize_step],
-            hash_attrs={"model_dir": quality_model, "v": 1},
+            hash_attrs={"model_version": quality_model_hash, "v": 1},
             fn=remote(
                 lambda output_path, np=normalize_step.output_path, src=name: score_normalized(
                     output_path=output_path,
@@ -491,9 +608,22 @@ def reference_datakit_steps(
         minhash = StepSpec(
             name=f"datakit/minhash/{name}",
             deps=[normalize_step],
+            hash_attrs={
+                "num_perms": mh.num_perms,
+                "num_bands": mh.num_bands,
+                "ngram_size": mh.ngram_size,
+                "text_cap_chars": mh.text_cap_chars,
+                "seed": mh.seed,
+                "v": 1,
+            },
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
                 output_path=op,
+                num_perms=mh.num_perms,
+                num_bands=mh.num_bands,
+                ngram_size=mh.ngram_size,
+                text_cap_chars=mh.text_cap_chars,
+                seed=mh.seed,
                 worker_resources=scale.pool.worker,
             ),
         )
@@ -509,9 +639,13 @@ def reference_datakit_steps(
         }
 
     # ---- Cross-source dedup ----------------------------------------------------
+    # No content params of its own -- the MinHash params live in the minhash deps
+    # (so a param change re-keys minhash, then dedup via dep names); connected
+    # components is deterministic given those inputs. ``v`` is a manual salt.
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
+        hash_attrs={"v": 1},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
@@ -544,6 +678,11 @@ def reference_datakit_steps(
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
     store_deps.append(dedup)
 
+    # ``cluster_view`` / ``split`` are read directly by the store fn and are NOT
+    # captured by any dep (the assign step materializes every ``cluster_<K>`` column
+    # regardless of view), so they must be hashed here. The tokenizer is captured via
+    # the tokenize deps, and the quality bucket edges via the quality deps, so both
+    # are intentionally absent.
     store = StepSpec(
         name="datakit/store",
         deps=store_deps,
@@ -720,6 +859,23 @@ def main() -> None:
         help="dir with centroids_<K>.npy + lookup_<K>_to_<k>.npy. Omit to train centroids inline from the embeds.",
     )
     parser.add_argument(
+        "--domain-centroids-version",
+        default=None,
+        help=(
+            "Stable identity tag for --domain-centroids (e.g. the training run id). "
+            "Required with --domain-centroids: hashed in place of the region-specific "
+            "path so identical centroids resolve to one output path across regions."
+        ),
+    )
+    parser.add_argument(
+        "--quality-model-version",
+        required=True,
+        help=(
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Hashed in "
+            "place of the region-specific model dir for cross-region reproducibility."
+        ),
+    )
+    parser.add_argument(
         "--sources",
         default=None,
         help="comma-separated source names, or 'all' for every source. Omit: full=all, sample=curated subset.",
@@ -748,7 +904,9 @@ def main() -> None:
     result = reference_datakit_steps(
         sources,
         quality_model=args.quality_model,
+        quality_model_version=args.quality_model_version,
         domain_centroids=args.domain_centroids,
+        centroids_version=args.domain_centroids_version,
         scale=scale,
     )
     StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)

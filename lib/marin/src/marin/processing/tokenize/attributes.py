@@ -234,6 +234,7 @@ def tokenize_attributes_step(
     validation_normalize: StepSpec | None = None,
     tokenizer: str,
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF,
+    tokenizer_revision: str | None = None,
     data_format: LmDatasetFormatBase | None = None,
     sample_count: int | None = None,
     text_field: str = "text",
@@ -254,6 +255,10 @@ def tokenize_attributes_step(
         validation_normalize: Upstream normalize step whose output feeds the validation split.
         tokenizer: Tokenizer name/path forwarded to :class:`TokenizeAttributesConfig`.
         tokenizer_backend: Tokenizer backend.
+        tokenizer_revision: Optional immutable HF commit to pin. When set it is folded
+            into the step hash so a retag invalidates the cache. NOTE: identity-only
+            today -- ``levanter.tokenizers.load_tokenizer`` does not yet accept a
+            revision, so it does not change which bytes are fetched (tracked follow-up).
         data_format: Levanter :class:`LmDatasetFormatBase`. Defaults to ``TextLmDatasetFormat()``.
         sample_count: Per-shard sample cap, or ``None`` for full data.
         text_field: Record field used for id fallback when input lacks ``id``.
@@ -287,16 +292,21 @@ def tokenize_attributes_step(
             kwargs["worker_resources"] = worker_resources
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))
 
+    hash_attrs: dict = {
+        "tokenizer": tokenizer,
+        "tokenizer_backend": tokenizer_backend.value,
+        "format": repr(fmt),
+        "sample_count": sample_count,
+        "text_field": text_field,
+    }
+    # Only add the key when pinned, so existing callers keep their current hash.
+    if tokenizer_revision is not None:
+        hash_attrs["tokenizer_revision"] = tokenizer_revision
+
     return StepSpec(
         name=name,
         deps=deps,
         fn=_fn,
-        hash_attrs={
-            "tokenizer": tokenizer,
-            "tokenizer_backend": tokenizer_backend.value,
-            "format": repr(fmt),
-            "sample_count": sample_count,
-            "text_field": text_field,
-        },
+        hash_attrs=hash_attrs,
         override_output_path=override_output_path,
     )

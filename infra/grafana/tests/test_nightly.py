@@ -12,7 +12,7 @@ project_nightlies directly against hand-built lanes and snapshots — no network
 import dataclasses
 from datetime import UTC, datetime
 
-from nightly import NightlyLaneSnapshot, NightlyRun, nightly_matrix, project_nightlies
+from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
 from nightly_config import NightlyLane
 
 _BASE_LANE = NightlyLane(
@@ -142,26 +142,12 @@ def test_too_short_success_is_excluded_from_health_but_baseline_pending_is_healt
     assert sum(row["healthy"] for row in today_rows) == 1
 
 
-def test_nightly_matrix_pivots_cells_into_one_wide_row_per_day():
+def test_projection_exposes_stable_lane_order_and_workflow_link():
     healthy = _lane(id="healthy", short_label="Healthy")
     quiet = _lane(id="quiet", short_label="Quiet", weekdays=(1,))  # only ever due on Tuesday
     now = datetime(2026, 7, 17, 15, 0, 0, tzinfo=UTC)
 
     long_rows = project_nightlies([healthy, quiet], [_snapshot(healthy.id, [_run()]), _snapshot(quiet.id)], now)
-    matrix = nightly_matrix(long_rows)
-
-    # One wide row per day, ascending, each carrying a cell per lane id.
-    assert [row["date"] for row in matrix] == [
-        "2026-07-11",
-        "2026-07-12",
-        "2026-07-13",
-        "2026-07-14",
-        "2026-07-15",
-        "2026-07-16",
-        "2026-07-17",
-    ]
-    assert all(set(row) == {"ts", "date", "healthy", "quiet"} for row in matrix)
-    # The daily lane ran healthy today; the Tuesday-only lane is a null gap that day.
-    today = matrix[-1]
-    assert today["healthy"] == 1
-    assert today["quiet"] is None
+    assert {row["lane_order"] for row in long_rows if row["lane_id"] == "healthy"} == {0}
+    assert {row["lane_order"] for row in long_rows if row["lane_id"] == "quiet"} == {1}
+    assert long_rows[0]["workflow_url"] == "https://github.com/marin-community/marin/actions/workflows/nightly.yaml"

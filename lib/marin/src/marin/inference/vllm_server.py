@@ -21,6 +21,7 @@ import requests
 from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import WORKER_PYTHON_VERSION
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
@@ -32,19 +33,12 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# The worker interpreter marin-serve provisions everywhere it controls one: the checkout-free
-# venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
-# worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
-WORKER_PYTHON_VERSION = "3.12"
-# Stock CUDA vLLM used by GPU serving. It runs in an isolated uv-tool environment, so it does not
-# participate in Marin's workspace dependency resolution.
-DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
-TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
 # Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
 # vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 
 
 class VllmLauncher(Protocol):
@@ -84,8 +78,8 @@ class VllmType(StrEnum):
 class IsolatedCudaVllm:
     """Provide an isolated CUDA vLLM command and environment.
 
-    Upstream serves standard vLLM architectures. The Marin fork additionally serves Marin-specific
-    architectures and streams checkpoints from the CoreWeave object store.
+    Both variants stream checkpoints from the CoreWeave object store. The Marin fork additionally
+    serves Marin-specific architectures.
     """
 
     source: VllmType = VllmType.UPSTREAM
@@ -121,26 +115,18 @@ class IsolatedCudaVllm:
         # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
         # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
         # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
-        environment = {_FLASHINFER_SAMPLER_ENV_VAR: "0"}
+        # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
+        # model cache. CoreWeave rejects the loader's default path-style S3 requests.
+        environment = {
+            _FLASHINFER_SAMPLER_ENV_VAR: "0",
+            _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
+        }
         if self.source is VllmType.MARIN_FORK:
-            environment.update(
-                {
-                    "VLLM_USE_PRECOMPILED": "1",
-                    "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
-                }
-            )
+            environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment
 
 
 def _write_virtual_hosted_s3_config() -> str:
-    """Write a boto3 config forcing virtual-hosted S3 addressing and return its path.
-
-    boto3's S3 addressing style can only be set from a config file (no env var), and the CoreWeave
-    object store rejects the default path-style requests. The fork's Run:ai streamer reads it via
-    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file. Rewritten on every
-    call (once per serve, cheap) rather than reused: a truncated leftover from a crash mid-write would
-    otherwise be kept and silently re-enable the path-style addressing the store rejects.
-    """
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
     with open(path, "w") as handle:
         handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
@@ -154,7 +140,7 @@ class IsolatedTpuVllm:
     The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
     runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
     provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve --tpu`` runs from outside a checkout.
+    ``marin-serve iris --tpu`` runs from outside a checkout.
     """
 
     vllm_ref: str
@@ -397,6 +383,9 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
+    dtype = engine_kwargs.get("dtype")
+    if dtype is not None:
+        args.extend(["--dtype", str(dtype)])
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])

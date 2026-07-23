@@ -93,6 +93,8 @@ class EvalGroupParams:
 
     group_id: str
     user: str
+    version: str | None
+    description: str | None
     records_prefix: str
     session: EvalSession
     runs: tuple[EvalRunParams, ...]
@@ -122,6 +124,8 @@ def _build_record(
         group_id=group.group_id,
         created_at=run.created_at,
         user=group.user,
+        version=group.version,
+        description=group.description,
         model=group.model_ref,
         evaluation=run.eval_ref,
         hardware=group.hardware_ref,
@@ -201,6 +205,8 @@ class LaunchSpec:
     limit: int | None
     records_prefix: str | None
     cluster: str
+    version: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -242,7 +248,6 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tpu_type=None,
             gpu_type=accel.gpu_type,
             gpu_count=accel.gpu_count,
-            max_model_len=model.max_model_len,
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
@@ -254,7 +259,6 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tpu_type=accel.tpu_type,
             gpu_type=None,
             gpu_count=None,
-            max_model_len=model.max_model_len,
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
@@ -357,7 +361,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
                     name=plan.eval_key,
                     tasks=plan.suite.tasks,
                     out_path=out_path,
-                    max_gen_toks=plan.suite.max_gen_toks,
+                    max_gen_toks=plan.model.max_gen_toks or plan.suite.max_gen_toks,
                     max_eval_instances=plan.limit,
                 ),
             )
@@ -367,12 +371,12 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
     return EvalGroupParams(
         group_id=_group_id(first.model_key),
         user=user,
+        version=spec.version,
+        description=spec.description,
         records_prefix=records_prefix,
         session=EvalSession(
             model=first.model.location,
-            # The serve child's self-stop backstop must outlive the whole suite running sequentially
-            # against it: budget two hours per eval on top of boot time.
-            serve=replace(first.serve, timeout_hours=2.0 + 2.0 * len(plans)),
+            serve=first.serve,
             tokenizer=first.model.tokenizer,
             apply_chat_template=first.model.apply_chat_template,
         ),

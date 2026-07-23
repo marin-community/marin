@@ -8,7 +8,7 @@ GETs and the CW read-role bearer token — no kubernetes client. K8sFleet fans a
 query out across every cluster and stamps a ``cluster`` column, so one response
 covers the fleet.
 
-The pod-level scans (crashloops, pending) cover every namespace except the
+The pod-level scans (crashloops, pending, termination candidates) cover every namespace except the
 provider-managed prefixes in PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node
 daemons are thousands of pods of someone else's infrastructure, while the
 namespaces we operate hold about a hundred.
@@ -29,8 +29,10 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TypeVar
 
 import httpx
 from config import (
@@ -41,6 +43,7 @@ from config import (
     WatchedComponent,
     WatchedWebhook,
 )
+from finelog_health import FinelogHealth, FinelogRole
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,30 @@ _MAX_RETRY_AFTER = 3.0
 _EVENT_LIMIT = 100
 _EVENT_MESSAGE_LIMIT = 200
 
+# A pod is a stuck-termination candidate only after its API deletion deadline has
+# been expired for this long. Grafana holds the alert for another five minutes.
+STUCK_TERMINATION_OVERDUE_SECONDS = 120
+
+_GPU_RESOURCE = "nvidia.com/gpu"
+_IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+_TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
+_FINELOG_CONTAINER = "finelog"
+_FINELOG_FALLBACK_SERVER = "finelog-mirror"
+
+# CoreWeave physical-topology labels a GPU node carries: which rack it lives in,
+# the rack's full CoreWeave-assigned name, and its instance type.
+_RACK_LABEL = "node.coreweave.cloud/rack"
+_RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
+_INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+
+# gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
+# fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
+# (e.g. gd-8xh100ib-i128, a standalone 8-GPU H100 server) get their own CoreWeave
+# rack label too, but mostly 1 node per rack: cw-us-east-02a has 29 racks, 26 of them
+# with exactly one node. Grouping those in made every one read as "1 of 18 trays" and
+# fired the below-16 alert on hardware the threshold was never about.
+_GB200_INSTANCE_TYPE_SUBSTRING = "gb200"
+
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
@@ -60,6 +87,11 @@ SCOPE_CONTROL_PLANE = "control-plane"
 SCOPE_WORKLOAD = "workload"
 
 
+def _deployment_has_container(deployment: dict, container_name: str) -> bool:
+    pod_spec = ((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}
+    return any(container.get("name") == container_name for container in pod_spec.get("containers") or [])
+
+
 class K8sErrorClass(StrEnum):
     """Why a cluster query failed, coarse enough to be an alert label."""
 
@@ -67,6 +99,89 @@ class K8sErrorClass(StrEnum):
     NETWORK = "network"  # connect/TLS failure
     TIMEOUT = "timeout"
     HTTP = "http"  # any other non-200
+
+
+class TerminationClass(StrEnum):
+    """Operator action implied by an overdue terminating pod."""
+
+    INVALID_TIMESTAMP = "invalid_timestamp"
+    FINALIZER = "finalizer"
+    TERMINAL = "terminal"
+    UNBOUND = "unbound"
+    NODE_CLEANUP = "node_cleanup"
+
+
+@dataclass(frozen=True)
+class TerminatingPod:
+    """A pod termination record that requires operator visibility."""
+
+    cluster: str
+    namespace: str
+    pod: str
+    node: str
+    phase: str
+    deletion_timestamp: str
+    deletion_grace_seconds: int | None
+    overdue_seconds: int | None
+    gpu_count: int
+    task_attempt: str
+    task_label: str
+    job_label: str
+    priority_class: str
+    finalizers: str
+    classification: TerminationClass
+
+
+@dataclass(frozen=True)
+class TerminatingPodError:
+    """A cluster query failure returned beside healthy clusters' pod records."""
+
+    cluster: str
+    error_class: str
+    error: str
+
+
+TerminatingPodResult = TerminatingPod | TerminatingPodError
+
+
+@dataclass(frozen=True)
+class FinelogPod:
+    """Runtime and provisioning details for one Kubernetes finelog pod."""
+
+    cluster: str
+    namespace: str
+    deployment: str
+    pod: str
+    node: str
+    phase: str
+    ready: bool
+    restarts: int
+    last_exit_code: int | None
+    last_exit_reason: str
+    image: str
+    cpu_request: str
+    cpu_limit: str
+    memory_request: str
+    memory_limit: str
+    startup_probe: bool
+    readiness_probe: bool
+    liveness_probe: bool
+    pvc: str
+    storage_class: str
+    storage_capacity: str
+
+
+@dataclass(frozen=True)
+class FinelogPodError:
+    """A cluster query failure returned beside healthy finelog pod records."""
+
+    cluster: str
+    error_class: str
+    error: str
+
+
+FinelogPodResult = FinelogPod | FinelogPodError
+_Row = TypeVar("_Row")
 
 
 class K8sError(Exception):
@@ -82,6 +197,14 @@ def _age_seconds(timestamp: str | None) -> int | None:
         return None
     created = datetime.fromisoformat(timestamp)
     return max(int((datetime.now(UTC) - created).total_seconds()), 0)
+
+
+def _deletion_overdue_seconds(timestamp: str) -> int | None:
+    """Return age past a deletion deadline, or None for an invalid deadline."""
+    try:
+        return _age_seconds(timestamp)
+    except (TypeError, ValueError):
+        return None
 
 
 def _epoch_ms(timestamp: str | None) -> int | None:
@@ -163,12 +286,12 @@ class K8sSource:
         path = f"/apis/apps/v1/namespaces/{component.namespace}/deployments/{component.deployment}"
         return self._get(path, none_on_404=True)
 
-    def _deployment_pods(self, component: WatchedComponent, deployment: dict) -> list[dict]:
+    def _deployment_pods(self, namespace: str, deployment: dict) -> list[dict]:
         match_labels = ((deployment.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
         if not match_labels:
             return []
         selector = ",".join(f"{key}={value}" for key, value in sorted(match_labels.items()))
-        return self._list(f"/api/v1/namespaces/{component.namespace}/pods", {"labelSelector": selector})
+        return self._list(f"/api/v1/namespaces/{namespace}/pods", {"labelSelector": selector})
 
     def component_status(self, component: WatchedComponent) -> dict:
         """Ready/desired replicas plus restart and waiting state from the pods behind one Deployment.
@@ -191,7 +314,7 @@ class K8sSource:
         ready = (deployment.get("status") or {}).get("readyReplicas") or 0
         restarts = 0
         waiting_reason = ""
-        for pod in self._deployment_pods(component, deployment):
+        for pod in self._deployment_pods(component.namespace, deployment):
             for status in _container_statuses(pod):
                 restarts += status.get("restartCount") or 0
                 reason = ((status.get("state") or {}).get("waiting") or {}).get("reason")
@@ -232,16 +355,132 @@ class K8sSource:
             )
         return rows
 
+    def finelog_health(self) -> FinelogHealth:
+        """Report the mirror's HTTP-probe readiness from its Deployment status."""
+        # Name and namespace belong to finelog's deploy config, which is not in this
+        # image; discover by the stable container name instead of mirroring config.
+        deployments = self._finelog_deployments()
+        if len(deployments) != 1:
+            return FinelogHealth(
+                cluster=self._target.name,
+                server=_FINELOG_FALLBACK_SERVER,
+                role=FinelogRole.MIRROR,
+                responsive=False,
+                ready=0,
+                desired=1,
+                latency_ms=None,
+                error_class="discovery",
+                error=f"expected one finelog Deployment, found {len(deployments)}",
+            )
+        deployment = deployments[0]
+        server = (deployment.get("metadata") or {}).get("name") or _FINELOG_FALLBACK_SERVER
+        desired = (deployment.get("spec") or {}).get("replicas", 1)
+        ready = (deployment.get("status") or {}).get("readyReplicas") or 0
+        responsive = desired > 0 and ready >= desired
+        return FinelogHealth(
+            cluster=self._target.name,
+            server=server,
+            role=FinelogRole.MIRROR,
+            responsive=responsive,
+            ready=ready,
+            desired=desired,
+            latency_ms=None,
+            error_class="" if responsive else "readiness",
+            error="" if responsive else "HTTP /health probe is not Ready",
+        )
+
+    def _finelog_deployments(self) -> list[dict]:
+        return [
+            deployment
+            for deployment in self._list("/apis/apps/v1/deployments")
+            if _deployment_has_container(deployment, _FINELOG_CONTAINER)
+        ]
+
+    def finelog_pods(self) -> list[FinelogPod]:
+        """Report each finelog Deployment, including a Missing row when it has no pod."""
+        rows = []
+        for deployment in self._finelog_deployments():
+            metadata = deployment.get("metadata") or {}
+            namespace = metadata.get("namespace") or "default"
+            deployment_name = metadata.get("name") or _FINELOG_FALLBACK_SERVER
+            pod_spec = ((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}
+            container = next(
+                (item for item in pod_spec.get("containers") or [] if item.get("name") == _FINELOG_CONTAINER),
+                {},
+            )
+            resources = container.get("resources") or {}
+            requests = resources.get("requests") or {}
+            limits = resources.get("limits") or {}
+            pvc_name = next(
+                (
+                    (volume.get("persistentVolumeClaim") or {}).get("claimName")
+                    for volume in pod_spec.get("volumes") or []
+                    if (volume.get("persistentVolumeClaim") or {}).get("claimName")
+                ),
+                "",
+            )
+            pvc = None
+            if pvc_name:
+                pvc = self._get(
+                    f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}",
+                    none_on_404=True,
+                )
+            pvc_spec = (pvc or {}).get("spec") or {}
+            pvc_status = (pvc or {}).get("status") or {}
+            storage_capacity = (pvc_status.get("capacity") or {}).get("storage")
+            if storage_capacity is None:
+                storage_capacity = ((pvc_spec.get("resources") or {}).get("requests") or {}).get("storage", "")
+
+            pods = self._deployment_pods(namespace, deployment)
+            if not pods:
+                pods = [{"metadata": {}, "spec": {}, "status": {}}]
+            for pod in pods:
+                pod_metadata = pod.get("metadata") or {}
+                runtime_spec = pod.get("spec") or {}
+                status = pod.get("status") or {}
+                container_status = next(
+                    (item for item in status.get("containerStatuses") or [] if item.get("name") == _FINELOG_CONTAINER),
+                    {},
+                )
+                last_terminated = (container_status.get("lastState") or {}).get("terminated") or {}
+                rows.append(
+                    FinelogPod(
+                        cluster=self._target.name,
+                        namespace=namespace,
+                        deployment=deployment_name,
+                        pod=pod_metadata.get("name") or "",
+                        node=runtime_spec.get("nodeName") or "",
+                        phase=status.get("phase") or "Missing",
+                        ready=bool(container_status.get("ready")),
+                        restarts=container_status.get("restartCount") or 0,
+                        last_exit_code=last_terminated.get("exitCode"),
+                        last_exit_reason=last_terminated.get("reason") or "",
+                        image=container.get("image") or "",
+                        cpu_request=str(requests.get("cpu", "")),
+                        cpu_limit=str(limits.get("cpu", "")),
+                        memory_request=str(requests.get("memory", "")),
+                        memory_limit=str(limits.get("memory", "")),
+                        startup_probe=bool(container.get("startupProbe")),
+                        readiness_probe=bool(container.get("readinessProbe")),
+                        liveness_probe=bool(container.get("livenessProbe")),
+                        pvc=pvc_name,
+                        storage_class=pvc_spec.get("storageClassName") or "",
+                        storage_capacity=str(storage_capacity),
+                    )
+                )
+        return rows
+
     def _scanned_namespaces(self) -> list[str]:
         """Namespaces the pod scans cover: everything not provider-managed by prefix."""
         namespaces = self._list("/api/v1/namespaces")
         names = [(ns.get("metadata") or {}).get("name") or "" for ns in namespaces]
         return [name for name in names if name and not name.startswith(PROVIDER_NAMESPACE_PREFIXES)]
 
-    def _scan_pods(self, field_selector: str) -> list[dict]:
+    def _scan_pods(self, field_selector: str | None) -> list[dict]:
         pods: list[dict] = []
+        params = {"fieldSelector": field_selector} if field_selector else None
         for namespace in self._scanned_namespaces():
-            pods.extend(self._list(f"/api/v1/namespaces/{namespace}/pods", {"fieldSelector": field_selector}))
+            pods.extend(self._list(f"/api/v1/namespaces/{namespace}/pods", params))
         return pods
 
     def crashloops(self) -> list[dict]:
@@ -286,6 +525,47 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
+    def termination_candidates(self) -> list[TerminatingPod]:
+        """Return overdue terminating pods and invalid deletion timestamps.
+
+        Raises:
+            ValueError: A candidate has a malformed GPU resource quantity.
+        """
+        rows = []
+        for pod in self._scan_pods(None):
+            metadata = pod.get("metadata") or {}
+            deletion_timestamp = metadata.get("deletionTimestamp")
+            if not deletion_timestamp:
+                continue
+            overdue_seconds = _deletion_overdue_seconds(deletion_timestamp)
+            if overdue_seconds is not None and overdue_seconds < STUCK_TERMINATION_OVERDUE_SECONDS:
+                continue
+            spec = pod.get("spec") or {}
+            status = pod.get("status") or {}
+            labels = metadata.get("labels") or {}
+            finalizers = sorted(metadata.get("finalizers") or [])
+            rows.append(
+                TerminatingPod(
+                    cluster=self._target.name,
+                    namespace=metadata.get("namespace") or "",
+                    pod=metadata.get("name") or "",
+                    node=spec.get("nodeName") or "",
+                    phase=status.get("phase") or "",
+                    deletion_timestamp=deletion_timestamp,
+                    deletion_grace_seconds=metadata.get("deletionGracePeriodSeconds"),
+                    overdue_seconds=overdue_seconds,
+                    gpu_count=_pod_gpu_count(pod),
+                    task_attempt=_iris_task_attempt(pod),
+                    task_label=labels.get("iris.task_id") or "",
+                    job_label=labels.get("iris.job_id") or "",
+                    priority_class=spec.get("priorityClassName") or "",
+                    finalizers=",".join(finalizers),
+                    classification=_termination_class(pod, overdue_seconds),
+                )
+            )
+        rows.sort(key=lambda row: row.overdue_seconds if row.overdue_seconds is not None else -1, reverse=True)
+        return rows
+
     def kueue(self) -> list[dict]:
         """Unadmitted, unfinished Kueue Workloads aggregated per local queue."""
         workloads = self._list("/apis/kueue.x-k8s.io/v1beta2/workloads")
@@ -325,6 +605,55 @@ class K8sSource:
         rows.sort(key=lambda row: row["last_seen"] or 0, reverse=True)
         return rows[:_EVENT_LIMIT]
 
+    def gpu_racks(self) -> list[dict]:
+        """One row per physical rack of GB200 nodes: trays registered vs. Ready.
+
+        Scoped to GB200 NVL72 instance types (see _GB200_INSTANCE_TYPE_SUBSTRING):
+        other GPU instance types carry a CoreWeave rack label too, but with a
+        different physical-rack topology the 16/18-tray expectation doesn't apply to.
+
+        Raises:
+            ValueError: A node has a malformed nvidia.com/gpu capacity quantity.
+        """
+        racks: dict[str, dict] = {}
+        for node in self._list("/api/v1/nodes"):
+            if _node_gpu_capacity(node) <= 0:
+                continue
+            labels = (node.get("metadata") or {}).get("labels") or {}
+            instance_type = labels.get(_INSTANCE_TYPE_LABEL, "")
+            if _GB200_INSTANCE_TYPE_SUBSTRING not in instance_type:
+                continue
+            rack = labels.get(_RACK_LABEL)
+            if rack is None:
+                continue
+            bucket = racks.setdefault(
+                rack,
+                {
+                    "rack": rack,
+                    "rack_name": labels.get(_RACK_NAME_LABEL, ""),
+                    "instance_type": instance_type,
+                    "trays_total": 0,
+                    "trays_ready": 0,
+                },
+            )
+            bucket["trays_total"] += 1
+            if _node_ready(node):
+                bucket["trays_ready"] += 1
+        return [racks[rack] for rack in sorted(racks, key=int)]
+
+
+def _node_gpu_capacity(node: dict) -> int:
+    raw = ((node.get("status") or {}).get("capacity") or {}).get(_GPU_RESOURCE, 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"invalid {_GPU_RESOURCE} capacity quantity: {raw!r}") from err
+
+
+def _node_ready(node: dict) -> bool:
+    conditions = (node.get("status") or {}).get("conditions") or []
+    return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+
 
 def _container_statuses(pod: dict) -> list[dict]:
     status = pod.get("status") or {}
@@ -347,6 +676,57 @@ def _pod_scope(metadata: dict) -> str:
     return SCOPE_WORKLOAD
 
 
+def _resource_gpu_count(resources: dict | None) -> int:
+    resources = resources or {}
+    values = []
+    for field in ("requests", "limits"):
+        raw = (resources.get(field) or {}).get(_GPU_RESOURCE, 0)
+        try:
+            values.append(int(raw))
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"invalid {_GPU_RESOURCE} {field} quantity: {raw!r}") from err
+    return max(values, default=0)
+
+
+def _pod_gpu_count(pod: dict) -> int:
+    """Return the effective GPU request Kubernetes uses to schedule the pod."""
+    spec = pod.get("spec") or {}
+    app_total = sum(_resource_gpu_count(c.get("resources")) for c in spec.get("containers") or [])
+    restartable_total = 0
+    init_peak = 0
+    for container in spec.get("initContainers") or []:
+        count = _resource_gpu_count(container.get("resources"))
+        if container.get("restartPolicy") == "Always":
+            restartable_total += count
+        else:
+            init_peak = max(init_peak, restartable_total + count)
+    return max(app_total + restartable_total, init_peak)
+
+
+def _iris_task_attempt(pod: dict) -> str:
+    for container in (pod.get("spec") or {}).get("containers") or []:
+        if container.get("name") != "task":
+            continue
+        for item in container.get("env") or []:
+            if item.get("name") == _IRIS_TASK_ID_ENV:
+                return item.get("value") or ""
+    return ""
+
+
+def _termination_class(pod: dict, overdue_seconds: int | None) -> TerminationClass:
+    metadata = pod.get("metadata") or {}
+    if overdue_seconds is None:
+        return TerminationClass.INVALID_TIMESTAMP
+    if metadata.get("finalizers"):
+        return TerminationClass.FINALIZER
+    status = pod.get("status") or {}
+    if status.get("phase") in _TERMINAL_POD_PHASES:
+        return TerminationClass.TERMINAL
+    if not (pod.get("spec") or {}).get("nodeName"):
+        return TerminationClass.UNBOUND
+    return TerminationClass.NODE_CLEANUP
+
+
 class K8sFleet:
     """Fans one query out across every cluster, one thread each, stamping ``cluster``."""
 
@@ -354,21 +734,33 @@ class K8sFleet:
         self._sources = tuple(sources)
         self._executor = ThreadPoolExecutor(max_workers=max(len(self._sources), 1), thread_name_prefix="k8s")
 
+    def _collect(
+        self,
+        fn: Callable[[K8sSource], list[_Row]],
+        on_error: Callable[[K8sSource, K8sError], list[_Row]],
+    ) -> list[_Row]:
+        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
+        rows: list[_Row] = []
+        for source, future in futures:
+            try:
+                rows.extend(future.result())
+            except K8sError as err:
+                logger.warning("k8s query failed for %s: %s", source.target.name, err)
+                rows.extend(on_error(source, err))
+        return rows
+
     def _fan_out(
         self,
         fn: Callable[[K8sSource], list[dict]],
         on_error: Callable[[K8sError], list[dict]],
     ) -> list[dict]:
-        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
-        rows: list[dict] = []
-        for source, future in futures:
-            try:
-                cluster_rows = future.result()
-            except K8sError as err:
-                logger.warning("k8s query failed for %s: %s", source.target.name, err)
-                cluster_rows = on_error(err)
-            rows.extend({"cluster": source.target.name, **row} for row in cluster_rows)
-        return rows
+        def stamped(source: K8sSource) -> list[dict]:
+            return [{"cluster": source.target.name, **row} for row in fn(source)]
+
+        def stamped_error(source: K8sSource, err: K8sError) -> list[dict]:
+            return [{"cluster": source.target.name, **row} for row in on_error(err)]
+
+        return self._collect(stamped, stamped_error)
 
     @staticmethod
     def _error_row(err: K8sError) -> list[dict]:
@@ -383,11 +775,64 @@ class K8sFleet:
     def pending(self) -> list[dict]:
         return self._fan_out(lambda s: s.pending(), self._error_row)
 
+    def termination_candidates(self) -> list[TerminatingPodResult]:
+        return self._collect(
+            lambda source: source.termination_candidates(),
+            lambda source, err: [TerminatingPodError(source.target.name, str(err.error_class), str(err))],
+        )
+
     def kueue(self) -> list[dict]:
         return self._fan_out(lambda s: s.kueue(), self._error_row)
 
     def warning_events(self) -> list[dict]:
         return self._fan_out(lambda s: s.warning_events(), self._error_row)
+
+    def gpu_racks(self) -> list[dict]:
+        return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
+
+    def finelog_health(self) -> list[FinelogHealth]:
+        """One health row per k8s finelog mirror, including API failures."""
+
+        def on_error(source: K8sSource, err: K8sError) -> list[FinelogHealth]:
+            return [
+                FinelogHealth(
+                    cluster=source.target.name,
+                    server=_FINELOG_FALLBACK_SERVER,
+                    role=FinelogRole.MIRROR,
+                    responsive=False,
+                    ready=0,
+                    desired=1,
+                    latency_ms=None,
+                    error_class=str(err.error_class),
+                    error=str(err),
+                )
+            ]
+
+        return self._collect(lambda source: [source.finelog_health()], on_error)
+
+    def finelog_pods(self) -> list[FinelogPodResult]:
+        return self._collect(
+            lambda source: source.finelog_pods(),
+            lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
+        )
+
+    def alert_gpu_rack_trays(self) -> list[dict]:
+        """Per rack: trays_ready as ``value``, for the below-minimum-trays alert.
+
+        Unlike the other alert routes, an unreachable cluster contributes no rows
+        here rather than an explicit safe value: we don't know its rack set to fill
+        in placeholders for, and a fabricated value below the threshold would
+        double-page alongside K8sClusterUnreachable, which already covers that
+        failure mode. noDataState=Alerting still pages if the whole fleet drops out.
+        """
+
+        def counts(source: K8sSource) -> list[dict]:
+            return [
+                {"rack": row["rack"], "rack_name": row["rack_name"], "value": row["trays_ready"]}
+                for row in source.gpu_racks()
+            ]
+
+        return self._fan_out(counts, lambda err: [])
 
     def health(self) -> list[dict]:
         """One row per cluster: reachable, error class, and API server latency."""
@@ -441,3 +886,37 @@ class K8sFleet:
             return rows
 
         return self._fan_out(gaps, lambda err: [{"component": c.key, "value": 0} for c in WATCHED_COMPONENTS])
+
+    def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
+        """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
+        rows = list(candidates) if candidates is not None else self.termination_candidates()
+        by_node: dict[tuple[str, str], int] = {}
+        for row in rows:
+            if not isinstance(row, TerminatingPod):
+                continue
+            if row.classification != TerminationClass.NODE_CLEANUP or row.gpu_count <= 0:
+                continue
+            key = (row.cluster, row.node)
+            by_node[key] = by_node.get(key, 0) + 1
+
+        alert_rows = []
+        affected_clusters = set()
+        for (cluster, node), count in sorted(by_node.items()):
+            affected_clusters.add(cluster)
+            alert_rows.append(
+                {
+                    "cluster": cluster,
+                    "node": node,
+                    "value": count,
+                }
+            )
+        for source in self._sources:
+            if source.target.name not in affected_clusters:
+                alert_rows.append(
+                    {
+                        "cluster": source.target.name,
+                        "node": "",
+                        "value": 0,
+                    }
+                )
+        return alert_rows

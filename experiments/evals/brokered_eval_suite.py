@@ -3,9 +3,8 @@
 
 from marin.evaluation.lm_eval import LmEvalResults, LmEvalRun
 from marin.execution.lazy import ArtifactStep
-from marin.inference.vllm import BrokeredVllmSystemConfig
 
-from experiments.evals.served_lm_eval import brokered_lm_eval_step
+from experiments.evals.served_lm_eval import BrokeredEvalInference, brokered_lm_eval_step
 
 BROKERED_EVAL_TASKS = (
     "cruxeval_input",
@@ -15,7 +14,7 @@ BROKERED_EVAL_TASKS = (
 
 
 def brokered_eval_suite(
-    inference: BrokeredVllmSystemConfig,
+    inference: BrokeredEvalInference,
     *,
     model_name: str,
     version: str,

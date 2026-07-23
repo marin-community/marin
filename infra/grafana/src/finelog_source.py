@@ -9,12 +9,16 @@ cluster's controller is down.
 """
 
 import logging
+import time
 from typing import Protocol
 
 import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
-from discovery import resolve_internal_ip
+from discovery import InstanceResolutionError, resolve_internal_ip
 from finelog.client.log_client import LogClient
+from finelog.errors import StatsError
+from finelog_health import FinelogHealth, FinelogRole
+from google.api_core.exceptions import GoogleAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,8 @@ class MetricSource(Protocol):
     def target(self) -> ClusterTarget: ...
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table: ...
+
+    def health(self) -> FinelogHealth: ...
 
 
 class FinelogSource:
@@ -56,3 +62,33 @@ class FinelogSource:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run sql against this cluster's finelog. Raises QueryResultTooLargeError past max_rows."""
         return self._client.query(sql, max_rows=max_rows)
+
+    def health(self) -> FinelogHealth:
+        """Probe the query path and return a dashboard-safe health row."""
+        started = time.monotonic()
+        try:
+            self.query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+        except (GoogleAPIError, InstanceResolutionError, OSError, StatsError) as err:
+            logger.warning("finelog health query failed for %s: %s", self._target.name, err)
+            return FinelogHealth(
+                cluster=self._target.name,
+                server=f"finelog-{self._target.name}",
+                role=FinelogRole.HUB,
+                responsive=False,
+                ready=0,
+                desired=1,
+                latency_ms=None,
+                error_class=type(err).__name__,
+                error=str(err),
+            )
+        return FinelogHealth(
+            cluster=self._target.name,
+            server=f"finelog-{self._target.name}",
+            role=FinelogRole.HUB,
+            responsive=True,
+            ready=1,
+            desired=1,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            error_class="",
+            error="",
+        )
