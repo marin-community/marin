@@ -405,9 +405,8 @@ def all_sources() -> dict[str, DatakitSource]:
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
-    # excluded to avoid double-counting that corpus). Token counts measured
-    # by tokenizing every subset with the marin-community tokenizer (see
-    # ``scripts/datakit/tokenize_safety_pt.py``).
+    # excluded to avoid double-counting that corpus). Token counts were measured
+    # by tokenizing every subset with the marin-community tokenizer.
     safety_pretraining = _rows_flat(
         safety_pretraining_normalize_steps,
         {

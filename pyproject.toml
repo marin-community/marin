@@ -376,7 +376,6 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
