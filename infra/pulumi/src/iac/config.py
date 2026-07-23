@@ -84,6 +84,8 @@ class KueueProvisioningSpec(BaseModel):
 MARIN_FEDERATION_EGRESS_SOURCES = ["34.27.183.11", "35.254.13.19"]
 CLOUDFLARE_OA_DEV_ZONE_ID = "169959d6aafcbfd77764b8efafa3a509"
 
+CLOUDFLARE_TOKEN_SECRET = "gcp-secret://projects/hai-gcp-models/secrets/cloudflare-oa-dns-token/versions/latest"
+
 
 class IngressSpec(BaseModel):
     """Traefik + cert-manager + ACME issuers, and the IP-locked federation route (TraefikAddon)."""
