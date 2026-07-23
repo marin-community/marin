@@ -284,162 +284,23 @@
     },
     {
       "id": 3,
-      "type": "stat",
-      "title": "Iris controller",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "iris-marin"
-      },
+      "panelRef": "iris_controller_up",
       "gridPos": {
         "h": 3,
         "w": 4,
         "x": 0,
         "y": 12
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "max": 1,
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "DOWN",
-                  "color": "red",
-                  "index": 1
-                },
-                "1": {
-                  "text": "UP",
-                  "color": "green",
-                  "index": 0
-                }
-              }
-            }
-          ]
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/health",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "up",
-              "text": "up",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 4,
-      "type": "stat",
-      "title": "K8s APIs reachable",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "k8s_apis_unreachable",
       "gridPos": {
         "h": 3,
         "w": 4,
         "x": 4,
         "y": 12
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/health",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "up",
-              "text": "up",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 5,
@@ -587,204 +448,33 @@
     },
     {
       "id": 7,
-      "type": "stat",
-      "title": "Pending pods",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "pending_pods_count",
       "gridPos": {
         "h": 3,
         "w": 4,
         "x": 16,
         "y": 12
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/overview",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "pending_pods",
-              "text": "pending_pods",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 8,
-      "type": "stat",
-      "title": "Crashloops",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "crashloops_count",
       "gridPos": {
         "h": 3,
         "w": 4,
         "x": 20,
         "y": 12
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "count"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/overview",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "crashlooping_containers",
-              "text": "crashlooping_containers",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 9,
-      "type": "stat",
-      "title": "Healthy workers",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "iris-marin"
-      },
+      "panelRef": "healthy_workers_count",
       "gridPos": {
         "h": 3,
         "w": 6,
         "x": 0,
         "y": 15
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/workers",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "healthy",
-              "text": "healthy",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 10,
@@ -918,67 +608,13 @@
     },
     {
       "id": 12,
-      "type": "stat",
-      "title": "TPU chips",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "iris-marin"
-      },
+      "panelRef": "tpu_chips_count",
       "gridPos": {
         "h": 3,
         "w": 6,
         "x": 18,
         "y": 15
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "orientation": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/workers",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "tpu_chips",
-              "text": "tpu_chips",
-              "type": "number"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 20,
@@ -1550,87 +1186,13 @@
     },
     {
       "id": 33,
-      "type": "table",
-      "title": "Kubernetes control plane",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "control_plane_components",
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
         "y": 35
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/control_plane",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "kind",
-              "text": "kind",
-              "type": "string"
-            },
-            {
-              "selector": "namespace",
-              "text": "namespace",
-              "type": "string"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "desired",
-              "text": "desired",
-              "type": "number"
-            },
-            {
-              "selector": "ready",
-              "text": "ready",
-              "type": "number"
-            },
-            {
-              "selector": "up",
-              "text": "up",
-              "type": "number"
-            },
-            {
-              "selector": "error_class",
-              "text": "error_class",
-              "type": "string"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 40,
@@ -1882,171 +1444,23 @@
     },
     {
       "id": 51,
-      "type": "table",
-      "title": "Pending and gated pods",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "pending_gated_pods",
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
         "y": 53
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/pending",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "namespace",
-              "text": "namespace",
-              "type": "string"
-            },
-            {
-              "selector": "pod",
-              "text": "pod",
-              "type": "string"
-            },
-            {
-              "selector": "phase",
-              "text": "phase",
-              "type": "string"
-            },
-            {
-              "selector": "reason",
-              "text": "reason",
-              "type": "string"
-            },
-            {
-              "selector": "age_seconds",
-              "text": "age_seconds",
-              "type": "number"
-            },
-            {
-              "selector": "scope",
-              "text": "scope",
-              "type": "string"
-            },
-            {
-              "selector": "error_class",
-              "text": "error_class",
-              "type": "string"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 52,
-      "type": "table",
-      "title": "Crashlooping containers",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "crashlooping_pods",
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
         "y": 53
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/crashloops",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "namespace",
-              "text": "namespace",
-              "type": "string"
-            },
-            {
-              "selector": "pod",
-              "text": "pod",
-              "type": "string"
-            },
-            {
-              "selector": "container",
-              "text": "container",
-              "type": "string"
-            },
-            {
-              "selector": "reason",
-              "text": "reason",
-              "type": "string"
-            },
-            {
-              "selector": "restarts",
-              "text": "restarts",
-              "type": "number"
-            },
-            {
-              "selector": "scope",
-              "text": "scope",
-              "type": "string"
-            },
-            {
-              "selector": "error_class",
-              "text": "error_class",
-              "type": "string"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 53,
@@ -2129,156 +1543,23 @@
     },
     {
       "id": 54,
-      "type": "table",
-      "title": "Kueue backlog",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "kueue_admission_backlog",
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
         "y": 60
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/kueue",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "queue",
-              "text": "queue",
-              "type": "string"
-            },
-            {
-              "selector": "count",
-              "text": "count",
-              "type": "number"
-            },
-            {
-              "selector": "oldest_age_seconds",
-              "text": "oldest_age_seconds",
-              "type": "number"
-            },
-            {
-              "selector": "error_class",
-              "text": "error_class",
-              "type": "string"
-            }
-          ]
-        }
-      ]
+      }
     },
     {
       "id": 55,
-      "type": "table",
-      "title": "Warning events",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "k8s"
-      },
+      "panelRef": "warning_events",
       "gridPos": {
         "h": 7,
         "w": 16,
         "x": 8,
         "y": 60
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/events",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "namespace",
-              "text": "namespace",
-              "type": "string"
-            },
-            {
-              "selector": "involved_object",
-              "text": "involved_object",
-              "type": "string"
-            },
-            {
-              "selector": "reason",
-              "text": "reason",
-              "type": "string"
-            },
-            {
-              "selector": "message",
-              "text": "message",
-              "type": "string"
-            },
-            {
-              "selector": "count",
-              "text": "count",
-              "type": "number"
-            },
-            {
-              "selector": "last_seen",
-              "text": "last_seen",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "error_class",
-              "text": "error_class",
-              "type": "string"
-            }
-          ]
-        }
-      ]
+      }
     }
   ]
 }

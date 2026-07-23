@@ -48,4 +48,4 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python infra/cron/nightshift_doc_drift.py --run-id ${{ github.run_id }} --run-attempt ${{ github.run_attempt }}
+        run: python -m infra.cron.nightshift_doc_drift --run-id ${{ github.run_id }} --run-attempt ${{ github.run_attempt }}

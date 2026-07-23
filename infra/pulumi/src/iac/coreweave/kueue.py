@@ -79,6 +79,14 @@ class KueueAddon(pulumi.ComponentResource):
                 import_=import_id if (args.adopt and import_id) else None,
             )
 
+        client_connection = args.spec.client_connection
+        helm_values = build_cks_values(
+            [args.namespace],
+            manager_memory_limit=args.spec.manager_memory_limit,
+            client_connection_qps=client_connection.qps,
+            client_connection_burst=client_connection.burst,
+        )
+
         # The cks-kueue Helm release. Webhooks scoped to args.namespace via the manager config.
         release = k8s.helm.v3.Release(
             "kueue",
@@ -88,7 +96,7 @@ class KueueAddon(pulumi.ComponentResource):
             namespace=OPERATOR_NS,
             create_namespace=True,
             repository_opts=k8s.helm.v3.RepositoryOptsArgs(repo=CW_REPO_URL),
-            values=build_cks_values([args.namespace]),
+            values=helm_values,
             # helm Release import id is "<namespace>/<release-name>".
             opts=child_opts(f"{OPERATOR_NS}/{RELEASE_DEFAULT}"),
         )

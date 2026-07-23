@@ -140,7 +140,59 @@ def _finelog(query: str) -> list[dict]:
     return []
 
 
+def _finelog_k8s_rows(path: str) -> list[dict] | None:
+    if path == "/k8s/finelog":
+        return [
+            {
+                "cluster": cluster,
+                "namespace": "iris",
+                "deployment": server,
+                "pod": f"{server}-abc",
+                "node": "cpu-node-1",
+                "phase": "Running",
+                "ready": True,
+                "restarts": 0,
+                "last_exit_code": None,
+                "last_exit_reason": "",
+                "cpu_request": "2",
+                "cpu_limit": "8",
+                "memory_request": "16Gi",
+                "memory_limit": "32Gi",
+                "startup_probe": True,
+                "readiness_probe": True,
+                "liveness_probe": True,
+                "pvc": f"{server}-cache",
+                "storage_class": "shared-vast",
+                "storage_capacity": "250Gi",
+                "image": "ghcr.io/marin-community/finelog@sha256:abc",
+                "error_class": "",
+                "error": "",
+            }
+            for cluster, server in (
+                ("cw-us-east-02a", "finelog-cw-use02a"),
+                ("cw-us-east-08a", "finelog-cw-use08a"),
+                ("cw-rno2a", "finelog-cw-rno2a"),
+            )
+        ]
+    if path == "/k8s/finelog_events":
+        return [
+            {
+                "cluster": "cw-rno2a",
+                "namespace": "iris",
+                "object": "Pod/finelog-cw-rno2a-abc",
+                "reason": "Unhealthy",
+                "message": "Readiness probe failed",
+                "count": 3,
+                "last_seen": round(_NOW.timestamp() * 1000),
+            }
+        ]
+    return None
+
+
 def _rows(path: str, query: str) -> list[dict] | dict:
+    finelog_rows = _finelog_k8s_rows(path)
+    if finelog_rows is not None:
+        return finelog_rows
     if path == "/github/nightlies":
         return _nightlies()
     if path == "/github/builds":
@@ -188,9 +240,34 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             {"bucket": "last24h", "state": "succeeded", "count": 318},
             {"bucket": "last24h", "state": "failed", "count": 9},
         ]
+    if path == "/finelog/marin/fleet_health":
+        return [
+            {
+                "cluster": cluster,
+                "server": server,
+                "role": role,
+                "responsive": True,
+                "ready": 1,
+                "desired": 1,
+                "latency_ms": 22 if role == "hub" else None,
+                "error_class": "",
+                "error": "",
+            }
+            for cluster, server, role in (
+                ("marin", "finelog-marin", "hub"),
+                ("cw-us-east-02a", "finelog-cw-use02a", "mirror"),
+                ("cw-us-east-08a", "finelog-cw-use08a", "mirror"),
+                ("cw-rno2a", "finelog-cw-rno2a", "mirror"),
+            )
+        ]
     if path == "/k8s/health":
         return [
             {"cluster": cluster, "reachable": True, "up": 1, "latency_ms": 31, "error_class": ""}
+            for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
+        ]
+    if path == "/k8s/alerts/unreachable":
+        return [
+            {"cluster": cluster, "error_class": "none", "value": 0}
             for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
         ]
     if path == "/k8s/overview":
@@ -199,16 +276,15 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         return [
             {
                 "cluster": cluster,
-                "kind": "deployment",
-                "namespace": namespace,
-                "name": name,
-                "desired": 1,
+                "kind": "component",
+                "component": component,
                 "ready": 1,
-                "up": 1,
-                "error_class": "",
+                "desired": 1,
+                "restarts": 0,
+                "waiting_reason": "",
             }
             for cluster in ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a")
-            for namespace, name in (("iris", "iris-controller"), ("kueue-system", "kueue-controller-manager"))
+            for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
         ]
     if path == "/k8s/pending":
         return [
@@ -216,11 +292,9 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "cluster": "cw-us-east-08a",
                 "namespace": "iris",
                 "pod": "trainer-queued",
-                "phase": "Pending",
+                "state": "pending",
                 "reason": "Unschedulable",
                 "age_seconds": 420,
-                "scope": "workload",
-                "error_class": "",
             }
         ]
     if path == "/k8s/crashloops":
@@ -249,20 +323,42 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             }
         ]
     if path == "/k8s/kueue":
+        return [{"cluster": "cw-us-east-08a", "queue": "training", "unadmitted": 6, "oldest_age_seconds": 540}]
+    if path == "/k8s/gpu_racks":
         return [
-            {"cluster": "cw-us-east-08a", "queue": "training", "count": 6, "oldest_age_seconds": 540, "error_class": ""}
+            {
+                "cluster": "cw-us-east-08a",
+                "rack": rack,
+                "rack_name": f"dh1-r{rack}-us-east-08a",
+                "instance_type": "gb200-4x",
+                "trays_total": total,
+                "trays_ready": ready,
+            }
+            for rack, total, ready in (
+                ("122", 17, 17),
+                ("124", 17, 17),
+                ("125", 17, 17),
+                ("126", 18, 18),
+                ("128", 16, 16),
+                ("129", 18, 18),
+                ("136", 17, 17),
+                ("137", 16, 16),
+                ("392", 16, 16),
+                ("393", 16, 16),
+                ("394", 16, 16),
+                ("397", 15, 15),
+            )
         ]
     if path == "/k8s/events":
         return [
             {
                 "cluster": "cw-us-east-08a",
                 "namespace": "training",
-                "involved_object": "trainer-queued",
+                "object": "Pod/trainer-queued",
                 "reason": "FailedScheduling",
                 "message": "waiting for H100 capacity",
                 "count": 2,
                 "last_seen": round(_NOW.timestamp() * 1000),
-                "error_class": "",
             }
         ]
     if path.startswith("/wandb/"):

@@ -6,11 +6,11 @@
 Reads the target cluster from stack config (`marin-iac:cluster`), loads its Iris config +
 typed `provisioning:` section, and declares that cluster's resources. One stack per cluster;
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
-which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects, and
-the Traefik/cert-manager/federation-ingress stack; GCP declares the reserved federation-egress
-static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
+which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
+the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
+the reserved federation-egress static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
 (object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
-gaps.md.
+README.md's "Future work".
 """
 
 import os
@@ -27,6 +27,7 @@ import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from iac.config import Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
+from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
@@ -45,9 +46,9 @@ def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
     (declared below) exposes the controller's RPC surface behind only an IP allowlist — a
     stable identity plus `auth.trusted_cidrs` is what actually makes that enforcing rather
     than permissive (see install_cw_network.py's own NULL-AUTH warning, docs/coreweave.md).
-    Pulumi does not provision the signing-key secret itself (see gaps.md's "finelog auth
-    secrets" — the key material must never pass through Pulumi state); this is purely a
-    read-only reminder pointing at the one command that does.
+    Pulumi does not provision the signing-key secret itself — the key material must never pass
+    through Pulumi state (see README.md's "Unsupported"); this is purely a read-only reminder
+    pointing at the one command that does.
     """
     auth = iris_config.auth
     if auth is not None and auth.signing_key:
@@ -149,6 +150,22 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         ),
         k8s_provider=k8s_provider,
     )
+
+    federation_dns = coreweave_provisioning.federation_dns
+    if federation_dns is not None:
+        cloudflare_api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+        if not cloudflare_api_token:
+            raise ValueError(
+                "CLOUDFLARE_API_TOKEN is required when provisioning.coreweave.federation_dns is set; "
+                "load cloudflare-oa-dns-token from GCP Secret Manager"
+            )
+        FederationDns(
+            "dns",
+            FederationDnsArgs(
+                spec=federation_dns,
+                api_token=pulumi.Output.secret(cloudflare_api_token),
+            ),
+        )
 
 
 def _build_gcp(cluster: str, *, adopt: bool) -> None:

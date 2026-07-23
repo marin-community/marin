@@ -130,6 +130,24 @@ def test_drain_pending_creates_attempt_rows(state):
     assert attempt.worker_id is None
 
 
+def test_drain_stamps_attempt_uid(state):
+    """The dispatched RunTaskRequest carries the attempt's minted uid, and a
+    redrive of the same attempt keeps it — so the K8s backend can label the pod
+    and tell this attempt's pod apart from a stale resubmit pod."""
+    [task_id] = submit_direct_job(state, "drain-uid")
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    uid = batch.tasks_to_run[0].attempt_uid
+    assert uid
+    assert uid == query_attempt(state, task_id, 0).attempt_uid
+
+    # Redrive (still ASSIGNED+null-worker) rebuilds the request with the same uid.
+    with state._db.transaction() as cur:
+        redriven = dispatch.drain_for_dispatch(cur)
+    assert redriven.tasks_to_run[0].attempt_uid == uid
+
+
 def test_drain_propagates_task_image(state):
     """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
     [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")

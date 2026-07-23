@@ -288,7 +288,7 @@ jobs:
         if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
         run: |
           npm install -g @anthropic-ai/claude-code
-          python lib/iris/scripts/verify_screenshots.py \
+          python -m lib.iris.scripts.verify_screenshots \
             --screenshot-dir ${{ github.workspace }}/iris-screenshots
 
       - name: Upload screenshots

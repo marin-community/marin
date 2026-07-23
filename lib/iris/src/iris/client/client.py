@@ -852,30 +852,23 @@ class IrisClient:
         """List workers registered with the controller."""
         return list(self._cluster_client.list_workers(query=query))
 
-    def terminate_prefix(
-        self,
-        prefix: JobName,
-        *,
-        exclude_finished: bool = True,
-    ) -> list[JobName]:
-        """Terminate all jobs matching a prefix.
+    def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
+        """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
+        return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
+
+    def terminate_prefix(self, prefix: str) -> list[JobName]:
+        """Terminate all active jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
-            exclude_finished: If True, skip jobs already in terminal states
+            prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
 
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix.to_wire())
-        terminated = []
-        for job in jobs:
-            if exclude_finished and is_job_finished(job.state):
-                continue
-            job_id = JobName.from_wire(job.job_id)
+        job_ids = self.active_job_names_for_prefix(prefix)
+        for job_id in job_ids:
             self.terminate(job_id)
-            terminated.append(job_id)
-        return terminated
+        return job_ids
 
     def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task.

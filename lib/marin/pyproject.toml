@@ -204,6 +204,7 @@ datakit = [
     "faiss-cpu",
     "scikit-learn",
     "scipy",
+    "duckdb>=1.0.0",
 ]
 
 math = ["pylatexenc", "sympy"]

@@ -102,10 +102,9 @@ class TraefikAddon(pulumi.ComponentResource):
         # These two Releases omit `repository_opts`: with it set, Pulumi intermittently fails to
         # resolve the chart at preview time (upstream pulumi-kubernetes#935). Without it,
         # `chart="coreweave/traefik"` resolves through the local `helm` CLI repo config, which
-        # must have the `coreweave` alias registered first (`helm repo add coreweave <url>`).
-        # That prerequisite, and the options for folding it into `pulumi up`, are documented in
-        # one place: infra/pulumi/README.md Prerequisites and gaps.md's "Pulumi Helm chart
-        # resolution". `KueueAddon`'s `cks-kueue` Release keeps `repository_opts`, never having failed.
+        # must have the `coreweave` alias registered first (`helm repo add coreweave <url>`,
+        # documented in infra/pulumi/README.md's "First-time setup"). `KueueAddon`'s `cks-kueue`
+        # Release keeps `repository_opts`, never having failed.
         cert_manager_release = k8s.helm.v3.Release(
             "cert-manager",
             name=DEFAULT_CERT_MANAGER_RELEASE,
@@ -130,8 +129,9 @@ class TraefikAddon(pulumi.ComponentResource):
         # No explicit CRD-readiness wait: `depends_on=[cert_manager_release]` orders these after
         # the Release's readiness check (healthy cert-manager pods), which in practice clears
         # after the CRDs it ships are registered, and the k8s provider retries a CustomResource
-        # create up to 5 times if the CRD is not yet found. See gaps.md's "Traefik/cert-manager
-        # CRD-registration race" for the investigation and the accepted-risk rationale.
+        # create up to 5 times if the CRD is not yet found (pulumi-kubernetes#1446). Accepted as
+        # a bounded risk — image pull and readiness probes take longer than CRD registration, so
+        # this hasn't manifested across any `pulumi up`/`preview` run to date.
         issuers = []
         for issuer_name in args.spec.cluster_issuers:
             env = ISSUER_ENVS[issuer_name]

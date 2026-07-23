@@ -56,6 +56,9 @@ def smtp_secret_exists(provider: gcp.Provider) -> bool:
 
 def main() -> None:
     config = pulumi.Config()
+    # Grafana uses this URL in alert notifications. Without it, its server defaults
+    # to the container listener and links point to localhost:8080.
+    custom_domain = config.get("custom_domain")
     # IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
@@ -86,6 +89,8 @@ def main() -> None:
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
     }
+    if custom_domain:
+        env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
     if smtp_secret_exists(provider):
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))
         env["GF_SMTP_ENABLED"] = "true"
@@ -115,7 +120,6 @@ def main() -> None:
     # Optional vanity domain: custom_domain is the host, dns_zone_id its Cloudflare zone.
     # Cloud Run terminates TLS and IAP, so the CNAME is DNS-only; a Cloudflare proxy blocks
     # managed-cert issuance.
-    custom_domain = config.get("custom_domain")
     if custom_domain:
         dns_zone_id = config.require("dns_zone_id")
         gcp.cloudrun.DomainMapping(

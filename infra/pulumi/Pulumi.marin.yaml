@@ -1,3 +1,4 @@
 config:
   marin-iac:cluster: marin
-encryptionsalt: v1:DllYXY6TjoI=:v1:bUzjcglbcOPfMjlm:SArcHQUd8X4RyFqteNWDEmDvY58Iew==
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6WdPIcnb9BTMvTFi33Ul9bDA89H3owKefrxog4tbpWoSSQCdtF6iH5aRd5NJkng98KEkevQprE6799I0MRgoNS8OYkDqy0L5TX5J/nilfCLWa/h/8rRj3EwSvvLDl8DQyHh6XrHURw1yadA=

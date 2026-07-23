@@ -1,0 +1,282 @@
+{
+  "uid": "marin-finelog",
+  "title": "Finelog",
+  "description": "Finelog fleet health, Kubernetes pod provisioning, restart history, probes, and persistent storage. The fleet table includes the GCE hub and every CoreWeave mirror; pod and PVC details come from the read-only Kubernetes API.",
+  "tags": [
+    "marin",
+    "generated",
+    "finelog"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 42,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "Finelog runbook",
+      "type": "link",
+      "url": "https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "K8s",
+      "type": "link",
+      "url": "/d/marin-k8s"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panelRef": "finelog_fleet_health"
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Kubernetes pods and storage",
+      "description": "Effective pod placement, restart history, resource requests and limits, probe presence, and PVC provisioning for every CoreWeave finelog mirror.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "deployment",
+              "text": "deployment",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "boolean"
+            },
+            {
+              "selector": "restarts",
+              "text": "restarts",
+              "type": "number"
+            },
+            {
+              "selector": "last_exit_code",
+              "text": "last_exit_code",
+              "type": "number"
+            },
+            {
+              "selector": "last_exit_reason",
+              "text": "last_exit_reason",
+              "type": "string"
+            },
+            {
+              "selector": "cpu_request",
+              "text": "cpu_request",
+              "type": "string"
+            },
+            {
+              "selector": "cpu_limit",
+              "text": "cpu_limit",
+              "type": "string"
+            },
+            {
+              "selector": "memory_request",
+              "text": "memory_request",
+              "type": "string"
+            },
+            {
+              "selector": "memory_limit",
+              "text": "memory_limit",
+              "type": "string"
+            },
+            {
+              "selector": "startup_probe",
+              "text": "startup_probe",
+              "type": "boolean"
+            },
+            {
+              "selector": "readiness_probe",
+              "text": "readiness_probe",
+              "type": "boolean"
+            },
+            {
+              "selector": "liveness_probe",
+              "text": "liveness_probe",
+              "type": "boolean"
+            },
+            {
+              "selector": "pvc",
+              "text": "pvc",
+              "type": "string"
+            },
+            {
+              "selector": "storage_class",
+              "text": "storage_class",
+              "type": "string"
+            },
+            {
+              "selector": "storage_capacity",
+              "text": "storage_capacity",
+              "type": "string"
+            },
+            {
+              "selector": "image",
+              "text": "image",
+              "type": "string"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Recent finelog warning events",
+      "description": "Kubernetes Warning events whose object name or message mentions finelog, newest first. Empty means no matching retained events.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog_events",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "last_seen",
+              "text": "last_seen",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "object",
+              "text": "object",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

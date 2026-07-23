@@ -110,7 +110,9 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
 
 def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
     launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
-    assert launcher.env() == {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
+    env = launcher.env()
+    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
 
 
 def test_isolated_cuda_vllm_marin_fork_command_and_env():
@@ -122,7 +124,7 @@ def test_isolated_cuda_vllm_marin_fork_command_and_env():
     env = launcher.env()
     assert env["VLLM_USE_PRECOMPILED"] == "1"
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert "AWS_CONFIG_FILE" in env
+    assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():

@@ -10,6 +10,7 @@ from dataclasses import replace
 
 import click
 import pytest
+import yaml
 from finelog.deploy._k8s import (
     _K8S_MANIFEST_DIR,
     _MANIFESTS,
@@ -128,6 +129,42 @@ def test_forwarding_signing_key_never_leaves_the_secret(monkeypatch: pytest.Monk
 
     for manifest_name in _MANIFESTS:
         assert "SEKRIT" not in _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
+
+
+def test_deployment_probes_the_http_health_endpoint() -> None:
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["readinessProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "initialDelaySeconds": 5,
+        "periodSeconds": 10,
+        "timeoutSeconds": 15,
+        "failureThreshold": 3,
+    }
+    assert container["livenessProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "initialDelaySeconds": 15,
+        "periodSeconds": 30,
+        "timeoutSeconds": 15,
+        "failureThreshold": 3,
+    }
+    assert container["startupProbe"] == {
+        "httpGet": {"path": "/health", "port": 10001},
+        "periodSeconds": 10,
+        "timeoutSeconds": 15,
+        "failureThreshold": 30,
+    }
+
+
+def test_k8s_deployment_reserves_burst_capacity_by_default() -> None:
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["resources"] == {
+        "requests": {"cpu": "2", "memory": "16Gi"},
+        "limits": {"cpu": "8", "memory": "32Gi"},
+    }
 
 
 def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:

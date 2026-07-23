@@ -217,21 +217,6 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Recover the next seq to allocate by scanning `dir`'s segment footers.
-///
-/// Returns `max(max_seq over all segments) + 1`, or `1` when no segments exist.
-pub fn recover_next_seq(dir: &Path) -> i64 {
-    let mut next_seq = 1_i64;
-    for p in discover_segments(dir) {
-        if let Some(meta) = read_segment_footer(&p, None) {
-            if meta.max_seq + 1 > next_seq {
-                next_seq = meta.max_seq + 1;
-            }
-        }
-    }
-    next_seq
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -315,23 +300,6 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(keys.values(), &[30_i64, 10, 20], "L0 must be UNSORTED");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn recover_next_seq_over_two_segments() {
-        let dir = tempdir();
-        // segment 1: seqs 1..3 (min_seq 1); segment 2: seqs 4..5 (min_seq 4).
-        write_segment_to_dir(&dir, 0, 1, &batch_with_keys(1, vec![1, 2, 3])).unwrap();
-        write_segment_to_dir(&dir, 0, 4, &batch_with_keys(4, vec![4, 5])).unwrap();
-        assert_eq!(recover_next_seq(&dir), 6);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn recover_next_seq_empty_dir_is_one() {
-        let dir = tempdir();
-        assert_eq!(recover_next_seq(&dir), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

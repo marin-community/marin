@@ -41,9 +41,7 @@ use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
-use crate::store::segment::{
-    discover_segments, read_segment_footer, recover_next_seq, write_segment_to_dir,
-};
+use crate::store::segment::{discover_segments, read_segment_footer, write_segment_to_dir};
 use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
@@ -196,6 +194,7 @@ impl Namespace {
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
+        let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
         let key_column = if schema.key_column.is_empty() {
             None
@@ -203,6 +202,7 @@ impl Namespace {
             Some(schema.key_column.clone())
         };
 
+        let local_recovery_started = Instant::now();
         let (next_seq, adopted, init_persisted) = match &data_dir {
             None => (1_i64, VecDeque::new(), -1_i64),
             Some(dir) => {
@@ -215,7 +215,16 @@ impl Namespace {
                 // parquet unlinked, so a footer-only scan under-counts and would
                 // reuse live seqs (silent overwrite). Union the footer scan with
                 // the full catalog (LOCAL, REMOTE, and BOTH rows).
-                let next_seq = recover_next_seq(dir).max(crate::store::adopt::recover_next_seq(
+                // `adopt_local_segments` has already read every healthy local
+                // footer. Reuse those max_seq values instead of scanning every
+                // Parquet footer a second time.
+                let local_next_seq = adopted
+                    .iter()
+                    .map(|segment| segment.max_seq + 1)
+                    .max()
+                    .unwrap_or(1)
+                    .max(1);
+                let next_seq = local_next_seq.max(crate::store::adopt::recover_next_seq(
                     &catalog.list_segments(name)?,
                 ));
                 let max_persisted = adopted
@@ -227,14 +236,17 @@ impl Namespace {
                 (next_seq, adopted, max_persisted)
             }
         };
+        let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
         // The RemoteStore is rooted at the remote dir and composes the
         // namespace prefix internally, so we only need the dir to be configured.
+        let remote_store_started = Instant::now();
         let remote = if data_dir.is_some() {
             build_remote_store(remote_log_dir)?
         } else {
             None
         };
+        let remote_store_ms = remote_store_started.elapsed().as_millis() as u64;
 
         let (tx, _rx) = watch::channel(init_persisted);
         let ns = Arc::new(Namespace {
@@ -264,14 +276,28 @@ impl Namespace {
 
         // Refresh the catalog from the adopted deque so the segments table
         // reflects on-disk reality after a fresh boot from a wiped catalog.
-        for seg in &adopted {
-            catalog.upsert_segment(&segment_to_row(name, seg))?;
-        }
+        let catalog_refresh_started = Instant::now();
+        let adopted_rows: Vec<SegmentRow> = adopted
+            .iter()
+            .map(|segment| segment_to_row(name, segment))
+            .collect();
+        catalog.upsert_segments(&adopted_rows)?;
+        let catalog_refresh_ms = catalog_refresh_started.elapsed().as_millis() as u64;
 
         if ns.data_dir.is_some() {
             let handle = spawn_flush_task(Arc::clone(&ns));
             ns.task_handles.lock().unwrap().push(handle);
         }
+        tracing::info!(
+            namespace = name,
+            segments = adopted.len(),
+            next_seq,
+            local_recovery_ms,
+            remote_store_ms,
+            catalog_refresh_ms,
+            total_ms = startup_started.elapsed().as_millis() as u64,
+            "finelog namespace startup complete"
+        );
         Ok(ns)
     }
 
@@ -1396,16 +1422,22 @@ fn adopt_local_segments(
     catalog: &Catalog,
     namespace: &str,
 ) -> VecDeque<LocalSegment> {
+    let started = Instant::now();
     let mut segs: Vec<LocalSegment> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    let discover_started = Instant::now();
     let local_files: std::collections::HashMap<String, PathBuf> = discover_segments(dir)
         .into_iter()
         .map(|p| (p.to_string_lossy().into_owned(), p))
         .collect();
+    let discover_ms = discover_started.elapsed().as_millis() as u64;
 
     // Pass 1: catalog rows.
+    let catalog_started = Instant::now();
     let catalog_rows = catalog.list_segments(namespace).unwrap_or_default();
+    let catalog_read_ms = catalog_started.elapsed().as_millis() as u64;
+    let footer_reconcile_started = Instant::now();
     // Highest seq the catalog still ACCOUNTS FOR after reconciliation: a local
     // file past it is genuinely new (an uncataloged flush); a file at or below it
     // whose row is gone is a compaction input the catalog already superseded (the
@@ -1513,6 +1545,17 @@ fn adopt_local_segments(
     segs.sort_by_key(|s| s.min_seq);
     let deque: VecDeque<LocalSegment> = segs.into();
     debug_assert_unique_paths(&deque);
+    tracing::info!(
+        namespace,
+        local_files = local_files.len(),
+        catalog_rows = catalog_rows.len(),
+        adopted_segments = deque.len(),
+        discover_ms,
+        catalog_read_ms,
+        footer_reconcile_ms = footer_reconcile_started.elapsed().as_millis() as u64,
+        total_ms = started.elapsed().as_millis() as u64,
+        "finelog local segment adoption complete"
+    );
     deque
 }
 
