@@ -18,6 +18,7 @@ from iris.client import Job
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
+from experiments.evals.evalchemy.marin_evalchemy_gpu import _grug_profile
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
     EvalUnit,
@@ -164,6 +165,20 @@ def test_client_forwards_seed_and_extra_generation_kwargs():
 
     assert cmd[cmd.index("--seed") + 1] == "43"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048,skip_special_tokens=false"
+
+
+def test_grug_profile_uses_local_weight_loader_compatible_extra_args():
+    """Grug's old RunAI-only loader config must not leak into local-weight GPU serving."""
+    args = _grug_profile("penfever/grug-67b-a2b-sft-s2-thinking-step630")["vllm_extra_args"]
+
+    assert args == (
+        "--data-parallel-size",
+        "8",
+        "--enable-expert-parallel",
+        "--revision",
+        "delphi-v0-think",
+    )
+    assert "--model-loader-extra-config" not in args
 
 
 def test_model_args_carry_served_max_length():

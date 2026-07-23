@@ -163,9 +163,10 @@ class ServeSpec:
     """Extra flags forwarded to ``vllm serve`` (``VllmEngineConfig.extra_args``); empty for the common case.
     Use it for models the portable defaults miss:
 
-    - 256-expert Grug MoE export: ``--data-parallel-size N --enable-expert-parallel
-      --model-loader-extra-config '{"distributed":true}'`` with ``tensor_parallel_size=1``; the per-head
-      TP heuristic cannot infer this.
+    - 256-expert Grug MoE export: ``--data-parallel-size N --enable-expert-parallel`` with
+      ``tensor_parallel_size=1``; the per-head TP heuristic cannot infer this. The old
+      ``distributed`` loader config was specific to RunAI streaming and is invalid for the
+      canonical local-weight loader.
     - Qwen gated-delta-net models (``qwen_gdn_linear_attn``: ``Qwen/Qwen3.5-35B-A3B``,
       ``Qwen/Qwen3-Next-80B-A3B``): ``--gdn-prefill-backend triton``. The GPU serve env runs without
       ``nvcc``, so the default FlashInfer GDN prefill kernel — JIT-compiled at warmup — fails; triton

@@ -173,9 +173,10 @@ def _grug_profile(model: str) -> dict:
         "tp": 1,  # 256-expert MoE: experts shard via data + expert parallelism, NOT tensor parallelism
         "revision": "delphi-v0-think",  # the checkpoint revision carrying the Delphi chat_template (NOT main)
         "tokenizer": "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
-        # grug MoE expert-parallel serve; --revision selects the Delphi-template checkpoint.
+        # Grug MoE expert-parallel serve; --revision selects the Delphi-template checkpoint.
+        # ``distributed`` was a RunAI-streamer loader option. The canonical local-weight path
+        # uses vLLM's ``auto`` loader, which rejects it as an unknown loader extra config.
         "vllm_extra_args": ("--data-parallel-size", "8", "--enable-expert-parallel",
-                            "--model-loader-extra-config", '{"distributed":true}',
                             "--revision", "delphi-v0-think"),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
