@@ -8,6 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import fsspec
 import jax
 import jax.numpy as jnp
@@ -180,7 +181,7 @@ def build_tagged_evaluator(
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
-        )
+        )[0]
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
         per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
@@ -252,6 +253,48 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
+    # QB router biases to apply on the NEXT step: [num_layers, num_experts]. All-zero (a no-op) unless
+    # cfg.qb_routing is on, so the model's forward is byte-for-byte unchanged when QB is off.
+    pending_qb_betas: jax.Array
+
+
+def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+    """Set router biases from the QB betas computed on the previous step.
+
+    Every grug layer is MoE and lives in the single stacked scan body, so ``router_bias`` is the
+    [num_layers, num_experts] leaf ``stacked_blocks.stacked.mlp.router_bias`` and this is one
+    vectorized assignment. Per-layer mean-centering keeps each layer's bias zero-sum. When QB is off
+    the betas are all-zero, so the bias stays zero and never enters the (plain top-k) forward.
+    """
+    new_bias = -qb_betas
+    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+
+
+# SCALE_OFFLOAD_OPT_STATE=1 parks the optimizer state on pinned host memory between steps so it
+# is off-HBM during forward/backward (freeing HBM for the memory-aware scheduler to async the
+# backward re-gathers), streaming it back to device only for the optimizer update. Viable on GB200
+# via the ~900 GB/s NVLink-C2C Grace<->Blackwell link; ~50ms/direction hides under the ~15s step.
+_OFFLOAD_OPT_STATE = os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1"
+
+
+def _opt_state_to_memory_kind(tree, kind: str):
+    """Move optimizer-state array leaves to ``kind`` (``pinned_host`` to offload, ``device`` to
+    bring back), preserving each leaf's PartitionSpec. Works both eagerly and inside jit
+    (explicit-sharding mode exposes the traced leaf's sharding via ``jax.typeof``)."""
+
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
+        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+            # Scalars / replicated hyperparams (inject_hyperparams count, learning_rate) carry an
+            # empty abstract mesh; leave them on device (negligible HBM) to avoid a mesh mismatch.
+            return leaf
+        return jax.device_put(leaf, sharding.with_memory_kind(kind))
+
+    return jax.tree.map(_move, tree)
 
 
 def initial_state(
@@ -263,11 +306,16 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    opt_state = optimizer.init(params)
+    if _OFFLOAD_OPT_STATE:
+        opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
+        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero == no bias at step 0.
+        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
     )
 
 
@@ -291,6 +339,11 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+        # Apply the pending QB betas (from the previous step) to the router biases inside JIT, before
+        # the forward. All-zero when QB is off, so qb_params is numerically identical to state.params.
+        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas) if ema_beta is not None else None
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -301,19 +354,22 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss}
-        updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
-        params = optax.apply_updates(state.params, updates)
+        # Optimizer state is host-resident between steps when offloading; stream it to device
+        # only here (after backward) for the update, then send the new state back to host below.
+        opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
+        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+        params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
             ema_params = None
         else:
-            if state.ema_params is None:
+            if qb_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                state.ema_params,
+                qb_ema_params,
                 params,
             )
 
@@ -325,12 +381,15 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=state.params,
+                params=qb_params,
                 grads=grads,
                 updates=updates,
-                opt_state=state.opt_state,
+                opt_state=opt_state_in,
                 model_tree_type=type(state.params),
             )
+
+        if _OFFLOAD_OPT_STATE:
+            opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
@@ -338,6 +397,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
+            pending_qb_betas=qb_beta_per_layer,
         )
 
         return next_state, metrics, watch_stats

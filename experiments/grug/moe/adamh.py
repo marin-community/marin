@@ -4,6 +4,7 @@
 # Local copy of AdamH for iteration without modifying Levanter.
 # Adapted from levanter.optim.adamh.
 
+import os
 from typing import Any, NamedTuple
 
 import chex
@@ -47,6 +48,15 @@ def scale_by_adamh(
             is_leaf=lambda x: x is None,
         )
         mu = otu.tree_cast(mu, mu_dtype)
+
+        if os.environ.get("SCALE_NO_HYPERBALL") == "1":
+            # Plain Adam step: drop the Frobenius norm-preserving projection (no norm reductions).
+            adamh_updates = jax.tree.map(
+                lambda u: None if u is None else -learning_rate * u,
+                adam_updates,
+                is_leaf=lambda x: x is None,
+            )
+            return adamh_updates, ScaleByAdamHState(count=count_inc, mu=mu, nu=nu)
 
         def _scale_invariant_2d(p, u):
             """Core update for a 2-D (matrix) parameter."""

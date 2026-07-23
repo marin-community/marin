@@ -29,6 +29,7 @@ from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
+    align_kv_heads,
     apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
@@ -120,6 +121,19 @@ class GrugModelConfig:
     sliding_window: int = 0
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
+    # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
+    # multiplier on the attention output before w_o. Zero-init -> gate==1 at step 0 (identical to the
+    # no-gate model); training learns to gate down from pass-through. Absorption-friendly (depends
+    # only on the current query). Off in the barebones default (SCALE_ATTN_GATE=1).
+    attn_gate: bool = False
+    # Exclusive Self Attention: per head, subtract the component of the attention output parallel to
+    # vᵢ, zᵢ = yᵢ - (yᵢ·vᵢ / ‖vᵢ‖²) vᵢ. Off in the barebones default (SCALE_XSA=1).
+    xsa: bool = False
+    # QB aux-loss-free load balancing (DeepSeek-V3 style): bias the top-k expert *selection* with a
+    # per-expert router_bias while forming combine weights from the unbiased logits, and feed the
+    # resulting qb_beta stat into the next step's router_bias. Off in the barebones default
+    # (SCALE_MOE_QB=1); when off the router is the plain top-k path (byte-for-byte unchanged).
+    qb_routing: bool = False
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -222,6 +236,7 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
+    attn_gate: Float[Array, "D N"] | None  # per-head sigmoid gate (cfg.attn_gate); routed to adam
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -233,6 +248,8 @@ class CausalSelfAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _QKV_SPEC),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), _QKV_SPEC),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
+            # Zero-init -> 2*sigmoid(0) == 1 pass-through at step 0, identical to the no-gate model.
+            attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
             cfg=cfg,
         )
 
@@ -261,6 +278,20 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
 
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        # Exclusive Self Attention (optional): per head, subtract the component of yᵢ parallel to vᵢ,
+        # zᵢ = yᵢ - (yᵢ·vᵢ / ‖vᵢ‖²) vᵢ. align_kv_heads broadcasts the GQA KV heads up to the Q heads;
+        # reshard both to the canonical TP layout (model on num_q_heads) so they align per head.
+        if self.cfg.xsa:
+            attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
+            aligned_v = reshard(align_kv_heads(v, num_q_heads=attn_out.shape[2]), P(_BATCH_AXES, None, "model", None))
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        # Per-head sigmoid attention gate (optional): scalar per (token, head), broadcast over
+        # head_dim, applied before merging heads. Zero-init -> gate==1 at step 0.
+        if self.attn_gate is not None:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
+            attn_out = attn_out * gate[..., None]
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
@@ -358,10 +389,44 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
+def _compute_qb_beta(router_logits: jax.Array, qb_alpha: jax.Array, cfg: "GrugModelConfig") -> jax.Array:
+    """Sharded QB beta (DeepSeek-V3 aux-loss-free balancing).
+
+    Per device, take the ``qb_count``-th largest ``(logit - alpha)`` gap over the local tokens, then
+    average across the batch axes. The qb_beta pmean is an f32 all-reduce whose result only feeds the
+    NEXT step's router_bias (train.py:_apply_qb_betas), never this forward -- yet XLA schedules it as a
+    synchronous per-layer collective in the forward critical path, which can stall the compute stream
+    and block the weight-gather overlap. ``SCALE_MOE_SKIP_QB`` drops it entirely (router_bias stops
+    updating, so loss quality is invalid under this flag -- throughput diagnostic only).
+    """
+    if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
+        return jnp.zeros((cfg.num_experts,), dtype=jnp.float32)
+    mesh = get_abstract_mesh()
+    s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+    num_devices = 1
+    for a in _BATCH_AXES:
+        num_devices *= mesh.shape[a]
+    local_tokens = s_minus_alpha.shape[0] // num_devices
+    qb_count = max(1, local_tokens * cfg.num_experts_per_token // cfg.num_experts)
+
+    def _local_qb_beta(s_ma):
+        topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+        beta = topk_vals[:, -1]
+        return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+
+    return shard_map(
+        _local_qb_beta,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None),),
+        out_specs=P(),
+    )(s_minus_alpha)
+
+
 class MoEMLP(eqx.Module):
-    """Top-k routed MoE with sigmoid combine weights."""
+    """Top-k routed MoE with sigmoid combine weights (optional QB balancing behind cfg.qb_routing)."""
 
     router: jax.Array
+    router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -377,6 +442,7 @@ class MoEMLP(eqx.Module):
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -396,12 +462,25 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         w13_pre0: jax.Array | None = None,
         w2_pre0: jax.Array | None = None,
-    ) -> Float[Array, "B S D"]:
+    ) -> tuple[Float[Array, "B S D"], jax.Array]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+        if self.cfg.qb_routing:
+            # QB aux-loss-free balancing: bias the top-k *selection* with the per-expert router_bias,
+            # but form combine weights from the UNBIASED logits. Select top-(K+1); the (K+1)-th biased
+            # logit is the QB threshold alpha, and qb_beta (returned up the stack) feeds NEXT step's
+            # router_bias (train.py:_apply_qb_betas).
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            topk_biased, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            qb_alpha = topk_biased[:, -1:]
+            selected_experts = selected_experts[:, :-1]
+            topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
+        else:
+            topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+            qb_beta = jnp.zeros((self.cfg.num_experts,), dtype=jnp.float32)
         # Sigmoid combine weights on the selected logits, renormalized to sum to ``_ROUTING_RENORM_SUM``.
         combine_weights_f = jax.nn.sigmoid(topk_logits)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
@@ -418,7 +497,7 @@ class MoEMLP(eqx.Module):
             w2_pre0=w2_pre0,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return reshard(routed, _batch_spec())
+        return reshard(routed, _batch_spec()), qb_beta
 
 
 class Block(eqx.Module):
@@ -456,7 +535,9 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
+    ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
         # (it will not hoist a collective backward across the whole attention block). Threaded into the
@@ -480,15 +561,15 @@ class Block(eqx.Module):
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
-            return x
+            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.float32)
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
-        mlp_out = self.mlp(mlp_in, w13_pre0, w2_pre0)
+        mlp_out, qb_beta = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
-        return x + mlp_out
+        return x + mlp_out, qb_beta
 
 
 class Transformer(eqx.Module):
@@ -544,7 +625,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S D"]:
+    ) -> tuple[Float[Array, "B S D"], Float[Array, "L E"]]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -578,11 +659,15 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], None]:
-            return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask), None
+        def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], jax.Array]:
+            # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
+            new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
+            return new_hidden, qb_beta
 
-        hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll)
-        return self.final_norm(hidden)
+        hidden, qb_beta_per_layer = jax.lax.scan(
+            _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
+        )
+        return self.final_norm(hidden), qb_beta_per_layer
 
     @named_call
     def logits(
@@ -590,7 +675,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        hidden = self(token_ids, mask=mask)
+        hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_spec())
 
     def next_token_loss(
@@ -602,11 +687,11 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> jax.Array:
-        hidden = self(token_ids, mask=mask)
+    ) -> tuple[jax.Array, Float[Array, "L E"]]:
+        hidden, qb_beta_per_layer = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
-        return fused_linear_softmax_cross_entropy_loss(
+        loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -615,6 +700,7 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
+        return loss, qb_beta_per_layer
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
