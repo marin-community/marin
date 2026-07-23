@@ -21,17 +21,8 @@ import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_REGION = "us-central1"
-DEFAULT_NETWORK = "default"
-DEFAULT_INSTANCE_NAME = "loom"
-DEFAULT_VM_SERVICE_ACCOUNT = "loom-vm"
-DEFAULT_MACHINE_TYPE = "e2-highmem-4"
 DEFAULT_DISK_TYPE = "pd-balanced"
-DEFAULT_BOOT_DISK_GB = 100
-DEFAULT_DATA_DISK_GB = 500
-DEFAULT_REPO_URL = "https://github.com/marin-community/loom.git"
-DEFAULT_DOTENV_SECRET_VERSION = 1
-DEFAULT_SNAPSHOT_RETENTION_DAYS = 14
+REPOSITORY_URL = "https://github.com/marin-community/loom.git"
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
@@ -46,12 +37,10 @@ RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
 
 
-def _positive_config_int(value: int | None, default: int, name: str) -> int:
-    """Default only an absent Pulumi integer; reject explicit zero/negatives."""
-    resolved = default if value is None else value
-    if resolved <= 0:
+def _positive_config_int(value: int, name: str) -> int:
+    if value <= 0:
         raise ValueError(f"{name} must be positive")
-    return resolved
+    return value
 
 
 def _artifact_image_path(project: str, region: str) -> str:
@@ -292,27 +281,29 @@ class DeploymentConfig:
     operator_cidr: str
     dns_zone_id: str
     source_path: str
-    network: str = DEFAULT_NETWORK
-    instance_name: str = DEFAULT_INSTANCE_NAME
-    vm_service_account_name: str = DEFAULT_VM_SERVICE_ACCOUNT
-    machine_type: str = DEFAULT_MACHINE_TYPE
-    boot_disk_gb: int = DEFAULT_BOOT_DISK_GB
-    data_disk_gb: int = DEFAULT_DATA_DISK_GB
-    dotenv_secret_version: int = DEFAULT_DOTENV_SECRET_VERSION
+    network: str
+    instance_name: str
+    vm_service_account_name: str
+    machine_type: str
+    boot_disk_gb: int
+    data_disk_gb: int
+    dotenv_secret_version: int
+    snapshot_retention_days: int
     prune_deployment: bool = False
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
-    snapshot_retention_days: int = DEFAULT_SNAPSHOT_RETENTION_DAYS
 
     def __post_init__(self) -> None:
+        if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
+            raise ValueError("domain must be a canonical hostname without a scheme, path, or trailing dot")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
             ("dataDiskGb", self.data_disk_gb),
             ("snapshotRetentionDays", self.snapshot_retention_days),
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
-            _positive_config_int(value, value, name)
+            _positive_config_int(value, name)
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
@@ -325,6 +316,10 @@ class DeploymentConfig:
         if self.prune_deployment and not (self.profiles or self.workloads or self.github_federations):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
+    @property
+    def public_url(self) -> str:
+        return f"https://{self.domain}"
+
     @classmethod
     def from_pulumi(cls) -> DeploymentConfig:
         config = pulumi.Config()
@@ -336,7 +331,7 @@ class DeploymentConfig:
         source = Path(source_path).expanduser().resolve()
         if not (source / "Dockerfile").is_file():
             raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {source}")
-        region = config.get("region") or DEFAULT_REGION
+        region = config.require("region")
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
             raise ValueError("profiles must be an object")
@@ -364,27 +359,23 @@ class DeploymentConfig:
         return cls(
             project=project,
             region=region,
-            zone=config.get("zone") or f"{region}-a",
+            zone=config.require("zone"),
             domain=config.require("domain"),
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
             source_path=str(source),
-            network=config.get("network") or DEFAULT_NETWORK,
-            instance_name=config.get("instanceName") or DEFAULT_INSTANCE_NAME,
-            vm_service_account_name=config.get("vmServiceAccountName") or DEFAULT_VM_SERVICE_ACCOUNT,
-            machine_type=config.get("machineType") or DEFAULT_MACHINE_TYPE,
-            boot_disk_gb=_positive_config_int(config.get_int("bootDiskGb"), DEFAULT_BOOT_DISK_GB, "bootDiskGb"),
-            data_disk_gb=_positive_config_int(config.get_int("dataDiskGb"), DEFAULT_DATA_DISK_GB, "dataDiskGb"),
-            dotenv_secret_version=_positive_config_int(
-                config.get_int("dotenvSecretVersion"), DEFAULT_DOTENV_SECRET_VERSION, "dotenvSecretVersion"
-            ),
+            network=config.require("network"),
+            instance_name=config.require("instanceName"),
+            vm_service_account_name=config.require("vmServiceAccountName"),
+            machine_type=config.require("machineType"),
+            boot_disk_gb=config.require_int("bootDiskGb"),
+            data_disk_gb=config.require_int("dataDiskGb"),
+            dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
-            snapshot_retention_days=_positive_config_int(
-                config.get_int("snapshotRetentionDays"), DEFAULT_SNAPSHOT_RETENTION_DAYS, "snapshotRetentionDays"
-            ),
+            snapshot_retention_days=config.require_int("snapshotRetentionDays"),
         )
 
 
@@ -475,7 +466,7 @@ def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) 
     dns_record = cloudflare.DnsRecord(
         "loom-dns-address",
         zone_id=config.dns_zone_id,
-        name=config.domain.rstrip("."),
+        name=config.domain,
         type="A",
         content=address.address,
         ttl=300,
@@ -560,9 +551,10 @@ def _create_image(
         "loom-release-image",
         context=docker_build.BuildContextArgs(location=config.source_path),
         build_args={"CARGO_PROFILE": "release"},
-        labels={"org.opencontainers.image.source": DEFAULT_REPO_URL},
+        labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
         tags=[image_tag],
+        build_on_preview=True,
         push=True,
         opts=pulumi.ResourceOptions(depends_on=[repository]),
     )
@@ -583,7 +575,7 @@ def _create_runtime_policy(
     api_options: pulumi.ResourceOptions,
 ) -> RuntimePolicyResources:
     profiles, profile_secret_refs = _deployment_profiles(config.profiles)
-    audience = f"https://{config.domain.rstrip('/')}"
+    audience = config.public_url
     workload_mappings: list[pulumi.Output[dict[str, Any]]] = []
     workload_clients: list[pulumi.Output[dict[str, str]]] = []
     for workload in config.workloads:
@@ -677,27 +669,22 @@ def _create_secrets(
     return SecretResources(secret, vm_reader, profile_readers)
 
 
-def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
-    """Create loom's GCP resource graph and export its operator-facing values."""
-    apis = _enable_apis(config.project)
-    api_options = pulumi.ResourceOptions(depends_on=apis)
+@dataclass(frozen=True)
+class InstanceResources:
+    instance: gcp.compute.Instance
+    metadata: dict[str, pulumi.Input[str]]
 
-    vm_account = gcp.serviceaccount.Account(
-        "loom-vm",
-        project=config.project,
-        account_id=config.vm_service_account_name,
-        display_name="loom standalone VM",
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    runtime_policy = _create_runtime_policy(config, api_options)
-    image = _create_image(config, apis, vm_account)
-    network = _create_network(config, apis)
 
-    data = _create_data_disk(config, apis)
-
-    secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
-
-    metadata = {
+def _create_instance(
+    config: DeploymentConfig,
+    vm_account: gcp.serviceaccount.Account,
+    network: NetworkResources,
+    data: DataResources,
+    image: ImageResources,
+    secrets: SecretResources,
+    runtime_policy: RuntimePolicyResources,
+) -> InstanceResources:
+    metadata: dict[str, pulumi.Input[str]] = {
         "loom-domain": config.domain,
         "loom-image": image.reference,
         "dotenv-secret-version": str(config.dotenv_secret_version),
@@ -712,19 +699,14 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     dependencies: list[pulumi.Resource] = [
         network.web_firewall,
         network.ssh_firewall,
+        network.dns_record,
         data.disk,
+        data.snapshot_attachment,
         secrets.secret,
         secrets.vm_reader,
         image.vm_reader,
-        data.snapshot_attachment,
         *secrets.profile_readers,
     ]
-    dependencies.append(network.dns_record)
-    instance_options = pulumi.ResourceOptions(
-        depends_on=dependencies,
-        protect=True,
-        ignore_changes=['metadata["ssh-keys"]', 'metadata["enable-osconfig"]'],
-    )
     instance = gcp.compute.Instance(
         "loom",
         project=config.project,
@@ -762,10 +744,21 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         },
         allow_stopping_for_update=False,
         deletion_protection=True,
-        opts=instance_options,
+        opts=pulumi.ResourceOptions(
+            depends_on=dependencies,
+            protect=True,
+            ignore_changes=['metadata["ssh-keys"]', 'metadata["enable-osconfig"]'],
+        ),
     )
+    return InstanceResources(instance, metadata)
 
-    activation = command.local.Command(
+
+def _create_activation(
+    config: DeploymentConfig,
+    instance: InstanceResources,
+    dns_record: cloudflare.DnsRecord,
+) -> command.local.Command:
+    return command.local.Command(
         "loom-activate",
         create="./activate.sh",
         update="./activate.sh",
@@ -776,15 +769,20 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             "LOOM_INSTANCE": config.instance_name,
             "LOOM_DOMAIN": config.domain,
         },
-        triggers=[
-            instance.id,
-            pulumi.Output.json_dumps(metadata),
-        ],
-        opts=pulumi.ResourceOptions(depends_on=[instance, network.dns_record]),
+        triggers=[instance.instance.id, pulumi.Output.json_dumps(instance.metadata)],
+        opts=pulumi.ResourceOptions(depends_on=[instance.instance, dns_record]),
     )
 
+
+def _export_outputs(
+    config: DeploymentConfig,
+    instance: gcp.compute.Instance,
+    network: NetworkResources,
+    image: ImageResources,
+    runtime_policy: RuntimePolicyResources,
+) -> None:
     pulumi.export("address", network.address.address)
-    pulumi.export("url", f"https://{config.domain}/")
+    pulumi.export("url", f"{config.public_url}/")
     pulumi.export("instanceName", instance.name)
     pulumi.export("zone", config.zone)
     pulumi.export("artifactImage", image.reference)
@@ -796,7 +794,25 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "workloadClients",
         pulumi.Output.all(*runtime_policy.workload_clients) if runtime_policy.workload_clients else [],
     )
-    return Infrastructure(
-        instance=instance,
-        activation=activation,
+
+
+def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
+    """Create loom's GCP resource graph and export its operator-facing values."""
+    apis = _enable_apis(config.project)
+    api_options = pulumi.ResourceOptions(depends_on=apis)
+    vm_account = gcp.serviceaccount.Account(
+        "loom-vm",
+        project=config.project,
+        account_id=config.vm_service_account_name,
+        display_name="loom standalone VM",
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
+    runtime_policy = _create_runtime_policy(config, api_options)
+    image = _create_image(config, apis, vm_account)
+    network = _create_network(config, apis)
+    data = _create_data_disk(config, apis)
+    secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
+    instance = _create_instance(config, vm_account, network, data, image, secrets, runtime_policy)
+    activation = _create_activation(config, instance, network.dns_record)
+    _export_outputs(config, instance.instance, network, image, runtime_policy)
+    return Infrastructure(instance.instance, activation)

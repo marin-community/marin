@@ -11,7 +11,7 @@ gcloud --project="$LOOM_PROJECT" compute ssh "$LOOM_INSTANCE" \
   --command='sudo systemctl restart google-startup-scripts.service'
 
 for _ in $(seq 1 90); do
-  if curl -fsS "https://${LOOM_DOMAIN}/api/ready" >/dev/null; then
+  if curl -fsS "https://${LOOM_DOMAIN}/api/ready" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"'; then
     exit 0
   fi
   sleep 10

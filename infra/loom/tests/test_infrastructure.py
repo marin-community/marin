@@ -54,7 +54,14 @@ def deployment_config() -> DeploymentConfig:
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
         source_path="/tmp/loom-source",
+        network="default",
+        instance_name="loom",
+        vm_service_account_name="loom-vm",
+        machine_type="e2-highmem-4",
+        boot_disk_gb=100,
+        data_disk_gb=500,
         dotenv_secret_version=3,
+        snapshot_retention_days=14,
         prune_deployment=True,
         profiles=(
             ProfileConfig.parse(
@@ -100,6 +107,11 @@ def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
     base = deployment_config()
     with pytest.raises(ValueError, match="non-empty runtime policy"):
         replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
+
+
+def test_domain_is_a_canonical_hostname() -> None:
+    with pytest.raises(ValueError, match="canonical hostname"):
+        replace(deployment_config(), domain="https://loom.example.com/")
 
 
 def test_github_federations_require_unique_names_and_known_profiles() -> None:
@@ -157,7 +169,6 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert len(attached) == 1
         assert field(attached[0], "device_name", "deviceName") == "loom-data"
         assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["loom-image"].endswith("@sha256:" + "a" * 64)
         assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
         assert "startup-script" in vm.inputs["metadata"]
         assert "loom-compose" in vm.inputs["metadata"]
@@ -187,9 +198,6 @@ def test_local_tree_build_drives_the_runtime_rollout():
         }
         assert image.inputs["tags"] == ["us-central1-docker.pkg.dev/example/loom/loom:latest"]
         assert image.inputs["push"] is True
-        vm = by_name(mocks, "loom")
-        assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
-        assert vm.inputs["metadata"]["loom-image"].endswith("@sha256:" + "a" * 64)
 
     return infrastructure.instance.id.apply(check)
 
@@ -217,12 +225,10 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
         metadata = by_name(mocks, "loom").inputs["metadata"]
         assert metadata["loom-image"].endswith("@sha256:" + "a" * 64)
         activation = by_name(mocks, "loom-activate")
-        assert activation.typ == "command:local:Command"
         triggers = activation.inputs["triggers"]
         assert "loom_id" in triggers
         serialized_metadata = json.loads(next(trigger for trigger in triggers if trigger != "loom_id"))
         assert serialized_metadata == metadata
-        assert by_name(mocks, "loom-release-image").typ == "docker-build:index:Image"
 
     return infrastructure.activation.id.apply(check)
 

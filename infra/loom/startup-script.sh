@@ -25,23 +25,35 @@ if [[ "$LOOM_IMAGE" != *@sha256:* ]]; then
 fi
 
 packages=()
-if ! command -v docker >/dev/null 2>&1; then
+add_apt_repository() {
+  local key_url="$1"
+  local key_path="$2"
+  local repository="$3"
+  local source_path="$4"
+
   install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
+  curl -fsSL "$key_url" -o "$key_path"
+  chmod a+r "$key_path"
+  echo "$repository" >"$source_path"
+}
+
+if ! command -v docker >/dev/null 2>&1; then
   # shellcheck disable=SC1091
   release="$(. /etc/os-release && echo "$VERSION_CODENAME")"
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${release} stable" \
-    >/etc/apt/sources.list.d/docker.list
+  add_apt_repository \
+    https://download.docker.com/linux/debian/gpg \
+    /etc/apt/keyrings/docker.asc \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${release} stable" \
+    /etc/apt/sources.list.d/docker.list
   packages+=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 fi
 
 if ! command -v gcloud >/dev/null 2>&1; then
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg -o /etc/apt/keyrings/cloud.google.asc
-  chmod a+r /etc/apt/keyrings/cloud.google.asc
-  echo "deb [signed-by=/etc/apt/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt cloud-sdk main" \
-    >/etc/apt/sources.list.d/google-cloud-sdk.list
+  add_apt_repository \
+    https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    /etc/apt/keyrings/cloud.google.asc \
+    "deb [signed-by=/etc/apt/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt cloud-sdk main" \
+    /etc/apt/sources.list.d/google-cloud-sdk.list
   packages+=(google-cloud-cli)
 fi
 if [ "${#packages[@]}" -gt 0 ]; then
@@ -68,10 +80,10 @@ else
 fi
 mkdir -p "$DATA_MOUNT"
 if mountpoint -q "$DATA_MOUNT"; then
-  data_disk_mounted=false
+  data_disk_mounted_this_run=false
 else
   mount "$DATA_DISK_DEVICE" "$DATA_MOUNT"
-  data_disk_mounted=true
+  data_disk_mounted_this_run=true
 fi
 resize2fs "$DATA_DISK_DEVICE"
 grep -q "^${DATA_DISK_DEVICE} " /etc/fstab || \
@@ -85,7 +97,7 @@ else
   docker_config_changed=false
 fi
 systemctl enable --now docker
-if [ "${docker_config_changed:-false}" = true ] || [ "$data_disk_mounted" = true ]; then
+if [ "${docker_config_changed:-false}" = true ] || [ "$data_disk_mounted_this_run" = true ]; then
   systemctl restart docker
 fi
 
