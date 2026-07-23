@@ -55,7 +55,7 @@ def main() -> None:
         policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 
         def loss_fn(m):
-            return policy.cast_to_compute(m).next_token_loss(tokens, loss_weight, reduction="mean")
+            return policy.cast_to_compute(m).next_token_loss(tokens, loss_weight, reduction="mean")[0]
 
         loss, grads = jax.value_and_grad(loss_fn)(model)
         jax.block_until_ready(grads)

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import jax
@@ -64,6 +65,18 @@ def _match_named_sharding_to_params(updates, params):
 
 
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+    if os.environ.get("SCALE_NO_HYPERBALL") == "1":
+        # Plain scaled Muon step: drop the Frobenius norm-preserving projection (no
+        # ‖p‖/‖u‖/‖new_p‖ all-reduces, no early reshard-to-params). Just p += -lr*u; the
+        # trailing _match_named_update_sharding restores param layout for apply. Isolates the
+        # hyperball's added collectives from the unavoidable Newton-Schulz collect.
+        return jax.tree.map(
+            lambda p, u: None if u is None else -learning_rate * u,
+            params,
+            direction_updates,
+            is_leaf=lambda x: x is None,
+        )
+
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
