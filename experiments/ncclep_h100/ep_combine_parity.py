@@ -312,12 +312,17 @@ def _references(
     weights: Any,
     scales: Any,
     *,
+    route_sharding: Any,
     top_k: int,
     expert_scaled: bool,
     jax: Any,
     jnp: Any,
 ) -> dict[str, Any]:
-    selected_scales = scales[routes] if expert_scaled else jnp.ones_like(weights, dtype=jnp.bfloat16)
+    selected_scales = (
+        scales.at[routes].get(out_sharding=route_sharding)
+        if expert_scaled
+        else jnp.ones_like(weights, dtype=jnp.bfloat16)
+    )
     coefficients_f32 = weights.astype(jnp.float32) * selected_scales.astype(jnp.float32)
     analytic = (tokens.astype(jnp.float32) * jnp.sum(coefficients_f32, axis=1, dtype=jnp.float32)[:, None]).astype(
         jnp.bfloat16
@@ -467,6 +472,7 @@ def _compiled_case(
             routes,
             weights,
             scales,
+            route_sharding=lead2,
             top_k=spec.top_k,
             expert_scaled=spec.expert_scaled,
             jax=jax,
