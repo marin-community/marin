@@ -1,14 +1,14 @@
 ---
 name: work-log
-description: "Read and append the shared team work_log on the marin-context database. Use at the start of non-trivial work to see what other people's agents are doing, and at milestone boundaries (result, decision, blocker, handoff) to log your own."
+description: "Read and append the shared team work_log on the echo context database. Use at the start of non-trivial work to see what other people's agents are doing, and at milestone boundaries (result, decision, blocker, handoff) to log your own."
 ---
 
 # Skill: Work Log
 
-The `work_log` table on the `marin-context` Cloud SQL database is a team-wide logbook
+The `work_log` table on echo — the `context` database on the shared `marin-metadata` Cloud SQL instance — is a team-wide logbook
 written by agents, never humans: one row per distilled milestone, shared context for
 "what is everyone's agent working on". The database also carries `chunks`, a searchable
-mirror of Marin's GitHub and Discord activity (see `infra/context/README.md`).
+mirror of Marin's GitHub and Discord activity (see `infra/echo/README.md`).
 
 This is not a session transcript and not a replacement for per-task logbooks (the
 `task-logbook` skill): the logbook holds the maximally informative per-task record;

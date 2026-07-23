@@ -8,12 +8,12 @@
 #     "cloud-sql-python-connector[pg8000]>=1.9",
 # ]
 # ///
-"""Read and append the shared agent work_log on the marin-context database.
+"""Read and append the shared agent work_log on the echo context database.
 
 The work_log is a team-wide, agent-written logbook: one row per distilled milestone
 (a result, a decision, a blocker, a handoff), never session transcripts. See
 `.agents/skills/work-log/SKILL.md` for when to read and write, and
-`infra/context/README.md` for the database itself.
+`infra/echo/README.md` for the database itself.
 
     scripts/work_log.py recent [--days 7] [--project P] [--limit 30]
     scripts/work_log.py show <id>
@@ -31,7 +31,7 @@ import sys
 from google.cloud.sql.connector import Connector
 
 PROJECT = "hai-gcp-models"
-INSTANCE = "hai-gcp-models:us-central1:marin-context"
+INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 DATABASE = "context"
 DB_USER = "agents"
 PASSWORD_SECRET = "cloudsql-agents-password"
