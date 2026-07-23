@@ -131,7 +131,7 @@ def test_build_command_chat_route_needs_template_and_generation():
     cmd = build_command(config, generative, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
-    assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in build_model_args(config, True, None)
+    assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in build_model_args(config, True)
 
     # ...but a loglikelihood (MCQ) task always uses completions: chat endpoints cannot echo prompt
     # logprobs, and lm-eval rejects loglikelihood over chat completions.
@@ -188,11 +188,13 @@ def test_aime_defaults_to_the_three_canonical_campaign_seeds():
     assert _aime_seeds("42,44,99") == (42, 44, 99)
 
 
-def test_model_args_carry_served_max_length():
-    # lm-eval assumes a 2048-token window unless told otherwise, silently left-truncating few-shot
-    # prompts; the client reads the served max_model_len and passes it through.
-    args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False, 4096).split(","))
-    assert args["max_length"] == "4096"
+def test_build_command_carries_served_max_length_via_evalchemy_flag():
+    # Evalchemy owns the canonical request limit.  Keeping this outside lm-eval model_args makes
+    # native and custom benchmarks consume exactly the same explicit --max_length contract.
+    cmd = build_command(_payload(), _payload()["tasks"][0], "/tmp/out", "/opt/py", 4096)
+    args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False).split(","))
+    assert cmd[cmd.index("--max_length") + 1] == "4096"
+    assert "max_length" not in args
     assert args["tokenized_requests"] == "False"
 
 

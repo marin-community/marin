@@ -75,7 +75,7 @@ def served_max_length(base_url: str) -> int | None:
     return None
 
 
-def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
+def build_model_args(config: dict, use_chat: bool) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
     args = [
@@ -95,8 +95,6 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
         "timeout=1800",
     ]
-    if max_length is not None:
-        args.append(f"max_length={max_length}")
     return ",".join(args)
 
 
@@ -131,7 +129,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--model",
         model,
         "--model_args",
-        build_model_args(config, use_chat, max_length),
+        build_model_args(config, use_chat),
         "--tasks",
         task["name"],
         "--gen_kwargs",
@@ -148,6 +146,9 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--verbosity",
         "INFO",
     ]
+    if max_length is not None:
+        # Evalchemy resolves this once for both native lm-eval and its custom benchmarks.
+        cmd += ["--max_length", str(max_length)]
     # Always pass --num_fewshot, including 0. evalchemy's parser defaults it to None, so omitting the
     # flag lets lm-eval fall back to the task YAML's own default (gsm8k defaults to 5-shot) and a
     # 0-shot request is silently ignored. Chat-native benchmarks record it in their config but do not
