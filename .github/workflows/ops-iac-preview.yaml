@@ -67,8 +67,6 @@ jobs:
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-on-pr: ${{ github.event_name == 'pull_request' }}
-          # Every CoreWeave cluster declares provisioning.coreweave.federation_dns.
-          cloudflare-secret-name: cloudflare-oa-dns-token
 
   preview-gcp:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

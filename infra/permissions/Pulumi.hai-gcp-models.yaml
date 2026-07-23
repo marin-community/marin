@@ -29,9 +29,7 @@ config:
           repositories:
             - marin-grafana
       iap_iam_manager: true
-    # Used for posting `pulumi preview` as a PR comment. Two subjects: `pull_request` covers
-    # the PR trigger; `*main_subject` covers `workflow_dispatch`, whose OIDC subject follows
-    # the dispatching ref rather than the event name — manual runs only authenticate from main.
+    # Used for posting `pulumi preview` as a PR comment.
     - service_account: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
       github_subjects:
         - repo:marin-community/marin:pull_request
