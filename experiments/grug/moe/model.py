@@ -75,6 +75,26 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
+def _rel_pos_bias_full(bias_band: Float[Array, "B S N R"], q_len: int, window: int) -> Float[Array, "B N Q K"]:
+    """Scatter a per-head relative-offset band into a dense additive attention bias.
+
+    ``bias_band[b, i, h, r]`` is the learned bias on the logit between query ``i`` and key
+    ``i-r`` (``r=0`` is self). Returns ``bias_full[b, h, i, j] = bias_band[b, i, h, i-j]`` for
+    ``0 <= i-j < window`` and ``0`` otherwise (including the causal upper triangle ``j > i``,
+    which the softmax mask also zeros). Correctness over efficiency: materializes ``[B, N, Q, K]``.
+    """
+    i = jnp.arange(q_len)[:, None]
+    j = jnp.arange(q_len)[None, :]
+    offset = i - j  # [Q, K]
+    in_band = (offset >= 0) & (offset < window)
+    offset_clamped = jnp.clip(offset, 0, window - 1)
+    # band[b, h, i, r]; gather along r using offset[i, j] to land on [b, h, i, j].
+    band = jnp.transpose(bias_band, (0, 2, 1, 3))  # [B, N, S, window]
+    idx = jnp.broadcast_to(offset_clamped[None, None, :, :], (*band.shape[:2], q_len, q_len))
+    gathered = jnp.take_along_axis(band, idx, axis=3)  # [B, N, Q, K]
+    return jnp.where(in_band[None, None, :, :], gathered, jnp.zeros_like(gathered))
+
+
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
     """Replica-local embedding lookup.
 
@@ -134,6 +154,21 @@ class GrugModelConfig:
     # resulting qb_beta stat into the next step's router_bias. Off in the barebones default
     # (SCALE_MOE_QB=1); when off the router is the plain top-k path (byte-for-byte unchanged).
     qb_routing: bool = False
+    # Simplified Multi-head Latent Attention (no RoPE / QK-norm / gate / XSA / PKO): compress x into
+    # KV and Q latents (kv_lora_rank / q_lora_rank), each with a learnable RMSNorm, then up-project to
+    # full per-head q/k/v. Off in the barebones default (SCALE_MLA=1); uses CausalSelfAttention when off.
+    mla: bool = False
+    kv_lora_rank: int = 512
+    q_lora_rank: int = 2048
+    rel_pos_bias: bool = False
+    """When True, attention replaces half-RoPE with a learned, per-layer relative-position bias
+    added to the pre-softmax attention logits. RoPE is disabled on every layer (this bias supplies
+    positional information). Off in the barebones default (SCALE_REL_POS_BIAS=1)."""
+    rel_pos_latent: int = 16
+    """Latent width of the relative-position bias factorization (``rel_pos_a``/``rel_pos_b``)."""
+    rel_pos_window: int = 1024
+    """Relative-offset band width of the position bias: query ``i`` receives a learned bias on
+    keys ``i-r`` for ``r`` in ``0..window-1`` (r=0 is self); keys further back get no bias."""
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -237,12 +272,26 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"] | None  # per-head sigmoid gate (cfg.attn_gate); routed to adam
+    # Learned relative-position bias (only when ``cfg.rel_pos_bias``); None otherwise.
+    # ``rel_pos_a`` projects the attention input to a per-head latent; ``rel_pos_b`` (zero-init)
+    # maps the latent to a bias over relative offsets 0..window-1. See ``__call__``.
+    rel_pos_a: Float[Array, "D LN"] | None
+    rel_pos_b: Float[Array, "R L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        rel_pos_a = None
+        rel_pos_b = None
+        if cfg.rel_pos_bias:
+            k_ra = random.fold_in(key, 0x9E3779B9)
+            latent = cfg.rel_pos_latent
+            # rel_pos_a: [hidden, latent*num_heads], heads-major so ``(n d)`` reshapes to (num_heads, latent).
+            rel_pos_a = reshard(_init_weight(k_ra, (d, n * latent), cfg.initializer_std), P("data", "model"))
+            # rel_pos_b: [window, latent], zero-init so the bias contributes nothing at init (NoPE-equivalent).
+            rel_pos_b = reshard(jnp.zeros((cfg.rel_pos_window, latent)), P(None, None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _QKV_SPEC),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _QKV_SPEC),
@@ -250,6 +299,8 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
             # Zero-init -> 2*sigmoid(0) == 1 pass-through at step 0, identical to the no-gate model.
             attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
+            rel_pos_a=rel_pos_a,
+            rel_pos_b=rel_pos_b,
             cfg=cfg,
         )
 
@@ -274,10 +325,23 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        # The learned relative-position bias supplies positional information, so it fully replaces
+        # RoPE: skip rotary on every layer when it is enabled.
+        if self.rel_pos_a is None:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
 
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        bias = None
+        if self.rel_pos_a is not None:
+            latent = self.cfg.rel_pos_latent
+            window = self.cfg.rel_pos_window
+            rel_latent = rearrange(jnp.einsum("bsh,hd->bsd", x, self.rel_pos_a), "b s (n d) -> b s n d", d=latent)
+            bias_band = jnp.einsum("bsnd,rd->bsnr", rel_latent, self.rel_pos_b)
+            if self.cfg.attention_implementation == "gpu_fa4_cute":
+                bias = bias_band.astype(q.dtype)
+            else:
+                bias = _rel_pos_bias_full(bias_band, seq_len, window)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation, bias=bias)
         # Exclusive Self Attention (optional): per head, subtract the component of yᵢ parallel to vᵢ,
         # zᵢ = yᵢ - (yᵢ·vᵢ / ‖vᵢ‖²) vᵢ. align_kv_heads broadcasts the GQA KV heads up to the Q heads;
         # reshard both to the canonical TP layout (model on num_q_heads) so they align per head.
@@ -292,6 +356,109 @@ class CausalSelfAttention(eqx.Module):
         if self.attn_gate is not None:
             gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
             attn_out = attn_out * gate[..., None]
+        # Merge heads into hidden dim while keeping model-axis sharding for w_o.
+        attn_out = jnp.reshape(
+            attn_out,
+            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+            out_sharding=P(_BATCH_AXES, None, "model"),
+        )
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_batch_spec())
+
+
+class MultiheadLatentAttention(eqx.Module):
+    """Simplified Multi-head Latent Attention for grug (SCALE_MLA=1).
+
+    Compresses ``x`` into a KV latent (``kv_lora_rank``) and a Q latent (``q_lora_rank``), each with a
+    learnable RMSNorm, then up-projects to full per-head k/q/v -- every head is a plain ``head_dim``
+    slice. Unlike DeepSeek-V3 MLA this variant is fully symmetric: no decoupled RoPE, no nope/rope
+    split, no per-head QK RMSNorm, no attention gate / XSA / PKO. The only norms are the two learnable
+    latent norms ``kv_norm`` / ``q_norm``. Attention uses ``attention()``'s default softmax scale
+    (no ``qk_mult``). Returns ``[B, S, D]`` like ``CausalSelfAttention``.
+    """
+
+    w_dkv: Float[Array, "D Ckv"]
+    kv_norm: "RMSNorm"
+    w_uk: Float[Array, "Ckv NH"]
+    w_uv: Float[Array, "Ckv NH"]
+    w_dq: Float[Array, "D Cq"]
+    q_norm: "RMSNorm"
+    w_uq: Float[Array, "Cq NH"]
+    w_o: Float[Array, "NH D"]
+    # Learned relative-position bias (only when ``cfg.rel_pos_bias``); None otherwise. See
+    # ``CausalSelfAttention`` for the ``rel_pos_a`` / ``rel_pos_b`` factorization.
+    rel_pos_a: Float[Array, "D LN"] | None
+    rel_pos_b: Float[Array, "R L"] | None
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MultiheadLatentAttention":
+        d, n, h = cfg.hidden_dim, cfg.num_heads, cfg.inferred_head_dim
+        ckv, cq = cfg.kv_lora_rank, cfg.q_lora_rank
+        std = cfg.initializer_std
+        # FSDP-shard the latent down-projections (D->c) over ``data`` so a single-node run (``model``
+        # axis size 1) still shards them; the per-head up-projections keep ``model`` tensor-parallelism
+        # on the output head dim. RMSNorm acts on the gathered latent activation, not the sharded weight.
+        k_dkv, k_uk, k_uv, k_dq, k_uq, k_o = random.split(key, 6)
+        rel_pos_a = None
+        rel_pos_b = None
+        if cfg.rel_pos_bias:
+            k_ra = random.fold_in(key, 0x9E3779B9)
+            latent = cfg.rel_pos_latent
+            rel_pos_a = reshard(_init_weight(k_ra, (d, n * latent), std), P("data", "model"))
+            rel_pos_b = reshard(jnp.zeros((cfg.rel_pos_window, latent)), P(None, None))
+        return MultiheadLatentAttention(
+            w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
+            kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
+            w_uk=reshard(_init_weight(k_uk, (ckv, n * h), std), P("data", "model")),
+            w_uv=reshard(_init_weight(k_uv, (ckv, n * h), std), P("data", "model")),
+            w_dq=reshard(_init_weight(k_dq, (d, cq), std), P("data", None)),
+            q_norm=RMSNorm.init(cq, cfg.layer_norm_eps),
+            w_uq=reshard(_init_weight(k_uq, (cq, n * h), std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", "data")),
+            rel_pos_a=rel_pos_a,
+            rel_pos_b=rel_pos_b,
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+    ) -> Float[Array, "B S D"]:
+        cfg = self.cfg
+        head_dim = cfg.inferred_head_dim
+        seq_len = x.shape[1]
+        # Canonical TP head layout (heads on ``model``); pin q/k/v to it before attention.
+        head_spec = P(_BATCH_AXES, None, "model", None)
+
+        # Compressed KV latent -> learnable RMSNorm -> up-project to per-head k and v.
+        c_kv = self.kv_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dkv))
+        k = reshard(rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk), "... (n d) -> ... n d", d=head_dim), head_spec)
+        v = reshard(rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv), "... (n d) -> ... n d", d=head_dim), head_spec)
+
+        # Compressed Q latent -> learnable RMSNorm -> up-project to per-head q.
+        c_q = self.q_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dq))
+        q = reshard(rearrange(jnp.einsum("bsc,cd->bsd", c_q, self.w_uq), "... (n d) -> ... n d", d=head_dim), head_spec)
+
+        bias = None
+        if self.rel_pos_a is not None:
+            latent = cfg.rel_pos_latent
+            window = cfg.rel_pos_window
+            rel_latent = rearrange(jnp.einsum("bsh,hd->bsd", x, self.rel_pos_a), "b s (n d) -> b s n d", d=latent)
+            bias_band = jnp.einsum("bsnd,rd->bsnr", rel_latent, self.rel_pos_b)
+            if cfg.attention_implementation == "gpu_fa4_cute":
+                bias = bias_band.astype(q.dtype)
+            else:
+                bias = _rel_pos_bias_full(bias_band, seq_len, window)
+        attn_out = attention(q, k, v, mask, implementation=cfg.attention_implementation, bias=bias)
+        attn_out = reshard(attn_out, head_spec)
+        # Exclusive Self Attention (optional): per head, subtract the component of yᵢ parallel to vᵢ.
+        # MLA has n KV heads == n Q heads (v already matches attn_out per head), so no align_kv_heads.
+        if cfg.xsa:
+            dot = jnp.sum(attn_out * v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(v * v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * v
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
@@ -503,7 +670,7 @@ class MoEMLP(eqx.Module):
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm | None
-    attn: CausalSelfAttention
+    attn: CausalSelfAttention | MultiheadLatentAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm | None
     mlp: MoEMLP
@@ -527,7 +694,11 @@ class Block(eqx.Module):
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=attn_gated_norm,
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            attn=(
+                MultiheadLatentAttention.init(cfg, key=attn_key)
+                if cfg.mla
+                else CausalSelfAttention.init(cfg, key=attn_key)
+            ),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=mlp_gated_norm,
             mlp=MoEMLP.init(cfg, key=mlp_key),

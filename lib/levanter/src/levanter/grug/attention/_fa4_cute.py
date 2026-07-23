@@ -240,6 +240,7 @@ def _fa4_cute_attention_forward_sharded(
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    bias: jax.Array | None = None,
 ) -> jax.Array:
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
@@ -251,6 +252,7 @@ def _fa4_cute_attention_forward_sharded(
             valid,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
+            bias=bias,
         )
 
     batch_axes = _q_batch_axes(q, mesh)
@@ -263,6 +265,7 @@ def _fa4_cute_attention_forward_sharded(
             valid,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
+            bias=bias,
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
@@ -275,12 +278,30 @@ def _fa4_cute_attention_forward_sharded(
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
 
-    @shard_map(
-        mesh=mesh,
-        out_specs=qkv_spec,
-        check_vma=False,
-    )
-    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+    if bias is None:
+
+        @shard_map(mesh=mesh, out_specs=qkv_spec, check_vma=False)
+        def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+            return fa4_cute_attention_forward(
+                q_local,
+                k_local,
+                v_local,
+                lower_bounds_local,
+                valid_local,
+                sm_scale=sm_scale,
+                kernel_config=kernel_config,
+            )
+
+        return _local_fa4_attention(q, k, v, lower_bounds, valid)
+
+    # The bias band [B, S, Hq, window] follows q's batch/head sharding with an unsharded
+    # sequence + window axis, so the kernel sees one contiguous local band per shard.
+    bias_spec = P(batch_axes, None, _head_axis(mesh), None)
+    _assert_sequence_axis_unsharded("bias", bias)
+    bias = reshard(bias, bias_spec)
+
+    @shard_map(mesh=mesh, out_specs=qkv_spec, check_vma=False)
+    def _local_fa4_attention_bias(q_local, k_local, v_local, lower_bounds_local, valid_local, bias_local):
         return fa4_cute_attention_forward(
             q_local,
             k_local,
@@ -289,9 +310,10 @@ def _fa4_cute_attention_forward_sharded(
             valid_local,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
+            bias=bias_local,
         )
 
-    return _local_fa4_attention(q, k, v, lower_bounds, valid)
+    return _local_fa4_attention_bias(q, k, v, lower_bounds, valid, bias)
 
 
 def _gpu_compute_arch() -> int:
@@ -308,9 +330,9 @@ def _gpu_compute_arch() -> int:
     raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
 
 
-def _segmented_kernel_config(head_dim: int):
+def _segmented_kernel_config(head_dim: int, head_dim_v: int | None = None):
     arch = _gpu_compute_arch()
-    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch, head_dim_v=head_dim_v)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
     # flash_attn/cute/interface.py. This Grug port is not that native SM100
@@ -327,8 +349,14 @@ def gpu_fa4_cute_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    bias: Float[Array, "B S Hq W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run causal self-attention through a FlashAttention-4/CuTe JAX FFI backend."""
+    """Run causal self-attention through a FlashAttention-4/CuTe JAX FFI backend.
+
+    ``bias`` is the optional compact learned relative-position band ``[B, S, Hq, window]``; when
+    given it is added to the scaled logits inside the fused kernel (and its own gradient composes
+    through the custom VJP). It is the compact band, not a dense ``[B, H, Q, K]`` bias.
+    """
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
 
@@ -345,7 +373,8 @@ def gpu_fa4_cute_attention(
             mask,
             backend_name="gpu_fa4_cute_attention",
         )
-    kernel_config = _segmented_kernel_config(q.shape[-1])
+    # Pass v head_dim too: MLA runs asymmetric qk=192 / v=128, so the kernel config keys on both.
+    kernel_config = _segmented_kernel_config(q.shape[-1], v.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
         q,
@@ -355,6 +384,7 @@ def gpu_fa4_cute_attention(
         valid,
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
+        bias=bias,
     )
 
 

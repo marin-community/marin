@@ -42,7 +42,15 @@ def flash4_cute_kernel_config(
     head_dim: int,
     *,
     arch: int,
+    head_dim_v: int | None = None,
 ) -> Flash4CuteKernelConfig:
+    """Kernel schedule for the segmented FA4/CuTe path.
+
+    ``head_dim_v`` is the (possibly asymmetric) value head dim; when it differs from ``head_dim``
+    (MLA qk=192 / v=128) the SM90 backward schedule keys its ``num_stages_do`` off the real value
+    head dim. Defaults to ``head_dim`` for the symmetric case.
+    """
+    head_dim_v = head_dim if head_dim_v is None else head_dim_v
     arch_family = arch // 10
     if arch_family == 10:
         return Flash4CuteKernelConfig(
@@ -68,7 +76,7 @@ def flash4_cute_kernel_config(
     if arch_family == 9:
         sm90_backward = sm90_flash4_cute_backward_config(
             head_dim,
-            head_dim_v=head_dim,
+            head_dim_v=head_dim_v,
             schedule=Sm90BackwardSchedule.CAUSAL_OR_LOCAL,
         )
         return Flash4CuteKernelConfig(

@@ -265,6 +265,7 @@ def reference_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
+    bias: Float[Array, "B H Q K"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
@@ -273,6 +274,14 @@ def reference_attention(
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+
+    # Per-head additive bias (e.g. a learned relative-position bias) is added to the
+    # pre-softmax logits. Causal / windowed masking below still zeros out disallowed
+    # positions regardless of the bias value.
+    if bias is not None:
+        if bias.shape != scores.shape:
+            raise ValueError(f"bias must match scores shape {scores.shape}, got {bias.shape}")
+        scores = scores + bias.astype(scores.dtype)
 
     explicit = None
     if mask is None:
@@ -485,15 +494,23 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    bias: Float[Array, "B H Q K"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
-        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-    if implementation == "cudnn":
-        return cudnn_attention(q, k, v, mask)
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, bias=bias)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        # The FA4/CuTe path consumes the compact band [B, S, Hq, window] directly (not a dense
+        # [B, H, Q, K] bias); the model passes the band on this path and only densifies for reference.
+        return gpu_fa4_cute_attention(q, k, v, mask, bias=bias)
+    if bias is not None:
+        # The remaining fused kernels do not yet apply a per-head additive bias.
+        raise NotImplementedError(
+            f"Per-head attention bias is only supported by 'reference' and 'gpu_fa4_cute'; got {implementation!r}."
+        )
+    if implementation == "cudnn":
+        return cudnn_attention(q, k, v, mask)
     if implementation == "gpu_fa4_thd":
         from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
 

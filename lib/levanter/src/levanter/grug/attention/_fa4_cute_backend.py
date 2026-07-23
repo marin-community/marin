@@ -86,6 +86,7 @@ def segmented_flash_attention_forward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    bias: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """FA4/CuTe segmented attention forward entry point.
 
@@ -97,12 +98,16 @@ def segmented_flash_attention_forward(
         valid: Per-token query validity mask, shape [B, S].
         softmax_scale: QK softmax scale.
         kernel_config: Architecture-specific tile/config object selected by attention.py.
+        bias: Optional learned relative-position band, shape [B, S, Hq, window]. When
+            given, ``bias[b, i, h, i-j]`` is added to the scaled logit of every in-window
+            causal pair. When ``None`` the kernel is byte-for-byte the bias-free path.
 
     Returns:
         ``(out, lse)`` where ``out`` has shape [B, S, Hq, Dv] and ``lse`` has
         shape [B, Hq, S]. The backward kernel consumes both tensors.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
+    rel_pos_window = _validate_bias(q, bias)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
@@ -118,8 +123,9 @@ def segmented_flash_attention_forward(
         tile_m=forward_tile[0],
         tile_n=forward_tile[1],
         num_threads=num_threads,
+        rel_pos_window=rel_pos_window,
     )
-    input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
+    input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8, include_bias=bias is not None)
     out_shape_dtype = jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32)
     call = modules.cjax.cutlass_call(
@@ -130,7 +136,9 @@ def segmented_flash_attention_forward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    return call(q, k, v, lower_bounds, valid.astype(jnp.int32))
+    if bias is None:
+        return call(q, k, v, lower_bounds, valid.astype(jnp.int32))
+    return call(q, k, v, lower_bounds, valid.astype(jnp.int32), bias)
 
 
 def segmented_flash_attention_backward(
@@ -145,17 +153,33 @@ def segmented_flash_attention_backward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Return gradients for FA4/CuTe packed-segment attention."""
+    bias: jax.Array | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array | None]:
+    """Return ``(dq, dk, dv, d_bias)`` for FA4/CuTe packed-segment attention.
+
+    When ``bias`` (the ``[B, S, Hq, window]`` relative-position band) is given, the recomputed
+    score tile is biased so dq/dk/dv match the biased forward, and the band's own gradient
+    ``d_bias`` is scattered from the same dS tiles inside the segmented kernel (``d_bias`` is ``None``
+    when no bias is given). No separate windowed recompute is required.
+    """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
+    rel_pos_window = _validate_bias(q, bias)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
-    if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+    # Route every SM90 head-dim the native warp-specialized backward supports through it: GQA D128
+    # (ratio > 1) and MLA qk=192 / v=128 MHA (ratio == 1). The segmented Sm120 fallback is ~40x
+    # slower per call and dominated (~34%) the MLA step time in profiling.
+    if kernel_config.sm90_backward is not None and q.shape[-1] in (128, 192):
+        if bias is not None:
+            raise NotImplementedError(
+                "Relative-position bias in the FA4/CuTe backward is only wired for the segmented "
+                "(SM80/SM120) path; the native SM90 warp-specialized backward is out of scope."
+            )
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -163,7 +187,7 @@ def segmented_flash_attention_backward(
             tile_m=sm90_config.tile[0],
             tile_n=sm90_config.tile[1],
         )
-        return segmented_flash_attention_backward_sm90_native(
+        dq, dk, dv = segmented_flash_attention_backward_sm90_native(
             q,
             k,
             v,
@@ -180,6 +204,7 @@ def segmented_flash_attention_backward(
             kernel_config=kernel_config,
             window_size_left=None,
         )
+        return dq, dk, dv, None
 
     backward_tile = kernel_config.backward_tile
     num_threads = kernel_config.num_threads
@@ -193,13 +218,15 @@ def segmented_flash_attention_backward(
         tile_n=backward_tile[1],
         num_threads=num_threads,
         compute_arch=kernel_config.backward_arch,
+        rel_pos_window=rel_pos_window,
     )
     input_spec, output_spec = _cutlass_attention_backward_specs(
         modules,
         vector_elems=8,
         qhead_per_kvhead=qhead_per_kvhead,
+        include_bias=bias is not None,
     )
-    output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile)
+    output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile, window=rel_pos_window)
     call = modules.cjax.cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
@@ -208,8 +235,14 @@ def segmented_flash_attention_backward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
-    return dq, dk, dv
+    if bias is None:
+        dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
+        return dq, dk, dv, None
+    dq, dk, dv, *rest = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), bias)
+    # rest = (dpsum, lse_log2, dq_accum, dk_accum, dv_accum, d_bias); the kernel scatters the band
+    # gradient straight from its dS tiles, so no separate windowed recompute is needed.
+    d_bias = rest[-1]
+    return dq, dk, dv, d_bias
 
 
 def segmented_flash_attention_backward_sm90_native(
@@ -287,9 +320,8 @@ def segmented_flash_attention_backward_sm90_native(
         config=sm90_config,
         window_size_left=window_size_left,
     )
-    qhead_per_kvhead = q.shape[2] // k.shape[2]
-    if qhead_per_kvhead == 1:
-        raise NotImplementedError("native SM90 backward currently expects GQA so dK/dV accumulators are present.")
+    # MHA (ratio == 1, MLA) is the degenerate GQA group of size 1: dK/dV accumulators are per-head,
+    # so the native accumulation path is correct without a grouped reduction.
     preprocess_input_spec, preprocess_output_spec = _cutlass_attention_backward_sm90_preprocess_specs(
         modules,
         vector_elems=8,
@@ -304,8 +336,13 @@ def segmented_flash_attention_backward_sm90_native(
     )
     dpsum, lse_log2, _dq_accum = preprocess_call(out, dout, lse)
 
-    backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
-    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
+    mha = q.shape[2] == k.shape[2]
+    backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(
+        modules, vector_elems=8, mha=mha
+    )
+    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(
+        q, k, v, sm90_config.tile, mha=mha
+    )
     backward_call = modules.cjax.cutlass_call(
         backward_launcher,
         output_shape_dtype=backward_output_shape_dtype,
@@ -314,7 +351,7 @@ def segmented_flash_attention_backward_sm90_native(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq_accum, dk_accum, dv_accum = backward_call(
+    dq_accum, dk_out, dv_out = backward_call(
         q,
         k,
         v,
@@ -388,23 +425,47 @@ def segmented_flash_attention_backward_sm90_native(
         softmax_scale=1.0,
     )
     (dq,) = dq_postprocess(dq_accum)
-    (dk,) = dk_postprocess(dk_accum)
-    (dv,) = dv_postprocess(dv_accum)
+    if mha:
+        # MHA: dK/dV came out of the kernel epilogue as final softmax-scaled bf16 — no postprocess.
+        return dq, dk_out, dv_out
+    (dk,) = dk_postprocess(dk_out)
+    (dv,) = dv_postprocess(dv_out)
     return dq, dk, dv
 
 
 def _cutlass_attention_forward_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int
+    modules: _CutlassCuteModules, *, vector_elems: int, include_bias: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec), (qkv_spec, lse_spec)
+    input_spec = (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec)
+    if include_bias:
+        # Keep the bias band in its native [B, S, Hq, window] layout (identity mode) so the
+        # kernel can index mBias[b, i, h, offset] directly.
+        bias_spec = tensor_spec(static=True)
+        input_spec = (*input_spec, bias_spec)
+    return input_spec, (qkv_spec, lse_spec)
+
+
+def _validate_bias(q: jax.Array, bias: jax.Array | None) -> int | None:
+    """Validate the optional relative-position bias band and return its window width."""
+    if bias is None:
+        return None
+    expected = (q.shape[0], q.shape[1], q.shape[2])
+    if bias.ndim != 4 or bias.shape[:3] != expected:
+        raise ValueError(f"bias must have shape [B, S, Hq, window]={expected}+(window,), got {bias.shape}")
+    if bias.dtype != q.dtype:
+        raise TypeError(f"bias dtype must match q dtype {q.dtype}, got {bias.dtype}")
+    window = bias.shape[3]
+    if window <= 0:
+        raise ValueError(f"bias window must be positive, got {window}")
+    return window
 
 
 def _cutlass_attention_backward_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int, qhead_per_kvhead: int
+    modules: _CutlassCuteModules, *, vector_elems: int, qhead_per_kvhead: int, include_bias: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
@@ -421,8 +482,12 @@ def _cutlass_attention_backward_specs(
         metadata_spec,
         metadata_spec,
     )
+    if include_bias:
+        # Bias band [B, S, Hq, window] in native layout (matches the backward's identity BSHD mode).
+        bias_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
+        input_spec = (*input_spec, bias_spec)
     dkv_accum_spec = scratch_spec if qhead_per_kvhead > 1 else qkv_spec
-    return input_spec, (
+    output_spec = (
         qkv_spec,
         qkv_spec,
         qkv_spec,
@@ -432,10 +497,15 @@ def _cutlass_attention_backward_specs(
         dkv_accum_spec,
         dkv_accum_spec,
     )
+    if include_bias:
+        # d_bias band gradient output [B, S, Hq, window], identity 4D layout like the input band.
+        dbias_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
+        output_spec = (*output_spec, dbias_spec)
+    return input_spec, output_spec
 
 
 def _cutlass_attention_backward_sm90_accum_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int
+    modules: _CutlassCuteModules, *, vector_elems: int, mha: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
@@ -457,7 +527,11 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_cnt_spec,
         sparse_idx_spec,
     )
-    return input_spec, (scratch_spec, scratch_spec, scratch_spec)
+    # For MHA (qhead_per_kvhead == 1) the kernel writes final bf16 dK/dV directly in [B, S, H, D]
+    # layout (already softmax-scaled), so their outputs are 4D qkv_spec instead of the fp32
+    # accumulator scratch tensors used by the GQA (grouped-reduction) path.
+    output_spec = (scratch_spec, qkv_spec, qkv_spec) if mha else (scratch_spec, scratch_spec, scratch_spec)
+    return input_spec, output_spec
 
 
 def _cutlass_attention_backward_sm90_preprocess_specs(
@@ -586,6 +660,7 @@ def _cutlass_attention_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
+    window: int | None = None,
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -605,7 +680,7 @@ def _cutlass_attention_backward_output_shapes(
         if qhead_per_kvhead > 1
         else jax.ShapeDtypeStruct(v.shape, v.dtype)
     )
-    return (
+    outputs = (
         jax.ShapeDtypeStruct(q.shape, q.dtype),
         jax.ShapeDtypeStruct(k.shape, k.dtype),
         jax.ShapeDtypeStruct(v.shape, v.dtype),
@@ -615,6 +690,10 @@ def _cutlass_attention_backward_output_shapes(
         dk_accum,
         dv_accum,
     )
+    if window is not None:
+        # Band gradient d_bias[B, S, Hq, window] scattered inside the kernel (fp32 accumulator).
+        outputs = (*outputs, jax.ShapeDtypeStruct((batch, seq_len, q_heads, window), jnp.float32))
+    return outputs
 
 
 def _cutlass_attention_backward_sm90_preprocess_output_shapes(
@@ -635,6 +714,8 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
+    *,
+    mha: bool = False,
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -644,6 +725,12 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     head_dim_rounded = ((head_dim + 31) // 32) * 32
     head_dim_v_rounded = ((v.shape[-1] + 31) // 32) * 32
     dq_accum = jax.ShapeDtypeStruct((batch, q_heads, seq_q_rounded * head_dim_rounded), jnp.float32)
+    if mha:
+        # MHA: the kernel emits final bf16 dK/dV in the input [B, S, H, D] layout (no grouped
+        # accumulation, no dK/dV postprocess). dQ still uses the fp32 atomic accumulator.
+        dk = jax.ShapeDtypeStruct(k.shape, k.dtype)
+        dv = jax.ShapeDtypeStruct(v.shape, v.dtype)
+        return dq_accum, dk, dv
     dk_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_rounded), jnp.float32)
     dv_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_v_rounded), jnp.float32)
     return dq_accum, dk_accum, dv_accum
@@ -658,20 +745,34 @@ def fa4_cute_attention_forward(
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
+    bias: jax.Array | None = None,
 ) -> jax.Array:
     """FA4/CuTe attention boundary with packed causal metadata.
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
-    attempt to autodiff through ``cutlass_call``.
+    attempt to autodiff through ``cutlass_call``. When ``bias`` (the ``[B, S, Hq, window]``
+    relative-position band) is given it is threaded through both the biased forward/backward kernels
+    and a JAX-side band-gradient path so ``d_bias`` composes with the model's einsum VJP.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
-    return _segmented_flash_attention_custom_vjp(
+    if bias is None:
+        return _segmented_flash_attention_custom_vjp(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid,
+            sm_scale,
+            kernel_config,
+        )
+    return _segmented_flash_attention_bias_custom_vjp(
         q,
         k,
         v,
         lower_bounds,
         valid,
+        bias,
         sm_scale,
         kernel_config,
     )
@@ -729,7 +830,7 @@ def _segmented_flash_attention_custom_vjp_bwd(
     q, k, v, out, lse, lower_bounds, valid = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
-    dq, dk, dv = segmented_flash_attention_backward(
+    dq, dk, dv, _d_bias = segmented_flash_attention_backward(
         q,
         k,
         v,
@@ -747,6 +848,88 @@ def _segmented_flash_attention_custom_vjp_bwd(
 _segmented_flash_attention_custom_vjp.defvjp(
     _segmented_flash_attention_custom_vjp_fwd,
     _segmented_flash_attention_custom_vjp_bwd,
+)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7))
+def _segmented_flash_attention_bias_custom_vjp(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    bias: jax.Array,
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+) -> jax.Array:
+    out, _ = segmented_flash_attention_forward(
+        q,
+        k,
+        v,
+        lower_bounds,
+        valid,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+        bias=bias,
+    )
+    return out
+
+
+def _segmented_flash_attention_bias_custom_vjp_fwd(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    bias: jax.Array,
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+) -> tuple[jax.Array, tuple[jax.Array, ...]]:
+    out, lse = segmented_flash_attention_forward(
+        q,
+        k,
+        v,
+        lower_bounds,
+        valid,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+        bias=bias,
+    )
+    return out, (q, k, v, out, lse, lower_bounds, valid, bias)
+
+
+def _segmented_flash_attention_bias_custom_vjp_bwd(
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+    residuals: tuple[jax.Array, ...],
+    cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
+) -> tuple[jax.Array | None, ...]:
+    q, k, v, out, lse, lower_bounds, valid, bias = residuals
+    if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
+        zeros = (jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, jnp.zeros_like(bias))
+        return zeros
+    dout = cotangent.astype(q.dtype)
+    # dq/dk/dv AND the band gradient d_bias all come out of the one fused segmented backward: the
+    # kernel scatters its dS tiles into d_bias, so there is no separate windowed recompute pass.
+    dq, dk, dv, d_bias = segmented_flash_attention_backward(
+        q,
+        k,
+        v,
+        out,
+        dout,
+        lse,
+        lower_bounds,
+        valid,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+        bias=bias,
+    )
+    return dq, dk, dv, None, None, d_bias.astype(bias.dtype)
+
+
+_segmented_flash_attention_bias_custom_vjp.defvjp(
+    _segmented_flash_attention_bias_custom_vjp_fwd,
+    _segmented_flash_attention_bias_custom_vjp_bwd,
 )
 
 
@@ -769,8 +952,10 @@ def _validate_forward_inputs(
         raise ValueError(f"q/k head dimensions must match, got q={q.shape}, k={k.shape}")
     if k.shape[2] != v.shape[2]:
         raise ValueError(f"k/v head counts must match, got k={k.shape}, v={v.shape}")
-    if v.shape[-1] != q.shape[-1]:
-        raise NotImplementedError(f"gpu_fa4_cute_attention currently requires Dv == D, got q={q.shape}, v={v.shape}")
+    # Asymmetric V head dim (MLA qk=192 / v=128) is supported by the kernel; V/O layouts are
+    # sized on head_dim_v independently of the q/k head_dim. Both must be multiples of 8.
+    if v.shape[-1] % 8 != 0:
+        raise NotImplementedError(f"gpu_fa4_cute_attention requires Dv % 8 == 0, got v={v.shape}")
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"Hq must be divisible by Hkv for GQA, got q={q.shape}, k={k.shape}")
     if lower_bounds.shape != q.shape[:2]:
