@@ -17,5 +17,8 @@ config:
   # not a secret. The private key is the hand-placed marin-grafana-github-app-private-key
   # secret; auth turns on once both are present. See README "Secrets and rotation".
   marin-grafana:github_app_client_id: Iv23lifJun4glkL9XbFJ
+  # Set false only for the first deployment in a new project: that creates the
+  # service account before the Loom stack binds it. Re-enable after Loom is up.
+  marin-grafana:loom_alerts: "true"
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Q+ANb/lWOlKPlnYfjnVwqsddavq2mCxtpbL2qM4LDkSSQCdtF6i23aOY/4tztuXbQxjEf7zLiHzOSRS37IKAQ0lwPtGPtsU+eHwrNMTw6rqY4wLRoKzPpdTOWDtzYkIgSixmuEPz14nxCE=
