@@ -52,6 +52,16 @@ def test_launcher_selects_gpu_disk_default(tmp_path):
     assert args.disk == DEFAULT_GPU_DISK
 
 
+def test_launcher_alias_preserves_dry_run_boolean_semantics(tmp_path):
+    harbor_config = tmp_path / "harbor.yaml"
+    harbor_config.write_text("agents:\n  - name: terminus-2\n")
+    args = create_parser().parse_args(
+        ["--harbor-config", str(harbor_config), "--model", "Qwen/Qwen3-32B", "--dataset", "terminal-bench@2.0", "--dry-run"]
+    )
+
+    assert args.dry_run is True
+
+
 def test_launcher_selects_tpu_disk_default(tmp_path):
     harbor_config = tmp_path / "harbor.yaml"
     harbor_config.write_text("agents:\n  - name: terminus-2\n")

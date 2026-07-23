@@ -23,10 +23,13 @@ def _add_arg_with_alias(
     alias: Optional[str] = None,
     **kwargs,
 ) -> None:
-    parser.add_argument(primary, **kwargs)
     if alias:
-        dest = primary.lstrip("-").replace("-", "_")
-        parser.add_argument(alias, dest=dest, help=argparse.SUPPRESS)
+        # A single argparse action preserves type, action, defaults, and
+        # required semantics for both spellings. Registering the alias as a
+        # second bare action silently turns e.g. ``--dry-run`` into a value.
+        parser.add_argument(primary, alias, **kwargs)
+    else:
+        parser.add_argument(primary, **kwargs)
 
 
 def add_harbor_args(parser: ArgTarget, *, config_required: bool = True) -> None:

@@ -31,6 +31,7 @@ from .backends.federated_iris import (
     DEFAULT_PARENT_INGRESS,
     DUMMY_API_KEY,
     build_marin_serve_command,
+    build_wait_and_mint_command,
     durable_harbor_jobs_dir,
     mint_external_api_base,
 )
@@ -380,13 +381,20 @@ def main() -> None:
         env_vars["HARBOR_ENV"] = args.harbor_env
 
     if args.external_serve_model:
-        import subprocess
+        if args.dry_run:
+            print("[dry-run] would start external serve:", " ".join(build_marin_serve_command(args)))
+        else:
+            import subprocess
 
-        result = subprocess.run(build_marin_serve_command(args), cwd=Path.cwd(), check=False)
-        if result.returncode:
-            raise SystemExit(result.returncode)
+            result = subprocess.run(build_marin_serve_command(args), cwd=Path.cwd(), check=False)
+            if result.returncode:
+                raise SystemExit(result.returncode)
     if args.external_endpoint_name:
-        env_vars["EXTERNAL_AGENT_API_BASE"] = mint_external_api_base(args)
+        if args.dry_run:
+            print("[dry-run] would wait and mint:", " ".join(build_wait_and_mint_command(args)))
+            env_vars["EXTERNAL_AGENT_API_BASE"] = "https://dry-run.invalid/v1"
+        else:
+            env_vars["EXTERNAL_AGENT_API_BASE"] = mint_external_api_base(args)
         env_vars["EXTERNAL_AGENT_API_KEY"] = DUMMY_API_KEY
 
     # Resolve model config for agent kwargs passthrough
