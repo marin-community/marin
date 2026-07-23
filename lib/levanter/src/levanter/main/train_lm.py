@@ -6,7 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, cast
 
 import equinox as eqx
 import haliax as hax
@@ -158,7 +158,21 @@ def main(config: TrainLmConfig):
             # NB: gross mutability
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = config.model.hf_checkpoint_converter()
+        # WORKAROUND(eczech 2026-07-14): hf_checkpoint_converter() eagerly loads the model's
+        # *reference* tokenizer (e.g. "Qwen/Qwen3-0.6B") straight from HF Hub inside
+        # HFCheckpointConverter.__init__ (via _infer_tokenizer). On marin workers with flaky HF
+        # egress this hangs indefinitely on a blocked socket. That reference tokenizer is
+        # discarded one line later by .replaced(tokenizer=tokenizer), so seed a throwaway copy
+        # of the model config with the already-loaded training tokenizer *object* --
+        # _infer_tokenizer returns an object unchanged and never touches HF. Only configs that
+        # expose a `tokenizer` field (Llama/Qwen family) can be seeded; others fall back to the
+        # original eager path. To revert: `converter = config.model.hf_checkpoint_converter()`.
+        model_config = config.model
+        if any(f.name == "tokenizer" for f in dataclasses.fields(model_config)):
+            # cast: only concrete configs (Llama/Qwen family) declare `tokenizer`, so the
+            # abstract HFCompatConfig type doesn't accept it; the field check above guards it.
+            model_config = dataclasses.replace(cast(LlamaConfig, model_config), tokenizer=tokenizer)
+        converter = model_config.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()

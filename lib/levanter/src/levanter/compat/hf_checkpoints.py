@@ -26,7 +26,6 @@ import humanfriendly
 import jax
 import jax.numpy as jnp
 import mergedeep
-import numpy as np
 import requests
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
@@ -43,6 +42,7 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
+from jax.experimental import multihost_utils
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
@@ -1141,7 +1141,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     subset_arg = subset_keys
 
                 shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                shard_numpy = {k: np.asarray(v) for k, v in shard_weights.items()}
+                # process_allgather (not np.asarray) so this works on multi-host: the deshard above
+                # replicates within the mesh, but on >1 process each weight still spans
+                # non-addressable devices, so bring the full array to host on every process (only
+                # process 0 uploads; see temp_dir_before_upload). This is a collective -- every
+                # process must reach it, which holds since save_pretrained runs on all of them.
+                shard_numpy = {k: multihost_utils.process_allgather(v, tiled=True) for k, v in shard_weights.items()}
                 bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
                 logger.info(
                     "Saving shard %s (%s, %.2f%% of model)",
