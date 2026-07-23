@@ -33,8 +33,6 @@ import json
 import os
 from typing import NamedTuple
 
-from levanter.checkpoint import CheckpointerConfig
-from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -88,20 +86,16 @@ def _make_build_config(mixture: Mixture, run_id: str):
             enable_simulated_epoching=dk.ENABLE_SIMULATED_EPOCHING,
             val_components=val_components,
         )
-        tracker: WandbConfig | JsonLoggerConfig = (
-            WandbConfig(project="marin_moe", tags=["moe", "datakit_swarm", run_id], group="datakit-swarm", name=None)
-            if dk._USE_WANDB
-            else JsonLoggerConfig(logger_name="datakit_swarm.metrics")
+        tracker = WandbConfig(
+            entity=os.environ.get("WANDB_ENTITY") or None,
+            project=os.environ.get("WANDB_PROJECT", "rav_moe"),
+            tags=["moe", "datakit_swarm", run_id],
+            group="datakit-swarm",
+            name=None,
         )
-        # Node-local disposable checkpoints: a swarm wants the eval metric per run, not durable
-        # weights, and CW S3 tensorstore writes are fragile.
-        checkpointer = CheckpointerConfig(
-            base_path=f"/tmp/datakit-swarm-ckpt/{run_id}",
-            append_run_id_to_base_path=False,
-            save_interval=None,
-            keep=None,
-        )
-        return dk.build_launch_config(ctx, data=data, run_id=run_id, tracker=tracker, checkpointer=checkpointer)
+        # Durable S3 checkpoints (and final) under output_path -- None uses run_grug's
+        # default S3 checkpointer; the shutdown fix lets the async commit finish cleanly.
+        return dk.build_launch_config(ctx, data=data, run_id=run_id, tracker=tracker, checkpointer=None)
 
     return build_config
 

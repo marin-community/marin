@@ -17,7 +17,7 @@ from fray.types import ANY_REGION
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
-from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -409,7 +409,6 @@ _VALIDATION = (
 
 # CW pods carry no WANDB_API_KEY, so default to the json logger; opt into wandb with
 # DATAKIT_TRACKER=wandb (and pass -e WANDB_API_KEY).
-_USE_WANDB = os.environ.get("DATAKIT_TRACKER", "json_logger").lower() == "wandb"
 
 _MP = "params=float32,compute=bfloat16,output=bfloat16"
 
@@ -419,7 +418,7 @@ def build_launch_config(
     *,
     data: LmDataConfig,
     run_id: str,
-    tracker: WandbConfig | JsonLoggerConfig,
+    tracker: TrackerConfig,
     checkpointer: CheckpointerConfig | None,
 ) -> GrugMoeLaunchConfig:
     """The launch config shared by the single-mixture and swarm launchers: same model,
@@ -479,25 +478,17 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
             val_components=val_components,
         )
-        tracker: WandbConfig | JsonLoggerConfig = (
-            WandbConfig(
-                project="marin_moe",
-                tags=["moe", "datakit_store_mix", _SLUG],
-                group="datakit-moe-mix",
-                name=None,
-            )
-            if _USE_WANDB
-            else JsonLoggerConfig(logger_name="datakit_moe_mix.metrics")
+        tracker = WandbConfig(
+            entity=os.environ.get("WANDB_ENTITY") or None,
+            project=os.environ.get("WANDB_PROJECT", "rav_moe"),
+            tags=["moe", "datakit_store_mix", _SLUG],
+            group="datakit-moe-mix",
+            name=None,
         )
-        # CW S3 tensorstore checkpoint writes abort mid-run, so keep node-local
-        # disposable checkpoints.
-        checkpointer = CheckpointerConfig(
-            base_path="/tmp/datakit-ckpt/datakit-moe-mix",
-            append_run_id_to_base_path=False,
-            save_interval=None,
-            keep=None,
-        )
-        return build_launch_config(ctx, data=data, run_id="datakit-moe-mix", tracker=tracker, checkpointer=checkpointer)
+        # None -> run_grug's default: durable S3 checkpoints under output_path. The
+        # jax.distributed.shutdown() fix lets the async S3 commit finish before
+        # teardown, so this no longer aborts the process.
+        return build_launch_config(ctx, data=data, run_id="datakit-moe-mix", tracker=tracker, checkpointer=None)
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),
