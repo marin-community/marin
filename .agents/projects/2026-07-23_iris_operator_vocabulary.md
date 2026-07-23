@@ -30,6 +30,150 @@ set of verbs operates on them. The CLI is where an operator sees that; the
 internals are where it is either honored or contradicted. Today they contradict it
 in specific, catalogued ways (Part II).
 
+## Peer review response (codex, 2026-07-23)
+
+The proposal was sent to codex (gpt-5.6-sol) for an adversarial read. Verdict:
+**request changes.** The operator-facing direction is right — first-class
+task/attempt inspection, backend identity, terminal reasons, structured history,
+and `describe` crossing the backend boundary are all necessary — but Part I as
+scoped bundles too much, and several verb semantics are not implementable as
+written. The accepted changes below **supersede** the corresponding sections; where
+a section further down still reads the old way, this response is authoritative.
+
+**Ship a smaller incident-driven slice first.** One accepted design, several
+implementation PRs, in this order (this replaces the spiral under "Implementation
+plan"):
+
+1. Thin connection resolver + clean-install test (the §8 provider-extras fix).
+   *Landed on this branch.*
+2. Incident slice: **persist** the backend object reference at create success,
+   **capture the terminal backend reason** when an attempt finishes, a dedicated
+   `DescribeTask` RPC, and `task`/`attempt describe`. No event system, no renames.
+3. Event contract + delivery pipeline — only after durability and security are
+   settled (below).
+4. Stop semantics + a race-safe asynchronous operation API.
+5. CLI vocabulary + module moves, with compatibility messaging.
+
+**`describe` (§4) — persist backend identity as the primary mechanism.** A
+deterministic pod name plus one live GET is fragile: pods get
+GC'd, names are reused (a k8s name is not an object identity — the pod UID is),
+namespaces disappear, federated attempts run on a peer, and the derivation
+algorithm can drift across controller versions. Change: persist a backend object
+reference (`backend_id, home_cluster, namespace, kind, name, object_uid,
+attempt_uid, created_at`) when create succeeds, and record a **bounded terminal
+reason** (including the init-container failure) on the attempt decision record when
+it finishes, so the answer survives pod deletion. Deterministic derivation becomes
+a clearly labeled legacy fallback with an algorithm version. Live backend data is
+optional enrichment; `DescribeTask` (a **new** RPC, so live I/O never contaminates
+the cheap `GetTaskStatus` poll path) returns the registry snapshot with a deadline
+and a typed partial-result status (`not-created / observed-at-T / deleted /
+unreachable / permission-denied / unsupported / legacy-reference`). One pod GET
+does not answer "why pending" on Kueue in general (workload/admission state,
+scheduling conditions, k8s events); describe reports what it can and names what it
+could not reach.
+
+**`events` (§5) — a real event contract, audit-vs-telemetry decided before build.**
+The `{entity_id, ts, action, trigger, noun, details_json}` row is insufficient.
+Carry canonical identity and provenance: `event_id, occurred_at,
+recorded_at, home_cluster, noun, resource_id, parent_job_id/parent_task_id,
+attempt_uid, action, action_schema_version, source, principal, correlation_id,
+details`. Reasons: `entity_id` collides across nouns and clusters; attempt events
+keyed by `task_id` are not attempt-indexed; job roll-ups over `entity_id` are N+1;
+`ORDER BY ts` is not a deterministic total order across four writers; `noun` cannot
+be inferred inside `log_event` without caller changes or a brittle table;
+`slice_ready` already bypasses `log_event`, so "single chokepoint captures
+everything" is false; unversioned JSON is hard to redact and evolve. The stream is
+not obviously low-volume (`scheduling_pass_completed` and pending-reason events can
+fire every tick — emit pending reasons only on change, or model them as bounded
+current state). Name the namespace by its durability contract
+(`iris.audit_event`/`iris.operational_event`); `iris.event` is too generic. Before
+building,
+decide audit-vs-telemetry and answer: bounded vs unbounded buffering, drop
+behavior + metrics, shutdown flush, retries/dedup, finelog outage, ordering, and
+at-least-once vs best-effort. A background-thread buffer is not by itself an audit
+trail. The read RPC needs cursored pagination, rate limits,
+partial-result/source-watermark reporting, pushed-down parent indexes, and must not
+run finelog queries on the control thread.
+
+**`stop` (§7) — do not default to a "stop" that restarts.** `task stop
+--reschedule` as the default violates the plain meaning of stop. Change: default to
+no retry; make retry explicit; and prefer distinct domain verbs over one overloaded
+`stop` — `job cancel` (prevent new attempts), `task retry` (end the current
+attempt, keep the task eligible), `attempt terminate` (end exactly one current
+attempt, conditional on `attempt_uid`), `slice delete` (infra teardown — do not
+rename it to a benign `stop`). Attempt targeting is a compare-and-stop: the request
+carries the exact `attempt_uid` and the control loop terminates only if it still
+matches, so a rollover (attempt 3 ends, attempt 4 starts) cannot hit the wrong
+attempt, and the same guard makes retries/duplicates idempotent. The CLI exposes
+these as **asynchronous** operations (accepted vs completed, with a way to observe
+completion), since all three paths queue onto the single control thread. `job kill`
+(the literal alias) is still deleted.
+
+**Ownership model (§II.1) — provenance dimensions over exclusive A/B/C classes.**
+The A/B/C cut leaks: worker/slice have controller rows *and* live projections;
+attempt is record-backed *and* becomes a live pod; endpoint lacks the hierarchical
+`JobName` identity its class implies; actor and cluster are promised verbs they
+cannot implement. Change: describe each noun by *dimensions* — registry identity
+(controller DB), desired state (home controller), runtime identity (backend),
+runtime observation (execution cluster), health (worker tracker), history
+(finelog) — and let the service layer report provenance per field. Resolve the
+overloaded `cluster` noun (a config scope, a federation peer, a k8s execution
+cluster, and the controller process are four different things): `controller`,
+`backend`, and `peer` are more defensible nouns than `actor`, which the controller
+cannot enumerate. A/B/C stays only as informal shorthand.
+
+**`ResourceRef` (§II.2) — a minimal `ResourceKey`, deferring full subsumption.**
+Same string grammar does not mean same semantic type: `/user/job/0` is at once a stable
+task identity, a current process, a multi-attempt log source, and a live profiling
+target; `/user/job/0:3` is a human ordinal while `attempt_uid` is the execution
+identity. `TaskTarget` is a *resolved* runtime handle and must be produced by
+resolving a stable ref, not used as one. Change Phase A to introduce only a
+canonical `ResourceKey` (home_cluster, kind, id) for event addressing, plus
+explicit `AttemptLocator` (task + ordinal) and `AttemptIdentity` (`attempt_uid`),
+keeping `ExecutionTarget` and `LogSourceRef` distinct. Share parsing behind
+adapters; do not converge the typed `List*` RPCs into a generic `List(kind, query)`
+(it weakens typing, authz, pagination, evolution).
+
+**Matrix (§3) — remove cells that cannot be implemented.** actor
+`list/describe/events` needs controller identity/discovery it lacks; attempt
+`profile` is impossible on a completed attempt and race-prone live; `task spec`
+returning the parent job's spec is not a task spec; `cluster spec` as config does
+not meet "sufficient to resubmit." `spec` output is redacted, so it is a
+**sanitized submitted configuration**, not a guaranteed re-runnable spec. Pin the
+universal-verb contracts before the CLI move: which attempt `task logs` selects,
+whether `job logs` aggregates, `--follow` across a retry, the canonical `list
+--state` values per state machine, list pagination/snapshot consistency, and
+whether `attempt stop` rejects historical attempts.
+
+**New cross-cutting concerns (were missing).**
+- *Federation:* every ref/event carries a home cluster and, where different, an
+  execution cluster; `describe`/`events`/`stop` proxy to the authoritative peer or
+  return a structured partial/redirect — never silent local best-effort.
+- *Security/authorization:* per-resource tenant authz before any DB/finelog/backend
+  read; authz for list/roll-up/prefix queries; redaction allowlists for event
+  details and k8s messages; principal identity on stop/audit events; separation of
+  user-facing vs system worker/cluster events; sanitize terminal control characters
+  in rendered backend messages. `**details`-to-JSON must not retain tokens/URLs.
+- *Versioning:* client/controller skew is real even under "no aliases" — new proto
+  fields/RPCs need a deploy order and capability detection; removed commands should
+  fail with a precise replacement message.
+- *Performance/isolation:* no per-task live GET for `job describe` unless asked; no
+  event queries on the control thread; deadlines + backend rate limiting on live
+  describes; event buffer/health metrics visible without the event system itself.
+
+**Part II schema (§II.4) — soften.** Uniform CLI presentation does not need uniform
+physical encoding: prefer typed domain adapters over an int→string state migration
+(migrate one table only when another change requires it). Name the three event
+roles in docs; do not physically rename established finelog namespaces. Decide
+free-floating IDs per coordinate by ownership/integrity need, not for relational
+aesthetics (a thin anchor table with no lifecycle is a second stale truth).
+slice↔worker: measure contradictions in real DBs and document membership lifetime
+before dropping either side; if history matters, a junction/history table may be
+right. The service-file split, docstring sweep, private-helper rename, and proto
+renames are unrelated cleanup and should not ride inside the resource-model program.
+
+The sections below are the original proposal, retained for context and reference.
+
 # Part I — The operator CLI vocabulary (this PR)
 
 ## Problem
