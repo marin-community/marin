@@ -4,6 +4,7 @@
 from marin.execution.lazy import materialized_config
 
 import experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support as submission_support
+from experiments.llama import llama3_tokenizer
 from experiments.speedrun.prism_berkeley_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
 from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_sweep import build_config
 from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import default_speedrun
@@ -104,3 +105,12 @@ def test_default_speedrun_accepts_archived_tokenized_dataset(monkeypatch):
     assert train_dataset.override_path == config.tokenized_dataset
     assert results_config.wandb_entity is None
     assert results_config.output_path == f"{train_step.path('gs://test-prefix')}/speedrun_results.json"
+
+
+def test_default_speedrun_matches_validation_tokenizer_to_archived_train_cache():
+    _, config = build_config("130m")
+    train_step, _ = default_speedrun("prism-berkeley-qwen3-130m-test", config, version="2026.07.11")
+    validation_steps = [step for step in train_step.deps if step.name.startswith(("paloma/", "uncheatable_eval/"))]
+
+    assert len(validation_steps) == 23
+    assert {materialized_config(step, "gs://test-prefix").tokenizer for step in validation_steps} == {llama3_tokenizer}
