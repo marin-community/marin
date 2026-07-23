@@ -1,13 +1,13 @@
 ---
 name: context-search
-description: "Semantic and substring search over the marin-context corpus — GitHub issues/PRs/comments and Discord messages, every hit citable by URL. Use for questions about Marin activity: was X discussed, which issue/PR covered Y, what did people decide about Z."
+description: "Semantic and substring search over the echo corpus — GitHub issues/PRs/comments and Discord messages, every hit citable by URL. Use for questions about Marin activity: was X discussed, which issue/PR covered Y, what did people decide about Z."
 ---
 
 # Skill: Context Search
 
-The `chunks` table on the marin-context database mirrors the github+discord slice of the
+The `chunks` table on echo (the `context` database on the shared `marin-metadata` instance) mirrors the github+discord slice of the
 marinmirror corpus — 73k+ chunks, re-synced every 10 minutes — with pgvector embeddings
-for semantic search (see `infra/context/README.md`). Every hit carries a canonical URL:
+for semantic search (see `infra/echo/README.md`). Every hit carries a canonical URL:
 cite it, don't paraphrase from memory.
 
 ## When to use

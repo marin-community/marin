@@ -9,13 +9,14 @@
 #     "fastembed>=0.3",
 # ]
 # ///
-"""Search the marin-context corpus: GitHub issues/PRs/comments and Discord messages.
+"""Search the echo corpus: GitHub issues/PRs/comments and Discord messages.
 
-The `chunks` table on the marin-context database mirrors the github+discord slice of the
-marinmirror corpus (re-synced every 10 minutes), with pgvector embeddings for semantic
+The `chunks` table on echo (the `context` database on the shared `marin-metadata`
+instance) mirrors the github+discord slice of the marinmirror corpus (re-synced every
+10 minutes), with pgvector embeddings for semantic
 search. Every hit carries a canonical, citable URL. See
 `.agents/skills/context-search/SKILL.md` for when to use it, and
-`infra/context/README.md` for the database itself.
+`infra/echo/README.md` for the database itself.
 
     scripts/context_search.py search "<natural language query>" [--source github|discord]
         [--kind issue|pr|comment|message] [--since YYYY-MM-DD] [--limit 10]
@@ -39,11 +40,11 @@ from google.cloud.sql.connector import Connector
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
-INSTANCE = f"{PROJECT}:{REGION}:marin-context"
+INSTANCE = f"{PROJECT}:{REGION}:marin-metadata"
 DATABASE = "context"
 DB_USER = "agents"
 PASSWORD_SECRET = "cloudsql-agents-password"
-# Must match the corpus's embedding space (see infra/context/sync/main.py).
+# Must match the corpus's embedding space (see infra/echo/schema.py).
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 
@@ -120,7 +121,7 @@ def cmd_show(cur, args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Search the marin-context github+discord corpus.")
+    parser = argparse.ArgumentParser(description="Search the echo github+discord corpus.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="semantic search, ranked by cosine distance")
