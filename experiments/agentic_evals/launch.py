@@ -246,6 +246,8 @@ def _normalize(args: argparse.Namespace) -> None:
         args.disk = DEFAULT_GPU_DISK if args.gpu else DEFAULT_TPU_DISK
 
     if args.external_serve_model:
+        if not args.gpu:
+            raise ValueError("--external-serve-model requires --gpu (or --external-profile grug).")
         args.external_serve_name = args.external_serve_name or f"{args.job_name or 'eval'}-serve"
         args.external_endpoint_name = args.external_endpoint_name or f"/serve/{args.external_serve_name}"
         defaults = {

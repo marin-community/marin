@@ -162,6 +162,28 @@ def test_external_endpoint_worker_uses_environment_reference_not_capability_url(
     assert "--harbor_extra_arg=--jobs-dir=s3://bucket/run" in command
 
 
+def test_external_serve_requires_an_explicit_gpu_without_a_profile(tmp_path):
+    harbor_config = tmp_path / "harbor.yaml"
+    harbor_config.write_text("agents:\n  - name: opencode\n")
+    args = create_parser().parse_args(
+        [
+            "--harbor_config",
+            str(harbor_config),
+            "--model",
+            "vllm/example",
+            "--dataset",
+            "DCAgent/dev_set_v2",
+            "--target-cluster",
+            "cw-us-east-02a",
+            "--external-serve-model",
+            "example/model",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="requires --gpu"):
+        _normalize(args)
+
+
 def test_wait_and_mint_command_is_parent_scoped_and_keeps_url_out_of_errors():
     args = SimpleNamespace(
         iris_bin="iris",
