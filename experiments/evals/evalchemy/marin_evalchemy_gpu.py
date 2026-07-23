@@ -158,6 +158,14 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
 # Every value below is a DEFAULT — the matching EVAL_* env var still overrides it.
 PROMPT_HEADROOM = 4096  # min context reserved for the prompt; default gen budget = max_model_len − this.
 GRUG_THINKING_MODELS = {"penfever/grug-67b-a2b-sft-s2-thinking-step630"}
+CANONICAL_AIME_SEEDS = (42, 43, 44)
+
+
+def _aime_seeds(seed_spec: str | None) -> tuple[int, ...]:
+    """Return canonical AIME seeds unless a caller deliberately requests a sensitivity set."""
+    if not seed_spec:
+        return CANONICAL_AIME_SEEDS
+    return tuple(int(seed) for seed in seed_spec.split(",") if seed.strip())
 
 
 def _is_grug_thinking(model: str) -> bool:
@@ -251,16 +259,14 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # --limit → proves BOTH request types score non-empty over local-completions before the full suite.
     if os.environ.get("EVAL_SMOKE") == "1":
         tasks = (EvalTaskConfig("gsm8k", 0), EvalTaskConfig("hellaswag", 10))
-    # AIME24 10-seed μ±σ (POLICY §3): one process per seed 42..51, distinct dir per seed (task_alias)
-    # so results don't overwrite. Harvest = mean±std over the 10 pass@1 values.
+    # AIME24 policy: one process per canonical seed 42..44, with distinct task aliases so results
+    # do not overwrite. Three valid paired samples are sufficient for the campaign statistic.
     if os.environ.get("EVAL_TASK_SET") == "math500":  # one-benchmark chat smoke (reasoning-parser test)
         tasks = (EvalTaskConfig("MATH500", 0),)
         apply_chat_template = True
     if os.environ.get("EVAL_TASK_SET") == "aime24_seeds":
-        # Seeds: EVAL_AIME_SEEDS as a comma list (e.g. "42,43,44") — MARIN_EVAL_POLICY is 3-seed
-        # (seeds 42,43,44; report the mean). Default = the historical 10-seed set (42..51) for back-compat.
-        _seed_env = os.environ.get("EVAL_AIME_SEEDS")
-        _seeds = [int(s) for s in _seed_env.split(",") if s.strip()] if _seed_env else list(range(42, 52))
+        # EVAL_AIME_SEEDS may override the canonical three seeds for a deliberate sensitivity study.
+        _seeds = _aime_seeds(os.environ.get("EVAL_AIME_SEEDS"))
         tasks = tuple(
             EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s}, generation=True)
             for s in _seeds

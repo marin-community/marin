@@ -18,7 +18,7 @@ from iris.client import Job
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
-from experiments.evals.evalchemy.marin_evalchemy_gpu import _grug_profile
+from experiments.evals.evalchemy.marin_evalchemy_gpu import CANONICAL_AIME_SEEDS, _aime_seeds, _grug_profile
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
     EvalUnit,
@@ -179,6 +179,11 @@ def test_grug_profile_uses_local_weight_loader_compatible_extra_args():
         "delphi-v0-think",
     )
     assert "--model-loader-extra-config" not in args
+
+
+def test_aime_defaults_to_the_three_canonical_campaign_seeds():
+    assert _aime_seeds(None) == CANONICAL_AIME_SEEDS == (42, 43, 44)
+    assert _aime_seeds("42,44,99") == (42, 44, 99)
 
 
 def test_model_args_carry_served_max_length():
