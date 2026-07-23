@@ -8,23 +8,33 @@ columns ``bucket,phase_0,phase_1,sum``. The two phase columns are independently
 normalized below and used as a two-stage schedule.
 """
 
+import dataclasses
 import math
+import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
+from fray.types import ANY_REGION
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.optim.config import AdamConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
+from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
+from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.marin_tokenizer import marin_tokenizer
 
 _STORE_PREFIX = "datakit/store_8ac06c74"
@@ -32,14 +42,30 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # one sequence per block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
-ENABLE_SIMULATED_EPOCHING = True
+# Simulated epoching truncates each bucket to `experiment_budget`; at production
+# scale every bucket is well-fed, but a tiny smoke budget starves most of the 168
+# buckets to 0 sequences (which the restart mixture rejects). Default it off for a
+# smoke, on for a real run. Override with DATAKIT_SIM_EPOCH.
+ENABLE_SIMULATED_EPOCHING = bool(env_int("DATAKIT_SIM_EPOCH", 1))
 
 # Natural size of ``datakit/store_8ac06c74`` from Will's datakit-moe-mix branch:
 # 167 mixable bucket caches plus the 33-cache tail component.
 _TARGET_BUDGET_TOKENS = 10_372_343_704_053
 
-# The datakit store lives in us-central2; pin training there to avoid cross-region I/O.
-_TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8", zone="us-central2-b")
+# Train on the CoreWeave H100 fleet via federated Iris. The datakit store lives on
+# the CW object store (s3://marin-us-east-02a/marin/datakit/store_8ac06c74); the
+# per-bucket cache paths resolve under MARIN_PREFIX there, so no cross-region copy.
+# regions=[ANY_REGION] keeps the job schedulable on the region-less federated GPU
+# fleet. Set DATAKIT_SMOKE=1 for a tiny single-H100 plumbing run over the real
+# buckets (see the SMOKE branch below).
+_SMOKE = bool(env_int("DATAKIT_SMOKE", 0))
+_GPUS_PER_NODE = 8
+_GPU_COUNT = env_int("DATAKIT_GPU_COUNT", 1 if _SMOKE else _GPUS_PER_NODE)
+_REPLICAS = env_int("DATAKIT_REPLICAS", 1)
+_EXPERT_AXIS = env_int("DATAKIT_EXPERT_AXIS", 1 if _SMOKE else _GPUS_PER_NODE)
+_TRAIN_RESOURCES = ResourceConfig.with_gpu(
+    "H100", count=_GPU_COUNT, cpu=32, ram="256g", disk="256g", regions=[ANY_REGION], replicas=_REPLICAS
+)
 
 _BUCKET_PHASE_WEIGHTS: tuple[tuple[str, float, float], ...] = (
     ("c01q0", 0.022957, 0.031937),
@@ -252,7 +278,10 @@ _TAIL_BUCKETS: tuple[str, ...] = (
 def _bucket_path(bucket: str) -> str:
     cluster = int(bucket[1:3])
     quality = int(bucket[-1])
-    return f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}"
+    # Resolve the store-relative path against MARIN_PREFIX (e.g. the CoreWeave
+    # object store s3://marin-us-east-02a/marin) so levanter's TreeCache loader
+    # opens the absolute cache URL; a bare relative path is read as local and 404s.
+    return prefix_join(marin_prefix(), f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}")
 
 
 def _bucket_component(bucket: str) -> DatasetComponent:
@@ -315,12 +344,16 @@ def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_l
 
 def _datakit_data_config(
     *,
+    phase0_weights: dict[str, float],
+    phase1_weights: dict[str, float],
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
     enable_simulated_epoching: bool,
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
 ) -> LmDataConfig:
+    """Two-phase datakit ``LmDataConfig`` for one mixture (weights keyed by bucket name,
+    each phase summing to 1); reused per-run by the swarm launcher."""
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
     budget_kwargs: dict = {}
     if enable_simulated_epoching:
@@ -344,8 +377,8 @@ def _datakit_data_config(
         cache_dir=None,
         components=all_components,
         train_weights=[
-            (0, {**_phase_weights(0), **val_zero_weights}),
-            (phase_1_start, {**_phase_weights(1), **val_zero_weights}),
+            (0, {**phase0_weights, **val_zero_weights}),
+            (phase_1_start, {**phase1_weights, **val_zero_weights}),
         ],
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
@@ -353,25 +386,78 @@ def _datakit_data_config(
     )
 
 
-_BUDGET: float = 2.19e17
-_HIDDEN_DIM: int = 512
-_TARGET_STEPS: int = 2**14
-_model, _optimizer, _batch_size, _steps = build_from_heuristic(
-    budget=_BUDGET,
-    hidden_dim=_HIDDEN_DIM,
-    target_steps=_TARGET_STEPS,
+_HIDDEN_DIM = env_int("DATAKIT_HIDDEN_DIM", 512)
+if _SMOKE:
+    # Tiny explicit MoE: small enough to fit and compile fast on a single H100,
+    # exercising the real 168-bucket datakit read end to end -- not trained to signal.
+    _HEAD_DIM = 128
+    _num_heads = max(1, _HIDDEN_DIM // _HEAD_DIM)
+    _num_kv_heads = max(1, _num_heads // 4)
+    while _num_heads % _num_kv_heads != 0:
+        _num_kv_heads -= 1
+    _seq_len = env_int("DATAKIT_SEQ_LEN", 512)
+    _model = GrugModelConfig(
+        vocab_size=llama3_tokenizer_vocab_size,
+        hidden_dim=_HIDDEN_DIM,
+        num_layers=env_int("DATAKIT_NUM_LAYERS", 2),
+        num_heads=_num_heads,
+        num_kv_heads=_num_kv_heads,
+        head_dim=_HEAD_DIM,
+        intermediate_dim=_HIDDEN_DIM // 2,
+        shared_expert_intermediate_dim=_HIDDEN_DIM // 2,
+        num_experts=env_int("DATAKIT_NUM_EXPERTS", 8),
+        num_experts_per_token=env_int("DATAKIT_TOP_K", 2),
+        max_seq_len=_seq_len,
+        sliding_window=_seq_len,
+        remat_mode=cast(RematMode, "recompute_all"),
+    )
+    _optimizer = AdamConfig(learning_rate=6e-4, weight_decay=0.1, lr_schedule="cosine", warmup=10, min_lr_ratio=0.1)
+    _batch_size = env_int("DATAKIT_BATCH", 8)
+    _steps = env_int("DATAKIT_STEPS", 5)
+    _SLUG = f"d{_HIDDEN_DIM}-smoke"
+else:
+    _BUDGET = float(os.environ.get("DATAKIT_BUDGET", "2.19e17"))
+    _TARGET_STEPS = env_int("DATAKIT_TARGET_STEPS", 2**14)
+    _model, _optimizer, _batch_size, _steps = build_from_heuristic(
+        budget=_BUDGET,
+        hidden_dim=_HIDDEN_DIM,
+        target_steps=_TARGET_STEPS,
+    )
+    # H100 FSDP reshards the [batch, seq, hidden] activation through a fully-replicated
+    # intermediate, so peak memory scales with batch*seq; the heuristic's batch 512 x
+    # seq 8192 OOMs one 8xH100 node. DATAKIT_SEQ_LEN / DATAKIT_BATCH let a run pick a
+    # memory-fitting shape (e.g. 256 x 2048, as launch_cw_scale uses).
+    _seq_override = env_int("DATAKIT_SEQ_LEN", 0)
+    if _seq_override:
+        _model = dataclasses.replace(_model, max_seq_len=_seq_override, sliding_window=_seq_override)
+    _batch_size = env_int("DATAKIT_BATCH", _batch_size)
+    # Optional step cap for a short real-config confirmation run (timing / tok-s).
+    _steps = env_int("DATAKIT_STEPS", _steps)
+    _SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
+
+# Eval on paloma + uncheatable perplexity in production; off (with no dataset deps)
+# for a smoke or a training-path-only confirmation. Toggle with DATAKIT_EVAL.
+_ENABLE_EVAL = bool(env_int("DATAKIT_EVAL", 0 if _SMOKE else 1))
+_VALIDATION = (
+    [
+        *paloma_datasets(tokenizer=marin_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
+    ]
+    if _ENABLE_EVAL
+    else []
 )
 
-_SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
 
-_VALIDATION = [
-    *paloma_datasets(tokenizer=marin_tokenizer).values(),
-    *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
-]
+_RUN_ID = os.environ.get("RUN_ID") or ("datakit-moe-smoke" if _SMOKE else "datakit-moe-mix")
+_USE_WANDB = os.environ.get("DATAKIT_TRACKER", "json_logger").lower() == "wandb"
+# CW S3 tensorstore checkpoint writes are fragile; local node-local checkpoints are
+# safe and disposable. Default local for a smoke; DATAKIT_CHECKPOINTS=local forces it
+# for a production run too (fine when we only need eval metrics, not the checkpoint).
+_LOCAL_CKPT = _SMOKE or os.environ.get("DATAKIT_CHECKPOINTS", "s3").lower() == "local"
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Grug MoE on the us-central2 datakit store with the mixture-3 two-phase bucket schedule."""
+    """Grug MoE on the CoreWeave datakit store with the mixture-3 two-phase bucket schedule."""
     name = f"grug/datakit_moe_mix_{_SLUG}"
     version = resolve_version(name, version)
 
@@ -381,37 +467,70 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
         data = _datakit_data_config(
+            phase0_weights=_phase_weights(0),
+            phase1_weights=_phase_weights(1),
             total_steps=_steps,
             batch_size=_batch_size,
             max_seq_len=_model.max_seq_len,
             enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
             val_components=val_components,
         )
-        return GrugMoeLaunchConfig(
-            model=_model,
-            data=data,
-            output_path=ctx.output_path,
-            run_id="datakit-moe-mix",
-            resources=ctx.runtime_arg("train_resources"),
-            steps=_steps,
-            batch_size=_batch_size,
-            seed=0,
-            mp="params=float32,compute=bfloat16,output=bfloat16",
-            tracker=WandbConfig(
+        # CW pods carry no WANDB_API_KEY, so default to the json logger; opt into
+        # wandb with DATAKIT_TRACKER=wandb (then pass -e WANDB_API_KEY).
+        tracker: WandbConfig | JsonLoggerConfig = (
+            WandbConfig(
                 project="marin_moe",
                 tags=["moe", "datakit_store_mix", _SLUG],
                 group="datakit-moe-mix",
                 name=None,
-            ),
-            optimizer=_optimizer,
-            grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
-            eval=GrugEvalConfig(
+            )
+            if _USE_WANDB
+            else JsonLoggerConfig(logger_name="datakit_moe_mix.metrics")
+        )
+        # Smoke writes node-local checkpoints (no S3 commit); production uses the
+        # default periodic + final S3 checkpointer.
+        checkpointer: CheckpointerConfig | None = (
+            CheckpointerConfig(
+                base_path=f"/tmp/datakit-ckpt/{_RUN_ID}",
+                append_run_id_to_base_path=False,
+                save_interval=None,
+                keep=None,
+            )
+            if _LOCAL_CKPT
+            else None
+        )
+        eval_config: GrugEvalConfig | None = (
+            GrugEvalConfig(
                 eval_batch_size=512,
                 steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
+            )
+            if _ENABLE_EVAL
+            else None
+        )
+        return GrugMoeLaunchConfig(
+            model=_model,
+            data=data,
+            output_path=ctx.output_path,
+            run_id=_RUN_ID,
+            resources=ctx.runtime_arg("train_resources"),
+            steps=_steps,
+            batch_size=_batch_size,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=tracker,
+            optimizer=_optimizer,
+            grug_trainer=GrugTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+                expert_axis_size=_EXPERT_AXIS,
+                replica_axis_size=_REPLICAS,
             ),
+            eval=eval_config,
+            checkpointer=checkpointer,
         )
 
     return ArtifactStep(
