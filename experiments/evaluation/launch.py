@@ -553,16 +553,26 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
     user = _launch_user()
     plans = plan_runs(spec)
     params = _group_params(plans, spec, provenance, user)
+    is_harbor = plans[0].suite.mechanism is EvalMechanism.HARBOR
     constraints = None
     if plans[0].accel.target_cluster:
         constraints = [
             Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=plans[0].accel.target_cluster)
         ]
+    # A Harbor group drives Harbor + the Daytona SDK inside the orchestrator itself (not just a child),
+    # so the orchestrator env installs the harbor extra and needs more than the evalchemy default.
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_eval_group, params),
         name=f"eval-{params.group_id}",
-        resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
-        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
+        resources=ResourceSpec(
+            cpu=4.0 if is_harbor else _ORCHESTRATOR_CPU,
+            memory="16g" if is_harbor else _ORCHESTRATOR_MEMORY,
+            disk=_ORCHESTRATOR_DISK,
+        ),
+        environment=EnvironmentSpec(
+            extras=["harbor"] if is_harbor else None,
+            env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env(),
+        ),
         constraints=constraints,
         max_retries_failure=0,
     )
@@ -572,7 +582,7 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
         job=job,
         records_prefix=params.records_prefix,
         model_key=plans[0].model_key,
-        runs=tuple(GroupRunRef(run_id=run.run_id, eval_key=run.unit.name) for run in params.runs),
+        runs=tuple(GroupRunRef(run_id=run.run_id, eval_key=run.eval_ref.name) for run in params.runs),
     )
 
 
