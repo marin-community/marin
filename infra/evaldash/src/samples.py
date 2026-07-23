@@ -300,11 +300,9 @@ def _unavailable_artifact(
 def _artifact_within_results(results_path: str, uri: str) -> bool:
     """True when ``uri`` sits under ``results_path`` with no upward traversal.
 
-    Containment is structural: ``StoragePath.relative_to`` compares parsed URL segments (not string
-    prefixes) and raises when the scheme/bucket differ or the target is not beneath the root, so the
-    endpoint only resolves the ``trajectory_uri``/``exchange_uri`` a run wrote under its own results
-    directory. A literal ``..`` segment is refused on top of that, so a crafted URI cannot climb back
-    above the root.
+    The endpoint resolves only the ``trajectory_uri``/``exchange_uri`` a run wrote under its own
+    results directory, so a URI on a different store, above the root, or reached through a ``..``
+    segment is refused.
     """
     try:
         relative = StoragePath(uri).relative_to(StoragePath(results_path))
@@ -330,17 +328,17 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
     if cached is not None:
         return cached
 
+    # Resolve through StoragePath (the guarded url_to_fs/open_url factory) so an s3:// read inherits
+    # finite socket timeouts and a cross-region read is budget-charged, the same as the path check above.
+    path = StoragePath(uri)
     try:
-        fs, _ = url_to_fs(uri)
-        info = fs.info(uri)
-        raw_size = info.get("size")
-        size = int(raw_size) if raw_size is not None else None
-        if size is not None and size > max_bytes:
+        size = path.size()
+        if size > max_bytes:
             return _unavailable_artifact(
                 uri, f"artifact is {size} bytes; exceeds the {max_bytes}-byte cap", size=size, truncated=True
             )
-        with fs.open(uri, "rb") as handle:
-            # Read one byte past the cap so a size the filesystem did not report is still caught.
+        with path.open("rb") as handle:
+            # Read one byte past the cap so a size the filesystem misreported is still caught.
             raw = handle.read(max_bytes + 1)
     except Exception as exc:
         logger.info("artifact fetch failed for %s: %s", uri, exc)
@@ -354,7 +352,7 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
         reason=None,
         uri=uri,
         media_type=_media_type(uri),
-        size=size if size is not None else len(raw),
+        size=size,
         truncated=False,
         text=raw.decode("utf-8", errors="replace"),
     )
