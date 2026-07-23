@@ -11,14 +11,12 @@ normalized below and used as a two-stage schedule.
 import dataclasses
 import math
 import os
-from typing import cast
 
 from fray.cluster import ResourceConfig
 from fray.types import ANY_REGION
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
-from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -32,9 +30,7 @@ from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial
-from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.marin_tokenizer import marin_tokenizer
 
 _STORE_PREFIX = "datakit/store_8ac06c74"
@@ -42,16 +38,7 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # one sequence per block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
-
-# DATAKIT_SMOKE=1 runs a tiny single-H100 plumbing job over the real buckets (the
-# SMOKE branch below); it also flips the simulated-epoching and eval defaults.
-_SMOKE = bool(env_int("DATAKIT_SMOKE", 0))
-
-# Simulated epoching truncates each bucket to `experiment_budget`; at production
-# scale every bucket is well-fed, but a tiny smoke budget starves most of the 168
-# buckets to 0 sequences (which the restart mixture rejects), so default it off for
-# a smoke and on for a real run. Override with DATAKIT_SIM_EPOCH.
-ENABLE_SIMULATED_EPOCHING = bool(env_int("DATAKIT_SIM_EPOCH", 0 if _SMOKE else 1))
+ENABLE_SIMULATED_EPOCHING = True
 
 # Natural size of ``datakit/store_8ac06c74`` from Will's datakit-moe-mix branch:
 # 167 mixable bucket caches plus the 33-cache tail component.
@@ -61,13 +48,12 @@ _TARGET_BUDGET_TOKENS = 10_372_343_704_053
 # the CW object store (s3://marin-us-east-02a/marin/datakit/store_8ac06c74); the
 # per-bucket cache paths resolve under MARIN_PREFIX there, so no cross-region copy.
 # regions=[ANY_REGION] keeps the job schedulable on the region-less federated GPU
-# fleet.
+# fleet; the 256 routed experts shard over the node's 8 NVLink GPUs.
 _GPUS_PER_NODE = 8
-_GPU_COUNT = env_int("DATAKIT_GPU_COUNT", 1 if _SMOKE else _GPUS_PER_NODE)
-_REPLICAS = env_int("DATAKIT_REPLICAS", 1)
-_EXPERT_AXIS = env_int("DATAKIT_EXPERT_AXIS", 1 if _SMOKE else _GPUS_PER_NODE)
+_EXPERT_AXIS = 8
+_REPLICAS = 1
 _TRAIN_RESOURCES = ResourceConfig.with_gpu(
-    "H100", count=_GPU_COUNT, cpu=32, ram="256g", disk="256g", regions=[ANY_REGION], replicas=_REPLICAS
+    "H100", count=_GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", regions=[ANY_REGION], replicas=_REPLICAS
 )
 
 _BUCKET_PHASE_WEIGHTS: tuple[tuple[str, float, float], ...] = (
@@ -389,58 +375,25 @@ def _datakit_data_config(
     )
 
 
-_HIDDEN_DIM = env_int("DATAKIT_HIDDEN_DIM", 512)
-if _SMOKE:
-    # Tiny explicit MoE: small enough to fit and compile fast on a single H100,
-    # exercising the real 168-bucket datakit read end to end -- not trained to signal.
-    _HEAD_DIM = 128
-    _num_heads = max(1, _HIDDEN_DIM // _HEAD_DIM)
-    _num_kv_heads = max(1, _num_heads // 4)
-    while _num_heads % _num_kv_heads != 0:
-        _num_kv_heads -= 1
-    _seq_len = env_int("DATAKIT_SEQ_LEN", 512)
-    _model = GrugModelConfig(
-        vocab_size=llama3_tokenizer_vocab_size,
-        hidden_dim=_HIDDEN_DIM,
-        num_layers=env_int("DATAKIT_NUM_LAYERS", 2),
-        num_heads=_num_heads,
-        num_kv_heads=_num_kv_heads,
-        head_dim=_HEAD_DIM,
-        intermediate_dim=_HIDDEN_DIM // 2,
-        shared_expert_intermediate_dim=_HIDDEN_DIM // 2,
-        num_experts=env_int("DATAKIT_NUM_EXPERTS", 8),
-        num_experts_per_token=env_int("DATAKIT_TOP_K", 2),
-        max_seq_len=_seq_len,
-        sliding_window=_seq_len,
-        remat_mode=cast(RematMode, "recompute_all"),
-    )
-    _optimizer = AdamConfig(learning_rate=6e-4, weight_decay=0.1, lr_schedule="cosine", warmup=10, min_lr_ratio=0.1)
-    _batch_size = env_int("DATAKIT_BATCH", 8)
-    _steps = env_int("DATAKIT_STEPS", 5)
-    _SLUG = f"d{_HIDDEN_DIM}-smoke"
-else:
-    _BUDGET = float(os.environ.get("DATAKIT_BUDGET", "2.19e17"))
-    _TARGET_STEPS = env_int("DATAKIT_TARGET_STEPS", 2**14)
-    _model, _optimizer, _batch_size, _steps = build_from_heuristic(
-        budget=_BUDGET,
-        hidden_dim=_HIDDEN_DIM,
-        target_steps=_TARGET_STEPS,
-    )
-    # H100 FSDP reshards the [batch, seq, hidden] activation through a fully-replicated
-    # intermediate, so peak memory scales with batch*seq; the heuristic's batch 512 x
-    # seq 8192 OOMs one 8xH100 node. DATAKIT_SEQ_LEN / DATAKIT_BATCH let a run pick a
-    # memory-fitting shape (e.g. 256 x 2048, as launch_cw_scale uses).
-    _seq_override = env_int("DATAKIT_SEQ_LEN", 0)
-    if _seq_override:
-        _model = dataclasses.replace(_model, max_seq_len=_seq_override, sliding_window=_seq_override)
-    _batch_size = env_int("DATAKIT_BATCH", _batch_size)
-    # Optional step cap for a short real-config confirmation run (timing / tok-s).
-    _steps = env_int("DATAKIT_STEPS", _steps)
-    _SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
+_BUDGET: float = 2.19e17
+_HIDDEN_DIM: int = 512
+_TARGET_STEPS: int = 2**14
+_model, _optimizer, _batch_size, _steps = build_from_heuristic(
+    budget=_BUDGET,
+    hidden_dim=_HIDDEN_DIM,
+    target_steps=_TARGET_STEPS,
+)
+# H100 FSDP reshards the [batch, seq, hidden] activation through a fully-replicated
+# intermediate, so peak memory scales with batch*seq; the heuristic's seq 8192 OOMs
+# one 8xH100 node. Halving to 2048 fits and leaves the batch and its LR schedule
+# untouched.
+_SEQ_LEN = 2048
+_model = dataclasses.replace(_model, max_seq_len=_SEQ_LEN, sliding_window=_SEQ_LEN)
+_SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
 
-# Eval on paloma + uncheatable perplexity in production; off (with no dataset deps)
-# for a smoke or a training-path-only confirmation. Toggle with DATAKIT_EVAL.
-_ENABLE_EVAL = bool(env_int("DATAKIT_EVAL", 0 if _SMOKE else 1))
+# Eval on paloma + uncheatable perplexity; DATAKIT_EVAL=0 skips it and its dataset
+# deps (e.g. a swarm scored on train loss, or when a target eval is wired separately).
+_ENABLE_EVAL = bool(env_int("DATAKIT_EVAL", 1))
 _VALIDATION = (
     [
         *paloma_datasets(tokenizer=marin_tokenizer).values(),
@@ -450,13 +403,9 @@ _VALIDATION = (
     else []
 )
 
-
-_RUN_ID = os.environ.get("RUN_ID") or ("datakit-moe-smoke" if _SMOKE else "datakit-moe-mix")
+# CW pods carry no WANDB_API_KEY, so default to the json logger; opt into wandb with
+# DATAKIT_TRACKER=wandb (and pass -e WANDB_API_KEY).
 _USE_WANDB = os.environ.get("DATAKIT_TRACKER", "json_logger").lower() == "wandb"
-# CW S3 tensorstore checkpoint writes are fragile; local node-local checkpoints are
-# safe and disposable. Default local for a smoke; DATAKIT_CHECKPOINTS=local forces it
-# for a production run too (fine when we only need eval metrics, not the checkpoint).
-_LOCAL_CKPT = _SMOKE or os.environ.get("DATAKIT_CHECKPOINTS", "s3").lower() == "local"
 
 _MP = "params=float32,compute=bfloat16,output=bfloat16"
 
@@ -526,8 +475,6 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
             val_components=val_components,
         )
-        # CW pods carry no WANDB_API_KEY, so default to the json logger; opt into
-        # wandb with DATAKIT_TRACKER=wandb (then pass -e WANDB_API_KEY).
         tracker: WandbConfig | JsonLoggerConfig = (
             WandbConfig(
                 project="marin_moe",
@@ -538,19 +485,15 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             if _USE_WANDB
             else JsonLoggerConfig(logger_name="datakit_moe_mix.metrics")
         )
-        # Smoke writes node-local checkpoints (no S3 commit); production uses the
-        # default periodic + final S3 checkpointer.
-        checkpointer: CheckpointerConfig | None = (
-            CheckpointerConfig(
-                base_path=f"/tmp/datakit-ckpt/{_RUN_ID}",
-                append_run_id_to_base_path=False,
-                save_interval=None,
-                keep=None,
-            )
-            if _LOCAL_CKPT
-            else None
+        # CW S3 tensorstore checkpoint writes abort mid-run, so keep node-local
+        # disposable checkpoints.
+        checkpointer = CheckpointerConfig(
+            base_path="/tmp/datakit-ckpt/datakit-moe-mix",
+            append_run_id_to_base_path=False,
+            save_interval=None,
+            keep=None,
         )
-        return build_launch_config(ctx, data=data, run_id=_RUN_ID, tracker=tracker, checkpointer=checkpointer)
+        return build_launch_config(ctx, data=data, run_id="datakit-moe-mix", tracker=tracker, checkpointer=checkpointer)
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),
