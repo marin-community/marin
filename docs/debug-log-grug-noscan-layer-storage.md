@@ -28,3 +28,5 @@ The corrected exact-shape Toolbox probe used 16 four-GPU GB200 hosts, `scan_laye
 ## Conclusion
 
 The intended no-scan representation is now tested. JAX-Toolbox gets past the previously observed CUBIN failure surface for this probe, but XLA requests an infeasible temporary arena before execution, so the run cannot establish MFU or prove that Toolbox resolves CUBIN failures in general.
+
+An ablation inserted `jax.lax.optimization_barrier` between all 48 independent blocks. It failed before step 0 with a 972,028,203,152-byte request, only 131,072 bytes below the unbarriered request. Block-boundary fusion and cross-block optimization are therefore not material causes of this arena. [W&B run](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-noscan-barrier-a-20260722-1837)

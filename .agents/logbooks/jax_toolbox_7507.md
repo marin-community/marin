@@ -68,3 +68,11 @@ The first exact 48-layer Toolbox treatment with `SCALE_SCAN_LAYERS=0` failed bef
 After changing initialization to store a tuple of independently initialized `Block` modules, a corrected exact-shape run spent about 26 minutes in the first `jit_train_step` and failed before step 0. CUDA requested 972,028,334,224 bytes (905.27 GiB) against a 138.22 GiB allocator limit. The run used 16 hosts and 64 devices, had retries disabled, and produced neither MFU metrics nor an in-memory-CUBIN or null-module signature. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-noscan-modules-a-20260722-1640)
 
 The corrected run reproduces the unrolled-layer temporary-arena pathology, not the distinct CUBIN-load failure. JAX-Toolbox gets past that known CUBIN surface in this case but does not make the full workload viable without scan, and one OOM-terminated probe cannot establish that it fixes CUBIN loading in general. A current-image no-scan repeat is unlikely to add useful performance evidence because the treatment terminates at the earlier arena-memory boundary.
+
+## 2026-07-22: no-scan block-boundary barrier probe
+
+Commit [`239b663c4d`](https://github.com/marin-community/marin/commit/239b663c4d) adds `jax.lax.optimization_barrier` between the 48 independently initialized blocks while retaining per-block rematerialization. A small CPU test confirmed that the barriers preserve model outputs.
+
+The exact 64-GPU Toolbox treatment failed before step 0 after 26m37s in the first `jit_train_step`. Each local CUDA async allocator requested 972,028,203,152 bytes (905.27 GiB), versus 972,028,334,224 bytes without barriers: a reduction of only 131,072 bytes. The allocator limit remained 138.22 GiB, with 51.10 GiB in use. The run produced no CUBIN signature, history rows, or MFU metrics. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-noscan-barrier-a-20260722-1837)
+
+This falsifies the hypothesis that cross-block compiler optimization or fusion is responsible for the 905 GiB temporary arena. XLA's planned memory is effectively unchanged when optimization is prohibited across block boundaries.
