@@ -31,6 +31,7 @@ from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
+from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -42,6 +43,7 @@ from iris.cluster.types import (
     WellKnownAttribute,
     parse_memory_string,
 )
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -191,6 +193,19 @@ class _OneofConfig(_Config):
 class GcpPlatformConfig(_Config):
     project_id: str = ""
     zones: list[str] = Field(default_factory=list)  # all zones, for list_all_slices
+    # Pull-through cache routing: upstream registry → zone prefix (the zone's
+    # leading dash-separated segment) → mirror repo prefix the image path is
+    # appended to. Docker Hub references (bare names like ``ubuntu:24.04`` and
+    # ``docker.io/...``) match the ``docker.io`` key. Example:
+    #   registry_mirrors:
+    #     ghcr.io:
+    #       us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    #       europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    # Workers rewrite matching images so pulls stay on-continent and dodge
+    # upstream rate limits; unlisted registries and zone prefixes pull straight
+    # from upstream. Every named repo must exist and be enabled or pulls fail
+    # (provisioned by infra/pulumi from provisioning.gcp.registries).
+    registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class ManualPlatformConfig(_Config):
@@ -406,7 +421,9 @@ class WorkerConfig(_Config):
     docker_image: str = ""
     host: str = "0.0.0.0"
     port: int = 10001
-    port_range: str = "30000-40000"
+    # Task named-port allocation range (end exclusive); see
+    # DEFAULT_TASK_PORT_RANGE for why it sits below the ephemeral floor.
+    port_range: str = f"{DEFAULT_TASK_PORT_RANGE[0]}-{DEFAULT_TASK_PORT_RANGE[1]}"
     worker_id: str = ""  # auto-generated if empty
     controller_address: str = ""
     cache_dir: str = "/dev/shm/iris"
@@ -593,7 +610,8 @@ class WorkerProviderConfig(_Config):
 
 class KueueTopology(_Config):
     node_label: str = ""
-    required: bool = False  # True => required-topology (hard); False => preferred
+    mode: TopologyMode = TopologyMode.PREFERRED  # preferred (soft) / required (hard) / slice
+    coarse_preferred_label: str = ""  # optional soft coarse pairing for a sliced binding
 
 
 class KueueConfig(_Config):
@@ -607,6 +625,7 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
+    # Image for GPU jobs (a device.gpu request), used unless a job overrides with
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
@@ -756,6 +775,10 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
+    # opaque dict so `provisioning:` can live in the cluster config file without
+    # Iris depending on the IaC schema; iac.config owns the typed validation.
+    provisioning: dict[str, Any] | None = None
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -1155,6 +1178,38 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
+def slice_template_region(template: SliceConfig) -> str | None:
+    """Region a slice template occupies: a GCP zone's region prefix or the CoreWeave region.
+
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
+    """
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``region`` a backend's scale groups occupy, from their slice templates.
+
+    Mirrors :meth:`ScaleGroup.region` so a backend advertises the same region a
+    worker self-reports, letting ``--region`` route across a federation instead of
+    only within one cluster (#7286). Scale groups in different regions union into
+    one set.
+    """
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        template = sg.slice_template
+        if template is None:
+            continue
+        region = slice_template_region(template)
+        if region:
+            derived.setdefault(WellKnownAttribute.REGION.value, set()).add(region)
+    return derived
+
+
 def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
     """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
 
@@ -1189,13 +1244,19 @@ def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
     whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
     additionally derived from ``scale_groups[*].resources`` and unioned in, so a
     backend advertises the devices its scale groups offer without the operator
-    restating them in ``attributes``.
+    restating them in ``attributes``. ``region`` is derived the same way from each
+    scale group's slice template so the backend exports its location through the
+    federation protocol (#7286).
     """
     attributes = {
         key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
     }
-    for key, values in _scale_group_device_attributes(backend.scale_groups).items():
-        attributes.setdefault(key, set()).update(values)
+    for derived in (
+        _scale_group_device_attributes(backend.scale_groups),
+        _scale_group_region_attributes(backend.scale_groups),
+    ):
+        for key, values in derived.items():
+            attributes.setdefault(key, set()).update(values)
     return attributes
 
 

@@ -348,6 +348,11 @@ tasks_table = Table(
     Column("priority_insertion", Integer, nullable=False),
     Column("priority_band", Integer, nullable=False, server_default="2"),
     Column("container_id", String),
+    # Backend status one-liner for a waiting/building task (the current reason it is
+    # not running yet, e.g. the Kubernetes pod/Kueue admission verdict). NULL/"" when
+    # running or when the backend has nothing to say. Served as TaskStatus.status_message
+    # and mirrored across federation.
+    Column("status_message", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),
@@ -588,6 +593,10 @@ federated_jobs_table = Table(
     Column("owner_principal", String, nullable=False, server_default=""),  # end-user identity
     Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF | HANDOFF_REJECTED
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
+    # One handoff incarnation: minted per SENT handle, carried on the delivered
+    # request, stored on the peer's RECEIVED row. A re-drive repeats it; a
+    # resubmission mints a new one — how the peer tells a replay from a new run.
+    Column("handoff_nonce", String, nullable=False, server_default=""),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 

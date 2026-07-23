@@ -80,7 +80,7 @@ _INSERT_OR_REPLACE_ENDPOINT = insert(endpoints_table).prefix_with("OR REPLACE")
 
 # Built once so the SELECT cache key is computed at import time; rebuilding it
 # inside ``add()`` paid a ~50µs cache-key tax per call on burst writes.
-_TASK_STATE_FOR_ENDPOINT = select(tasks_table.c.state, tasks_table.c.current_attempt_id).where(
+_TASK_STATE_FOR_ENDPOINT = select(tasks_table.c.state).where(
     tasks_table.c.task_id == bindparam("task_id", type_=tasks_table.c.task_id.type)
 )
 
@@ -94,7 +94,6 @@ class AddEndpointOutcome(StrEnum):
 
     OK = "ok"
     NOT_FOUND = "not_found"
-    STALE_ATTEMPT = "stale_attempt"
     TERMINAL = "terminal"
 
 
@@ -253,18 +252,15 @@ class EndpointsProjection(Projection):
         self,
         cur: db.Tx,
         endpoint: EndpointRow,
-        *,
-        expected_attempt_id: int | None = None,
     ) -> AddEndpointOutcome:
         """Insert ``endpoint`` into the DB and schedule the memory update.
 
-        All task validation runs inside this transaction so the RPC handler
-        does not need a separate read snapshot. Returns:
+        Task validation runs inside this transaction so the RPC handler does
+        not need a separate read snapshot. Returns:
 
         - ``NOT_FOUND`` if the task row does not exist.
-        - ``TERMINAL`` if the task is in a terminal state.
-        - ``STALE_ATTEMPT`` if ``expected_attempt_id`` doesn't match the
-          task's current attempt.
+        - ``TERMINAL`` if the task is in a terminal state; registration is
+          refused so an endpoint isn't served for a task that is already gone.
         - ``OK`` after a successful upsert; the in-memory index is updated
           via a post-commit hook.
         """
@@ -275,8 +271,6 @@ class EndpointsProjection(Projection):
             return AddEndpointOutcome.NOT_FOUND
         if int(task_row.state) in TERMINAL_TASK_STATES:
             return AddEndpointOutcome.TERMINAL
-        if expected_attempt_id is not None and int(task_row.current_attempt_id) != int(expected_attempt_id):
-            return AddEndpointOutcome.STALE_ATTEMPT
 
         cur.execute(
             _INSERT_OR_REPLACE_ENDPOINT,
@@ -386,25 +380,6 @@ class EndpointsProjection(Projection):
 
         cur.register(apply)
         return existing
-
-    def remove_by_task(self, cur: db.Tx, task_id: JobName) -> list[str]:
-        """Remove all endpoints owned by a task. Returns the removed endpoint_ids."""
-        with self._lock:
-            ids = list(self._by_task.get(task_id, ()))
-        # Empty index means no committed rows (the index mirrors committed state
-        # under the write lock), so the DELETE would be a no-op — skip it, as
-        # remove() does.
-        if not ids:
-            return []
-        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
-
-        def apply() -> None:
-            with self._lock:
-                for eid in ids:
-                    self._unindex(eid)
-
-        cur.register(apply)
-        return ids
 
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
         """Remove all endpoints owned by any of ``job_ids``. Returns the removed endpoint_ids."""

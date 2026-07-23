@@ -1,0 +1,70 @@
+name: "Ops - Ducky"
+
+# Deploys the ducky service to the marin Iris cluster on merge to main (when lib/ducky
+# or infra/ducky change) and on manual dispatch. Rolls the `ducky-marin` Pulumi stack
+# (infra/ducky): the IrisService Command resubmits /ops/ducky with RECREATE when its
+# spec or code hash changed, building the Vue dashboard itself (spec build_commands)
+# on every deploy.
+#
+# Service config lives in infra/ducky/Pulumi.ducky-marin.yaml; repository secrets enter
+# the deploy process as environment variables and are resolved at submit time. The one
+# dispatch input is a deploy_generation override — the forced-redeploy hammer for a
+# wedged instance whose spec and code are unchanged.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lib/ducky/**'
+      - 'infra/ducky/**'
+      - '.github/workflows/ops-ducky.yaml'
+  workflow_dispatch:
+    inputs:
+      deploy_generation:
+        description: "Override ducky:deploy_generation to force a redeploy (any value not used before, e.g. a timestamp)"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ducky-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # The dashboard build runs inside `pulumi up` (spec build_commands); this step
+      # only pins the node version and primes the npm cache it uses.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: lib/ducky/dashboard/package-lock.json
+
+      - name: Roll the ducky service
+        uses: ./.github/actions/pulumi-deploy
+        env:
+          DUCKY_GCS_HMAC_KEY_ID: ${{ secrets.DUCKY_GCS_HMAC_KEY_ID }}
+          DUCKY_GCS_HMAC_SECRET: ${{ secrets.DUCKY_GCS_HMAC_SECRET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          DUCKY_CW_SECRET_KEY: ${{ secrets.DUCKY_CW_SECRET_KEY }}
+        with:
+          stack: ducky-marin
+          work-dir: infra/ducky
+          service-account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+          gcp-project-id: hai-gcp-models
+          # The program imports ducky + iris, so sync the whole workspace.
+          uv-sync-args: "--all-packages --extra deploy --frozen"
+          config-map: >-
+            ${{ inputs.deploy_generation && format('{{"ducky:deploy_generation": {{"value": "{0}"}}}}', inputs.deploy_generation) || '' }}

@@ -35,8 +35,8 @@ import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
-from iris.actor import ActorServer
 from iris.actor.client import ActorClient
+from iris.actor.server import ActorServer
 from iris.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec

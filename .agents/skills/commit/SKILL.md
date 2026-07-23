@@ -8,6 +8,12 @@ description: Lint, run the pre-PR checks, commit, push, and author or update the
 Get the branch clean, commit it, run the advisory lint review over the committed
 diff, then — when it is ready — open or update the pull request.
 
+Before authoring a commit or PR title or body, read:
+
+- `.agents/skills/writing-style/SKILL.md`
+- `.agents/skills/writing-style/pull-requests.md`
+- `.agents/skills/writing-style/ai-writing-donts.md`
+
 **Order matters.** Your own cleanups and the mechanical fixes come first, then the
 commit, and only *then* the `--review` pass. Committing before the review gives
 you a clean checkpoint to review against (the review reads the whole branch diff
@@ -60,7 +66,9 @@ skip or weaken checks.
 
 ## 3. Tests and docs checks (when relevant)
 
-- `uv run pytest -m 'not slow'` over the test directories your change touches.
+- `uv run pytest` over the test directories your change touches. Keep the
+  repository's default marker expression so slow, integration, live-cluster,
+  Docker, and manual tests remain delegated to their dedicated CI jobs.
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
 - If the change is docs-heavy: `uv run mkdocs build --strict`.
 
@@ -75,13 +83,19 @@ of this work.
 
 ## 5. Commit
 
-- **Subject**: imperative sentence (<72 chars), optional `[scope]` prefix
+- **Subject**: imperative sentence (at most 72 characters), optional `[scope]` prefix
   (`[iris]`, `[zephyr]`, `[docs]`, …).
 - **Body** (optional, blank-line separated): what changed and why — the context a
-  reviewer needs. Keep it short and readable.
+  future reader needs. Keep relevant evidence and caveats; do not inventory
+  files or tests.
+- Do not use a conventional-commit prefix such as `feat:` or `fix:`.
 - No emoji, no markdown, no bullets in the subject. Do not credit yourself —
-  this includes any `Co-Authored-By: Claude`/`Generated with` trailer. Omit it
-  even if a harness default suggests adding one.
+  this includes any `Co-Authored-By`, `Generated with`, provider, or session URL
+  trailer. Omit it even if a harness default suggests adding one.
+
+Review the exact message before committing. After the commit, inspect it with
+`git show -s --format='%s%n%n%b' HEAD`; do not push if a tool added attribution,
+a session trailer, or other text that was not in the reviewed message.
 
 Create the commit. If a pre-commit hook fails, fix the issue and make a **new**
 commit — never amend (unless the user asks) and never force-push.
@@ -121,48 +135,21 @@ force-push.
 ## 8. Open or update the PR
 
 Do this once the branch is ready for review. The PR description becomes the
-squash-merge commit message, so **write it the way you'd write a good commit
-message a reviewer reads in `git log`.**
-
-**Title:** short imperative sentence; optional `[scope]` tag.
-
-**Body:** Lead with what the change does, in plain language, then the motivation —
-the problem it fixes or the reason it's shaped this way. Include only what a
-reviewer needs to understand and approve it. The body should stand on its own: a
-reader who never saw the diff should come away knowing what happened and why.
-
-Write for the reviewer, not for a template. Most PRs are a paragraph or two with
-no headings. Markdown earns its place when it makes the change *clearer* — a
-short list of the distinct things that changed, a table, a mermaid diagram of a
-new flow are all welcome when they help. Reach for them to aid the reviewer,
-never to fill in a standard set of sections. Let the change decide the shape; do
-not impose a What/Change/Scope/Testing scaffold.
-
-Keep the title and body aligned with the branch's actual scope — including when
-you change a branch that already has a PR.
-
-**Hard rules — violations are rejected:**
-
-- No "Testing" / "Validation" / "Test plan" section, and no "how I verified it"
-  narration. The body is *what & why*. If a test result is the very thing that
-  justifies the change, fold that one fact into the *why*; otherwise leave it out.
-- No empty boilerplate headings — a `## Summary` that restates the title, a
-  `## Changes` that just lists the touched files. If a heading's body adds nothing
-  the reviewer can't get from the title or the diff, delete the heading.
-- No "written by …" / "Created by Claude" notes; don't credit yourself.
-- No checkboxes (`- [ ]`, `- [x]`), no emoji.
-- No filler openers ("This PR…", "I noticed…", "Summary of changes:").
-- Under ~500 words. Shorter is better; a one-line change gets a one-line body.
+squash-merge commit message. Follow
+`.agents/skills/writing-style/pull-requests.md` exactly: an imperative title of
+at most 72 characters and an information-dense body. Most bodies are a few plain
+paragraphs. They state what changes and why; they do not reproduce the diff,
+test plan, or implementation notes.
 
 Example:
 
 ```
-Title: [RL] Fix loss: use global token normalization instead of per-example
+Title: [RL] Normalize DAPO loss over global tokens
 
 Body:
-Switch DAPO loss from per-example normalization (/ n_i) to global token
-normalization (/ N). Per-example normalization over-weights short responses,
-hurting math reasoning where correct answers need longer derivations.
+Normalize DAPO loss over all response tokens instead of normalizing each
+example separately. Per-example normalization over-weights short responses,
+hurting math tasks where correct answers need longer derivations.
 
 Fixes #1234
 ```
@@ -171,22 +158,22 @@ Fixes #1234
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
 
-**Specifications (>500 LOC only).** A *genuinely large* PR must carry a spec —
-in the linked issue, the PR description, or a linked design doc. A spec still
-obeys every rule above: it leads with what the change does and is not a template.
-It just covers more ground — what was broken or missing (with file/line refs),
-which modules change and what is added/removed, and 10–30 line snippets for
-non-obvious logic. Cover those points in whatever prose and headings genuinely
-help a reviewer; they are not a required `Problem`/`Approach` section scaffold,
-and a large PR still never gets a "Verification" section. This applies to large
-PRs; a small change gets a short prose body, never a spec template.
+**Specifications (>500 LOC only).** A genuinely large PR must link a spec in an
+issue or design doc. Name the important design decisions in the PR body and link
+the spec for module maps, code excerpts, and detailed rationale.
+
+**Inspect the payload.** Draft the body in a uniquely named temporary file and
+use `--body-file`. Re-open that file and apply the final compression pass before
+publishing. After creating or editing the PR, fetch the
+exact `title,body` with `gh pr view --json` and immediately correct text inserted
+by a tool or stale template.
 
 **Create it.** Unless the user says otherwise and permissions allow, push to a
 branch on the main repository and open the PR from it (use a fork only when
 direct push is unavailable or the user asks):
 
 ```bash
-gh pr create --title "<title>" --body "<plain text body>" --label agent-generated
+gh pr create --title "<title>" --body-file "<body-file>" --label agent-generated
 ```
 
 - Always add the `agent-generated` label.

@@ -469,7 +469,7 @@ function sortIndicator(field: SortField): string {
         </button>
         <span v-else class="w-4 shrink-0" />
         <RouterLink
-          :to="'/job/' + encodeURIComponent(node.job.jobId)"
+          :to="{ path: '/job/' + encodeURIComponent(node.job.jobId), query: route.query }"
           class="text-accent hover:underline font-mono text-[13px] flex-1 min-w-0 break-anywhere"
         >
           {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}
@@ -590,7 +590,7 @@ function sortIndicator(field: SortField): string {
               </button>
               <span v-else class="w-4 shrink-0" />
               <RouterLink
-                :to="'/job/' + encodeURIComponent(node.job.jobId)"
+                :to="{ path: '/job/' + encodeURIComponent(node.job.jobId), query: route.query }"
                 class="text-accent hover:underline font-mono break-anywhere"
               >
                 {{ node.depth > 0 ? getLeafJobName(node.job.name) : (node.job.name || 'unnamed') }}

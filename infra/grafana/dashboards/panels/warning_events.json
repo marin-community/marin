@@ -1,0 +1,63 @@
+{
+  "type": "table",
+  "title": "Warning events",
+  "description": "The most recent Warning events per cluster (fieldSelector type=Warning), newest first. Event retention on the API server is about an hour.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/events",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "last_seen",
+          "text": "last_seen",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "namespace",
+          "text": "namespace",
+          "type": "string"
+        },
+        {
+          "selector": "object",
+          "text": "object",
+          "type": "string"
+        },
+        {
+          "selector": "reason",
+          "text": "reason",
+          "type": "string"
+        },
+        {
+          "selector": "count",
+          "text": "count",
+          "type": "number"
+        },
+        {
+          "selector": "message",
+          "text": "message",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

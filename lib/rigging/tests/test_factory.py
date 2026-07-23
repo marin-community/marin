@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the guarded fsspec factory: the url_to_fs/open_url/filesystem entry
-points, unique_temp_path, and atomic_rename."""
+points, unique_temp_path, atomic_rename, and fetch_file_atomic."""
 
 from pathlib import Path
 
 import pytest
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
-from rigging.filesystem.factory import atomic_rename, filesystem, open_url, unique_temp_path, url_to_fs
+from rigging.filesystem.factory import (
+    atomic_rename,
+    fetch_file_atomic,
+    filesystem,
+    open_url,
+    unique_temp_path,
+    url_to_fs,
+)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -45,6 +52,52 @@ def test_atomic_rename_cleans_up_on_error(tmp_path):
 
     assert not Path(temp_path).exists()
     assert not Path(output).exists()
+
+
+# ---------------------------------------------------------------------------
+# fetch_file_atomic
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_file_atomic_copies_source(tmp_path):
+    src = tmp_path / "remote" / "tokenizer.json"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b'{"version": 1}')
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+
+    assert fetch_file_atomic(str(src), str(dest)) is True
+    assert dest.read_bytes() == b'{"version": 1}'
+
+
+def test_fetch_file_atomic_missing_source_returns_false(tmp_path):
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+
+    assert fetch_file_atomic(str(tmp_path / "remote" / "absent.json"), str(dest)) is False
+    assert not dest.exists()
+
+
+def test_fetch_file_atomic_failure_preserves_dest_and_cleans_temp(tmp_path, monkeypatch):
+    # Regression for marin#7167: a fetch that dies mid-finalize must not leave a
+    # partial file at dest (poisoning a shared cache) and must not orphan its temp.
+    src = tmp_path / "remote" / "tokenizer.json"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b'{"version": 2}')
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b'{"version": 1}')  # a previous complete file
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated failure finalizing the fetch")
+
+    monkeypatch.setattr("os.replace", boom)
+
+    with pytest.raises(OSError, match="simulated failure"):
+        fetch_file_atomic(str(src), str(dest))
+
+    assert dest.read_bytes() == b'{"version": 1}'
+    assert [p.name for p in dest.parent.iterdir()] == ["tokenizer.json"]
 
 
 # ---------------------------------------------------------------------------

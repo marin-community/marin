@@ -855,14 +855,14 @@ class DecodeState(eqx.Module):
                     raise ValueError("DecodeState was initialized without stop token storage")
                 case (stops, None):
                     # this is fine, just fill this sequence with the pad token
-                    assert stops is not None  # make mypy happy
+                    assert stops is not None  # make pyrefly happy
                     new_stop_tokens = stops.at["seq", local_slot_id].set(INVALID)
                     new_state = dataclasses.replace(new_state, stop_tokens=new_stop_tokens)
                 case (stops, seq_stops):
                     # too fancy, but we allow for different stop sequences per sequence etc.
                     # Probably better to do this in python outside of the jit loop
-                    assert stops is not None  # make mypy happy
-                    assert seq_stops is not None  # make mypy happy
+                    assert stops is not None  # make pyrefly happy
+                    assert seq_stops is not None  # make pyrefly happy
                     seq_num_stops = seq_stops.axis_size("stop_seq")
                     seq_stop_len = seq_stops.axis_size("position")
                     this_row_full = hax.full_like(stops["seq", local_slot_id], INVALID)

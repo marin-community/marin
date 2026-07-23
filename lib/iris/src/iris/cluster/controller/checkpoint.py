@@ -282,6 +282,16 @@ def _list_checkpoint_entries(remote_state_dir: str) -> list[str] | None:
         return None
 
 
+def _entry_epoch_ms(entry: str) -> int | None:
+    """Epoch-ms timestamp encoded in a checkpoint dir entry, or None if not a timestamp dir.
+
+    Checkpoint directories are named ``{controller-state}/{epoch_ms}``; entries
+    whose basename is not a plain integer (e.g. unrelated files) are ignored.
+    """
+    basename = entry.rstrip("/").rsplit("/", 1)[-1]
+    return int(basename) if basename.isdigit() else None
+
+
 def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     """Find the most recent timestamped checkpoint directory.
 
@@ -292,19 +302,12 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     if entries is None:
         return None
 
-    # Filter to numeric directory names (epoch_ms timestamps)
-    timestamp_dirs: list[tuple[int, str]] = []
-    for entry in entries:
-        basename = entry.rstrip("/").rsplit("/", 1)[-1]
-        if basename.isdigit():
-            timestamp_dirs.append((int(basename), entry))
-
+    timestamp_dirs = [(epoch_ms, entry) for entry in entries if (epoch_ms := _entry_epoch_ms(entry)) is not None]
     if not timestamp_dirs:
         return None
 
     # Return the most recent (highest timestamp)
-    timestamp_dirs.sort(reverse=True)
-    _, latest_path = timestamp_dirs[0]
+    _, latest_path = max(timestamp_dirs)
     return _reconstruct_uri(remote_state_dir, latest_path)
 
 
@@ -313,7 +316,7 @@ def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
     found = _find_latest_checkpoint_dir(remote_state_dir)
     if found is None:
         return None
-    return int(found.rstrip("/").rsplit("/", 1)[-1])
+    return _entry_epoch_ms(found)
 
 
 def prune_old_checkpoints(
@@ -332,16 +335,15 @@ def prune_old_checkpoints(
     fs, _ = fsspec.core.url_to_fs(remote_state_dir)
     pruned = 0
     for entry in entries:
-        basename = entry.rstrip("/").rsplit("/", 1)[-1]
-        if not basename.isdigit():
+        epoch_ms = _entry_epoch_ms(entry)
+        if epoch_ms is None or epoch_ms >= cutoff_ms:
             continue
-        if int(basename) < cutoff_ms:
-            try:
-                fs.rm(entry, recursive=True)
-                logger.info("Pruned old checkpoint: %s", entry)
-                pruned += 1
-            except Exception:
-                logger.warning("Failed to prune checkpoint: %s", entry, exc_info=True)
+        try:
+            fs.rm(entry, recursive=True)
+            logger.info("Pruned old checkpoint: %s", entry)
+            pruned += 1
+        except Exception:
+            logger.warning("Failed to prune checkpoint: %s", entry, exc_info=True)
     return pruned
 
 

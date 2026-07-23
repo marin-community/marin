@@ -38,6 +38,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
 from iris.rpc import job_pb2
@@ -58,7 +59,9 @@ def make_task_backend(
     *,
     unreachable_grace: Duration,
     task_stats_table: Table | None = None,
+    task_event_table: Table | None = None,
     profile_table: Table | None = None,
+    worker_stats_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
     transition_reader: TransitionReader | None = None,
 ) -> TaskBackend:
@@ -76,6 +79,15 @@ def make_task_backend(
     which = config.provider_kind()
     if which == "kubernetes_provider":
         kp = config.kubernetes_provider
+        # Kueue is mandatory on the K8s backend: every pod is admitted through it, so
+        # its accounting and preemption arbitrate all capacity. A cluster with no
+        # ClusterQueue has no flavor to admit pods against — they would hang gated.
+        if not kp.kueue.cluster_queue:
+            raise ValueError(
+                "kubernetes_provider requires kueue.cluster_queue: the K8s backend admits every pod "
+                "through Kueue. Provision it (lib/iris/scripts/install_kueue.py --with-queues) and set "
+                "kubernetes_provider.kueue.cluster_queue."
+            )
         namespace = kp.namespace or "iris"
         label_prefix = config.platform.label_prefix or "iris"
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
@@ -102,10 +114,13 @@ def make_task_backend(
             pod_priority_classes[band] = pc_name
 
         # Empty topologies falls back to the CoreWeave-convention defaults.
-        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
-        # Kueue is enabled by a configured cluster_queue; the LocalQueue name is
-        # derived from label_prefix, not configured.
-        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
+        topologies = {
+            group_by: KueueTopologyBinding(topo.node_label, topo.mode, topo.coarse_preferred_label or None)
+            for group_by, topo in kp.kueue.topologies.items()
+        }
+        # The LocalQueue name is derived from label_prefix, not configured; Kueue is
+        # mandatory (checked above), so it is always set.
+        local_queue = local_queue_name(label_prefix)
         env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(
@@ -129,7 +144,9 @@ def make_task_backend(
             preempt_namespaces=list(kp.preempt_namespaces),
             priority_class_names=pod_priority_classes,
             task_stats_table=task_stats_table,
+            task_event_table=task_event_table,
             profile_table=profile_table,
+            worker_stats_table=worker_stats_table,
             transition_reader=transition_reader,
         )
     if which == "worker_provider":
@@ -207,7 +224,9 @@ def make_backend(
             config,
             unreachable_grace=unreachable_grace,
             task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
+            worker_stats_table=log_stack.worker_stats_table,
             transition_reader=DbTransitionReader(db),
         )
         logger.info("Backend created: %s", type(provider).__name__)
@@ -219,6 +238,7 @@ def make_backend(
             config,
             unreachable_grace=unreachable_grace,
             task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
 
@@ -259,6 +279,7 @@ def make_backend(
         config,
         unreachable_grace=unreachable_grace,
         task_stats_table=log_stack.task_stats_table,
+        task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,
     )

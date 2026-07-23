@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import logging
 import subprocess
 from pathlib import Path
 
@@ -31,6 +33,7 @@ def test_json_round_trip():
 def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatch):
     # Drops the domain but keeps the whole local name, so the segment is path-safe (no '@'/'.')
     # and two users who share a first name don't collapse onto one namespace.
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
     monkeypatch.setattr("rigging.provenance._getuser", lambda: "Russell.Power@gmail.com")
     assert username_segment() == "russell-power"
 
@@ -38,9 +41,56 @@ def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatc
 def test_username_segment_raises_when_unresolvable(monkeypatch):
     # Fail-fast is the contract: a username that does not resolve must not silently namespace
     # artifacts under a shared bucket.
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
     monkeypatch.setattr("rigging.provenance._getuser", lambda: None)
     with pytest.raises(RuntimeError):
         username_segment()
+
+
+def _launch_env_payload(built_by: str | None) -> str:
+    return Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch=None, built_by=built_by).to_json()
+
+
+def test_username_segment_prefers_launch_built_by_over_os_login(monkeypatch):
+    # On a remote worker the OS login is the machine's (`root`), while MARIN_PROVENANCE
+    # carries the submitting human; the namespace must follow the human.
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, _launch_env_payload("Russell.Power@openathena.ai"))
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "root")
+    assert username_segment() == "russell-power"
+
+
+def test_username_segment_falls_back_to_os_login_on_malformed_launch_env(monkeypatch):
+    # A corrupt env value must not break namespacing; the OS login still resolves.
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, "not json")
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "alice")
+    assert username_segment() == "alice"
+
+
+def test_username_segment_falls_back_to_os_login_when_built_by_missing(monkeypatch):
+    # A launch payload can carry built_by=None (submitting host could not resolve a user);
+    # that is absence, not an identity.
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, _launch_env_payload(None))
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "alice")
+    assert username_segment() == "alice"
+
+
+def test_username_segment_falls_back_to_os_login_on_non_string_built_by(monkeypatch):
+    # Required fields present but built_by is not a string: the payload is malformed, so
+    # namespacing must fall back rather than crash on the bogus value.
+    payload = json.dumps({"tree_hash": "feed", "base_commit": "beef", "dirty": False, "built_by": 123})
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, payload)
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "alice")
+    assert username_segment() == "alice"
+
+
+def test_username_segment_warns_when_resolving_to_machine_login(monkeypatch, caplog):
+    # A machine login owning a per-user namespace always means launch identity was not
+    # threaded; the segment is still returned, but the plumbing bug is surfaced.
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "root")
+    with caplog.at_level(logging.WARNING, logger="rigging.provenance"):
+        assert username_segment() == "root"
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
 
 
 def _run(args: list[str], cwd: Path) -> None:

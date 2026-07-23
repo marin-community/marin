@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-iac"
+version = "0.0.0"
+description = "Pulumi infrastructure for Marin."
+requires-python = ">=3.12"
+dependencies = [
+    # [controller] for the `kubernetes` client + `marin-rigging[secrets]`: iac.iris.deploy's
+    # connect_controller() call opens a kubectl port-forward tunnel (iris.cluster.platforms.k8s
+    # .service.CloudK8sService) when the target Iris cluster (iac.iris.service, used by
+    # infra/ducky) is CoreWeave-backed.
+    "marin-iris[controller]",
+    "marin-rigging",
+    "pyyaml>=6.0",
+]
+
+# The pulumi SDK is only imported when running the IaC program itself (pulumi
+# preview/up, the grafana Cloud Run deploy, and the iac tests); no Iris/Marin
+# runtime code touches it. Gating it behind the `deploy` extra keeps the
+# workspace-wide `uv sync --all-packages` that provisions every Iris job venv
+# from pulling the pulumi providers into jobs that never deploy.
+[project.optional-dependencies]
+deploy = [
+    "pulumi>=3.140,<4",
+    "pulumi-kubernetes>=4.18,<5",
+    "pulumi-gcp>=9,<10",
+    "pulumi-github>=6,<7",
+    "pulumi-docker-build>=0.0.8,<1",
+    "pulumi-cloudflare>=6,<7",
+    "pulumi-command>=1,<2",
+]
+
+# marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]
+# (marin-iac is a workspace member), so no local sources table is needed.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iac"]

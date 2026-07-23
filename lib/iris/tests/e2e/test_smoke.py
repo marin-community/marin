@@ -256,7 +256,8 @@ def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
         """
         (jobId) => {
             const text = document.body.textContent || "";
-            const routeReady = decodeURIComponent(window.location.hash) === `#/job/${jobId}`;
+            const [routePath] = decodeURIComponent(window.location.hash).split("?");
+            const routeReady = routePath === `#/job/${jobId}`;
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
             const taskRowReady = Array.from(document.querySelectorAll("table tbody tr"))
@@ -327,6 +328,14 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
         "jobs-tab",
         f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
+
+    # The job detail breadcrumb returns to the same user-scoped list.
+    if not isinstance(smoke_page, _NoOpPage):
+        smoke_page.locator("tr", has_text="smoke-simple").get_by_role("link", name="smoke-simple").click()
+        _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
+        smoke_page.get_by_role("link", name="Jobs").click()
+        wait_for_dashboard_ready(smoke_page)
+        assert smoke_page.url.endswith(f"/#/?user={user}")
 
     smoke_cluster.kill(running)
 

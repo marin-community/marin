@@ -96,7 +96,7 @@ class GrugRunConfig:
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.runtime.multigpu supervisor instead of one process per node.
+    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
 
 

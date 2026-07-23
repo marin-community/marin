@@ -18,6 +18,7 @@ import jmp
 from draccus import parse
 from draccus.parsers.decoding import decode_dataclass
 from haliax import ScanCheckpointPolicy
+from jax.sharding import PartitionSpec
 from rigging.filesystem import StoragePath
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
@@ -64,6 +65,42 @@ def register_codecs():
 
     draccus.decode.register(ScanCheckpointPolicy, scan_checkpoint_policy_decode)
     draccus.encode.register(ScanCheckpointPolicy, scan_checkpoint_policy_encode)
+
+    # jax.sharding.PartitionSpec has no default draccus codec, so dumping a config that
+    # carries one (e.g. Grug's batch spec P(("replica_dcn", "data"))) previously raised and
+    # dropped the whole config artifact. Encode it as a list of axis entries (a string, None,
+    # a nested list of names, or the UNCONSTRAINED marker) that survives a YAML round-trip.
+    draccus.decode.register(PartitionSpec, partition_spec_decode)
+    draccus.encode.register(PartitionSpec, partition_spec_encode)
+
+
+_PARTITION_SPEC_UNCONSTRAINED = "__unconstrained__"
+
+
+def _encode_partition_spec_entry(entry):
+    if entry is None:
+        return None
+    if entry is PartitionSpec.UNCONSTRAINED:
+        return _PARTITION_SPEC_UNCONSTRAINED
+    if isinstance(entry, (tuple, list)):
+        return [_encode_partition_spec_entry(e) for e in entry]
+    return str(entry)
+
+
+def partition_spec_encode(spec: PartitionSpec, decl_type=None):
+    return [_encode_partition_spec_entry(entry) for entry in spec]
+
+
+def _decode_partition_spec_entry(entry):
+    if entry == _PARTITION_SPEC_UNCONSTRAINED:
+        return PartitionSpec.UNCONSTRAINED
+    if isinstance(entry, (tuple, list)):
+        return tuple(_decode_partition_spec_entry(e) for e in entry)
+    return entry
+
+
+def partition_spec_decode(value, decl_type=None) -> PartitionSpec:
+    return PartitionSpec(*(_decode_partition_spec_entry(entry) for entry in value))
 
 
 register_codecs()

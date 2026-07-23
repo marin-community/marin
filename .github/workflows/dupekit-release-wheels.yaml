@@ -2,9 +2,15 @@ name: "Dupekit - Release Wheels"
 
 # Triggers mirror marin-release-libs-wheels.yaml: schedule for nightlies, tag
 # push for stables, workflow_dispatch for manual cuts, pull_request for build
-# smoke. There is intentionally no `push: branches: [main]` trigger - that is
-# what previously caused the auto-pin chore PR to recursively re-trigger this
-# workflow on every merge.
+# smoke. There is intentionally no `push: branches: [main]` trigger: it would
+# let an auto-pin chore PR recursively re-trigger this workflow on every merge.
+#
+# Builds and publishes both dists of the pair in lockstep at one resolved
+# version (see lib/dupekit/pyproject.toml for how the pure and native packages
+# relate): marin-dupekit-native (platform wheels from lib/dupekit/rust, per
+# matrix leg) and marin-dupekit (one pure py3-none-any wheel, linux leg only).
+# PyPI trusted publishing must be configured for BOTH projects against this
+# workflow + the pypi-publish environment.
 on:
   workflow_dispatch:
     inputs:
@@ -165,9 +171,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Build sdist into the same dist/ directory the wheels were downloaded
-      # into so gh-action-pypi-publish uploads everything as one release.
-      - name: Build sdist
+      # Build both sdists into the same dist/ directory the wheels were
+      # downloaded into so gh-action-pypi-publish uploads everything as one
+      # release.
+      - name: Build sdists
         run: |
           python lib/dupekit/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \

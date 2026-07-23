@@ -49,8 +49,8 @@ from iris.cluster.platforms.gcp.service import (
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
 from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
-    rewrite_ghcr_to_ar_remote,
-    zone_to_multi_region,
+    rewrite_image_to_mirror,
+    upstream_registry,
 )
 from iris.cluster.platforms.remote_exec import GceRemoteExec
 from iris.cluster.platforms.types import (
@@ -262,6 +262,7 @@ class GcpWorkerProvider:
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
+        self._registry_mirrors = gcp_config.registry_mirrors
         self._label_prefix = label_prefix
         self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
@@ -290,18 +291,19 @@ class GcpWorkerProvider:
         return self._ssh_config
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
-        """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
+        """Rewrite public-registry images to the pull-through mirror for *zone*'s continent.
 
-        Non-GHCR images pass through unchanged.
+        Routing comes from ``platform.gcp.registry_mirrors`` (upstream registry →
+        zone prefix → mirror repo prefix); mirrored pulls stay on-continent and
+        dodge upstream rate limits. Images whose registry has no mirror entry —
+        gcr.io, Artifact Registry, a private host, or any upstream the cluster
+        config leaves unlisted — pass through unchanged.
         """
-        if not image.startswith("ghcr.io/"):
+        if upstream_registry(image) not in self._registry_mirrors:
             return image
         if not zone:
-            raise ValueError("zone is required for GHCR→AR image rewriting on GCP")
-        multi_region = zone_to_multi_region(zone)
-        if not multi_region:
-            return image
-        return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+            raise ValueError("zone is required to rewrite public images to a registry mirror on GCP")
+        return rewrite_image_to_mirror(image, zone, self._registry_mirrors)
 
     def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
         """Try to delete a GCE VM that may have been partially created."""

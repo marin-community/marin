@@ -49,6 +49,8 @@ pub async fn reconcile_remote_segments(
     local_dir: &std::path::Path,
     key_column: Option<&str>,
 ) -> Result<(), StatsError> {
+    let started = std::time::Instant::now();
+    let list_started = std::time::Instant::now();
     let objects = match remote.list_segment_objects(namespace).await {
         Ok(o) => o,
         Err(e) => {
@@ -56,6 +58,7 @@ pub async fn reconcile_remote_segments(
             return Ok(());
         }
     };
+    let list_ms = list_started.elapsed().as_millis() as u64;
 
     // Catalog rows at L>=1 keyed by basename (the durable-archive pointers).
     let catalog_rows = catalog.list_segments_min_level(namespace, 1)?;
@@ -88,6 +91,7 @@ pub async fn reconcile_remote_segments(
     // trips, so a sequential await would cost O(N) RTTs. `buffer_unordered`
     // caps in-flight requests; `read_footer` is a single ranged GET (size is
     // already known, no `head`).
+    let footer_started = std::time::Instant::now();
     let footers: Vec<Footer> = futures::stream::iter(pending)
         .map(|(name, size, level, min_seq)| async move {
             let footer = remote.read_footer(namespace, &name, size, key_column).await;
@@ -112,6 +116,7 @@ pub async fn reconcile_remote_segments(
         })
         .collect()
         .await;
+    let footer_ms = footer_started.elapsed().as_millis() as u64;
 
     // Union catalog + remote-only seq ranges; mark any segment fully spanned by
     // a strictly-higher level as redundant (transitivity makes a single pass
@@ -147,18 +152,25 @@ pub async fn reconcile_remote_segments(
     }
 
     // Drop redundant catalog rows + delete their bucket files.
+    let catalog_update_started = std::time::Instant::now();
+    let removed_paths: Vec<String> = redundant
+        .iter()
+        .filter_map(|name| catalog_by_basename.get(name).map(|row| row.path.clone()))
+        .collect();
+    catalog.remove_segments(namespace, &removed_paths)?;
+    let catalog_remove_ms = catalog_update_started.elapsed().as_millis() as u64;
+
+    let remote_delete_started = std::time::Instant::now();
     let mut dropped = 0;
     for name in &redundant {
-        if let Some(row) = catalog_by_basename.get(name) {
-            catalog.remove_segment(namespace, &row.path)?;
-        }
         remote.delete(namespace, name).await;
         dropped += 1;
     }
+    let remote_delete_ms = remote_delete_started.elapsed().as_millis() as u64;
 
     // Adopt the surviving (non-redundant) remote-only footers as REMOTE rows.
     let now = now_ms();
-    let mut adopted = 0;
+    let mut adopted_rows = Vec::new();
     for f in &footers {
         if redundant.contains(&f.basename) {
             continue;
@@ -166,7 +178,7 @@ pub async fn reconcile_remote_segments(
         let local_path = local_dir.join(&f.basename);
         // Record the footer's actual num_rows, not a seq-span recomputation, so
         // an edge-case empty footer adopts row_count=0 rather than 1.
-        catalog.upsert_segment(&SegmentRow {
+        adopted_rows.push(SegmentRow {
             namespace: namespace.to_string(),
             path: local_path.to_string_lossy().into_owned(),
             level: f.level,
@@ -178,18 +190,28 @@ pub async fn reconcile_remote_segments(
             min_key_value: f.min_key.map(|v| v.to_string()),
             max_key_value: f.max_key.map(|v| v.to_string()),
             location: SegmentLocation::Remote,
-        })?;
-        adopted += 1;
+        });
     }
+    let catalog_upsert_started = std::time::Instant::now();
+    catalog.upsert_segments(&adopted_rows)?;
+    let catalog_upsert_ms = catalog_upsert_started.elapsed().as_millis() as u64;
+    let adopted = adopted_rows.len();
 
-    if adopted > 0 || dropped > 0 {
-        tracing::info!(
-            namespace,
-            adopted,
-            dropped_redundant = dropped,
-            "reconciled remote"
-        );
-    }
+    tracing::info!(
+        namespace,
+        remote_objects = objects.len(),
+        catalog_segments = catalog_by_basename.len(),
+        footer_reads = footers.len(),
+        adopted,
+        dropped_redundant = dropped,
+        list_ms,
+        footer_ms,
+        catalog_remove_ms,
+        remote_delete_ms,
+        catalog_upsert_ms,
+        total_ms = started.elapsed().as_millis() as u64,
+        "finelog remote reconcile complete"
+    );
     Ok(())
 }
 

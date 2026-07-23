@@ -147,7 +147,7 @@ def merge_task_termination(
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
 ) -> None:
-    """Move a task to ``task_state`` and record its attempt + endpoint deletion.
+    """Move a task to ``task_state`` and record its attempt.
 
     ``stamp_attempt_finished`` controls whether the attempt's ``finished_at_ms``
     is stamped: finalizing callers stamp it (the attempt is truly done);
@@ -190,7 +190,6 @@ def merge_task_termination(
             finished_at=task_finished_at,
         )
     )
-    state.emit_endpoint_deletion(task_name)
 
 
 # ─── Per-task decision helpers ───
@@ -365,8 +364,13 @@ def apply_one_transition(
     # snapshot row when no overlay entry exists.
     prior_state = overlay_state if overlay_state is not None else task.state
 
-    # Fast path: task already in the reported state with no new data to apply.
-    has_new_data = update.error is not None or update.exit_code is not None
+    # Fast path: task already in the reported state with no new data to apply. A
+    # changed status_message counts as new data so a same-state BUILDING tick still
+    # emits a task delta — which persists the message AND appends a federation
+    # changelog row (commit._flush_tasks), so a stuck task's reason reaches the hub.
+    # An unchanged message stays a no-op, so the message does not churn the changelog.
+    message_changed = update.status_message is not None and update.status_message != (task.status_message or "")
+    has_new_data = update.error is not None or update.exit_code is not None or message_changed
     if update.new_state == prior_state and not has_new_data:
         return None
 
@@ -411,10 +415,11 @@ def apply_one_transition(
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Stamp started_at_ms on BUILDING so the execution-timeout scan
-        # (gated on started_at_ms IS NOT NULL) can finalize wedged builds.
-        # COALESCE on the RUNNING write preserves this stamp. Issue #6077.
-        started_ms = now_ms
+        # Worker BUILDING runs setup, so start its clock to catch wedged builds
+        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
+        # at RUNNING instead (#7431).
+        if source is TransitionSource.WORKER_RECONCILE:
+            started_ms = now_ms
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,
@@ -503,11 +508,9 @@ def apply_one_transition(
             started_at=started_at,
             finished_at=task_finished_at,
             container_id=update.container_id,
+            status_message=update.status_message,
         )
     )
-
-    if update.new_state in TERMINAL_TASK_STATES:
-        state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
     has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in PEER_CASCADE_TRIGGER_STATES)

@@ -9,7 +9,7 @@ ProcessRuntime skips it). Setup is the user's client-resolved
 ``EnvironmentConfig.setup_scripts`` followed by iris's own runtime-deps script.
 """
 
-from iris.cluster.setup_scripts import iris_runtime_setup_script, setup_is_quiet
+from iris.cluster.setup_scripts import iris_runtime_setup_script
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
@@ -29,7 +29,7 @@ def build_runtime_entrypoint(
     # build phase (iris script included) is skipped and the command runs as-is.
     user_scripts = [s for s in env_config.setup_scripts if s.strip()]
     if user_scripts:
-        iris_script = iris_runtime_setup_script(quiet=setup_is_quiet(env_config.env_vars))
+        iris_script = iris_runtime_setup_script()
         rt.setup_commands[:] = [*user_scripts, iris_script]
     rt.run_command.argv[:] = entrypoint.command
     for k, v in entrypoint.workdir_files.items():

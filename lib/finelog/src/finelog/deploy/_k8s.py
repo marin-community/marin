@@ -96,6 +96,10 @@ def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
         "remote_log_dir": cfg.remote_log_dir,
         "storage_class_block": storage_class_block,
         "storage_gb": k8s.storage_gb,
+        "cpu_request": k8s.cpu_request,
+        "cpu_limit": k8s.cpu_limit,
+        "memory_request": k8s.memory_request,
+        "memory_limit": k8s.memory_limit,
         "inline_env_block": _inline_env_block(cfg),
         "priority_class_block": _priority_class_block(cfg),
     }

@@ -90,7 +90,11 @@ create branches on github and submit PRs from them.
 * Never use mocks.
 * Keep tests simple and minimal. Do not test obvious behavior like "object has an attr".
 * Run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues.
-* Run `uv run pytest -m 'not slow'` and ensure _all_ tests pass before uploading.
+* Run the default local test suite for the touched package and ensure it passes
+  before uploading. Use `uv run pytest` for root or mixed changes; do not
+  override the configured marker expression. Slow, integration, live-cluster,
+  Docker, and manual tests run in dedicated CI jobs unless the task explicitly
+  requires one.
 
 ## Uploading
 

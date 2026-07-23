@@ -226,39 +226,33 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
+        # One name per field: core fields take the universal transformers spelling, MoE fields the
+        # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
+        # stays tolerant of the older spellings so existing artifacts keep loading.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
-            "hidden_dim": self.hidden_dim,
+            # core — universal transformers names
             "hidden_size": self.hidden_dim,
-            "intermediate_dim": self.intermediate_dim,
-            "intermediate_size": self.intermediate_dim,
-            "moe_intermediate_size": self.intermediate_dim,
-            "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
-            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
-            "num_experts": self.num_experts,
-            "num_local_experts": self.num_experts,
-            "num_experts_per_token": self.num_experts_per_token,
-            "num_experts_per_tok": self.num_experts_per_token,
-            "num_layers": self.num_layers,
             "num_hidden_layers": self.num_layers,
-            "num_heads": self.num_heads,
             "num_attention_heads": self.num_heads,
-            "num_kv_heads": self.num_kv_heads,
             "num_key_value_heads": self.num_kv_heads,
             "head_dim": self.inferred_head_dim,
-            "max_seq_len": self.max_seq_len,
             "max_position_embeddings": self.max_seq_len,
             "sliding_window": self.sliding_window,
-            "layer_norm_eps": self.layer_norm_eps,
             "rms_norm_eps": self.layer_norm_eps,
-            "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
+            "rope_theta": self.rope.theta,
+            "tie_word_embeddings": False,
+            # MoE — most common public spelling per field
+            "num_experts": self.num_experts,
+            "num_experts_per_tok": self.num_experts_per_token,
+            "moe_intermediate_size": self.intermediate_dim,
+            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
-            "rope_theta": self.rope.theta,
-            "tie_word_embeddings": False,
         }
         if config_overrides is not None:
             config.update(config_overrides)

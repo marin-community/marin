@@ -1,0 +1,123 @@
+name: "Rust - Unit"
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# cargo fmt/clippy/test for the dupekit and finelog native crates, plus a guard that
+# no rust dev-mode source leaked into a committed pyproject. The `changes` job always
+# runs so the downstream jobs report a status on every PR (a workflow-level `paths:`
+# filter would leave a required check pending forever on non-matching PRs).
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      dupekit: ${{ steps.filter.outputs.dupekit }}
+      finelog: ${{ steps.filter.outputs.finelog }}
+      user_mode: ${{ steps.filter.outputs.user_mode }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
+        id: filter
+        with:
+          filters: |
+            dupekit:
+              - 'lib/dupekit/rust/**'
+              - '.github/workflows/rust-checks.yaml'
+            finelog:
+              - 'lib/finelog/rust/**'
+              - '.github/workflows/rust-checks.yaml'
+            # The dev-mode guard inspects the pyprojects a leaked rust path source
+            # lands in, plus the script that writes it.
+            user_mode:
+              - 'pyproject.toml'
+              - 'lib/dupekit/pyproject.toml'
+              - 'lib/finelog/pyproject.toml'
+              - 'scripts/rust_mode.py'
+
+  check-user-mode:
+    needs: changes
+    if: needs.changes.outputs.dupekit == 'true' || needs.changes.outputs.finelog == 'true' || needs.changes.outputs.user_mode == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - uses: actions/checkout@v5
+      - name: Ensure pyprojects are in user mode
+        run: |
+          # A committed path source for either native package means 'rust_mode.py dev'
+          # leaked into a commit. CI flips to dev mode transiently for source-build test
+          # legs, but that flip must never be committed.
+          if grep -qE 'marin-(dupekit-native|finelog-server) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml; then
+            echo "ERROR: a pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
+            exit 1
+          fi
+
+  dupekit-rust:
+    needs: changes
+    if: needs.changes.outputs.dupekit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: lib/dupekit/rust
+      - name: cargo fmt
+        run: cargo fmt --manifest-path lib/dupekit/rust/Cargo.toml --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --manifest-path lib/dupekit/rust/Cargo.toml --workspace --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path lib/dupekit/rust/Cargo.toml --workspace
+
+  finelog-rust:
+    needs: changes
+    if: needs.changes.outputs.finelog == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: lib/finelog/rust
+      - name: cargo fmt
+        run: cargo fmt --manifest-path lib/finelog/rust/Cargo.toml --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --manifest-path lib/finelog/rust/Cargo.toml --workspace --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --manifest-path lib/finelog/rust/Cargo.toml --workspace
+
+  rust-checks:
+    name: rust-checks
+    needs: [changes, check-user-mode, dupekit-rust, finelog-rust]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.changes.result }}" = "success" ] || exit 1
+          for result in \
+            "${{ needs.check-user-mode.result }}" \
+            "${{ needs.dupekit-rust.result }}" \
+            "${{ needs.finelog-rust.result }}"
+          do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "job result: $result"; exit 1 ;;
+            esac
+          done

@@ -262,6 +262,79 @@ def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
         )
 
 
+def _canonical_assignment(source: NormalizedData, output_path: str) -> dict[str, tuple[str, bool]]:
+    """Run minhash + fuzzy_dups for *source* and return ``{id -> (dup_cluster_id, is_canonical)}``."""
+    minhash = compute_minhash_attrs(source=source, output_path=os.path.join(output_path, "minhash"))
+    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=os.path.join(output_path, "dups"), max_parallelism=4)
+    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
+    return {r["id"]: (r["attributes"]["dup_cluster_id"], r["attributes"]["is_cluster_canonical"]) for r in rows}
+
+
+def test_fuzzy_dups_canonical_selection_is_deterministic(fox_corpus):
+    """Two independent runs over the same input select the same survivors (marin#6798).
+
+    Canonical selection is the min content-hash per component, so it must not
+    depend on shard/link/reduce order or parallelism. Running the whole
+    minhash → fuzzy_dups path twice into separate output trees must yield a
+    byte-identical ``{id -> (dup_cluster_id, is_cluster_canonical)}`` map, with
+    exactly one canonical per cluster. A future canonical pick that leaked
+    dict/set ordering or arrival order would break this.
+    """
+    source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))
+
+    first = _canonical_assignment(source, os.path.join(fox_corpus["output_dir"], "run_a"))
+    second = _canonical_assignment(source, os.path.join(fox_corpus["output_dir"], "run_b"))
+
+    assert first == second, "fuzzy-dup canonical assignment differs between two runs over identical input"
+    # The fox corpus has at least one real fuzzy cluster; guard against a
+    # vacuous all-empty comparison and pin the one-canonical-per-cluster rule.
+    assert first, "expected at least one cluster member row"
+    canonical_per_cluster: dict[str, int] = {}
+    for cluster_id, is_canonical in first.values():
+        canonical_per_cluster[cluster_id] = canonical_per_cluster.get(cluster_id, 0) + int(is_canonical)
+    assert all(
+        n == 1 for n in canonical_per_cluster.values()
+    ), f"every cluster must have exactly one canonical; got {canonical_per_cluster}"
+
+
+def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
+    """A capped (non-converged) run warns but still produces a deterministic result (marin#6798).
+
+    Builds a 5-node path graph (A-B-C-D-E, neighbors sharing one LSH bucket
+    each) whose min component id needs >=2 iterations to reach both ends;
+    ``cc_max_iterations=1`` cannot converge. The step must NOT raise -- with the
+    id_norm-sorted bucket topology the capped result is deterministic (just
+    incomplete) -- and must still emit cluster-member attr rows.
+    """
+    main_dir = os.path.join(fox_corpus["output_dir"], "path_main")
+    texts = [f"path node number {i} with distinct filler content here" for i in range(5)]
+    # Chain the nodes: node i shares bucket b{i-1}{i} with its left neighbor and
+    # b{i}{i+1} with its right neighbor, so links form a path, not a star.
+    rows = []
+    for i, text in enumerate(texts):
+        buckets = []
+        if i > 0:
+            buckets.append(f"b{i - 1}{i}")
+        if i < len(texts) - 1:
+            buckets.append(f"b{i}{i + 1}")
+        rows.append({"id": generate_id(text), "buckets": buckets})
+
+    mh = _write_minhash_attr_dataset(
+        output_dir=os.path.join(fox_corpus["output_dir"], "mh_path"),
+        source_main_dir=main_dir,
+        rows=rows,
+    )
+
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[mh],
+        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups_path"),
+        cc_max_iterations=1,
+        max_parallelism=4,
+    )
+    attr_rows = _read_cluster_attrs(dups.sources[main_dir].attr_dir)
+    assert attr_rows, "capped run should still emit cluster-member rows"
+
+
 def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     """``text_cap_chars`` should change the MinHash signature for docs above
     the cap but leave smaller docs unaffected.

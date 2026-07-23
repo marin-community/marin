@@ -139,6 +139,13 @@ message Controller {
     // allowlist gates on. The peer re-checks it against the same claim carried in
     // the federation JWT before trusting it (defense in depth).
     string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
   }
 
   message LaunchJobResponse {
@@ -560,6 +567,41 @@ message Controller {
     string quota = 12;
   }
 
+  // One physical node surfaced as a worker-like fleet member. A cluster backend
+  // has no per-node Iris worker daemon, so identity/liveness/allocatable come
+  // from the periodic kubectl node sync and the utilization/device readings from
+  // the controller-side exporter scrape (0 until the first successful scrape).
+  message NodeStatus {
+    string name = 1;
+    bool ready = 2;               // kubelet Ready condition
+    bool schedulable = 3;         // not cordoned (spec.unschedulable is false)
+    string status_summary = 4;    // "Ready", "NotReady", "Ready,SchedulingDisabled"
+    string instance_type = 5;
+    string region = 6;
+    int32 gpu_count = 7;          // allocatable nvidia.com/gpu
+    string gpu_model = 8;
+    int64 cpu_millicores = 9;     // allocatable cpu
+    int64 memory_bytes = 10;      // allocatable memory
+    int64 disk_bytes = 11;        // allocatable ephemeral-storage
+    int32 running_pods = 12;      // Iris-managed pods scheduled on this node
+    string created = 13;          // node creationTimestamp (RFC3339)
+
+    // Live host + device readings from the last exporter scrape.
+    int64 metrics_ts = 20;        // scrape time (epoch ms); 0 = never scraped
+    double cpu_pct = 21;
+    int64 mem_used_bytes = 22;
+    int64 mem_total_bytes = 23;
+    int64 disk_used_bytes = 24;
+    int64 disk_total_bytes = 25;
+    int64 net_recv_bytes = 26;
+    int64 net_sent_bytes = 27;
+    int64 hbm_used_bytes = 28;
+    int64 hbm_total_bytes = 29;
+    double gpu_util_pct = 30;
+    double gpu_temp_c = 31;
+    double gpu_power_w = 32;
+  }
+
   message GetKubernetesClusterStatusResponse {
     string namespace = 1;
     int32 total_nodes = 2;
@@ -569,6 +611,7 @@ message Controller {
     repeated KubernetesPodStatus pod_statuses = 6;
     string provider_version = 7;
     repeated NodePoolStatus node_pools = 8;
+    repeated NodeStatus nodes = 9;
   }
 
   // --- Budget Management ---
@@ -679,6 +722,11 @@ message Controller {
     // Free amount per resource token, in the token's natural unit (accelerator
     // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
     map<string, int64> amounts = 3;
+    // Total amount per resource token over the same capacity the free amounts were
+    // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
+    // keys as `amounts`; a token's free amount never exceeds its total. Display
+    // only — the federation availability gate reads `amounts` alone.
+    map<string, int64> total_amounts = 4;
   }
 
   message BackendSummary {

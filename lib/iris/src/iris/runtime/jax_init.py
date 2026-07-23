@@ -23,15 +23,22 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.runtime.multigpu import (
+from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
+from iris.runtime import telltale
 
 logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
+# JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
+# preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
+# GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
+# whole gang. Give cold gang-init more slack; a longer timeout only affects how long a
+# genuinely-stuck init waits.
+_JAX_DIST_INIT_TIMEOUT = 1800
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -180,7 +187,7 @@ def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: in
 def _initialize_supervised_jax(
     jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
 ) -> None:
-    """Join the JAX mesh for a process launched by ``iris.runtime.multigpu``.
+    """Join the JAX mesh for a process launched by ``iris.hooks.multigpu_main``.
 
     The supervisor runs N JAX processes inside one Iris task and stamps each
     child with its global rank (``IRIS_MULTIGPU_PROCESS_INDEX``), the global world
@@ -219,13 +226,19 @@ def _initialize_supervised_jax(
         device_ids,
         coordinator,
     )
-    jax.distributed.initialize(coordinator, proc_count, proc_index, local_device_ids=device_ids)
+    jax.distributed.initialize(
+        coordinator,
+        proc_count,
+        proc_index,
+        local_device_ids=device_ids,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+    )
 
 
 def initialize_jax(
     port: int = 8476,
     endpoint_name: str = "jax_coordinator",
-    poll_timeout: float = 300.0,
+    poll_timeout: float = _JAX_DIST_INIT_TIMEOUT,
     poll_interval: float = 2.0,
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
@@ -246,7 +259,10 @@ def initialize_jax(
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
         endpoint_name: Name under which the coordinator registers.
-        poll_timeout: Maximum seconds for non-coordinator tasks to wait.
+        poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
+            coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
+            so a slow coordinator host on a large-gang cold restart does not abort
+            the pollers before the JAX barrier itself gets its longer timeout.
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
@@ -254,6 +270,9 @@ def initialize_jax(
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).
     configure_jax_compilation_cache()
+
+    # Start the telltale server to report stats for training jobs.
+    telltale.start()
 
     # Idempotent: skip if jax.distributed has already been initialized. This
     # lets a caller that must touch JAX before levanter.initialize (e.g. via
@@ -272,7 +291,7 @@ def initialize_jax(
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
-    # paths: iris.runtime.multigpu has already assigned this process its global
+    # paths: the multigpu supervisor has already assigned this process its global
     # rank, so the single/multi-task branches below (which assume one process
     # per task) do not apply. This runs even when job_info is None so a local
     # supervisor smoke can bring up a localhost mesh.
@@ -311,7 +330,11 @@ def initialize_jax(
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        )
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        )

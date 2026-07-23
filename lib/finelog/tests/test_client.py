@@ -22,7 +22,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import Column, Schema, schema_from_proto, schema_to_proto
+from finelog.schema import MAP_STRING_STRING, Column, Schema, schema_from_proto, schema_to_arrow, schema_to_proto
 
 
 class FakeLogClient:
@@ -359,6 +359,37 @@ def test_get_table_with_explicit_schema(tracked_clients):
         client.close()
 
 
+def test_get_table_with_map_column_round_trips(tracked_clients):
+    # A COLUMN_TYPE_MAP column encodes Python dicts as a native Map<Utf8,Utf8>
+    # Arrow column on the WriteRows IPC (a None row is a null map cell).
+    schema = Schema(
+        columns=(
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_MAP),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+    )
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.probes", schema)
+        table.write(
+            [
+                SimpleNamespace(labels={"scope": "fleet", "region": "us-east"}, timestamp_ms=1),
+                SimpleNamespace(labels=None, timestamp_ms=2),
+            ]
+        )
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        write_req = tracked_clients[0].writes[0]
+        decoded = paipc.open_stream(pa.BufferReader(write_req.arrow_ipc)).read_all()
+        assert decoded.num_rows == 2
+        assert decoded.schema.field("labels").type == MAP_STRING_STRING
+        assert decoded.column("labels").to_pylist() == [
+            [("scope", "fleet"), ("region", "us-east")],
+            None,
+        ]
+    finally:
+        client.close()
+
+
 def test_get_table_forwards_storage_policy(tracked_clients):
     """An explicit StoragePolicy on get_table is sent on the register_table request."""
     client = LogClient.connect("http://h:1")
@@ -668,6 +699,26 @@ def test_schema_from_dataclass_rejects_unsupported_type():
 
     with pytest.raises(SchemaValidationError):
         schema_from_dataclass(Stat)
+
+
+def test_schema_from_dataclass_infers_dict_str_str_as_map():
+    @dataclass
+    class Probe:
+        labels: dict[str, str]
+        optional_labels: dict[str, str] | None
+        timestamp_ms: int
+
+    s = schema_from_dataclass(Probe)
+    types = {c.name: c.type for c in s.columns}
+    assert types["labels"] == stats_pb2.COLUMN_TYPE_MAP
+    assert types["optional_labels"] == stats_pb2.COLUMN_TYPE_MAP
+    assert types["timestamp_ms"] == stats_pb2.COLUMN_TYPE_INT64
+
+
+def test_schema_to_arrow_maps_map_column_to_native_map():
+    s = Schema(columns=(Column(name="labels", type=stats_pb2.COLUMN_TYPE_MAP),))
+    arrow = schema_to_arrow(s)
+    assert arrow.field("labels").type == MAP_STRING_STRING
 
 
 def test_remote_log_handler_writes_via_log_client(tracked_clients):

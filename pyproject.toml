@@ -33,13 +33,13 @@ dependencies = [
     "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit is a native (maturin) package shipped as pre-built platform
-    # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
-    # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels
-    # (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain `>= X.Y.Z` floor pins to a stable tag
-    # (`dupekit-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
-    # any earlier dev of the same Z; bump the floor to whichever is newest.
-    "marin-dupekit >= 0.1.2.dev202606060824",
+    # marin-dupekit is the pure-Python text-dedup surface, a workspace member
+    # (editable source). Its native companion marin-dupekit-native (the Rust
+    # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
+    # member: it ships as a pre-built platform wheel and reaches us transitively
+    # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
+    # marin-dupekit-native to a local source build.
+    "marin-dupekit",
 ]
 
 [tool.uv]
@@ -48,7 +48,8 @@ fork-strategy = "fewest"
 # names one, so our intentional pre-releases resolve while everything else stays
 # on its latest stable release. (A global "allow" would instead promote any
 # transitive dependency's newest beta/rc into the lock.) Opted in: the
-# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
+# omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
 # (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
 prerelease = "explicit"
@@ -82,6 +83,9 @@ override-dependencies = [
     "multipart>=1.3.1",
     "nltk>=3.9.4",
     "notebook>=7.5.6",
+    # Work around https://github.com/NVIDIA/cutlass/issues/3259, fixed in
+    # CUTLASS DSL 4.6.0; remove this override when upgrading to >=4.6.0.
+    "nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
@@ -127,18 +131,22 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/dupekit",
     "lib/ducky",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "infra/pulumi",
 ]
-# lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
-# log-server ext is consumed as a pre-built wheel by default and only built from
-# source under `scripts/rust_mode.py dev`. Exclude it so workspace discovery
-# doesn't pull the nested package into the workspace.
-exclude = ["lib/finelog/rust"]
+# The native (maturin) companions are NOT members: their extensions are consumed
+# as pre-built wheels by default and only built from source under
+# `scripts/rust_mode.py dev`. Exclude them so workspace discovery doesn't pull
+# the nested packages into the workspace.
+#   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
+#   - lib/dupekit/rust   -> marin-dupekit-native  (module `dupekit_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -154,6 +162,7 @@ vllm = [
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -165,16 +174,16 @@ nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8904ed984137a0dfa764583f1508cf3274" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...a0b205f2afd5b33d01703a4cd9b18453d5286f39
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "a0b205f2afd5b33d01703a4cd9b18453d5286f39" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -255,13 +264,6 @@ known-first-party = ["experiments"]
 known-third-party = ["wandb", "config"]
 
 
-[tool.mypy]
-python_version = "3.12"
-
-# Note: Grow more strict over time!
-ignore_missing_imports = true
-exclude = ["marin/", "scripts/"]
-
 # Pyrefly type checker configuration
 [tool.pyrefly]
 python-version = "3.12"
@@ -326,6 +328,9 @@ ignore-missing-imports = [
     "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
+    # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
+    "upath",
+    "upath.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",
@@ -449,17 +454,23 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
-    "requires_cluster: mark tests that need a running iris cluster",
+    "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "requires_cluster: mark Iris tests that start or connect to a cluster",
+    "docker: mark tests that require a Docker daemon",
+    "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
 pythonpath = ["."]
 
-# Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, Docker, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
-# requires_cluster tests need a running iris cluster (local or remote).
-# All are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster' --import-mode=importlib"
+# cluster and requires_cluster tests submit jobs or start cluster infrastructure;
+# Docker tests require a local daemon;
+# manual tests are run by hand (e.g. live TPU smokes in a custom container).
+# All but manual are run from dedicated CI workflows. Tests that need a TPU carry
+# @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
+# the Iris markers also apply when lib/iris test paths are passed from the root.
+addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

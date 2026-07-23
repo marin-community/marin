@@ -190,6 +190,20 @@ def local_iris_client():
         client.shutdown()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_iris_user():
+    """Shield the suite from the developer's IRIS_USER.
+
+    resolve_job_user consults it when naming submitted jobs; without this, a
+    developer's exported IRIS_USER changes job names across the whole suite.
+    Session-scoped so module-scoped fixtures that submit jobs are covered too.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("IRIS_USER", raising=False)
+    yield
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def _thread_cleanup(request):
     """Isolate each test's managed threads and warn on leaks.

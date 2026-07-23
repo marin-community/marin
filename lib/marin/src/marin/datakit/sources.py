@@ -18,15 +18,19 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
+from marin.datakit.download.common_crawl_focus import common_crawl_focus_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
     davinci_dev_ctx_native_normalize_steps,
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.dolma3_5_code import dolma3_5_code_normalize_steps
+from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
@@ -35,14 +39,21 @@ from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
-from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
+from marin.datakit.download.nemotron_v2 import (
+    NEMOTRON_PRETRAINING_LEGAL_V1,
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+    nemotron_v2_normalize_steps,
+)
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
+from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
+from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
@@ -141,6 +152,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
@@ -151,12 +163,19 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        (
+            "nemotron_code_v2/content",
+            nemotron_code_v2_content_normalize_steps,
+            120.254379519,
+        ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
+        ("sec-edgar", sec_edgar_normalize_steps, 334.90),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
+        ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("swe-zero-12m", swe_zero_12m_normalize_steps, 106.91),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
@@ -172,6 +191,18 @@ def all_sources() -> dict[str, DatakitSource]:
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
+        },
+    )
+
+    # TheBioCollection: two synthetic bio/chem streams from one HF repo, each
+    # staged and downloaded per-stream (see biocollection.py). Token counts are
+    # the exact Marin-tokenizer (Llama-3) totals from each stream's tokenized
+    # cache .stats.json.
+    biocollection = _rows_flat(
+        biocollection_normalize_steps,
+        {
+            "biocollection/free_text_stream": 33.186704843,
+            "biocollection/instruction_stream": 18.123700603,
         },
     )
 
@@ -235,6 +266,24 @@ def all_sources() -> dict[str, DatakitSource]:
             "finepdfs/ukr_Cyrl": 25.53,
         },
     )
+
+    # Exact counts, measured with marin-community/marin-tokenizer over the
+    # normalized data: 1,221,318,442,892 tokens / 635,390,613 docs and
+    # 65,538,632,427 / 31,179,056. Both came in above their chars/4 estimates
+    # (by 11.7% and 6.0%), which is the bias to expect from the estimates below.
+    dolma3_5_code = _rows_flat(
+        dolma3_5_code_normalize_steps,
+        {
+            "dolma_code": 1221.32,
+            "dolma_code_prose": 65.54,
+        },
+    )
+
+    # dolma3.5_pool PDF subset, minus the finepdfs component we already ingest
+    # separately (see dolma4pdfs.py). Exact count measured over the normalized
+    # data with marin-community/marin-tokenizer: 1,804,002,448,556 tokens over
+    # 137,132,279 documents.
+    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1804.002448556})
 
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
@@ -322,6 +371,37 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_specialized_v1_1/unconditional_algorithmic": 0.19,
         },
     )
+    # v1.2 supersedes neither v1 nor v1.1 — it adds four new synthetic subsets
+    # (fact-seeking, moral scenarios, generative and multiple-choice questions).
+    # Its multiple_choice is a distinct, larger regeneration of the v1.1 subset
+    # of the same name, so both are carried.
+    nemotron_specialized_v1_2 = _rows_nemotron(
+        NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+        "nemotron_specialized_v1_2",
+        {
+            "nemotron_specialized_v1_2/fact_seeking": 34.264249298,
+            "nemotron_specialized_v1_2/generative": 0.657347056,
+            "nemotron_specialized_v1_2/moral_scenarios": 0.014813270,
+            "nemotron_specialized_v1_2/multiple_choice": 6.826340523,
+        },
+    )
+    nemotron_legal = _rows_nemotron(
+        NEMOTRON_PRETRAINING_LEGAL_V1,
+        "nemotron_legal",
+        {
+            "nemotron_legal/california_code_of_regulations": 0.033064243,
+            "nemotron_legal/case_law_summary": 0.027076493,
+            "nemotron_legal/casehold": 3.839242351,
+            "nemotron_legal/definition_classification": 0.001354030,
+            "nemotron_legal/diversity_jurisdiction": 0.000837717,
+            "nemotron_legal/ecfr": 0.122605305,
+            "nemotron_legal/ecfr_qa": 0.549815436,
+            "nemotron_legal/function_of_decision": 0.023167261,
+            "nemotron_legal/globalcit": 0.007366386,
+            "nemotron_legal/legalbench_cuad_v2": 0.047987198,
+            "nemotron_legal/nycourts_judicial_ethics_opinions": 0.004178264,
+        },
+    )
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
@@ -345,8 +425,11 @@ def all_sources() -> dict[str, DatakitSource]:
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
+        *biocollection,
         *common_pile,
         *finepdfs,
+        *dolma3_5_code,
+        *dolma4pdfs,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,
@@ -355,6 +438,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *nemotron_specialized_v1_2,
+        *nemotron_legal,
         *safety_pretraining,
     )
 

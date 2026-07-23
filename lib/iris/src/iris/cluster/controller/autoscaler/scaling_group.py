@@ -19,7 +19,7 @@ from enum import Enum, StrEnum
 from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.chaos import chaos_raise
-from iris.cluster.config import ScaleGroupConfig, ScaleGroupResources, SliceConfig, WorkerConfig
+from iris.cluster.config import ScaleGroupConfig, ScaleGroupResources, SliceConfig, WorkerConfig, slice_template_region
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
     AttributeValue,
@@ -435,11 +435,7 @@ class ScalingGroup:
         template = self._config.slice_template
         if template is None:
             return None
-        if template.gcp is not None and template.gcp.zone:
-            return template.gcp.zone.rsplit("-", 1)[0]
-        if template.coreweave is not None and template.coreweave.region:
-            return template.coreweave.region
-        return None
+        return slice_template_region(template)
 
     @property
     def zone(self) -> str | None:

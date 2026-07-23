@@ -219,7 +219,6 @@ def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(
     config = dataclasses.replace(
         _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
         n_generations_per_prompt=16,
-        train_decoding_top_k=4096,
     )
     job_config = _build_rl_job_config(
         name="rl-test",
