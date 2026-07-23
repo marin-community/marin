@@ -140,6 +140,8 @@ class GrugModelConfig:
     # Identity-init -> inert at step 0. Off in the barebones default (SCALE_SCONV=1).
     sconv: bool = False
     sconv_kernel: int = 4
+    # Which of the 4 SConv sites are active (subset of "k","v","attn","mlp"); default all four.
+    sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -286,8 +288,8 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
             # Zero-init -> 2*sigmoid(0) == 1 pass-through at step 0, identical to the no-gate model.
             attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv else None),
-            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv else None),
+            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
         )
 
@@ -576,8 +578,12 @@ class Block(eqx.Module):
             mlp_gated_norm=mlp_gated_norm,
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
-            sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv else None),
-            sconv_mlp=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv else None),
+            sconv_attn=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
+            ),
+            sconv_mlp=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+            ),
         )
 
     @named_call

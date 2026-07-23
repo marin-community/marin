@@ -149,6 +149,9 @@ def build_scale_model() -> GrugModelConfig:
         qb_routing=os.environ.get("SCALE_MOE_QB") == "1",
         sconv=os.environ.get("SCALE_SCONV") == "1",
         sconv_kernel=env_int("SCALE_SCONV_KERNEL", 4),
+        sconv_sites=tuple(
+            s.strip() for s in os.environ.get("SCALE_SCONV_SITES", "k,v,attn,mlp").split(",") if s.strip()
+        ),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
