@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Object-store staging and proxy-path adaptation for hosted XProf."""
+"""Serve allowlisted object-store profiles through XProf."""
 
 import gzip
 import hashlib
@@ -35,7 +35,7 @@ WsgiApplication = Callable[[dict, StartResponse], Iterable[bytes]]
 
 
 class ProfileSourceError(ValueError):
-    """The requested object-store path is outside the profile service policy."""
+    """Raised when a profile URI is outside the service policy."""
 
 
 class ProfileSourcePolicy:
@@ -47,7 +47,7 @@ class ProfileSourcePolicy:
         self._allowed_buckets = allowed_buckets
 
     def validate(self, uri: str) -> str:
-        """Return a normalized URI or reject it before any storage access."""
+        """Validate and normalize an object-store URI."""
         source = StoragePath(uri)
         if source.scheme not in ("gs", "s3"):
             raise ProfileSourceError("profile URI must use gs:// or s3://")
@@ -63,7 +63,7 @@ class ProfileSourcePolicy:
 
 
 class ProfileCache:
-    """Atomically stage approved profile trees into a persistent local cache."""
+    """Stage profiles atomically in a local cache."""
 
     def __init__(self, cache_dir: Path, policy: ProfileSourcePolicy):
         self._cache_dir = cache_dir
@@ -76,7 +76,7 @@ class ProfileCache:
         return self._policy.validate(uri)
 
     def stage(self, uri: str) -> Path:
-        """Download one profile tree once and return its stable local path."""
+        """Return the cached XProf run path."""
         source_uri = self.validate(uri)
         cache_key = hashlib.sha256(source_uri.encode()).hexdigest()[:24]
         target = self._cache_dir / cache_key
@@ -112,7 +112,7 @@ class ProfileCache:
 
 
 class ProfileStager(Protocol):
-    """Boundary used by the web gateway to validate and stage a profile URI."""
+    """Validate and stage profile trees."""
 
     def validate(self, uri: str) -> str: ...
 
@@ -120,7 +120,7 @@ class ProfileStager(Protocol):
 
 
 class ProfileStageManager:
-    """Run downloads off-request so Iris's proxy timeout does not bound staging."""
+    """Stage profiles outside the Iris request timeout."""
 
     def __init__(self, stager: ProfileStager, max_workers: int = 4, max_retained: int = 256):
         self._stager = stager
@@ -133,7 +133,7 @@ class ProfileStageManager:
         return self._stager.validate(uri)
 
     def future(self, uri: str) -> Future[Path]:
-        """Return the existing staging operation or submit a new one."""
+        """Return or start the staging task for ``uri``."""
         with self._lock:
             future = self._futures.get(uri)
             if future is None:
@@ -147,7 +147,6 @@ class ProfileStageManager:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def discard(self, uri: str, future: Future[Path]) -> None:
-        """Forget a failed operation so a later browser refresh can retry it."""
         with self._lock:
             if self._futures.get(uri) is future:
                 self._futures.pop(uri)
@@ -161,7 +160,7 @@ class ProfileStageManager:
 
 
 class XprofGateway:
-    """Serve health/open routes and delegate the complete XProf application."""
+    """Serve gateway routes and delegate XProf routes."""
 
     def __init__(self, xprof_app: WsgiApplication, profiles: ProfileStageManager, public_path: str):
         self._xprof_app = xprof_app
@@ -199,7 +198,9 @@ class XprofGateway:
         except Exception as exc:
             self._profiles.discard(normalized_uri, future)
             logger.exception("Failed to stage XProf profile %s", normalized_uri)
-            return _response(start_response, "502 Bad Gateway", f"profile staging failed: {exc}\n".encode(), "text/plain")
+            return _response(
+                start_response, "502 Bad Gateway", f"profile staging failed: {exc}\n".encode(), "text/plain"
+            )
 
         location = f"{self._public_path}/?{urlencode({'run_path': str(local_path)})}"
         start_response("303 See Other", [("Location", location), ("Content-Length", "0")])
@@ -231,9 +232,7 @@ class XprofGateway:
         if content_encoding == "gzip":
             body = gzip.compress(body)
         rewritten_headers = [
-            (name, value)
-            for name, value in headers
-            if name.lower() not in ("content-length", "etag", "content-md5")
+            (name, value) for name, value in headers if name.lower() not in ("content-length", "etag", "content-md5")
         ]
         rewritten_headers.append(("Content-Length", str(len(body))))
         start_response(status, rewritten_headers)

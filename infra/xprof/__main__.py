@@ -1,13 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pulumi entry point for the always-on Iris XProf service."""
-
 import pulumi
+from config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME, XPROF_PACKAGE
 from iac.iris.service import IrisService, IrisServiceArgs
 from iris.cluster.types import ResourceSpec
-
-from config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME, XPROF_PACKAGE
 
 
 def main() -> None:

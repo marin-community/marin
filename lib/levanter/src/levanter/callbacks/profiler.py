@@ -74,7 +74,7 @@ class ProfileOptionsConfig:
 
 @dataclass(frozen=True)
 class XprofUploadConfig:
-    """TTL storage and hosted XProf settings for one profiling run."""
+    """XProf upload settings."""
 
     enabled: bool = True
     ttl_days: int = 7
@@ -82,14 +82,10 @@ class XprofUploadConfig:
     service_url: str = DEFAULT_XPROF_SERVICE_URL
 
     def destination_for_run(self, run_id: str) -> str:
-        """Return the profile root, deriving a region-local TTL path when needed."""
+        """Resolve the run's upload root."""
         if self.destination is not None:
             return str(StoragePath(self.destination) / run_id)
         return marin_temp_bucket(self.ttl_days, prefix=f"xprof/{run_id}")
-
-    def viewer_url(self, profile_uri: str) -> str:
-        """Return the hosted XProf URL for an uploaded profile root."""
-        return xprof_viewer_url(self.service_url, profile_uri)
 
 
 @dataclass(frozen=True)
@@ -124,7 +120,7 @@ class ProfilerConfig:
         return max(0, total_prof_steps)
 
     def build(self, path: str, run_id: str, num_steps: int | None = None) -> Callable[[StepInfo], None]:
-        """Build the scheduled callback, including its TTL upload destination."""
+        """Build the scheduled profiler callback."""
         if num_steps is None:
             num_steps = self.num_steps
         upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
@@ -158,7 +154,7 @@ def profile(
     upload_uri: str | None = None,
     xprof_service_url: str | None = None,
 ) -> Callable[[StepInfo], None]:
-    """Schedule a JAX XPlane capture and optionally upload it for hosted XProf."""
+    """Schedule a JAX XPlane capture."""
     profile_path = StoragePath(path)
     if not profile_path.is_local:
         raise ValueError(f"JAX profiler capture path must be local, got {path}")
@@ -210,8 +206,7 @@ def profile(
                 )
             else:
                 logger.info("Stopping profiler.")
-            # gcloud ssh does not reliably flush stdout while stop_trace blocks for a
-            # Perfetto link, so keep the terminal alive until the call returns.
+            # Keep gcloud SSH output alive while Perfetto link creation blocks.
             event = threading.Event()
             if create_perfetto_link and jax.process_index() == 0:
                 _flush_while_waiting(event)
@@ -233,8 +228,7 @@ def profile(
                 logger.exception("Failed to upload XProf profile to %s", upload_uri)
 
         if upload_uri is not None:
-            # Upload errors are held until every process reaches this bounded
-            # barrier, avoiding a healthy host waiting forever for a failed peer.
+            # All processes must reach the same barrier before an upload error propagates.
             barrier_sync()
         profile_window_started = False
         if upload_error is not None:

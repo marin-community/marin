@@ -34,8 +34,8 @@ profile with no XPlane protobuf.
 
 ## Capture Profiles
 Use Levanter profiler flags so profiles land under
-`<trainer.log_dir>/<run_id>/profiler`, upload to the `MARIN_PREFIX` TTL store,
-and print a hosted XProf link:
+`<trainer.log_dir>/<run_id>/profiler`. Remote Marin runs also upload to
+`MARIN_PREFIX` TTL storage and print an XProf link:
 
 ```bash
 uv run ... \
@@ -59,13 +59,10 @@ uv run ... \
   --trainer.profiler.profile_options.enable_hlo_proto true
 ```
 
-Keep the profiler window short when enabling HLO protobuf collection — it
-enlarges artifacts and can increase profile upload/finalization time.
-The `XProf profile:` log line is emitted after all selected JAX processes finish
-their uploads. Open it through the authenticated Iris proxy; do not copy the
-underlying object tree to another GCS region for inspection.
-For a deliberately local-only capture, set
-`--trainer.profiler.upload.enabled false`.
+HLO protobufs increase artifact size, so keep their profile windows short. The
+`XProf profile:` link appears after upload. Set
+`--trainer.profiler.upload.enabled false` for local-only capture. Do not copy
+profiles to another GCS region for inspection.
 
 Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
 `trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,

@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Always-on XProf server registered behind the Iris endpoint proxy."""
-
 import logging
 import os
 import signal
@@ -36,7 +34,6 @@ def _xprof_application(grpc_port: int):
 
 
 def main() -> None:
-    """Configure storage, register the Iris endpoint, and serve XProf."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
 

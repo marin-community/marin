@@ -1,8 +1,5 @@
 name: "Ops - XProf"
 
-# Rolls the Pulumi-managed /ops/xprof Iris service when its gateway, service
-# component, or storage dependencies change. The dispatch input is the recovery
-# mechanism for resubmitting an otherwise unchanged service generation.
 on:
   push:
     branches:
