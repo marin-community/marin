@@ -30,6 +30,7 @@ from typing import cast
 
 from fray.iris_backend import IrisJobHandle
 from fray.types import ResourceConfig, create_environment
+from huggingface_hub import hf_hub_download
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.constraints import region_constraint
 from iris.cluster.setup_scripts import default_setup_script
@@ -176,6 +177,10 @@ class ServeSpec:
     Passed to :class:`~marin.inference.config.ServedModelConfig`."""
     instances: int = 1
     broker: BrokerConfig | None = None
+    auto_overrides: bool = True
+    """Derive text-eval vLLM options from the model's ``config.json`` (a GDN prefill backend, a
+    multimodal-off limit, a reasoning parser) and clamp ``max_model_len`` to the model's own context.
+    Explicit ``vllm_extra_args`` always win; an unreadable config leaves the explicit options alone."""
 
 
 @dataclass(frozen=True)
@@ -232,7 +237,80 @@ class _InferenceLaunch:
     broker: BrokerConfig | None
 
 
+def _has_vllm_option(args: tuple[str, ...], option: str) -> bool:
+    """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
+def _auto_serve_overrides_from_config(
+    model: str,
+    config: dict,
+    max_model_len: int | None,
+    existing_extra_args: tuple[str, ...],
+) -> tuple[tuple[str, ...], int | None]:
+    """Derive text-eval vLLM defaults from one model configuration.
+
+    Explicit options always win. A missing ``max_model_len`` stays missing so vLLM can use the model's
+    own default rather than silently imposing an arbitrary context window.
+    """
+    serialized_config = json.dumps(config).lower()
+    architectures = " ".join(config.get("architectures") or ()).lower()
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = config
+
+    derived: tuple[tuple[str, str], ...] = ()
+    if (
+        "gated_delta_net" in serialized_config
+        or "linear_attn" in serialized_config
+        or "qwen3next" in architectures
+        or "qwen3_5" in architectures
+        or "qwen3.5" in model.lower()
+        or "qwen3-next" in model.lower()
+    ):
+        derived += (("--gdn-prefill-backend", "triton"),)
+    if config.get("vision_config") or "forconditionalgeneration" in architectures:
+        derived += (("--limit-mm-per-prompt", '{"image":0,"video":0}'),)
+    if "qwen" in model.lower() and (
+        "thinking" in model.lower() or "qwen3.5" in model.lower() or "qwen3-next" in model.lower()
+    ):
+        derived += (("--reasoning-parser", "qwen3"),)
+
+    merged = list(existing_extra_args)
+    for option, value in derived:
+        if not _has_vllm_option(existing_extra_args, option):
+            merged.extend((option, value))
+
+    native_max_model_len = text_config.get("max_position_embeddings") or config.get("max_position_embeddings")
+    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+        max_model_len = min(max_model_len, int(native_max_model_len))
+    return tuple(merged), max_model_len
+
+
+def auto_serve_overrides(
+    model: str,
+    max_model_len: int | None,
+    existing_extra_args: tuple[str, ...] = (),
+) -> tuple[tuple[str, ...], int | None]:
+    """Read an HF model config and derive safe text-eval vLLM options from it.
+
+    Config inspection is an optional compatibility improvement: an unavailable private repository must
+    not prevent an otherwise valid explicitly-configured serve from launching.
+    """
+    try:
+        with open(hf_hub_download(model, "config.json")) as handle:
+            config = json.load(handle)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not inspect config.json for %s; using explicit serving options: %s", model, exc)
+        return existing_extra_args, max_model_len
+    return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
+
+
 def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _InferenceLaunch:
+    vllm_extra_args = spec.vllm_extra_args
+    max_model_len = spec.max_model_len
+    if spec.backend == ServeBackend.VLLM and spec.auto_overrides:
+        vllm_extra_args, max_model_len = auto_serve_overrides(model, spec.max_model_len, spec.vllm_extra_args)
     if spec.gpu_count is not None:
         resources = ResourceConfig.with_gpu(
             spec.gpu_type or "H100",
@@ -248,7 +326,7 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
                 source=VllmSource.MARIN_FORK,
                 startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
                 max_num_batched_tokens=spec.max_num_batched_tokens,
-                extra_args=(*spec.vllm_extra_args, *_QUIET_VLLM_ARGS),
+                extra_args=(*vllm_extra_args, *_QUIET_VLLM_ARGS),
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -271,7 +349,7 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
             engine = VllmEngineConfig(
                 startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
                 max_num_batched_tokens=spec.max_num_batched_tokens,
-                extra_args=(*spec.vllm_extra_args, *_QUIET_VLLM_ARGS),
+                extra_args=(*vllm_extra_args, *_QUIET_VLLM_ARGS),
             )
             environment = create_environment(extras=["tpu", "vllm"], env_vars=_propagated_env())
         else:
@@ -282,7 +360,7 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
             model=model,
             tokenizer=tokenizer,
             dtype=spec.dtype,
-            max_model_len=spec.max_model_len,
+            max_model_len=max_model_len,
             tensor_parallel_size=spec.tensor_parallel_size,
             chat_template_content=spec.chat_template_content,
         ),
