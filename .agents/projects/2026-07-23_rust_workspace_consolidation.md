@@ -445,8 +445,9 @@ old paths — `rust_mode.py`, the root `pyproject.toml` exclude/sources,
 `rust-checks.yaml`, each release workflow (working dir + `paths` filters) and its
 `build_package.py`, the finelog and iris Dockerfiles, `select_tests.py`, and
 CODEOWNERS. Leaving `rust-checks.yaml` or a release workflow on a stale
-`--manifest-path lib/<pkg>/rust` is the failure codex flagged: the job runs
-against a path that no longer exists. No shared crate and no arrow bump yet —
+`--manifest-path lib/<pkg>/rust` runs the job against a path that no longer
+exists, so every consumer must move in the same commit. No shared crate and no
+arrow bump yet —
 this PR reproduces today's wheels modulo the pyo3 already unified in 1a. `arrow`
 stays split (finelog 58, dupekit 57.1) for now, allowlisted in the `cargo-deny`
 duplicate policy; a workspace tolerates the duplicate, and forcing dupekit's
