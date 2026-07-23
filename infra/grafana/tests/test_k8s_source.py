@@ -630,8 +630,6 @@ def test_k8s_routes_serve_fleet_rows():
         "/k8s/pending",
         "/k8s/kueue",
         "/k8s/events",
-        "/k8s/finelog",
-        "/k8s/finelog_events",
         "/k8s/gpu_racks",
     ):
         assert client.get(path).status_code == 200
@@ -646,6 +644,47 @@ def test_k8s_routes_serve_fleet_rows():
         "instance_type": "gb200-4x",
         "trays_total": 1,
         "trays_ready": 1,
+    }
+
+
+def test_finelog_route_serializes_pod_diagnostics():
+    routes = healthy_k8s_routes()
+    finelog_pod = pod("iris", "finelog-cw-a-abc", restarts=2)
+    finelog_pod["spec"]["nodeName"] = "cpu-1"
+    finelog_pod["status"]["phase"] = "Running"
+    finelog_pod["status"]["containerStatuses"] = [
+        {
+            "name": "finelog",
+            "ready": True,
+            "restartCount": 2,
+            "state": {"running": {}},
+            "lastState": {"terminated": {"reason": "Error", "exitCode": 137}},
+        }
+    ]
+    routes["/api/v1/namespaces/iris/pods"] = [finelog_pod]
+
+    response = _client(_fleet(("cw-a", k8s_api(routes)))).get("/k8s/finelog")
+
+    assert response.status_code == 200
+    (row,) = response.json()
+    assert {
+        "cluster": row["cluster"],
+        "deployment": row["deployment"],
+        "pod": row["pod"],
+        "node": row["node"],
+        "phase": row["phase"],
+        "ready": row["ready"],
+        "restarts": row["restarts"],
+        "last_exit_code": row["last_exit_code"],
+    } == {
+        "cluster": "cw-a",
+        "deployment": "finelog-cw-a",
+        "pod": "finelog-cw-a-abc",
+        "node": "cpu-1",
+        "phase": "Running",
+        "ready": True,
+        "restarts": 2,
+        "last_exit_code": 137,
     }
 
 

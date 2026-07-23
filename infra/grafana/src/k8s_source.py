@@ -397,7 +397,7 @@ class K8sSource:
         ]
 
     def finelog_pods(self) -> list[FinelogPod]:
-        """Runtime and provisioning details for every finelog pod in this cluster."""
+        """Report each finelog Deployment, including a Missing row when it has no pod."""
         rows = []
         for deployment in self._finelog_deployments():
             metadata = deployment.get("metadata") or {}
