@@ -80,42 +80,88 @@ def decode_embedding(blob: bytes | None) -> list[float] | None:
     return list(struct.unpack(f"<{count}f", blob))
 
 
-def chunk_rows(corpus: Path):
-    src = sqlite3.connect(corpus)
-    placeholders = ",".join("?" * len(SOURCES))
-    rows = src.execute(
-        f"SELECT {', '.join(CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
-        SOURCES,
-    ).fetchall()
-    for row in rows:
-        record = dict(zip(CHUNK_COLUMNS, row, strict=True))
-        record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
-        record["embedding"] = decode_embedding(record["embedding"])
-        yield record
+def chunk_record(row: tuple) -> dict:
+    record = dict(zip(CHUNK_COLUMNS, row, strict=True))
+    record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
+    record["embedding"] = decode_embedding(record["embedding"])
+    return record
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
-    """Upsert every github/discord chunk; delete rows gone upstream. Returns (upserted, deleted)."""
-    records = list(chunk_rows(corpus))
-    statement = pg_insert(schema.chunks)
-    statement = statement.on_conflict_do_update(
-        index_elements=[schema.chunks.c.id],
-        set_={name: statement.excluded[name] for name in CHUNK_COLUMNS if name != "id"},
+    """Upsert every github/discord chunk; delete rows gone upstream. Returns (upserted, deleted).
+
+    Streams one BATCH of decoded rows at a time: the decoded embeddings are ~30x larger
+    than their sqlite blobs (73k rows of boxed floats exceed the job's memory), so only
+    the id list is held for the whole corpus. Each batch is one multi-row VALUES statement
+    — executemany with ON CONFLICT falls back to a round-trip per row (~80 rows/s over
+    the connector socket vs ~600/s batched).
+    """
+    placeholders = ",".join("?" * len(SOURCES))
+    cursor = sqlite3.connect(corpus).execute(
+        f"SELECT {', '.join(CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
+        SOURCES,
     )
-    for start in range(0, len(records), BATCH):
-        conn.execute(statement, records[start : start + BATCH])
+    ids: list[int] = []
+    started = time.time()
+    while rows := cursor.fetchmany(BATCH):
+        records = [chunk_record(row) for row in rows]
+        statement = pg_insert(schema.chunks).values(records)
+        statement = statement.on_conflict_do_update(
+            index_elements=[schema.chunks.c.id],
+            set_={name: statement.excluded[name] for name in CHUNK_COLUMNS if name != "id"},
+        )
+        conn.execute(statement)
+        ids.extend(record["id"] for record in records)
+        if len(ids) % 8000 == 0:
+            print(f"  upserted {len(ids)} rows ({len(ids) / (time.time() - started):.0f}/s)")
 
     deleted = conn.execute(
-        sqlalchemy.delete(schema.chunks)
-        .where(schema.chunks.c.source.in_(SOURCES))
-        .where(schema.chunks.c.id.not_in([r["id"] for r in records]))
+        sqlalchemy.delete(schema.chunks).where(schema.chunks.c.source.in_(SOURCES)).where(schema.chunks.c.id.not_in(ids))
     ).rowcount
-    return len(records), deleted
+    return len(ids), deleted
+
+
+def fetch_manifest() -> dict:
+    with mirror_open("/manifest.json", timeout=30) as response:
+        return json.load(response)
+
+
+def corpus_build_epoch(path: Path) -> int:
+    """The build epoch a corpus file claims for itself, after an integrity check."""
+    db = sqlite3.connect(path)
+    try:
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("corpus failed sqlite integrity check")
+        return int(db.execute("SELECT value FROM meta WHERE key = 'built_at_epoch'").fetchone()[0])
+    finally:
+        db.close()
+
+
+def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
+    """Download the corpus and return the build epoch actually downloaded.
+
+    The manifest sha is the fast path. marinmirror rebuilds every ~90 minutes, so a
+    mismatch usually means the corpus was replaced mid-download — refetch and retry.
+    The manifest and corpus can also skew for a whole build (observed: a manifest ahead
+    of a regressed corpus file), so after the retries a mismatched file is still
+    accepted if it passes sqlite integrity and self-reports its build epoch.
+    """
+    error: RuntimeError | None = None
+    for _ in range(attempts):
+        try:
+            download_corpus(dest, manifest["corpus_index"]["sha256"])
+            return manifest["built_at_epoch"]
+        except RuntimeError as caught:
+            error = caught
+            print(f"{caught}; refetching manifest")
+            manifest = fetch_manifest()
+    built = corpus_build_epoch(dest)
+    print(f"{error}; accepting intact corpus self-reporting build {built} (manifest/corpus skew)")
+    return built
 
 
 def main() -> int:
-    with mirror_open("/manifest.json", timeout=30) as response:
-        manifest = json.load(response)
+    manifest = fetch_manifest()
     built = manifest["built_at_epoch"]
 
     engine = make_engine()
@@ -128,7 +174,10 @@ def main() -> int:
     start = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         corpus = Path(tmp) / "corpus-index.db"
-        download_corpus(corpus, manifest["corpus_index"]["sha256"])
+        built = fetch_corpus(corpus, manifest)
+        if watermark is not None and watermark >= built:
+            print(f"up to date: downloaded corpus is build {built}, already synced")
+            return 0
         print(f"downloaded corpus build {built} ({corpus.stat().st_size >> 20} MB)")
         with engine.begin() as conn:
             upserted, deleted = upsert_chunks(conn, corpus)
