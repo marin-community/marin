@@ -36,15 +36,18 @@ Env knobs (all optional; defaults = the Qwen3-30B-A3B-Thinking-2507 pathfinder, 
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
 import uuid
 from pathlib import Path
 
+from huggingface_hub import hf_hub_download
 from iris.cli.connect import open_iris_client
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
+from marin.evaluation.evaluation_config import EvalTaskConfig
 
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalchemyEvalConfig,
@@ -52,15 +55,12 @@ from experiments.evals.evalchemy.serve_and_eval import (
     ServeSpec,
     serve_and_eval,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
 
 CLUSTER = os.environ.get("EVAL_CLUSTER", "cw-us-east-02a")
 # :evalchemy-gpu (built via evalchemy infra/docker/build_evalchemy_gpu_kaniko.sh, PR #18) — CPU-only eval
 # client; python at /opt/eval/evalchemy/.venv. Pinned to evalchemy main HEAD 676fb85f which carries #28
 # (per-sample records now persist for lm-eval-native tasks under --log_samples → offline rescore, e.g. drop).
-EVAL_IMAGE = os.environ.get(
-    "EVAL_IMAGE", "ghcr.io/open-thoughts/openthoughts-agent:evalchemy-gpu-676fb85f"
-)
+EVAL_IMAGE = os.environ.get("EVAL_IMAGE", "ghcr.io/open-thoughts/openthoughts-agent:evalchemy-gpu-676fb85f")
 EVAL_PYTHON = os.environ.get("EVAL_PYTHON", "/opt/eval/evalchemy/.venv/bin/python")
 
 # --- Tier 1: 14 lm-eval-harness tasks (POLICY §3; per-task shots). 1 run, seed 42. ---
@@ -87,7 +87,7 @@ TIER1_TASKS = (
 #     AIME24 = 10-seed (42..51) via EVAL_TIER=2 seed handling in the driver/client. ---
 TIER2_TASKS = (
     EvalTaskConfig("MATH500", 0, generation=True),
-    # AIME24 is NOT here — it runs as a dedicated 10-seed μ±σ set (EVAL_TASK_SET=aime24_seeds).
+    # AIME24 is NOT here; it runs as a dedicated 10-seed mean/stddev set (EVAL_TASK_SET=aime24_seeds).
     EvalTaskConfig("HumanEvalPlus", 0, generation=True, unsafe_code=True, completion_only=True),
     EvalTaskConfig("MBPPPlus", 0, generation=True, unsafe_code=True, completion_only=True),
     # MMLUPro DEFERRED — fork construction load_dataset fails (not a clean pip dep); N/A in RESULTS.
@@ -125,16 +125,21 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
     mml = requested_max_model_len
     cfg: dict = {}
     try:
-        import json as _json
-        from huggingface_hub import hf_hub_download
-        cfg = _json.load(open(hf_hub_download(model, "config.json")))
-    except Exception as e:  # noqa: BLE001
+        with open(hf_hub_download(model, "config.json")) as config_file:
+            cfg = json.load(config_file)
+    except Exception as e:
         print(f"[warn] config.json fetch failed for {model}: {e!r}; using request defaults")
-    txt = __import__("json").dumps(cfg).lower()
+    txt = json.dumps(cfg).lower()
     arch = " ".join(cfg.get("architectures") or []).lower()
     tcfg = cfg.get("text_config", cfg) if isinstance(cfg.get("text_config", cfg), dict) else cfg
-    if ("gated_delta_net" in txt or "linear_attn" in txt or "qwen3next" in arch
-            or "qwen3_5" in arch or "qwen3.5" in model.lower() or "qwen3-next" in model.lower()):
+    if (
+        "gated_delta_net" in txt
+        or "linear_attn" in txt
+        or "qwen3next" in arch
+        or "qwen3_5" in arch
+        or "qwen3.5" in model.lower()
+        or "qwen3-next" in model.lower()
+    ):
         extra += ["--gdn-prefill-backend", "triton"]
     if cfg.get("vision_config") or "forconditionalgeneration" in arch:
         extra += ["--limit-mm-per-prompt", '{"image":0,"video":0}']
@@ -156,7 +161,7 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
 # EMPTY results — the bug this bakes out), the atomic <|start_think|>/<|end_think|> delimiters intact,
 # the Delphi chat_template (NOT the generic `main` /think template), and the answer-channel loop curbed.
 # Every value below is a DEFAULT — the matching EVAL_* env var still overrides it.
-PROMPT_HEADROOM = 4096  # min context reserved for the prompt; default gen budget = max_model_len − this.
+PROMPT_HEADROOM = 4096  # Min context reserved for the prompt; default gen budget = max_model_len - this.
 GRUG_THINKING_MODELS = {"penfever/grug-67b-a2b-sft-s2-thinking-step630"}
 CANONICAL_AIME_SEEDS = (42, 43, 44)
 
@@ -184,8 +189,7 @@ def _grug_profile(model: str) -> dict:
         # Grug MoE expert-parallel serve; --revision selects the Delphi-template checkpoint.
         # ``distributed`` was a RunAI-streamer loader option. The canonical local-weight path
         # uses vLLM's ``auto`` loader, which rejects it as an unknown loader extra config.
-        "vllm_extra_args": ("--data-parallel-size", "8", "--enable-expert-parallel",
-                            "--revision", "delphi-v0-think"),
+        "vllm_extra_args": ("--data-parallel-size", "8", "--enable-expert-parallel", "--revision", "delphi-v0-think"),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
         # loops (marin #7321) so long-CoT MATH500/GPQA samples terminate + box within the gen budget.
@@ -198,9 +202,8 @@ def _grug_chat_template(model: str, revision: str) -> str | None:
     <|start_think|>/<|end_think|> machinery). cw nodes have egress. Returns None on failure so the serve
     degrades to the repo's own template rather than hard-failing the launch."""
     try:
-        from huggingface_hub import hf_hub_download  # noqa: PLC0415
         return Path(hf_hub_download(model, "chat_template.jinja", revision=revision)).read_text()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[warn] grug chat_template fetch failed (rev={revision}): {e!r}; using served repo template")
         return None
 
@@ -215,24 +218,31 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # Tier-2 budget is MODEL-CLASS-dependent: thinking/GDN models need ~30720 (near-full 32k) for
     # their CoT + boxed answer under the chat template; instruct models finish at 20480. Tier-1 uses
     # 20480 (completion-style, shorter). AIME already forces 30720 via EVAL_MAX_GEN_TOKS in the launcher.
-    # grug thinking: size the gen budget to LEAVE prompt headroom (max_model_len − PROMPT_HEADROOM =
+    # grug thinking: size the gen budget to LEAVE prompt headroom (max_model_len - PROMPT_HEADROOM =
     # 28672 @ 32k) so the CoT budget can't starve a long prompt into a context overflow → EMPTY result
     # (marin #7321). Other thinking/GDN models keep the historical near-full 30720; instruct 20480.
-    _default_gen = (max_model_len - PROMPT_HEADROOM) if prof else (30720 if (tier == 2 and _is_thinking(model)) else 20480)
+    _default_gen = max_model_len - PROMPT_HEADROOM if prof else 30720 if tier == 2 and _is_thinking(model) else 20480
     max_gen_toks = int(os.environ.get("EVAL_MAX_GEN_TOKS", str(_default_gen)))
     num_concurrent = int(os.environ.get("EVAL_NUM_CONCURRENT", "16"))
     # Per-model serve mitigations (GDN triton / limit-mm / native-context cap) derived automatically
     # from config.json — durable + identical across tiers, no hand-passed flags.
     # grug thinking: default the serve args to the expert-parallel + delphi-v0-think-revision set (env wins).
-    env_extra = (tuple(os.environ["EVAL_VLLM_EXTRA_ARGS"].split()) if os.environ.get("EVAL_VLLM_EXTRA_ARGS")
-                 else tuple(prof.get("vllm_extra_args", ())))
+    env_extra = (
+        tuple(os.environ["EVAL_VLLM_EXTRA_ARGS"].split())
+        if os.environ.get("EVAL_VLLM_EXTRA_ARGS")
+        else tuple(prof.get("vllm_extra_args", ()))
+    )
     auto_extra, max_model_len = _auto_serve_overrides(model, max_model_len)
     # Merge: env-passed flags win; append an auto flag only if its flag-name isn't already present.
     merged = list(env_extra)
     i = 0
     while i < len(auto_extra):
         flag = auto_extra[i]
-        pair = auto_extra[i:i + 2] if (i + 1 < len(auto_extra) and not auto_extra[i + 1].startswith("--")) else auto_extra[i:i + 1]
+        pair = (
+            auto_extra[i : i + 2]
+            if (i + 1 < len(auto_extra) and not auto_extra[i + 1].startswith("--"))
+            else auto_extra[i : i + 1]
+        )
         if flag not in merged:
             merged += list(pair)
         i += len(pair)
@@ -253,8 +263,11 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # harvested HumanEvalPlus). Applies on the tier-2 path; num_fewshot 0 (tier-2 is all 0-shot chat).
     if tier == 2 and os.environ.get("EVAL_TIER2_TASKS"):
         selected = {task.name: task for task in TIER2_TASKS}
-        tasks = tuple(selected.get(name.strip(), EvalTaskConfig(name.strip(), 0, generation=True))
-                      for name in os.environ["EVAL_TIER2_TASKS"].split(",") if name.strip())
+        tasks = tuple(
+            selected.get(name.strip(), EvalTaskConfig(name.strip(), 0, generation=True))
+            for name in os.environ["EVAL_TIER2_TASKS"].split(",")
+            if name.strip()
+        )
     # Fast diagnostic smoke: a generative task (gsm8k) + an MC/loglikelihood task (hellaswag), small
     # --limit → proves BOTH request types score non-empty over local-completions before the full suite.
     if os.environ.get("EVAL_SMOKE") == "1":
@@ -368,8 +381,10 @@ def main() -> None:
             env_vars[k] = os.environ[k]
 
     name = f"marinbase-eval-{_slug(model)}-t{tier}{('-' + suffix) if suffix else ''}-{uuid.uuid4().hex[:6]}"
-    print(f"MODEL={model}  TIER={tier}  TP={config.serve.tensor_parallel_size}  "
-          f"max_model_len={config.serve.max_model_len}  out_path={config.out_path}")
+    print(
+        f"MODEL={model}  TIER={tier}  TP={config.serve.tensor_parallel_size}  "
+        f"max_model_len={config.serve.max_model_len}  out_path={config.out_path}"
+    )
     print(f"TASKS={[t.name + '@' + str(t.num_fewshot) for t in config.tasks]}")
     print(f"EVAL_IMAGE={EVAL_IMAGE}")
 
@@ -387,9 +402,11 @@ def main() -> None:
         print("SUBMITTED_JOB_ID:", job_id)
         print("JOB_NAME:", name)
         print("SUBMIT_MS:", submit_ms)
-        print(f"LOG_CMD: KUBECONFIG=~/.kube/coreweave-iris-gpu "
-              f"/Users/benjaminfeuer/miniconda3/envs/otagent/bin/iris --cluster={CLUSTER} "
-              f"job logs {job_id} --since-ms {submit_ms} --max-lines 400 --no-tail")
+        print(
+            f"LOG_CMD: KUBECONFIG=~/.kube/coreweave-iris-gpu "
+            f"/Users/benjaminfeuer/miniconda3/envs/otagent/bin/iris --cluster={CLUSTER} "
+            f"job logs {job_id} --since-ms {submit_ms} --max-lines 400 --no-tail"
+        )
 
 
 if __name__ == "__main__":

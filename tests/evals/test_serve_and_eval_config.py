@@ -17,8 +17,8 @@ from typing import cast
 from iris.client import Job
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
 from experiments.evals.evalchemy.marin_evalchemy_gpu import CANONICAL_AIME_SEEDS, _aime_seeds, _grug_profile
+from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
     EvalUnit,
@@ -160,7 +160,9 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
 
 def test_client_forwards_seed_and_extra_generation_kwargs():
     unit = _unit(tasks=(EvalTaskConfig("AIME24", 0, task_kwargs={"seed": 43}, generation=True),))
-    config = _payload(session=_session(apply_chat_template=True, extra_gen_kwargs={"skip_special_tokens": "false"}), unit=unit)
+    config = _payload(
+        session=_session(apply_chat_template=True, extra_gen_kwargs={"skip_special_tokens": "false"}), unit=unit
+    )
     cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
 
     assert cmd[cmd.index("--seed") + 1] == "43"
