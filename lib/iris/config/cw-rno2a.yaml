@@ -41,9 +41,6 @@ provisioning:
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
       manager_memory_limit: 2Gi
-      # Kueue's 20-QPS/30-burst defaults starve its 10-second leader lease when this
-      # cluster's thousands of Pods and Workloads resync after a controller restart.
-      client_connection: { qps: 100, burst: 200 }
     ingress:
       ingress_class: traefik
       acme_email: ops@openathena.ai

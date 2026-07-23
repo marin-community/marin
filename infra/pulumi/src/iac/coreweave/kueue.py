@@ -83,8 +83,8 @@ class KueueAddon(pulumi.ComponentResource):
         helm_values = build_cks_values(
             [args.namespace],
             manager_memory_limit=args.spec.manager_memory_limit,
-            client_connection_qps=None if client_connection is None else client_connection.qps,
-            client_connection_burst=None if client_connection is None else client_connection.burst,
+            client_connection_qps=client_connection.qps,
+            client_connection_burst=client_connection.burst,
         )
 
         # The cks-kueue Helm release. Webhooks scoped to args.namespace via the manager config.

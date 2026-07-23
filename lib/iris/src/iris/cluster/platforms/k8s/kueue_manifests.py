@@ -59,6 +59,13 @@ CKS_KUEUE_FEATURE_GATES = [
 # build_controller_manager_config for why a broad selector is dangerous.
 DEFAULT_POD_NAMESPACES = ("iris",)
 
+# Kueue's Kubernetes API client is shared by reconcilers, event recording, and
+# leader election. Iris clusters routinely carry enough Pods and Workloads for
+# Kueue's upstream 20-QPS/30-burst defaults to delay a lease renewal during a
+# restart resync.
+DEFAULT_CLIENT_CONNECTION_QPS = 100.0
+DEFAULT_CLIENT_CONNECTION_BURST = 200
+
 # Standard k8s per-node label, the finest topology level.
 _K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
 
@@ -138,8 +145,8 @@ CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
 def build_controller_manager_config(
     pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     *,
-    client_connection_qps: float | None = None,
-    client_connection_burst: int | None = None,
+    client_connection_qps: float = DEFAULT_CLIENT_CONNECTION_QPS,
+    client_connection_burst: int = DEFAULT_CLIENT_CONNECTION_BURST,
 ) -> dict:
     """Return the kueue ``Configuration`` (controller-manager config) as a dict.
 
@@ -164,9 +171,6 @@ def build_controller_manager_config(
     it can't reach (no network yet) → the pod is rejected → the node never goes
     Ready. Opt-in scoping keeps the webhooks off every namespace but our own.
     """
-    if (client_connection_qps is None) != (client_connection_burst is None):
-        raise ValueError("client connection QPS and burst must be set together")
-
     config: dict[str, object] = {
         "apiVersion": "config.kueue.x-k8s.io/v1beta1",
         "kind": "Configuration",
@@ -194,12 +198,11 @@ def build_controller_manager_config(
         "integrations": {
             "frameworks": ["batch/job", "pod"],
         },
-    }
-    if client_connection_qps is not None and client_connection_burst is not None:
-        config["clientConnection"] = {
+        "clientConnection": {
             "qps": client_connection_qps,
             "burst": client_connection_burst,
-        }
+        },
+    }
     return config
 
 
@@ -207,8 +210,8 @@ def build_cks_values(
     pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     *,
     manager_memory_limit: str | None = None,
-    client_connection_qps: float | None = None,
-    client_connection_burst: int | None = None,
+    client_connection_qps: float = DEFAULT_CLIENT_CONNECTION_QPS,
+    client_connection_burst: int = DEFAULT_CLIENT_CONNECTION_BURST,
 ) -> dict:
     """Return the ``cks-kueue`` (CoreWeave) helm values (managerConfig only).
 

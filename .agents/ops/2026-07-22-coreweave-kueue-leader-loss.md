@@ -3,7 +3,7 @@ date: 2026-07-22
 system: coreweave
 severity: outage
 resolution: fixed
-pr: none
+pr: https://github.com/marin-community/marin/pull/7533
 issue: none
 ---
 
@@ -12,8 +12,8 @@ issue: none
 - `cw-rno2a` lost the `kueue-webhook-service` endpoint while `kueue-controller-manager` entered `CrashLoopBackOff`.
 - The observed restarts were not OOM kills. They exited with code 1 after the Kubernetes API client rate limiter delayed event writes past Kueue's 10-second leader-election renewal deadline.
 - The failure appeared during a resync with approximately 4,843 Pods and 3,080 Kueue Workloads. Kueue was using its 20-QPS, 30-request burst defaults.
-- `provisioning.coreweave.kueue.client_connection` now sets 100 QPS and a 200-request burst for `cw-rno2a`. A targeted Pulumi update rolled the controller; the replacement Pod became ready with zero restarts and restored the webhook endpoint.
-- The full preview also found an existing Cloudflare federation CNAME orphaned from the Pulumi program. The CNAME is declared and protected again, and an untargeted preview reports 29 unchanged resources.
+- Iris now renders 100 QPS and a 200-request burst by default for every Kueue installation. A targeted Pulumi update applied those values to `cw-rno2a`; the replacement Pod became ready with zero restarts and restored the webhook endpoint.
+- Full previews also found the existing Cloudflare federation CNAME in every CoreWeave stack orphaned from the Pulumi program. All four records are declared and protected again.
 
 ## Original problem report
 
@@ -29,17 +29,18 @@ Grafana fired `WebhookEndpointsEmpty cw-rno2a` for `kueue-system/kueue-webhook-s
 
 4. The manager ConfigMap had no `clientConnection` block, leaving Kueue v0.18.0 at its 20-QPS and 30-request burst defaults. The cluster held approximately 4,843 Pods and 3,080 Kueue Workloads. Restart resyncs produced event POST delays above 11 seconds, longer than the 10-second leader renewal deadline.
 
-5. `lib/iris/src/iris/cluster/platforms/k8s/kueue_manifests.py:138` gained an optional `clientConnection` renderer. `lib/iris/config/cw-rno2a.yaml:41` set 100 QPS and a 200-request burst while retaining the existing 2 GiB memory limit.
+5. `lib/iris/src/iris/cluster/platforms/k8s/kueue_manifests.py` gained a `clientConnection` renderer. The first recovery applied 100 QPS and a 200-request burst through `cw-rno2a`'s provisioning config while retaining the existing 2 GiB memory limit.
 
-6. An untargeted Pulumi preview proposed deleting `iris-cw-rno2a.oa.dev`, an unrelated Cloudflare CNAME still present in stack state. The Kueue recovery used a target restricted to the Helm release; no DNS or NodePool resource changed.
+6. An untargeted Pulumi preview proposed deleting `iris-cw-rno2a.oa.dev`, an unrelated Cloudflare CNAME still present in stack state. The Kueue recovery used a target restricted to the Helm release; no DNS or NodePool resource changed. Later previews found the same drift in the other three CoreWeave stacks.
 
 7. The targeted update completed in 43 seconds. Deployment revision 6 created `kueue-controller-manager-77cbc9bcd7-d5hcb`, and `kueue-webhook-service` published its ready endpoint at `10.0.1.139`.
 
-8. `infra/pulumi/src/iac/coreweave/dns.py` restored the exact Cloudflare component, provider, and record URNs already in state. The live CNAME still resolved to `iris-cw-rno2a.208261-marin-rn02a.coreweave.app`, and the final untargeted preview reported all 29 resources unchanged.
+8. `infra/pulumi/src/iac/coreweave/dns.py` restored the exact Cloudflare component, provider, and record URNs already in state. Each cluster config now declares the hostname and live target already recorded in its Pulumi state.
 
 ## User course corrections
 
-- After the targeted Kueue rollout succeeded, the operator asked for the orphaned Cloudflare CNAME to be fixed before finishing. This converted a one-off targeted-update workaround into a clean, non-destructive full-stack preview.
+- After the targeted Kueue rollout succeeded, the operator asked for the orphaned Cloudflare CNAME to be fixed before finishing. Full-stack previews showed that the same correction was required for all four existing CoreWeave records.
+- Because Iris control-plane load is similar across clusters, the operator asked to make 100 QPS and a 200-request burst the shared default rather than a `cw-rno2a` override.
 
 ## Root cause
 
@@ -49,7 +50,7 @@ The prior 2 GiB memory correction remained active. The sampled failures had expl
 
 ## Fix
 
-`lib/iris/src/iris/cluster/platforms/k8s/kueue_manifests.py` now renders explicit client rate limits when both values are configured:
+`lib/iris/src/iris/cluster/platforms/k8s/kueue_manifests.py` now renders these client rate limits by default for both CKS and upstream Kueue charts:
 
 ```yaml
 clientConnection:
@@ -57,9 +58,9 @@ clientConnection:
   burst: 200
 ```
 
-`infra/pulumi/src/iac/config.py` exposes the pair as a typed provisioning block, and `lib/iris/config/cw-rno2a.yaml` supplies the large-cluster override. Pulumi applied only the Kueue Helm release during recovery.
+`infra/pulumi/src/iac/config.py` exposes the pair as a typed provisioning block with the same shared defaults, while retaining per-cluster overrides. Pulumi applied only the `cw-rno2a` Kueue Helm release during recovery; other clusters will receive the defaults through their normal Pulumi updates.
 
-`infra/pulumi/src/iac/coreweave/dns.py` also declares the existing DNS-only Cloudflare record with deletion protection. The CoreWeave config carries its zone, hostname, and allocated LoadBalancer target. Operators load `cloudflare-oa-dns-token` into `CLOUDFLARE_API_TOKEN` for previews and updates.
+`infra/pulumi/src/iac/coreweave/dns.py` also declares each existing DNS-only Cloudflare record with deletion protection. Every CoreWeave config carries its zone, hostname, and allocated LoadBalancer target. Operators load `cloudflare-oa-dns-token` into `CLOUDFLARE_API_TOKEN` for previews and updates.
 
 ## How OPS.md could have shortened this
 
@@ -70,7 +71,6 @@ clientConnection:
 ## Artifacts
 
 - `.agents/ops/2026-07-22-coreweave-kueue-leader-loss.md`
-- `lib/iris/config/cw-rno2a.yaml`
 - `lib/iris/src/iris/cluster/platforms/k8s/kueue_manifests.py`
 - `infra/pulumi/src/iac/coreweave/dns.py`
 - Grafana alert: https://grafana.oa.dev/alerting/grafana/k8s-control-plane-crashloop/view?orgId=1

@@ -19,6 +19,10 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    DEFAULT_CLIENT_CONNECTION_BURST,
+    DEFAULT_CLIENT_CONNECTION_QPS,
+)
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from pydantic import BaseModel, Field
 from rigging.config_discovery import resolve_cluster_config
@@ -47,8 +51,8 @@ class CksClusterSpec(BaseModel):
 class KueueClientConnectionSpec(BaseModel):
     """Kubernetes API client rate limit for the Kueue controller-manager."""
 
-    qps: float = Field(gt=0)
-    burst: int = Field(gt=0)
+    qps: float = Field(default=DEFAULT_CLIENT_CONNECTION_QPS, gt=0)
+    burst: int = Field(default=DEFAULT_CLIENT_CONNECTION_BURST, gt=0)
 
 
 class KueueProvisioningSpec(BaseModel):
@@ -66,9 +70,8 @@ class KueueProvisioningSpec(BaseModel):
     flavor_topology: str = "infiniband"
     # Override controllerManager.manager.resources' memory (requests == limits)
     manager_memory_limit: str | None = None
-    # Override Kueue's default client-side API rate limit. Large clusters can otherwise build
-    # enough reconciliation requests to starve the controller's shared leader-election client.
-    client_connection: KueueClientConnectionSpec | None = None
+    # Override Iris's shared Kueue client-side API rate limit.
+    client_connection: KueueClientConnectionSpec = Field(default_factory=KueueClientConnectionSpec)
 
 
 # Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
