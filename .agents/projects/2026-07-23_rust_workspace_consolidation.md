@@ -73,7 +73,7 @@ Build and release tooling that assumes the per-package layout:
 
 - Root `pyproject.toml`: `[tool.uv.workspace] exclude = ["lib/finelog/rust", "lib/dupekit/rust"]` and per-native `[tool.uv.sources]` path entries under RUST-DEV markers.
 - `scripts/rust_mode.py`: toggles path sources for `marin-dupekit-native` and `marin-finelog-server` between local source build ("dev") and published wheel ("user").
-- `infra/ci/select_tests.py`: `NATIVE_PACKAGES = {"dupekit": "lib/dupekit/rust", "finelog": "lib/finelog/rust"}`; a change under a crate's `rust/` tree force-selects that scope for a source build. Only the owning scope is source-built.
+- `infra/ci/select_tests.py`: `NATIVE_CRATE_DIR = {"dupekit": "lib/dupekit/rust", "finelog": "lib/finelog/rust"}`; a change under a crate's `rust/` tree force-selects that scope for a source build. Only the owning scope is source-built.
 - `.github/workflows/rust-checks.yaml`: one `dupekit-rust` job and one `finelog-rust` job, each running fmt/clippy/test against its own `--manifest-path`.
 - Per-package release workflows (`dupekit-release-wheels.yaml`, `finelog-release-wheels.yaml`, and iris's new `iris-native-release-wheels.yaml`) drive per-package `build_package.py` scripts (zig-cross manylinux + macOS matrix).
 - Two committed locks: `lib/finelog/rust/Cargo.lock`, `lib/dupekit/rust/Cargo.lock`. No cargo entry in `.github/dependabot.yml` (only `uv` and `npm`), so today's Rust dependency graph is not auto-updated at all.
@@ -316,7 +316,7 @@ Two concerns, split cleanly:
      wheel install + `import` smoke, so an abi3 / `extension-module` / feature
      regression that the workspace test masks is caught per wheel.
    - `infra/ci/select_tests.py` extends the same idea for the Python unit legs:
-     `NATIVE_PACKAGES` becomes a crate→scopes map, and a shared-crate change
+     `NATIVE_CRATE_DIR` becomes a crate→scopes map, and a shared-crate change
      force-selects a source build for every dependent scope (today only the
      owning scope is source-built — that rule cannot survive shared crates,
      since a `marin-jwt` change must exercise both finelog and iris).
