@@ -2499,3 +2499,19 @@ author: dlwh
   - No tolerance was changed. Diagnostic timing remains non-promotable while parity is false; it is useful only to decide whether isolating the transport/reduction-order difference is worth further work.
 - Next action:
   - Rerun the same paired program in explicit diagnostic mode. Stop NCCL_EP if it does not beat ring by at least `10%`; if it does, isolate whether the output difference comes from combine accumulation order or another adapter detail before any JaxPP training integration.
+
+### 2026-07-23 08:27 PDT - paired diagnostic shows a 1.45x NCCL_EP full-MLP gain
+- Hypothesis: If NCCL_EP is materially faster than ring with identical expert GEMMs, the narrow output mismatch is worth isolating before deciding whether an exact or explicitly approximate backend is viable.
+- Commit Hash: `cdd92278d1` (`[docs] Record strict NCCL_EP full-MLP parity gate`), with diagnostic support at `5282a2f915`.
+- Command: the same paired H100x8 full routed-MLP program as the strict gate, launched remotely with `env PARITY_MODE=diagnostic`. Job `/dlwh/ncclep-h100-full-mlp-diagnostic-r2-20260723-151635`; six alternating warmup pairs and 20 alternating measured pairs, each sample aggregated as the slowest of eight ranks.
+- Results:
+  - Iris succeeded in `9m7.36s`; the task and all eight ranks exited `0` with no failures/preemptions. No resources remain live.
+  - Marin bulk ring median/p10/p90 value-and-grad latency was `22.73490/22.58603/22.82575ms`.
+  - Transformer Engine NCCL_EP plus the same Pallas-Triton expert GEMMs was `15.65238/15.62121/15.71140ms`.
+  - NCCL_EP is `1.452489x` faster, a `31.1527%` latency reduction. The central distributions do not overlap.
+  - The strict numerical result reproduced exactly: all values were finite, no assignments dropped, loss and all four gradient groups passed, while output retained `683,013` mismatches (`0.203554%`), relative-L2 `0.00296233`, and maximum absolute error `0.0078125`.
+- Interpretation:
+  - The gain easily clears the `10%` performance threshold and is large enough to matter at the pipeline level. It is the strongest exact-shape transport signal after ring.
+  - The backend remains non-promotable: `status=stop` and the promotion criterion correctly stayed false because output parity failed. The result justifies one focused numerical isolation, not a tolerance change or immediate JaxPP integration.
+- Next action:
+  - Isolate TE dispatch/combine with top-k1 and top-k4 identity and per-expert-scaled identity cases. Determine whether the discrepancy is intrinsic BF16 combine accumulation order or an adapter error; only then choose an exact fix or request explicit approval for an approximate research backend.
