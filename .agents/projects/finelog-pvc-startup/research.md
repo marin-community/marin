@@ -16,7 +16,9 @@ The live resource patch restarted RNO2A at 02:20:49 UTC. The server logged `fine
 
 ## Internal Prior Work
 
-`lib/finelog/rust/src/store/namespace.rs` adopts local segments during `Namespace::open`, then calls `catalog.upsert_segment` once for every adopted segment. `lib/finelog/rust/src/store/catalog.rs` executes each upsert as a standalone SQLite statement. On an NFS-backed SQLite database, routine startup can therefore issue hundreds of implicit commits and synchronous filesystem operations before the listener binds.
+Before PR #7540, `lib/finelog/rust/src/store/namespace.rs` adopted local segments during `Namespace::open`, then called `catalog.upsert_segment` once for every adopted segment. `lib/finelog/rust/src/store/catalog.rs` executed each upsert as a standalone SQLite statement. On an NFS-backed SQLite database, routine startup could therefore issue hundreds of implicit commits and synchronous filesystem operations before the listener bound.
+
+PR #7540 changes that path to one transaction per namespace, eliminates a second full Parquet-footer scan that only recomputed `next_seq`, selects SQLite's rollback-journal `PERSIST` mode with `synchronous=FULL`, and emits structured phase timings. WAL remains disabled because SQLite requires WAL clients to share a memory index and explicitly does not support WAL over network filesystems.
 
 Iris already keeps its CoreWeave controller SQLite state on node-local NVMe through `storage.local_state_dir`; `lib/iris/docs/coreweave.md` documents that `/mnt/local` is the bare-metal node's NVMe RAID. Finelog differs because its PVC provides node-independent persistence for active segments that have not yet reached object storage.
 
@@ -49,7 +51,7 @@ CoreWeave recommends larger object-store requests and notes that LOTA caches obj
   - No phase timers or syscall trace yet prove how much time is spent in catalog commits.
 - Directness to Marin: exact live dataset, deployment, PVC, and startup code path.
 - Confidence: high inference, not yet experimentally isolated.
-- Action: add phase timing and batch catalog refresh in one transaction.
+- Action: deploy PR #7540 and compare its new phase timings with the 28.4-second baseline.
 
 ### Claim: a larger PVC will not make this deployment faster
 
@@ -64,10 +66,10 @@ CoreWeave recommends larger object-store requests and notes that LOTA caches obj
 
 ## Recommended Next Experiments
 
-### 1. Batch startup catalog refresh
+### 1. Measure the batched startup path
 
-- Minimum experiment: add timers for catalog open, local adoption, catalog refresh, and engine rehydration; refresh all adopted segment rows in one SQLite transaction.
-- Baseline/control: five cold restarts from identical copied stores on `shared-vast`, current build versus batched build.
+- Minimum experiment: run five controlled restarts of PR #7540 and record catalog open, local adoption, footer reconciliation, catalog refresh, namespace rehydration, and total store timings.
+- Baseline/control: the observed 28.4-second restart and five restarts from an identical copied store on `shared-vast` using the prior build.
 - Expected signal: at least 50% lower container-start-to-listener-bind time and one catalog commit per startup or namespace instead of one per segment.
 - Falsifier: startup improves less than 20% and the footer/adoption phase remains dominant.
 - Cost/risk: low implementation cost; preserve FULL durability and crash-safe transaction semantics.
@@ -106,7 +108,7 @@ CoreWeave recommends larger object-store requests and notes that LOTA caches obj
 - Add: intermittent VAST metadata contention explains the 28-95 second spread after transaction count is controlled.
 - Add: remote small-object layout limits LOTA during cold recovery.
 - Falsify / stop: increasing PVC capacity as a performance fix.
-- Promote: batched catalog refresh and phase timing.
+- Promote: deploy and measure the batched catalog refresh, single footer pass, and phase timing in PR #7540.
 
 ## Source Ledger
 
@@ -127,6 +129,6 @@ CoreWeave recommends larger object-store requests and notes that LOTA caches obj
 
 ## Handoff
 
-- Suggested issue title: `[finelog] Batch startup catalog refresh on network filesystems`
-- Open questions: exact phase timing; number of SQLite syncs; VAST `qos_wait`; remote object-size distribution; acceptable durability model for a local-NVMe active cache.
+- Suggested issue title: `[finelog] Benchmark startup catalog refresh on shared VAST`
+- Open questions: measured phase timing after PR #7540; VAST `qos_wait`; remote object-size distribution; acceptable durability model for a local-NVMe active cache.
 - Stop reason: internal code, live measurements, installed StorageClasses, and primary external sources converge on a falsifiable first experiment.

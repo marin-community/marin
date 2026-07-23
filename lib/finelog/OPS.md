@@ -124,6 +124,9 @@ kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
   exec deployment/finelog-<cluster> -- cat /sys/fs/cgroup/memory.events
 kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
   exec deployment/finelog-<cluster> -- df -h /var/cache/finelog
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  logs deployment/finelog-<cluster> --timestamps=true | \
+  rg 'finelog (catalog sqlite ready|local segment adoption complete|namespace startup complete|store startup complete|remote reconcile complete)'
 ```
 
 Exit 137 is ambiguous by itself. A nearby `Killing ... failed liveness probe`
@@ -135,3 +138,11 @@ compactions indicate ingest pressure; tune `cpu_request`, `cpu_limit`,
 `memory_request`, and `memory_limit` in the cluster's finelog config. Every
 Kubernetes deployment also has a five-minute startup probe so reopening an
 existing network-backed store does not feed a liveness restart loop.
+
+The startup events carry millisecond timings for SQLite open, one-time catalog
+adoption, local directory discovery, catalog reads, Parquet footer reconciliation,
+batched catalog refresh, namespace rehydration, and total store open. The catalog
+event also reports the effective SQLite journal and synchronous modes. Remote
+reconcile runs after the listener binds and reports object listing, footer fetch,
+catalog update, and delete timings separately; a slow remote phase cannot explain
+pre-bind readiness delay.

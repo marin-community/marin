@@ -13,7 +13,7 @@ issue: none
 - Exit 137 came from kubelet liveness termination, not an OOM: cgroup counters showed zero OOM kills and memory peaked at 12.4 GB under a 32 GiB limit.
 - The 250 GiB PVC was 1% full. More disk capacity would not address the failure.
 - A live patch raised reserved compute, added a five-minute startup probe, and moved all probes to HTTP `/health`; the replacement pod remained Ready with zero restarts.
-- Global Kubernetes defaults, a dedicated Grafana dashboard, the readiness runbook, and a startup/PVC research brief were proposed in PR #7540.
+- Global Kubernetes defaults, startup phase logging and batching, a dedicated Grafana dashboard, the readiness runbook, and a startup/PVC research brief were proposed in PR #7540.
 
 ## Original problem report
 
@@ -41,17 +41,17 @@ The RNO2A finelog mirror intermittently reported `HTTP /health probe is not Read
 
 Concurrent ingest and large compactions intermittently delayed the health endpoint long enough to fail readiness and liveness. The liveness policy then killed the process during both overload and slow store reopening, creating a restart loop. Memory exhaustion, PVC capacity, and node capacity were excluded.
 
-The remaining 28–95 second startup time was not fully isolated. The leading hypothesis was hundreds of implicit SQLite catalog transactions over the shared VAST/NFS volume, based on the startup code path and live file count. Phase timers and a batched transaction experiment were still required to confirm it.
+The remaining 28–95 second startup time was not fully isolated. The leading hypothesis was hundreds of implicit SQLite catalog transactions over the shared VAST/NFS volume, based on the startup code path and live file count. PR #7540 added phase timers, batched those writes, and removed a duplicate footer scan so the next deployment could confirm or falsify it.
 
 ## Fix
 
-The live RNO2A Deployment was patched to request 2 CPUs and 16 GiB of memory, allow 8 CPUs and 32 GiB, and defer liveness and readiness until a five-minute HTTP startup probe succeeded. PR #7540 applied those values as the global Kubernetes finelog defaults, kept per-cluster overrides available, added the dedicated Grafana dashboard, and documented the diagnostic procedure.
+The live RNO2A Deployment was patched to request 2 CPUs and 16 GiB of memory, allow 8 CPUs and 32 GiB, and defer liveness and readiness until a five-minute HTTP startup probe succeeded. PR #7540 applied those values as the global Kubernetes finelog defaults, kept per-cluster overrides available, batched startup catalog writes, removed a duplicate footer scan, selected network-safe persistent rollback journaling, added structured startup timings and the dedicated Grafana dashboard, and documented the diagnostic procedure.
 
 ## How OPS.md could have shortened this
 
 The previous runbook did not explain that exit 137 could be a liveness kill, nor did it list cgroup OOM counters, peak memory, PVC use, and previous logs as the first decision points. The added readiness section now provides those commands and directs operators to compare ingest/compaction stalls with probe events before increasing memory or storage.
 
-Startup phase timing was still absent from the server. Timers around catalog open, local segment adoption, catalog refresh, and engine rehydration would have separated storage latency from SQLite transaction overhead without inferring from aggregate startup time.
+Startup phase timing had been absent from the server. PR #7540 added timers around catalog open, local segment adoption, footer reconciliation, catalog refresh, engine rehydration, and remote reconcile so subsequent incidents could separate storage latency from SQLite transaction overhead.
 
 ## Artifacts
 
