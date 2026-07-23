@@ -389,7 +389,7 @@ def test_mint_endpoint_token_unknown_endpoint(state, mock_controller, log_client
 
 
 def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_path):
-    """A requested TTL above the ceiling is clamped, not honored verbatim."""
+    """A requested TTL above the ceiling is clamped down to the ceiling, not honored verbatim."""
     task, attempt = _live_task(state)
     service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
     endpoint_service.register_endpoint(
@@ -397,10 +397,27 @@ def test_mint_endpoint_token_clamps_ttl(state, mock_controller, log_client, tmp_
     )
 
     with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
-        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(72)), None)
+        # A month is well past the week-long ceiling, so the result pins to the max.
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=Duration.from_hours(24 * 30)), None)
 
     ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
-    assert ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000
+    assert (MAX_ENDPOINT_TOKEN_TTL_SECONDS - 5) * 1000 <= ttl_ms <= (MAX_ENDPOINT_TOKEN_TTL_SECONDS + 5) * 1000
+
+
+def test_mint_endpoint_token_honors_multiday_ttl(state, mock_controller, log_client, tmp_path):
+    """A multi-day TTL under the week ceiling is honored — the long-running datagen/eval case."""
+    task, attempt = _live_task(state)
+    service, endpoint_service, _ = _mint_service(state, mock_controller, log_client, tmp_path)
+    endpoint_service.register_endpoint(
+        _register_with_access("/serve/foo", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
+    )
+
+    requested = Duration.from_hours(96)
+    with identity_scope(VerifiedIdentity(user_id=task.user, role="user")):
+        resp = service.mint_endpoint_token(_mint_request("/serve/foo", ttl=requested), None)
+
+    ttl_ms = resp.expires_at.epoch_ms - Timestamp.now().epoch_ms()
+    assert abs(ttl_ms - requested.to_ms()) <= 5 * 1000
 
 
 # --- EndpointClient: registers and keeps leases against the real service ------

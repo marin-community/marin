@@ -114,7 +114,14 @@ ENDPOINT_TOKEN_ROLE = "endpoint"
 # endpoint as the identity's audience only when this scope is present.
 ENDPOINT_TOKEN_SCOPE = "proxy"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
-MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
+# Ceiling on a requested endpoint-token TTL. Set to a week so a long-running
+# agentic datagen/eval job can hold one capability URL for its whole run instead
+# of hitting 401s when a shorter token expires under a still-healthy endpoint. The
+# token stays narrowly scoped — one endpoint, /proxy access only, zero RPC
+# authority (see authorize_method) — so a week-long, non-revocable lifetime widens
+# nothing: a leak exposes only that one endpoint until it ages out. Callers opt
+# into a long TTL explicitly; the default stays short.
+MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400 * 7  # 7 days
 
 # Federation plane: the token a parent controller presents on RPCs to this cluster,
 # verified against the parent's published key by a dedicated verifier. Kept OUT of
