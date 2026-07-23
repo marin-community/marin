@@ -43,7 +43,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
@@ -2433,6 +2433,13 @@ class ProxyExerciseResult:
     health_errors: tuple[str, ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class ProxyStreamSpec:
+    chunks: int
+    chunk_bytes: int
+    chunk_interval: float
+
+
 _PROXY_ASYNCIO_LOOP = "asyncio"
 _PROXY_AUTO_LOOP = "auto"
 _PROXY_LOOPS = (_PROXY_ASYNCIO_LOOP, _PROXY_AUTO_LOOP)
@@ -2447,14 +2454,14 @@ def _wait_for_uvicorn(server: uvicorn.Server) -> None:
     )
 
 
-def _proxy_benchmark_upstream(*, chunks: int, chunk_bytes: int, chunk_interval: float) -> Starlette:
-    payload = b"x" * chunk_bytes
+def _proxy_benchmark_upstream(stream_spec: ProxyStreamSpec) -> Starlette:
+    payload = b"x" * stream_spec.chunk_bytes
 
     async def stream(_request: Request) -> StreamingResponse:
         async def body():
-            for _ in range(chunks):
+            for _ in range(stream_spec.chunks):
                 yield payload
-                await asyncio.sleep(chunk_interval)
+                await asyncio.sleep(stream_spec.chunk_interval)
 
         return StreamingResponse(body(), media_type="application/octet-stream")
 
@@ -2543,9 +2550,7 @@ def _run_proxy_trial(
     *,
     loop: str,
     connections: int,
-    chunks: int,
-    chunk_bytes: int,
-    chunk_interval: float,
+    stream_spec: ProxyStreamSpec,
     trial: int,
 ) -> ProxyBenchmarkResult:
     threads = ThreadContainer(f"proxy-benchmark-{loop}-{trial}")
@@ -2553,7 +2558,7 @@ def _run_proxy_trial(
     proxy_port = find_free_port()
     upstream = uvicorn.Server(
         uvicorn.Config(
-            _proxy_benchmark_upstream(chunks=chunks, chunk_bytes=chunk_bytes, chunk_interval=chunk_interval),
+            _proxy_benchmark_upstream(stream_spec),
             host="127.0.0.1",
             port=upstream_port,
             loop="uvloop",
@@ -2599,6 +2604,52 @@ def _run_proxy_trial(
     )
 
 
+def _proxy_trials(
+    *, connections: tuple[int, ...], trials: int, stream_spec: ProxyStreamSpec
+) -> Iterator[ProxyBenchmarkResult]:
+    for connection_count in connections:
+        for trial in range(1, trials + 1):
+            loop_order = _PROXY_LOOPS if trial % 2 else tuple(reversed(_PROXY_LOOPS))
+            for loop in loop_order:
+                yield _run_proxy_trial(
+                    loop=loop,
+                    connections=connection_count,
+                    stream_spec=stream_spec,
+                    trial=trial,
+                )
+
+
+def _print_proxy_result(result: ProxyBenchmarkResult) -> None:
+    percentiles = result.health_percentiles_ms
+    print(
+        f"{result.connections:5d}  {result.loop:>7}  {result.loop_class:>10}  {result.trial:5d}  "
+        f"{result.elapsed:7.3f}s  {result.streams_per_second:9.1f}  "
+        f"{result.mebibytes_per_second:8.1f}  {percentiles.p50:9.1f}ms  {percentiles.p99:7.1f}ms  "
+        f"{percentiles.maximum:7.1f}ms  {len(result.health_latencies_ms):6d}  {len(result.health_errors):4d}"
+    )
+    for error in result.health_errors:
+        print(f"         health error: {error}")
+
+
+def _print_proxy_comparison(results: list[ProxyBenchmarkResult], connections: tuple[int, ...]) -> None:
+    print("\nMedian comparison (auto relative to asyncio):")
+    for connection_count in connections:
+        by_loop = {
+            loop: [r for r in results if r.connections == connection_count and r.loop == loop] for loop in _PROXY_LOOPS
+        }
+        baseline = statistics.median(r.streams_per_second for r in by_loop[_PROXY_ASYNCIO_LOOP])
+        treatment = statistics.median(r.streams_per_second for r in by_loop[_PROXY_AUTO_LOOP])
+        baseline_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_ASYNCIO_LOOP])
+        treatment_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_AUTO_LOOP])
+        baseline_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_ASYNCIO_LOOP])
+        treatment_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_AUTO_LOOP])
+        print(
+            f"  {connection_count:5d} connections: throughput {baseline:.1f} -> {treatment:.1f} streams/s "
+            f"({(treatment / baseline - 1) * 100:+.1f}%); health p99 {baseline_p99:.1f} -> {treatment_p99:.1f} ms "
+            f"({(treatment_p99 / baseline_p99 - 1) * 100:+.1f}%); errors {baseline_errors} -> {treatment_errors}"
+        )
+
+
 @main.command("proxy")
 @click.option("--connections", type=int, multiple=True, default=(200, 800, 1600), show_default=True)
 @click.option("--trials", type=int, default=3, show_default=True)
@@ -2617,6 +2668,11 @@ def proxy_cmd(
     if min((*connections, trials, chunks, chunk_bytes)) <= 0 or chunk_interval_ms < 0:
         raise click.BadParameter("connections, trials, chunks, and chunk-bytes must be positive")
 
+    stream_spec = ProxyStreamSpec(
+        chunks=chunks,
+        chunk_bytes=chunk_bytes,
+        chunk_interval=chunk_interval_ms / 1000,
+    )
     print(
         f"Proxy benchmark: connections={list(connections)} trials={trials} "
         f"body={chunks}x{chunk_bytes}B interval={chunk_interval_ms:g}ms"
@@ -2627,46 +2683,10 @@ def proxy_cmd(
         f"{'probes':>6}  {'errs':>4}"
     )
     results: list[ProxyBenchmarkResult] = []
-    for connection_count in connections:
-        for trial in range(1, trials + 1):
-            loop_order = _PROXY_LOOPS if trial % 2 else tuple(reversed(_PROXY_LOOPS))
-            for loop in loop_order:
-                result = _run_proxy_trial(
-                    loop=loop,
-                    connections=connection_count,
-                    chunks=chunks,
-                    chunk_bytes=chunk_bytes,
-                    chunk_interval=chunk_interval_ms / 1000,
-                    trial=trial,
-                )
-                results.append(result)
-                percentiles = result.health_percentiles_ms
-                print(
-                    f"{connection_count:5d}  {loop:>7}  {result.loop_class:>10}  {trial:5d}  "
-                    f"{result.elapsed:7.3f}s  {result.streams_per_second:9.1f}  "
-                    f"{result.mebibytes_per_second:8.1f}  {percentiles.p50:9.1f}ms  {percentiles.p99:7.1f}ms  "
-                    f"{percentiles.maximum:7.1f}ms  {len(result.health_latencies_ms):6d}  "
-                    f"{len(result.health_errors):4d}"
-                )
-                for error in result.health_errors:
-                    print(f"         health error: {error}")
-
-    print("\nMedian comparison (auto relative to asyncio):")
-    for connection_count in connections:
-        by_loop = {
-            loop: [r for r in results if r.connections == connection_count and r.loop == loop] for loop in _PROXY_LOOPS
-        }
-        baseline = statistics.median(r.streams_per_second for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment = statistics.median(r.streams_per_second for r in by_loop[_PROXY_AUTO_LOOP])
-        baseline_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_AUTO_LOOP])
-        baseline_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_AUTO_LOOP])
-        print(
-            f"  {connection_count:5d} connections: throughput {baseline:.1f} -> {treatment:.1f} streams/s "
-            f"({(treatment / baseline - 1) * 100:+.1f}%); health p99 {baseline_p99:.1f} -> {treatment_p99:.1f} ms "
-            f"({(treatment_p99 / baseline_p99 - 1) * 100:+.1f}%); errors {baseline_errors} -> {treatment_errors}"
-        )
+    for result in _proxy_trials(connections=connections, trials=trials, stream_spec=stream_spec):
+        results.append(result)
+        _print_proxy_result(result)
+    _print_proxy_comparison(results, connections)
 
 
 # ---------------------------------------------------------------------------
