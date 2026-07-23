@@ -29,8 +29,6 @@ from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import controller_pb2
-from iris.time_proto import duration_to_proto
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.harbor_runner import HarborRunConfig, canonical_served_name, run_harbor_eval
@@ -208,19 +206,18 @@ def run_eval_group(params: EvalGroupParams) -> list[str]:
     return paths
 
 
+# A minted endpoint token must outlive the longest Harbor suite it authorizes (an agentic run can take
+# many hours); 96h matches the scoped-token ceiling in iris (#7551).
+_MINT_TTL = Duration.from_hours(96)
+
+
 def _mint_capability_url(endpoint_name: str, origin: str) -> str:
     """Mint a capability URL for ``endpoint_name`` and return its OpenAI base (``.../v1``).
 
     The scoped token rides in the path, so possession of the URL is the credential -- an off-cluster
     Harbor sandbox can call the served model with no auth header.
     """
-    client = iris_ctx().client
-    resp = client.mint_endpoint_token(
-        controller_pb2.Controller.MintEndpointTokenRequest(
-            endpoint_name=endpoint_name,
-            ttl=duration_to_proto(Duration.from_hours(96)),
-        )
-    )
+    resp = iris_ctx().client._cluster_client.mint_endpoint_token(endpoint_name, ttl=_MINT_TTL)
     return f"{origin.rstrip('/')}{capability_path(endpoint_name, resp.token)}/v1"
 
 
