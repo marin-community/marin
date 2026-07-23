@@ -2629,3 +2629,18 @@ author: dlwh
   - `c42fb432d6` makes a fresh TE guard context and enters it around explicit-MPMD train-step construction, lower, `eval_local()` compile, and execution. JaxPP remains outside the global Grug mesh as required.
 - Next action:
   - Relaunch the unchanged reduced smoke from `c42fb432d6`. Require TE partitioning and stage-local XLA compilation to clear before interpreting runtime or performance.
+
+### 2026-07-23 14:34 PDT - stage compilation clears; inconsistent NCCL_EP capacity fails first dispatch
+- Hypothesis: Keeping the Transformer Engine shard guard active through lower, compile, and execute will let the reduced four-stage program enter its first forward microbatch.
+- Commit Hash: `f038bdf9a1` (`[grug] Match NCCL EP bootstrap capacity to Grug`).
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` smoke. Parent `/dlwh/iris-run-job-20260723-210124`; child `/dlwh/iris-run-job-20260723-210124/grug-train-jaxpp-rno2a-ncclep-smoke-r7-l8-e64k4-b512-s4096-p4m16-20260723-1408`.
+- Results:
+  - TE setup, 32-rank ordering, four EP8 bootstraps, complete JaxPR construction, TE custom partitioning, and stage-0 XLA compilation all passed.
+  - Execution reached `jit_grug_1f1b_mb0_stage0_forward`. Every stage-0 rank failed on its first TE dispatch custom call with `ep_backend.cpp:411 in dispatch: NCCL Error: invalid argument`; downstream ranks then blocked awaiting pipeline traffic.
+  - The babysitter stopped the parent. Parent and child are terminal killed, with no live resources and no loss or MFU result.
+- Interpretation:
+  - Grug compiled each dispatch receive tensor with its model capacity factor `1.0`, or `65,536` rows/rank. Bootstrap incorrectly used Levanter's independent default `1.25`, registering `max_recv_tokens_per_rank=81,920`.
+  - NCCL_EP's hybrid transport copies the full registered receive bound during CUDA graph capture and returns `ncclInvalidArgument` when the caller's receive token, weight, or index tensor has fewer than that many rows. The observed first-dispatch failure therefore follows directly from the compiled `65,536 < 81,920` contract violation.
+  - The fix promotes Grug's existing `1.0` factor to one shared model constant and uses it for both model construction and NCCL_EP bootstrap. This preserves the matched ring model's routing capacity while making the registered and compiled receive bounds exactly `65,536`.
+- Next action:
+  - Relaunch the identical reduced smoke with matched bootstrap and model capacity. Require at least one finite training step before scaling or comparing performance.
