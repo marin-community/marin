@@ -2551,3 +2551,19 @@ author: dlwh
   - Commit `a3db0171e2` activates `$IRIS_VENV` and enables `set -euo pipefail` before CUDA/TE setup, making interpreter selection coherent and preventing a failed build from reaching rank launch.
 - Next action:
   - Relaunch the identical reduced smoke from `a3db0171e2`; do not change the model or performance axes.
+
+### 2026-07-23 11:56 PDT - corrected setup validates four EP8 groups and reaches JaxPP tracing
+- Hypothesis: Activating the worker venv will build Transformer Engine consistently and advance the unchanged reduced smoke through multi-group NCCL_EP bootstrap.
+- Commit Hash: `85600cf9d5` (`[grug] Trace NCCL EP under JaxPP abstract mesh`) fixes the tracing failure exposed by this run.
+- Command: identical L8/d2560/e64/top-k4/seq4096/b512/m16 reduced smoke from the prior entry. Parent `/dlwh/iris-run-job-20260723-184218`; child `/dlwh/iris-run-job-20260723-184218/grug-train-jaxpp-rno2a-ncclep-smoke-r2-l8-e64k4-b512-s4096-p4m16-20260723-1150`.
+- Results:
+  - All four workers built Transformer Engine `2.19.0.dev0+4adad4c`, passed its NCCL_EP import probe, and completed all setup steps.
+  - The 32-rank topology again mapped task-local groups to global ranks `0-7`, `8-15`, `16-23`, and `24-31`.
+  - All ranks successfully bootstrapped four EP8 groups with `world=32`, `max_tokens_per_rank=16384`, and `recv_capacity_per_rank=81920`.
+  - JaxPP then failed during `explicit_mpmd_train_step.lower()` in `jax.make_jaxpr`, before XLA compilation: `ValueError: Expected mesh of type jax.sharding.Mesh. Got jax._src.mesh.AbstractMesh` at the backend's inner `jax.set_mesh(mesh)`.
+  - Parent, child, and all tasks are terminal failed with zero preemptions and no live resources. No training step, loss, MFU, or duration result was produced.
+- Interpretation:
+  - TE build, import, process ordering, communicator grouping, bootstrap capacity, and multi-group topology are validated. The failure is a redundant concrete-mesh context inside the backend, not an NCCL transport or JaxPP schedule failure.
+  - JaxPP intentionally supplies an `AbstractMesh` while tracing stage-local programs. Commit `85600cf9d5` removes the inner `jax.set_mesh`; the outer runtime mesh and TE global shard guard remain authoritative.
+- Next action:
+  - Relaunch the unchanged reduced smoke from `85600cf9d5` and require it to pass JaxPR tracing before interpreting any later compiler or runtime result.
