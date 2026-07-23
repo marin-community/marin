@@ -23,7 +23,7 @@ jobs:
       id-token: write
     outputs:
       description: ${{ steps.rewrite.outputs.structured_output }}
-      rate_limited: ${{ steps.classify.outputs.rate_limited }}
+      rate_limited: ${{ steps.rewrite.outputs.rate_limited }}
 
     steps:
       # pull_request_target can expose credentials, so execute only the
@@ -36,8 +36,7 @@ jobs:
 
       - name: Rewrite for a technical reader
         id: rewrite
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -82,14 +81,6 @@ jobs:
             --max-turns 10
             --tools "Read"
             --json-schema '{"type":"object","properties":{"body":{"type":"string"}},"required":["body"],"additionalProperties":false}'
-
-      - name: Classify Claude result
-        id: classify
-        if: always()
-        uses: ./.github/actions/classify-claude
-        with:
-          outcome: ${{ steps.rewrite.outcome }}
-          execution-file: ${{ steps.rewrite.outputs.execution_file }}
 
   cleanup:
     needs: rewrite

@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the live Iris and GitHub sources and their bridge endpoints.
-
-The sources are driven over an httpx MockTransport so the real RPC/REST parsing,
-aggregation, and error mapping run without a controller or GitHub.
-"""
+"""Behavioral tests for live finelog, Iris, GitHub, and W&B bridge sources."""
 
 import json
 
 import httpx
+import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
 from errors import UpstreamError
+from finelog_health import FinelogRole
+from finelog_source import FinelogSource
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet
@@ -42,6 +41,44 @@ def _wandb(handler) -> WandbSource:
     source = WandbSource(timeout=5.0)
     source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
     return source
+
+
+class _FakeLogClient:
+    def __init__(self, raises: Exception | None = None) -> None:
+        self._raises = raises
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        assert sql == 'SELECT * FROM "log" LIMIT 1'
+        assert max_rows == 1
+        if self._raises is not None:
+            raise self._raises
+        return pa.table({"1": [1]})
+
+
+def _finelog(raises: Exception | None = None) -> FinelogSource:
+    source = FinelogSource(TARGET, timeout_ms=5_000)
+    source._client = _FakeLogClient(raises)
+    return source
+
+
+def test_finelog_health_probes_the_log_query_path():
+    row = _finelog().health()
+    assert isinstance(row.latency_ms, int)
+    assert (row.cluster, row.server, row.role) == ("marin", "finelog-marin", FinelogRole.HUB)
+    assert row.responsive is True
+    assert (row.ready, row.desired, row.error_class) == (1, 1, "")
+
+
+def test_finelog_health_reports_query_failures_without_raising():
+    row = _finelog(TimeoutError("slow")).health()
+    assert (row.cluster, row.server, row.role) == ("marin", "finelog-marin", FinelogRole.HUB)
+    assert row.responsive is False
+    assert (row.ready, row.desired, row.latency_ms, row.error_class) == (0, 1, None, "TimeoutError")
+
+
+def test_finelog_health_does_not_mask_programming_errors():
+    with pytest.raises(ValueError, match="bug"):
+        _finelog(ValueError("bug")).health()
 
 
 # --- IrisSource ------------------------------------------------------------

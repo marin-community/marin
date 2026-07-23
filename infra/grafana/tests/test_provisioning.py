@@ -6,7 +6,6 @@ datasource UIDs and refIds, every rule's query URL answers on the bridge, and
 dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
-import json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,6 +13,8 @@ from urllib.parse import urlsplit
 import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
+from dashboard_stitch import stitch_all
+from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -22,9 +23,20 @@ from wandb_source import WandbSource
 
 ROOT = Path(__file__).resolve().parent.parent
 ALERTING = ROOT / "provisioning" / "alerting"
+DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
 VALID_SEVERITIES = {"critical", "warning"}
+
+
+def _stitched_dashboards() -> dict[str, dict]:
+    """Every dashboard as Grafana actually renders it: panelRef markers resolved.
+
+    The checks below assert on the deployed shape, not the templated source —
+    a panel's real datasource/columns/thresholds live in its fragment file once
+    it's been extracted behind a panelRef.
+    """
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
 
 def _load(path: Path) -> dict:
@@ -73,14 +85,33 @@ class _FakeIris:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
 
 
+class _FakeFinelog:
+    def __init__(self, name: str) -> None:
+        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+
+    def health(self) -> FinelogHealth:
+        return FinelogHealth(
+            cluster=self.target.name,
+            server=f"finelog-{self.target.name}",
+            role=FinelogRole.HUB,
+            responsive=True,
+            ready=1,
+            desired=1,
+            latency_ms=3,
+            error_class="",
+            error="",
+        )
+
+
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
+    finelog_sources = {"marin": _FakeFinelog("marin")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
     client = TestClient(
         create_app(
             bridge_config(),
-            {},
+            finelog_sources,
             iris_sources,
             GithubSource(token=None, timeout=5.0),
             fleet,
@@ -129,12 +160,59 @@ def test_critical_contact_point_reaches_email_and_slack():
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
 
 
+def test_finelog_health_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-fleet-unhealthy"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
+    assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_k8s_dashboard_shows_finelog_fleet_health():
+    dashboard = _stitched_dashboards()["k8s.json"]
+    (panel,) = [
+        panel
+        for panel in dashboard["panels"]
+        if any(target.get("url") == "/fleet_health" for target in panel.get("targets", []))
+    ]
+    assert panel["datasource"]["uid"] == "finelog-marin"
+    selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
+    assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
+
+
+def test_finelog_dashboard_shows_health_pods_storage_and_events():
+    dashboard = _stitched_dashboards()["finelog.json"]
+    targets = [target for panel in dashboard["panels"] for target in panel.get("targets", [])]
+
+    assert {(target["url"], target.get("parser")) for target in targets} == {
+        ("/fleet_health", "backend"),
+        ("/finelog", "backend"),
+        ("/finelog_events", "backend"),
+    }
+    pod_target = next(target for target in targets if target["url"] == "/finelog")
+    selectors = {column["selector"] for column in pod_target["columns"]}
+    assert {
+        "cluster",
+        "namespace",
+        "pod",
+        "node",
+        "restarts",
+        "cpu_request",
+        "cpu_limit",
+        "memory_request",
+        "memory_limit",
+        "startup_probe",
+        "pvc",
+        "storage_class",
+        "storage_capacity",
+    } <= selectors
+
+
 def test_dashboard_filter_expressions_reference_selected_columns():
     # Infinity's backend parser applies filterExpression to the frame built from
     # `columns`, so every field a filter references must also be selected.
     literals = {"true", "false", "null"}
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             for target in panel.get("targets", []):
                 expression = target.get("filterExpression")
@@ -144,26 +222,24 @@ def test_dashboard_filter_expressions_reference_selected_columns():
                 selected = {c["text"] for c in columns} | {c["selector"] for c in columns}
                 fields = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"'[^']*'", "", expression))) - literals
                 missing = fields - selected
-                assert not missing, f"{path.name} panel {panel.get('id')}: filter references unselected {missing}"
+                assert not missing, f"{name} panel {panel.get('id')}: filter references unselected {missing}"
 
 
 def test_dashboard_datasource_uids_are_provisioned():
     uids = set(_datasources())
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             uid = (panel.get("datasource") or {}).get("uid")
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
-            assert uid in uids, f"{path.name} panel {panel.get('id')}: unknown datasource {uid!r}"
+            assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():
-    for path in (ROOT / "dashboards").glob("*.json"):
-        dashboard = json.loads(path.read_text())
+    for name, dashboard in _stitched_dashboards().items():
         for panel in dashboard["panels"]:
             if panel.get("type") != "stat":
                 continue
             reduce_options = panel.get("options", {}).get("reduceOptions", {})
-            assert "calc" not in reduce_options, f"{path.name} panel {panel['id']}: use calcs, not calc"
-            assert reduce_options.get("calcs"), f"{path.name} panel {panel['id']}: missing reduction"
+            assert "calc" not in reduce_options, f"{name} panel {panel['id']}: use calcs, not calc"
+            assert reduce_options.get("calcs"), f"{name} panel {panel['id']}: missing reduction"

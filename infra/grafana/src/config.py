@@ -20,6 +20,9 @@ CONTROLLER_PORT = 10000
 # (provisioning/datasources/finelog.yaml) use it.
 BRIDGE_PORT = 8081
 
+# A main-hub log query at or above this latency is unhealthy.
+FINELOG_SLOW_THRESHOLD_MS = 5_000
+
 # The GitHub repository the ferry and build panels read.
 GITHUB_REPO = "marin-community/marin"
 # Ferry runs fetched per tier; commits scanned for the build panel.

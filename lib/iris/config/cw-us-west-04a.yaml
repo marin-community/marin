@@ -25,6 +25,9 @@ provisioning:
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
       # Flipped from the default staging issuer once the staging cert validated (2026-07-17).
       active_cluster_issuer: letsencrypt-http01-prod
+    federation_dns:
+      hostname: iris-cw-us-west-04a.oa.dev
+      target: iris-cw-us-west-04a.208261-marin.coreweave.app
     rbac: { service_account: iris-controller }
 
 # Request auth. Identity is by network location: in-cluster peers (RFC1918 pods/nodes,

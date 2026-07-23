@@ -109,3 +109,6 @@ own Pulumi project (stack `marin-evaldash`), sharing `infra/pulumi`'s state back
 on the `hai-gcp-models:us-central1:marin-metadata` Cloud SQL instance and the
 `cloudsql-evals-password` secret from `infra/cloudsql` — see that project's README for
 provisioning them.
+
+The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.

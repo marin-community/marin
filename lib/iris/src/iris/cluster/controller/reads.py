@@ -1139,6 +1139,46 @@ _RESOLVE_ATTEMPT_UIDS_STMT = (
 )
 
 
+def attempt_uid_for(tx: Tx, task_id: JobName, attempt_id: int) -> AttemptUid | None:
+    """Return the controller-minted ``attempt_uid`` for ``(task_id, attempt_id)``.
+
+    Point-read over the ``task_attempts`` primary key. ``None`` when the attempt
+    row does not exist — e.g. a never-run PENDING task whose ``current_attempt_id``
+    is still ``-1``.
+    """
+    row = tx.execute(
+        select(task_attempts_table.c.attempt_uid).where(
+            task_attempts_table.c.task_id == task_id,
+            task_attempts_table.c.attempt_id == attempt_id,
+        )
+    ).first()
+    return AttemptUid(row.attempt_uid) if row is not None else None
+
+
+def attempt_uids_for(tx: Tx, keys: Sequence[tuple[JobName, int]]) -> dict[tuple[JobName, int], AttemptUid]:
+    """Bulk ``(task_id, attempt_id) -> attempt_uid`` over the task_attempts PK.
+
+    Chunked to bound the IN-list size. Missing keys are silently absent — a
+    caller treats their uid as empty (pre-uid name).
+    """
+    if not keys:
+        return {}
+    unique = list(dict.fromkeys(keys))
+    result: dict[tuple[JobName, int], AttemptUid] = {}
+    for chunk_start in range(0, len(unique), _BULK_GET_CHUNK_SIZE):
+        chunk = unique[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
+        rows = tx.execute(
+            select(
+                task_attempts_table.c.task_id,
+                task_attempts_table.c.attempt_id,
+                task_attempts_table.c.attempt_uid,
+            ).where(tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(chunk))
+        ).all()
+        for row in rows:
+            result[(row.task_id, int(row.attempt_id))] = AttemptUid(row.attempt_uid)
+    return result
+
+
 def resolve_attempt_uids(
     tx: Tx,
     uids: Sequence[AttemptUid],

@@ -58,8 +58,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
@@ -77,13 +76,6 @@ jobs:
             --max-turns 250
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
             --system-prompt "Read and follow AGENTS.md (especially its Testing section) and .agents/skills/commit/SKILL.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. NEVER credit yourself: no 'Co-Authored-By: Claude' or 'Generated with Claude Code' trailer in commits, and no self-attribution in PR descriptions. NEVER write tautological, trivial, or slop tests: a test must fail when behavior is wrong, not merely when the code changes; never add a test for a thin wrapper, a one-off script, or just to have one; if a change does not warrant a meaningful test, add none. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results)."
-
-      - name: Classify Claude result
-        if: always()
-        uses: ./.github/actions/classify-claude
-        with:
-          outcome: ${{ steps.claude.outcome }}
-          execution-file: ${{ steps.claude.outputs.execution_file }}
 
   triage:
     if: |
@@ -118,8 +110,7 @@ jobs:
 
       - name: Triage Issue
         id: claude
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
@@ -204,13 +195,6 @@ jobs:
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
             --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. NEVER credit yourself in commits or PRs (no 'Co-Authored-By: Claude' or 'Generated with Claude Code' trailer). NEVER write tautological or trivial tests — a test must fail when behavior is wrong; do not test thin wrappers or scripts just to have a test. Always commit and push, even if tests fail. Never post multiple comments — post one comment, then use --edit-last for all updates."
 
-      - name: Classify Claude result
-        if: always()
-        uses: ./.github/actions/classify-claude
-        with:
-          outcome: ${{ steps.claude.outcome }}
-          execution-file: ${{ steps.claude.outputs.execution_file }}
-
   autofix:
     if: |
       github.event_name == 'pull_request_review' &&
@@ -244,8 +228,7 @@ jobs:
 
       - name: Apply Autofix
         id: claude
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
@@ -276,10 +259,3 @@ jobs:
             --model claude-sonnet-4-6
             --max-turns 100
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-
-      - name: Classify Claude result
-        if: always()
-        uses: marin-community/marin/.github/actions/classify-claude@main
-        with:
-          outcome: ${{ steps.claude.outcome }}
-          execution-file: ${{ steps.claude.outputs.execution_file }}

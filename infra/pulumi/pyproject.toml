@@ -8,8 +8,10 @@ version = "0.0.0"
 description = "Pulumi infrastructure for Marin."
 requires-python = ">=3.12"
 dependencies = [
-    # [controller] for iris.cluster.platforms.k8s.service.CloudK8sService, used by
-    # scripts/verify_no_drift.py to list NodePools/Nodes without reinventing kubectl+JSON.
+    # [controller] for the `kubernetes` client + `marin-rigging[secrets]`: iac.iris.deploy's
+    # connect_controller() call opens a kubectl port-forward tunnel (iris.cluster.platforms.k8s
+    # .service.CloudK8sService) when the target Iris cluster (iac.iris.service, used by
+    # infra/ducky) is CoreWeave-backed.
     "marin-iris[controller]",
     "marin-rigging",
     "pyyaml>=6.0",

@@ -9,6 +9,7 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
@@ -21,6 +22,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.writers import atomic_rename, ensure_parent_dir, parquet_sink
 
 from marin.datakit.normalize import normalize_step
+from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
 
@@ -33,16 +35,9 @@ _HF_URL_ROOT = StoragePath("hf://datasets") / HF_DATASET_ID
 
 FILING_TYPES = ("10-K", "10-Q", "8-K", "20-F", "S-1", "S-8", "144", "3", "4", "5")
 
-# HF rate-limits aggressively; a small batch reader keeps memory bounded
-# while one big SEC row group (~700 MB decompressed) is in flight.
+# A small batch reader keeps memory bounded while one big SEC row group
+# (~700 MB decompressed) is in flight.
 _ROWS_PER_BATCH = 8
-
-# Lift PyArrow's Thrift decoder caps so page headers carrying multi-MB
-# string statistics (apache/arrow#46404) decode without "Couldn't
-# deserialize thrift" errors. 1 GiB is well above any plausible single
-# page header in SEC's content column (~tens of MB worst case) while
-# still bounded.
-_THRIFT_DECODE_LIMIT_BYTES = 1024 * 1024 * 1024
 
 # Per-file retry policy for HF rate limits and transient network failures.
 _MAX_RETRIES = 20
@@ -62,17 +57,31 @@ class _DownloadResult:
     rows: int
 
 
+def _revision_pinned_url(hf_path: str, revision: str) -> str:
+    """Insert the revision pin into a shard URL: ``hf://datasets/<repo>@<rev>/<in-repo>``."""
+    in_repo = StoragePath(hf_path).relative_to(_HF_URL_ROOT)
+    return str(StoragePath(f"hf://datasets/{HF_DATASET_ID}@{revision}") / in_repo)
+
+
 def _iter_parquet_batches(hf_path: str, *, revision: str = HF_REVISION) -> Iterator[pa.RecordBatch]:
     """Yield record batches from one revision-pinned SEC-EDGAR shard."""
-    with StoragePath(hf_path).open("rb", revision=revision) as source:
-        # SEC's multi-MB content values can produce page headers above PyArrow's
-        # default Thrift limits. See https://github.com/marin-community/marin/issues/5334.
-        parquet_file = pq.ParquetFile(
-            source,
-            thrift_string_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
-            thrift_container_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
-        )
-        yield from parquet_file.iter_batches(batch_size=_ROWS_PER_BATCH)
+    # Read with DuckDB, not PyArrow: SEC's multi-MB `content` values produce
+    # parquet page-header statistics that PyArrow 23's Thrift decoder cannot
+    # deserialize ("Couldn't deserialize thrift: No more data to read",
+    # apache/arrow#46404), even with raised decoder limits, while DuckDB reads
+    # them. _download_once re-encodes the batches into pyarrow-readable shards.
+    # DuckDB reads the shard over the fsspec HfFileSystem (no local staging).
+    import duckdb  # noqa: PLC0415  # optional dep: duckdb (datakit extra; requested via pip_dependency_groups)
+
+    connection = duckdb.connect()
+    try:
+        connection.register_filesystem(fsspec.filesystem("hf"))
+        reader = connection.execute(
+            "SELECT * FROM read_parquet($shard)", {"shard": _revision_pinned_url(hf_path, revision)}
+        ).to_arrow_reader(_ROWS_PER_BATCH)
+        yield from reader
+    finally:
+        connection.close()
 
 
 def _download_once(task: _DownloadTask) -> _DownloadResult:
@@ -119,7 +128,7 @@ def _list_hf_parquets() -> list[str]:
             # glob(..., revision=...) embeds the pin in the repo segment
             # (``datasets/<repo>@<rev>/...``); resolve_path recovers the clean
             # in-repo path so the emitted hf:// URL stays revision-free (the pin
-            # is reapplied at open time in _iter_parquet_batches).
+            # is reapplied when the shard is read in _iter_parquet_batches).
             relative_path = filesystem.resolve_path(parquet_path).path_in_repo
             paths.append(str(_HF_URL_ROOT / relative_path))
     paths.sort()
@@ -162,7 +171,14 @@ def download_sec_edgar(output_path: str) -> None:
 def download_sec_edgar_step() -> StepSpec:
     return StepSpec(
         name="raw/sec-edgar",
-        fn=download_sec_edgar,
+        # Run as a remote job carrying the ``datakit`` extra so the download's
+        # zephyr workers get duckdb (the shard reader); duckdb is not a core
+        # marin dependency.
+        fn=remote(
+            download_sec_edgar,
+            resources=ResourceConfig(cpu=1, ram="2g"),
+            pip_dependency_groups=["datakit"],
+        ),
         hash_attrs={
             "hf_dataset_id": HF_DATASET_ID,
             "revision": HF_REVISION,

@@ -36,8 +36,7 @@ jobs:
 
       - name: Run Claude Review
         id: claude
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           track_progress: true
@@ -48,13 +47,6 @@ jobs:
             --max-turns 200
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*)"
           allowed_bots: 'claude[bot]'
-
-      - name: Classify Claude result
-        if: always()
-        uses: ./.github/actions/classify-claude
-        with:
-          outcome: ${{ steps.claude.outcome }}
-          execution-file: ${{ steps.claude.outputs.execution_file }}
 
   # Runs in parallel with `review`: the advisory infra/lint/ catalog review
   # (`pre-commit.py --review`, the CI counterpart of the commit skill's local
@@ -106,8 +98,7 @@ jobs:
 
       - name: Run Lint Review
         id: claude
-        continue-on-error: true
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: marin-community/marin-style/actions/consult-agent@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           prompt: |
@@ -117,10 +108,3 @@ jobs:
             --max-turns 150
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(./infra/pre-commit.py:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git status:*)"
           allowed_bots: 'claude[bot]'
-
-      - name: Classify Claude result
-        if: always()
-        uses: ./.github/actions/classify-claude
-        with:
-          outcome: ${{ steps.claude.outcome }}
-          execution-file: ${{ steps.claude.outputs.execution_file }}

@@ -295,4 +295,5 @@ config:
       source_ref: env:OPENAI_ADMIN_KEY
       disposition: review
       note: Optional cost-report provider credential.
-encryptionsalt: v1:DFMrtZjMAAg=:v1:8LS1krCS1f9qTzOA:jbdoeGkDIOvOTJg3CKKKeobJyGGGgQ==
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6XZs8zGfSYvujFXIFZheWMPjbPdDOV7JJodZEXp2kRkSSQCdtF6ipwmQbLzrT+vTDynD/SCx5yrJeXJ4b2hDtiqNsXV8wjjzqePjSvwlLP4lQZ9EWt2ow0DiAiWCqkg6c4Md9mRI8TY0fPE=
