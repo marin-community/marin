@@ -17,11 +17,14 @@ import click
 import pytest
 import requests
 from click.testing import CliRunner
-from fray.types import ANY_REGION
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    GPU_MODEL_CACHE_TTL_DAYS,
+    TPU_MODEL_CACHE_TTL_DAYS,
+    IrisConfig,
     LevanterEngineConfig,
     VllmEngineConfig,
     VllmLauncherType,
@@ -98,6 +101,20 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_iris_config_uses_local_model_materialization_on_gpu_by_default():
+    gpu = IrisConfig(
+        worker_resources=ResourceConfig.with_gpu("H100", count=8),
+        worker_environment=create_environment(extras=["gpu"]),
+    )
+    tpu = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    assert gpu.cache_ttl_days == GPU_MODEL_CACHE_TTL_DAYS == 0
+    assert tpu.cache_ttl_days == TPU_MODEL_CACHE_TTL_DAYS == 14
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():

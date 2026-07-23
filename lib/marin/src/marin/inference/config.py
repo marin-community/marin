@@ -19,6 +19,8 @@ WORKER_PYTHON_VERSION = "3.12"
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
+TPU_MODEL_CACHE_TTL_DAYS = 14
+GPU_MODEL_CACHE_TTL_DAYS = 0
 
 
 class VllmLauncherType(StrEnum):
@@ -168,14 +170,26 @@ class IrisConfig:
 
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
-    cache_ttl_days: int = 14
+    cache_ttl_days: int | None = None
+    """TTL for the regional object-store model cache.
+
+    ``None`` resolves to 14 days on constrained TPU workers and zero on
+    CoreWeave GPUs.  GPU workers have sufficient local NVMe for normal Hugging
+    Face/vLLM materialization; avoiding the object-store path also avoids the
+    RunAI range-streamer as the default load mechanism.  Pass a nonzero value
+    explicitly to opt a GPU serve into the regional mirror.
+    """
     endpoint_ready_timeout_seconds: float = 1800.0
     priority: int = 0
     max_retries_failure: int = 1
     max_retries_preemption: int = 10
 
     def __post_init__(self) -> None:
-        if self.cache_ttl_days < 0:
+        if isinstance(self.worker_resources, ResourceConfig) and self.cache_ttl_days is None:
+            device = self.worker_resources.device
+            cache_ttl_days = GPU_MODEL_CACHE_TTL_DAYS if device.kind == "gpu" else TPU_MODEL_CACHE_TTL_DAYS
+            object.__setattr__(self, "cache_ttl_days", cache_ttl_days)
+        if self.cache_ttl_days is not None and self.cache_ttl_days < 0:
             raise ValueError("cache_ttl_days must not be negative")
         if self.endpoint_ready_timeout_seconds <= 0:
             raise ValueError("endpoint_ready_timeout_seconds must be positive")

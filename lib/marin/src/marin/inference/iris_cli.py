@@ -341,7 +341,12 @@ def _mint_and_print_capability_url(
 )
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
-@click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
+@click.option(
+    "--cache-ttl-days",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Mirror HF models to a TTL'd GCS cache. Default: 14 days on TPU, disabled on CoreWeave GPU.",
+)
 @click.option(
     "--no-cache", is_flag=True, default=False, help="Skip the GCS model cache; always download from HuggingFace."
 )
@@ -425,7 +430,7 @@ def main(
     hbm_utilization: float,
     tensor_parallel_size: int | None,
     dtype: str,
-    cache_ttl_days: int,
+    cache_ttl_days: int | None,
     no_cache: bool,
     timeout_hours: float,
     proxy_timeout: float,
