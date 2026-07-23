@@ -31,12 +31,15 @@ The maintainer collapsed this to **one PR** with these adjustments to the Rev 2 
   the in-VPC `base_url` directly, so the first live smoke uses aime.
 - **Deliverable:** the merged PR + an example evaldash URL to a real Harbor and evalchemy run.
 
-Progress (branch `weaver/eval-rollup`): committed — v2 `Grading` sample contract + column-projecting
-evaldash reader; generalized record (`eval_image`, `HarborRef`, `EvalRef.tasks` optional); `eval_env`
-module + Daytona credential bridge. Remaining: `auto_serve_overrides`/`extra_gen_kwargs` graft;
-`HarborSpec` + Harbor runner (serve → run trials on Daytona → normalize to record + agentic samples) +
-`run_eval_group` dispatch; delete the standalone launcher; live evalchemy + Harbor-on-Daytona runs;
-close #7476/#7552; open the PR.
+Delivered (branch `weaver/eval-rollup`): the v2 `Grading` sample contract + column-projecting evaldash
+reader; the generalized record (`eval_image`, `HarborRef`, `EvalRef.tasks` optional); the `eval_env`
+module + Daytona credential bridge; the `auto_serve_overrides` graft (derives vLLM flags + clamps
+`max_model_len` from `config.json`); `HarborSpec` + the Harbor runner that runs a registry dataset as
+an isolated `uv` subprocess (`harbor` + `daytona`, kept out of the marin lock) against the served
+endpoint and normalizes each trial into a record + agentic samples; the `run_eval_group` Harbor
+dispatch; and deletion of the standalone launcher. The evalchemy path is validated live (mmlu smoke
+lands a v2 record + graded samples); the Harbor-on-Daytona path is validated live against `aime`.
+Sections 5–7 below are the superseded Rev 2 multi-PR plan, retained for the reasoning trail.
 
 ## 1. Current state (the evidence)
 
