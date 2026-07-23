@@ -140,7 +140,59 @@ def _finelog(query: str) -> list[dict]:
     return []
 
 
+def _finelog_k8s_rows(path: str) -> list[dict] | None:
+    if path == "/k8s/finelog":
+        return [
+            {
+                "cluster": cluster,
+                "namespace": "iris",
+                "deployment": server,
+                "pod": f"{server}-abc",
+                "node": "cpu-node-1",
+                "phase": "Running",
+                "ready": True,
+                "restarts": 0,
+                "last_exit_code": None,
+                "last_exit_reason": "",
+                "cpu_request": "2",
+                "cpu_limit": "8",
+                "memory_request": "16Gi",
+                "memory_limit": "32Gi",
+                "startup_probe": True,
+                "readiness_probe": True,
+                "liveness_probe": True,
+                "pvc": f"{server}-cache",
+                "storage_class": "shared-vast",
+                "storage_capacity": "250Gi",
+                "image": "ghcr.io/marin-community/finelog@sha256:abc",
+                "error_class": "",
+                "error": "",
+            }
+            for cluster, server in (
+                ("cw-us-east-02a", "finelog-cw-use02a"),
+                ("cw-us-east-08a", "finelog-cw-use08a"),
+                ("cw-rno2a", "finelog-cw-rno2a"),
+            )
+        ]
+    if path == "/k8s/finelog_events":
+        return [
+            {
+                "cluster": "cw-rno2a",
+                "namespace": "iris",
+                "object": "Pod/finelog-cw-rno2a-abc",
+                "reason": "Unhealthy",
+                "message": "Readiness probe failed",
+                "count": 3,
+                "last_seen": round(_NOW.timestamp() * 1000),
+            }
+        ]
+    return None
+
+
 def _rows(path: str, query: str) -> list[dict] | dict:
+    finelog_rows = _finelog_k8s_rows(path)
+    if finelog_rows is not None:
+        return finelog_rows
     if path == "/github/nightlies":
         return _nightlies()
     if path == "/github/builds":
@@ -306,51 +358,6 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "reason": "FailedScheduling",
                 "message": "waiting for H100 capacity",
                 "count": 2,
-                "last_seen": round(_NOW.timestamp() * 1000),
-            }
-        ]
-    if path == "/k8s/finelog":
-        return [
-            {
-                "cluster": cluster,
-                "namespace": "iris",
-                "deployment": server,
-                "pod": f"{server}-abc",
-                "node": "cpu-node-1",
-                "phase": "Running",
-                "ready": True,
-                "restarts": 0,
-                "last_exit_code": None,
-                "last_exit_reason": "",
-                "cpu_request": "2",
-                "cpu_limit": "8",
-                "memory_request": "16Gi",
-                "memory_limit": "32Gi",
-                "startup_probe": True,
-                "readiness_probe": True,
-                "liveness_probe": True,
-                "pvc": f"{server}-cache",
-                "storage_class": "shared-vast",
-                "storage_capacity": "250Gi",
-                "image": "ghcr.io/marin-community/finelog@sha256:abc",
-                "error_class": "",
-                "error": "",
-            }
-            for cluster, server in (
-                ("cw-us-east-02a", "finelog-cw-use02a"),
-                ("cw-us-east-08a", "finelog-cw-use08a"),
-                ("cw-rno2a", "finelog-cw-rno2a"),
-            )
-        ]
-    if path == "/k8s/finelog_events":
-        return [
-            {
-                "cluster": "cw-rno2a",
-                "namespace": "iris",
-                "object": "Pod/finelog-cw-rno2a-abc",
-                "reason": "Unhealthy",
-                "message": "Readiness probe failed",
-                "count": 3,
                 "last_seen": round(_NOW.timestamp() * 1000),
             }
         ]

@@ -84,6 +84,9 @@ TO_MACRO = "{{to}}"
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
+_K8S_EVENTS_CACHE_KEY = "events"
+_K8S_FINELOG_CACHE_KEY = "finelog"
+_FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
 
@@ -399,18 +402,20 @@ def create_app(
         return k8s_endpoint("kueue", k8s_fleet.kueue)
 
     def k8s_events(_: Request) -> JSONResponse:
-        return k8s_endpoint("events", k8s_fleet.warning_events)
+        return k8s_endpoint(_K8S_EVENTS_CACHE_KEY, k8s_fleet.warning_events)
 
     def k8s_finelog(_: Request) -> JSONResponse:
-        return k8s_endpoint("finelog", k8s_fleet.finelog_pods)
+        rows = k8s_cache.get_or_compute(_K8S_FINELOG_CACHE_KEY, k8s_fleet.finelog_pods)
+        return JSONResponse([asdict(row) for row in rows])
 
     def k8s_finelog_events(_: Request) -> JSONResponse:
-        events = k8s_cache.get_or_compute("events", k8s_fleet.warning_events)
+        events = k8s_cache.get_or_compute(_K8S_EVENTS_CACHE_KEY, k8s_fleet.warning_events)
         return JSONResponse(
             [
                 row
                 for row in events
-                if "finelog" in (row.get("object") or "").lower() or "finelog" in (row.get("message") or "").lower()
+                if _FINELOG_FILTER_TOKEN in (row.get("object") or "").lower()
+                or _FINELOG_FILTER_TOKEN in (row.get("message") or "").lower()
             ]
         )
 

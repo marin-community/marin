@@ -142,6 +142,45 @@ class TerminatingPodError:
 
 
 TerminatingPodResult = TerminatingPod | TerminatingPodError
+
+
+@dataclass(frozen=True)
+class FinelogPod:
+    """Runtime and provisioning details for one Kubernetes finelog pod."""
+
+    cluster: str
+    namespace: str
+    deployment: str
+    pod: str
+    node: str
+    phase: str
+    ready: bool
+    restarts: int
+    last_exit_code: int | None
+    last_exit_reason: str
+    image: str
+    cpu_request: str
+    cpu_limit: str
+    memory_request: str
+    memory_limit: str
+    startup_probe: bool
+    readiness_probe: bool
+    liveness_probe: bool
+    pvc: str
+    storage_class: str
+    storage_capacity: str
+
+
+@dataclass(frozen=True)
+class FinelogPodError:
+    """A cluster query failure returned beside healthy finelog pod records."""
+
+    cluster: str
+    error_class: str
+    error: str
+
+
+FinelogPodResult = FinelogPod | FinelogPodError
 _Row = TypeVar("_Row")
 
 
@@ -320,10 +359,7 @@ class K8sSource:
         """Report the mirror's HTTP-probe readiness from its Deployment status."""
         # Name and namespace belong to finelog's deploy config, which is not in this
         # image; discover by the stable container name instead of mirroring config.
-        deployments = self._list("/apis/apps/v1/deployments")
-        deployments = [
-            deployment for deployment in deployments if _deployment_has_container(deployment, _FINELOG_CONTAINER)
-        ]
+        deployments = self._finelog_deployments()
         if len(deployments) != 1:
             return FinelogHealth(
                 cluster=self._target.name,
@@ -353,15 +389,17 @@ class K8sSource:
             error="" if responsive else "HTTP /health probe is not Ready",
         )
 
-    def finelog_pods(self) -> list[dict]:
-        """Runtime and provisioning details for every finelog pod in this cluster."""
-        deployments = [
+    def _finelog_deployments(self) -> list[dict]:
+        return [
             deployment
             for deployment in self._list("/apis/apps/v1/deployments")
             if _deployment_has_container(deployment, _FINELOG_CONTAINER)
         ]
+
+    def finelog_pods(self) -> list[FinelogPod]:
+        """Runtime and provisioning details for every finelog pod in this cluster."""
         rows = []
-        for deployment in deployments:
+        for deployment in self._finelog_deployments():
             metadata = deployment.get("metadata") or {}
             namespace = metadata.get("namespace") or "default"
             deployment_name = metadata.get("name") or _FINELOG_FALLBACK_SERVER
@@ -406,28 +444,29 @@ class K8sSource:
                 )
                 last_terminated = (container_status.get("lastState") or {}).get("terminated") or {}
                 rows.append(
-                    {
-                        "namespace": namespace,
-                        "deployment": deployment_name,
-                        "pod": pod_metadata.get("name") or "",
-                        "node": runtime_spec.get("nodeName") or "",
-                        "phase": status.get("phase") or "Missing",
-                        "ready": bool(container_status.get("ready")),
-                        "restarts": container_status.get("restartCount") or 0,
-                        "last_exit_code": last_terminated.get("exitCode"),
-                        "last_exit_reason": last_terminated.get("reason") or "",
-                        "image": container.get("image") or "",
-                        "cpu_request": str(requests.get("cpu", "")),
-                        "cpu_limit": str(limits.get("cpu", "")),
-                        "memory_request": str(requests.get("memory", "")),
-                        "memory_limit": str(limits.get("memory", "")),
-                        "startup_probe": bool(container.get("startupProbe")),
-                        "readiness_probe": bool(container.get("readinessProbe")),
-                        "liveness_probe": bool(container.get("livenessProbe")),
-                        "pvc": pvc_name,
-                        "storage_class": pvc_spec.get("storageClassName") or "",
-                        "storage_capacity": str(storage_capacity),
-                    }
+                    FinelogPod(
+                        cluster=self._target.name,
+                        namespace=namespace,
+                        deployment=deployment_name,
+                        pod=pod_metadata.get("name") or "",
+                        node=runtime_spec.get("nodeName") or "",
+                        phase=status.get("phase") or "Missing",
+                        ready=bool(container_status.get("ready")),
+                        restarts=container_status.get("restartCount") or 0,
+                        last_exit_code=last_terminated.get("exitCode"),
+                        last_exit_reason=last_terminated.get("reason") or "",
+                        image=container.get("image") or "",
+                        cpu_request=str(requests.get("cpu", "")),
+                        cpu_limit=str(limits.get("cpu", "")),
+                        memory_request=str(requests.get("memory", "")),
+                        memory_limit=str(limits.get("memory", "")),
+                        startup_probe=bool(container.get("startupProbe")),
+                        readiness_probe=bool(container.get("readinessProbe")),
+                        liveness_probe=bool(container.get("livenessProbe")),
+                        pvc=pvc_name,
+                        storage_class=pvc_spec.get("storageClassName") or "",
+                        storage_capacity=str(storage_capacity),
+                    )
                 )
         return rows
 
@@ -771,8 +810,11 @@ class K8sFleet:
 
         return self._collect(lambda source: [source.finelog_health()], on_error)
 
-    def finelog_pods(self) -> list[dict]:
-        return self._fan_out(lambda source: source.finelog_pods(), self._error_row)
+    def finelog_pods(self) -> list[FinelogPodResult]:
+        return self._collect(
+            lambda source: source.finelog_pods(),
+            lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
+        )
 
     def alert_gpu_rack_trays(self) -> list[dict]:
         """Per rack: trays_ready as ``value``, for the below-minimum-trays alert.

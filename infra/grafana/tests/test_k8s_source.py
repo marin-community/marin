@@ -504,7 +504,8 @@ def test_finelog_pods_reports_runtime_resources_probes_and_pvc():
 
     (row,) = make_k8s_source(k8s_api(routes)).finelog_pods()
 
-    assert row == {
+    assert asdict(row) == {
+        "cluster": "cw-a",
         "namespace": "iris",
         "deployment": "finelog-cw-a",
         "pod": "finelog-cw-a-abc",
@@ -646,6 +647,35 @@ def test_k8s_routes_serve_fleet_rows():
         "trays_total": 1,
         "trays_ready": 1,
     }
+
+
+def test_finelog_events_route_filters_kubernetes_warnings():
+    routes = healthy_k8s_routes()
+    routes["/api/v1/events"] = [
+        {
+            "involvedObject": {"kind": "Pod", "name": "finelog-cw-a-abc", "namespace": "iris"},
+            "reason": "Unhealthy",
+            "message": "Readiness probe failed",
+            "lastTimestamp": "2026-07-23T02:00:00Z",
+        },
+        {
+            "involvedObject": {"kind": "PersistentVolumeClaim", "name": "cache", "namespace": "iris"},
+            "reason": "ProvisioningFailed",
+            "message": "finelog volume could not be mounted",
+            "lastTimestamp": "2026-07-23T01:59:00Z",
+        },
+        {
+            "involvedObject": {"kind": "Pod", "name": "trainer-0", "namespace": "training"},
+            "reason": "FailedScheduling",
+            "message": "no GPU nodes available",
+            "lastTimestamp": "2026-07-23T01:58:00Z",
+        },
+    ]
+
+    response = _client(_fleet(("cw-a", k8s_api(routes)))).get("/k8s/finelog_events")
+
+    assert response.status_code == 200
+    assert [row["object"] for row in response.json()] == ["Pod/finelog-cw-a-abc", "PersistentVolumeClaim/cache"]
 
 
 def test_stuck_termination_routes_return_classification_and_alert_projection():
