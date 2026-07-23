@@ -253,7 +253,7 @@ class GitHubFederationConfig:
         }
 
 
-def _profile_manifest(
+def _deployment_profiles(
     profiles: tuple[ProfileConfig, ...],
 ) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
     """Return Loom profile manifests and their ``(project, secret)`` IAM targets."""
@@ -271,7 +271,6 @@ def _google_federation_mapping(
     email: str,
     subject: str,
 ) -> dict[str, Any]:
-    """Render a Google workload identity mapping for Loom's deployment API."""
     return {
         "name": workload.name,
         "provider": "google",
@@ -571,22 +570,22 @@ def _create_image(
     return ImageResources(image, reference, vm_reader)
 
 
-def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
-    """Create loom's GCP resource graph and export its operator-facing values."""
-    apis = _enable_apis(config.project)
-    api_options = pulumi.ResourceOptions(depends_on=apis)
+@dataclass(frozen=True)
+class RuntimePolicyResources:
+    audience: str
+    manifest: pulumi.Input[str]
+    workload_clients: list[pulumi.Output[dict[str, str]]]
+    profile_secret_refs: list[tuple[str, str]]
 
-    vm_account = gcp.serviceaccount.Account(
-        "loom-vm",
-        project=config.project,
-        account_id=config.vm_service_account_name,
-        display_name="loom standalone VM",
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    profile_manifest, profile_secret_refs = _profile_manifest(config.profiles)
+
+def _create_runtime_policy(
+    config: DeploymentConfig,
+    api_options: pulumi.ResourceOptions,
+) -> RuntimePolicyResources:
+    profiles, profile_secret_refs = _deployment_profiles(config.profiles)
     audience = f"https://{config.domain.rstrip('/')}"
-    workload_mapping_outputs: list[pulumi.Output[dict[str, Any]]] = []
-    workload_client_outputs: list[pulumi.Output[dict[str, str]]] = []
+    workload_mappings: list[pulumi.Output[dict[str, Any]]] = []
+    workload_clients: list[pulumi.Output[dict[str, str]]] = []
     for workload in config.workloads:
         resource_name = re.sub(r"[^a-z0-9-]", "-", workload.name.lower())
         account = gcp.serviceaccount.Account(
@@ -596,12 +595,12 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             display_name=f"Loom workload: {workload.name}",
             opts=api_options,
         )
-        workload_mapping_outputs.append(
+        workload_mappings.append(
             pulumi.Output.all(account.email, account.unique_id).apply(
                 lambda values, workload=workload: _google_federation_mapping(workload, audience, values[0], values[1])
             )
         )
-        workload_client_outputs.append(
+        workload_clients.append(
             account.email.apply(
                 lambda email, workload=workload: {
                     "name": workload.name,
@@ -615,47 +614,57 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         )
     github_mappings = [mapping.manifest(audience) for mapping in config.github_federations]
 
-    def render_deployment_manifest(workload_mappings: list[dict[str, Any]]) -> str:
+    def render(workload_values: list[dict[str, Any]]) -> str:
         return json.dumps(
             {
-                "profiles": profile_manifest,
-                "federations": github_mappings + workload_mappings,
+                "profiles": profiles,
+                "federations": github_mappings + workload_values,
                 "prune": config.prune_deployment,
             },
             sort_keys=True,
             separators=(",", ":"),
         )
 
-    deployment_manifest: pulumi.Input[str]
-    if workload_mapping_outputs:
-        deployment_manifest = pulumi.Output.all(*workload_mapping_outputs).apply(
-            lambda workload_mappings: render_deployment_manifest(list(workload_mappings))
-        )
+    manifest: pulumi.Input[str]
+    if workload_mappings:
+        manifest = pulumi.Output.all(*workload_mappings).apply(lambda values: render(list(values)))
     else:
-        deployment_manifest = render_deployment_manifest([])
-    image = _create_image(config, apis, vm_account)
-    network = _create_network(config, apis)
+        manifest = render([])
+    return RuntimePolicyResources(audience, manifest, workload_clients, profile_secret_refs)
 
-    data = _create_data_disk(config, apis)
 
-    dotenv_secret = gcp.secretmanager.Secret(
+@dataclass(frozen=True)
+class SecretResources:
+    secret: gcp.secretmanager.Secret
+    vm_reader: gcp.secretmanager.SecretIamMember
+    profile_readers: list[gcp.secretmanager.SecretIamMember]
+
+
+def _create_secrets(
+    config: DeploymentConfig,
+    apis: list[gcp.projects.Service],
+    api_options: pulumi.ResourceOptions,
+    vm_account: gcp.serviceaccount.Account,
+    profile_secret_refs: list[tuple[str, str]],
+) -> SecretResources:
+    secret = gcp.secretmanager.Secret(
         "loom-dotenv",
         project=config.project,
         secret_id=DOTENV_SECRET_ID,
         replication={"auto": {}},
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    vm_secret_reader = gcp.secretmanager.SecretIamMember(
+    vm_reader = gcp.secretmanager.SecretIamMember(
         "loom-vm-secret-reader",
         project=config.project,
-        secret_id=dotenv_secret.secret_id,
+        secret_id=secret.secret_id,
         role=SECRET_ACCESSOR_ROLE,
         member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
     )
-    profile_secret_readers = []
+    profile_readers = []
     for secret_project, secret_name in sorted(set(profile_secret_refs)):
         suffix = hashlib.sha256(f"{secret_project}/{secret_name}".encode()).hexdigest()[:10]
-        profile_secret_readers.append(
+        profile_readers.append(
             gcp.secretmanager.SecretIamMember(
                 f"loom-profile-secret-{suffix}",
                 project=secret_project,
@@ -665,6 +674,28 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 opts=api_options,
             )
         )
+    return SecretResources(secret, vm_reader, profile_readers)
+
+
+def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
+    """Create loom's GCP resource graph and export its operator-facing values."""
+    apis = _enable_apis(config.project)
+    api_options = pulumi.ResourceOptions(depends_on=apis)
+
+    vm_account = gcp.serviceaccount.Account(
+        "loom-vm",
+        project=config.project,
+        account_id=config.vm_service_account_name,
+        display_name="loom standalone VM",
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    runtime_policy = _create_runtime_policy(config, api_options)
+    image = _create_image(config, apis, vm_account)
+    network = _create_network(config, apis)
+
+    data = _create_data_disk(config, apis)
+
+    secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
 
     metadata = {
         "loom-domain": config.domain,
@@ -673,7 +704,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
         "data-disk-device": DATA_DISK_DEVICE_NAME,
-        "loom-deployment": deployment_manifest,
+        "loom-deployment": runtime_policy.manifest,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
         "startup-script": STARTUP_SCRIPT,
@@ -682,11 +713,11 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         network.web_firewall,
         network.ssh_firewall,
         data.disk,
-        dotenv_secret,
-        vm_secret_reader,
+        secrets.secret,
+        secrets.vm_reader,
         image.vm_reader,
         data.snapshot_attachment,
-        *profile_secret_readers,
+        *secrets.profile_readers,
     ]
     dependencies.append(network.dns_record)
     instance_options = pulumi.ResourceOptions(
@@ -759,11 +790,11 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     pulumi.export("artifactImage", image.reference)
     pulumi.export("builtImage", image.image.ref)
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
-    pulumi.export("tokenAudience", audience)
+    pulumi.export("tokenAudience", runtime_policy.audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
     pulumi.export(
         "workloadClients",
-        pulumi.Output.all(*workload_client_outputs) if workload_client_outputs else [],
+        pulumi.Output.all(*runtime_policy.workload_clients) if runtime_policy.workload_clients else [],
     )
     return Infrastructure(
         instance=instance,

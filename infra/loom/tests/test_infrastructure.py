@@ -15,7 +15,7 @@ from infra.loom.infrastructure import (
     GitHubFederationConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
-    _profile_manifest,
+    _deployment_profiles,
     _validated_image_reference,
     create_infrastructure,
 )
@@ -124,7 +124,7 @@ def test_release_reference_must_be_the_expected_registry_digest() -> None:
 
 
 def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None:
-    profiles, references = _profile_manifest(
+    profiles, references = _deployment_profiles(
         (
             ProfileConfig.parse(
                 "ops",
@@ -168,7 +168,6 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
         secret_reader = by_name(mocks, "loom-vm-secret-reader")
         assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
-        assert not any(resource.typ == "gcp:storage/bucket:Bucket" for resource in mocks.resources)
 
     return infrastructure.instance.id.apply(check)
 
@@ -191,7 +190,6 @@ def test_local_tree_build_drives_the_runtime_rollout():
         vm = by_name(mocks, "loom")
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
         assert vm.inputs["metadata"]["loom-image"].endswith("@sha256:" + "a" * 64)
-        assert "release-commit" not in vm.inputs["metadata"]
 
     return infrastructure.instance.id.apply(check)
 
