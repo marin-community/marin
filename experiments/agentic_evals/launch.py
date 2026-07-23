@@ -26,6 +26,14 @@ from pathlib import Path
 from typing import Dict, List
 
 from .harness.config import get_harbor_env_from_config, load_harbor_config
+from .backends.federated_iris import (
+    DEFAULT_PARENT_CLUSTER,
+    DEFAULT_PARENT_INGRESS,
+    DUMMY_API_KEY,
+    build_marin_serve_command,
+    durable_harbor_jobs_dir,
+    mint_external_api_base,
+)
 from .results.infra_errors import INFRA_ERROR_TYPES
 from .runtime.args import (
     add_database_upload_args,
@@ -39,6 +47,8 @@ from .serve.model_config import resolve_model_config
 DEFAULT_REFIRE_ERROR_TYPES = sorted(set(INFRA_ERROR_TYPES) | {"DaytonaValidationError", "VerifierTimeoutError"})
 DEFAULT_TPU_DISK = "100GB"
 DEFAULT_GPU_DISK = "512GB"
+DEFAULT_GRUG_SERVE_MODEL = "laion/grug-67b-a2b-sft-s3-agentic-step1903"
+DEFAULT_GRUG_S3_OUTPUT_ROOT = "s3://marin-us-east-02a/iris"
 
 
 def _load_presets() -> Dict[str, dict]:
@@ -120,6 +130,27 @@ def create_parser() -> argparse.ArgumentParser:
     iris.add_argument("--timeout", type=int, default=0)
     iris.add_argument("--no-wait", "--no_wait", dest="no_wait", action="store_true", default=False)
     iris.add_argument("--secrets-env", "--secrets_env", default=None, help="Path to a KEY=VALUE env file.")
+    iris.add_argument("--target-cluster", default=None, help="Federate the whole eval root job to this Iris peer.")
+
+    external = parser.add_argument_group("separately served endpoint")
+    external.add_argument("--external-profile", choices=["grug"], default=None)
+    external.add_argument("--external-endpoint", help="Existing parent-controller endpoint name to wait for and mint.")
+    external.add_argument("--external-serve-model", help="Start this model with marin-serve before evaluating.")
+    external.add_argument("--external-serve-name", help="Serving job name (default: <job-name>-serve).")
+    external.add_argument("--external-endpoint-name", help="Endpoint name (default: /serve/<serve-name>).")
+    external.add_argument("--external-parent-cluster", default=DEFAULT_PARENT_CLUSTER)
+    external.add_argument("--external-parent-ingress-host", default=DEFAULT_PARENT_INGRESS)
+    external.add_argument("--iris-bin", default="iris")
+    external.add_argument("--external-ttl-hours", type=float, default=24.0)
+    external.add_argument("--external-ready-timeout-seconds", type=float, default=1800.0)
+    external.add_argument("--external-serve-idle-timeout-hours", type=float, default=1.0)
+    external.add_argument("--external-serve-max-model-len", type=int, default=None)
+    external.add_argument("--external-serve-max-num-batched-tokens", type=int, default=None)
+    external.add_argument("--external-serve-tensor-parallel-size", type=int, default=None)
+    external.add_argument("--external-serve-data-parallel-size", type=int, default=None)
+    external.add_argument("--external-serve-max-num-seqs", type=int, default=None)
+    external.add_argument("--external-serve-vllm-arg", action="append", default=[])
+    external.add_argument("--external-s3-output-root", default=None)
 
     return parser
 
@@ -158,6 +189,23 @@ def _apply_preset(args: argparse.Namespace) -> None:
 
 
 def _normalize(args: argparse.Namespace) -> None:
+    if args.external_profile == "grug":
+        args.external_serve_model = args.external_serve_model or DEFAULT_GRUG_SERVE_MODEL
+        args.gpu = args.gpu or "H100x8"
+        args.target_cluster = args.target_cluster or "cw-us-east-02a"
+        args.external_s3_output_root = args.external_s3_output_root or DEFAULT_GRUG_S3_OUTPUT_ROOT
+        if not _cli_has("--n_concurrent", "--n-concurrent"):
+            args.n_concurrent = 256
+        if not args.model:
+            args.model = f"vllm/{args.external_serve_model}"
+        args.external_serve_vllm_arg.extend(
+            ["--enable-expert-parallel", "--enable-auto-tool-choice", "--tool-call-parser=hermes"]
+        )
+
+    if args.external_endpoint and args.external_serve_model:
+        raise ValueError("Specify --external-endpoint or --external-serve-model, not both.")
+    if (args.external_endpoint or args.external_serve_model) and not args.target_cluster:
+        raise ValueError("A separately served endpoint requires --target-cluster.")
     _apply_preset(args)
 
     if args.dataset and args.dataset_path:
@@ -197,6 +245,33 @@ def _normalize(args: argparse.Namespace) -> None:
     if args.disk is None:
         args.disk = DEFAULT_GPU_DISK if args.gpu else DEFAULT_TPU_DISK
 
+    if args.external_serve_model:
+        args.external_serve_name = args.external_serve_name or f"{args.job_name or 'eval'}-serve"
+        args.external_endpoint_name = args.external_endpoint_name or f"/serve/{args.external_serve_name}"
+        defaults = {
+            "external_serve_max_model_len": 32768,
+            "external_serve_max_num_batched_tokens": 8192,
+            "external_serve_tensor_parallel_size": 1,
+            "external_serve_data_parallel_size": 1,
+            "external_serve_max_num_seqs": 32,
+        }
+        if args.external_profile == "grug":
+            defaults.update(
+                external_serve_max_model_len=65536,
+                external_serve_max_num_batched_tokens=7168,
+                external_serve_data_parallel_size=8,
+            )
+        for key, value in defaults.items():
+            if getattr(args, key) is None:
+                setattr(args, key, value)
+    elif args.external_endpoint:
+        args.external_endpoint_name = args.external_endpoint
+
+    if args.external_s3_output_root:
+        args.harbor_extra_arg.append(
+            f"--jobs-dir={durable_harbor_jobs_dir(args.external_s3_output_root, args.job_name or 'eval')}"
+        )
+
 
 def build_worker_command(args: argparse.Namespace) -> List[str]:
     """Build the in-pod run_eval.py command."""
@@ -235,6 +310,11 @@ def build_worker_command(args: argparse.Namespace) -> List[str]:
 
     for kwarg in args.agent_kwarg or []:
         cmd.extend(["--agent_kwarg", kwarg])
+    for extra_arg in args.harbor_extra_arg or []:
+        cmd.append(f"--harbor_extra_arg={extra_arg}")
+
+    if args.external_endpoint_name:
+        cmd.extend(["--external-agent-api-base-env", "EXTERNAL_AGENT_API_BASE"])
 
     if args.upload_to_database:
         cmd.append("--upload_to_database")
@@ -244,6 +324,12 @@ def build_worker_command(args: argparse.Namespace) -> List[str]:
         cmd.append("--upload_hf_private")
     if args.upload_hf_episodes:
         cmd.extend(["--upload_hf_episodes", args.upload_hf_episodes])
+    if args.upload_username:
+        cmd.extend(["--upload_username", args.upload_username])
+    if args.upload_error_mode:
+        cmd.extend(["--upload_error_mode", args.upload_error_mode])
+    if args.upload_forced_update:
+        cmd.append("--upload_forced_update")
 
     for _et in getattr(args, "refire_filter_error_types", None) or []:
         cmd.extend(["--refire_filter_error_type", _et])
@@ -254,6 +340,8 @@ def build_worker_command(args: argparse.Namespace) -> List[str]:
 def main() -> None:
     parser = create_parser()
     args = parser.parse_args()
+    if not args.job_name:
+        args.job_name = f"eval-{int(__import__('time').time())}"
     _normalize(args)
 
     accelerator = args.gpu or args.tpu
@@ -262,6 +350,16 @@ def main() -> None:
     env_vars: Dict[str, str] = {}
     if args.harbor_env:
         env_vars["HARBOR_ENV"] = args.harbor_env
+
+    if args.external_serve_model:
+        import subprocess
+
+        result = subprocess.run(build_marin_serve_command(args), cwd=Path.cwd(), check=False)
+        if result.returncode:
+            raise SystemExit(result.returncode)
+    if args.external_endpoint_name:
+        env_vars["EXTERNAL_AGENT_API_BASE"] = mint_external_api_base(args)
+        env_vars["EXTERNAL_AGENT_API_KEY"] = DUMMY_API_KEY
 
     # Resolve model config for agent kwargs passthrough
     resolved = resolve_model_config(args.model, subsystem="eval")
@@ -286,7 +384,7 @@ def main() -> None:
 
     exit_code = backend.submit(
         command=command,
-        job_name=args.job_name or f"eval-{int(__import__('time').time())}",
+        job_name=args.job_name,
         env_vars=env_vars,
         accelerator=accelerator,
         replicas=args.replicas,
@@ -300,6 +398,7 @@ def main() -> None:
         secrets_env=args.secrets_env,
         dry_run=args.dry_run,
         no_wait=args.no_wait,
+        target_cluster=args.target_cluster,
     )
     sys.exit(exit_code or 0)
 

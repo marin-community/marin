@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..harness._compat import get_orchestrator_field
 from ..harness.command import (
+    build_endpoint_meta,
     build_harbor_command,
     load_endpoint_metadata,
     run_harbor_cli,
@@ -489,6 +490,10 @@ class LocalHarborRunner:
         parser.add_argument("--cpus", type=int, help="CPUs to expose to Ray.")
         parser.add_argument("--endpoint-json", help="Optional endpoint JSON path.")
         parser.add_argument(
+            "--external-agent-api-base-env",
+            help="Environment-variable name containing a separately served OpenAI /v1 endpoint.",
+        )
+        parser.add_argument(
             "--fd_monitor_interval",
             type=int,
             default=DEFAULT_FD_MONITOR_INTERVAL,
@@ -552,6 +557,18 @@ class LocalHarborRunner:
 
         # Resolve per-model serve config
         self._apply_model_config(args)
+
+        external_api_base_env = getattr(args, "external_agent_api_base_env", None)
+        external_api_base = os.environ.get(external_api_base_env) if external_api_base_env else None
+        if external_api_base_env and not external_api_base:
+            raise ValueError(f"external endpoint environment variable {external_api_base_env!r} is empty")
+        if external_api_base:
+            args._engine_type = "external_endpoint"
+            args._needs_local_vllm = False
+            args._external_endpoint_meta = build_endpoint_meta(
+                external_api_base,
+                api_key=os.environ.get("EXTERNAL_AGENT_API_KEY", "capability-url-no-auth-header"),
+            )
 
         # Set parallelism defaults
         _iris_serve = os.environ.get("OT_AGENT_IRIS_SERVE") == "1"
@@ -803,7 +820,9 @@ class LocalHarborRunner:
                 vllm_proc.proc.wait()
                 return
 
-            if needs_local_vllm and vllm_proc is not None:
+            if getattr(args, "_external_endpoint_meta", None) is not None:
+                self._endpoint_meta = args._external_endpoint_meta
+            elif needs_local_vllm and vllm_proc is not None:
                 endpoint_timeout = 1200 if iris_serve else 300
                 wait_for_endpoint(self._endpoint_json, vllm_proc, timeout=endpoint_timeout)
                 run_endpoint_health_check(

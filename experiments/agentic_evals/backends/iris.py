@@ -61,6 +61,7 @@ class IrisBackend:
         secrets_env: Optional[str] = None,
         dry_run: bool = False,
         no_wait: bool = False,
+        target_cluster: Optional[str] = None,
     ) -> Any:
         """Submit an eval job to Iris.
 
@@ -132,6 +133,7 @@ class IrisBackend:
                 regions=None,
                 zone=None,
                 preemptible=None,
+                target_cluster=target_cluster,
             )
 
             _PRIO = {
