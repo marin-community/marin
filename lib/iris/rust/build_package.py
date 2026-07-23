@@ -4,15 +4,15 @@
 
 """Build marin-iris-native wheels and source distributions.
 
-Driven by .github/workflows/iris-native-release-wheels.yaml. The release modes
-match the other native packages:
+Without a pre-resolved ``--version``, the release modes choose versions as
+follows:
 
     nightly  -- one patch above the latest stable, with a UTC dev timestamp
-    stable   -- the version supplied by an iris-native-v* tag
-    manual   -- the declared version plus the current commit, for build smokes
+    stable   -- requires an explicit version
+    manual   -- the declared version plus an explicit revision, for build smokes
 
-The resolved version is written to the maturin project and both Cargo packages
-inside the ephemeral CI checkout before building.
+CI resolves the version once, then passes it back through ``--version`` so every
+wheel and source distribution carries the same value.
 """
 
 import argparse
@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from enum import StrEnum
 from pathlib import Path
 
 RUST_DIR = Path(__file__).resolve().parent
@@ -36,6 +37,18 @@ VERSION_PATHS = (
 )
 PYPI_JSON_URL = "https://pypi.org/pypi/marin-iris-native/json"
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
+
+
+class BuildMode(StrEnum):
+    NIGHTLY = "nightly"
+    STABLE = "stable"
+    MANUAL = "manual"
+
+
+class BuildTarget(StrEnum):
+    RESOLVE = "resolve"
+    WHEEL = "wheel"
+    SDIST = "sdist"
 
 
 def _emit_github_output(key: str, value: str) -> None:
@@ -91,16 +104,17 @@ def _nightly_version() -> str:
     return f"{_bump_patch(base)}-dev.{stamp}"
 
 
-def resolve_version(mode: str, version: str | None) -> str:
+def resolve_version(mode: BuildMode, version: str | None, revision: str | None) -> str:
     if version:
         return version
-    if mode == "stable":
+    if mode == BuildMode.STABLE:
         raise ValueError("--mode stable requires --version")
-    if mode == "nightly":
+    if mode == BuildMode.NIGHTLY:
         return _nightly_version()
-    if mode == "manual":
-        revision = os.environ.get("GITHUB_SHA", "")[:8] or "local"
-        return f"{_read_declared_version()}+{revision}"
+    if mode == BuildMode.MANUAL:
+        if revision is None:
+            raise ValueError("--mode manual requires --revision when --version is omitted")
+        return f"{_read_declared_version()}+{revision[:8]}"
     raise ValueError(f"Unknown build mode: {mode}")
 
 
@@ -126,27 +140,24 @@ def build_sdist() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("nightly", "stable", "manual"), required=True)
-    parser.add_argument("--version")
-    parser.add_argument("--build", choices=("wheel", "sdist"))
-    parser.add_argument("--resolve-only", action="store_true")
+    parser.add_argument("--mode", type=BuildMode, choices=tuple(BuildMode), required=True)
+    parser.add_argument("--version", help="Pre-resolved version; bypasses mode-specific resolution.")
+    parser.add_argument("--revision", help="Commit revision used to resolve a manual build version.")
+    parser.add_argument("--build", type=BuildTarget, choices=tuple(BuildTarget), required=True)
     args = parser.parse_args()
 
-    if not args.resolve_only and args.build is None:
-        parser.error("--build is required unless --resolve-only is set")
-
     try:
-        version = resolve_version(args.mode, args.version)
+        version = resolve_version(args.mode, args.version, args.revision)
     except ValueError as error:
         parser.error(str(error))
 
     print(f"marin-iris-native version: {version} (mode={args.mode})")
     _emit_github_output("version", version)
-    if args.resolve_only:
+    if args.build == BuildTarget.RESOLVE:
         return
 
     _write_versions(version)
-    if args.build == "wheel":
+    if args.build == BuildTarget.WHEEL:
         build_wheel()
     else:
         build_sdist()

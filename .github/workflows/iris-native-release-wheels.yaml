@@ -1,8 +1,5 @@
 name: "Iris Native - Release Wheels"
 
-# Match the other native package release workflows: scheduled nightlies,
-# iris-native-v* stable tags, manually dispatched cuts, and PR build smokes.
-# Scheduled runs skip when neither the crate nor this workflow changed in 25h.
 on:
   workflow_dispatch:
     inputs:
@@ -87,7 +84,8 @@ jobs:
           python lib/iris/rust/build_package.py \
             --mode "$MODE" \
             --version "$INPUT_VERSION" \
-            --resolve-only
+            --revision "$GITHUB_SHA" \
+            --build resolve
 
   build:
     needs: resolve

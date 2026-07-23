@@ -4,6 +4,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 BUILD_PACKAGE_PATH = Path(__file__).parents[1] / "rust" / "build_package.py"
 
 
@@ -21,7 +23,7 @@ def test_nightly_version_advances_latest_stable(monkeypatch):
     monkeypatch.setattr(build_package, "_read_declared_version", lambda: "0.1.0")
     monkeypatch.setattr(build_package, "_latest_pypi_stable", lambda: "0.1.2")
 
-    resolved = build_package.resolve_version("nightly", None)
+    resolved = build_package.resolve_version(build_package.BuildMode.NIGHTLY, None, None)
 
     base, timestamp = resolved.split("-dev.")
     assert base == "0.1.3"
@@ -43,3 +45,12 @@ def test_build_version_is_written_to_all_manifests(tmp_path, monkeypatch):
         '[package]\nversion = "0.1.1-dev.202607230600"\n',
         '[package]\nversion = "0.1.1-dev.202607230600"\n',
     ]
+
+
+def test_manual_version_requires_explicit_revision():
+    build_package = _load_build_package()
+
+    with pytest.raises(ValueError, match="requires --revision"):
+        build_package.resolve_version(build_package.BuildMode.MANUAL, None, None)
+
+    assert build_package.resolve_version(build_package.BuildMode.MANUAL, None, "25bcb20c25f00d") == "0.1.0+25bcb20c"
