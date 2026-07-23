@@ -98,10 +98,13 @@ def cmd_search(cur, args: argparse.Namespace) -> None:
 
 def cmd_grep(cur, args: argparse.Namespace) -> None:
     where, params = chunk_filters(args)
+    # Escape ILIKE wildcards so the pattern is an exact substring: unescaped, the _ in
+    # e.g. "ragged_all_to_all" matches any character and % matches everything.
+    escaped = args.pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     cur.execute(
         f"SELECT id, NULL, source, kind, date::date, author, title, text, url "
-        f"FROM chunks WHERE {where} AND text ILIKE %s ORDER BY chunks.date DESC LIMIT %s",
-        [*params, f"%{args.pattern}%", args.limit],
+        f"FROM chunks WHERE {where} AND text ILIKE %s ESCAPE '\\' ORDER BY chunks.date DESC LIMIT %s",
+        [*params, f"%{escaped}%", args.limit],
     )
     print_hits(cur.fetchall())
 
@@ -142,11 +145,13 @@ def main() -> None:
 
     args = parser.parse_args()
     connector = Connector(quota_project=PROJECT)
-    conn = connector.connect(INSTANCE, "pg8000", user=DB_USER, password=db_password(), db=DATABASE)
     try:
-        args.func(conn.cursor(), args)
+        conn = connector.connect(INSTANCE, "pg8000", user=DB_USER, password=db_password(), db=DATABASE)
+        try:
+            args.func(conn.cursor(), args)
+        finally:
+            conn.close()
     finally:
-        conn.close()
         connector.close()
 
 
