@@ -2467,3 +2467,18 @@ author: dlwh
   - Ring remains the measured production winner. The remaining transport candidate is Transformer Engine NCCL_EP; a self-contained H100x8 transport gate is committed under `experiments/ncclep_h100`.
 - Next action:
   - Run the H100x8 NCCL_EP transport gate. Stop if transport-only forward-backward exceeds its explicit `18.33144ms` sanity bound; otherwise build a paired eight-process NCCL_EP-plus-Marin-GEMM versus ring benchmark before changing the JaxPP transport.
+
+### 2026-07-23 00:15 PDT - Transformer Engine NCCL_EP clears the H100 transport sanity gate
+- Hypothesis: Transformer Engine's staged, non-zero-copy NCCL_EP transport has enough H100 headroom to justify a matched full routed-MLP comparison against Marin ring.
+- Commit Hash: `34ce844e23` (`[docs] Record H100 NCCL ragged transport result`), with the gate implementation at `4d4c705cb6`.
+- Command: the H100x8 Iris command in `experiments/ncclep_h100/README.md`. Job `/dlwh/ncclep-h100-ep8-gate-20260723-070226` built Transformer Engine `4adad4c218c115cd9af235fb3d4e13ef4cec55a8` for SM90, installed NCCL `2.30.7`, and launched eight supervised one-GPU JAX processes. Shape: EP8, 16,384 tokens/rank, d2560, e64/top-k4, BF16 token payloads, FP32 routing weights, uniform balanced routing, and 1.25 receive capacity.
+- Results:
+  - Iris succeeded in `8m52.57s`; the task and all eight ranks exited `0` with no failures or preemptions. The task-local TE wheel build, NCCL_EP JIT setup, bootstrap, dispatch, combine, and custom VJPs all completed. No resources remain live.
+  - Dispatch-plus-combine forward median/p10/p90 was `14.26947/14.20567/14.90450ms`, corresponding to `41.1670` effective remote-wire GB/s.
+  - Transport value-and-grad median/p10/p90 was `5.21039/5.19228/5.23367ms`, corresponding to `225.4849` effective remote-wire GB/s under the gate's two-round-trip byte model.
+  - The value-and-grad median clears the predeclared `18.33144ms` unpaired sanity bound. Output, loss, token gradients, and routing-weight gradients were finite on every rank.
+- Interpretation:
+  - The gate promotes NCCL_EP to a paired full-MLP comparison; it does not establish a winner because the reference bound uses a different process topology and includes expert GEMMs.
+  - Forward alone being slower than value-and-grad is counterintuitive. The historical TE microbenchmark notes that reverse-mode graph construction can eliminate FFI work when the primal is discarded; this gate used `value_and_grad`, but the inversion still warrants treating the absolute transport number as provisional. A full-MLP A/B with all parameter gradients and synchronized output leaves is the decisive measurement.
+- Next action:
+  - Compare current Marin ring against NCCL_EP plus the same Haliax/Pallas-Triton BF16 expert GEMMs in one eight-process H100 job. Require finite values, explicit output/loss/gradient parity, slowest-rank timing, and at least `10%` NCCL_EP p50 speedup before integrating it into JaxPP.
