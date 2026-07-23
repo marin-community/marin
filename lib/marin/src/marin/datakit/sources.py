@@ -50,6 +50,7 @@ from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
 from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
+from marin.datakit.download.stack_v3 import stack_v3_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
@@ -173,6 +174,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
         ("sec-edgar", sec_edgar_normalize_steps, 334.90),
+        ("stack-v3", stack_v3_normalize_steps, 4900.0),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
@@ -206,7 +208,7 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
-    # common-pile: 27 entries, each its own HF repo.
+    # common-pile: 26 entries, each its own HF repo.
     common_pile = _rows_flat(
         common_pile_normalize_steps,
         {
@@ -230,7 +232,6 @@ def all_sources() -> dict[str, DatakitSource]:
             "cp/pubmed": 38.08,
             "cp/regulations": 1.28,
             "cp/stackexchange": 21.89,
-            "cp/stackv2_code": 352.76,
             "cp/ubuntu_irc": 1.76,
             "cp/uk_hansard": 2.13,
             "cp/usgpo": 7.78,
@@ -267,14 +268,11 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
-    # Exact counts, measured with marin-community/marin-tokenizer over the
-    # normalized data: 1,221,318,442,892 tokens / 635,390,613 docs and
-    # 65,538,632,427 / 31,179,056. Both came in above their chars/4 estimates
-    # (by 11.7% and 6.0%), which is the bias to expect from the estimates below.
+    # Exact count measured with marin-community/marin-tokenizer over the
+    # normalized data: 65,538,632,427 tokens / 31,179,056 docs.
     dolma3_5_code = _rows_flat(
         dolma3_5_code_normalize_steps,
         {
-            "dolma_code": 1221.32,
             "dolma_code_prose": 65.54,
         },
     )

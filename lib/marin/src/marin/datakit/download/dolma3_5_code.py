@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The code subsets of allenai/dolma3.5_pool.
+"""The code-prose subset of allenai/dolma3.5_pool.
 
-* ``dolma_code`` -- Stack v2, reprocessed for code quality.
-* ``dolma_code_prose`` -- web documents mixing prose and code.
+``dolma_code_prose`` contains web documents mixing prose and code.
 
 The pool is one HF repo with a directory per component and is nearly 10T tokens in
 full, so each subset downloads under a glob scoped to its own directory. The pool's
@@ -26,7 +25,7 @@ from marin.datakit.download.dolma3_5 import (
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 
-SUBSETS = ("dolma_code", "dolma_code_prose")
+SUBSETS = ("dolma_code_prose",)
 
 
 def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
