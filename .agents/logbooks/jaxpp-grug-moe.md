@@ -2599,3 +2599,18 @@ author: dlwh
   - The C++ bootstrap already configured each process with one physical EP8 communicator. At the pinned TE revision, the separate Python `EpConfig` controls abstract output dimensions, so `359a3effb9` changes only that tracing snapshot to `num_ep_groups=1` after physical bootstrap. It also pins stage-local inputs/receives/combines to the expert axis. The expected local FFN shapes are now receive `(1, 65536, 2560)`, counts `(1, 8)`, and eight expert matrices.
 - Next action:
   - Relaunch the unchanged reduced smoke from `359a3effb9`. If tracing clears, capture the first XLA compile/runtime result before changing any capacity or performance axis.
+
+### 2026-07-23 13:39 PDT - stage-local receive shape clears; TE backward needs an explicit spec
+- Hypothesis: Separating TE's physical communicator config from its stage-local abstract config will clear the four-group receive shape and complete JaxPR construction.
+- Commit Hash: `4bc4b059a7` (`[grug] Make NCCL EP dispatch backward sharding explicit`) fixes the next custom-VJP boundary.
+- Command: unchanged reduced smoke. Parent `/dlwh/iris-run-job-20260723-202237`; child `/dlwh/iris-run-job-20260723-202237/grug-train-jaxpp-rno2a-ncclep-smoke-r5-l8-e64k4-b512-s4096-p4m16-20260723-1325`.
+- Results:
+  - TE setup and all four physical EP8 bootstraps passed. The prior `(4, 65536, 2560)` local receive reshape failure is cleared.
+  - JaxPR construction advanced through forward dispatch, local expert FFN, and combine into TE's dispatch custom-VJP backward.
+  - TE's public `_dispatch_bwd` then failed before XLA compilation while calling its private default output-spec helper: `AssertionError: Global mesh resource is not set`.
+  - Child duration was `9m13.67s`; parent duration was `9m58.57s`. Parent, child, and all tasks are terminal with zero preemptions and no live resources. No loss or MFU metric was produced.
+- Interpretation:
+  - Physical topology and the stage-local receive layout are no longer blockers. The remaining error comes from TE's custom-VJP wrapper deriving backward sharding from ambient Python global state during JaxPP transposition.
+  - `4bc4b059a7` retains TE's tested prepare/dispatch forward/backward primitives but wraps dispatch with an explicit custom VJP whose receive cotangents and returned token gradients use the stage-local expert-axis spec. It does not modify C++ kernels, communicator state, or numerical equations.
+- Next action:
+  - Relaunch the unchanged reduced smoke from `4bc4b059a7`. Require complete JaxPR construction and capture the first XLA partition/lower/compile/runtime result.
