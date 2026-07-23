@@ -1,4 +1,12 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import importlib
+import importlib.util
 from types import SimpleNamespace
+
+import huggingface_hub
+import pytest
 
 from experiments.agentic_evals.backends.iris import IrisBackend
 from experiments.agentic_evals.launch import DEFAULT_GPU_DISK, DEFAULT_TPU_DISK, _normalize, create_parser
@@ -88,8 +96,9 @@ def test_iris_backend_submits_requested_gpu_resources(monkeypatch):
 
 
 def test_hf_result_sink_uses_current_harbor_export_api(monkeypatch, tmp_path):
-    from harbor.utils import traces_utils
-    import huggingface_hub
+    if importlib.util.find_spec("harbor") is None:
+        pytest.skip("Harbor is an optional dependency outside the Harbor worker environment.")
+    traces_utils = importlib.import_module("harbor.utils.traces_utils")
 
     captured = {}
 

@@ -11,12 +11,12 @@ functions the eval package needs: ``load_job_config``,
 
 from __future__ import annotations
 
+import json
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 import yaml
-from harbor.models.job.config import JobConfig
-from harbor.models.metric.type import MetricType
 
 _UNSUPPORTED_METRIC_TYPES = frozenset({"mean-drop-ei", "accuracy-drop-ei"})
 
@@ -28,7 +28,8 @@ def _filter_supported_metrics(raw: Any) -> Any:
     metrics = raw.get("metrics")
     if not isinstance(metrics, list):
         return raw
-    allowed = {mt.value for mt in MetricType}
+    MetricType = import_module("harbor.models.metric.type").MetricType
+    allowed = {metric_type.value for metric_type in MetricType}
     filtered = []
     dropped = []
     for entry in metrics:
@@ -80,7 +81,7 @@ def normalize_trajectory_kwargs(kwargs: dict[str, Any] | None) -> dict[str, Any]
     return normalized
 
 
-def _normalize_job_config_agent_kwargs(config: JobConfig) -> JobConfig:
+def _normalize_job_config_agent_kwargs(config: Any) -> Any:
     updated = config.model_copy(deep=True)
     normalized_agents = []
     for agent in updated.agents:
@@ -91,8 +92,9 @@ def _normalize_job_config_agent_kwargs(config: JobConfig) -> JobConfig:
     return updated
 
 
-def load_job_config(config_path: Path | str) -> JobConfig:
+def load_job_config(config_path: Path | str) -> Any:
     """Load a Harbor ``JobConfig`` from YAML or JSON."""
+    JobConfig = import_module("harbor.models.job.config").JobConfig
     path = Path(config_path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"Harbor job config not found: {path}")
@@ -102,9 +104,7 @@ def load_job_config(config_path: Path | str) -> JobConfig:
         raw = _filter_supported_metrics(yaml.safe_load(path.read_text()))
         config = JobConfig.model_validate(raw)
     elif suffix == ".json":
-        import json as _json
-
-        raw = _filter_supported_metrics(_json.loads(path.read_text()))
+        raw = _filter_supported_metrics(json.loads(path.read_text()))
         config = JobConfig.model_validate(raw)
     else:
         raise ValueError(f"Unsupported Harbor job config format '{path.suffix}'. Expected one of: .yaml, .yml, .json.")
