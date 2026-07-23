@@ -33,7 +33,7 @@ def main() -> None:
             accounts=tuple(
                 GcpDeployAccount(
                     service_account=account["service_account"],
-                    github_subject=account["github_subject"],
+                    github_subjects=tuple(account["github_subjects"]),
                     mint_id_tokens=account.get("mint_id_tokens", False),
                     kms_access=GcpKmsAccess(account.get("kms_access", GcpKmsAccess.ENCRYPT_DECRYPT.value)),
                     state_access=GcpStateAccess(account.get("state_access", GcpStateAccess.APPLY.value)),

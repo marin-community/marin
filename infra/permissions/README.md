@@ -19,11 +19,14 @@ GitHub subject. Rigging needs it to mint the service-account ID token accepted b
 edge; Grafana does not mint IAP tokens and does not receive that role.
 
 The `pulumi-ci` account backs `ops-iac-preview.yaml` (`infra/pulumi/README.md`'s CI preview) and
-is created by this stack (`create_account: true`) rather than pre-existing. It binds to the
-`pull_request` OIDC subject rather than main-branch push, and its grants are preview-only:
+is created by this stack (`create_account: true`) rather than pre-existing. It binds two
+`github_subjects`: `pull_request` for the PR trigger, and `*main_subject` for
+`workflow_dispatch` — whose OIDC subject follows the dispatching ref, not the event name, so a
+manual run only authenticates when dispatched from `main`. Its grants are preview-only:
 `kms_access: decrypt_only` (never encrypt/write secrets) and `state_access: preview` (read
 state, write only the `.pulumi/locks/` prefix — never state content). Every other account
-defaults to `kms_access: encrypt_decrypt` / `state_access: apply`, matching `pulumi up`.
+defaults to `kms_access: encrypt_decrypt` / `state_access: apply`, matching `pulumi up`, and
+`github_subjects` normally holds just the one main-branch subject.
 
 The Grafana deploy account can list Secret Manager metadata for its optional-secret probe. A
 custom role lets it manage IAM policies on the four secrets wired into Cloud Run without

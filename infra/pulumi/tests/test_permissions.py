@@ -22,7 +22,7 @@ def _permissions_args() -> GcpDeployPermissionsArgs:
         kms_location="us-central1",
         kms_key_ring="marin-iac-keyring",
         kms_key="marin-iac-key",
-        accounts=(GcpDeployAccount(service_account=DEPLOY_ACCOUNT, github_subject=GITHUB_SUBJECT),),
+        accounts=(GcpDeployAccount(service_account=DEPLOY_ACCOUNT, github_subjects=(GITHUB_SUBJECT,)),),
     )
 
 
@@ -32,7 +32,7 @@ def test_deploy_permission_sets_rejects_service_account_from_another_project():
         accounts=(
             GcpDeployAccount(
                 service_account="deploy@another-project.iam.gserviceaccount.com",
-                github_subject=GITHUB_SUBJECT,
+                github_subjects=(GITHUB_SUBJECT,),
             ),
         ),
     )

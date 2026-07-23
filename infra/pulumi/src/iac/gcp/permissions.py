@@ -62,7 +62,10 @@ class GcpArtifactRegistryGrant:
 @dataclass(frozen=True)
 class GcpDeployAccount:
     service_account: str
-    github_subject: str
+    # One GitHub OIDC subject per trigger this account must authenticate from (e.g. a
+    # `pull_request` subject for preview plus a main-branch `ref:refs/heads/main` subject for
+    # `workflow_dispatch`, whose subject follows the dispatching ref rather than the event name).
+    github_subjects: tuple[str, ...]
     mint_id_tokens: bool = False
     kms_access: GcpKmsAccess = GcpKmsAccess.ENCRYPT_DECRYPT
     state_access: GcpStateAccess = GcpStateAccess.APPLY
@@ -95,7 +98,7 @@ class GcpDeployPermissionSet:
     account_id: str
     service_account_id: str
     service_account_member: str
-    github_principal: str
+    github_principals: tuple[str, ...]
     state_bucket: str
     crypto_key_id: str
     mint_id_tokens: bool
@@ -114,10 +117,13 @@ def _service_account_member(email: str) -> str:
     return f"serviceAccount:{email}"
 
 
-def _github_principal(project_number: str, workload_identity_pool: str, github_subject: str) -> str:
-    return (
+def _github_principals(
+    project_number: str, workload_identity_pool: str, github_subjects: tuple[str, ...]
+) -> tuple[str, ...]:
+    return tuple(
         f"principal://iam.googleapis.com/projects/{project_number}/locations/global/"
-        f"workloadIdentityPools/{workload_identity_pool}/subject/{github_subject}"
+        f"workloadIdentityPools/{workload_identity_pool}/subject/{subject}"
+        for subject in github_subjects
     )
 
 
@@ -132,7 +138,9 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
             account_id=_account_id(args.project, account.service_account),
             service_account_id=f"projects/{args.project}/serviceAccounts/{account.service_account}",
             service_account_member=_service_account_member(account.service_account),
-            github_principal=_github_principal(args.project_number, args.workload_identity_pool, account.github_subject),
+            github_principals=_github_principals(
+                args.project_number, args.workload_identity_pool, account.github_subjects
+            ),
             state_bucket=args.state_bucket,
             crypto_key_id=crypto_key_id,
             mint_id_tokens=account.mint_id_tokens,
@@ -169,21 +177,27 @@ def _create_base_permissions(
     opts: pulumi.ResourceOptions,
 ) -> None:
     for permission_set in permission_sets:
-        gcp.serviceaccount.IAMMember(
-            f"{permission_set.account_id}-github-main",
-            service_account_id=permission_set.service_account_id,
-            role=WORKLOAD_IDENTITY_USER,
-            member=permission_set.github_principal,
-            opts=opts,
-        )
-        if permission_set.mint_id_tokens:
+        # Suffix only when an account has more than one subject: the unsuffixed "-github-main"
+        # name is the pre-existing resource name for the accounts already live in state, and
+        # renaming it would make Pulumi delete-then-recreate a protected resource.
+        multiple = len(permission_set.github_principals) > 1
+        for i, principal in enumerate(permission_set.github_principals):
+            suffix = f"-{i}" if multiple else ""
             gcp.serviceaccount.IAMMember(
-                f"{permission_set.account_id}-github-main-id-token",
+                f"{permission_set.account_id}-github-main{suffix}",
                 service_account_id=permission_set.service_account_id,
-                role=SERVICE_ACCOUNT_TOKEN_CREATOR,
-                member=permission_set.github_principal,
+                role=WORKLOAD_IDENTITY_USER,
+                member=principal,
                 opts=opts,
             )
+            if permission_set.mint_id_tokens:
+                gcp.serviceaccount.IAMMember(
+                    f"{permission_set.account_id}-github-main-id-token{suffix}",
+                    service_account_id=permission_set.service_account_id,
+                    role=SERVICE_ACCOUNT_TOKEN_CREATOR,
+                    member=principal,
+                    opts=opts,
+                )
         if permission_set.state_access is GcpStateAccess.APPLY:
             gcp.storage.BucketIAMMember(
                 f"{permission_set.account_id}-pulumi-state",

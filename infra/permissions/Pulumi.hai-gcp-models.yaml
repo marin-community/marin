@@ -8,12 +8,14 @@ config:
   marin-permissions:kms_key: marin-iac-key
   marin-permissions:deploy_accounts:
     - service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
-      github_subject: &main_subject repo:marin-community/marin:ref:refs/heads/main
+      github_subjects:
+        - &main_subject repo:marin-community/marin:ref:refs/heads/main
       mint_id_tokens: true
       secret_access_secrets:
         - iris-cw-us-west-04a-signing-key
     - service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-      github_subject: *main_subject
+      github_subjects:
+        - *main_subject
       secret_metadata_viewer: true
       # Keep this permission allowlist explicit: a new runtime secret should fail closed
       # until its deploy-account IAM management is reviewed here.
@@ -27,9 +29,13 @@ config:
           repositories:
             - marin-grafana
       iap_iam_manager: true
-    # Used for posting `pulumi preview` as a PR comment
+    # Used for posting `pulumi preview` as a PR comment. Two subjects: `pull_request` covers
+    # the PR trigger; `*main_subject` covers `workflow_dispatch`, whose OIDC subject follows
+    # the dispatching ref rather than the event name — manual runs only authenticate from main.
     - service_account: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-      github_subject: repo:marin-community/marin:pull_request
+      github_subjects:
+        - repo:marin-community/marin:pull_request
+        - *main_subject
       kms_access: decrypt_only
       state_access: preview
       create_account: true

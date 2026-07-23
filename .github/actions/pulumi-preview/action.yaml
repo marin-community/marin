@@ -51,6 +51,12 @@ runs:
 
     - name: Preview the stack
       uses: pulumi/actions@v6
+      env:
+        # infra/pulumi's plain `runtime: python` (no `virtualenv:` option) resolves `python3`
+        # from PATH, which `uv sync` above does not add to this step's PATH — without this,
+        # Pulumi runs the program under the runner's system Python and fails with
+        # `ModuleNotFoundError: No module named 'pulumi'` instead of previewing.
+        PULUMI_PYTHON_CMD: ${{ github.workspace }}/.venv/bin/python
       with:
         command: preview
         stack-name: ${{ inputs.stack }}
