@@ -227,8 +227,8 @@ allowlist for the deploy account to bind IAM on it.
 `GF_DATABASE_PASSWORD`, `CW_READ_TOKEN`, and `SLACK_ALERTS_WEBHOOK` must exist
 before a deploy — Cloud Run fails to start a revision that references a missing
 secret. `GF_SMTP_PASSWORD` and `GITHUB_APP_PRIVATE_KEY` are optional: `__main__.py`
-probes for each and only wires it when the secret exists (the GitHub App wiring
-also needs its two id config values). Unset, the GitHub panels deploy
+probes for each and wires it only when the secret exists (the GitHub App also
+needs its `github_app_client_id` config). Unset, the GitHub panels deploy
 unauthenticated and the build panel shows no data.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
@@ -317,36 +317,30 @@ project-level and shared across the project's IAP services, so nothing per-servi
 configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
 i.e. reachable by nobody until the first grant.
 
-The ferry, build, and nightly panels read the GitHub API. GitHub gates the GraphQL
-build query behind auth even for public repos, so the bridge authenticates as the
-"Marin Ops Agent" GitHub App: it signs a JWT with the app's private key, mints a
-read-only installation token scoped to the repos the panels read (the main repo
-plus every nightly lane repo — all under `marin-community`), and refreshes it
-before it expires (`src/github_app.py`). Nothing long-lived expires under the
-panels — a static token that did is what blanked the build panel.
+The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
+build query behind auth even for public repos. The bridge authenticates as the
+"Marin Ops Agent" GitHub App (`src/github_app.py`): it signs a JWT with the app's
+private key, looks up its installation, and mints a read-only token scoped to the
+repos the panels read (the main repo and every nightly lane repo, all under
+`marin-community`), refreshing it before expiry. A static token that expired is
+what blanked the build panel.
 
-The private key is a hand-placed secret (the deploy account cannot create
-secrets); the app id and installation id are not secret and travel as plain stack
-config. The wiring is optional — `__main__.py` probes for the secret and wires it
-only when the secret exists and both ids are set, so the merge-triggered deploy
-never blocks on it. Enable it once:
+The app's client id is committed as `github_app_client_id` (not secret); the
+private key is hand-placed. `__main__.py` wires the app only when both are present,
+so the merge-triggered deploy never blocks. The client id is already set, so
+enabling auth is one step (plus its permissions grant):
 
 ```bash
-# 1. Place the app private key. Grant the deploy account IAM on it by adding
-#    marin-grafana-github-app-private-key to secret_iam_secrets in
-#    infra/permissions/Pulumi.hai-gcp-models.yaml, then apply the permissions stack.
+# Add marin-grafana-github-app-private-key to secret_iam_secrets in
+# infra/permissions/Pulumi.hai-gcp-models.yaml and apply the permissions stack, then:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
-# 2. Set the ids and deploy.
-pulumi config set marin-grafana:github_app_id <app-id>
-pulumi config set marin-grafana:github_app_installation_id <installation-id>
 ```
 
-The app must be installed on `marin-community` with access to the main repo and
-every nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`,
-`tpu-inference`), and needs read on their Contents, Metadata, Commit statuses,
-Checks, and Actions; the minted token is attenuated to that read-only subset even
-if the app itself holds broader grants.
+Install the app on `marin-community` with access to the main repo and every
+nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`, `tpu-inference`),
+read-only on Contents, Metadata, Commit statuses, Checks, and Actions. The minted
+token is attenuated to that subset even if the app holds broader grants.
 
 ## Adding a dashboard
 

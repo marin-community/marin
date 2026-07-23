@@ -102,25 +102,18 @@ def main() -> None:
         secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))
         env["GF_SMTP_ENABLED"] = "true"
 
-    # The bridge authenticates to GitHub as the "Marin Ops Agent" App: it mints
-    # short-lived, read-only installation tokens at runtime (github_app.py), so no
-    # long-lived token expires under the ferry/build/nightly panels — the failure
-    # that blanked the build panel. The private key is a hand-placed secret (the
-    # deploy account cannot create secrets); the app and installation ids are not
-    # secret and travel as plain stack config. Wiring is optional (like SMTP): until
-    # the ids are set and the key secret exists, the bridge runs unauthenticated and
-    # the build panel shows no data, so the merge-triggered deploy never blocks on
-    # it. Enable it once:
+    # The bridge authenticates to GitHub as the "Marin Ops Agent" App, minting
+    # read-only installation tokens at runtime (github_app.py). The private key is a
+    # hand-placed secret (the deploy account cannot create secrets); the client id is
+    # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
+    # unauthenticated (build panel shows no data), so the merge deploy never blocks.
     #   gcloud secrets create marin-grafana-github-app-private-key \
-    #     --project=hai-gcp-models --data-file=key.pem   # (then add infra/permissions grant)
-    #   pulumi config set marin-grafana:github_app_id <app-id>
-    #   pulumi config set marin-grafana:github_app_installation_id <installation-id>
-    github_app_id = config.get("github_app_id")
-    github_app_installation_id = config.get("github_app_installation_id")
-    if github_app_id and github_app_installation_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
+    #     --project=hai-gcp-models --data-file=key.pem   # (then allowlist in infra/permissions)
+    #   pulumi config set marin-grafana:github_app_client_id <client-id>
+    github_app_client_id = config.get("github_app_client_id")
+    if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
         secrets.append(SecretEnv(name="GITHUB_APP_PRIVATE_KEY", secret=GITHUB_APP_PRIVATE_KEY_SECRET))
-        env["GITHUB_APP_ID"] = github_app_id
-        env["GITHUB_APP_INSTALLATION_ID"] = github_app_installation_id
+        env["GITHUB_APP_CLIENT_ID"] = github_app_client_id
     else:
         pulumi.log.warn(
             "GitHub App auth not configured; GitHub panels deploy unauthenticated (build panel shows no data)"

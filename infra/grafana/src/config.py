@@ -32,10 +32,9 @@ GITHUB_REPO = "marin-community/marin"
 
 @dataclasses.dataclass(frozen=True)
 class GithubAppCredentials:
-    """The "Marin Ops Agent" app identity and its installation on the served repo."""
+    """The "Marin Ops Agent" App client id (the token JWT's issuer) and private key."""
 
-    app_id: str
-    installation_id: str
+    client_id: str
     private_key: str  # PEM
 
 
@@ -181,10 +180,8 @@ class BridgeConfig:
     k8s_cache_ttl: float
     # HTTP timeout for the controller RPC, GitHub, and k8s API calls, seconds.
     http_timeout: float
-    # "Marin Ops Agent" GitHub App credentials for the ferry/build/nightly panels,
-    # or None when unconfigured (the GitHub calls then run unauthenticated and the
-    # build panel shows no data). The bridge mints short-lived installation tokens
-    # from these (see github_app.py).
+    # "Marin Ops Agent" GitHub App credentials, or None when unconfigured (the
+    # GitHub panels then run unauthenticated and the build panel shows no data).
     github_app_credentials: GithubAppCredentials | None
     # CW read-role bearer token for the k8s API servers. None does not fail the boot
     # (that would take Grafana down with it); the k8s routes serve auth error rows
@@ -209,13 +206,10 @@ class BridgeConfig:
 
 def _github_app_credentials() -> GithubAppCredentials | None:
     """Resolve GitHub App credentials from the environment; fail fast on a partial set."""
-    app_id = os.environ.get("GITHUB_APP_ID") or None
-    installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID") or None
+    client_id = os.environ.get("GITHUB_APP_CLIENT_ID") or None
     private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY") or None
-    if app_id and installation_id and private_key:
-        return GithubAppCredentials(app_id, installation_id, private_key)
-    if app_id or installation_id or private_key:
-        raise ValueError(
-            "GitHub App auth needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY together"
-        )
+    if client_id and private_key:
+        return GithubAppCredentials(client_id, private_key)
+    if client_id or private_key:
+        raise ValueError("GitHub App auth needs GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY together")
     return None
