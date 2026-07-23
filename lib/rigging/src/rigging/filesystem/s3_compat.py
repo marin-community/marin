@@ -37,8 +37,13 @@ _S3_READ_TIMEOUT = 120
 _S3_RETRY_MAX_ATTEMPTS = 5
 
 
-def s3_timeout_config_kwargs() -> dict[str, Any]:
-    """Return finite botocore request bounds for fsspec S3 filesystems."""
+def s3_request_bounds_config_kwargs() -> dict[str, Any]:
+    """Return finite botocore timeouts and retries for fsspec S3 filesystems.
+
+    s3fs/aiobotocore otherwise permit upload requests to wait indefinitely when a
+    connection wedges. Finite bounds turn that stall into an error handled by the
+    task retry path (#6487).
+    """
     return {
         "connect_timeout": _S3_CONNECT_TIMEOUT,
         "read_timeout": _S3_READ_TIMEOUT,
@@ -60,7 +65,7 @@ def fsspec_s3_conf(endpoint: str) -> dict:
     scheme; signing with the wrong region surfaces as 400 Bad Request. "auto" tells boto3 to skip
     region validation and let the endpoint route the request itself.
     """
-    config_kwargs = s3_timeout_config_kwargs()
+    config_kwargs = s3_request_bounds_config_kwargs()
     if needs_virtual_host_addressing(endpoint):
         config_kwargs["s3"] = {"addressing_style": "virtual"}
     return {

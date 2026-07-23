@@ -1034,7 +1034,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
-| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded endpoint, addressing, timeout, and retry config |
 | `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
