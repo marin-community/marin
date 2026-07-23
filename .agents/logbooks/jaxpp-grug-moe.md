@@ -2614,3 +2614,18 @@ author: dlwh
   - `4bc4b059a7` retains TE's tested prepare/dispatch forward/backward primitives but wraps dispatch with an explicit custom VJP whose receive cotangents and returned token gradients use the stage-local expert-axis spec. It does not modify C++ kernels, communicator state, or numerical equations.
 - Next action:
   - Relaunch the unchanged reduced smoke from `4bc4b059a7`. Require complete JaxPR construction and capture the first XLA partition/lower/compile/runtime result.
+
+### 2026-07-23 14:00 PDT - full JaxPR clears; TE partition callbacks need the guard during compile
+- Hypothesis: An explicit dispatch VJP will remove the final ambient TE dependency from JaxPR transposition and reach XLA compilation.
+- Commit Hash: `c42fb432d6` (`[grug] Guard NCCL EP pipeline compilation`) fixes the compiler-callback lifecycle exposed by this run.
+- Command: unchanged reduced smoke. Parent `/dlwh/iris-run-job-20260723-204042`; child `/dlwh/iris-run-job-20260723-204042/grug-train-jaxpp-rno2a-ncclep-smoke-r6-l8-e64k4-b512-s4096-p4m16-20260723-1345`.
+- Results:
+  - TE setup and four EP8 bootstraps passed. The explicit dispatch backward spec cleared the prior custom-VJP tracing failure.
+  - The complete explicit-MPMD JaxPR lower succeeded for the first time.
+  - Stage-local `eval_local()` compilation then failed in TE's `ep_prepare` custom partitioner because `_leading_axis_ok` called `global_mesh_resource()` after the earlier setup guard had exited.
+  - Child duration was `13m30.09s`; parent duration was `14m34.49s`. All jobs/tasks are terminal with zero preemptions and no live resources. No training step or MFU metric was produced.
+- Interpretation:
+  - The forward and backward program is now representable as a JaxPP stage JaxPR. The failure is lifecycle-only: Grug intentionally exits the global mesh setup context before entering the pipeline loop, but the TE guard was coupled to that same context even though JaxPP invokes TE partition callbacks later during local compilation.
+  - `c42fb432d6` makes a fresh TE guard context and enters it around explicit-MPMD train-step construction, lower, `eval_local()` compile, and execution. JaxPP remains outside the global Grug mesh as required.
+- Next action:
+  - Relaunch the unchanged reduced smoke from `c42fb432d6`. Require TE partitioning and stage-local XLA compilation to clear before interpreting runtime or performance.
