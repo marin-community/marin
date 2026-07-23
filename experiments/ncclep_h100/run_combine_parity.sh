@@ -7,6 +7,7 @@ TE_SHA=4adad4c218c115cd9af235fb3d4e13ef4cec55a8
 NCCL_RUNTIME_VERSION=2.30.7
 WORK=${WORK:-/tmp/ncclep-h100-combine-parity}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
+export WORK
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
