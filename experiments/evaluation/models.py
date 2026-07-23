@@ -39,7 +39,9 @@ MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
 _SNOWBALL_VLLM_ARGS = ("--enable-expert-parallel", "--model-loader-extra-config", '{"distributed":true}')
 
 
-def _snowball(name: str, location: str, *, chat_template: str | None = None, generation: GenerationConfig | None = None) -> ModelConfig:
+def _snowball(
+    name: str, location: str, *, chat_template: str | None = None, generation: GenerationConfig | None = None
+) -> ModelConfig:
     """A Grug 67B-A2B export served on a CoreWeave 8xH100 node via the marin vLLM fork.
 
     Data-parallel + expert-parallel sharding for the 256-expert MoE with ``tensor_parallel_size=1``.

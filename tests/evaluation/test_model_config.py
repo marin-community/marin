@@ -24,6 +24,8 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 
+from experiments.evaluation.models import MODEL_CATALOG_DIR, MODELS
+
 _CATALOG_YAML = textwrap.dedent(
     """
     name: qwen3-32b
@@ -149,8 +151,6 @@ def test_registry_migration_preserves_snowball_serve_options():
     # The migrated factory entries must produce the same serve options the earlier registry did: the
     # 256-expert MoE serves data-parallel + expert-parallel at tensor_parallel_size=1 on a pinned
     # 8xH100 node, and the thinking SFT carries the special-token gen kwargs that keep its CoT scored.
-    from experiments.evaluation.models import MODELS
-
     snow = MODELS["snowball"]
     assert snow.serve.fixed_gpu == ("H100", 8)
     assert snow.serve.tensor_parallel_size == 1
@@ -185,8 +185,6 @@ def test_shipped_catalog_loads_and_every_model_can_size_a_slice():
     # The imported serve catalog must load into ModelConfig with no draccus error, and every entry must
     # carry the sizing signal the hardware selector needs (hbm_gb or a pinned GPU) or a launch of it
     # would fail deep in accelerator selection rather than at load.
-    from experiments.evaluation.models import MODELS, MODEL_CATALOG_DIR
-
     catalog = scan_model_configs(MODEL_CATALOG_DIR)
     assert len(catalog) >= 40  # the OT-Agent catalog import
     for name, config in MODELS.items():

@@ -9,10 +9,13 @@ path. These check the registry wiring and that a model's agent_kwargs reach the 
 pure planning pieces that need no cluster.
 """
 
-from experiments.evaluation.evals import EVALS, SUITES, EvalMechanism
-from experiments.evaluation.launch import LaunchSpec, _group_params, plan_runs
-from experiments.evaluation.hardware import Platform
+from dataclasses import replace
+
 from marin.evaluation.records import Provenance
+
+from experiments.evaluation.evals import EVALS, SUITES, EvalMechanism
+from experiments.evaluation.hardware import Platform
+from experiments.evaluation.launch import LaunchSpec, _group_params, plan_runs
 
 
 def test_agentic_suites_are_harbor_datasets():
@@ -55,10 +58,6 @@ def test_model_agent_kwargs_flow_into_the_harbor_run():
 
 def test_suite_level_agent_kwargs_override_model_level():
     # A model-level agent kwarg is the default; a suite that sets the same key wins.
-    from dataclasses import replace
-
-    from experiments.evaluation.evals import HarborSpec
-
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("tb2-override",),
@@ -69,7 +68,9 @@ def test_suite_level_agent_kwargs_override_model_level():
         cluster="marin",
     )
     EVALS["tb2-override"] = replace(
-        EVALS["tb2-lite"], name="tb2-override", harbor=replace(EVALS["tb2-lite"].harbor, agent_kwargs={"extra_body": "SUITE"})
+        EVALS["tb2-lite"],
+        name="tb2-override",
+        harbor=replace(EVALS["tb2-lite"].harbor, agent_kwargs={"extra_body": "SUITE"}),
     )
     try:
         params = _group_params(plan_runs(spec), spec, _provenance(), "tester")
