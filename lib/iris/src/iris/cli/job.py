@@ -18,6 +18,7 @@ import time
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import click
 import humanfriendly
@@ -45,7 +46,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.codec import reconstruct_launch_job_request
+from iris.cluster.controller.codec import LaunchJobRow, reconstruct_launch_job_request
 from iris.cluster.controller.schema import JSONList, job_config_table
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
@@ -1514,11 +1515,15 @@ def logs(
 _JSON_LIST_COLUMNS = frozenset(c.name for c in job_config_table.columns if isinstance(c.type, JSONList))
 
 
-def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> SimpleNamespace | None:
-    """Read the stored config of *job_id* in the shape the reconstructor expects."""
+def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> LaunchJobRow | None:
+    """Read the stored config of *job_id* in the shape the reconstructor expects.
+
+    ``state`` rides along so the caller can report what it replaced; the rest of
+    the row is the ``LaunchJobRow`` read surface.
+    """
     rows = query_dicts(
         client,
-        "SELECT c.*, j.num_tasks, j.user_id, j.state "
+        "SELECT c.*, j.num_tasks, j.state "
         "FROM job_config c JOIN jobs j ON j.job_id = c.job_id "
         f"WHERE c.job_id = {sql_literal(job_id)}",
     )
@@ -1529,11 +1534,17 @@ def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> SimpleN
         value = row.get(column)
         row[column] = json.loads(value) if isinstance(value, str) else (value or [])
     row["has_coscheduling"] = bool(row.get("has_coscheduling"))
-    return SimpleNamespace(**row)
+    # The field set comes from `SELECT c.*`, so the schema decides it; the cast
+    # records that this is the reconstructor's row shape without restating it.
+    return cast(LaunchJobRow, SimpleNamespace(**row))
 
 
 def _stored_workdir_files(client: ControllerServiceClientSync, job_id: str) -> dict[str, bytes]:
-    """Read the job's workdir files, hex-encoded so they survive the query RPC."""
+    """Read the job's workdir files.
+
+    ``data`` is a BLOB and the query RPC carries JSON, so it crosses as hex and
+    is decoded back to bytes here.
+    """
     rows = query_dicts(
         client,
         f"SELECT filename, hex(data) AS data_hex FROM job_workdir_files WHERE job_id = {sql_literal(job_id)}",
