@@ -18,16 +18,16 @@ author: mcwitt
 
 ### Active
 
-- `H-FUSION2174-EMPTY` (rank 1, established): both failing full serialized executables contain exactly one
-  zero-byte owning custom-kernel CUBIN, `fusion_2174`. Passing B1024-XLA and B832-CuTe controls contain no empty
-  custom CUBINs. Aggregate confidence is about 95% that `fusion_2174`'s compile/ownership path returned or created
-  an empty CUBIN before persistence and XLA accepted it unchecked.
-- `H-SPEC-LOSS` (rank 2): a non-empty `fusion_2174` CUBIN was selectively lost between provider return and
-  `GpuExecutableProto` construction. No source-level loss site is known; repeated identical empty persistence in
-  two independent failures makes this a roughly 4% alternative.
-- `H-OTHER-PRESERIALIZATION` (rank 3): another compiler-side defect created the empty `fusion_2174` spec before
-  persistence. This retains uncertainty about the exact PTX-to-CUBIN provider status and input, not the failure
-  boundary.
+- No active root-cause hypotheses remain for the exact NGC 26.06 B1024/L24 reproducer.
+
+### Promoted
+
+- `H-KERNEL-CACHE-COLLISION` (established): XLA revision
+  `385ce9a909ddbd223ec8a9a92ca9b1ab6dc42aed` uses an empty kernel-reuse discriminator for both Triton and MLIR
+  fusions. A Triton entry intentionally contains an empty owned binary because its LLVM module is compiled later;
+  the MLIR path can collide with that entry and serialize the empty binary as an owned CUBIN. The exact diagnostic
+  arm stopped at this collision, while the exact arm with the upstream discriminator fix completed one training
+  step on all 64 GPUs.
 
 ### Falsified / Dead End
 
@@ -46,6 +46,13 @@ author: mcwitt
   passing full serialized executables.
 - `H-RUNTIME-LOSS`: both failing persistent executables already contain the named zero-byte CUBIN, so cache reads,
   deserialization, loader-time handoff, and device-HBM state cannot have created it.
+- `H-OOM-PRIMARY`: the exact failing graph reaches an intentional empty Triton cache entry through a deterministic
+  cross-emitter cache-key collision. Applying only the upstream discriminator fix makes the same 64-GPU graph
+  complete without an allocator or shape change.
+- `H-SPEC-LOSS`: the binary is not lost after compilation. The colliding Triton cache entry is intentionally empty
+  because its LLVM module is compiled later through the ordinary kernel-thunk path.
+- `H-OTHER-PRESERIALIZATION`: the direct diagnostic names the cache collision before executable serialization, and
+  the matching upstream fix removes it.
 
 ## Entry Log
 
@@ -437,3 +444,42 @@ author: mcwitt
 - Next action: instrument the exact NGC XLA boundary after the `fusion_2174` cache lookup/compile with annotation,
   cache-hit state, reused kernel name, compiler provider/status, and returned binary size; reject a zero-byte
   result before `CreateOwnedCubinCustomKernel`.
+
+### 2026-07-23 - CUBIN7421-017 exact kernel-cache collision A/B
+
+- Hypothesis: Triton and MLIR fusions collide in `KernelReuseCache` because both use an empty discriminator. The
+  MLIR path then consumes the Triton entry's intentional empty binary as an owned CUBIN.
+- Commit Hash: `bca8524123873fe98780e02db980f408064066d2`.
+- Jobs:
+  - Diagnostic plugin build: `/mwittmann/cubin7421-ngc-xla-plugin-diag-build-06`.
+  - Fixed plugin build: `/mwittmann/cubin7421-ngc-xla-plugin-fix-build-07`.
+  - One-node overlay smoke: `/mwittmann/cubin7421-kcache-plugin-diag-smoke-04`.
+  - Exact diagnostic arm: `/mwittmann/cubin7421-kcache-plugin-diag-b1024-l24-01`.
+  - Exact fixed arm: `/mwittmann/cubin7421-kcache-plugin-fix-b1024-l24-01`.
+- Config: NGC JAX `26.06-py3`, XLA `385ce9a909ddbd223ec8a9a92ca9b1ab6dc42aed`, 16 replicas with four GB200s
+  each, one process per node, B1024, sequence 4096, L24, d5120, 128 experts, top-5, intermediate/shared 2560,
+  scanned layers, CuTe MXFP8 producer, ring MoE, `gpu_fa4_cute`, expert axis 8, `cuda_async`, one step, zero
+  retries, and separate fresh compilation caches. The task overlay preserved JAX
+  `0.10.1.dev20260605+10439788c` from `/opt/jax` and JAXLIB `0.10.1.dev20260723` from `/opt/jaxlibs`.
+- Artifacts:
+  - Diagnostic plugin:
+    `s3://marin-us-east-02a/tmp/ttl=30d/cubin7421-ngc-xla-plugin-probe-06/diagnostic/xla_cuda_plugin.so`,
+    354,938,776 bytes, SHA-256 `947282f92d052b58bd8586e9e5f623fa31c7a460deb006ae3b1d022fe8e9f5fc`.
+  - Fixed plugin:
+    `s3://marin-us-east-02a/tmp/ttl=30d/cubin7421-ngc-xla-plugin-probe-07/fix/xla_cuda_plugin.so`,
+    354,939,024 bytes, SHA-256 `e420223a7a3ce7e5a816be50286e3610dacb10971984935ce986b316f47d8194`.
+- Result:
+  - The one-node diagnostic-plugin smoke completed a real 16,384-token step with loss
+    `11.807469367980957`, validating the CUDA PJRT overlay and NGC library paths.
+  - The exact diagnostic arm stopped before serialization with
+    `CUBIN7421_EMPTY_KERNEL_CACHE_ENTRY fusion=loop_convert_fusion.19 was_cached=1
+    entry_kernel=fusion_4157`. The entry's launch dimensions were 256 blocks and 128 threads per block.
+  - The fixed arm added the upstream `TritonFusion` and `MlirKernelFusion` discriminators from OpenXLA commit
+    `4c1b00509e646d13a9cf443cd10c866810ed923d`. All 16 tasks completed the one-step run, with loss
+    `11.806529998779297`; Iris reported 16/16 tasks succeeded, exit 0.
+- Interpretation: this is a matched causal A/B for the exact remaining NGC 26.06 reproducer. The CUBIN loader
+  error is downstream and misleading: XLA serialized an empty owned CUBIN after a cross-emitter cache collision,
+  then CUDA correctly rejected the null image as an invalid argument. OOM and concurrent CUDA module loading are
+  not the cause of this failure. NGC 26.06 alone does not contain the fix.
+- Next action: use an XLA/JAX build containing OpenXLA PR #35868, or overlay/backport commit
+  `4c1b00509e646d13a9cf443cd10c866810ed923d`, and confirm which later NGC JAX image first includes it.
