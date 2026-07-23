@@ -474,8 +474,12 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
     )
 
     with serve_app_background(_fake_vllm_app(), upstream_sock):
+        inference_requests: list[None] = []
         app = build_dashboard_app(
-            upstream_base_url=f"http://127.0.0.1:{upstream_port}", model_id="fake-model", info=info
+            upstream_base_url=f"http://127.0.0.1:{upstream_port}",
+            model_id="fake-model",
+            info=info,
+            on_inference_request=lambda: inference_requests.append(None),
         )
         with serve_app_background(app, dashboard_sock):
             base = f"http://127.0.0.1:{dashboard_port}"
@@ -487,6 +491,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
+            assert inference_requests == []
 
             chat = requests.post(
                 f"{base}/v1/chat/completions",
@@ -495,6 +500,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
                 timeout=10,
             )
             assert _collect_sse_text(chat, "delta") == "Hello, world!"
+            assert len(inference_requests) == 1
 
             completion = requests.post(
                 f"{base}/v1/completions",
@@ -503,6 +509,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
                 timeout=10,
             )
             assert _collect_sse_text(completion, "text") == "123456"
+            assert len(inference_requests) == 2
 
 
 def test_dashboard_health_reports_loading_when_upstream_down():

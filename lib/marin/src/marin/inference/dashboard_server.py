@@ -21,7 +21,7 @@ import importlib.resources
 import logging
 import socket
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
@@ -59,6 +59,7 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    on_inference_request: Callable[[], None] | None = None,
 ) -> Starlette:
     """Build the Starlette app fronting a local serving backend.
 
@@ -67,6 +68,8 @@ def build_dashboard_app(
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        on_inference_request: Called for a model-inference request, but not
+            readiness, health, or model-discovery probes.
     """
     state: dict[str, httpx.AsyncClient] = {}
 
@@ -100,6 +103,11 @@ def build_dashboard_app(
         )
 
     async def proxy(request: Request) -> Response:
+        # Do not let the launcher's readiness probe or a monitor's GET /models
+        # keep an otherwise unused accelerator alive.  Actual OpenAI inference
+        # calls are non-GET requests under /v1/.
+        if on_inference_request is not None and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            on_inference_request()
         client = state["client"]
         body = await request.body()
         fwd_headers = forwardable_request_headers(request.headers)

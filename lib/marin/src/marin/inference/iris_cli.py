@@ -347,6 +347,12 @@ def _mint_and_print_capability_url(
 )
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
 @click.option(
+    "--idle-timeout-hours",
+    type=float,
+    default=None,
+    help="Stop the server after this long without a model-inference request (health/readiness probes do not count).",
+)
+@click.option(
     "--proxy-timeout",
     type=float,
     default=600.0,
@@ -428,6 +434,7 @@ def main(
     cache_ttl_days: int,
     no_cache: bool,
     timeout_hours: float,
+    idle_timeout_hours: float | None,
     proxy_timeout: float,
     region: str | None,
     cpu: float,
@@ -468,6 +475,8 @@ def main(
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
+    if idle_timeout_hours is not None and idle_timeout_hours <= 0:
+        raise click.ClickException("--idle-timeout-hours must be positive when set.")
 
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
@@ -554,6 +563,7 @@ def main(
         broker=broker_config,
         access=EndpointAccess.ENDPOINT_ACCESS_LINK,
         timeout_hours=timeout_hours,
+        idle_timeout_hours=idle_timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
@@ -617,6 +627,8 @@ def main(
             else:
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
+            if idle_timeout_hours is not None:
+                click.echo(f"  idle timeout {idle_timeout_hours:g}h (model requests only)")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
                 click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
