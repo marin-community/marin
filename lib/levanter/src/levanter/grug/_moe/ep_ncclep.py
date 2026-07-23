@@ -219,16 +219,15 @@ def moe_mlp_ep_ncclep(
             out_sharding=tuple(batch_spec),
         ).astype(tokens.dtype)
 
-    # The runtime owns Transformer Engine's global_shard_guard because the
-    # nontrivial outer EP-group axis is the JaxPP pipeline axis, not a batch axis.
-    with jax.set_mesh(mesh):
-        auto_body = cast(
-            Callable[..., jax.Array],
-            jax.sharding.auto_axes(
-                body,
-                axes=tuple(mesh.axis_names),
-                out_sharding=batch_spec,
-            ),
-        )
-        output = auto_body(x, selected_experts, combine_weights, w_up_gate, w_down)
+    # The runtime owns the concrete mesh context and Transformer Engine's
+    # global_shard_guard. JaxPP supplies an AbstractMesh while tracing stages.
+    auto_body = cast(
+        Callable[..., jax.Array],
+        jax.sharding.auto_axes(
+            body,
+            axes=tuple(mesh.axis_names),
+            out_sharding=batch_spec,
+        ),
+    )
+    output = auto_body(x, selected_experts, combine_weights, w_up_gate, w_down)
     return output, _zero_dropped_assignments()
