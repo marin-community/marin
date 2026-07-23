@@ -127,9 +127,10 @@ def _role_slug(role: str) -> str:
     return role.removeprefix("roles/").replace(".", "-").replace("/", "-")
 
 
-def member_slug(member: str) -> str:
-    """Stable resource-name-safe slug for an IAM member, so each grant is its own resource."""
-    return re.sub(r"[^a-z0-9]+", "-", member.lower()).strip("-")
+def resource_slug(identifier: str) -> str:
+    """Stable resource-name-safe slug for an identifier (IAM member, secret id), so each
+    grant is its own resource."""
+    return re.sub(r"[^a-z0-9]+", "-", identifier.lower()).strip("-")
 
 
 def runtime_service_account(
@@ -139,7 +140,7 @@ def runtime_service_account(
     project: str,
     roles: tuple[str, ...],
     secrets: tuple[SecretEnv, ...],
-    cloudsql_client: bool,
+    cloudsql_instances: tuple[str, ...],
     opts: pulumi.ResourceOptions,
 ) -> gcp.serviceaccount.Account:
     """Runtime service account with its project roles, cloudsql.client, and secret accessor grants.
@@ -164,7 +165,7 @@ def runtime_service_account(
             member=member,
             opts=opts,
         )
-    if cloudsql_client:
+    if cloudsql_instances:
         gcp.projects.IAMMember(
             "sa-cloudsql-client",
             project=project,
@@ -174,7 +175,7 @@ def runtime_service_account(
         )
     for secret_env in secrets:
         gcp.secretmanager.SecretIamMember(
-            f"secret-{member_slug(secret_env.secret)}",
+            f"secret-{resource_slug(secret_env.secret)}",
             project=project,
             secret_id=secret_env.secret,
             role="roles/secretmanager.secretAccessor",
@@ -250,7 +251,7 @@ class CloudRunService(pulumi.ComponentResource):
             project=args.project,
             roles=args.service_account_roles,
             secrets=args.secrets,
-            cloudsql_client=bool(args.cloudsql_instances),
+            cloudsql_instances=args.cloudsql_instances,
             opts=child,
         )
         image = dockerfile_image(
@@ -359,7 +360,7 @@ class CloudRunService(pulumi.ComponentResource):
         for raw_member in args.iap_members:
             member = normalize_iap_member(raw_member)
             gcp.iap.WebCloudRunServiceIamMember(
-                f"iap-access-{member_slug(member)}",
+                f"iap-access-{resource_slug(member)}",
                 project=args.project,
                 location=args.region,
                 cloud_run_service_name=service.name,

@@ -72,7 +72,9 @@ def main() -> None:
             region=REGION,
             job_name="marin-context-sync",
             build_context="./sync",
-            schedule="0 */6 * * *",
+            # Cheap when nothing changed: the job exits on the manifest watermark check, and
+            # only a new upstream corpus build (~every 90 min) triggers the full download+upsert.
+            schedule="*/10 * * * *",
             env={
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,

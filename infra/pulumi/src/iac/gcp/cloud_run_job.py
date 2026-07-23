@@ -84,7 +84,7 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
             project=args.project,
             roles=(),
             secrets=args.secrets,
-            cloudsql_client=bool(args.cloudsql_instances),
+            cloudsql_instances=args.cloudsql_instances,
             opts=child,
         )
         member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
