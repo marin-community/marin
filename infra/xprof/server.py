@@ -15,7 +15,7 @@ from xprof import server as xprof_server
 from xprof.convert import _pywrap_profiler_plugin
 
 from infra.xprof.config import ENDPOINT_NAME, PORT_NAME, PUBLIC_PATH
-from infra.xprof.gateway import ProfileCache, ProfileSourcePolicy, ProfileStageManager, XprofGateway
+from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
 
-    allowed_buckets = frozenset(filter(None, os.environ["XPROF_ALLOWED_BUCKETS"].split(",")))
     workdir = Path(os.environ["IRIS_WORKDIR"])
     grpc_port = int(os.environ["XPROF_GRPC_PORT"])
-    profiles = ProfileStageManager(ProfileCache(workdir / "xprof-cache", ProfileSourcePolicy(allowed_buckets)))
+    profiles = ProfileStageManager(ProfileCache(workdir / "xprof-cache"))
     app = XprofGateway(_xprof_application(grpc_port), profiles, PUBLIC_PATH)
 
     ctx = iris_ctx()

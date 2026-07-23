@@ -7,7 +7,6 @@ config:
   xprof:disk: 80GB
   xprof:deploy_generation: "0"
   xprof:env:
-    XPROF_ALLOWED_BUCKETS: marin-us-central1,marin-us-central2,marin-us-east1,marin-us-east5,marin-us-west4,marin-eu-west4,marin-us-east-02a,marin-us-west-04a
     XPROF_GRPC_PORT: "50051"
   xprof:secret_env:
     CW_KEY_ID: env:CW_KEY_ID

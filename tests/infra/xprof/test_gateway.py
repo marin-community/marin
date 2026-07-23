@@ -12,7 +12,6 @@ import pytest
 from infra.xprof.gateway import (
     ProfileCache,
     ProfileSourceError,
-    ProfileSourcePolicy,
     ProfileStageManager,
     XprofGateway,
 )
@@ -66,21 +65,13 @@ def _compressed_xprof_app(environ, start_response):
     return [body]
 
 
-def test_source_policy_only_allows_ttl_xprof_trees_in_named_buckets():
-    policy = ProfileSourcePolicy(frozenset({"marin-us-east5", "marin-us-east-02a"}))
+def test_cache_accepts_any_gcs_or_s3_path(tmp_path):
+    cache = ProfileCache(tmp_path / "cache")
 
-    assert policy.validate("gs://marin-us-east5/tmp/ttl=7d/xprof/run-1") == (
-        "gs://marin-us-east5/tmp/ttl=7d/xprof/run-1"
-    )
-    assert policy.validate("s3://marin-us-east-02a/marin/tmp/ttl=3d/xprof/run-2") == (
-        "s3://marin-us-east-02a/marin/tmp/ttl=3d/xprof/run-2"
-    )
-    with pytest.raises(ProfileSourceError, match="not available"):
-        policy.validate("gs://other/tmp/ttl=7d/xprof/run")
-    with pytest.raises(ProfileSourceError, match="xprof TTL prefix"):
-        policy.validate("gs://marin-us-east5/tmp/ttl=7d/checkpoints/run")
+    assert cache.validate("gs://other/checkpoints/run") == "gs://other/checkpoints/run"
+    assert cache.validate("s3://another-bucket/profiles/run") == "s3://another-bucket/profiles/run"
     with pytest.raises(ProfileSourceError, match="must use"):
-        policy.validate("https://marin-us-east5/tmp/ttl=7d/xprof/run")
+        cache.validate("https://example.com/profile")
 
 
 def test_cache_returns_the_session_parent_xprof_expects(tmp_path):
@@ -89,17 +80,11 @@ def test_cache_returns_the_session_parent_xprof_expects(tmp_path):
     session.mkdir(parents=True)
     (session / "host.xplane.pb").write_bytes(b"xplane")
 
-    class LocalProfileSourcePolicy(ProfileSourcePolicy):
-        def __init__(self):
-            pass
-
+    class LocalProfileCache(ProfileCache):
         def validate(self, uri: str) -> str:
             return uri
 
-    cache = ProfileCache(
-        tmp_path / "cache",
-        LocalProfileSourcePolicy(),
-    )
+    cache = LocalProfileCache(tmp_path / "cache")
 
     source_uri = f"file://{source}"
     run_path = cache.stage(source_uri)

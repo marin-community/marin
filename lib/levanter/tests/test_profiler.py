@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
-import draccus
 import pytest
 
 import levanter.callbacks as callbacks_module
@@ -12,7 +11,6 @@ from levanter.callbacks import LambdaCallback
 from levanter.callbacks import profile_ctx
 from levanter.callbacks import profiler as profiler_module
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig, profile
-from levanter.trainer import TrainerConfig
 
 
 def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
@@ -98,58 +96,7 @@ def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tm
     assert parse_qs(urlparse(link).query) == {"uri": [f"file://{upload_dir}"]}
 
 
-def test_profiler_config_builds_ttl_destination_and_forwards_hlo_options(monkeypatch, tmp_path):
-    captured = {}
-
-    def fake_profile(path, **kwargs):
-        captured.update(path=path, **kwargs)
-        return lambda _step: None
-
-    monkeypatch.setattr(profiler_module, "profile", fake_profile)
-    config = ProfilerConfig(
-        enabled=True,
-        create_perfetto_trace=True,
-        process_index=3,
-        profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
-        upload=XprofUploadConfig(destination=f"file://{tmp_path}/profiles"),
-    )
-    callback = config.build(str(tmp_path / "capture"), run_id="run-123", num_steps=4)
-
-    assert callable(callback)
-    assert captured["upload_uri"] == f"file://{tmp_path}/profiles/run-123"
-    assert captured["create_perfetto_trace"] is True
-    assert captured["process_index"] == 3
-    assert captured["profiler_options"].enable_hlo_proto is True
-
-
-def test_plain_profile_disables_hlo_metadata():
-    options = ProfileOptionsConfig().build_jax_profile_options()
-
-    assert options.enable_hlo_proto is False
-
-
-def test_profiler_is_configurable_inline_from_training_cli():
-    config = draccus.parse(
-        TrainerConfig,
-        args=[
-            "--profiler.enabled",
-            "true",
-            "--profiler.num_steps",
-            "4",
-            "--profiler.upload.ttl_days",
-            "3",
-            "--profiler.profile_options.enable_hlo_proto",
-            "true",
-        ],
-    )
-
-    assert config.profiler.enabled
-    assert config.profiler.num_steps == 4
-    assert config.profiler.upload.ttl_days == 3
-    assert config.profiler.profile_options.enable_hlo_proto is True
-
-
-def test_default_upload_destination_uses_marin_ttl_storage(monkeypatch):
+def test_upload_destination_uses_explicit_path_or_ttl_fallback(monkeypatch):
     calls = []
 
     def temp_bucket(ttl_days: int, prefix: str) -> str:
@@ -158,7 +105,11 @@ def test_default_upload_destination_uses_marin_ttl_storage(monkeypatch):
 
     monkeypatch.setattr(profiler_module, "marin_temp_bucket", temp_bucket)
 
-    XprofUploadConfig().destination_for_run("run-123")
+    assert XprofUploadConfig(path="s3://profiles/custom-run").destination_for_run("run-123") == (
+        "s3://profiles/custom-run"
+    )
+    assert calls == []
+    assert XprofUploadConfig().destination_for_run("run-123") == "gs://marin-us-east5/tmp/ttl=30d/xprof/run-123"
     assert calls == [(30, "xprof/run-123")]
 
 

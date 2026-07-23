@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve allowlisted object-store profiles through XProf."""
+"""Serve object-store profiles through XProf."""
 
 import gzip
 import hashlib
 import html
 import logging
-import re
 import shutil
 import tempfile
 import threading
@@ -24,8 +23,6 @@ from infra.xprof.config import HEALTH_PATH
 
 logger = logging.getLogger(__name__)
 
-_TTL_SEGMENT = re.compile(r"ttl=[1-9][0-9]*d")
-_PROFILE_ROOTS = ((), ("marin",))
 _SOURCE_MARKER = ".xprof-source"
 _REWRITE_SUFFIXES = (".html", ".js")
 _XPROF_RUN_PATH = ("plugins", "profile")
@@ -35,49 +32,23 @@ WsgiApplication = Callable[[dict, StartResponse], Iterable[bytes]]
 
 
 class ProfileSourceError(ValueError):
-    """Raised when a profile URI is outside the service policy."""
-
-
-class ProfileSourcePolicy:
-    """Restrict reads to XProf trees under lifecycle-managed Marin buckets."""
-
-    def __init__(self, allowed_buckets: frozenset[str]):
-        if not allowed_buckets:
-            raise ValueError("allowed_buckets must not be empty")
-        self._allowed_buckets = allowed_buckets
-
-    def validate(self, uri: str) -> str:
-        """Validate and normalize an object-store URI."""
-        source = StoragePath(uri)
-        if source.scheme not in ("gs", "s3"):
-            raise ProfileSourceError("profile URI must use gs:// or s3://")
-        if source.bucket not in self._allowed_buckets:
-            raise ProfileSourceError(f"bucket {source.bucket!r} is not available to the XProf service")
-        for root in _PROFILE_ROOTS:
-            profile_prefix = (*root, "tmp")
-            if source.segments[: len(profile_prefix)] != profile_prefix:
-                continue
-            ttl_index = len(profile_prefix)
-            if len(source.segments) < ttl_index + 3 or not _TTL_SEGMENT.fullmatch(source.segments[ttl_index]):
-                raise ProfileSourceError("profile URI must identify a run under tmp/ttl=Nd/xprof/")
-            if source.segments[ttl_index + 1] != "xprof":
-                raise ProfileSourceError("profile URI must be under the xprof TTL prefix")
-            return str(source)
-        raise ProfileSourceError("profile URI must be under tmp/ttl=Nd/")
+    """Raised when a profile URI does not use a supported object store."""
 
 
 class ProfileCache:
     """Stage profiles atomically in a local cache."""
 
-    def __init__(self, cache_dir: Path, policy: ProfileSourcePolicy):
+    def __init__(self, cache_dir: Path):
         self._cache_dir = cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._policy = policy
         self._locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()
 
     def validate(self, uri: str) -> str:
-        return self._policy.validate(uri)
+        source = StoragePath(uri)
+        if source.scheme not in ("gs", "s3"):
+            raise ProfileSourceError("profile URI must use gs:// or s3://")
+        return str(source)
 
     def stage(self, uri: str) -> Path:
         """Return the cached XProf run path."""
