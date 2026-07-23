@@ -28,7 +28,6 @@ CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "context"
 # Shared read/append SQL role for everyone's agents.
 AGENTS_PASSWORD_SECRET = "cloudsql-agents-password"
-# The sync job's writer role.
 SYNC_PASSWORD_SECRET = "cloudsql-echo-sync-password"
 # The PostgreSQL provider's admin role; password set out-of-band, shared with other
 # provider users of marin-metadata.
@@ -37,8 +36,13 @@ ADMIN_PASSWORD_SECRET = "cloudsql-pulumi-admin-password"
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 
 
-def password_secret(resource_name: str, secret_id: str, value: pulumi.Output[str], *, adopt: bool, provider) -> None:
-    """A Secret Manager secret holding a role's password, with its current version."""
+def password_secret(
+    resource_name: str, secret_id: str, value: pulumi.Output[str], *, adopt: bool, provider
+) -> tuple[pulumi.Resource, ...]:
+    """A Secret Manager secret holding a role's password, with its current version.
+
+    Returns both resources so consumers can depend on them (see SecretEnv.wait_for).
+    """
     secret = gcp.secretmanager.Secret(
         resource_name,
         secret_id=secret_id,
@@ -49,12 +53,13 @@ def password_secret(resource_name: str, secret_id: str, value: pulumi.Output[str
             import_=f"projects/{PROJECT}/secrets/{secret_id}" if adopt else None,
         ),
     )
-    gcp.secretmanager.SecretVersion(
+    version = gcp.secretmanager.SecretVersion(
         f"{resource_name}-version",
         secret=secret.id,
         secret_data=value,
         opts=pulumi.ResourceOptions(provider=provider),
     )
+    return (secret, version)
 
 
 def main() -> None:
@@ -97,9 +102,11 @@ def main() -> None:
             opts=pulumi.ResourceOptions(provider=pg_provider, depends_on=[database]),
         )
     password_secret("agents-secret", AGENTS_PASSWORD_SECRET, agents_password.result, adopt=adopt, provider=gcp_provider)
-    password_secret("sync-secret", SYNC_PASSWORD_SECRET, sync_password.result, adopt=False, provider=gcp_provider)
+    sync_secret = password_secret(
+        "sync-secret", SYNC_PASSWORD_SECRET, sync_password.result, adopt=False, provider=gcp_provider
+    )
 
-    gcp.secretmanager.Secret(
+    mirror_token = gcp.secretmanager.Secret(
         "marinmirror-token",
         secret_id=MARINMIRROR_TOKEN_SECRET,
         project=PROJECT,
@@ -127,8 +134,8 @@ def main() -> None:
                 "PGUSER": "echo_sync",
             },
             secrets=(
-                SecretEnv(name="PGPASSWORD", secret=SYNC_PASSWORD_SECRET),
-                SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET),
+                SecretEnv(name="PGPASSWORD", secret=SYNC_PASSWORD_SECRET, wait_for=sync_secret),
+                SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),
             ),
             cloudsql_instances=(CONNECTION_NAME,),
             # The sync holds a ~650 MB corpus download plus batch buffers in memory.

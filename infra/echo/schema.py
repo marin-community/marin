@@ -33,7 +33,8 @@ metadata = MetaData()
 chunks = Table(
     "chunks",
     metadata,
-    Column("id", BigInteger, primary_key=True),
+    # Chunk ids come from the corpus, never a sequence.
+    Column("id", BigInteger, primary_key=True, autoincrement=False),
     Column("source", Text, nullable=False),
     Column("kind", Text, nullable=False),
     Column("ref", Text),

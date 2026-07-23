@@ -158,14 +158,17 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     ],
                 ),
             ),
-            # Cloud Run validates secret access at job creation, so the grants must exist
-            # before the job; without the edge a fresh deploy can race them and fail.
-            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(depends_on=sa_grants)),
+            # Cloud Run validates secret access and version existence at job creation, so
+            # the grants and any stack-created secrets must exist before the job.
+            opts=pulumi.ResourceOptions.merge(
+                child,
+                pulumi.ResourceOptions(depends_on=sa_grants + [r for s in args.secrets for r in s.wait_for]),
+            ),
         )
 
         # Scheduler runs the job as the job's own service account, which therefore needs
         # run.invoker on the job (jobs.run permission).
-        gcp.cloudrunv2.JobIamMember(
+        invoker = gcp.cloudrunv2.JobIamMember(
             "sa-invoker",
             project=args.project,
             location=args.region,
@@ -188,7 +191,8 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     service_account_email=service_account.email,
                 ),
             ),
-            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[job]),
+            # The invoker grant must exist before the first tick, or it 403s.
+            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[job, invoker]),
         )
 
         self.job_name = job.name

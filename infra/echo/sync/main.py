@@ -37,6 +37,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 MARINMIRROR_URL = os.environ.get("MARINMIRROR_URL", "https://marinmirror.exe.xyz")
 SOURCES = ("github", "discord")
 BATCH = 400
+# Session advisory lock so overlapping executions don't convoy on row locks: a full sync
+# outlasts the 10-minute schedule, and Cloud Run jobs have no concurrency limit of their own.
+SYNC_LOCK_KEY = 0x6563686F  # "echo"
 
 CHUNK_COLUMNS = [c.name for c in schema.chunks.columns]
 
@@ -180,6 +183,10 @@ def main() -> int:
             return 0
         print(f"downloaded corpus build {built} ({corpus.stat().st_size >> 20} MB)")
         with engine.begin() as conn:
+            locked = conn.execute(sqlalchemy.select(sqlalchemy.func.pg_try_advisory_xact_lock(SYNC_LOCK_KEY))).scalar()
+            if not locked:
+                print("another sync is already running; exiting")
+                return 0
             upserted, deleted = upsert_chunks(conn, corpus)
             watermark_insert = pg_insert(schema.sync_state).values(built_at_epoch=built)
             conn.execute(
