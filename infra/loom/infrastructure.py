@@ -38,6 +38,7 @@ ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
+GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
@@ -65,6 +66,10 @@ def _artifact_image_path(project: str, region: str) -> str:
     return f"{region}-docker.pkg.dev/{project}/{ARTIFACT_REPOSITORY_ID}/{ARTIFACT_IMAGE_NAME}"
 
 
+def _service_account_member(email: str) -> str:
+    return f"serviceAccount:{email}"
+
+
 def _validated_image_reference(value: str, project: str, region: str) -> str:
     prefix = f"{_artifact_image_path(project, region)}@sha256:"
     digest = value.removeprefix(prefix)
@@ -86,7 +91,7 @@ class WorkloadIdentityConfig:
     service_account_id: str
 
     @classmethod
-    def parse(cls, value: dict[str, Any]) -> WorkloadIdentityConfig:
+    def parse(cls, value: Mapping[str, object]) -> WorkloadIdentityConfig:
         name = str(value.get("name", "")).strip()
         profile = str(value.get("profile", "")).strip()
         service_tag = str(value.get("serviceTag", name)).strip()
@@ -273,10 +278,6 @@ def _profile_manifest(
     return result, secret_refs
 
 
-def _github_federation_manifest(mappings: tuple[GitHubFederationConfig, ...], audience: str) -> list[dict[str, object]]:
-    return [mapping.manifest(audience) for mapping in mappings]
-
-
 def _google_federation_mapping(
     workload: WorkloadIdentityConfig,
     audience: str,
@@ -324,9 +325,9 @@ class DeploymentConfig:
     backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS
 
     def __post_init__(self) -> None:
-        if self.build_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", self.build_commit):
+        if self.build_commit is not None and not GIT_COMMIT.fullmatch(self.build_commit):
             raise ValueError("buildCommit must be a 40-character Git commit")
-        if self.runtime_mode is RuntimeMode.MANAGED and not re.fullmatch(r"[0-9a-f]{40}", self.git_ref):
+        if self.runtime_mode is RuntimeMode.MANAGED and not GIT_COMMIT.fullmatch(self.git_ref):
             raise ValueError("managed runtime requires a 40-character gitRef")
         if self.runtime_mode is RuntimeMode.MANAGED and self.build_commit == self.git_ref:
             raise ValueError("buildCommit must be staged before the same gitRef is activated")
@@ -491,7 +492,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 }
             )
         )
-    github_mappings = _github_federation_manifest(config.github_federations, audience)
+    github_mappings = [mapping.manifest(audience) for mapping in config.github_federations]
 
     def render_deployment_manifest(workload_mappings: list[dict[str, Any]]) -> str:
         return json.dumps(
@@ -527,7 +528,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         location=artifact_repository.location,
         repository=artifact_repository.repository_id,
         role="roles/artifactregistry.reader",
-        member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
+        member=vm_account.email.apply(_service_account_member),
     )
     web_firewall = gcp.compute.Firewall(
         "loom-web",
@@ -620,7 +621,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         project=config.project,
         secret_id=dotenv_secret.secret_id,
         role=SECRET_ACCESSOR_ROLE,
-        member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
+        member=vm_account.email.apply(_service_account_member),
     )
     profile_secret_readers = []
     for secret_project, secret_name in sorted(set(profile_secret_refs)):
@@ -631,7 +632,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 project=secret_project,
                 secret_id=secret_name,
                 role=SECRET_ACCESSOR_ROLE,
-                member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
+                member=vm_account.email.apply(_service_account_member),
                 opts=api_options,
             )
         )
@@ -656,7 +657,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "loom-vm-backup-writer",
         bucket=backup_bucket.name,
         role="roles/storage.objectCreator",
-        member=vm_account.email.apply(lambda email: f"serviceAccount:{email}"),
+        member=vm_account.email.apply(_service_account_member),
     )
 
     built_image: docker_build.Image | None = None

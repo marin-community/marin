@@ -142,21 +142,11 @@ The runtime deployment manifest defaults to `pruneDeployment: false`. Enable
 pruning only with a reviewed, non-empty set of profiles, workload identities,
 or GitHub federation mappings; the program rejects an empty pruning manifest.
 
-## Initial activation
-
-The initial adoption preserves the current Compose topology. Released Loom
-versions place each new session supervisor in a separately labeled Docker
-container. Recreating the control-plane service preserves those container IDs
-and lets the restarted Loom process discover and adopt them.
-
-Before the first activation, take an online SQLite backup and accept that legacy
-in-container supervisors will stop once. Every session created after that runs
-in a labeled sibling container, so later `docker compose up -d` calls replace
-the control service without removing the session containers.
-
-Remove this section after the initial activation is complete.
-
 ## Restart behavior and rollback
+
+Released Loom versions place each session supervisor in a separately labeled
+Docker container. Recreating the control-plane service preserves those container
+IDs and lets the restarted Loom process discover and adopt them.
 
 Roll back by setting `gitRef` to a retained prior commit and pairing it with the
 prior numbered secret version. Pulumi resolves the existing tag to its immutable

@@ -22,6 +22,7 @@ if [[ "$LOOM_IMAGE" != *@sha256:* ]]; then
   exit 1
 fi
 
+packages=()
 if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
@@ -30,9 +31,7 @@ if ! command -v docker >/dev/null 2>&1; then
   release="$(. /etc/os-release && echo "$VERSION_CODENAME")"
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${release} stable" \
     >/etc/apt/sources.list.d/docker.list
-  apt-get update
-  apt-get install -y --no-install-recommends \
-    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  packages+=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 fi
 
 if ! command -v gcloud >/dev/null 2>&1; then
@@ -41,16 +40,29 @@ if ! command -v gcloud >/dev/null 2>&1; then
   chmod a+r /etc/apt/keyrings/cloud.google.asc
   echo "deb [signed-by=/etc/apt/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt cloud-sdk main" \
     >/etc/apt/sources.list.d/google-cloud-sdk.list
+  packages+=(google-cloud-cli)
+fi
+if [ "${#packages[@]}" -gt 0 ]; then
   apt-get update
-  apt-get install -y --no-install-recommends google-cloud-cli
+  apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
 if [ ! -e "$DATA_DISK_DEVICE" ]; then
   echo "loom startup-script: durable data disk is not attached" >&2
   exit 1
 fi
-if ! blkid "$DATA_DISK_DEVICE" >/dev/null 2>&1; then
-  mkfs.ext4 -m 0 -F "$DATA_DISK_DEVICE"
+if filesystem_type="$(blkid -p -s TYPE -o value "$DATA_DISK_DEVICE")"; then
+  if [ "$filesystem_type" != ext4 ]; then
+    echo "loom startup-script: durable data disk uses unexpected filesystem ${filesystem_type}" >&2
+    exit 1
+  fi
+else
+  blkid_status=$?
+  if [ "$blkid_status" -ne 2 ]; then
+    echo "loom startup-script: could not inspect durable data disk (blkid ${blkid_status})" >&2
+    exit 1
+  fi
+  mkfs.ext4 -m 0 "$DATA_DISK_DEVICE"
 fi
 mkdir -p "$DATA_MOUNT"
 mountpoint -q "$DATA_MOUNT" || mount "$DATA_DISK_DEVICE" "$DATA_MOUNT"
