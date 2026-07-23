@@ -1,4 +1,4 @@
-# A uniform noun-verb vocabulary for the Iris operator CLI
+# A resource model for Iris: operator vocabulary and internal structure
 
 > Status: **proposal, for peer review** — written before implementation, against
 > the code as of this branch. GitHub issue
@@ -7,6 +7,30 @@
 > [#7542](https://github.com/marin-community/marin/issues/7542). The code is the
 > source of truth; every claim below is cited to `file:line` so a reviewer can
 > check it. Nothing here is implemented yet.
+
+## Scope
+
+Two parts, at two horizons.
+
+- **Part I — the operator CLI vocabulary (this PR).** A fixed noun set and verb
+  set for `iris`, each verb meaning one thing everywhere. This is what #7543 asks
+  for and what the incident needed; it is buildable now against the current RPCs
+  with one net-new backend read.
+- **Part II — evolving the internals around the same resource model (a plan, not
+  this PR).** @rjpower asked to use this as an opportunity to normalize the
+  internal package structure and naming. Part II is the grounded plan for that:
+  what "resource" should mean inside iris, the one abstraction worth extracting (a
+  typed `ResourceRef`), and the bounded, phased changes to the DB schema, the
+  module layout, and the docstrings — with an explicit list of what the resource
+  framing should *not* be forced onto (the pure scheduling/reconcile kernels, and
+  the nouns that have no controller identity).
+
+The idea both parts share: iris manages a small set of resource kinds, and a small
+set of verbs operates on them. The CLI is where an operator sees that; the
+internals are where it is either honored or contradicted. Today they contradict it
+in specific, catalogued ways (Part II).
+
+# Part I — The operator CLI vocabulary (this PR)
 
 ## Problem
 
@@ -510,7 +534,259 @@ Stages 1–2 are small and land immediately. Stage 3 is the incident fix. Stages
   failed in `stage-workdir` prints the init-container reason; `events` returns the
   ordered history for a preempted task.
 
+# Part II — Evolving the internals around the resource model (plan)
+
+Part I normalizes what the operator types. This part asks whether the code behind
+those commands is organized around the same resources, and where it should move if
+not. It is a plan for follow-on work; the CLI in Part I ships first and depends on
+none of it. The grounding is a four-seam sweep of the current code — the persistent
+stores (`cluster/controller/schema.py`, `cluster/stats/tables.py`), the scheduler
+and reconcile kernels (`cluster/controller/scheduling/`, `.../reconcile/`), the
+per-noun type layer (protos, dataclasses, RPCs), and the package layout. Every
+claim is cited so a reviewer can check it against the code.
+
+## II.1 — What a "resource" is in iris, and what it is not
+
+The eight nouns do not share a lifecycle. They fall into three ownership classes,
+and the class decides which verbs are real and where the code for them lives.
+
+- **Class A — controller-owned records with a strong hierarchical id: job, task,
+  attempt, endpoint.** Each is a row the controller writes (`jobs`/`tasks`/
+  `task_attempts`/`endpoints`, `schema.py:243,327,423,498`) with a proto view and,
+  for job/task/attempt, a `JobName`-based id that already encodes parent/child
+  (`cluster/types.py:132`). `list`/`describe`/`spec`/`events`/`stop` all mean
+  something concrete here. This is where a resource abstraction earns its keep.
+- **Class B — live infra projections: worker, slice, cluster-as-K8s.** The
+  authoritative state is not a controller record; it is a `RemoteWorkerHandle`/
+  `SliceHandle` (`cluster/platforms/types.py:220,324`) or a kubectl/autoscaler
+  snapshot. `list`/`describe` are read projections; `stop` is infra teardown routed
+  through the platform layer, not a controller state write; `spec` does not exist
+  (they are provisioned from a `ScaleGroup`, not submitted). A uniform model must
+  tolerate a member with no submit spec and, for the K8s backend, no controller
+  worker rows at all (`health = None`, `backends/k8s/tasks.py:2188`).
+- **Class C — non-records: cluster-identity, actor.** "cluster" is a config `name`
+  plus three unrelated wire types (`PeerSummary`/`BackendSummary`/
+  `KubernetesClusterStatus`); it has no single object. "actor" has no controller
+  identity — the controller sees an `Endpoint` row, and `RegisteredActor` exists
+  only inside the task process (`actor/server.py:45`). A Resource type here would
+  invent identity that is not there.
+
+The recommendation that follows: do not introduce a single `Resource` base class
+over all eight nouns. Model Class A as resources; keep Class B as a fleet/infra
+read surface; leave Class C as scope (cluster) and as a sub-view of an endpoint
+(actor). The uniformity the operator sees in Part I comes from the shared verb
+layer in the CLI, not from a forced common supertype in the domain model.
+
+## II.2 — The one abstraction worth extracting: a typed `ResourceRef`
+
+There is no shared `Resource`/`Entity`/`Addressable` type today. The nearest thing
+that already works is a string path grammar, used in three places that do not know
+about each other:
+
+- profiling / process-status `target` — `/user/job/0`, `/user/job/0:3`,
+  `/system/worker/<id>`, `/system/controller` (`rpc/job.proto:82`; dispatch
+  `service.py:2615`);
+- finelog log `source`/`key` — the identical grammar (`cluster/log_keys.py:61,67`);
+- `JobName`/`TaskAttempt`, which already parse and format the job/task/attempt
+  portion with ancestry helpers (`cluster/types.py:132,336`).
+
+So job, task, attempt, the controller process, and a worker process are already
+addressable by one path string; slice, endpoint, actor, and cluster are not yet in
+the grammar. Extracting a typed `ResourceRef` — one parser/formatter that produces
+a tagged reference and subsumes `target`, `source`, and `JobName`/`TaskAttempt` —
+is the single highest-leverage internal change. It is what lets `describe(ref)`,
+`events(ref)`, and `stop(ref)` dispatch by ref-kind in one place; today each RPC
+re-parses the string itself. It should reuse the existing `TaskTarget`
+(`controller/backend.py:153`) for the attempt case, so no parallel addressing
+scheme appears. It is also the natural point to give slice and attempt the
+first-class `list` they lack, and to converge the six near-identical `*Query`
+messages (`ListJobs/Tasks/Workers/Endpoints/Backends/Peers`, `service.py:2023,
+2145,2330,2429,3220,3344`) toward one `List(kind, query)` shape over time.
+
+## II.3 — The resource surface lives at the service layer, above the pure kernels
+
+Two kernels are pure by construction and must stay that way. The scheduling kernel
+(`scheduling/scheduler.py:696`, "does not dispatch tasks, modify state, or run
+threads", `:678`) and the reconcile kernel (`controller/reconcile/`, "a pure state
+machine over a closed snapshot, plus thin I/O") have zero `db`/`schema` imports,
+enforced structurally and by the AGENTS.md dependency rule. A resource surface
+"backed by the scheduler" must not reach into them; it belongs at the
+controller/service layer, where the DB, the backends, and finelog already meet.
+
+Two consequences for the resource verbs:
+
+- **`stop` is not a synchronous mutating call.** It fans into three
+  control-loop-mediated paths: job stop is a cascade-kill through the reconcile
+  kernel (`ReconcileState.cancel_job`, `reconcile/batches.py:273`); task/attempt
+  stop is a queued kick resolved in-tick (`request_task_kicks` →
+  `_resolve_pending_kicks`, `controller.py:576,1576`); worker stop is a queued
+  eviction plus slice/sibling teardown routed to the owning backend
+  (`request_worker_eviction`, `controller.py:562`). All three stay on the single
+  control thread. A uniform `stop` verb wraps these; it does not replace the
+  queue-onto-the-tick discipline.
+- **`describe`/`events` legitimately cross stores.** A task's full description
+  spans the DB registry (`tasks`/`task_attempts`), finelog measurements
+  (`iris.task`/`iris.profile`), and the live backend object (a pod GET or a worker
+  RPC). This is the decisions-vs-measurements split (`AGENTS.md:85-89`) working as
+  intended; it is not a defect to normalize away.
+
+## II.4 — DB schema evolution
+
+The schema is sound for what it does; the resource model asks for consistency, not
+a rewrite. Ordered by value over risk:
+
+1. **Uniform state typing.** `state` is an integer enum on jobs/tasks/attempts
+   (`schema.py:259,333,429`) but a `lifecycle` free string on slices
+   (`schema.py:549`) and a `handoff_state` int on federation (`schema.py:594`).
+   Converge on a typed state per resource (a `StrEnum` persisted consistently) so
+   `describe`/`list --state` read the same way for every noun. Keep the deliberate
+   non-storage of derived attempt failure/preemption counts (recomputed by
+   `AttemptCountsProjection`, `schema.py:341-345`); the resource model reads that
+   projection, it does not persist a count.
+2. **Name the three event streams so they stop colliding.**
+   `federation_changelog` (SQLite, control-plane change events for peers to poll,
+   `schema.py:634`) and `iris.task_event` (finelog, admission telemetry,
+   `stats/tables.py:179`) both call themselves "the event log," and Part I adds a
+   third, `iris.event` (audit). These are a decision-change feed, a measurement
+   stream, and an audit trail. The plan names them by role; it does not merge them.
+   The decisions-vs-measurements rule already assigns audit/measurement events to
+   finelog namespaces and control-plane change feeds to controller tables.
+3. **Decide what the free-floating strings are.** `backend_id`, `scale_group`,
+   `user_id`, and `cluster` are referenced across many tables with no anchor table
+   — the `backends` and `users` tables were dropped (migrations 0042, 0040), and
+   `scaling_groups` keys on `name` while everything else says `scale_group`
+   (`schema.py:530` vs `workers.scale_group:480`). Either re-introduce thin
+   registry rows for the ones that are genuinely resources (backend, scale-group)
+   or document them as external coordinates; align `scaling_groups.name` with the
+   `scale_group` column name. This dovetails with the maintainer's flat-namespace
+   direction of making `cluster` a first-class column.
+4. **Pick one direction for slice↔worker.** The relation is denormalized both ways:
+   `slices.worker_ids` is a JSON array (`schema.py:550`) and `workers.slice_id` is
+   a column (`schema.py:479`). Keep `workers.slice_id` as the source of truth and
+   derive membership, or add a junction; drop the JSON array as authoritative.
+5. **Document the attempt dual identity once.** `attempt_id` (ordinal, in
+   `/user/job/0:3`) and `attempt_uid` (16-hex routing key that drives the pod name,
+   unique index `schema.py:435,444`) are both real and both needed. Keep both;
+   state the invariant in one place; do not re-explain it at each use.
+
+Every item stays inside the decisions-vs-measurements rule: no new measurement
+columns land on controller tables; they go to finelog namespaces.
+
+## II.5 — Scheduling and constraints: preserve, do not restructure
+
+The scheduling path is already the closest thing iris has to a clean resource
+model. The plan treats it as the reference to preserve:
+
+- The constraint/attribute model is uniform — one `ConstraintIndex`
+  (`constraints.py:1148`) matches workers in the scheduler, routes jobs to backends
+  in the meta-scheduler, and routes demand in the autoscaler. Keep it.
+- The `TaskBackend` contract (`controller/backend.py:464`) is a clean per-resource
+  driver: declared capabilities (`BackendCapability`, `:85`), three uniform phases
+  (schedule/reconcile/autoscale), plain-data frozen results dispatched on non-empty
+  field. This is the seam the uniform verbs hang on (§II.6); it should not grow
+  domain logic.
+- The 4-scalar resource model (cpu/gpu/tpu/memory) plus constraint-matched device
+  type/variant (`scheduler.py:61,250`), gang/coscheduling, priority bands, and
+  Kueue-on-K8s all stay.
+
+The one scheduling-adjacent addition the resource model wants is on the read side,
+not the decision side: `task describe` should surface *why* a task is pending. The
+scheduler already computes that verdict (unschedulable reasons and gate results,
+`scheduling/policy.py:840`), but it is not persisted as a queryable reason.
+Capturing the latest placement verdict for a pending task — as an event on the
+`iris.event` stream (§II.2, §5) — answers "why is this stuck" in the
+resource-model-shaped way and keeps the kernel pure: the controller writes the
+event after the pass; the kernel returns it as data.
+
+## II.6 — Backend-crossing is a capability branch, reused not reinvented
+
+Part I §4 adds `describe_task` to the `TaskBackend` contract. Generalized: uniform
+verbs that touch a live object branch on `BackendCapability` (`backend.py:85`) and
+route through the existing `TaskTarget`, because the two backends diverge — the
+worker-daemon backend owns workers, slices, liveness, and an autoscaler, while the
+K8s `CLUSTER_VIEW` backend owns none of them and reconstructs a pod name from
+`attempt_uid` plus one live GET. Worker liveness is in-memory and per-backend
+(`WorkerHealthTracker`, unioned by `Controller.all_liveness`, `controller.py:601`),
+so a uniform `worker list --health` is a join across backends; no single table
+holds it. The plan reuses this dispatch path for every backend-crossing verb; it
+adds no parallel router.
+
+## II.7 — Package and module naming
+
+Mechanical renames toward the vocabulary, no behavior change. Ranked by leverage:
+
+1. **Fold the `vm` proto noun into `worker`/`slice`.** `rpc/vm.proto` models
+   `VmInfo`/`VmState` nested under `SliceInfo` (`vm.proto:52,84`) while the Python
+   type layer already says `WorkerStatus`/`SliceInfo` (`cluster/types.py:497`). This
+   proto-vs-types split is the largest naming inconsistency; the CLI's `cluster vm
+   status` (`cli/cluster.py:934`) is its surface symptom.
+2. **Rename `platforms/vm_lifecycle.py` → `controller_lifecycle.py`.** Its docstring
+   says "Controller lifecycle as free functions" and it exports `start_controller`/
+   `stop_controller` (`vm_lifecycle.py:16,444`); the filename is wrong.
+3. **Split the CLI grab-bags** (Part I §9): `cli/cluster.py` (1615 lines, six nouns)
+   into per-noun modules; delete the synthetic `process` group
+   (`cli/process_status.py`), moving `status`→`describe`/`logs`/`profile` onto
+   `worker`, `task`, and the controller view.
+4. **Align the controller-side stop vocabulary.** `kick_tasks`/`terminate_job`/
+   `request_task_kicks` (`service.py:2174`, `controller.py:576`) and
+   `Worker.KillTask` are the server-side counterpart of the CLI's stop/kill/kick
+   sprawl; converge on stop/terminate as Part I collapses the CLI verbs.
+5. **`endpoints` group → `endpoint`** for singular-noun consistency
+   (`cli/endpoints.py:23`).
+6. **Make the shared CPU-sampling helper public.** `cluster/process_status.py`
+   imports `_read_proc_cpu_millicores` from `cluster/runtime/process.py` across a
+   module boundary; a `_private` name reused elsewhere should be public.
+7. **Optional, later:** `controller/service.py` is 3524 lines; if the resource
+   surface is added, split the one monolithic RPC impl along the resource nouns.
+
+## II.8 — Docstrings
+
+Standardize on the pattern `cluster/controller/reads.py` already uses, and make it
+the reference: state a shared cross-module mechanism once in the module docstring,
+then a one-line imperative Google-style summary on every public function whose
+behavior is not obvious from a return-type-reflecting name; skip trivial one-line
+accessors; drop `__all__` blocks that only mirror the import list. Concrete first
+targets from the sweep: missing summaries on `worker/worker.py:241 start()` /
+`:400 wait()`, `controller/controller.py:1027 owns_scale_group()` / `:1137
+resolve()`, `types.py:506 is_idle()` / `:843 is_job_finished()`; redundant
+`__all__` re-export blocks in `cluster/runtime/__init__.py:24` and
+`client/__init__.py:29`; a bulleted mechanism-restating module docstring in
+`cluster/runtime/process.py:4`. Run this alongside the naming changes in §II.7,
+documenting each shared mechanism once; do not repeat it per call site.
+
+## II.9 — Phasing, and what this plan will not do
+
+The internal work is sequenced after Part I and split so each phase is
+independently reviewable:
+
+- **Phase A (shared with Part I):** the typed `ResourceRef` at the service layer,
+  `describe_task` on `TaskBackend`, and the `iris.event` namespace. Part I already
+  needs all three, so they land with the CLI and are the foundation the rest builds
+  on.
+- **Phase B (mechanical, no behavior change):** the naming sweep and package splits
+  (§II.7) and the docstring sweep (§II.8). Pure refactors, landable in small PRs,
+  no migration.
+- **Phase C (migration-gated, last):** the DB schema alignments (§II.4) — uniform
+  state typing, event-stream naming, anchoring or documenting the free-floating
+  strings, the slice↔worker direction. Highest risk, done incrementally behind
+  migrations, each paired with a `describe`/`list` read that proves the shape
+  before and after.
+
+Explicitly out of scope, to keep the framing honest:
+
+- No single `Resource` base class over all eight nouns (§II.1); the classes do not
+  share a lifecycle.
+- No resource logic inside the scheduling or reconcile kernels (§II.3); they stay
+  pure.
+- No merging of the three event streams (§II.4); they differ in kind.
+- No persisting of derived state — attempt counts, per-cycle capacity, and worker
+  liveness stay computed, not stored (§II.4, §II.5).
+- No new addressing scheme: `ResourceRef` subsumes `target`/`source`/`TaskTarget`
+  (§II.2, §II.6).
+
 ## Open questions for review
+
+Part I (the CLI, this PR):
 
 1. **`describe` transport:** new `DescribeTask` RPC, or extend
    `GetTaskStatusResponse` with an optional `backend_detail` populated on request?
@@ -530,3 +806,22 @@ Stages 1–2 are small and land immediately. Stage 3 is the incident fix. Stages
    larger 3–7? The maintainer asked to "normalize everything"; I propose one
    design, delivered as the spiral above, but the split point for PRs is worth
    agreeing on.
+
+Part II (the internal model, plan):
+
+6. **Resource classes:** is the A/B/C split (§II.1) the right cut? The debatable
+   case is worker/slice — they have DB rows (Class-A-like) but their authoritative
+   state lives in backend handles and their `stop` is infra teardown (Class B). I
+   put them in B; the alternative is a fourth "record-backed infra" class.
+7. **`ResourceRef` timing:** extract the typed ref in Phase A (shared with the CLI),
+   or defer until the CLI has proven the vocabulary? Extracting early avoids each
+   new verb re-parsing `target`/`source`; deferring keeps this PR smaller.
+8. **DB state typing (§II.4.1):** is converging slice `lifecycle` and federation
+   `handoff_state` onto a persisted `StrEnum` worth a migration, or is the current
+   int-enum/string split tolerable given how rarely those tables change?
+9. **Free-floating strings (§II.4.3):** re-introduce thin anchor tables for
+   `backend`/`scale_group` (dropped in migrations 0042/0040), or formally document
+   them as external coordinates and only align the `scaling_groups.name` naming?
+10. **Service split (§II.7.7):** is splitting the 3524-line `service.py` along the
+   resource nouns in scope for this effort, or a separate refactor to keep the
+   vocabulary PRs reviewable?
