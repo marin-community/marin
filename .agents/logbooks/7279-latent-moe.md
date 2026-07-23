@@ -168,3 +168,64 @@ same benchmark arguments. The strongest remaining concentration is ring EP4
 at 3/4, but the fourth attempt hung before first execution rather than passing.
 The aggregate failure should therefore remain classified as a graph/runtime
 and infrastructure interaction, not as a deterministic latent-MoE failure.
+
+## 2026-07-23 15:20 PDT - Readable EP4 ring versus ragged profiles on NGC 26.06
+
+The matched profile pair used commit `bbc816a39`, NVIDIA JAX 26.06, one
+GB200x4 node, and a scaled version of the current D6144 architecture:
+D3072/L8, 128 routed experts, top-4, routed intermediate 1536, shared
+intermediate 3072, 24 query heads, 4 KV heads, sequence length 4096, and
+global batch 64. Both arms used `gpu_fa4_cute`, `recompute_all`, EP4, and the
+QuACK expert kernels. The backend was the only model/config difference:
+`ring_cute` versus `ragged_all_to_all_cute`.
+
+The readability settings were identical:
+
+```text
+XLA_FLAGS=--xla_gpu_enable_command_buffer='' --xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false
+host_tracer_level=1
+python_tracer_level=0
+enable_hlo_proto=true
+profile_start_step=10
+profile_num_steps=1
+```
+
+| Backend | Iris job | Median tok/s | Median step | Profile-step tok/s | Profile-step time |
+|---|---|---:|---:|---:|---:|
+| `ring_cute` | `/mwittmann/ep4-readable-ring-r3-20260723` | **128,317** | **2.0574 s** | 125,096 | 2.0955 s |
+| `ragged_all_to_all_cute` | `/mwittmann/ep4-readable-ragged-r3-20260723` | 117,899 | 2.2287 s | 115,266 | 2.2743 s |
+
+Ring was 8.84% faster by steady median and had 7.69% lower median step time.
+The uncapped XPlane summaries attribute 557.5 ms aggregate communication to
+ring and 614.5 ms to ragged across the device tracks. Ring's defining EP
+collectives were 196 all-gathers (298.8 ms) plus 96 reduce-scatters
+(169.3 ms); ragged used 512 send/recv kernels (472.7 ms). Relative to ring,
+ragged also accumulated 6.96% more compute time and 11.56% more stall time.
+The throughput gap therefore is not explained by EP communication duration
+alone.
+
+Both runs succeeded without the intermittent CUBIN loader error seen in the
+64-GPU experiments. The retained artifacts are:
+
+- Ring:
+  `s3://marin-us-east-02a/tmp/ttl=7d/profiles/issue7279/ep4-readable-ring-r3-20260723/`
+- Ragged:
+  `s3://marin-us-east-02a/tmp/ttl=7d/profiles/issue7279/ep4-readable-ragged-r3-20260723/`
+
+Each directory contains a parseable Perfetto trace and an XPlane protobuf. The
+ring XPlane has 411,936 events; ragged has 437,090. Neither summary reports
+trace truncation.
+
+One readability limitation remains. Every compiled GPU event has
+`tf_op=XlaModule:` in both Perfetto and XPlane, even with command buffers
+disabled and HLO protobuf collection enabled. The traces expose kernels,
+collectives, HLO op names, and the outer `train_step`, but not the nested
+`jax.named_scope` paths already present in the model. These captures are useful
+for backend/kernel comparison; they do not resolve source-level MoE subscopes.
+
+The first two parent submissions failed before allocating GPUs because
+package-scoped Iris dependency sync omitted root-workspace dependencies. The
+first successful compute submissions wrote the profiles but attempted to
+upload to the legacy `s3://marin-na` bucket, which is not reachable from this
+cluster. The `r3` jobs used full-workspace sync and the in-region
+`s3://marin-us-east-02a` bucket.
