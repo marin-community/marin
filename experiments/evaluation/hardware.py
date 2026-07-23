@@ -16,8 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from fray.types import TPU_HBM_BYTES_PER_CHIP, get_tpu_topology, tpu_family
-
-from experiments.evaluation.models import EvalModelConfig
+from marin.evaluation.model_config import ModelConfig
 
 _BYTES_PER_GIB = 1024**3
 UTILIZATION = 0.85
@@ -71,9 +70,9 @@ class AcceleratorChoice:
         return f"{self.gpu_type}x{self.gpu_count}"
 
 
-def default_platform(model: EvalModelConfig) -> Platform:
+def default_platform(model: ModelConfig) -> Platform:
     """The platform a model runs on absent an explicit choice: GPU when it is GPU-only or GPU-pinned."""
-    if model.gpu_only or model.fixed_gpu is not None:
+    if model.serve.gpu_only or model.serve.fixed_gpu is not None:
         return Platform.GPU
     return Platform.TPU
 
@@ -110,13 +109,13 @@ def _select_gpu(hbm_gb: int, target_cluster: str | None) -> AcceleratorChoice:
     raise ValueError(f"no GPU slice fits {hbm_gb} GB HBM at {UTILIZATION:.0%} utilization (max GB200x4)")
 
 
-def _fixed_gpu_choice(model: EvalModelConfig) -> AcceleratorChoice:
-    gpu_type, gpu_count = model.fixed_gpu
+def _fixed_gpu_choice(model: ModelConfig) -> AcceleratorChoice:
+    gpu_type, gpu_count = model.serve.fixed_gpu
     return AcceleratorChoice(
         platform=Platform.GPU,
         gpu_type=gpu_type,
         gpu_count=gpu_count,
-        target_cluster=model.target_cluster or GPU_CLUSTERS.get(gpu_type),
+        target_cluster=model.serve.target_cluster or GPU_CLUSTERS.get(gpu_type),
     )
 
 
@@ -144,7 +143,7 @@ def _parse_override(override: str) -> AcceleratorChoice:
     return AcceleratorChoice(platform=Platform.TPU, tpu_type=text, region=TPU_FAMILY_REGION[tpu_family(text)])
 
 
-def select_accelerator(model: EvalModelConfig, platform: Platform, override: str | None) -> AcceleratorChoice:
+def select_accelerator(model: ModelConfig, platform: Platform, override: str | None) -> AcceleratorChoice:
     """Resolve the serving slice for ``model`` on ``platform``.
 
     An explicit ``override`` (``v6e-8`` or ``H100x8``) wins over everything; otherwise a model's
@@ -152,10 +151,13 @@ def select_accelerator(model: EvalModelConfig, platform: Platform, override: str
     """
     if override:
         return _parse_override(override)
-    if model.fixed_gpu is not None:
+    serve = model.serve
+    if serve.fixed_gpu is not None:
         return _fixed_gpu_choice(model)
+    if serve.hbm_gb is None:
+        raise ValueError(f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice")
     if platform == Platform.GPU:
-        return _select_gpu(model.hbm_gb, model.target_cluster)
-    if model.gpu_only:
+        return _select_gpu(serve.hbm_gb, serve.target_cluster)
+    if serve.gpu_only:
         raise ValueError(f"model {model.name!r} is gpu_only; launch with --platform gpu")
-    return _select_tpu(model.hbm_gb)
+    return _select_tpu(serve.hbm_gb)

@@ -116,6 +116,13 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
             f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
             flush=True,
         )
+    # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
+    # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
+    # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
+    # it keys "max_gen_toks", which the registry does not.
+    gen_kwargs = ",".join(
+        [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
+    )
     cmd = [
         python,
         "-m",
@@ -127,7 +134,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--tasks",
         task["name"],
         "--gen_kwargs",
-        f"max_gen_toks={gen_budget}",
+        gen_kwargs,
         # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
         # gen_kwargs; lm-eval-native tasks ignore it.
         "--max_tokens",

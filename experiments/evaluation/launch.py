@@ -32,6 +32,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.harbor_runner import HarborRunConfig, canonical_served_name, run_harbor_eval
+from marin.evaluation.model_config import ModelConfig, resolve_serve_variant, serve_config_vllm_args
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
@@ -64,7 +65,7 @@ from experiments.evals.evalchemy.serve_and_eval import (
 )
 from experiments.evaluation.evals import EVALS, EvalMechanism, EvalSuiteConfig, HarborSpec
 from experiments.evaluation.hardware import AcceleratorChoice, Platform, select_accelerator
-from experiments.evaluation.models import MODELS, EvalModelConfig
+from experiments.evaluation.models import MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +336,7 @@ class RunPlan:
 
     model_key: str
     eval_key: str
-    model: EvalModelConfig
+    model: ModelConfig
     suite: EvalSuiteConfig
     accel: AcceleratorChoice
     serve: ServeSpec
@@ -361,31 +362,32 @@ class SubmittedGroup:
     runs: tuple[GroupRunRef, ...]
 
 
-def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
+def _serve_spec(model: ModelConfig, accel: AcceleratorChoice) -> ServeSpec:
+    """Map a model's :class:`ServeConfig` and the resolved slice onto a launch-level ``ServeSpec``.
+
+    The typed serve knobs render to ``vllm serve`` flags (:func:`serve_config_vllm_args`); a pinned
+    ``revision`` rides as ``--revision``; ``auto_serve_overrides`` later fills the rest from the model's
+    ``config.json`` at serve time. A per-hardware ``variant`` overlays the base config when the slice's
+    label matches (inert on the marin H100/GB200/TPU slices).
+    """
+    serve = resolve_serve_variant(model.serve, accel.label)
+    extra_args = serve_config_vllm_args(serve)
+    if model.revision is not None:
+        extra_args = (*extra_args, "--revision", model.revision)
+    common = dict(
+        backend=serve.backend,
+        tensor_parallel_size=serve.tensor_parallel_size,
+        max_model_len=serve.max_model_len,
+        region=accel.region,
+        vllm_extra_args=extra_args,
+        chat_template_content=serve.chat_template,
+    )
     if accel.platform == Platform.GPU:
-        spec = ServeSpec(
-            backend=model.backend,
-            tpu_type=None,
-            gpu_type=accel.gpu_type,
-            gpu_count=accel.gpu_count,
-            tensor_parallel_size=model.tensor_parallel_size,
-            region=accel.region,
-            vllm_extra_args=model.vllm_extra_args,
-            chat_template_content=model.chat_template,
-        )
+        spec = ServeSpec(tpu_type=None, gpu_type=accel.gpu_type, gpu_count=accel.gpu_count, **common)
     else:
-        spec = ServeSpec(
-            backend=model.backend,
-            tpu_type=accel.tpu_type,
-            gpu_type=None,
-            gpu_count=None,
-            tensor_parallel_size=model.tensor_parallel_size,
-            region=accel.region,
-            vllm_extra_args=model.vllm_extra_args,
-            chat_template_content=model.chat_template,
-        )
-    if model.serve_memory is not None:
-        spec = replace(spec, serve_memory=model.serve_memory)
+        spec = ServeSpec(tpu_type=accel.tpu_type, gpu_type=None, gpu_count=None, **common)
+    if serve.serve_memory is not None:
+        spec = replace(spec, serve_memory=serve.serve_memory)
     return spec
 
 
@@ -468,6 +470,10 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
         run_id = _run_id(plan.model_key, plan.eval_key)
         out_path = f"{records_prefix.rstrip('/')}/{run_id}/results"
         harbor = plan.suite.harbor
+        # Model-level agent kwargs (enable_thinking, an extra_body template) flow into every agentic
+        # run; a suite's own agent_kwargs override on a key clash.
+        if harbor is not None and plan.model.agent.agent_kwargs:
+            harbor = replace(harbor, agent_kwargs={**plan.model.agent.agent_kwargs, **harbor.agent_kwargs})
         eval_ref = EvalRef(
             name=plan.suite.name,
             mechanism=plan.suite.mechanism.value,
@@ -485,7 +491,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
                 name=plan.eval_key,
                 tasks=plan.suite.tasks,
                 out_path=out_path,
-                max_gen_toks=plan.model.max_gen_toks or plan.suite.max_gen_toks,
+                max_gen_toks=plan.model.generation.max_gen_toks or plan.suite.max_gen_toks,
                 max_eval_instances=plan.limit,
             )
         )
@@ -520,9 +526,12 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
             serve=serve,
             tokenizer=first.model.tokenizer,
             apply_chat_template=first.model.apply_chat_template,
+            extra_gen_kwargs=dict(first.model.generation.extra_gen_kwargs),
         ),
         runs=tuple(runs),
-        model_ref=ModelRef(name=first.model.name, location=first.model.location, backend=first.model.backend.value),
+        model_ref=ModelRef(
+            name=first.model.name, location=first.model.location, backend=first.model.serve.backend.value
+        ),
         hardware_ref=HardwareRef(
             platform=first.accel.platform.value,
             accelerator=first.accel.label,

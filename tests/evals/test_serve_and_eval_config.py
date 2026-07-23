@@ -121,6 +121,21 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
 
 
+def test_extra_gen_kwargs_ride_on_gen_kwargs():
+    # A thinking model (snowball-sft) needs skip_special_tokens=false so its delimiters survive scoring
+    # plus a light repetition penalty; both ride on --gen_kwargs alongside the budget, on every task.
+    session = _session(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"})
+    config = _payload(session=session)
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
+    gen_kwargs = cmd[cmd.index("--gen_kwargs") + 1]
+    assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
+
+
+def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
+    cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
+
+
 def test_build_command_chat_route_needs_template_and_generation():
     config = _payload(session=_session(apply_chat_template=True))
     generative, mcq = config["tasks"][1], config["tasks"][0]

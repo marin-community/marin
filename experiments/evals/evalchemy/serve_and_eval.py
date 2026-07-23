@@ -41,6 +41,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.model_config import ServeBackend
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -131,14 +132,6 @@ def _propagated_env(**extra: str) -> dict[str, str]:
     return env
 
 
-class ServeBackend(StrEnum):
-    """Which marin-serve backend serves the model under eval. Both expose the same OpenAI API, so the
-    eval client is identical either way."""
-
-    VLLM = "vllm"
-    LEVANTER = "levanter"
-
-
 @dataclass(frozen=True)
 class ServeSpec:
     """Which backend serves the model under eval, and on what slice.
@@ -222,6 +215,9 @@ class EvalchemyEvalConfig:
     apply_chat_template: bool = False
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Extra lm-eval ``--gen_kwargs`` (``key=value``) forwarded on every task's request; see
+    :attr:`EvalSession.extra_gen_kwargs`."""
     eval_image: str = EVALCHEMY_IMAGE
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
@@ -476,6 +472,7 @@ def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEn
             "out_path": unit.out_path,
             "apply_chat_template": session.apply_chat_template,
             "max_gen_toks": unit.max_gen_toks,
+            "extra_gen_kwargs": dict(session.extra_gen_kwargs),
             "max_eval_instances": unit.max_eval_instances,
             "num_concurrent": session.num_concurrent,
         }
@@ -499,6 +496,10 @@ class EvalSession:
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     apply_chat_template: bool = False
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Extra lm-eval ``--gen_kwargs`` (``key=value``) forwarded on every task's request, e.g.
+    ``skip_special_tokens=false`` so a thinking model's special-token delimiters survive scoring, or
+    ``repetition_penalty=1.1``. Model-level; ``max_gen_toks`` is set per unit, so it is not repeated here."""
     eval_image: str = EVALCHEMY_IMAGE
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
@@ -772,6 +773,7 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> ServeAndEvalRun:
         tokenizer=config.tokenizer,
         apply_chat_template=config.apply_chat_template,
         num_concurrent=config.num_concurrent,
+        extra_gen_kwargs=config.extra_gen_kwargs,
         eval_image=config.eval_image,
         eval_cpu=config.eval_cpu,
         eval_memory=config.eval_memory,
