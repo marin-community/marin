@@ -2449,3 +2449,21 @@ author: dlwh
   - Filed Marin bug [#7529](https://github.com/marin-community/marin/issues/7529) with `bug` and `agent-generated`; it is packaged for upstream review, but no NVIDIA issue was filed.
 - Next action:
   - Do not launch the matched FP8 full-block run until the BF16 gate passes. Minimize the JaxPP/CuTe FA4 interaction within #7529 or consume a JaxPP/Cutlass fix, then resume the FP8 training A/B.
+
+### 2026-07-23 00:01 PDT - private-output NCCL ragged all-to-all is functional but slower than ring
+- Hypothesis: Forcing JAX 0.10.1's exact-count grouped NCCL send/receive fallback avoids the symmetric-memory failure of the one-shot ragged all-to-all path and improves the matched L24 pipeline over Marin's bulk ring transport.
+- Commit Hash: `4d4c705cb6` (`[experiments] Add H100 NCCL_EP transport gate`).
+- Command: RNO2A 4x8 H100 explicit-MPMD `std_1f1b`, L24/d2560/e64/top-k4/seq4096/vocab8192/b512/m16, ragged-all-to-all EP8, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, XLA loss, `save_moe`, 10 steps, and XLA preallocation `0.70`. The launcher set both `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false` and `--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false`. Parent `/dlwh/iris-run-job-20260723-064055`; child `/dlwh/iris-run-job-20260723-064055/grug-train-jaxpp-rno2a-ragged-ncclfallback-l24-e64k4-b512-s4096-p4m16-20260722`; W&B <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ragged-ncclfallback-l24-e64k4-b512-s4096-p4m16-20260722>.
+- Results:
+  - Parent, child, and all four tasks succeeded. W&B finished after 10 finite steps with final loss `7.278883934`.
+  - Mean/p10/p50/p90 MFU was `14.393416/14.356245/14.401264/14.415185`; latest throughput was `324,954.49` tokens/s, `4,562,288.73` GFLOP/s, and duration `6.453679s`.
+  - The matched ring result at the same L24/b512/m16 geometry is `16.200488` mean MFU. The private-output fallback is `11.15%` slower.
+  - FABRIC/POSIX_FD VMM warnings remained in the logs, but they were nonfatal because the selected fallback used ordinary output memory. Shutdown emitted PJRT coordination connection-refused noise only after task 0 completed; Iris classified the run as successful and no resources remain live.
+- Source audit:
+  - JAX 0.10.1 already contains this private-output host-metadata-sync plus grouped NCCL send/receive fallback. Current JAX 0.11 does not add a private-memory fast ragged kernel; its one-shot path remains symmetric-memory dependent.
+  - Transformer Engine main at `4adad4c218c115cd9af235fb3d4e13ef4cec55a8` exposes a staged, non-zero-copy NCCL_EP transport with custom VJPs on H100. Its integrated grouped-GEMM MoE tests are SM100-only, so an H100 evaluation must first gate transport and then pair it with Marin GEMMs.
+- Interpretation:
+  - The exact-count NCCL fallback resolves the prior allocation failure but does not beat ring. At `11.15%` below ring it misses the predeclared within-10% promotion threshold, though it is not a catastrophic transport failure.
+  - Ring remains the measured production winner. The remaining transport candidate is Transformer Engine NCCL_EP; a self-contained H100x8 transport gate is committed under `experiments/ncclep_h100`.
+- Next action:
+  - Run the H100x8 NCCL_EP transport gate. Stop if transport-only forward-backward exceeds its explicit `18.33144ms` sanity bound; otherwise build a paired eight-process NCCL_EP-plus-Marin-GEMM versus ring benchmark before changing the JaxPP transport.
