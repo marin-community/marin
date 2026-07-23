@@ -14,12 +14,12 @@ trials from the durable output path before the job runs.
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +30,12 @@ from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_samp
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 
 logger = logging.getLogger(__name__)
+
+# Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
+# pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
+_HARBOR_SPEC = "harbor>=0.8.0"
+_DAYTONA_SPEC = "daytona>=0.200.1"
+_DRIVER = str(Path(__file__).with_name("harbor_trial_driver.py"))
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -209,18 +215,41 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
     )
 
 
+def _run_driver(config_file: Path) -> None:
+    """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
+    cmd = [
+        "uv",
+        "run",
+        "--isolated",
+        "--no-project",
+        "--prerelease=allow",
+        "--with",
+        _HARBOR_SPEC,
+        "--with",
+        _DAYTONA_SPEC,
+        "python",
+        _DRIVER,
+        str(config_file),
+    ]
+    logger.info("running Harbor driver: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+def _upload_trials(job_dir: Path, out_path: str) -> None:
+    """Upload each finished trial directory under ``job_dir`` to ``out_path/harbor_trials`` for resume."""
+    for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
+        if (trial_dir / "result.json").exists():
+            upload_to_gcs(str(trial_dir), prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
+
+
 def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
     """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
 
-    Serving is the caller's job: ``config.api_base`` already points at a live endpoint. This runs the
-    Harbor trials on the configured environment, resuming any completed trials it finds under
-    ``out_path``, then writes the per-sample parquet and returns the aggregate for the record.
+    Serving is the caller's job: ``config.api_base`` already points at a live endpoint. Harbor runs as
+    an isolated subprocess (see :mod:`marin.evaluation.harbor_trial_driver`); this resumes any
+    completed trials it finds under ``out_path`` first, then reads Harbor's native trial files back and
+    writes the per-sample parquet plus the aggregate for the record.
     """
-    from harbor.job import Job  # noqa: PLC0415  # optional dep: harbor
-    from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415
-    from harbor.models.job.config import DatasetConfig, JobConfig  # noqa: PLC0415
-    from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415
-
     job_name = _job_name(config)
     workdir = Path("/tmp/harbor_workdir") / job_name
     output_dir = workdir / "harbor_results"
@@ -232,48 +261,30 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, out_path)
 
-    try:
-        env_type = EnvironmentType(config.env)
-    except ValueError:
-        logger.warning("unknown Harbor environment %r; falling back to docker", config.env)
-        env_type = EnvironmentType.DOCKER
-
     agent_kwargs = dict(config.agent_kwargs)
     agent_kwargs.setdefault("api_base", config.api_base)
     agent_kwargs.setdefault("model_info", {**_DEFAULT_MODEL_INFO, "max_output_tokens": config.max_output_tokens})
-
-    job = Job(
-        JobConfig(
-            job_name=job_name,
-            jobs_dir=output_dir,
-            datasets=[DatasetConfig(name=config.dataset, version=config.version, n_tasks=config.task_limit)],
-            agents=[
-                AgentConfig(
-                    name=config.agent,
-                    model_name=f"hosted_vllm/{config.served_model_name}",
-                    kwargs=agent_kwargs,
-                )
-            ],
-            n_concurrent_trials=config.n_concurrent,
-            environment=EnvironmentConfig(type=env_type),
-        )
-    )
-
-    if is_remote_path(out_path):
-
-        async def _upload(event) -> None:
-            if event.result is None:
-                return
-            local = job.job_dir / event.result.trial_name
-            if local.exists():
-                upload_to_gcs(str(local), prefix_join(out_path, f"harbor_trials/{event.result.trial_name}"))
-
-        job.on_trial_ended(_upload)
+    driver_config = {
+        "job_name": job_name,
+        "jobs_dir": str(output_dir),
+        "dataset": config.dataset,
+        "version": config.version,
+        "n_tasks": config.task_limit,
+        "agent": config.agent,
+        "model_name": f"hosted_vllm/{config.served_model_name}",
+        "agent_kwargs": agent_kwargs,
+        "n_concurrent": config.n_concurrent,
+        "env": config.env,
+    }
+    config_file = workdir / "driver_config.json"
+    config_file.write_text(json.dumps(driver_config))
 
     logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, config.dataset, config.env)
-    asyncio.run(job.run())
+    _run_driver(config_file)
 
-    trials = _read_trials(job.job_dir)
+    trials = _read_trials(job_dir)
+    if is_remote_path(out_path):
+        _upload_trials(job_dir, out_path)
     samples_path = _write_samples(trials, config.dataset, out_path)
     result = _aggregate(trials, config.dataset, samples_path)
     StoragePath(prefix_join(out_path, "harbor_result.json")).write_text(

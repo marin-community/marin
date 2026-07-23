@@ -559,8 +559,9 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
         constraints = [
             Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=plans[0].accel.target_cluster)
         ]
-    # A Harbor group drives Harbor + the Daytona SDK inside the orchestrator itself (not just a child),
-    # so the orchestrator env installs the harbor extra and needs more than the evalchemy default.
+    # A Harbor group runs Harbor as an isolated uv subprocess from the orchestrator (see
+    # marin.evaluation.harbor_runner), so the orchestrator needs no harbor extra -- just more CPU and
+    # memory than the evalchemy orchestrator, and the Daytona credential in its env.
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_eval_group, params),
         name=f"eval-{params.group_id}",
@@ -569,10 +570,7 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
             memory="16g" if is_harbor else _ORCHESTRATOR_MEMORY,
             disk=_ORCHESTRATOR_DISK,
         ),
-        environment=EnvironmentSpec(
-            extras=["harbor"] if is_harbor else None,
-            env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env(),
-        ),
+        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
         constraints=constraints,
         max_retries_failure=0,
     )
