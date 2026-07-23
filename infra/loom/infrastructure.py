@@ -37,6 +37,7 @@ ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
+DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
 WEB_FIREWALL_TAG = "loom-web"
@@ -649,7 +650,11 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             {
                 "action": {"type": "Delete"},
                 "condition": {"age": config.backup_retention_days},
-            }
+            },
+            {
+                "action": {"type": "Delete"},
+                "condition": {"days_since_noncurrent_time": config.backup_retention_days},
+            },
         ],
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
@@ -701,6 +706,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
+        "data-disk-device": DATA_DISK_DEVICE_NAME,
         "loom-deployment": deployment_manifest,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
@@ -750,7 +756,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             # instance is deleted; the disk resource is protected as well.
             {
                 "source": data_disk.id,
-                "device_name": "loom-data",
+                "device_name": DATA_DISK_DEVICE_NAME,
                 "mode": "READ_WRITE",
             }
         ],
@@ -785,14 +791,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             },
             triggers=[
                 instance.id,
-                config.git_ref,
-                config.dotenv_secret_version,
-                image,
-                deployment_manifest,
-                STARTUP_SCRIPT,
-                RUNTIME_COMPOSE,
-                RUNTIME_CADDYFILE,
-                BACKUP_SCRIPT,
+                pulumi.Output.json_dumps(metadata),
             ],
             opts=pulumi.ResourceOptions(depends_on=[instance, dns_record]),
         )

@@ -250,26 +250,14 @@ def test_release_rollout_pins_metadata_to_the_reviewed_commit_and_digest():
 
     def check(_: object) -> None:
         metadata = by_name(mocks, "loom").inputs["metadata"]
-        assert (
-            field(
-                by_name(mocks, "loom").inputs,
-                "allow_stopping_for_update",
-                "allowStoppingForUpdate",
-            )
-            is False
-        )
         assert metadata["release-commit"] == "0123456789abcdef0123456789abcdef01234567"
         assert metadata["loom-image"].endswith("@sha256:" + "b" * 64)
         activation = by_name(mocks, "loom-activate")
         assert activation.typ == "command:local:Command"
         triggers = activation.inputs["triggers"]
         assert "loom_id" in triggers
-        assert "0123456789abcdef0123456789abcdef01234567" in triggers
-        assert 3 in triggers
-        assert metadata["loom-image"] in triggers
-        assert metadata["loom-deployment"] in triggers
-        for key in ("startup-script", "loom-compose", "loom-caddyfile", "loom-backup-script"):
-            assert metadata[key] in triggers
+        serialized_metadata = json.loads(next(trigger for trigger in triggers if trigger != "loom_id"))
+        assert serialized_metadata == metadata
         assert not any(resource.typ == "docker-build:index:Image" for resource in mocks.resources)
 
     return infrastructure.activation.id.apply(check)

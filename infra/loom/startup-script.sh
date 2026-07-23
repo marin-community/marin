@@ -13,7 +13,7 @@ DOTENV_SECRET_VERSION="$(meta instance/attributes/dotenv-secret-version)"
 DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
-DATA_DISK_DEVICE=/dev/disk/by-id/google-loom-data
+DATA_DISK_DEVICE="/dev/disk/by-id/google-$(meta instance/attributes/data-disk-device)"
 DATA_MOUNT=/mnt/loom-data
 
 echo "== loom startup-script: ${LOOM_DOMAIN} =="

@@ -123,10 +123,10 @@ the same commit in one update. Activation resolves the retained full-SHA tag
 from Artifact Registry and feeds its digest reference directly into VM metadata;
 there is no manual digest configuration. Pulumi validates that the real provider
 returns the expected repository's `@sha256:` reference before updating the VM.
-The first activation contains a large metadata diff because adoption deliberately
-ignored the whole legacy map. It must contain no replacement, deletion,
-boot-disk, data-disk, or network-interface change. The imported `ssh-keys` and
-`enable-osconfig` metadata remain ignored and are not removed.
+Switching from `runtimeMode: adopt` to `managed` changes the VM metadata that
+adoption deliberately ignored. The preview must contain no replacement,
+deletion, boot-disk, data-disk, or network-interface change. The imported
+`ssh-keys` and `enable-osconfig` metadata remain ignored and are not removed.
 
 After reviewing that runtime activation, run `pulumi up`. The stack's
 `loom-activate` command restarts the GCE startup unit after metadata is current
