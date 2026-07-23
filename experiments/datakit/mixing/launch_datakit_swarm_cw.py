@@ -26,7 +26,7 @@ Bucket names are the 168 grug buckets (``cNNqT`` + ``tail``), which match the da
     python experiments/mixture_surrogate/sample.py --budget-tokens 1e11 --top-k 50 --out proposals.json
     # 2. launch the swarm on CoreWeave via federated Iris
     SWARM_MIXTURES=proposals.json .venv/bin/iris --cluster=cw-rno2a job run --no-wait --cpu 4 --extra cpu \
-        -- python -m experiments.grug.moe.launch_datakit_swarm_cw --version dev --run --max-concurrent 16
+        -- python -m experiments.datakit.mixing.launch_datakit_swarm_cw --version dev --run --max-concurrent 16
 """
 
 import json
