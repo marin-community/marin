@@ -6,11 +6,13 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
+from urllib.parse import urlencode
 
 import jax
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, marin_temp_bucket
 
 from levanter.callbacks._core import StepInfo
 from levanter.utils.jax_utils import barrier_sync
@@ -18,6 +20,12 @@ from levanter.utils.jax_utils import barrier_sync
 logger = logging.getLogger(__name__)
 
 AdvancedProfileOptionValue = bool | int | str
+DEFAULT_XPROF_SERVICE_URL = "https://iris.oa.dev/proxy/xprof"
+
+
+def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
+    """Return the hosted XProf URL for an uploaded profile root."""
+    return f"{service_url.rstrip('/')}/open?{urlencode({'uri': profile_uri})}"
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,26 @@ class ProfileOptionsConfig:
 
 
 @dataclass(frozen=True)
+class XprofUploadConfig:
+    """TTL storage and hosted XProf settings for one profiling run."""
+
+    enabled: bool = True
+    ttl_days: int = 7
+    destination: str | None = None
+    service_url: str = DEFAULT_XPROF_SERVICE_URL
+
+    def destination_for_run(self, run_id: str) -> str:
+        """Return the profile root, deriving a region-local TTL path when needed."""
+        if self.destination is not None:
+            return str(StoragePath(self.destination) / run_id)
+        return marin_temp_bucket(self.ttl_days, prefix=f"xprof/{run_id}")
+
+    def viewer_url(self, profile_uri: str) -> str:
+        """Return the hosted XProf URL for an uploaded profile root."""
+        return xprof_viewer_url(self.service_url, profile_uri)
+
+
+@dataclass(frozen=True)
 class ProfilerConfig:
     """Configuration for scheduling the training profiler callback."""
 
@@ -72,7 +100,10 @@ class ProfilerConfig:
     start_step: int = 5
     num_steps: int = 25
     perfetto_link: bool = False
+    create_perfetto_trace: bool = False
+    process_index: int | None = None
     profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
+    upload: XprofUploadConfig = field(default_factory=XprofUploadConfig)
 
     @property
     def is_enabled(self) -> bool:
@@ -92,62 +123,150 @@ class ProfilerConfig:
 
         return max(0, total_prof_steps)
 
+    def build(self, path: str, run_id: str, num_steps: int | None = None) -> Callable[[StepInfo], None]:
+        """Build the scheduled callback, including its TTL upload destination."""
+        if num_steps is None:
+            num_steps = self.num_steps
+        upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
+        if upload_uri is not None and self.upload.destination is None and StoragePath(upload_uri).is_local:
+            logger.info("MARIN_PREFIX has no remote TTL store; keeping the profile at %s", path)
+            upload_uri = None
+        service_url = None
+        if upload_uri is not None and StoragePath(upload_uri).scheme in ("gs", "s3"):
+            service_url = self.upload.service_url
+        return profile(
+            path,
+            start_step=self.start_step,
+            num_steps=num_steps,
+            create_perfetto_link=self.perfetto_link,
+            create_perfetto_trace=self.create_perfetto_trace,
+            profiler_options=self.build_jax_profile_options(),
+            process_index=self.process_index,
+            upload_uri=upload_uri,
+            xprof_service_url=service_url,
+        )
+
 
 def profile(
     path: str,
     start_step: int,
     num_steps: int,
     create_perfetto_link: bool,
+    create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    process_index: int | None = None,
+    upload_uri: str | None = None,
+    xprof_service_url: str | None = None,
 ) -> Callable[[StepInfo], None]:
+    """Schedule a JAX XPlane capture and optionally upload it for hosted XProf."""
+    profile_path = StoragePath(path)
+    if not profile_path.is_local:
+        raise ValueError(f"JAX profiler capture path must be local, got {path}")
+
+    local_path = Path(path)
+    local_path.mkdir(parents=True, exist_ok=True)
+    profile_window_started = False
     trace_started = False
-    StoragePath(path).mkdirs()
+    existing_sessions: set[Path] = set()
+
+    def is_tracing_process() -> bool:
+        return process_index is None or jax.process_index() == process_index
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
-        nonlocal trace_started
-        if force and trace_started:
-            _stop_profile()
+        nonlocal existing_sessions, profile_window_started, trace_started
+        if force and profile_window_started:
+            _stop_profile(max(start_step, step.step + 1))
             return
 
         # -1 b/c step is the finished step
         if step.step == start_step - 1:
-            if force or trace_started:
+            if force or profile_window_started:
                 return
-            _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info(f"Starting profiler until step {start_step + num_steps}.")
-            jax.profiler.start_trace(
-                path,
-                create_perfetto_link=_create_perfetto_link,
-                create_perfetto_trace=True,
-                profiler_options=profiler_options,
-            )
-            trace_started = True
+            profile_window_started = True
+            if is_tracing_process():
+                existing_sessions = _profile_sessions(local_path)
+                _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
+                logger.info(f"Starting profiler until step {start_step + num_steps}.")
+                jax.profiler.start_trace(
+                    path,
+                    create_perfetto_link=_create_perfetto_link,
+                    create_perfetto_trace=create_perfetto_trace or create_perfetto_link,
+                    profiler_options=profiler_options,
+                )
+                trace_started = True
         elif step.step == start_step + num_steps - 1:
-            _stop_profile()
+            _stop_profile(start_step + num_steps)
 
-    def _stop_profile():
-        nonlocal trace_started
-        if not trace_started:
+    def _stop_profile(end_step: int):
+        nonlocal profile_window_started, trace_started
+        if not profile_window_started:
             return
-        if create_perfetto_link:
-            logger.info(f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}")
-        else:
-            logger.info("Stopping profiler.")
-        # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-        # a thread to flush and print periodically until we make it past stop_trace
-        # (note: stop_trace blocks if perfetto is enabled)
-        event = threading.Event()
-        if create_perfetto_link and jax.process_index() == 0:
-            _flush_while_waiting(event)
 
-        jax.profiler.stop_trace()
-        trace_started = False
+        captured_profile = trace_started
+        if trace_started:
+            if create_perfetto_link:
+                logger.info(
+                    f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
+                )
+            else:
+                logger.info("Stopping profiler.")
+            # gcloud ssh does not reliably flush stdout while stop_trace blocks for a
+            # Perfetto link, so keep the terminal alive until the call returns.
+            event = threading.Event()
+            if create_perfetto_link and jax.process_index() == 0:
+                _flush_while_waiting(event)
 
-        if create_perfetto_link and jax.process_index() == 0:
-            event.set()
+            jax.profiler.stop_trace()
+            trace_started = False
+
+            if create_perfetto_link and jax.process_index() == 0:
+                event.set()
+
         barrier_sync()
+        upload_error: Exception | None = None
+        if captured_profile and upload_uri is not None:
+            try:
+                remote_session_name = f"steps-{start_step}-to-{end_step}"
+                _upload_profile_sessions(local_path, existing_sessions, upload_uri, remote_session_name)
+            except Exception as exc:
+                upload_error = exc
+                logger.exception("Failed to upload XProf profile to %s", upload_uri)
+
+        if upload_uri is not None:
+            # Upload errors are held until every process reaches this bounded
+            # barrier, avoiding a healthy host waiting forever for a failed peer.
+            barrier_sync()
+        profile_window_started = False
+        if upload_error is not None:
+            raise RuntimeError(f"Failed to upload XProf profile to {upload_uri}") from upload_error
+        if upload_uri is not None and xprof_service_url is not None and jax.process_index() == 0:
+            viewer_url = xprof_viewer_url(xprof_service_url, upload_uri)
+            logger.info("XProf profile: %s", viewer_url)
 
     return profiler_callback_fn
+
+
+def _profile_sessions(profile_path: Path) -> set[Path]:
+    session_root = profile_path / "plugins" / "profile"
+    if not session_root.exists():
+        return set()
+    return {path for path in session_root.iterdir() if path.is_dir()}
+
+
+def _upload_profile_sessions(
+    profile_path: Path,
+    existing_sessions: set[Path],
+    upload_uri: str,
+    remote_session_name: str,
+) -> None:
+    new_sessions = _profile_sessions(profile_path) - existing_sessions
+    if not new_sessions:
+        raise RuntimeError(f"JAX profiler produced no new XPlane session under {profile_path}")
+
+    destination = StoragePath(upload_uri) / "plugins" / "profile" / remote_session_name
+    for session_path in sorted(new_sessions):
+        destination.upload_from(f"{session_path}/", recursive=True)
+    logger.info("Uploaded XProf session to %s", destination)
 
 
 def _flush_while_waiting(event):

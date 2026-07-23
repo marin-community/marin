@@ -26,7 +26,14 @@ from levanter.callbacks._metrics import (
 )
 from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
-from levanter.callbacks.profiler import _flush_while_waiting, profile
+from levanter.callbacks.profiler import (
+    ProfileOptionsConfig as ProfileOptionsConfig,
+    ProfilerConfig as ProfilerConfig,
+    XprofUploadConfig as XprofUploadConfig,
+    _flush_while_waiting,
+    profile,
+    xprof_viewer_url as xprof_viewer_url,
+)
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
 from levanter.schedule import BatchSchedule

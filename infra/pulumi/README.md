@@ -21,7 +21,7 @@ federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
 used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky`).
+around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
