@@ -54,9 +54,7 @@ from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.moe.model import (
-    _DEFAULT_EP_CAPACITY_FACTOR as _GRUG_MOE_EP_CAPACITY_FACTOR,
-)
-from experiments.grug.moe.model import (
+    GRUG_MOE_EP_CAPACITY_FACTOR,
     Block,
     CausalSelfAttention,
     GatedNorm,
@@ -482,7 +480,7 @@ def _routed_expert_layer(
             implementation="ring" if config.kernel.endswith("_ring") else "scatter",
             activation=ActivationFunctionEnum.silu,
             capacity_factor=(
-                _GRUG_MOE_EP_CAPACITY_FACTOR
+                GRUG_MOE_EP_CAPACITY_FACTOR
                 if model_config is not None and config.block_boundary == "full"
                 else _DEFAULT_EP_CAPACITY_FACTOR
             ),

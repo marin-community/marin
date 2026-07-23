@@ -56,7 +56,7 @@ try:
 except ModuleNotFoundError:
     jaxpp = None
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
+GRUG_MOE_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _FP8_EXPERT_GEMM_ALIGNMENT = 128
@@ -698,7 +698,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=GRUG_MOE_EP_CAPACITY_FACTOR,
                 ragged_dot_ops=ragged_dot_ops,
             ),
             cfg=cfg,
