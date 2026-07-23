@@ -10,7 +10,7 @@ plus generation limits. The launcher today drives the ``EVALCHEMY`` mechanism (s
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -18,19 +18,39 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 
 class EvalMechanism(StrEnum):
     """How a suite is executed. ``EVALCHEMY`` serves the model and runs lm-eval against its OpenAI URL;
-    ``HARBOR`` (agentic registry benchmarks) is not yet wired into this launcher."""
+    ``HARBOR`` serves the model and runs a Harbor registry dataset's agentic trials against it."""
 
     EVALCHEMY = "evalchemy"
     HARBOR = "harbor"
 
 
 @dataclass(frozen=True)
+class HarborSpec:
+    """A Harbor registry dataset run against the served model.
+
+    ``env`` selects the sandbox backend: ``daytona`` (off-cluster, needs ``DAYTONA_EVAL_API_KEY``),
+    ``local`` (Docker on the worker), or ``iris``. ``agent`` is the Harbor agent that drives each task
+    against the served endpoint (``hosted_vllm/<served-name>``). ``max_output_tokens`` is the litellm
+    generation budget (distinct from lm-eval's ``max_gen_toks``).
+    """
+
+    dataset: str
+    version: str = "1.0"
+    agent: str = "terminus-2"
+    env: str = "daytona"
+    n_concurrent: int = 4
+    max_output_tokens: int = 8192
+    agent_kwargs: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class EvalSuiteConfig:
-    """A named set of lm-eval tasks run together, with per-suite generation limits."""
+    """A named eval run: lm-eval tasks for the evalchemy mechanism, or a Harbor dataset for Harbor."""
 
     name: str
     mechanism: EvalMechanism
-    tasks: tuple[EvalTaskConfig, ...]
+    tasks: tuple[EvalTaskConfig, ...] = ()
+    harbor: HarborSpec | None = None
     max_gen_toks: int = 2048
     max_eval_instances: int | None = None
 
@@ -152,6 +172,20 @@ EVALS: dict[str, EvalSuiteConfig] = {
         tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
         max_gen_toks=512,
         max_eval_instances=128,
+    ),
+    # --- Harbor (agentic registry benchmarks) ---
+    # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
+    # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
+    "aime-harbor": EvalSuiteConfig(
+        name="aime-harbor",
+        mechanism=EvalMechanism.HARBOR,
+        harbor=HarborSpec(dataset="aime", version="1.0"),
+    ),
+    "aime-smoke": EvalSuiteConfig(
+        name="aime-smoke",
+        mechanism=EvalMechanism.HARBOR,
+        harbor=HarborSpec(dataset="aime", version="1.0", n_concurrent=2),
+        max_eval_instances=2,
     ),
 }
 

@@ -9,6 +9,35 @@ Rev 2. Reviewed independently by codex and `claude --model fable` against the co
 the same eight structural problems with rev 1, all incorporated below. **No backward compatibility:**
 existing eval outputs can be deleted and repopulated.
 
+## Rev 3 — finalized execution scope (owner decision, 2026-07-23)
+
+The maintainer collapsed this to **one PR** with these adjustments to the Rev 2 plan:
+- **Launcher unification folds in.** The `experiments/evaluation` group launcher (records + evaldash,
+  already TPU+GPU) is the single system. The standalone self-serve launchers
+  (`marin_evalchemy_tpu.py`, #7476, #7552) are superseded and closed against this PR; the valuable
+  model-intelligence from #7476 — `auto_serve_overrides` (derives vLLM flags + clamps `max_model_len`
+  from a model's `config.json`) and `extra_gen_kwargs` — is grafted into `serve_and_eval.py` as the
+  substance of "unified model definitions."
+- **No generation-logprob capture** and **no evaldash UI work.** The evaldash summary view is the
+  surface. The v2 sample contract still lands (explicit `Grading`, agentic fields) since Harbor and
+  evalchemy share it; the `generation_logprobs` field is dropped from scope.
+- **#7517 is not absorbed.** Harbor drives Daytona itself (`harbor.EnvironmentType.DAYTONA` creates
+  sandboxes from `DAYTONA_API_KEY`); #7517's client is an audit/reclaim ops tool off the eval path, so
+  it stays independent. Only the credential bridge is needed: `eval_env.daytona_sdk_env` maps the GSM
+  `DAYTONA_EVAL_API_KEY` to the SDK's `DAYTONA_API_KEY`.
+- **Capability-URL minting is available programmatically:** `client.mint_endpoint_token(...)` +
+  `rigging.connect.capability_path(name, token)` (the `iris endpoints mint` internals). The Harbor
+  runner mints one from the served endpoint for in-sandbox agents; a client-side agent (aime) can use
+  the in-VPC `base_url` directly, so the first live smoke uses aime.
+- **Deliverable:** the merged PR + an example evaldash URL to a real Harbor and evalchemy run.
+
+Progress (branch `weaver/eval-rollup`): committed — v2 `Grading` sample contract + column-projecting
+evaldash reader; generalized record (`eval_image`, `HarborRef`, `EvalRef.tasks` optional); `eval_env`
+module + Daytona credential bridge. Remaining: `auto_serve_overrides`/`extra_gen_kwargs` graft;
+`HarborSpec` + Harbor runner (serve → run trials on Daytona → normalize to record + agentic samples) +
+`run_eval_group` dispatch; delete the standalone launcher; live evalchemy + Harbor-on-Daytona runs;
+close #7476/#7552; open the PR.
+
 ## 1. Current state (the evidence)
 
 Two disjoint eval worlds exist today; the plan collapses them onto one output format.
