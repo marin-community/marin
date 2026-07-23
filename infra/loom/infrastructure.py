@@ -285,7 +285,7 @@ def _google_federation_mapping(
     email: str,
     subject: str,
 ) -> dict[str, Any]:
-    """Render the exact two-claim Google identity binding Loom verifies."""
+    """Render a Google workload identity mapping for Loom's deployment API."""
     return {
         "name": workload.name,
         "provider": "google",

@@ -1,5 +1,9 @@
 name: loom
 
+x-session-home-volume: &session-home-volume loom_loom_home
+x-session-uv-volume: &session-uv-volume loom_uv
+x-session-network: &session-network loom_default
+
 services:
   loom-init:
     image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
@@ -23,10 +27,10 @@ services:
       RUST_BACKTRACE: "1"
       LOOM_RUNNER: docker
       LOOM_SESSION_IMAGE: ${LOOM_IMAGE:?LOOM_IMAGE is required}
-      LOOM_SESSION_HOME_VOLUME: loom_loom_home
-      LOOM_SESSION_UV_VOLUME: loom_uv
+      LOOM_SESSION_HOME_VOLUME: *session-home-volume
+      LOOM_SESSION_UV_VOLUME: *session-uv-volume
       LOOM_SESSION_DOCKER_GID: ${DOCKER_GID:?DOCKER_GID is required}
-      LOOM_SESSION_NETWORK: loom_default
+      LOOM_SESSION_NETWORK: *session-network
       LOOM_SESSION_API_URL: http://loom:${LOOM_PORT:?LOOM_PORT is required}
     command:
       - loom
@@ -93,10 +97,12 @@ services:
 
 volumes:
   loom_home:
+    name: *session-home-volume
   uv:
+    name: *session-uv-volume
   caddy_data:
   caddy_config:
 
 networks:
   default:
-    name: loom_default
+    name: *session-network
