@@ -140,13 +140,14 @@ members = [
     "lib/zephyr",
     "infra/pulumi",
 ]
-# The native (maturin) companions are NOT members: their extensions are consumed
-# as pre-built wheels by default and only built from source under
-# `scripts/rust_mode.py dev`. Exclude them so workspace discovery doesn't pull
-# the nested packages into the workspace.
+# Native maturin packages are excluded from uv workspace discovery because each
+# owns its own build backend and package metadata. The path sources below build
+# them from this checkout for development; published packages resolve their
+# companion wheels from PyPI.
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
-#   - lib/dupekit/rust   -> marin-dupekit-native  (module `dupekit_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust"]
+#   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
+#   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -160,6 +161,7 @@ vllm = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
+marin-iris-native = { path = "lib/iris/rust" }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
 marin-dupekit = { workspace = true }

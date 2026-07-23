@@ -837,8 +837,7 @@ def validate_scale_group_resources(scale_groups: dict[str, ScaleGroupConfig]) ->
             raise ValueError(f"Scale group '{name}' has invalid device_count={res.device_count}.")
         if res.capacity_type is None:
             raise ValueError(
-                f"Scale group '{name}': resources.capacity_type is required "
-                "(one of: preemptible, on-demand, reserved)."
+                f"Scale group '{name}': resources.capacity_type is required (one of: preemptible, on-demand, reserved)."
             )
 
 

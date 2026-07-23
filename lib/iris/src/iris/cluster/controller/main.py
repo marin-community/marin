@@ -394,8 +394,7 @@ def controller_serve_options(command):
             default=None,
             type=click.Path(path_type=Path),
             help=(
-                "Override the local state dir "
-                "(default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
+                "Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
             ),
         ),
     ]

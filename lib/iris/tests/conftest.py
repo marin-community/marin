@@ -3,6 +3,7 @@
 
 # Test configuration for iris
 
+import json
 import logging
 import os
 import subprocess
@@ -11,6 +12,7 @@ import threading
 import time
 import traceback
 import warnings
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from iris.cluster.config import (
     load_config,
     make_local_config,
 )
+from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
@@ -35,6 +38,24 @@ from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
+
+
+@pytest.fixture
+def permissive_native_proxy_auth_json() -> str:
+    """Serialized no-auth policy for standalone native-proxy tests."""
+    return json.dumps(
+        asdict(
+            NativeProxyAuthConfig(
+                mode=NativeProxyAuthMode.PERMISSIVE,
+                issuers=(),
+                jwks={"keys": []},
+                leeway_seconds=0,
+                cache_capacity=16,
+                cache_ttl_seconds=60,
+                trusted_cidrs=(),
+            )
+        )
+    )
 
 
 @pytest.fixture

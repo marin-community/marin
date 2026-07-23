@@ -304,9 +304,9 @@ client → GCLB (:443) → URL map                                              
 A **capability URL** carries a scoped endpoint token in its path —
 `/proxy/t/<token>/<endpoint>/<sub_path>` — so possession of the URL *is* the
 credential (gist-style: if you have the link, it works). No auth header or cookie
-is needed. The controller's `@public` token route lifts the token from the path
-and `_authorize_proxy` verifies it is scoped to that endpoint and unexpired before
-forwarding. Mint one with `iris endpoints mint <name>` (or let `marin-serve
+is needed. The native Iris listener lifts the token from the path and verifies
+that it is scoped to that endpoint and unexpired before forwarding. Mint one
+with `iris endpoints mint <name>` (or let `marin-serve
 --access link` print the ready-to-use URL at launch).
 
 The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP disabled)
@@ -314,9 +314,9 @@ on the same NEG and health check the `backend` stage already created — no new 
 no new controller — and a URL-map path rule routing `/proxy/t` and `/proxy/t/*` to
 it. Everything else on the host keeps flowing to the IAP-gated backend, so the
 browser's IAP identity still reaches PRIVATE endpoints and the dashboard's log
-viewer. The controller's `_authorize_proxy` is the sole gate for the capability
-path; it needs no firewall or IAP-admin authority, and this admin-run stage is the
-only thing that touches the LB.
+viewer. The controller's native listener is the sole gate for the capability
+path; it needs no firewall or IAP-admin authority, and this admin-run stage is
+the only thing that touches the LB.
 
 `deploy` runs `token-proxy` by default (it reuses the cluster's existing NEG +
 health check), so a plain deploy or re-deploy stands up the `/proxy/t` opening
@@ -341,12 +341,13 @@ exists.
 
 The firewall allow-rule still admits only the Google LB ranges, so nothing
 bypasses the LB; opening `/proxy/t/*` only changes *which* GCLB backend that path
-lands on, and the controller's `_authorize_proxy` remains the sole gate.
+lands on, and the controller's native listener remains the sole gate.
 
 On CoreWeave/k8s clusters there is no IAP layer: the controller Service is
 ClusterIP-internal and a single Traefik ingress already routes all of `/proxy`
 (including `/proxy/t/*`) to it with no edge auth, so the controller's own
-per-endpoint auth is the sole gate there and no equivalent stage is needed.
+native per-endpoint auth is the sole gate there and no equivalent stage is
+needed.
 
 ## Verify
 

@@ -11,6 +11,7 @@ time cannot observe.
 """
 
 import uuid
+from pathlib import Path
 
 import pytest
 from connectrpc.code import Code
@@ -19,7 +20,12 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
-from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOINT_LEASE, EndpointServiceImpl
+from iris.cluster.controller.endpoint_service import (
+    ENDPOINT_LEASE,
+    MIN_ENDPOINT_LEASE,
+    EndpointServiceImpl,
+    ProxyRegistryReset,
+)
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -166,6 +172,56 @@ def test_register_returns_lease_duration(state):
     assert state._endpoints.resolve("svc").address == "h:1"
 
 
+def test_proxy_registry_publishes_deltas_and_snapshots(state):
+    task, attempt = _live_task(state)
+    service = _service(state)
+    deltas = []
+    service.subscribe_proxy_updates(deltas.append)
+
+    response = service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt, endpoint_id="endpoint-1"),
+        None,
+    )
+    service.register_system_endpoint("/system/log-server", "http://logs:9000")
+
+    assert response.endpoint_id == "endpoint-1"
+    assert [(delta.base_generation, delta.next_generation) for delta in deltas] == [(0, 1), (1, 2)]
+    assert [mapping.endpoint_id for mapping in deltas[0].upserts] == ["endpoint-1"]
+    assert [mapping.endpoint_id for mapping in deltas[1].upserts] == ["system:/system/log-server"]
+
+    snapshot = service.proxy_registry_snapshot()
+    assert snapshot.generation == 2
+    assert {mapping.endpoint_id for mapping in snapshot.endpoints} == {
+        "endpoint-1",
+        "system:/system/log-server",
+    }
+
+    service.unregister_endpoint(
+        controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id="endpoint-1"),
+        None,
+    )
+    assert deltas[-1].base_generation == 2
+    assert deltas[-1].next_generation == 3
+    assert deltas[-1].deletes == ("endpoint-1",)
+
+
+def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path: Path):
+    service = _service(state)
+    updates = []
+    service.subscribe_proxy_updates(updates.append)
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    state._db.backup_to(backup_dir / "controller.sqlite3")
+    state._db.backup_to(backup_dir / "auth.sqlite3")
+
+    state._db.replace_from(backup_dir)
+
+    assert len(updates) == 1
+    reset = updates[0]
+    assert isinstance(reset, ProxyRegistryReset)
+    assert service.proxy_registry_snapshot().generation == 1
+
+
 def test_register_honors_and_clamps_requested_lease(state):
     task, attempt = _live_task(state)
     svc = _service(state)  # ceiling is the default ENDPOINT_LEASE
@@ -238,49 +294,8 @@ def test_register_defaults_to_private_and_persists_access(state):
         _register_with_access("/j/link", task, attempt, controller_pb2.Controller.ENDPOINT_ACCESS_LINK), None
     )
 
-    assert svc.resolve_proxy_target("j.private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert svc.resolve_proxy_target("j.link").access == EndpointAccess.ENDPOINT_ACCESS_LINK
-
-
-def test_resolve_proxy_target_decodes_slash_names(state):
-    """A slash-containing wire name is reachable via its dotted encoded form.
-
-    Regression for the encode/decode namespace bug: quick-serve's default
-    ``/serve/<job>`` arrives at the proxy as ``serve.foo`` and must still
-    resolve (access + address + canonical wire name).
-    """
-    task, attempt = _live_task(state)
-    svc = _service(state)
-    svc.register_endpoint(
-        controller_pb2.Controller.RegisterEndpointRequest(
-            name="/serve/foo",
-            address="up:8000",
-            task_id=task.to_wire(),
-            attempt_id=attempt,
-            access=controller_pb2.Controller.ENDPOINT_ACCESS_LINK,
-        ),
-        None,
-    )
-
-    resolved = svc.resolve_proxy_target("serve.foo")
-    assert resolved is not None
-    assert (resolved.name, resolved.address, resolved.access) == (
-        "/serve/foo",
-        "up:8000",
-        EndpointAccess.ENDPOINT_ACCESS_LINK,
-    )
-    assert svc.resolve_proxy_target("nope.missing") is None
-
-
-def test_resolve_proxy_target_system_endpoint_is_private(state):
-    svc = _service(state)
-    svc.register_system_endpoint("/system/log-server", "logs:9000")
-    resolved = svc.resolve_proxy_target("system.log-server")
-    assert resolved is not None
-    assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    assert resolved.address == "logs:9000"
-    # System endpoints carry no metadata, so no per-endpoint timeout override.
-    assert resolved.timeout_seconds is None
+    assert state._endpoints.resolve("/j/private").access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    assert state._endpoints.resolve("/j/link").access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
 @pytest.mark.parametrize(
@@ -292,9 +307,8 @@ def test_resolve_proxy_target_system_endpoint_is_private(state):
         ({PROXY_TIMEOUT_METADATA_KEY: "0"}, None),  # non-positive -> ignored
     ],
 )
-def test_resolve_proxy_target_reads_timeout_metadata(state, metadata_value, expected):
-    """A per-endpoint proxy timeout registered in metadata surfaces on the resolved
-    endpoint; absent or invalid values fall back to the proxy default (None)."""
+def test_proxy_registry_reads_timeout_metadata(state, metadata_value, expected):
+    """The native registry carries a valid timeout override or the default marker."""
     task, attempt = _live_task(state)
     svc = _service(state)
     svc.register_endpoint(
@@ -307,9 +321,8 @@ def test_resolve_proxy_target_reads_timeout_metadata(state, metadata_value, expe
         ),
         None,
     )
-    resolved = svc.resolve_proxy_target("serve.foo")
-    assert resolved is not None
-    assert resolved.timeout_seconds == expected
+    [mapping] = svc.proxy_registry_snapshot().endpoints
+    assert mapping.timeout_seconds == expected
 
 
 def test_resolve_task_endpoint_returns_owner_row(state):

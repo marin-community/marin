@@ -1,0 +1,57 @@
+[workspace]
+members = ["pyext"]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+[package]
+name = "iris-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "iris_proxy"
+path = "src/lib.rs"
+
+[dependencies]
+axum = "0.7"
+blake3 = "1"
+http = "1"
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "http1",
+    "http2",
+    "ring",
+    "tls12",
+    "webpki-roots",
+] }
+hyper-util = { version = "0.1", features = [
+    "client",
+    "client-legacy",
+    "http1",
+    "http2",
+    "tokio",
+] }
+ipnet = "2"
+jsonwebtoken = { version = "10", default-features = false, features = [
+    "use_pem",
+    "rust_crypto",
+] }
+moka = { version = "0.12", features = ["sync"] }
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-stream = { version = "0.1", features = ["time"] }
+tracing = "0.1"
+url = "2"

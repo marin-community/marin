@@ -4790,6 +4790,7 @@ dependencies = [
     { name = "humanfriendly" },
     { name = "marin-finelog" },
     { name = "marin-finelog-server" },
+    { name = "marin-iris-native" },
     { name = "marin-rigging" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -4859,6 +4860,7 @@ requires-dist = [
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
+    { name = "marin-iris-native", directory = "lib/iris/rust" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -4906,6 +4908,11 @@ test = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
+
+[[package]]
+name = "marin-iris-native"
+version = "0.1.0"
+source = { directory = "lib/iris/rust" }
 
 [[package]]
 name = "marin-levanter"

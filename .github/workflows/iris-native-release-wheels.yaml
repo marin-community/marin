@@ -1,0 +1,72 @@
+name: "Iris Native - Release Wheels"
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "iris-native-v*"
+  pull_request:
+    paths:
+      - "lib/iris/rust/**"
+      - ".github/workflows/iris-native-release-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Check release version
+        if: github.ref_type == 'tag'
+        working-directory: lib/iris/rust
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_VERSION#iris-native-v}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          pyext_version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyext/Cargo.toml | head -1)
+          test "$cargo_version" = "$expected"
+          test "$pyext_version" = "$expected"
+
+      - name: Build platform wheel
+        working-directory: lib/iris/rust
+        run: uvx --from 'maturin>=1.5,<2.0' maturin build --release --out ../../../dist
+
+      - name: Build source distribution
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: lib/iris/rust
+        run: uvx --from 'maturin>=1.5,<2.0' maturin sdist --out ../../../dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: iris-native-${{ matrix.os }}
+          path: dist/*
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist/

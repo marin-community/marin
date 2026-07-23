@@ -24,6 +24,21 @@ COPY lib/iris/dashboard/ ./
 RUN npm run build
 
 
+# ── Stage: iris-native-wheel ────────────────────────────────────────
+# Build the PyO3 companion once per target architecture without carrying a Rust
+# toolchain into the controller or worker images.
+FROM rust:1-bookworm AS iris-native-wheel
+
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+
+WORKDIR /build/iris-native
+COPY lib/iris/rust/ ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
+        --release \
+        --out /wheels
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -86,6 +101,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 # from the lock and never invokes a non-installed member's build backend.
 COPY uv.lock pyproject.toml ./
 COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
+COPY lib/iris/rust/pyproject.toml lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock \
+    lib/iris/rust/iris_native.pyi ./lib/iris/rust/
+COPY lib/iris/rust/pyext/Cargo.toml ./lib/iris/rust/pyext/Cargo.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
 COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
@@ -94,7 +112,8 @@ COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
 COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
 COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package marin-iris --no-install-workspace
+    uv sync --frozen --package marin-iris --no-install-workspace \
+        --no-install-package marin-iris-native
 
 # Now copy full source for rigging, finelog, and iris, then install. rigging's
 # wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
@@ -107,7 +126,10 @@ COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package marin-iris
+    uv sync --frozen --package marin-iris --no-install-package marin-iris-native
+COPY --from=iris-native-wheel /wheels/marin_iris_native-*.whl /tmp/
+RUN uv pip install --no-deps /tmp/marin_iris_native-*.whl \
+    && rm /tmp/marin_iris_native-*.whl
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -146,7 +168,8 @@ FROM deps AS controller
 
 # Controller-only deps: kubernetes (marin-iris's `controller` extra).
 # --inexact keeps the py-spy/memray installed above from being pruned.
-RUN uv sync --frozen --package marin-iris --extra controller --inexact
+RUN uv sync --frozen --package marin-iris --extra controller --inexact \
+    --no-install-package marin-iris-native
 
 LABEL org.opencontainers.image.description="Iris controller image"
 

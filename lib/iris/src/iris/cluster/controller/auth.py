@@ -32,14 +32,18 @@ import dataclasses
 import logging
 import secrets
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 
 from rigging.server_auth import (
+    IAP_ISSUER,
+    IAP_PUBLIC_KEYS_URL,
     IapAssertionVerifier,
     RequestAuthPolicy,
     TokenVerifier,
     VerifiedIdentity,
 )
 from rigging.token_authority import (
+    DEFAULT_LEEWAY_SECONDS,
     JwksVerifier,
     JwtSigner,
     generate_ed25519_keypair,
@@ -47,7 +51,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,9 @@ DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # nothing: a leak exposes only that one endpoint until it ages out. Callers opt
 # into a long TTL explicitly; the default stays short.
 MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400 * 7  # 7 days
+NATIVE_PROXY_JWT_CACHE_CAPACITY = 4096
+NATIVE_PROXY_JWT_CACHE_TTL_SECONDS = 60
+NATIVE_PROXY_JWT_LEEWAY_SECONDS = DEFAULT_LEEWAY_SECONDS
 
 # Federation plane: the token a parent controller presents on RPCs to this cluster,
 # verified against the parent's published key by a dedicated verifier. Kept OUT of
@@ -131,6 +138,36 @@ FEDERATION_AUDIENCE = "federation"
 # Short-lived and unrevocable: a fresh token is minted per outgoing RPC, so replay is
 # bounded by the TTL plus the IP allowlist and the issuer/aud/requester binding.
 FEDERATION_TOKEN_TTL_SECONDS = 300  # 5 minutes
+
+
+class NativeProxyAuthMode(StrEnum):
+    """How the native listener handles missing or invalid credentials."""
+
+    PERMISSIVE = "permissive"
+    OPTIONAL = "optional"
+    ENFORCING = "enforcing"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class NativeProxyAuthConfig:
+    """Public verification policy passed to the native listener."""
+
+    mode: NativeProxyAuthMode
+    issuers: tuple[str, ...]
+    jwks: dict
+    leeway_seconds: int
+    cache_capacity: int
+    cache_ttl_seconds: int
+    trusted_cidrs: tuple[str, ...]
+    control_audience: str = CONTROL_PLANE_AUDIENCE
+    proxy_audience: str = PROXY_PLANE_AUDIENCE
+    proxy_scope: str = ENDPOINT_TOKEN_SCOPE
+    federation_audience: str = FEDERATION_AUDIENCE
+    session_cookie: str = SESSION_COOKIE
+    iap_public_keys_url: str = IAP_PUBLIC_KEYS_URL
+    iap_issuer: str = IAP_ISSUER
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +207,10 @@ class JwtTokenManager:
     def public_jwks(self) -> dict:
         """Public JWKS for ``/.well-known/jwks.json`` (current + retained-previous keys)."""
         return self._signer.public_jwks(also=self._previous_public_keys)
+
+    def native_proxy_verification_material(self) -> tuple[tuple[str, ...], dict]:
+        """Return accepted issuers and public keys for the native listener."""
+        return tuple(sorted({self._signer.issuer, _LEGACY_ISSUER})), self.public_jwks()
 
     def create_token(
         self,
@@ -409,6 +450,8 @@ class ControllerAuth:
     # none (fail closed). The federation token itself only proves the requester; the
     # verifier that checks it is folded into ``verifier``.
     allowed_submitters: tuple[str, ...] = ()
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
@@ -557,6 +600,7 @@ def create_controller_auth(
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
             allowed_submitters=allowed_submitters,
+            federation_keys=federation_peers,
         )
 
     provider = auth_config.provider_kind() or CIDR_PROVIDER
@@ -596,6 +640,8 @@ def create_controller_auth(
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
         allowed_submitters=allowed_submitters,
+        iap_audience=signed_header_audience if provider == "iap" else None,
+        federation_keys=federation_peers,
     )
 
 

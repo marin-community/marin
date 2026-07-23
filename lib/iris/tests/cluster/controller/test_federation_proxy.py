@@ -14,18 +14,16 @@ and a real upstream:
          peer, and served by the upstream
       -> unregistering the endpoint on the peer drops it from the parent's proxy.
 
-The federation bearer is a real EdDSA JWT: the parent signs with its key, the peer
-trusts the parent's public key and resolves the token to a federation-peer identity,
-then authorizes the forward by the RECEIVED handle the handoff created — the same
-crypto and authorization path the controllers run in production.
+The federation bearer is a real EdDSA JWT: the parent signs with its key, the
+peer's Rust listener verifies it, then the private control-plane decision checks
+the RECEIVED handle the handoff created.
 """
 
-import asyncio
+import json
 import socket
 from collections.abc import Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass, field
-from threading import Event
+from dataclasses import asdict, dataclass, field
 
 import httpx
 import pytest
@@ -36,11 +34,13 @@ from iris.cluster.controller.auth import (
     FederationTokenProvider,
     FederationTokenVerifier,
     JwtTokenManager,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
+from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.native_proxy import NativeProxy
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import on_shutdown
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2
@@ -81,21 +81,6 @@ class UpstreamObservation:
     headers: list[dict[str, str]] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class SaturatedUpstream:
-    app: Starlette
-    all_blockers_arrived: Event
-    probe_arrived: Event
-    release_blockers: Event
-
-
-@dataclass(frozen=True)
-class SaturatedRequestResults:
-    probe_reached_upstream: bool
-    blocker_responses: list[httpx.Response]
-    probe_response: httpx.Response
-
-
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("", 0))
@@ -133,54 +118,6 @@ def _build_upstream_app(seen: UpstreamObservation) -> Starlette:
     return app
 
 
-def _build_saturated_upstream_app(blocking_requests: int) -> SaturatedUpstream:
-    """Build an upstream that holds ``blocking_requests`` while exposing a probe."""
-    arrived = 0
-    all_blockers_arrived = Event()
-    probe_arrived = Event()
-    release_blockers = Event()
-
-    async def block(_request: Request) -> Response:
-        nonlocal arrived
-        arrived += 1
-        if arrived == blocking_requests:
-            all_blockers_arrived.set()
-        await asyncio.to_thread(release_blockers.wait)
-        return JSONResponse({"status": "released"})
-
-    async def probe(_request: Request) -> Response:
-        probe_arrived.set()
-        return JSONResponse({"status": "reached"})
-
-    return SaturatedUpstream(
-        app=Starlette(
-            routes=[
-                Route("/proxy/{endpoint_name:str}/block", block),
-                Route("/proxy/{endpoint_name:str}/probe", probe),
-            ]
-        ),
-        all_blockers_arrived=all_blockers_arrived,
-        probe_arrived=probe_arrived,
-        release_blockers=release_blockers,
-    )
-
-
-def _build_federated_forwarder(proxy: FederatedEndpointProxy) -> Starlette:
-    async def forward(request: Request) -> Response:
-        return await proxy.dispatch(
-            request,
-            peer_id=PEER_ID,
-            encoded_name=ENDPOINT_PROXY_NAME,
-            sub_path=request.path_params["path"],
-            proxy_prefix=f"/proxy/{ENDPOINT_PROXY_NAME}",
-        )
-
-    return Starlette(
-        routes=[Route("/{path:path}", forward)],
-        lifespan=on_shutdown(proxy.close),
-    )
-
-
 def _federation_auth(requester: str = PARENT_ID):
     """A parent federation-token minter plus the peer verifier that trusts its key.
 
@@ -195,7 +132,7 @@ def _federation_auth(requester: str = PARENT_ID):
     )
     parent_manager = JwtTokenManager(signer, control_plane_verifier)
     mint_token = FederationTokenProvider(requester, parent_manager).get_token
-    return mint_token, FederationTokenVerifier({requester: key.public_pem})
+    return mint_token, FederationTokenVerifier({requester: key.public_pem}), key.public_pem
 
 
 def _register_endpoint(
@@ -250,25 +187,77 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             with peer_state._db.read_snapshot() as q:
                 return reads.has_received_job_from_peer(q, peer_id, root_job)
 
-        mint_token, peer_verifier = _federation_auth(PARENT_ID)
+        mint_token, peer_verifier, parent_public_key = _federation_auth(PARENT_ID)
+        decision_secret = "federation-native-proxy-test"
         peer_dashboard = ControllerDashboard(
             peer_service,
             auth_policy=RequestAuthPolicy.enforcing(verifier=peer_verifier),
             federation_owner_check=peer_owns,
+            proxy_decision_secret=decision_secret,
         )
-        peer_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
+        peer_private_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
+        peer_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            peer_private_url,
+            decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                        federation_keys={PARENT_ID: parent_public_key},
+                    )
+                )
+            ),
+        )
+        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(peer_proxy.stop)
+        peer_url = peer_proxy.address
 
         # Parent dashboard: resolves the mirrored remote endpoint and forwards to the
         # peer under a freshly minted federation bearer.
+        parent_decision_secret = "parent-federation-native-proxy-test"
         parent_dashboard = ControllerDashboard(
             parent_service,
             auth_policy=RequestAuthPolicy.permissive(),
-            federated_proxy=FederatedEndpointProxy(lambda pid: peer_url if pid == PEER_ID else None, mint_token),
+            federated_handoff=FederatedEndpointHandoff(
+                lambda pid: peer_url if pid == PEER_ID else None,
+                mint_token,
+            ),
+            proxy_decision_secret=parent_decision_secret,
         )
-        parent_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
+        parent_private_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
 
         # Sync mirrors the peer's endpoint onto the parent as a remote (peer_id) row.
         manager.sync_once()
+        parent_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            parent_private_url,
+            parent_decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.PERMISSIVE,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(parent_proxy.stop)
+        parent_url = parent_proxy.address
 
         # The whole forward: parent /proxy -> federation bearer -> peer /proxy -> upstream.
         with httpx.Client() as client:
@@ -277,9 +266,14 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
                 params={"q": "1"},
                 headers={"cookie": "session=secret", "authorization": "Bearer browser-user-token"},
             )
+            subdomain_resp = client.get(
+                f"{parent_url}/greet",
+                headers={"host": f"{ENDPOINT_PROXY_NAME}.proxy.example.test"},
+            )
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["marker"] == UPSTREAM_MARKER
+        assert subdomain_resp.status_code == 502
         # The upstream served the forwarded sub-path and query verbatim.
         assert upstream.paths[-1] == "/greet?q=1"
         # The browser's own session credentials never reached the serving process:
@@ -293,45 +287,8 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id), None
         )
         manager.sync_once()
+        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
 
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")
         assert gone.status_code == 404
-
-
-def test_federated_proxy_does_not_queue_probe_behind_100_long_requests(threads: ThreadContainer) -> None:
-    blocking_requests = 100
-    upstream = _build_saturated_upstream_app(blocking_requests)
-    upstream_url = _serve(threads, upstream.app, name="saturated-peer")
-    proxy = FederatedEndpointProxy(
-        lambda peer_id: upstream_url if peer_id == PEER_ID else None,
-        lambda: "federation-token",
-        timeout_seconds=5.0,
-    )
-    parent_url = _serve(threads, _build_federated_forwarder(proxy), name="federated-forwarder")
-
-    async def run_requests() -> SaturatedRequestResults:
-        limits = httpx.Limits(max_connections=None)
-        async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
-            blockers = [asyncio.create_task(client.get(f"{parent_url}/block")) for _ in range(blocking_requests)]
-            blockers_reached_upstream = await asyncio.to_thread(upstream.all_blockers_arrived.wait, 5.0)
-            if not blockers_reached_upstream:
-                upstream.release_blockers.set()
-                await asyncio.gather(*blockers, return_exceptions=True)
-                raise AssertionError("blocking requests did not reach the federated upstream")
-
-            probe = asyncio.create_task(client.get(f"{parent_url}/probe"))
-            probe_reached_upstream = await asyncio.to_thread(upstream.probe_arrived.wait, 2.0)
-            upstream.release_blockers.set()
-            blocker_responses = await asyncio.gather(*blockers)
-            return SaturatedRequestResults(
-                probe_reached_upstream=probe_reached_upstream,
-                blocker_responses=blocker_responses,
-                probe_response=await probe,
-            )
-
-    results = asyncio.run(run_requests())
-
-    assert results.probe_reached_upstream
-    assert all(response.status_code == 200 for response in results.blocker_responses)
-    assert results.probe_response.status_code == 200
