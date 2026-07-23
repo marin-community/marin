@@ -2710,6 +2710,24 @@ def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
         recv_capacity_per_rank=recv_capacity_per_rank,
         hidden_dim=config.model.hidden_dim,
     )
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
+    physical_ep_config = te_cpp_ep.get_ep_config()
+    if physical_ep_config.num_ep_groups != pipeline_groups:
+        raise ValueError(
+            "NCCL_EP bootstrap recorded an unexpected group count: "
+            f"expected {pipeline_groups}, got {physical_ep_config.num_ep_groups}"
+        )
+    # JaxPP traces each localized stage with a size-1 pipeline axis. The C++
+    # communicator is already one physical EP8 group; this Python snapshot only
+    # controls TE's global abstract receive shape during stage-local tracing.
+    te_cpp_ep.set_ep_config(
+        dataclasses.replace(
+            physical_ep_config,
+            world_size=expert_size,
+            rank=jax.process_index() % expert_size,
+            num_ep_groups=1,
+        )
+    )
     logger.info(
         "NCCL_EP bootstrapped: world=%d groups=%d ep=%d max_tokens_per_rank=%d recv_capacity_per_rank=%d",
         jax.process_count(),

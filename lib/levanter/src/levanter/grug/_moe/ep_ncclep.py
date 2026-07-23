@@ -163,26 +163,13 @@ def moe_mlp_ep_ncclep(
     )
 
     te_ep = importlib.import_module("transformer_engine.jax.ep")
-    te_sharding = importlib.import_module("transformer_engine.jax.sharding")
     layer_config = te_ep.EpLayerConfig(
         top_k=top_k,
         dispatch_output_per_expert_alignment=_NCCLEP_DISPATCH_ALIGNMENT,
     )
-    mesh_resource = te_sharding.global_mesh_resource()
-    if mesh_resource.ep_resource != _EXPERT_AXIS:
-        raise ValueError(
-            f"NCCL_EP requires MeshResource.ep_resource={_EXPERT_AXIS!r}, got {mesh_resource.ep_resource!r}"
-        )
-    outer_axis = None
-    if mesh_resource.dp_resource is not None and int(mesh.shape[mesh_resource.dp_resource]) > 1:
-        outer_axis = mesh_resource.dp_resource
-    elif mesh_resource.fsdp_resource is not None and int(mesh.shape[mesh_resource.fsdp_resource]) > 1:
-        outer_axis = mesh_resource.fsdp_resource
-    else:
-        outer_axis = mesh_resource.dp_resource or mesh_resource.fsdp_resource
-    recv_leading_axis = _EXPERT_AXIS if outer_axis is None else (outer_axis, _EXPERT_AXIS)
-    leading_spec = P(recv_leading_axis, None, None)
-    leading_spec_2d = P(recv_leading_axis, None)
+    input_spec = P(_EXPERT_AXIS, None)
+    leading_spec = P(_EXPERT_AXIS, None, None)
+    leading_spec_2d = P(_EXPERT_AXIS, None)
     expert_spec = P(_EXPERT_AXIS, None, None)
 
     def body(
@@ -192,6 +179,9 @@ def moe_mlp_ep_ncclep(
         expert_w13: jax.Array,
         expert_w2: jax.Array,
     ) -> jax.Array:
+        tokens = jax.lax.with_sharding_constraint(tokens, input_spec)
+        routes = jax.lax.with_sharding_constraint(routes, input_spec)
+        weights = jax.lax.with_sharding_constraint(weights, input_spec)
         recv_tokens, recv_weights, handle_memory, token_counts = te_ep.ep_dispatch(
             layer_config,
             routes.astype(jnp.int32),
@@ -230,7 +220,7 @@ def moe_mlp_ep_ncclep(
             token_counts,
             weighted_out,
             tuple(tokens.shape[:-1]),
-            out_sharding=tuple(batch_spec),
+            out_sharding=(_EXPERT_AXIS,),
         ).astype(tokens.dtype)
 
     # The runtime owns the concrete mesh context and Transformer Engine's
