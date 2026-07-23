@@ -33,6 +33,7 @@ from iris.cli.connect import iris_client_for_ctx, require_controller_url, rpc_cl
 from iris.cli.raw_query import query_dicts, sql_literal
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.client.remote_client import LAUNCH_JOB_TIMEOUT_FLOOR_MS
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -57,6 +58,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
@@ -1582,6 +1584,12 @@ def restore(ctx, job_id: tuple[str, ...], stdin: bool, dry_run: bool) -> None:
             if row is None:
                 click.echo(f"skip {target}: no stored config")
                 continue
+            # RECREATE cancels a job that is still going, and targets often arrive
+            # from a piped query whose results have moved on. Stop it first if
+            # replacing live work is really the intent.
+            if row.state not in TERMINAL_JOB_STATES:
+                click.echo(f"skip {target}: still {job_state_friendly(row.state)}")
+                continue
 
             request = reconstruct_launch_job_request(row, workdir_files=_stored_workdir_files(client, target))
             # The reconstructor names the job from the stored ``name`` column, which
@@ -1602,7 +1610,9 @@ def restore(ctx, job_id: tuple[str, ...], stdin: bool, dry_run: bool) -> None:
                 click.echo(f"would restore {target} (state={state}, tasks={request.replicas})")
                 continue
 
-            client.launch_job(request)
+            # Replacing a finished job can block on its worker-bound attempts
+            # draining, which outlasts the default per-call deadline.
+            client.launch_job(request, timeout_ms=LAUNCH_JOB_TIMEOUT_FLOOR_MS)
             restored.append(target)
             click.echo(f"restored {target} (was {state})")
 
