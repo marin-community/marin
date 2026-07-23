@@ -117,6 +117,8 @@ def nccl_ep_setup_scripts() -> tuple[str, ...]:
     return (
         "\n".join(
             [
+                "set -euo pipefail",
+                'source "$IRIS_VENV/bin/activate"',
                 'cd "$IRIS_WORKDIR"',
                 "echo 'building Transformer Engine NCCL_EP runtime'",
                 'export WORK="/tmp/grug-nccl-ep"',
