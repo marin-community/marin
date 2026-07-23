@@ -71,6 +71,31 @@ def _cli_has(*flags: str) -> bool:
     return False
 
 
+def _workspace_relative(path_value: str, workspace: Path) -> str:
+    """Translate a local launch-host path into the worker-visible `/app` path."""
+    path = Path(path_value).expanduser().resolve()
+    try:
+        return str(path.relative_to(workspace.resolve()))
+    except ValueError as error:
+        raise ValueError(f"local path {path} is outside the bundled workspace {workspace}") from error
+
+
+def _prepare_worker_paths(args: argparse.Namespace, workspace: Path | None = None) -> None:
+    """Replace host paths with paths visible inside the Iris `/app` workspace.
+
+    Normalization must retain host paths while it reads the Harbor configuration.
+    This conversion is deliberately deferred until immediately before submission.
+    """
+    workspace = workspace or Path.cwd()
+    args.harbor_config = _workspace_relative(args.harbor_config, workspace)
+    if args.datagen_config:
+        args.datagen_config = _workspace_relative(args.datagen_config, workspace)
+    if args.dataset_path and not args.dataset_path.startswith(("gs://", "s3://", "http://", "https://")):
+        candidate = Path(args.dataset_path).expanduser()
+        if candidate.exists():
+            args.dataset_path = _workspace_relative(args.dataset_path, workspace)
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch an agentic eval job on a cluster (Iris TPU/GPU).")
 
@@ -140,7 +165,7 @@ def create_parser() -> argparse.ArgumentParser:
     external.add_argument("--external-endpoint-name", help="Endpoint name (default: /serve/<serve-name>).")
     external.add_argument("--external-parent-cluster", default=DEFAULT_PARENT_CLUSTER)
     external.add_argument("--external-parent-ingress-host", default=DEFAULT_PARENT_INGRESS)
-    external.add_argument("--iris-bin", default="iris")
+    external.add_argument("--iris-bin", default=str(Path(sys.executable).with_name("iris")))
     external.add_argument("--external-ttl-hours", type=float, default=24.0)
     external.add_argument("--external-ready-timeout-seconds", type=float, default=1800.0)
     external.add_argument("--external-serve-idle-timeout-hours", type=float, default=1.0)
@@ -274,13 +299,12 @@ def _normalize(args: argparse.Namespace) -> None:
             f"--jobs-dir={durable_harbor_jobs_dir(args.external_s3_output_root, args.job_name or 'eval')}"
         )
 
-
 def build_worker_command(args: argparse.Namespace) -> List[str]:
     """Build the in-pod run_eval.py command."""
     cmd: List[str] = [
         "python",
         "-m",
-        "agentic_evals.run_eval",
+        "experiments.agentic_evals.run_eval",
         "--harbor_config",
         args.harbor_config,
         "--model",
@@ -345,11 +369,13 @@ def main() -> None:
     if not args.job_name:
         args.job_name = f"eval-{int(__import__('time').time())}"
     _normalize(args)
+    _prepare_worker_paths(args)
 
     accelerator = args.gpu or args.tpu
 
     # Build env vars for the task container
     env_vars: Dict[str, str] = {}
+    env_vars["_iris_extras"] = ["datagen"] if args.gpu else ["datagen-tpu"]
     if args.harbor_env:
         env_vars["HARBOR_ENV"] = args.harbor_env
 

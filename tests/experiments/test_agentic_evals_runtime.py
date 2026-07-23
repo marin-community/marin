@@ -19,6 +19,7 @@ from experiments.agentic_evals.launch import (
     DEFAULT_GPU_DISK,
     DEFAULT_TPU_DISK,
     _normalize,
+    _prepare_worker_paths,
     build_worker_command,
     create_parser,
 )
@@ -131,6 +132,22 @@ def test_grug_external_profile_uses_parent_federation_and_durable_jobs(tmp_path)
     assert "--jobs-dir=s3://marin-us-east-02a/iris/grug-r10/trace_jobs" in args.harbor_extra_arg
     assert "--model-loader-extra-config={\"distributed\":true}" not in build_marin_serve_command(args)
     assert "--idle-timeout-hours" in build_marin_serve_command(args)
+
+
+def test_launcher_rewrites_bundled_config_to_worker_relative_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "configs" / "harbor.yaml"
+    config.parent.mkdir()
+    config.write_text("agents:\n  - name: terminus-2\n")
+    args = create_parser().parse_args(
+        ["--harbor_config", str(config), "--model", "Qwen/Qwen3-32B", "--dataset", "terminal-bench@2.0"]
+    )
+
+    _normalize(args)
+    _prepare_worker_paths(args)
+
+    assert args.harbor_config == "configs/harbor.yaml"
+    assert build_worker_command(args)[:3] == ["python", "-m", "experiments.agentic_evals.run_eval"]
 
 
 def test_external_endpoint_worker_uses_environment_reference_not_capability_url(tmp_path):

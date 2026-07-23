@@ -1,0 +1,60 @@
+# Canonical external-endpoint Harbor config for the 64k Grug OpenCode ID eval.
+job_name: default-eval-job
+jobs_dir: trace_jobs
+n_attempts: 3
+timeout_multiplier: 2.0
+debug: false
+orchestrator:
+  type: local
+  n_concurrent_trials: 16
+  quiet: false
+  plain_output: true
+  adaptive_concurrency:
+    enabled: false
+  retry:
+    max_retries: 10
+    exclude_exceptions:
+      - AgentTimeoutError
+      - AgentEnvironmentTimeoutError
+      - VerifierTimeoutError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - VerifierOutputParseError
+      - SandboxBuildFailedError
+      - VerifierRuntimeError
+      - SummarizationTimeoutError
+      - ContextLengthExceededError
+    wait_multiplier: 2.0
+    min_wait_sec: 1.0
+    max_wait_sec: 90.0
+environment:
+  type: daytona
+  force_build: true
+  delete: true
+  override_cpus: 2
+  override_memory_mb: 8192
+  override_storage_mb: 8192
+  kwargs:
+    auto_snapshot: true
+verifier:
+  max_timeout_sec: 14400
+agents:
+  - name: opencode
+    model_name: vllm/override-at-runtime
+    max_timeout_sec: 7200
+    override_setup_timeout_sec: 600
+    kwargs:
+      opencode_config:
+        compaction:
+          auto: false
+      model_info:
+        max_input_tokens: 64512
+        max_output_tokens: 16384
+        input_cost_per_token: 0
+        output_cost_per_token: 0
+      trajectory_config:
+        raw_content: false
+        linear_history: true
+datasets:
+  - path: /replace/with/tasks/path
+tasks: []
