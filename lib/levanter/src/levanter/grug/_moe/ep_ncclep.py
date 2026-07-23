@@ -163,12 +163,26 @@ def moe_mlp_ep_ncclep(
     )
 
     te_ep = importlib.import_module("transformer_engine.jax.ep")
+    te_sharding = importlib.import_module("transformer_engine.jax.sharding")
     layer_config = te_ep.EpLayerConfig(
         top_k=top_k,
         dispatch_output_per_expert_alignment=_NCCLEP_DISPATCH_ALIGNMENT,
     )
-    leading_spec = P(batch_spec[0], None, None)
-    leading_spec_2d = P(batch_spec[0], None)
+    mesh_resource = te_sharding.global_mesh_resource()
+    if mesh_resource.ep_resource != _EXPERT_AXIS:
+        raise ValueError(
+            f"NCCL_EP requires MeshResource.ep_resource={_EXPERT_AXIS!r}, got {mesh_resource.ep_resource!r}"
+        )
+    outer_axis = None
+    if mesh_resource.dp_resource is not None and int(mesh.shape[mesh_resource.dp_resource]) > 1:
+        outer_axis = mesh_resource.dp_resource
+    elif mesh_resource.fsdp_resource is not None and int(mesh.shape[mesh_resource.fsdp_resource]) > 1:
+        outer_axis = mesh_resource.fsdp_resource
+    else:
+        outer_axis = mesh_resource.dp_resource or mesh_resource.fsdp_resource
+    recv_leading_axis = _EXPERT_AXIS if outer_axis is None else (outer_axis, _EXPERT_AXIS)
+    leading_spec = P(recv_leading_axis, None, None)
+    leading_spec_2d = P(recv_leading_axis, None)
     expert_spec = P(_EXPERT_AXIS, None, None)
 
     def body(
