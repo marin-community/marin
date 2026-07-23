@@ -29,6 +29,7 @@ DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
 DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
+LOG_WRITER_ROLE = "roles/logging.logWriter"
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
@@ -701,6 +702,7 @@ class InstanceResources:
 def _create_instance(
     config: DeploymentConfig,
     vm_account: gcp.serviceaccount.Account,
+    vm_log_writer: gcp.projects.IAMMember,
     network: NetworkResources,
     data: DataResources,
     image: ImageResources,
@@ -728,6 +730,7 @@ def _create_instance(
         secrets.secret,
         secrets.vm_reader,
         image.vm_reader,
+        vm_log_writer,
         *secrets.profile_readers,
     ]
     instance = gcp.compute.Instance(
@@ -830,12 +833,19 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         display_name="loom standalone VM",
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
+    vm_log_writer = gcp.projects.IAMMember(
+        "loom-vm-log-writer",
+        project=config.project,
+        role=LOG_WRITER_ROLE,
+        member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
+        opts=api_options,
+    )
     runtime_policy = _create_runtime_policy(config, api_options)
     image = _create_image(config, apis, vm_account)
     network = _create_network(config, apis)
     data = _create_data_disk(config, apis)
     secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
-    instance = _create_instance(config, vm_account, network, data, image, secrets, runtime_policy)
+    instance = _create_instance(config, vm_account, vm_log_writer, network, data, image, secrets, runtime_policy)
     activation = _create_activation(config, instance, network.dns_record)
     _export_outputs(config, instance.instance, network, image, runtime_policy)
     return Infrastructure(instance.instance, activation)

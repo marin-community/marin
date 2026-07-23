@@ -182,6 +182,9 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
         secret_reader = by_name(mocks, "loom-vm-secret-reader")
         assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
+        log_writer = by_name(mocks, "loom-vm-log-writer")
+        assert log_writer.inputs["role"] == "roles/logging.logWriter"
+        assert log_writer.inputs["member"] == "serviceAccount:loom-vm@example.iam.gserviceaccount.com"
 
     return infrastructure.instance.id.apply(check)
 
