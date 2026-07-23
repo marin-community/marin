@@ -94,14 +94,10 @@ def chunk_record(row: tuple) -> dict:
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
     """Upsert changed github/discord chunks; delete rows gone upstream. Returns (upserted, deleted).
 
-    Rows whose (id, hash) already match the database are skipped — the hash is the corpus's
-    own incremental-embed key, and re-upserting an unchanged row still pays an HNSW graph
-    insertion (~100 rows/s), so a typical sync touches hundreds of rows, not all 73k.
-
-    Streams one BATCH of decoded rows at a time: the decoded embeddings are ~30x larger
-    than their sqlite blobs (73k rows of boxed floats exceed the job's memory), so only
-    the id list is held for the whole corpus. Each batch is one multi-row VALUES statement
-    — executemany with ON CONFLICT falls back to a round-trip per row.
+    Rows whose (id, hash) already match the database are skipped (the hash is the corpus's
+    incremental-embed key; every re-upserted row pays an HNSW graph insertion). Rows stream
+    one BATCH at a time — decoded embeddings are ~30x their sqlite blobs and the full corpus
+    exceeds the job's memory — with each batch a single multi-row VALUES statement.
     """
     existing = dict(conn.execute(sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.hash)).fetchall())
     placeholders = ",".join("?" * len(SOURCES))
@@ -201,6 +197,12 @@ def main() -> int:
             locked = conn.execute(sqlalchemy.select(sqlalchemy.func.pg_try_advisory_xact_lock(SYNC_LOCK_KEY))).scalar()
             if not locked:
                 print("another sync is already running; exiting")
+                return 0
+            # Re-read under the lock: this run may hold an older build than what the
+            # previous lock holder committed, and must not roll the mirror backward.
+            watermark = conn.execute(sqlalchemy.select(schema.sync_state.c.built_at_epoch)).scalar()
+            if watermark is not None and watermark >= built:
+                print(f"up to date: build {built} superseded while waiting to sync")
                 return 0
             upserted, deleted = upsert_chunks(conn, corpus)
             watermark_insert = pg_insert(schema.sync_state).values(built_at_epoch=built)
