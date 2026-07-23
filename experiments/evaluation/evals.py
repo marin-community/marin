@@ -95,6 +95,29 @@ def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = F
     )
 
 
+def _agentic_eval(
+    name: str,
+    dataset: str,
+    *,
+    agent: str = "terminus-2",
+    n_concurrent: int = 8,
+    max_instances: int | None = None,
+) -> EvalSuiteConfig:
+    """An agentic Harbor benchmark: a registry dataset run by an in-sandbox terminal agent.
+
+    The served model drives ``agent`` inside a Daytona sandbox; the agent reaches the endpoint through
+    the minted capability URL, and Harbor's verifier scores each trial (reward -> agentic
+    :class:`~marin.evaluation.samples.EvalSample`). ``max_instances`` caps the task count for the
+    ``*-lite`` validation variants.
+    """
+    return EvalSuiteConfig(
+        name=name,
+        mechanism=EvalMechanism.HARBOR,
+        harbor=HarborSpec(dataset=dataset, agent=agent, env="daytona", n_concurrent=n_concurrent),
+        max_eval_instances=max_instances,
+    )
+
+
 EVALS: dict[str, EvalSuiteConfig] = {
     # The core benchmarks, one eval per task so every model x task pair is its own run with its own
     # serve/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
@@ -187,6 +210,23 @@ EVALS: dict[str, EvalSuiteConfig] = {
         harbor=HarborSpec(dataset="aime", version="1.0", n_concurrent=2),
         max_eval_instances=2,
     ),
+    # --- Agentic in-sandbox benchmarks (absorbed from #7246) ---
+    # Each is a Harbor registry dataset; the served model drives an in-sandbox terminal agent that
+    # reaches the endpoint through the minted capability URL, and Harbor's verifier scores each trial.
+    # The dataset slugs and concurrency come from OT-Agent's presets; the agent runs in the Daytona
+    # sandbox (env=daytona). The *-lite variants cap the task count for a validation run.
+    "tb2": _agentic_eval("tb2", "DCAgent2/terminal_bench_2", n_concurrent=32),
+    "tb2-lite": _agentic_eval("tb2-lite", "DCAgent2/terminal_bench_2", n_concurrent=4, max_instances=2),
+    "swebench": _agentic_eval("swebench", "DCAgent2/swebench-verified-random-100-folders", n_concurrent=32),
+    "swebench-lite": _agentic_eval(
+        "swebench-lite", "DCAgent2/swebench-verified-random-100-folders", n_concurrent=4, max_instances=2
+    ),
+    "swebench-full": _agentic_eval("swebench-full", "DCAgent/swebench-verified", n_concurrent=32),
+    "gaia": _agentic_eval("gaia", "DCAgent/gaia_127", n_concurrent=32),
+    "bfcl": _agentic_eval("bfcl", "DCAgent2/bfcl-parity", n_concurrent=32),
+    "aider": _agentic_eval("aider", "DCAgent2/aider_polyglot", n_concurrent=32),
+    "medagentbench": _agentic_eval("medagentbench", "DCAgent/medagentbench", n_concurrent=32),
+    "financeagent": _agentic_eval("financeagent", "DCAgent/financeagent_terminal", n_concurrent=16),
 }
 
 # A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
@@ -239,6 +279,18 @@ CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
 
+# The agentic in-sandbox benchmarks absorbed from #7246. Each runs its own serve (a Harbor group is
+# one mechanism), so launch them individually or as this named group.
+AGENTIC_EVALS: tuple[str, ...] = (
+    "tb2",
+    "swebench",
+    "gaia",
+    "bfcl",
+    "aider",
+    "medagentbench",
+    "financeagent",
+)
+
 # Named suite groups selectable by name on the CLI (``--evals smoke``). Launch NLP and CHAT as
 # separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
 # 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
@@ -249,4 +301,5 @@ SUITES: dict[str, tuple[str, ...]] = {
     "chat": CHAT_EVALS,
     "math": MATH_EVALS,
     "code": CODE_EVALS,
+    "agentic": AGENTIC_EVALS,
 }

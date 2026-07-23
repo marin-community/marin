@@ -38,7 +38,7 @@ def _print_plan(spec: LaunchSpec) -> None:
     for plan in plan_runs(spec):
         target = plan.accel.target_cluster or plan.accel.region or spec.cluster
         click.echo(
-            f"  eval={plan.eval_key}  location={plan.model.location}  backend={plan.model.backend.value}  "
+            f"  eval={plan.eval_key}  location={plan.model.location}  backend={plan.model.serve.backend.value}  "
             f"accel={plan.accel.label}  region_or_cluster={target}  limit={plan.limit}  "
             f"chat_template={plan.model.apply_chat_template}  tasks={[t.name for t in plan.suite.tasks]}  "
             f"records={records_prefix_for(plan.accel, spec)}"

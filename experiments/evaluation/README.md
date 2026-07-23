@@ -83,20 +83,52 @@ over a model sweep) and an identical config re-run is a cache hit. The step proc
 orchestrator, so the pipeline must itself run as an Iris job. The slice override is a runtime arg:
 changing it never forks the artifact's identity.
 
+## Agentic benchmarks (Harbor)
+
+The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
+in-sandbox agentic benchmarks through the same launcher. Each is a Harbor registry dataset: the
+launcher serves the model once, mints a capability URL for the served endpoint, and drives an
+in-sandbox terminal agent (Daytona) that reaches the model through that URL; Harbor's verifier scores
+each trial, which normalizes into one agentic `EvalSample` (reward -> `Grading(method="harbor:verifier")`,
+trajectory -> `trajectory_uri`) plus a record, so agentic runs land in evaldash like every other eval.
+
+```bash
+# A capped agentic validation run (2 tasks) -- needs DAYTONA_EVAL_API_KEY in the launch env.
+uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
+```
+
+A Harbor launch needs `DAYTONA_EVAL_API_KEY` (the Google Secret Manager secret of that name) loaded
+into the launch environment; the launcher bridges it to the SDK's `DAYTONA_API_KEY` and copies only
+the sandbox-needed credentials into the trial env. A Harbor group runs its own serve (not a shared
+one held open for hours) and Harbor itself as an isolated `uv` subprocess, out of the marin lock.
+
 ## Adding a model or eval
 
-Add a model by adding an `EvalModelConfig` to `MODELS` in `models.py`. Set `hbm_gb` honestly (bf16
-weights are `params_billions * 2 GB`, times roughly 1.3 for runtime overhead); the sizing heuristic
-picks the smallest slice that fits. Set `tokenizer` when `location` is an object-store export (the eval
-client loads its tokenizer through HF and cannot read a `gs://`/`s3://` path). Use `fixed_gpu` and
-`target_cluster` to pin an exact GPU shape and CoreWeave peer. Set `serve_memory` for large
-object-store exports: weight streaming stages shards through host buffers, so the serve pod's memory
-limit must cover the full weight volume or the kernel OOM-kills the server mid-load.
+A model is a `ModelConfig` (`marin.evaluation.model_config`): its `location` (HF id or `gs://`/`s3://`
+export), a `serve: ServeConfig` (slice sizing + vLLM knobs), a `generation: GenerationConfig`
+(`--gen_kwargs`), and an `agent: AgentConfig` (Harbor agent kwargs). Two population paths feed the one
+`MODELS` registry in `models.py`:
 
-Add an eval by adding an `EvalSuiteConfig` to `EVALS` in `evals.py` (its `tasks` are `EvalTaskConfig`
-entries, the same task menu the in-loop suites use). Add it to a group in `SUITES` to make it selectable
-by name. Task flags that matter for served evals: `generation` routes the task through the chat API for
-chat-template models (MCQ tasks always use completions, which alone can echo prompt logprobs);
-`unsafe_code` passes lm-eval's `--confirm_run_unsafe_code` for code-execution scoring; and
+- **YAML catalog** under `serve/models/<org>/<model>.yaml` -- one file per model, decoded by draccus
+  against `ModelConfig` (an unknown or mistyped field fails at load). This is the bulk catalog; see
+  `serve/models/README.md` for the schema. Just add a file.
+- **Python factory** in `models.py` for the parametric entries whose serve options are computed
+  (`_snowball`, `_base_hf`) or the curated hand-tuned ones.
+
+Set `serve.hbm_gb` honestly (bf16 weights are `params_billions * 2 GB`, times roughly 1.3 for runtime
+overhead) so the sizing heuristic picks the smallest slice that fits, or pin `serve.fixed_gpu`
+(`["H100", 8]`) and `serve.target_cluster` for an exact GPU shape. Set `tokenizer` when `location` is
+an object-store export (the eval client loads its tokenizer through HF and cannot read a `gs://` path).
+Set `serve.serve_memory` for large exports: weight streaming stages shards through host buffers, so the
+serve pod's memory limit must cover the full weight volume or the kernel OOM-kills the server mid-load.
+Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
+`config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
+rides on `--gen_kwargs`.
+
+Add an eval by adding an `EvalSuiteConfig` to `EVALS` in `evals.py` -- lm-eval `tasks` for the
+evalchemy mechanism, or a `HarborSpec` for an agentic dataset. Add it to a group in `SUITES` to make it
+selectable by name. Task flags that matter for served evals: `generation` routes the task through the
+chat API for chat-template models (MCQ tasks always use completions, which alone can echo prompt
+logprobs); `unsafe_code` passes lm-eval's `--confirm_run_unsafe_code` for code-execution scoring; and
 `completion_only` pins a generation task to the completions API for every model (humaneval's infill
 prompt breaks under chat formatting -- chat models reply with prose and markdown fences).

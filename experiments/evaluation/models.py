@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from marin.evaluation.model_config import (
+    AgentConfig,
     GenerationConfig,
     ModelConfig,
     ServeConfig,
@@ -98,7 +99,16 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         serve=ServeConfig(hbm_gb=24),
         generation=GenerationConfig(max_gen_toks=32768),
     ),
-    ModelConfig(name="qwen3-8b", location="Qwen/Qwen3-8B", apply_chat_template=True, serve=ServeConfig(hbm_gb=21)),
+    # The single unified Qwen3-8B entry: evalchemy sizing (TPU-servable at hbm_gb=21) plus the agentic
+    # serve/agent knobs the OT-Agent catalog carried for it (a hermes tool-call parser, and thinking
+    # enabled for the agent). auto_serve_overrides derives the qwen3 reasoning parser.
+    ModelConfig(
+        name="qwen3-8b",
+        location="Qwen/Qwen3-8B",
+        apply_chat_template=True,
+        serve=ServeConfig(hbm_gb=21, trust_remote_code=True, tool_call_parser="hermes"),
+        agent=AgentConfig(agent_kwargs={"extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}'}),
+    ),
     ModelConfig(
         name="llama3.1-8b-instruct",
         location="meta-llama/Llama-3.1-8B-Instruct",
@@ -111,6 +121,7 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         apply_chat_template=True,
         serve=ServeConfig(hbm_gb=18),
     ),
+    ModelConfig(name="qwen3-0.6b", location="Qwen/Qwen3-0.6B", apply_chat_template=True, serve=ServeConfig(hbm_gb=3)),
     ModelConfig(name="qwen3-1.7b", location="Qwen/Qwen3-1.7B", apply_chat_template=True, serve=ServeConfig(hbm_gb=5)),
     # The June pretrain cooldown export (the input to the SFT stages). Its tokenizer ships no chat
     # template and the delphi chat protocol is established by the SFT
