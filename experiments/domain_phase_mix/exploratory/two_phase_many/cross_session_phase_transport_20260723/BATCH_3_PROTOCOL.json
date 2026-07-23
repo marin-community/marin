@@ -1,0 +1,44 @@
+{
+  "batch_id": "cross_session_shared_recency_20260723",
+  "frozen_at": "2026-07-23T03:20:00-07:00",
+  "scope": "Delphi 3e18 39-bucket paired one-phase and two-phase fit rows",
+  "data_use": {
+    "fit": "280 exact aggregate-matched one-phase/two-phase pairs",
+    "development": "append-only 3e18 heldouts, evaluated once after candidate freeze",
+    "excluded": [
+      "StarCoder surfaces",
+      "production swarm",
+      "currently sealed training panels"
+    ]
+  },
+  "common_model": {
+    "aggregate_spine": "SFOS39 independently fit for each target",
+    "odd_transport": "alpha0*alpha1*(F_t(w0)-F_t(w1))",
+    "jensen_transport": "alpha0*F_t(w0)+alpha1*F_t(w1)-F_t(alpha0*w0+alpha1*w1)",
+    "target_balance": "each target's paired residual block is divided by its fit-only delta RMS",
+    "constraints": "Jensen coefficients are nonnegative; recency coefficient is unconstrained"
+  },
+  "candidates": [
+    {
+      "id": "shared_recency_target_jensen",
+      "parameters": 3,
+      "premise": "the fraction of early learning retained at evaluation is schedule-specific and therefore shared across smooth targets; overload curvature remains target-specific"
+    },
+    {
+      "id": "shared_transport",
+      "parameters": 2,
+      "premise": "both recency and within-schedule overload are schedule-level invariants shared across smooth targets"
+    },
+    {
+      "id": "equal_recency_target_jensen",
+      "parameters": 2,
+      "premise": "the evaluation state values early and late response equally; only target-specific overload is learned",
+      "fixed_recency_share": 0.5
+    }
+  ],
+  "gates": {
+    "paired_cv": "improve or preserve phase-delta RMSE on both targets relative to separate fpt_total_global",
+    "heldout": "do not increase target-matched optimism count or regret materially on either target",
+    "raw_surface": "no claim of global optimum improvement unless a separate raw optimization audit is plausible"
+  }
+}
