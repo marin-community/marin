@@ -84,15 +84,15 @@ TIER1_TASKS = (
 #     in this fork → omitted (flagged to operator). IFBench→IFEval (the fork's constraint benchmark).
 #     AIME24 = 10-seed (42..51) via EVAL_TIER=2 seed handling in the driver/client. ---
 TIER2_TASKS = (
-    EvalTaskConfig("MATH500", 0),
+    EvalTaskConfig("MATH500", 0, generation=True),
     # AIME24 is NOT here — it runs as a dedicated 10-seed μ±σ set (EVAL_TASK_SET=aime24_seeds).
-    EvalTaskConfig("HumanEvalPlus", 0),
-    EvalTaskConfig("MBPPPlus", 0),
+    EvalTaskConfig("HumanEvalPlus", 0, generation=True, unsafe_code=True, completion_only=True),
+    EvalTaskConfig("MBPPPlus", 0, generation=True, unsafe_code=True, completion_only=True),
     # MMLUPro DEFERRED — fork construction load_dataset fails (not a clean pip dep); N/A in RESULTS.
-    EvalTaskConfig("GPQADiamond", 0),
+    EvalTaskConfig("GPQADiamond", 0, generation=True),
     # CruxEval DEFERRED — the fork's CruxEval does `from execution import ...` (local-module import,
     # not a pip dep) → registration fails; not a clean install. Marked N/A in RESULTS.
-    EvalTaskConfig("IFEval", 0),
+    EvalTaskConfig("IFEval", 0, generation=True),
 )
 
 
@@ -241,7 +241,9 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # comma list of benchmark names (e.g. "MATH500,MBPPPlus,GPQADiamond,IFEval" to skip an already-
     # harvested HumanEvalPlus). Applies on the tier-2 path; num_fewshot 0 (tier-2 is all 0-shot chat).
     if tier == 2 and os.environ.get("EVAL_TIER2_TASKS"):
-        tasks = tuple(EvalTaskConfig(n.strip(), 0) for n in os.environ["EVAL_TIER2_TASKS"].split(",") if n.strip())
+        selected = {task.name: task for task in TIER2_TASKS}
+        tasks = tuple(selected.get(name.strip(), EvalTaskConfig(name.strip(), 0, generation=True))
+                      for name in os.environ["EVAL_TIER2_TASKS"].split(",") if name.strip())
     # Fast diagnostic smoke: a generative task (gsm8k) + an MC/loglikelihood task (hellaswag), small
     # --limit → proves BOTH request types score non-empty over local-completions before the full suite.
     if os.environ.get("EVAL_SMOKE") == "1":
@@ -257,7 +259,7 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         _seed_env = os.environ.get("EVAL_AIME_SEEDS")
         _seeds = [int(s) for s in _seed_env.split(",") if s.strip()] if _seed_env else list(range(42, 52))
         tasks = tuple(
-            EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s})
+            EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s}, generation=True)
             for s in _seeds
         )
         apply_chat_template = True

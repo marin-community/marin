@@ -214,6 +214,8 @@ class EvalchemyEvalConfig:
     """HF tokenizer id the eval client loads to build prompts; defaults to ``model``. Set it when
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     max_gen_toks: int = 2048
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional generation kwargs forwarded to every lm-eval request."""
     apply_chat_template: bool = False
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
@@ -392,12 +394,14 @@ def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEn
                     "generation": t.generation,
                     "unsafe_code": t.unsafe_code,
                     "completion_only": t.completion_only,
+                    "seed": (t.task_kwargs or {}).get("seed"),
                 }
                 for t in unit.tasks
             ],
             "out_path": unit.out_path,
             "apply_chat_template": session.apply_chat_template,
             "max_gen_toks": unit.max_gen_toks,
+            "extra_gen_kwargs": session.extra_gen_kwargs,
             "max_eval_instances": unit.max_eval_instances,
             "num_concurrent": session.num_concurrent,
         }
@@ -420,6 +424,8 @@ class EvalSession:
     """HF tokenizer id the eval client loads to build prompts; defaults to ``model``. Required when
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     apply_chat_template: bool = False
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional generation kwargs forwarded to every eval client request."""
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
     eval_image: str = EVALCHEMY_IMAGE
     eval_cpu: float = 8.0
@@ -693,6 +699,7 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> ServeAndEvalRun:
         serve=config.serve,
         tokenizer=config.tokenizer,
         apply_chat_template=config.apply_chat_template,
+        extra_gen_kwargs=config.extra_gen_kwargs,
         num_concurrent=config.num_concurrent,
         eval_image=config.eval_image,
         eval_cpu=config.eval_cpu,

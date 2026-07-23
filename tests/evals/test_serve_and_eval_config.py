@@ -73,6 +73,7 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
             "generation": False,
             "unsafe_code": False,
             "completion_only": False,
+            "seed": None,
         },
         {
             "name": "gsm8k",
@@ -81,6 +82,7 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
             "generation": True,
             "unsafe_code": False,
             "completion_only": False,
+            "seed": None,
         },
     ]
 
@@ -153,6 +155,15 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
     assert "--confirm_run_unsafe_code" in cmd
+
+
+def test_client_forwards_seed_and_extra_generation_kwargs():
+    unit = _unit(tasks=(EvalTaskConfig("AIME24", 0, task_kwargs={"seed": 43}, generation=True),))
+    config = _payload(session=_session(apply_chat_template=True, extra_gen_kwargs={"skip_special_tokens": "false"}), unit=unit)
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+
+    assert cmd[cmd.index("--seed") + 1] == "43"
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048,skip_special_tokens=false"
 
 
 def test_model_args_carry_served_max_length():
