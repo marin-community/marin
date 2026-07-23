@@ -25,13 +25,12 @@ from harbor.models.job.config import DatasetConfig, JobConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 
 
-def main() -> None:
-    config = json.loads(Path(sys.argv[1]).read_text())
+async def _run(config: dict) -> None:
     try:
         env_type = EnvironmentType(config["env"])
     except ValueError:
         env_type = EnvironmentType.DOCKER
-    job = Job(
+    job = await Job.create(
         JobConfig(
             job_name=config["job_name"],
             jobs_dir=Path(config["jobs_dir"]),
@@ -47,7 +46,12 @@ def main() -> None:
             environment=EnvironmentConfig(type=env_type),
         )
     )
-    asyncio.run(job.run())
+    await job.run()
+
+
+def main() -> None:
+    config = json.loads(Path(sys.argv[1]).read_text())
+    asyncio.run(_run(config))
 
 
 if __name__ == "__main__":
