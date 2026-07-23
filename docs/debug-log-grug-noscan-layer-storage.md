@@ -21,6 +21,10 @@ Unstacking views from one array-stacked pytree is not equivalent to presenting X
 
 The regression test failed before the change because both configurations lacked an independent `blocks` field. After selecting the representation during initialization, the no-scan model contains one `Block` pytree per layer and no `ArrayStacked` container; the scan model retains only `ArrayStacked`. A real CPU execution initialized both representations from the same key and produced identical logits. The focused storage, output-parity, and variant one-step lowering tests pass.
 
-## Future work
+The corrected exact-shape Toolbox probe used 16 four-GPU GB200 hosts, `scan_layers=false`, and `remat_mode=recompute_all`. It spent about 26 minutes in the first `jit_train_step`, then failed before step 0 when CUDA requested 972,028,334,224 bytes (905.27 GiB) against a 138.22 GiB allocator limit. It produced no MFU or throughput metrics and no null-module or in-memory-CUBIN signature. Independent modules therefore preserve the same computation, but they do not make this full unrolled graph fit; the earlier 863.96 GiB result from array-stacked views was not a valid test of the intended representation.
 
-- [ ] Run an AOT memory analysis or exact no-scan GB200 probe after local parity checks.
+[W&B run](https://wandb.ai/marin-community/marin_moe/runs/jax-toolbox-7507-toolbox-noscan-modules-a-20260722-1640)
+
+## Conclusion
+
+The intended no-scan representation is now tested. JAX-Toolbox gets past the previously observed CUBIN failure surface for this probe, but XLA requests an infeasible temporary arena before execution, so the run cannot establish MFU or prove that Toolbox resolves CUBIN failures in general.
