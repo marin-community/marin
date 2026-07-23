@@ -18,6 +18,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from stack_outputs import workload_client
 
 # Cloud Run serves every custom domain from this fixed Google frontend; the mapping resource
 # routes the host to the service, and the DNS CNAME points the host at the frontend.
@@ -28,6 +29,9 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 SERVICE = "marin-grafana"
+LOOM_STACK = "organization/marin-loom/marin-loom"
+LOOM_WORKLOAD = "grafana-alerts"
+LOOM_ALERT_REPOSITORY = "marin-community/marin"
 
 # The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
 # Grafana's state. On the self-managed GCS backend a stack reference is
@@ -59,6 +63,7 @@ def main() -> None:
     # Grafana uses this URL in alert notifications. Without it, its server defaults
     # to the container listener and links point to localhost:8080.
     custom_domain = config.get("custom_domain")
+    loom_alerts_enabled = config.get_bool("loom_alerts") or False
     # IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
@@ -89,6 +94,17 @@ def main() -> None:
         "GF_DATABASE_NAME": "grafana",
         "GF_DATABASE_USER": "grafana",
     }
+    if loom_alerts_enabled:
+        loom = pulumi.StackReference(LOOM_STACK)
+        loom_client = loom.require_output("workloadClients").apply(
+            lambda clients: workload_client(clients, LOOM_WORKLOAD)
+        )
+        # The loopback alert bridge uses the Cloud Run service account to mint a
+        # Google ID token for this exact audience. The Loom stack binds that
+        # identity to the dedicated profile; no long-lived Loom token is stored.
+        env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
+        env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
+        env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
     if custom_domain:
         env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
     if smtp_secret_exists(provider):

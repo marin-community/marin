@@ -13,5 +13,8 @@ config:
   # in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
   marin-grafana:custom_domain: grafana.oa.dev
   marin-grafana:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+  # Set false only for the first deployment in a new project: that creates the
+  # service account before the Loom stack binds it. Re-enable after Loom is up.
+  marin-grafana:loom_alerts: "true"
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Q+ANb/lWOlKPlnYfjnVwqsddavq2mCxtpbL2qM4LDkSSQCdtF6i23aOY/4tztuXbQxjEf7zLiHzOSRS37IKAQ0lwPtGPtsU+eHwrNMTw6rqY4wLRoKzPpdTOWDtzYkIgSixmuEPz14nxCE=

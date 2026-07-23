@@ -65,6 +65,7 @@ class WorkloadIdentityConfig:
     profile: str
     service_tag: str
     service_account_id: str
+    create_service_account: bool
 
     @classmethod
     def parse(cls, value: Mapping[str, object]) -> WorkloadIdentityConfig:
@@ -72,6 +73,9 @@ class WorkloadIdentityConfig:
         profile = str(value.get("profile", "")).strip()
         service_tag = str(value.get("serviceTag", name)).strip()
         account_id = str(value.get("serviceAccountId", f"loom-{name}")).strip()
+        create_account = value.get("createServiceAccount", True)
+        if not isinstance(create_account, bool):
+            raise ValueError(f"createServiceAccount for workload {name!r} must be a boolean")
         if not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", account_id):
             raise ValueError(f"invalid serviceAccountId for workload {name!r}")
         if not name or not profile or not service_tag:
@@ -80,7 +84,7 @@ class WorkloadIdentityConfig:
             raise ValueError(f"invalid workload name {name!r}")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", service_tag):
             raise ValueError(f"invalid serviceTag for workload {name!r}")
-        return cls(name, profile, service_tag, account_id)
+        return cls(name, profile, service_tag, account_id, create_account)
 
 
 @dataclass(frozen=True)
@@ -570,6 +574,32 @@ class RuntimePolicyResources:
     profile_secret_refs: list[tuple[str, str]]
 
 
+def _workload_service_account(
+    config: DeploymentConfig,
+    workload: WorkloadIdentityConfig,
+    api_options: pulumi.ResourceOptions,
+) -> tuple[pulumi.Output[str], pulumi.Output[str]]:
+    if workload.create_service_account:
+        resource_name = re.sub(r"[^a-z0-9-]", "-", workload.name.lower())
+        account = gcp.serviceaccount.Account(
+            f"loom-workload-{resource_name}",
+            project=config.project,
+            account_id=workload.service_account_id,
+            display_name=f"Loom workload: {workload.name}",
+            opts=api_options,
+        )
+        return account.email, account.unique_id
+
+    existing = gcp.serviceaccount.get_account_output(
+        account_id=workload.service_account_id,
+        project=config.project,
+    )
+    return (
+        existing.apply(lambda account: account.email),
+        existing.apply(lambda account: account.unique_id),
+    )
+
+
 def _create_runtime_policy(
     config: DeploymentConfig,
     api_options: pulumi.ResourceOptions,
@@ -579,21 +609,14 @@ def _create_runtime_policy(
     workload_mappings: list[pulumi.Output[dict[str, Any]]] = []
     workload_clients: list[pulumi.Output[dict[str, str]]] = []
     for workload in config.workloads:
-        resource_name = re.sub(r"[^a-z0-9-]", "-", workload.name.lower())
-        account = gcp.serviceaccount.Account(
-            f"loom-workload-{resource_name}",
-            project=config.project,
-            account_id=workload.service_account_id,
-            display_name=f"Loom workload: {workload.name}",
-            opts=api_options,
-        )
+        email, unique_id = _workload_service_account(config, workload, api_options)
         workload_mappings.append(
-            pulumi.Output.all(account.email, account.unique_id).apply(
+            pulumi.Output.all(email, unique_id).apply(
                 lambda values, workload=workload: _google_federation_mapping(workload, audience, values[0], values[1])
             )
         )
         workload_clients.append(
-            account.email.apply(
+            email.apply(
                 lambda email, workload=workload: {
                     "name": workload.name,
                     "serviceAccount": email,

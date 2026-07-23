@@ -69,6 +69,28 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
 
+## Automation identities
+
+Runtime profiles and workload federation mappings live in
+`Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
+activation. The `grafana_alert` profile is restricted to the Google identity of
+the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
+account's email and immutable numeric subject; it does not create or copy a Loom
+token.
+
+At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
+metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
+short-lived, profile-scoped token to create the alert session. No long-lived
+Loom credential belongs in the Grafana stack or Secret Manager.
+
+Apply the Loom stack before deploying a Grafana revision that enables a new
+federated caller. This ensures the identity mapping and profile exist before the
+contact point begins sending alerts. The Grafana stack consumes the URL and
+profile from this stack's `workloadClients` output. The `marin-grafana` service
+account already exists in the production Grafana stack. In a new environment,
+deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
+to bind the new service account, then enable Loom alerts and redeploy Grafana.
+
 ## Restart and rollback
 
 Each Loom session supervisor runs in a separately labeled Docker container.

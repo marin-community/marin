@@ -189,8 +189,9 @@ minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
-dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
-Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
+dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai,
+Slack, and a Loom triage session); `severity=warning` routes to `ops-slack`
+(Slack only). Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
 resolving.
@@ -204,14 +205,29 @@ sending as grafana@openathena.ai with an app password from Secret Manager; the a
 sends mail itself, so deliverability (SPF, spam filtering) rests on the sending
 account. The deploy enables SMTP only when the `marin-grafana-smtp-credentials`
 secret exists — without it the service still deploys, the email receiver fails
-silently, and critical alerts reach Slack only. After changing contact points or
-their credentials, send a test notification to both receivers (Alerting → Contact
-points → Test) rather than trusting config presence.
+silently, and critical alerts still reach Slack and Loom. After changing contact
+points or their credentials, send a test notification to all receivers (Alerting
+→ Contact points → Test) rather than trusting config presence.
+
+The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
+Grafana or IAP. For each firing group, the bridge asks the Cloud Run metadata
+server for a Google-signed identity token for `https://loom.oa.dev`, exchanges it
+for a short-lived `grafana_alert` Loom token, and creates an idempotent run for
+`marin-community/marin`. Resolved notifications do not create sessions. Repeated
+notifications for the same alert fingerprint and start time reuse the same Loom
+run. The Loom Pulumi stack binds the exact `marin-grafana` service-account email
+and numeric subject to this profile. The Grafana stack reads the Loom URL and
+profile from that stack's `workloadClients` output, so the caller and verifier
+cannot drift through duplicated configuration.
 
 ## Secrets and rotation
 
 All secrets live in Secret Manager and reach the container as env vars via the
 `CloudRunService` `secrets` field; values never enter Pulumi or git.
+
+Loom alert delivery does not add a secret. The bridge authenticates with the
+Cloud Run service account and short-lived Google/Loom tokens, while Pulumi owns
+the identity-to-profile binding.
 
 | Env var | Secret | Feeds |
 |---|---|---|
@@ -241,7 +257,8 @@ Creating the secrets:
    `echo -n "https://hooks.slack.com/..." | gcloud secrets create marin-grafana-slack-webhook --project=hai-gcp-models --data-file=-`
 3. (optional, enables email) Gmail app password for grafana@openathena.ai, then
    `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
-4. Send a test notification to both `ops-critical` receivers and confirm delivery.
+4. Send a test notification to `ops-critical` and confirm email, Slack, and a
+   single Loom session.
 
 ## Develop
 
@@ -286,6 +303,12 @@ pulumi config set --path 'viewers[0]' you@example.com
 pulumi preview                                            # plan; then, once it looks right:
 pulumi up
 ```
+
+Production reads the `grafana-alerts` URL and profile from the `marin-loom`
+stack. Apply that stack before rolling a Grafana revision with
+`marin-grafana:loom_alerts` enabled. For the first deployment in a new project,
+disable Loom alerts to create the Grafana service account, apply Loom, then
+enable the integration and deploy Grafana again.
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.

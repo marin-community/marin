@@ -26,6 +26,7 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
         http_timeout=5.0,
         github_token=None,
         cw_read_token=None,
+        loom_alerts=None,
     )
 
 

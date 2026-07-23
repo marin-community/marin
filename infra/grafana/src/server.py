@@ -39,6 +39,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
     GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
+    POST /alerts/loom                             firing Grafana groups become Loom automation runs
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -46,7 +47,8 @@ cached. The k8s routes aggregate every CW cluster into one response, so a dead
 cluster becomes labeled error rows while the rest render; the alert routes always
 return at least one row per cluster (explicit zeros when healthy) so Grafana
 rules never hit NoData. Handlers are sync defs; Starlette runs them in a
-threadpool.
+threadpool. The Loom webhook is async because it exchanges tokens and creates a
+run over HTTP.
 """
 
 import json
@@ -66,6 +68,7 @@ from finelog_source import FinelogSource, MetricSource
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
+from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -291,8 +294,9 @@ def create_app(
     github_source: GithubSource,
     k8s_fleet: K8sFleet,
     wandb_source: WandbSource,
+    loom_alerts: LoomAlertClient | None = None,
 ) -> Starlette:
-    """Build the ASGI app serving finelog, Iris, GitHub, W&B, and k8s sources."""
+    """Build the ASGI app serving Grafana's data sources and Loom webhook."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
@@ -462,9 +466,26 @@ def create_app(
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
+    async def loom_alert(request: Request) -> JSONResponse:
+        if loom_alerts is None:
+            return JSONResponse({"error": "Loom alert delivery is not configured"}, status_code=503)
+        try:
+            payload = await request.json()
+            result = await loom_alerts.submit(payload)
+        except (json.JSONDecodeError, LoomAlertPayloadError) as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except LoomAlertDeliveryError as err:
+            logger.warning("Loom alert delivery failed: %s", err)
+            return JSONResponse({"error": str(err)}, status_code=502)
+        if result is None:
+            return JSONResponse({"accepted": False, "reason": "no firing alerts"}, status_code=202)
+        logger.info("Grafana alert accepted by Loom: run=%s", result.get("id", "unknown"))
+        return JSONResponse({"accepted": True, "run": result}, status_code=202)
+
     return Starlette(
         routes=[
             Route("/health", health),
+            Route("/alerts/loom", loom_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -505,10 +526,11 @@ def main() -> None:
     github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
+    loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

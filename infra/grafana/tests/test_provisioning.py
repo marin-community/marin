@@ -150,14 +150,16 @@ def test_policies_reference_provisioned_contact_points():
             assert route["receiver"] in contact_points
 
 
-def test_critical_contact_point_reaches_email_and_slack():
+def test_critical_contact_point_reaches_email_slack_and_loom():
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack"}
+    assert critical_types == {"email", "slack", "webhook"}
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+    (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
+    assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():

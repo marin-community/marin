@@ -153,6 +153,16 @@ FERRY_GROUPS: tuple[FerryGroup, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
+class LoomAlertConfig:
+    """Identity-federated Loom destination for critical alerts."""
+
+    url: str
+    profile: str
+    repository: str
+    http_timeout: float
+
+
+@dataclasses.dataclass(frozen=True)
 class BridgeConfig:
     """Resolved bridge settings."""
 
@@ -173,10 +183,26 @@ class BridgeConfig:
     # (that would take Grafana down with it); the k8s routes serve auth error rows
     # and unreachable=1 alert rows instead.
     cw_read_token: str | None
+    # None keeps the webhook route disabled outside the production deployment.
+    loom_alerts: LoomAlertConfig | None
 
     @staticmethod
     def from_environment() -> "BridgeConfig":
         """Read settings from the container environment."""
+        http_timeout = float(os.environ.get("GRAFANA_BRIDGE_HTTP_TIMEOUT", "10"))
+        loom_url = os.environ.get("LOOM_ALERT_URL")
+        loom_alerts = None
+        if loom_url:
+            profile = os.environ.get("LOOM_ALERT_PROFILE")
+            repository = os.environ.get("LOOM_ALERT_REPOSITORY")
+            if not profile or not repository:
+                raise ValueError("LOOM_ALERT_PROFILE and LOOM_ALERT_REPOSITORY are required when LOOM_ALERT_URL is set")
+            loom_alerts = LoomAlertConfig(
+                url=loom_url.rstrip("/"),
+                profile=profile,
+                repository=repository,
+                http_timeout=http_timeout,
+            )
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),
             cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_CACHE_TTL", "20")),
@@ -184,7 +210,8 @@ class BridgeConfig:
             iris_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_IRIS_CACHE_TTL", "15")),
             github_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_GITHUB_CACHE_TTL", "60")),
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
-            http_timeout=float(os.environ.get("GRAFANA_BRIDGE_HTTP_TIMEOUT", "10")),
+            http_timeout=http_timeout,
             github_token=os.environ.get("GITHUB_TOKEN") or None,
             cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
+            loom_alerts=loom_alerts,
         )

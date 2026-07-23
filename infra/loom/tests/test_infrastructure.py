@@ -42,6 +42,9 @@ class RecordingMocks(Mocks):
 
     def call(self, args: MockCallArgs) -> tuple[dict, list[tuple[str, str]] | None]:
         outputs = dict(args.args)
+        if args.token == "gcp:serviceaccount/getAccount:getAccount":
+            outputs["email"] = f"{args.args['accountId']}@example.iam.gserviceaccount.com"
+            outputs["uniqueId"] = "99887766554433221100"
         return outputs, []
 
 
@@ -243,5 +246,31 @@ def test_profiles_and_workloads_render_to_vm_metadata():
         assert manifest["prune"] is True
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
+
+    return infrastructure.instance.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_existing_service_account_can_be_bound_to_a_workload_profile():
+    base = deployment_config()
+    grafana = WorkloadIdentityConfig.parse(
+        {
+            "name": "grafana-alerts",
+            "profile": "ops",
+            "serviceAccountId": "marin-grafana",
+            "createServiceAccount": False,
+        }
+    )
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(base, workloads=(grafana,)))
+
+    def check(_: object) -> None:
+        assert not any(resource.name == "loom-workload-grafana-alerts" for resource in mocks.resources)
+        manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
+        mapping = manifest["federations"][0]
+        assert mapping["service_account"] == "marin-grafana@example.iam.gserviceaccount.com"
+        assert mapping["subject"] == "99887766554433221100"
+        assert mapping["profiles"] == ["ops"]
 
     return infrastructure.instance.id.apply(check)

@@ -15,6 +15,7 @@ from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
+from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from wandb_source import WandbSource
@@ -73,7 +74,12 @@ class FakeSource:
         return self._health
 
 
-def _client(source: FakeSource, cache_ttl: float = 20.0, k8s_fleet: K8sFleet | None = None) -> TestClient:
+def _client(
+    source: FakeSource,
+    cache_ttl: float = 20.0,
+    k8s_fleet: K8sFleet | None = None,
+    loom_alerts: LoomAlertClient | None = None,
+) -> TestClient:
     github = GithubSource(token=None, timeout=5.0)
     return TestClient(
         create_app(
@@ -83,6 +89,7 @@ def _client(source: FakeSource, cache_ttl: float = 20.0, k8s_fleet: K8sFleet | N
             github,
             k8s_fleet or K8sFleet(()),
             WandbSource(timeout=5.0),
+            loom_alerts,
         )
     )
 
@@ -184,6 +191,34 @@ def test_unparseable_labels_cell_keeps_the_row():
 
 def test_health_lists_configured_clusters():
     assert _client(FakeSource()).get("/health").json() == {"status": "ok", "clusters": ["marin"]}
+
+
+class FakeLoomAlerts(LoomAlertClient):
+    def __init__(self, result: dict | None = None, error: LoomAlertDeliveryError | None = None) -> None:
+        self.result = result
+        self.error = error
+
+    async def submit(self, payload: object) -> dict | None:
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def test_loom_alert_route_returns_an_accepted_run():
+    resp = _client(FakeSource(), loom_alerts=FakeLoomAlerts({"id": "run-1"})).post(
+        "/alerts/loom", json={"alerts": [{"status": "firing"}]}
+    )
+    assert resp.status_code == 202
+    assert resp.json() == {"accepted": True, "run": {"id": "run-1"}}
+
+
+def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
+    resp = _client(
+        FakeSource(),
+        loom_alerts=FakeLoomAlerts(error=LoomAlertDeliveryError("loom.example returned HTTP 503")),
+    ).post("/alerts/loom", json={"alerts": [{"status": "firing"}]})
+    assert resp.status_code == 502
+    assert resp.json() == {"error": "loom.example returned HTTP 503"}
 
 
 def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():
