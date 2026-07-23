@@ -100,7 +100,7 @@ SMOKE_WANDB_GROUP: str = "exp146-smoke"
 # run of the same (point, region, tpu, correction_factor). Bump to fork a clean smoke run; the old
 # run and its checkpoints are left in place untouched.
 SMOKE_VERSION: str = "v1"
-CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-ledger-v1"
+CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-exp117fix-v1"
 CALIBRATION_BATCH_SIZE: int = 1024
 CALIBRATION_MODEL_SIZES: frozenset[str] = frozenset({"3b", "6b"})
 SMOKE_STEPS_DEFAULT: int = 20
