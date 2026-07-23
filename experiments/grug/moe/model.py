@@ -270,20 +270,20 @@ class ShortConv(eqx.Module):
         # with left pad (W-1) that yields out[t] = sum_k weight[W-1-k]*x[t-(W-1-k)], so kernel = flip(weight)
         # reproduces out[t] = sum_lag weight[lag]*x[t-lag]. Identity-init (weight[0]=1) stays pass-through.
         kernel = jnp.flip(self.weight, axis=0)[:, None, :].astype(x.dtype)
-        out = jax.lax.conv_general_dilated(
+        # Pin the output to x's layout so the depthwise conv stays shard-local (no all-gather of the
+        # model-sharded K/V channels). Under sharding, conv_general_dilated *requires* out_sharding;
+        # None (no mesh, e.g. eager unit tests) falls back to the default inferred sharding.
+        mesh = get_abstract_mesh()
+        out_sharding = jax.typeof(x).sharding if (mesh is not None and mesh.axis_names) else None
+        return jax.lax.conv_general_dilated(
             x,
             kernel,
             window_strides=(1,),
             padding=[(w - 1, 0)],
             dimension_numbers=("NWC", "WIO", "NWC"),
             feature_group_count=x.shape[-1],
+            out_sharding=out_sharding,
         )
-        # Pin the output to x's layout so XLA keeps the depthwise conv shard-local (no all-gather of
-        # the model-sharded K/V channels). Skipped when there is no mesh (e.g. eager unit tests).
-        mesh = get_abstract_mesh()
-        if mesh is not None and mesh.axis_names:
-            out = jax.lax.with_sharding_constraint(out, jax.typeof(x).sharding)
-        return out
 
 
 class CausalSelfAttention(eqx.Module):
