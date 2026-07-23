@@ -20,7 +20,8 @@ author: mcwitt
 
 - `H-ASYNC`: a preceding asynchronous CUDA operation failed.
 - `H-API`: raw ELF CUBINs fail specifically through `cuModuleLoadFatBinary`.
-- `H-ORDER`: concurrent XLA/CuTe loader ordering changes driver state.
+- `H-ORDER`: concurrency before the loader yields a null module image. Concurrent entry into `cuModuleLoadFatBinary`
+  is refuted by CUBIN7421-010.
 - `H-INPUT`: pointer lifetime, mutation, or alignment changes the result.
 - `H-PRESSURE`: a live memory or module resource is exhausted.
 
@@ -198,3 +199,34 @@ author: mcwitt
 - Result: the one-node four-process CuTe/MXFP8 smoke completed on all ranks with loss `11.806539535522461`. In the full treatment, all 16 supervisors logged the expected `CUDA_VISIBLE_DEVICES=0,1,2,3` assignment, all 64 JAX processes initialized with `local_device_ids=[0]`, and every node preserved JAX `0.10.1.dev20260605+10439788c` from `/opt/jax` and JAXLIB `0.10.1.dev20260723` from `/opt/jaxlibs`. No training step completed: all 64 global ranks emitted `Failed to load in-memory CUBIN ... CUDA_ERROR_INVALID_VALUE ... jit_train_step`. No explicit OOM or `RESOURCE_EXHAUSTED` line appeared.
 - Interpretation: the previous process-per-GPU null result was not an artifact of children retaining visibility of all four node GPUs. Strict one-process/one-visible-GPU isolation still reproduces the failure, refuting the narrower configuration-mismatch hypothesis. This does not refute a node- or driver-global race among separate processes because the 64 processes still compile and load concurrently. The prior probe result remains important: the immediate failed driver calls received null images after successful synchronization, rather than valid CUBINs that the driver rejected during concurrent loading.
 - Next action: if testing NVIDIA's broader concurrency hypothesis, serialize producer completion and module loading across processes on each node. Further process-topology-only variants are unlikely to discriminate the remaining hypotheses.
+
+### 2026-07-23 - CUBIN7421-010 serialized module-load treatment
+
+- Hypothesis: overlapping calls into `cuModuleLoadFatBinary` trigger a loader or driver race that surfaces as the
+  null-image CUBIN failure.
+- Commit Hash: `33bcefaf5`.
+- Jobs:
+  - Smoke:
+    `/mwittmann/cubin-ngc2606-loadlock-probe-smoke-01/grug-train-cubin-ngc2606-loadlock-probe-smoke-01-20260723`.
+  - Full treatment:
+    `/mwittmann/cubin-ngc2606-b1024-l24-loadlock-01/grug-train-cubin-ngc2606-b1024-l24-loadlock-01-20260723`.
+- Config: the probe's `serialize` profile held a process-wide mutex from before loader-entry accounting through the
+  return of the real `cuModuleLoadFatBinary` call. The full treatment retained NGC JAX 26.06, one process per
+  four-GPU node, 16 nodes, B1024/L24, CuTe MXFP8, ring MoE, `cuda_async`, one model step, and zero retries. The
+  ineffective `--xla_gpu_force_compilation_parallelism=1` treatment was removed.
+- Result: the one-node smoke completed with loss `11.806539535522461`. Its probe recorded 5,969 successful loads
+  and `maximum_in_flight=1`. The full treatment failed at `jit_train_step` with the same
+  `CUDA_ERROR_INVALID_VALUE` CUBIN surface on all 16 tasks. Across the 16 task artifacts, the probe recorded 63,046
+  loads: 62,982 succeeded and 64 failed. Every task reported `maximum_in_flight=1`; every task had four failed
+  calls; all 64 failed calls received `image=null`; zero failed calls had a non-null image.
+- Artifacts:
+  `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d5120-L24-e128-r16-cubin-ngc2606-b1024-l24-loadlock-01-20260723/dev/cuda-module-probe/`.
+- Interpretation: concurrent entry into `cuModuleLoadFatBinary` is not required for the failure. The direct
+  loader/driver race hypothesis is refuted for this reproducer. The treatment does not serialize work before the
+  loader receives its `image` argument, so a race in CuTe/XLA compilation, assembly, result publication, or memory
+  allocation remains possible. The result increases the relative weight of producer-specific memory exhaustion
+  and producer/codegen defects.
+- Next action: instrument the CuTe/XLA producer boundary that creates the module image. Capture the originating
+  status, byte-span presence, and allocator state when it returns an empty result; use producer-stage
+  serialization only if NVIDIA's hypothesis specifically includes compilation or result handoff before the CUDA
+  loader call.
