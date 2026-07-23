@@ -12,9 +12,15 @@ from marin.daytona.sandboxes import audit_sandboxes, delete_audited_sandboxes
 
 
 def _confirm(count: int, assume_yes: bool) -> bool:
-    if not assume_yes:
+    if not count:
         return False
-    return count > 0
+    if assume_yes:
+        return True
+    try:
+        response = input(f"Delete these {count} sandboxes? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return response in {"y", "yes"}
 
 
 def main() -> int:
@@ -39,7 +45,11 @@ def main() -> int:
         print(f"{row.sandbox_id}\t{row.state}\t{age}\t{row.reason}")
     if not args.delete:
         return 0
-    results = delete_audited_sandboxes(rows, confirm=lambda count: _confirm(count, args.yes))
+    eligible_count = sum(row.delete_eligible for row in rows)
+    confirmed = _confirm(eligible_count, args.yes)
+    if eligible_count and not confirmed:
+        return 3
+    results = delete_audited_sandboxes(rows, confirm=lambda _: confirmed)
     for result in results:
         if result.error is None:
             print(f"deleted\t{result.sandbox_id}")

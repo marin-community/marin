@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import io
+import os
 import tarfile
 from pathlib import Path
 
@@ -31,6 +32,18 @@ def test_task_archive_round_trips_nested_task_content(tmp_path):
     assert archive.task_count == 2
     assert [path.relative_to(tmp_path / "extracted").as_posix() for path in extracted] == ["first", "nested/second"]
     assert (tmp_path / "extracted/nested/second/instruction.md").read_text() == "second task"
+
+
+def test_task_archive_bytes_ignore_host_file_timestamps(tmp_path):
+    tasks = tmp_path / "tasks"
+    task = _write_task(tasks, "first", "first task")
+    first = write_task_archive(tasks, tmp_path / "first.parquet")
+
+    instruction = task / "instruction.md"
+    os.utime(instruction, (1_700_000_000, 1_700_000_000))
+    second = write_task_archive(tasks, tmp_path / "second.parquet")
+
+    assert first.parquet_path.read_bytes() == second.parquet_path.read_bytes()
 
 
 def test_task_archive_rejects_path_traversal_members(tmp_path):

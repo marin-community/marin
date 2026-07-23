@@ -20,9 +20,11 @@ uv run --package marin-core python scripts/daytona/sandboxes.py \
 ## Safe resource reclamation
 
 Sandbox and snapshot commands are audits by default. They print the selected
-resources but make no provider mutation. To delete, pass both `--delete` and
-`--yes`; snapshot deletion also requires an explicit `--name-prefix`, so a
-shared base image is never selected by an implicit organization-wide sweep.
+resources but make no provider mutation. To delete, pass `--delete` and answer
+the exact-count prompt, or pass `--yes` in a non-interactive invocation.
+Snapshot deletion also requires an explicit `--name-prefix`, so a shared base
+image is never selected by an implicit organization-wide sweep. Pass `--json`
+to save a machine-readable audit; JSON deletion requires `--yes`.
 
 ~~~bash
 uv run --package marin-core python scripts/daytona/snapshots.py \

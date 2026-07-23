@@ -8,6 +8,7 @@ import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass
+from gzip import GzipFile
 from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
@@ -34,13 +35,25 @@ def discover_task_dirs(root: Path, recursive: bool = True) -> list[Path]:
 
 def _archive_task(task_dir: Path) -> bytes:
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
-        for path in sorted(task_dir.rglob("*"), key=lambda item: item.relative_to(task_dir).as_posix()):
-            if path.is_symlink():
-                raise ValueError(f"Task archives do not permit symlinks: {path}")
-            relative = path.relative_to(task_dir).as_posix()
-            archive.add(path, arcname=relative, recursive=False)
+    with GzipFile(fileobj=buffer, mode="wb", mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for path in sorted(task_dir.rglob("*"), key=lambda item: item.relative_to(task_dir).as_posix()):
+                if path.is_symlink():
+                    raise ValueError(f"Task archives do not permit symlinks: {path}")
+                relative = path.relative_to(task_dir).as_posix()
+                archive.add(path, arcname=relative, recursive=False, filter=_normalize_tar_metadata)
     return buffer.getvalue()
+
+
+def _normalize_tar_metadata(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Remove host-specific metadata so identical tasks have identical archives."""
+
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    info.mtime = 0
+    return info
 
 
 def write_task_archive(tasks_dir: Path, parquet_path: Path, recursive: bool = True) -> TaskArchive:

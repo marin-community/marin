@@ -66,7 +66,7 @@ script is tied to an OpenThoughts-only reporting schema.
 | cleanup_stale_sandboxes.py | Lists/deletes stale Daytona sandboxes; imports daytona_client. | marin.daytona.sandboxes; scripts/daytona/sandboxes.py | Port. Keep default read-only inventory, exact typed state/age selection, dry-run, and explicit confirmation before deletion. |
 | daytona_snapshot_manager.py | Read-only/default-safe snapshot audit and destructive stale deletion. Imports daytona_client. | marin.daytona.snapshots; scripts/daytona/snapshots.py | Port. Preserve paging, protected transitional states, JSON audit, and confirmation-gated deletion; remove organization-specific hard caps, prefix assumptions, and secrets-file handling. |
 | health_check.py | Direct Daytona create/exec/delete latency and concurrency benchmark, with Jupiter proxy instructions. | marin.daytona.health; scripts/daytona/health.py | Port as generic provider health probe. Preserve structured per-phase timing and bounded concurrent probes; remove Jupiter paths/proxychains instructions and let normal process networking/configuration apply. |
-| inspect_daytona_data.py | Builds Daytona sandbox and dumps staged task files for debug. | marin.daytona.inspect; scripts/daytona/inspect.py | Port. Generalize to explicit image plus optional local upload roots and remote destinations; Harbor task-layout staging becomes an adapter, not hard-coded generic behavior. |
+| inspect_daytona_data.py | Builds Daytona sandbox and dumps staged task files for debug. | marin.daytona.inspect; scripts/daytona/inspect_sandbox.py | Port. Generalize to explicit image plus optional local upload roots and remote destinations; Harbor task-layout staging becomes an adapter, not hard-coded generic behavior. |
 | patch_freelancer_testbed.py | One-off rewrite of named Freelancer task dataset/Dockerfile. | versioned dataset transform only if still needed | Defer/drop. It must not become a generic operation. If dataset remains active, create a transform under experiments/datasets with explicit source/target IDs. |
 | search_sandbox_jobs.py | Queries OpenThoughts Supabase sandbox_jobs/benchmark/model tables and emits CSV matrices. | none | Drop. Its schema and credentials do not exist in Marin. Query W&B/eval records or typed Harbor evidence bundles instead. |
 | validate_and_upload_from_hf.py | Extracts HF task Parquet; validates buildability via Daytona, Harbor smoke, and oracle; writes survivors to HF. Imports task archive, OpenThoughts upload helper, Harbor compatibility shim. | marin.harbor.task_validation; scripts/harbor/validate_tasks.py | Port. Preserve Daytona build validation as one backend, add Iris/prebuilt-image validation as another, and keep Harbor smoke/oracle as separately selectable stages. Inputs/outputs use task_archive and UploadToHfConfig. |
@@ -98,7 +98,7 @@ lib/marin/src/marin/
     sandboxes.py          # inventory, age/state selection, guarded deletion
     snapshots.py          # paged audit, protected-state selection, guarded deletion
     health.py              # create/exec/delete probe and concurrency summaries
-    inspect.py             # sandbox staging/remote-file inspection
+    inspect_sandbox.py     # sandbox staging/remote-file inspection
   evaluation/
     harbor_results.py     # summarize/recompute Harbor result.json
 
@@ -113,7 +113,7 @@ scripts/daytona/
   sandboxes.py
   snapshots.py
   health.py
-  inspect.py
+  inspect_sandbox.py
 ~~~
 
 Key contracts:
