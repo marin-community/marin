@@ -134,6 +134,12 @@ class GrugModelConfig:
     # resulting qb_beta stat into the next step's router_bias. Off in the barebones default
     # (SCALE_MOE_QB=1); when off the router is the plain top-k path (byte-for-byte unchanged).
     qb_routing: bool = False
+    # Inkling-style short causal convolutions (SConv): a depthwise kernel-W causal 1-D conv over the
+    # sequence, applied after the K and V projections and on the attention/MoE branch outputs. Cheap
+    # local token mixing / short-range inductive bias that frees attention + experts from carrying it.
+    # Identity-init -> inert at step 0. Off in the barebones default (SCALE_SCONV=1).
+    sconv: bool = False
+    sconv_kernel: int = 4
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -231,12 +237,42 @@ def _qkv_projection_pipelined(
     )(reshard(x, x_spec), w_q, w_k, w_v)
 
 
+class ShortConv(eqx.Module):
+    """Depthwise causal 1-D convolution over the sequence axis (Inkling-style SConv).
+
+    A kernel of ``W`` taps mixes each channel with its own ``W-1`` causal predecessors:
+    ``out[t] = sum_{lag=0..W-1} weight[lag] * x[t-lag]`` independently per channel. Identity-init
+    (``weight[0]=1``, later taps 0) makes it a pass-through at step 0, so bolting it onto a tuned
+    baseline changes nothing until training learns the local mixing. Weights are tiny (``W*C``) and
+    routed to Adam (never Muon-orthogonalized). Implemented as a pad-and-shift sum rather than
+    ``lax.conv`` so it composes with the batch-sharded activation layout with no extra reshards.
+    """
+
+    weight: Float[Array, "W C"]
+    kernel_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(channels: int, kernel_size: int) -> "ShortConv":
+        weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
+        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
+
+    def __call__(self, x: Float[Array, "B S C"]) -> Float[Array, "B S C"]:
+        seq_len = x.shape[1]
+        out = self.weight[0] * x
+        for lag in range(1, self.kernel_size):
+            shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
+            out = out + self.weight[lag] * shifted
+        return out
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"] | None  # per-head sigmoid gate (cfg.attn_gate); routed to adam
+    sconv_k: ShortConv | None  # SConv after the K projection (cfg.sconv)
+    sconv_v: ShortConv | None  # SConv after the V projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -250,6 +286,8 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
             # Zero-init -> 2*sigmoid(0) == 1 pass-through at step 0, identical to the no-gate model.
             attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
+            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv else None),
+            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv else None),
             cfg=cfg,
         )
 
@@ -268,6 +306,10 @@ class CausalSelfAttention(eqx.Module):
             q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
             k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
             v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        # SConv: depthwise causal conv after the K and V projections (before head-split/RMS).
+        if self.sconv_k is not None:
+            k_flat = self.sconv_k(k_flat)
+            v_flat = self.sconv_v(v_flat)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
@@ -508,6 +550,8 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm | None
     mlp: MoEMLP
     shared: tuple[DenseMLP, ...] | None
+    sconv_attn: ShortConv | None  # SConv on the attention branch output (cfg.sconv)
+    sconv_mlp: ShortConv | None  # SConv on the MoE branch output (cfg.sconv)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -532,6 +576,8 @@ class Block(eqx.Module):
             mlp_gated_norm=mlp_gated_norm,
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv else None),
+            sconv_mlp=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv else None),
         )
 
     @named_call
@@ -557,7 +603,10 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        x = x + self.attn(attn_in, mask)
+        attn_out = self.attn(attn_in, mask)
+        if self.sconv_attn is not None:
+            attn_out = self.sconv_attn(attn_out)
+        x = x + attn_out
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
@@ -569,6 +618,8 @@ class Block(eqx.Module):
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+        if self.sconv_mlp is not None:
+            mlp_out = self.sconv_mlp(mlp_out)
         return x + mlp_out, qb_beta
 
 
