@@ -125,6 +125,7 @@ class GrugModelConfig:
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
     scan_layers: bool = True
     scan_unroll: int = 1
+    optimization_barrier_layers: bool = False
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -596,8 +597,10 @@ class Transformer(eqx.Module):
             hidden, _ = jax.lax.scan(_scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll)
         else:
             assert self.blocks is not None
-            for layer in self.blocks:
+            for layer_index, layer in enumerate(self.blocks):
                 hidden = eqx.filter_checkpoint(layer, policy=remat_policy)(hidden, layer_mask)
+                if cfg.optimization_barrier_layers and layer_index + 1 < len(self.blocks):
+                    hidden = jax.lax.optimization_barrier(hidden)
         return self.final_norm(hidden)
 
     @named_call

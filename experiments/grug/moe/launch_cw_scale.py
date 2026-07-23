@@ -31,6 +31,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         collectives are not re-run during recompute
     SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (default); 0
                         emits one unrolled layer graph per block
+    SCALE_BLOCK_OPTIMIZATION_BARRIER  1 inserts an XLA optimization barrier
+                        between unrolled blocks (default 0)
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -147,6 +149,7 @@ def build_scale_model() -> GrugModelConfig:
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         scan_layers=os.environ.get("SCALE_SCAN_LAYERS", "1") == "1",
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
+        optimization_barrier_layers=os.environ.get("SCALE_BLOCK_OPTIMIZATION_BARRIER") == "1",
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,

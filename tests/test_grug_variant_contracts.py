@@ -386,6 +386,29 @@ def test_grug_moe_scanned_and_unscanned_modules_have_output_parity():
     np.testing.assert_allclose(scanned_logits, unscanned_logits, rtol=1e-5, atol=1e-5)
 
 
+def test_grug_moe_block_optimization_barriers_preserve_outputs():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = dataclasses.replace(
+        _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4),
+        scan_layers=False,
+    )
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(4, dtype=jnp.int32).reshape(1, 4)
+    forward = eqx.filter_jit(lambda model, token_ids: model.logits(token_ids))
+
+    with jax.set_mesh(mesh):
+        without_barriers = model_module.Transformer.init(cfg, key=key)
+        with_barriers = model_module.Transformer.init(
+            dataclasses.replace(cfg, optimization_barrier_layers=True),
+            key=key,
+        )
+        without_barrier_logits = forward(without_barriers, tokens)
+        with_barrier_logits = forward(with_barriers, tokens)
+
+    np.testing.assert_allclose(without_barrier_logits, with_barrier_logits, rtol=1e-5, atol=1e-5)
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
