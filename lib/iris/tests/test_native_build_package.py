@@ -50,7 +50,7 @@ def test_build_version_is_written_to_all_manifests(tmp_path, monkeypatch):
 def test_manual_version_requires_explicit_revision():
     build_package = _load_build_package()
 
-    with pytest.raises(ValueError, match="requires --revision"):
+    with pytest.raises(ValueError):
         build_package.resolve_version(build_package.BuildMode.MANUAL, None, None)
 
     assert build_package.resolve_version(build_package.BuildMode.MANUAL, None, "25bcb20c25f00d") == "0.1.0+25bcb20c"

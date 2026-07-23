@@ -85,6 +85,7 @@ jobs:
             --mode "$MODE" \
             --version "$INPUT_VERSION" \
             --revision "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
             --build resolve
 
   build:

@@ -18,7 +18,6 @@ wheel and source distribution carries the same value.
 import argparse
 import datetime as dt
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -45,16 +44,15 @@ class BuildMode(StrEnum):
     MANUAL = "manual"
 
 
-class BuildTarget(StrEnum):
+class PackageOperation(StrEnum):
     RESOLVE = "resolve"
     WHEEL = "wheel"
     SDIST = "sdist"
 
 
-def _emit_github_output(key: str, value: str) -> None:
-    path = os.environ.get("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a", encoding="utf-8") as output:
+def _emit_github_output(path: Path | None, key: str, value: str) -> None:
+    if path is not None:
+        with path.open("a", encoding="utf-8") as output:
             output.write(f"{key}={value}\n")
 
 
@@ -143,7 +141,8 @@ def main() -> None:
     parser.add_argument("--mode", type=BuildMode, choices=tuple(BuildMode), required=True)
     parser.add_argument("--version", help="Pre-resolved version; bypasses mode-specific resolution.")
     parser.add_argument("--revision", help="Commit revision used to resolve a manual build version.")
-    parser.add_argument("--build", type=BuildTarget, choices=tuple(BuildTarget), required=True)
+    parser.add_argument("--github-output", type=Path, help="GitHub Actions output file for the resolved version.")
+    parser.add_argument("--build", type=PackageOperation, choices=tuple(PackageOperation), required=True)
     args = parser.parse_args()
 
     try:
@@ -152,12 +151,12 @@ def main() -> None:
         parser.error(str(error))
 
     print(f"marin-iris-native version: {version} (mode={args.mode})")
-    _emit_github_output("version", version)
-    if args.build == BuildTarget.RESOLVE:
+    _emit_github_output(args.github_output, "version", version)
+    if args.build == PackageOperation.RESOLVE:
         return
 
     _write_versions(version)
-    if args.build == BuildTarget.WHEEL:
+    if args.build == PackageOperation.WHEEL:
         build_wheel()
     else:
         build_sdist()
