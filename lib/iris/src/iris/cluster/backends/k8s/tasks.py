@@ -379,29 +379,36 @@ def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
-def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str) -> list[str]:
+def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str, *, allow_legacy: bool) -> list[str]:
     """Pod names an attempt may be running under, current scheme first.
 
     Pods are created under the uid-embedded name; attempts dispatched before the
     name embedded ``attempt_uid`` run under the uid-less name, so lookups must
-    accept it too. It ranks last, so a fresh attempt — whose uid-named pod exists
-    before it is first polled — resolves to its own pod rather than a leftover
-    one. Drop the legacy candidate once no pre-uid attempt can still be running.
+    accept it too. It ranks last, so an attempt whose uid-named pod exists always
+    resolves to its own pod rather than a leftover one.
+
+    ``allow_legacy`` must be false for any attempt this process dispatched. Such
+    an attempt was created under the current name, and a resubmit reuses
+    ``(task_id, attempt_id)``, so a uid-less pod sharing those is a previous
+    incarnation's — adopting it is the collision #7518 removed. Drop the legacy
+    candidate entirely once no attempt predating that change can still be running.
     """
     current = _pod_name(task_id, attempt_id, attempt_uid)
+    if not allow_legacy:
+        return [current]
     legacy = _pod_name(task_id, attempt_id)
     return [current] if legacy == current else [current, legacy]
 
 
 def _lookup_pod(
-    pods_by_name: dict[str, dict], task_id: JobName, attempt_id: int, attempt_uid: str
+    pods_by_name: dict[str, dict], task_id: JobName, attempt_id: int, attempt_uid: str, *, allow_legacy: bool
 ) -> tuple[str, dict | None]:
     """Resolve an attempt to its pod in *pods_by_name*, tolerating the pre-uid name.
 
     Returns the matched name and pod, or the current-scheme name and ``None``
-    when the attempt has no pod under either name.
+    when the attempt has no pod under any candidate name.
     """
-    candidates = _pod_name_candidates(task_id, attempt_id, attempt_uid)
+    candidates = _pod_name_candidates(task_id, attempt_id, attempt_uid, allow_legacy=allow_legacy)
     for name in candidates:
         pod = pods_by_name.get(name)
         if pod is not None:
@@ -2221,6 +2228,10 @@ class K8sTaskProvider:
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    # (task_id_wire, attempt_id) this process has dispatched a pod for. Those pods
+    # were created under the current name, so their lookups must never consider the
+    # pre-uid name — see _pod_name_candidates.
+    _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
@@ -2447,6 +2458,17 @@ class K8sTaskProvider:
 
         return updates
 
+    def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
+        """Resolve a running entry to its pod, allowing the pre-uid name only when this
+        process did not dispatch the attempt."""
+        return _lookup_pod(
+            pods_by_name,
+            entry.task_id,
+            entry.attempt_id,
+            entry.attempt_uid,
+            allow_legacy=(entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts,
+        )
+
     def _live_pod_name(self, target: TaskTarget) -> str:
         """Pod name for *target*, preferring the current scheme over the pre-uid name.
 
@@ -2454,7 +2476,12 @@ class K8sTaskProvider:
         otherwise returns the pre-uid name unprobed — a target with no pod under
         either name still yields a name for the caller to fail against.
         """
-        candidates = _pod_name_candidates(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        candidates = _pod_name_candidates(
+            JobName.from_wire(target.task_id),
+            target.attempt_id,
+            target.attempt_uid,
+            allow_legacy=(target.task_id, target.attempt_id) not in self._dispatched_attempts,
+        )
         for name in candidates[:-1]:
             if self.kubectl.get_json(K8sResource.PODS, name) is not None:
                 return name
@@ -2597,6 +2624,7 @@ class K8sTaskProvider:
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
+        self._dispatched_attempts.add((run_req.task_id, run_req.attempt_id))
 
         init_containers, extra_volumes, configmap_name = _build_init_container_spec(
             run_req,
@@ -2966,9 +2994,7 @@ class K8sTaskProvider:
         # each. Lazy: only fetched on cycles where at least one pod is missing,
         # so steady-state cycles add no call. setdefault keeps the active entry
         # if a name somehow appears in both.
-        if any(
-            _lookup_pod(pods_by_name, entry.task_id, entry.attempt_id, entry.attempt_uid)[1] is None for entry in running
-        ):
+        if any(self._lookup_entry_pod(pods_by_name, entry)[1] is None for entry in running):
             for pod in self._list_terminal_pods():
                 pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
 
@@ -2982,7 +3008,7 @@ class K8sTaskProvider:
         event_log = self._ensure_task_event_log()
 
         for entry in running:
-            pod_name, pod = _lookup_pod(pods_by_name, entry.task_id, entry.attempt_id, entry.attempt_uid)
+            pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             event_key = (entry.task_id.to_wire(), entry.attempt_id)
 
