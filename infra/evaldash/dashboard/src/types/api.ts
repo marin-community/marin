@@ -119,7 +119,7 @@ export interface EvalRecord {
   metrics: Record<string, Record<string, number>>
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
-  provenance: { git_sha: string; evalchemy_image: string; launch_host: string }
+  provenance: { git_sha: string; eval_image: string; launch_host: string }
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -201,7 +201,7 @@ export interface SampleTasksResponse {
   tasks: { task: string; files: number }[]
 }
 
-export type SampleKind = 'multiple_choice' | 'generation'
+export type SampleKind = 'multiple_choice' | 'generation' | 'agentic'
 
 export interface ChatMessage {
   role: string
@@ -215,10 +215,23 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
+// How one prediction was scored (marin.evaluation.samples.Grading). `method` names the grader
+// (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
+// as a JSON string, the escape hatch for anything the typed fields do not carry.
+export interface SampleGrading {
+  method: string
+  metric: string | null
+  filter: string | null
+  score: number | null
+  passed: boolean | null
+  detail: string
+}
+
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples.
+// samples, and `trajectory_uri` for `agentic` samples. The two unbounded payloads (the agentic
+// trajectory, a prediction's raw exchange) are referenced by URI and lazy-loaded on demand.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -231,9 +244,71 @@ export interface SampleRow {
   output: string | null
   extracted: string | null
   target_text: string | null
+  trajectory_uri: string | null
+  exchange_uri: string | null
+  grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
+}
+
+// One sample-referenced artifact (a trajectory, an exchange) resolved to text by the server's
+// artifact endpoint. `available` is false with a `reason` when the object is out of tree,
+// missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
+export interface ArtifactResponse {
+  available: boolean
+  reason: string | null
+  uri: string
+  media_type: string
+  size: number | null
+  truncated: boolean
+  text: string | null
+}
+
+// Agent Trajectory Interchange Format (ATIF): one agentic run's steps. A step is either a user
+// turn (the task/observation feed) or an agent turn carrying its message, tool calls, the resulting
+// observation, and per-step token metrics. Fields are optional because ATIF minor versions add them.
+export interface TrajectoryToolCall {
+  tool_call_id?: string
+  function_name: string
+  arguments: Record<string, unknown>
+}
+
+// One observation entry. Most carry `content` (a tool's stdout/terminal state); some carry no
+// content — a sub-agent delegation records a `subagent_trajectory_ref` instead.
+export interface TrajectoryObservationResult {
+  source_call_id?: string
+  content?: string
+  subagent_trajectory_ref?: string
+}
+
+export interface TrajectoryObservation {
+  results?: TrajectoryObservationResult[]
+}
+
+export interface TrajectoryStep {
+  step_id: number
+  timestamp?: string
+  source: string
+  model_name?: string
+  message?: string
+  tool_calls?: TrajectoryToolCall[]
+  observation?: TrajectoryObservation | null
+  metrics?: Record<string, number>
+}
+
+export interface TrajectoryAgent {
+  name: string
+  version?: string
+  model_name?: string
+}
+
+export interface Trajectory {
+  schema_version?: string
+  session_id?: string
+  agent?: TrajectoryAgent
+  steps: TrajectoryStep[]
+  final_metrics?: Record<string, number>
 }
 
 export interface SamplesResponse {

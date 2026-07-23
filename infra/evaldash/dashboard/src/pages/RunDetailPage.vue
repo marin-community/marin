@@ -167,7 +167,7 @@ async function copyPath() {
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
         <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
           <div class="flex gap-2"><dt class="text-text-muted w-28">git sha</dt><dd class="font-mono" :title="data.provenance.git_sha">{{ shortSha(data.provenance.git_sha) }}</dd></div>
-          <div class="flex gap-2"><dt class="text-text-muted w-28">image</dt><dd class="font-mono break-all">{{ data.provenance.evalchemy_image }}</dd></div>
+          <div class="flex gap-2"><dt class="text-text-muted w-28">image</dt><dd class="font-mono break-all">{{ data.provenance.eval_image }}</dd></div>
           <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
         </dl>
       </div>

@@ -18,6 +18,13 @@ grouped view expanding each serve group to its evals, plus a flat filterable tab
 detail (metrics, version + description, live iris job/attempt status, live finelog logs, a
 per-sample browser, and group siblings), and status (per-prefix ingest probes).
 
+The per-sample browser shows how each prediction was graded (the grader method, headline metric,
+score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
+samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
+and renders the agent's turns, tool calls, observations, and reward. A sample's unbounded payloads
+(the trajectory, a prediction's raw exchange) live as sibling artifact files, so paging the light
+columns never materializes them.
+
 IAP is the only access gate; there is no application auth.
 
 ## API
@@ -31,6 +38,7 @@ GET  /api/runs/{run_id}/jobs           live iris job + per-task attempt status f
 GET  /api/runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
 GET  /api/runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
 GET  /api/runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
+GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (trajectory/exchange) as text
 GET  /api/runs/{run_id}/group          sibling runs sharing the run's group_id
 GET  /api/matrix?include_archived=   model x task matrix (per cell, per-model version cohort) + leaderboard rows
 GET  /api/history?model=&task=   every run's headline score for one cell, over time
@@ -56,6 +64,12 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 `roles/compute.viewer` on the runtime service account. Outside the VPC (local dev) they return a `reachable: false`
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
+
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri`/`exchange_uri` through fsspec,
+restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
+refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
+logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
+object rather than a 500. Reads are cached briefly, as sample tables are.
 
 ## Layout
 
