@@ -81,7 +81,7 @@ def deployment_config() -> DeploymentConfig:
     )
 
 
-def make_infrastructure():
+def infrastructure_and_mocks():
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
     infrastructure = create_infrastructure(deployment_config())
@@ -143,7 +143,7 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
 
 @pulumi.runtime.test
 def test_deployment_models_durable_resources_without_secret_payloads():
-    infrastructure, mocks = make_infrastructure()
+    infrastructure, mocks = infrastructure_and_mocks()
 
     def check(_: object) -> None:
         resource_types = {resource.typ for resource in mocks.resources}
@@ -175,7 +175,7 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
 @pulumi.runtime.test
 def test_local_tree_build_drives_the_runtime_rollout():
-    infrastructure, mocks = make_infrastructure()
+    infrastructure, mocks = infrastructure_and_mocks()
 
     def check(_: object) -> None:
         image = by_name(mocks, "loom-release-image")
@@ -198,7 +198,7 @@ def test_local_tree_build_drives_the_runtime_rollout():
 
 @pulumi.runtime.test
 def test_dns_matches_the_existing_unproxied_cloudflare_record():
-    infrastructure, mocks = make_infrastructure()
+    infrastructure, mocks = infrastructure_and_mocks()
 
     def check(_: object) -> None:
         record = by_name(mocks, "loom-dns-address")
@@ -213,7 +213,7 @@ def test_dns_matches_the_existing_unproxied_cloudflare_record():
 
 @pulumi.runtime.test
 def test_release_rollout_pins_metadata_to_the_built_image_digest():
-    infrastructure, mocks = make_infrastructure()
+    infrastructure, mocks = infrastructure_and_mocks()
 
     def check(_: object) -> None:
         metadata = by_name(mocks, "loom").inputs["metadata"]
@@ -231,7 +231,7 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 @pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
-    infrastructure, mocks = make_infrastructure()
+    infrastructure, mocks = infrastructure_and_mocks()
 
     def check(_: object) -> None:
         assert by_name(mocks, "loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"

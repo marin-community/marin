@@ -26,6 +26,7 @@ DEFAULT_NETWORK = "default"
 DEFAULT_INSTANCE_NAME = "loom"
 DEFAULT_VM_SERVICE_ACCOUNT = "loom-vm"
 DEFAULT_MACHINE_TYPE = "e2-highmem-4"
+DEFAULT_DISK_TYPE = "pd-balanced"
 DEFAULT_BOOT_DISK_GB = 100
 DEFAULT_DATA_DISK_GB = 500
 DEFAULT_REPO_URL = "https://github.com/marin-community/loom.git"
@@ -37,6 +38,7 @@ DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
 DATA_DISK_DEVICE_NAME = "loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
+SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
@@ -496,7 +498,7 @@ def _create_data_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]
         project=config.project,
         zone=config.zone,
         name=f"{config.instance_name}-data",
-        type="pd-balanced",
+        type=DEFAULT_DISK_TYPE,
         size=config.data_disk_gb,
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
@@ -552,7 +554,7 @@ def _create_image(
         location=repository.location,
         repository=repository.repository_id,
         role="roles/artifactregistry.reader",
-        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
+        member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
     )
     image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
     image = docker_build.Image(
@@ -648,7 +650,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         project=config.project,
         secret_id=dotenv_secret.secret_id,
         role=SECRET_ACCESSOR_ROLE,
-        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
+        member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
     )
     profile_secret_readers = []
     for secret_project, secret_name in sorted(set(profile_secret_refs)):
@@ -659,7 +661,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 project=secret_project,
                 secret_id=secret_name,
                 role=SECRET_ACCESSOR_ROLE,
-                member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
+                member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
                 opts=api_options,
             )
         )
@@ -704,7 +706,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             "initialize_params": {
                 "image": "debian-cloud/debian-12",
                 "size": config.boot_disk_gb,
-                "type": "pd-balanced",
+                "type": DEFAULT_DISK_TYPE,
             },
         },
         attached_disks=[
