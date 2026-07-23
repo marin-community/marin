@@ -30,6 +30,7 @@ from typing import cast
 
 from fray.iris_backend import IrisJobHandle
 from fray.types import ResourceConfig, create_environment
+from huggingface_hub import hf_hub_download
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.constraints import region_constraint
 from iris.cluster.setup_scripts import default_setup_script
@@ -73,6 +74,75 @@ _PROPAGATED_ENV_KEYS = ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJ
 # How many trailing log lines of a failed child ride along in EvalPipelineError (and from there into
 # the run's failure record).
 LOG_TAIL_LINES = 100
+
+
+def _has_vllm_option(args: tuple[str, ...], option: str) -> bool:
+    """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
+def _auto_serve_overrides_from_config(
+    model: str,
+    config: dict,
+    max_model_len: int | None,
+    existing_extra_args: tuple[str, ...],
+) -> tuple[tuple[str, ...], int | None]:
+    """Derive text-eval vLLM defaults from one model configuration.
+
+    Explicit options always win. A missing ``max_model_len`` stays missing so vLLM can use the
+    model's own default rather than silently imposing an arbitrary context window.
+    """
+    serialized_config = json.dumps(config).lower()
+    architectures = " ".join(config.get("architectures") or ()).lower()
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = config
+
+    derived: tuple[tuple[str, str], ...] = ()
+    if (
+        "gated_delta_net" in serialized_config
+        or "linear_attn" in serialized_config
+        or "qwen3next" in architectures
+        or "qwen3_5" in architectures
+        or "qwen3.5" in model.lower()
+        or "qwen3-next" in model.lower()
+    ):
+        derived += (("--gdn-prefill-backend", "triton"),)
+    if config.get("vision_config") or "forconditionalgeneration" in architectures:
+        derived += (("--limit-mm-per-prompt", '{"image":0,"video":0}'),)
+    if "qwen" in model.lower() and (
+        "thinking" in model.lower() or "qwen3.5" in model.lower() or "qwen3-next" in model.lower()
+    ):
+        derived += (("--reasoning-parser", "qwen3"),)
+
+    merged = list(existing_extra_args)
+    for option, value in derived:
+        if not _has_vllm_option(existing_extra_args, option):
+            merged.extend((option, value))
+
+    native_max_model_len = text_config.get("max_position_embeddings") or config.get("max_position_embeddings")
+    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+        max_model_len = min(max_model_len, int(native_max_model_len))
+    return tuple(merged), max_model_len
+
+
+def auto_serve_overrides(
+    model: str,
+    max_model_len: int | None,
+    existing_extra_args: tuple[str, ...] = (),
+) -> tuple[tuple[str, ...], int | None]:
+    """Read an HF model config and derive safe text-eval vLLM options from it.
+
+    Config inspection is an optional compatibility improvement: an unavailable private repository
+    must not prevent an otherwise valid explicitly-configured serve from launching.
+    """
+    try:
+        with open(hf_hub_download(model, "config.json")) as handle:
+            config = json.load(handle)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not inspect config.json for %s; using explicit serving options: %s", model, exc)
+        return existing_extra_args, max_model_len
+    return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 
 class PipelineStage(StrEnum):
@@ -174,6 +244,11 @@ class ServeSpec:
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
     Passed to :class:`~marin.inference.config.ServedModelConfig`."""
+    auto_overrides: bool = True
+    """Whether text-eval vLLM compatibility flags are derived from the model config.
+
+    Explicit :attr:`vllm_extra_args` take precedence over the derived options.
+    """
     instances: int = 1
     broker: BrokerConfig | None = None
 
@@ -221,6 +296,12 @@ class EvalchemyEvalConfig:
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
     eval_disk: str = "50g"
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional decoding parameters forwarded to every lm-eval generation request."""
+
+    def __post_init__(self) -> None:
+        if "max_gen_toks" in self.extra_gen_kwargs:
+            raise ValueError("extra_gen_kwargs must not override max_gen_toks")
 
 
 @dataclass(frozen=True)
@@ -233,6 +314,9 @@ class _InferenceLaunch:
 
 
 def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _InferenceLaunch:
+    if spec.backend is ServeBackend.VLLM and spec.auto_overrides:
+        vllm_extra_args, max_model_len = auto_serve_overrides(model, spec.max_model_len, spec.vllm_extra_args)
+        spec = replace(spec, vllm_extra_args=vllm_extra_args, max_model_len=max_model_len)
     if spec.gpu_count is not None:
         resources = ResourceConfig.with_gpu(
             spec.gpu_type or "H100",
@@ -373,35 +457,42 @@ def _task_dir(task: EvalTaskConfig) -> str:
     return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
 
 
+def _client_task_config(task: EvalTaskConfig) -> dict[str, object]:
+    """Serialize one task for the evaluator image without leaking Marin imports into it."""
+    payload: dict[str, object] = {
+        "name": task.name,
+        "num_fewshot": task.num_fewshot,
+        "dir": _task_dir(task),
+        "generation": task.generation,
+        "unsafe_code": task.unsafe_code,
+        "completion_only": task.completion_only,
+    }
+    seed = (task.task_kwargs or {}).get("seed")
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
+
+
 def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEndpoint) -> str:
     """The evalchemy client's config as a JSON string, passed to the eval child in an env var.
 
     A plain JSON payload (not a cloudpickled object) so the image's bare interpreter can read it
     without any marin/cloudpickle import -- see :mod:`experiments.evals.evalchemy.run_evalchemy_client`.
     """
-    return json.dumps(
-        {
-            "base_url": endpoint.base_url,
-            "model_id": endpoint.model_id,
-            "tokenizer": endpoint.tokenizer,
-            "tasks": [
-                {
-                    "name": t.name,
-                    "num_fewshot": t.num_fewshot,
-                    "dir": _task_dir(t),
-                    "generation": t.generation,
-                    "unsafe_code": t.unsafe_code,
-                    "completion_only": t.completion_only,
-                }
-                for t in unit.tasks
-            ],
-            "out_path": unit.out_path,
-            "apply_chat_template": session.apply_chat_template,
-            "max_gen_toks": unit.max_gen_toks,
-            "max_eval_instances": unit.max_eval_instances,
-            "num_concurrent": session.num_concurrent,
-        }
-    )
+    payload: dict[str, object] = {
+        "base_url": endpoint.base_url,
+        "model_id": endpoint.model_id,
+        "tokenizer": endpoint.tokenizer,
+        "tasks": [_client_task_config(task) for task in unit.tasks],
+        "out_path": unit.out_path,
+        "apply_chat_template": session.apply_chat_template,
+        "max_gen_toks": unit.max_gen_toks,
+        "max_eval_instances": unit.max_eval_instances,
+        "num_concurrent": session.num_concurrent,
+    }
+    if session.extra_gen_kwargs:
+        payload["extra_gen_kwargs"] = session.extra_gen_kwargs
+    return json.dumps(payload)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -425,6 +516,12 @@ class EvalSession:
     eval_cpu: float = 8.0
     eval_memory: str = "32g"
     eval_disk: str = "50g"
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Additional decoding parameters forwarded to every lm-eval generation request."""
+
+    def __post_init__(self) -> None:
+        if "max_gen_toks" in self.extra_gen_kwargs:
+            raise ValueError("extra_gen_kwargs must not override max_gen_toks")
 
 
 @dataclass(frozen=True)
@@ -698,6 +795,7 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> ServeAndEvalRun:
         eval_cpu=config.eval_cpu,
         eval_memory=config.eval_memory,
         eval_disk=config.eval_disk,
+        extra_gen_kwargs=config.extra_gen_kwargs,
     )
     unit = EvalUnit(
         name="eval",

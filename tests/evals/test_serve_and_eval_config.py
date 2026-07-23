@@ -22,6 +22,7 @@ from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
     EvalUnit,
     ServedEndpoint,
+    _auto_serve_overrides_from_config,
     _client_config_json,
 )
 
@@ -153,6 +154,38 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
     assert "--confirm_run_unsafe_code" in cmd
+
+
+def test_client_forwards_task_seed_and_extra_generation_kwargs():
+    unit = _unit(tasks=(EvalTaskConfig("AIME24", 0, task_alias="AIME24_seed43", task_kwargs={"seed": 43}),))
+    config = _payload(session=_session(extra_gen_kwargs={"repetition_penalty": "1.1"}), unit=unit)
+
+    assert config["tasks"][0]["seed"] == 43
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+    assert cmd[cmd.index("--seed") + 1] == "43"
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048,repetition_penalty=1.1"
+
+
+def test_auto_serve_overrides_preserve_explicit_flags_and_cap_context():
+    extra_args, max_model_len = _auto_serve_overrides_from_config(
+        "Qwen/Qwen3.5-35B-A3B",
+        {
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "text_config": {"max_position_embeddings": 8192, "linear_attn": True},
+            "vision_config": {"hidden_size": 1},
+        },
+        32768,
+        ("--gdn-prefill-backend=flashinfer",),
+    )
+
+    assert extra_args == (
+        "--gdn-prefill-backend=flashinfer",
+        "--limit-mm-per-prompt",
+        '{"image":0,"video":0}',
+        "--reasoning-parser",
+        "qwen3",
+    )
+    assert max_model_len == 8192
 
 
 def test_model_args_carry_served_max_length():

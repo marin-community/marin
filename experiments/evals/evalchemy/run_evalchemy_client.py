@@ -99,6 +99,14 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     return ",".join(args)
 
 
+def generation_kwargs(config: dict, max_gen_toks: int) -> str:
+    """The ``--gen_kwargs`` value with a context-safe budget and extra decoding options."""
+    extra_gen_kwargs = config.get("extra_gen_kwargs", {})
+    if "max_gen_toks" in extra_gen_kwargs:
+        raise ValueError("extra_gen_kwargs must not override max_gen_toks")
+    return ",".join([f"max_gen_toks={max_gen_toks}", *[f"{key}={value}" for key, value in extra_gen_kwargs.items()]])
+
+
 def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
     """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
 
@@ -127,7 +135,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--tasks",
         task["name"],
         "--gen_kwargs",
-        f"max_gen_toks={gen_budget}",
+        generation_kwargs(config, gen_budget),
         # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
         # gen_kwargs; lm-eval-native tasks ignore it.
         "--max_tokens",
@@ -145,6 +153,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # 0-shot request is silently ignored. Chat-native benchmarks record it in their config but do not
     # few-shot on it, so an explicit 0 is harmless there.
     cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if task.get("seed") is not None:
+        cmd += ["--seed", str(task["seed"])]
     if task["unsafe_code"]:
         # code_eval tasks execute model-generated code; lm-eval refuses them without this opt-in.
         cmd.append("--confirm_run_unsafe_code")

@@ -33,10 +33,12 @@ Run (the pipeline coordinator is an Iris job — ``serve_and_eval`` submits chil
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+import logging
+from dataclasses import dataclass, replace
 
+from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.lazy import Artifact, ArtifactStep, StepContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.evals.evalchemy.serve_and_eval import (
@@ -47,12 +49,14 @@ from experiments.evals.evalchemy.serve_and_eval import (
     serve_and_eval,
 )
 
-# The suite → task-name preset map (evalchemy fork registry).
-SUITE_TO_TASKS: dict[str, list[str]] = {
-    "delphi_math": ["MATH500", "AIME24"],
-    "math": ["MATH500", "AIME24", "AMC23", "OLYMPIADBENCH"],
-    "gsm8k": ["gsm8k"],
-    "tier1": [
+# The suite → task-name preset map. These are the current runnable evalchemy tasks; the full
+# registry (including benchmarks that need image dependencies not yet present) lives in
+# ``experiments.evaluation.evals``.
+SUITE_TO_TASKS: dict[str, tuple[str, ...]] = {
+    "delphi_math": ("MATH500", "AIME24"),
+    "math": ("MATH500", "AIME24", "AMC23", "OlympiadBench"),
+    "gsm8k": ("gsm8k",),
+    "tier1": (
         "gsm8k",
         "mmlu",
         "hellaswag",
@@ -67,9 +71,11 @@ SUITE_TO_TASKS: dict[str, list[str]] = {
         "triviaqa",
         "nq_open",
         "drop",
-    ],
-    "tier2": ["MATH500", "HumanEvalPlus", "MBPPPlus", "GPQADiamond", "IFEval"],
+    ),
+    "tier2": ("MATH500", "AIME24", "OlympiadBench"),
 }
+
+logger = logging.getLogger(__name__)
 
 
 def _tasks(spec: EvalSpec) -> tuple[EvalTaskConfig, ...]:
@@ -79,7 +85,7 @@ def _tasks(spec: EvalSpec) -> tuple[EvalTaskConfig, ...]:
 
     tasks: list[EvalTaskConfig] = []
     for name in SUITE_TO_TASKS[spec.suite]:
-        if name == "AIME24" and len(spec.seeds) > 1:
+        if name == "AIME24":
             for seed in spec.seeds:
                 tasks.append(
                     EvalTaskConfig(
@@ -89,9 +95,14 @@ def _tasks(spec: EvalSpec) -> tuple[EvalTaskConfig, ...]:
                         task_kwargs={"seed": seed},
                     )
                 )
-        else:
-            shots = _SHOT_MAP.get(name, 0)
-            tasks.append(EvalTaskConfig(name, shots))
+            continue
+        tasks.append(
+            EvalTaskConfig(
+                name,
+                _SHOT_MAP.get(name, 0),
+                generation=name in _GENERATIVE_TASKS,
+            )
+        )
     return tuple(tasks)
 
 
@@ -106,7 +117,10 @@ _SHOT_MAP: dict[str, int] = {
     "drop": 3,
 }
 
+_GENERATIVE_TASKS = frozenset({"gsm8k", "triviaqa", "nq_open", "drop", "MATH500", "OlympiadBench"})
 
+
+@dataclass(frozen=True)
 class EvalSpec:
     """One evalchemy eval of one model, backend-agnostic.
 
@@ -117,7 +131,7 @@ class EvalSpec:
     model:
         HF repo id or object-store (``gs://``) path of the model to serve and eval.
     suite:
-        Suite name from :data:`SUITE_TO_TASKS`. Ignored if ``tasks`` is provided directly.
+        Suite name from :data:`SUITE_TO_TASKS`.
     stage:
         ``sft`` or ``rl`` → ``--apply_chat_template`` ON; ``base`` → OFF.
     serve:
@@ -131,49 +145,44 @@ class EvalSpec:
         Bump to force a re-eval (identity change). The OT-Agent force-reeval analog.
     """
 
-    def __init__(
-        self,
-        run_name: str,
-        model: str,
-        suite: str = "delphi_math",
-        stage: str = "sft",
-        serve: ServeSpec | None = None,
-        seeds: Sequence[int] = (42,),
-        max_gen_toks: int = 3584,
-        max_model_len: int | None = None,
-        version: str = "2026.07.15",
-        tokenizer: str | None = None,
-        num_concurrent: int = DEFAULT_NUM_CONCURRENT,
-        max_eval_instances: int | None = None,
-        extra_gen_kwargs: dict[str, str] | None = None,
-        region: str | None = None,
-    ):
-        self.run_name = run_name
-        self.model = model
-        self.suite = suite
-        self.stage = stage
-        self.seeds = tuple(seeds)
-        self.max_gen_toks = max_gen_toks
-        self.version = version
-        self.tokenizer = tokenizer
-        self.num_concurrent = num_concurrent
-        self.max_eval_instances = max_eval_instances
-        self.extra_gen_kwargs = extra_gen_kwargs or {}
+    run_name: str
+    model: str
+    suite: str = "delphi_math"
+    stage: str = "sft"
+    serve: ServeSpec | None = None
+    seeds: tuple[int, ...] = (42,)
+    max_gen_toks: int = 3584
+    max_model_len: int | None = None
+    version: str = "2026.07.15"
+    tokenizer: str | None = None
+    num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    max_eval_instances: int | None = None
+    extra_gen_kwargs: dict[str, str] | None = None
+    region: str | None = None
 
-        # Default serve spec: TPU v6e-8, vLLM backend.
-        if serve is not None:
-            self.serve = serve
-        else:
-            self.serve = ServeSpec(
-                backend=ServeBackend.VLLM,
-                tpu_type="v6e-8",
-                gpu_type=None,
-                gpu_count=None,
-                max_model_len=max_model_len,
-                region=region,
-            )
-        if max_model_len is not None and self.serve.max_model_len is None:
-            self.serve = ServeSpec(**{**self.serve.__dict__, "max_model_len": max_model_len})
+    def __post_init__(self) -> None:
+        if self.stage not in {"sft", "rl", "base"}:
+            raise ValueError(f"unknown stage {self.stage!r}")
+        if not self.seeds:
+            raise ValueError("seeds must not be empty")
+        if self.max_gen_toks <= 0:
+            raise ValueError("max_gen_toks must be positive")
+
+
+def _serve_spec(spec: EvalSpec) -> ServeSpec:
+    """Resolve this launcher's TPU default without overriding an explicit serve configuration."""
+    if spec.serve is None:
+        return ServeSpec(
+            backend=ServeBackend.VLLM,
+            tpu_type="v6e-8",
+            gpu_type=None,
+            gpu_count=None,
+            max_model_len=spec.max_model_len,
+            region=spec.region,
+        )
+    if spec.max_model_len is not None and spec.serve.max_model_len is None:
+        return replace(spec.serve, max_model_len=spec.max_model_len)
+    return spec.serve
 
 
 def _build_config(spec: EvalSpec) -> EvalchemyEvalConfig:
@@ -184,16 +193,16 @@ def _build_config(spec: EvalSpec) -> EvalchemyEvalConfig:
         model=spec.model,
         tokenizer=spec.tokenizer,
         tasks=tasks,
-        serve=spec.serve,
+        serve=_serve_spec(spec),
         apply_chat_template=apply_chat_template,
         max_gen_toks=spec.max_gen_toks,
         max_eval_instances=spec.max_eval_instances,
         num_concurrent=spec.num_concurrent,
-        extra_gen_kwargs=spec.extra_gen_kwargs,
+        extra_gen_kwargs=spec.extra_gen_kwargs or {},
     )
 
 
-def evalchemy_step(spec: EvalSpec) -> ArtifactStep[Artifact]:
+def evalchemy_step(spec: EvalSpec) -> ArtifactStep[EvalchemyResult]:
     """The eval as a lazy ``ArtifactStep``.
 
     Identity = model + suite + stage + seeds + version. Re-running the pipeline skips the eval
@@ -205,27 +214,40 @@ def evalchemy_step(spec: EvalSpec) -> ArtifactStep[Artifact]:
     """
 
     def build_config(ctx: StepContext) -> dict:
+        serve = _serve_spec(spec)
         return {
             "model": spec.model,
             "suite": spec.suite,
             "stage": spec.stage,
             "seeds": list(spec.seeds),
+            "tokenizer": spec.tokenizer,
+            "max_gen_toks": spec.max_gen_toks,
+            "max_model_len": serve.max_model_len,
+            "num_concurrent": spec.num_concurrent,
+            "max_eval_instances": spec.max_eval_instances,
+            "extra_gen_kwargs": spec.extra_gen_kwargs or {},
+            "serve": {
+                "backend": serve.backend.value,
+                "dtype": serve.dtype,
+                "tensor_parallel_size": serve.tensor_parallel_size,
+                "vllm_extra_args": list(serve.vllm_extra_args),
+                "chat_template_content": serve.chat_template_content,
+                "auto_overrides": serve.auto_overrides,
+            },
             "out": ctx.output_path,
         }
 
-    def run(cfg: dict) -> None:
+    def run(cfg: dict) -> EvalchemyResult:
         config = _build_config(spec)
-        # If the caller gave an explicit out_path, use it; otherwise the step's output_path
-        # (a gs:// artifact path) becomes the eval's out_path.
-        if not config.out_path:
-            config = EvalchemyEvalConfig(**{**config.__dict__, "out_path": cfg["out"]})
+        config = replace(config, out_path=cfg["out"])
         result = serve_and_eval(config)
-        print(f"evalchemy artifacts: {result.out_path}  jobs: {result.jobs}")
+        logger.info("Evalchemy artifacts: %s; child jobs: %s", result.out_path, result.jobs)
+        return EvalchemyResult(path=result.out_path)
 
     return ArtifactStep(
         name=f"evals/{spec.run_name}/{spec.suite}",
         version=spec.version,
-        artifact_type=Artifact,
+        artifact_type=EvalchemyResult,
         run=run,
         build_config=build_config,
         deps=(),
