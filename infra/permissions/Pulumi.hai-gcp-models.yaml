@@ -8,12 +8,12 @@ config:
   marin-permissions:kms_key: marin-iac-key
   marin-permissions:deploy_accounts:
     - service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
-      github_subject: repo:marin-community/marin:ref:refs/heads/main
+      github_subject: &main_subject repo:marin-community/marin:ref:refs/heads/main
       mint_id_tokens: true
       secret_access_secrets:
         - iris-cw-us-west-04a-signing-key
     - service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-      github_subject: repo:marin-community/marin:ref:refs/heads/main
+      github_subject: *main_subject
       secret_metadata_viewer: true
       # Keep this permission allowlist explicit: a new runtime secret should fail closed
       # until its deploy-account IAM management is reviewed here.
