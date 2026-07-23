@@ -5,6 +5,7 @@
 
 import contextlib
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -93,12 +94,34 @@ class IrisServiceConfig:
     broker: BrokerConfig | None = None
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     timeout_hours: float = 24.0
+    idle_timeout_hours: float | None = None
     controller_proxy_timeout_seconds: float = 600.0
     port_name: str | None = "http"
 
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
+        if self.timeout_hours <= 0:
+            raise ValueError("timeout_hours must be positive")
+        if self.idle_timeout_hours is not None and self.idle_timeout_hours <= 0:
+            raise ValueError("idle_timeout_hours must be positive when set")
+
+
+class EndpointActivity:
+    """Thread-safe model-request activity used for service idle expiry."""
+
+    def __init__(self, *, monotonic=time.monotonic) -> None:
+        self._monotonic = monotonic
+        self._lock = threading.Lock()
+        self._last_inference_request = monotonic()
+
+    def record_inference_request(self) -> None:
+        with self._lock:
+            self._last_inference_request = self._monotonic()
+
+    def idle_seconds(self) -> float:
+        with self._lock:
+            return self._monotonic() - self._last_inference_request
 
 
 def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig | None:
@@ -173,7 +196,7 @@ def _register_dashboard(
     tensor_parallel_size: int,
     backend_name: str,
     streaming: bool,
-) -> Iterator[None]:
+) -> Iterator[EndpointActivity]:
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris service must run inside an Iris job")
@@ -193,11 +216,13 @@ def _register_dashboard(
         endpoint=service.endpoint_name,
         streaming=streaming,
     )
+    activity = EndpointActivity()
     app = build_dashboard_app(
         upstream_base_url=_server_root(model),
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        on_inference_request=activity.record_inference_request,
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
@@ -219,7 +244,7 @@ def _register_dashboard(
             proxy_path(service.endpoint_name),
         )
         try:
-            yield
+            yield activity
         finally:
             try:
                 ctx.registry.unregister(endpoint_id)
@@ -227,20 +252,36 @@ def _register_dashboard(
                 logger.warning("Failed to unregister inference endpoint id=%s", endpoint_id, exc_info=True)
 
 
-def _block_until_timeout(session: LocalInferenceSession, timeout_hours: float) -> None:
+def _block_until_timeout(
+    session: LocalInferenceSession,
+    timeout_hours: float,
+    idle_timeout_hours: float | None,
+    activity: EndpointActivity,
+) -> None:
     deadline = time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
         session.check_alive()
+        if idle_timeout_hours is not None and activity.idle_seconds() >= idle_timeout_hours * 3600:
+            logger.info("Stopping inference service after %.1fh without a model request", idle_timeout_hours)
+            return
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
-def _block_remote_until_timeout(session: RemoteInferenceSession, timeout_hours: float) -> None:
+def _block_remote_until_timeout(
+    session: RemoteInferenceSession,
+    timeout_hours: float,
+    idle_timeout_hours: float | None,
+    activity: EndpointActivity,
+) -> None:
     deadline = time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
         for job in session.jobs:
             status = job.status()
             if JobStatus.finished(status):
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
+        if idle_timeout_hours is not None and activity.idle_seconds() >= idle_timeout_hours * 3600:
+            logger.info("Stopping inference service after %.1fh without a model request", idle_timeout_hours)
+            return
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
@@ -258,8 +299,10 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
                 streaming=True,
-            ):
-                _block_until_timeout(local_session, service.timeout_hours)
+            ) as activity:
+                _block_until_timeout(
+                    local_session, service.timeout_hours, service.idle_timeout_hours, activity
+                )
         return
 
     with remote_inference(
@@ -275,8 +318,10 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
             streaming=session.streaming,
-        ):
-            _block_remote_until_timeout(session, service.timeout_hours)
+        ) as activity:
+            _block_remote_until_timeout(
+                session, service.timeout_hours, service.idle_timeout_hours, activity
+            )
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
