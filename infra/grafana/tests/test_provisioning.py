@@ -113,7 +113,7 @@ def test_every_rule_query_url_answers_on_the_bridge():
             bridge_config(),
             finelog_sources,
             iris_sources,
-            GithubSource(token=None, timeout=5.0),
+            GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )

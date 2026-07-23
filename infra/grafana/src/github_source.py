@@ -95,15 +95,16 @@ def _to_nightly_run(run: dict) -> NightlyRun:
 class GithubSource:
     """Ferry and build status for the configured repo."""
 
-    def __init__(self, *, token: str | None, timeout: float) -> None:
+    def __init__(self, *, auth: httpx.Auth | None, timeout: float) -> None:
         headers = {
             "accept": "application/vnd.github+json",
             "x-github-api-version": "2022-11-28",
             "user-agent": "marin-grafana-bridge",
         }
-        if token:
-            headers["authorization"] = f"Bearer {token}"
-        self._client = httpx.Client(timeout=timeout, headers=headers)
+        # auth mints an installation token per request (see github_app.GithubAppAuth).
+        # None leaves requests unauthenticated: the REST ferry/nightly panels still
+        # work but rate-limit fast, and the GraphQL build panel returns no data.
+        self._client = httpx.Client(timeout=timeout, headers=headers, auth=auth)
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         try:

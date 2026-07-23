@@ -74,7 +74,7 @@ class FakeSource:
 
 
 def _client(source: FakeSource, cache_ttl: float = 20.0, k8s_fleet: K8sFleet | None = None) -> TestClient:
-    github = GithubSource(token=None, timeout=5.0)
+    github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
         create_app(
             bridge_config(cache_ttl),

@@ -31,8 +31,8 @@ def _iris(handler) -> IrisSource:
     return source
 
 
-def _github(handler, token: str | None = None) -> GithubSource:
-    source = GithubSource(token=token, timeout=5.0)
+def _github(handler, auth: httpx.Auth | None = None) -> GithubSource:
+    source = GithubSource(auth=auth, timeout=5.0)
     source._client = httpx.Client(transport=httpx.MockTransport(handler), headers=source._client.headers)
     return source
 
@@ -322,7 +322,7 @@ class _FakeIris:
 
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
-    github = github_source or GithubSource(token=None, timeout=5.0)
+    github = github_source or GithubSource(auth=None, timeout=5.0)
     return TestClient(
         create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(()), WandbSource(timeout=5.0))
     )

@@ -167,8 +167,15 @@ class BridgeConfig:
     k8s_cache_ttl: float
     # HTTP timeout for the controller RPC, GitHub, and k8s API calls, seconds.
     http_timeout: float
-    # GitHub token; lifts the REST rate limit and is required for the GraphQL build panel.
-    github_token: str | None
+    # "Marin Ops Agent" GitHub App credentials. The bridge mints short-lived
+    # installation tokens from these for the ferry/build/nightly panels (see
+    # github_app.py); all three are set together or the GitHub calls run
+    # unauthenticated and the build panel shows no data. The private key is
+    # Secret-Manager-backed (marin-grafana-github-app-private-key); the ids are
+    # not secret and travel as plain env.
+    github_app_id: str | None
+    github_app_installation_id: str | None
+    github_app_private_key: str | None
     # CW read-role bearer token for the k8s API servers. None does not fail the boot
     # (that would take Grafana down with it); the k8s routes serve auth error rows
     # and unreachable=1 alert rows instead.
@@ -185,6 +192,8 @@ class BridgeConfig:
             github_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_GITHUB_CACHE_TTL", "60")),
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
             http_timeout=float(os.environ.get("GRAFANA_BRIDGE_HTTP_TIMEOUT", "10")),
-            github_token=os.environ.get("GITHUB_TOKEN") or None,
+            github_app_id=os.environ.get("GITHUB_APP_ID") or None,
+            github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID") or None,
+            github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY") or None,
             cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
         )

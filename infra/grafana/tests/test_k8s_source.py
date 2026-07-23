@@ -618,7 +618,7 @@ def test_crashloop_alert_counts_by_scope():
 
 def _client(fleet: K8sFleet) -> TestClient:
     return TestClient(
-        create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), fleet, WandbSource(timeout=5.0))
     )
 
 

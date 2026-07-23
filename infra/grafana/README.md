@@ -210,20 +210,26 @@ points → Test) rather than trusting config presence.
 
 ## Secrets and rotation
 
-All secrets live in Secret Manager and reach the container as env vars via the
-`CloudRunService` `secrets` field; values never enter Pulumi or git.
+Most secrets live in Secret Manager, hand-placed, and reach the container as env
+vars via the `CloudRunService` `secrets` field; those values never enter Pulumi or
+git. The GitHub App private key is the exception — Pulumi owns it, from stack
+config (see GitHub auth below).
 
 | Env var | Secret | Feeds |
 |---|---|---|
-| `GITHUB_TOKEN` | `marin-status-page-github-token` | ferry/build/nightly panels |
+| `GITHUB_APP_PRIVATE_KEY` | `marin-grafana-github-app-private-key` (Pulumi-owned) | ferry/build/nightly panels |
 | `GF_DATABASE_PASSWORD` | `cloudsql-grafana-password` | Grafana's Postgres state (see Deploy) |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
 | `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
 | `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
 
-All but the last must exist before a deploy — Cloud Run fails to start a revision
-that references a missing secret. `GF_SMTP_PASSWORD` is optional: `__main__.py`
-probes for the secret and only wires it (and enables SMTP) when it exists.
+The hand-placed secrets (`GF_DATABASE_PASSWORD`, `CW_READ_TOKEN`,
+`SLACK_ALERTS_WEBHOOK`) must exist before a deploy — Cloud Run fails to start a
+revision that references a missing secret. `GF_SMTP_PASSWORD` is optional:
+`__main__.py` probes for the secret and only wires it (and enables SMTP) when it
+exists. `GITHUB_APP_PRIVATE_KEY` is also optional and Pulumi-created from stack
+config: unset, the bridge deploys unauthenticated and the build panel shows no
+data; setting the config (see GitHub auth below) creates the secret and wires it.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
@@ -311,17 +317,30 @@ project-level and shared across the project's IAP services, so nothing per-servi
 configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
 i.e. reachable by nobody until the first grant.
 
-The ferry and build panels read the GitHub API; `GITHUB_TOKEN` comes from the
-`marin-status-page-github-token` Secret Manager secret, mounted by the CloudRunService
-`secrets` field (the value never enters Pulumi). The name is a holdover from the retired
-`marin-infra-dashboard` status page; Grafana is now its only consumer, so keep it despite
-the name. Create it once if it does not exist — a classic token with no scopes or a
-fine-grained PAT scoped to public-repo read is enough:
+The ferry, build, and nightly panels read the GitHub API. GitHub gates the GraphQL
+build query behind auth even for public repos, so the bridge authenticates as the
+"Marin Ops Agent" GitHub App: it signs a JWT with the app's private key, mints a
+read-only installation token scoped to `marin-community/marin`, and refreshes it
+before it expires (`src/github_app.py`). Nothing long-lived expires under the
+panels — a static token that did is what blanked the build panel.
+
+Pulumi owns the private key: `__main__.py` reads it from stack config and creates
+the `marin-grafana-github-app-private-key` Secret Manager secret + version, then
+mounts it. The app id and installation id are not secret and travel as plain env.
+The wiring is all-or-nothing and optional — until it is set, GitHub calls run
+unauthenticated and the build panel shows no data, so the merge-triggered deploy
+never blocks on it. Enable it once (the private key must go in as a Pulumi
+`--secret`, encrypted into the stack config by the KMS provider):
 
 ```bash
-echo -n "<paste-github-token>" | gcloud secrets create marin-status-page-github-token \
-  --project=hai-gcp-models --data-file=-
+pulumi config set marin-grafana:github_app_id <app-id>
+pulumi config set marin-grafana:github_app_installation_id <installation-id>
+pulumi config set --secret marin-grafana:github_app_private_key -- "$(cat key.pem)"
 ```
+
+The app needs read access to the repo's Contents, Metadata, Commit statuses,
+Checks, and Actions; the minted token is attenuated to that read-only subset even
+if the app itself holds broader grants.
 
 ## Adding a dashboard
 

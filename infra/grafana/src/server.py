@@ -58,11 +58,20 @@ from datetime import UTC, datetime
 import pyarrow as pa
 import uvicorn
 from cache import TtlCache
-from config import BRIDGE_PORT, CLUSTERS, FINELOG_SLOW_THRESHOLD_MS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
+from config import (
+    BRIDGE_PORT,
+    CLUSTERS,
+    FINELOG_SLOW_THRESHOLD_MS,
+    GITHUB_REPO,
+    K8S_CLUSTERS,
+    BridgeConfig,
+    ClusterTarget,
+)
 from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
+from github_app import GithubAppAuth, GithubAppCredentials
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
@@ -497,12 +506,30 @@ def create_app(
     )
 
 
+def _github_auth(config: BridgeConfig) -> GithubAppAuth | None:
+    """Build GitHub App auth from config, or None when unconfigured (fail fast on partial)."""
+    app_id, installation_id, private_key = (
+        config.github_app_id,
+        config.github_app_installation_id,
+        config.github_app_private_key,
+    )
+    if app_id and installation_id and private_key:
+        credentials = GithubAppCredentials(app_id, installation_id, private_key)
+        return GithubAppAuth(credentials, repository=GITHUB_REPO)
+    if app_id or installation_id or private_key:
+        raise ValueError(
+            "GitHub App auth needs GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and " "GITHUB_APP_PRIVATE_KEY together"
+        )
+    logger.warning("no GitHub App credentials; GitHub panels run unauthenticated and the build panel shows no data")
+    return None
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = BridgeConfig.from_environment()
     finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
-    github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
+    github_source = GithubSource(auth=_github_auth(config), timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
