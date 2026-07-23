@@ -25,7 +25,7 @@ from marin.datakit.download.dolma3_5 import (
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 
-SUBSETS = ("dolma_code_prose",)
+SUBSET = "dolma_code_prose"
 
 
 def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
@@ -34,13 +34,12 @@ def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     The key matches the upstream directory name.
     """
     return {
-        subset: hf_normalize_steps(
-            marin_name=subset,
+        SUBSET: hf_normalize_steps(
+            marin_name=SUBSET,
             hf_dataset_id=HF_DATASET_ID,
             revision=HF_REVISION,
-            staged_path=prefix_join(STAGED_ROOT, subset),
-            hf_urls_glob=(prefix_join(subset, DATA_FILE_GLOB),),
+            staged_path=prefix_join(STAGED_ROOT, SUBSET),
+            hf_urls_glob=(prefix_join(SUBSET, DATA_FILE_GLOB),),
             file_extensions=(DATA_FILE_EXTENSION,),
         )
-        for subset in SUBSETS
     }
