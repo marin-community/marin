@@ -210,6 +210,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
+    parser.add_argument(
+        "--parity-mode",
+        choices=("strict", "diagnostic"),
+        default="strict",
+        help="strict stops before timing on parity failure; diagnostic times but remains non-promotable",
+    )
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -585,7 +591,7 @@ def run_ab(args: argparse.Namespace) -> int:
         finite = {arm: _finite_report(result, jax, jnp) for arm, result in validation_results.items()}
         parity = _parity_report(validation_results[ARM_TE], validation_results[ARM_RING], jax, jnp)
         finite_passed = all(all(checks.values()) for checks in finite.values())
-        if not parity["passed"] or not finite_passed:
+        if not finite_passed or (not parity["passed"] and args.parity_mode == "strict"):
             validation_summary = {
                 "event": SUMMARY_EVENT,
                 "schema_version": 1,
@@ -635,6 +641,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "sample_aggregation": "slowest_rank_per_sample",
         "warmup_pairs": args.warmup,
         "measured_pairs": args.iterations,
+        "parity_mode": args.parity_mode,
     }
     summary = build_summary(
         timings=timings,

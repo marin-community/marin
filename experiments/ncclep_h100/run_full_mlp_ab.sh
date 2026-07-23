@@ -8,6 +8,7 @@ NCCL_RUNTIME_VERSION=2.30.7
 WORK=${WORK:-/tmp/ncclep-h100}
 WARMUP=${WARMUP:-6}
 ITERATIONS=${ITERATIONS:-20}
+PARITY_MODE=${PARITY_MODE:-strict}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -21,6 +22,7 @@ Environment overrides:
   WORK                     task-local build directory (/tmp/ncclep-h100)
   WARMUP                   interleaved warmup pairs (6)
   ITERATIONS               interleaved measured pairs (20)
+  PARITY_MODE               strict or diagnostic (strict)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
 
@@ -48,6 +50,7 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   arms: current Marin bulk ring vs TE NCCL_EP dispatch/combine
   timing: alternating arm order, $WARMUP warmup pairs, $ITERATIONS measured pairs
   sample aggregation: slowest rank per sample
+  parity mode: $PARITY_MODE
   parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
   decision: TE value_and_grad p50 >= 1.10x ring and all parity/finite checks pass
   XLA preallocation fraction: $XLA_PREALLOC_FRACTION
@@ -63,6 +66,10 @@ EOF
 fi
 if [[ "$#" -ne 0 ]]; then
   usage >&2
+  exit 64
+fi
+if [[ "$PARITY_MODE" != "strict" && "$PARITY_MODE" != "diagnostic" ]]; then
+  echo "FATAL: PARITY_MODE must be strict or diagnostic, got '$PARITY_MODE'" >&2
   exit 64
 fi
 
@@ -150,4 +157,5 @@ echo "=== run: paired full routed-MLP A/B on eight one-GPU processes ==="
 exec python -m iris.runtime.multigpu --nproc 8 --devices-per-proc 1 -- \
   python -u "$SCRIPT_DIR/ep_full_mlp_ab.py" \
   --warmup "$WARMUP" \
-  --iterations "$ITERATIONS"
+  --iterations "$ITERATIONS" \
+  --parity-mode "$PARITY_MODE"

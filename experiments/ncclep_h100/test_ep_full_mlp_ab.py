@@ -15,6 +15,7 @@ from experiments.ncclep_h100.ep_full_mlp_ab import (
     balanced_route_table,
     build_summary,
     count_stablehlo_operations,
+    parse_args,
     routing_capacity_report,
     summarize_times,
     timing_orders,
@@ -108,3 +109,8 @@ def test_launcher_has_valid_bash_and_dry_run_contract() -> None:
     assert dry_run.returncode == 0, dry_run.stderr
     assert "8 processes x 1 GPU" in dry_run.stdout
     assert "TE value_and_grad p50 >= 1.10x ring" in dry_run.stdout
+
+
+def test_diagnostic_parity_mode_is_explicit() -> None:
+    assert parse_args(["--parity-mode", "strict"]).parity_mode == "strict"
+    assert parse_args(["--parity-mode", "diagnostic"]).parity_mode == "diagnostic"
