@@ -65,7 +65,12 @@ else
   mkfs.ext4 -m 0 "$DATA_DISK_DEVICE"
 fi
 mkdir -p "$DATA_MOUNT"
-mountpoint -q "$DATA_MOUNT" || mount "$DATA_DISK_DEVICE" "$DATA_MOUNT"
+if mountpoint -q "$DATA_MOUNT"; then
+  data_disk_mounted=false
+else
+  mount "$DATA_DISK_DEVICE" "$DATA_MOUNT"
+  data_disk_mounted=true
+fi
 resize2fs "$DATA_DISK_DEVICE"
 grep -q "^${DATA_DISK_DEVICE} " /etc/fstab || \
   echo "${DATA_DISK_DEVICE} ${DATA_MOUNT} ext4 discard,defaults,nofail 0 2" >>/etc/fstab
@@ -78,7 +83,7 @@ else
   docker_config_changed=false
 fi
 systemctl enable --now docker
-if [ "${docker_config_changed:-false}" = true ]; then
+if [ "${docker_config_changed:-false}" = true ] || [ "$data_disk_mounted" = true ]; then
   systemctl restart docker
 fi
 
@@ -108,9 +113,12 @@ for key in "${required_config[@]}"; do
   }
 done
 sed -i -E '/^(LOOM_DOMAIN|LOOM_IMAGE|LOOM_PORT|DOCKER_GID|BACKUP_BUCKET|GCP_PROJECT)=/d' "$ENV_FILE"
-printf 'LOOM_IMAGE=%s\nLOOM_PORT=%s\nDOCKER_GID=%s\nBACKUP_BUCKET=%s\nGCP_PROJECT=%s\n' \
-  "$LOOM_IMAGE" "$LOOM_PORT" "$(getent group docker | cut -d: -f3)" "$BACKUP_BUCKET" "$PROJECT" >>"$ENV_FILE"
-printf 'LOOM_DOMAIN=%s\n' "$LOOM_DOMAIN" >>"$ENV_FILE"
+{
+  printf '\n'
+  printf 'LOOM_IMAGE=%s\nLOOM_PORT=%s\nDOCKER_GID=%s\nBACKUP_BUCKET=%s\nGCP_PROJECT=%s\n' \
+    "$LOOM_IMAGE" "$LOOM_PORT" "$(getent group docker | cut -d: -f3)" "$BACKUP_BUCKET" "$PROJECT"
+  printf 'LOOM_DOMAIN=%s\n' "$LOOM_DOMAIN"
+} >>"$ENV_FILE"
 chmod 0600 "$ENV_FILE"
 
 registry="${LOOM_IMAGE%%/*}"
