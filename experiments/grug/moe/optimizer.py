@@ -208,7 +208,12 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
                 return "adam"
-            if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
+            if (
+                "router_bias" in path_lower
+                or "attn_gate" in path_lower
+                or ".router" in path_lower
+                or "sconv" in path_lower  # depthwise conv kernel: never orthogonalize/whiten
+            ):
                 return "adam"
             if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
@@ -306,6 +311,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 or "router_bias" in path_lower
                 or path_lower.endswith(".attn_gate")
                 or ".router" in path_lower
+                or "sconv" in path_lower  # depthwise conv kernel: never orthogonalize/whiten
             ):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:

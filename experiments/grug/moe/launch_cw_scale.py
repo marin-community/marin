@@ -147,6 +147,8 @@ def build_scale_model() -> GrugModelConfig:
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",
         qb_routing=os.environ.get("SCALE_MOE_QB") == "1",
+        sconv=os.environ.get("SCALE_SCONV") == "1",
+        sconv_kernel=env_int("SCALE_SCONV_KERNEL", 4),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
