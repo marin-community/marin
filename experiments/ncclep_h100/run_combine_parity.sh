@@ -39,6 +39,7 @@ NCCL_EP BF16 dispatch/combine numerical isolation dry run
   build arch: 90
   NCCL runtime: $NCCL_RUNTIME_VERSION
   topology: one Iris task, H100x8, 8 processes x 1 GPU
+  process groups: top-k4 then top-k1, resetting TE's process-wide top-k cache
   fixed shape: EP8, 16384 tokens/rank, d2560, e64, BF16
   cases: top-k1/top-k4 identity and per-expert-scaled identity
   route weights: exact binary fractions; top-k4 scaled contributions are distinct
@@ -52,9 +53,9 @@ NCCL_EP BF16 dispatch/combine numerical isolation dry run
 Runtime phases:
   1. Assemble the CUDA 13 + NCCL $NCCL_RUNTIME_VERSION toolchain.
   2. Build and install one task-local TE $TE_SHA wheel at NVTE_CUDA_ARCHS=90.
-  3. Launch eight supervised one-GPU processes.
-  4. Compile and run all fixed numerical cases in one process group.
-  5. Emit one structured rank-0 JSON result.
+  3. Launch a fresh eight-rank process group for top-k4 and emit its rank-0 JSON.
+  4. Launch a fresh eight-rank process group for top-k1 and emit its rank-0 JSON.
+  5. Keep strict dispatch and numerical results separate for offline attribution.
 EOF
   exit 0
 fi
@@ -140,6 +141,9 @@ export NCCLEP_NCCL_RUNTIME_VERSION="$NCCL_VERSION"
 export NCCLEP_TE_SHA="$TE_SHA"
 mkdir -p "$NCCL_EP_JIT_CACHE_DIR"
 
-echo "=== run: fixed dispatch/combine numerical cases on eight one-GPU processes ==="
-exec python -m iris.runtime.multigpu --nproc 8 --devices-per-proc 1 -- \
-  python -u "$SCRIPT_DIR/ep_combine_parity.py"
+for top_k in 4 1; do
+  echo "=== run: top-k${top_k} dispatch/combine numerical cases on eight fresh one-GPU processes ==="
+  NCCLEP_DIAGNOSTIC_TOP_K="$top_k" \
+    python -m iris.runtime.multigpu --nproc 8 --devices-per-proc 1 -- \
+    python -u "$SCRIPT_DIR/ep_combine_parity.py"
+done

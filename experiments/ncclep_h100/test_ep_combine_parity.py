@@ -15,6 +15,7 @@ from experiments.ncclep_h100.ep_combine_parity import (
     attribute_results,
     balanced_route_table,
     case_specs,
+    case_specs_for_top_k,
     distinct_route_contributions,
     expected_dispatch_fingerprints,
     expert_scales,
@@ -80,6 +81,15 @@ def test_case_matrix_keeps_fp32_probe_separate_from_bf16_cases() -> None:
         "topk4_expert_scaled_identity_fp32_combine_input",
     ]
     assert [spec.combine_input_dtype for spec in specs].count("float32") == 1
+    assert [spec.name for spec in case_specs_for_top_k(1)] == [
+        "topk1_identity",
+        "topk1_expert_scaled_identity",
+    ]
+    assert [spec.name for spec in case_specs_for_top_k(4)] == [
+        "topk4_identity",
+        "topk4_expert_scaled_identity",
+        "topk4_expert_scaled_identity_fp32_combine_input",
+    ]
 
 
 def test_strict_metrics_reports_exact_bf16_ulp_buckets() -> None:
@@ -134,6 +144,21 @@ def test_attribution_keeps_dispatch_in_scope_when_fingerprints_fail() -> None:
     assert attribution["most_specific_attribution"] == "dispatch_membership_or_route_weight_transport"
 
 
+def test_attribution_labels_one_process_topk_result_as_partial() -> None:
+    cases = {
+        "topk1_identity": {"status": "not_run_in_this_process"},
+        "topk1_expert_scaled_identity": {"status": "not_run_in_this_process"},
+        "topk4_identity": _case(parity=True),
+        "topk4_expert_scaled_identity": _case(parity=False, relative_l2_error=0.002),
+        "topk4_expert_scaled_identity_fp32_combine_input": {"status": "unsupported"},
+    }
+
+    attribution = attribute_results(cases)
+
+    assert attribution["dispatch_fingerprints_exact"] is True
+    assert attribution["most_specific_attribution"] == "topk4_completed_topk1_not_run_in_this_process"
+
+
 def test_launcher_has_valid_bash_and_dry_run_contract() -> None:
     syntax = subprocess.run(["bash", "-n", _SCRIPT], check=False, capture_output=True, text=True)
     dry_run = subprocess.run(["bash", _SCRIPT, "--dry-run"], check=False, capture_output=True, text=True)
@@ -141,5 +166,6 @@ def test_launcher_has_valid_bash_and_dry_run_contract() -> None:
     assert syntax.returncode == 0, syntax.stderr
     assert dry_run.returncode == 0, dry_run.stderr
     assert "8 processes x 1 GPU" in dry_run.stdout
+    assert "top-k4 then top-k1" in dry_run.stdout
     assert "FP32 accumulation, forward-route BF16, reverse-route BF16" in dry_run.stdout
     assert "promotion decision: none" in dry_run.stdout

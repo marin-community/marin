@@ -24,6 +24,7 @@ RECV_CAPACITY_PER_RANK = int(CAPACITY_FACTOR * TOKENS_PER_RANK * MAX_TOP_K)
 DISPATCH_ALIGNMENT = 16
 PROBE_FEATURES = 17
 SEED = 12_345
+TOP_K_ENV = "NCCLEP_DIAGNOSTIC_TOP_K"
 BF16_RTOL = 0.1
 BF16_ATOL = 2e-4
 SUMMARY_EVENT = "ncclep_h100_combine_parity"
@@ -54,6 +55,14 @@ def case_specs() -> tuple[CaseSpec, ...]:
             combine_input_dtype="float32",
         ),
     )
+
+
+def case_specs_for_top_k(top_k: int) -> tuple[CaseSpec, ...]:
+    """Return the cases for one process-wide TE top-k configuration."""
+    selected = tuple(spec for spec in case_specs() if spec.top_k == top_k)
+    if not selected:
+        raise ValueError(f"top_k must be 1 or 4, got {top_k}")
+    return selected
 
 
 def balanced_route_table(top_k: int) -> np.ndarray:
@@ -525,6 +534,12 @@ def attribute_results(cases: dict[str, dict[str, Any]]) -> dict[str, Any]:
     topk1_scaled = _case_passes(cases["topk1_expert_scaled_identity"])
     topk4_identity = _case_passes(cases["topk4_identity"])
     topk4_scaled = _case_passes(cases["topk4_expert_scaled_identity"])
+    topk1_completed = all(
+        cases[name].get("status") == "completed" for name in ("topk1_identity", "topk1_expert_scaled_identity")
+    )
+    topk4_completed = all(
+        cases[name].get("status") == "completed" for name in ("topk4_identity", "topk4_expert_scaled_identity")
+    )
 
     scaled_metrics = cases["topk4_expert_scaled_identity"].get("references", {})
     closest_reference = None
@@ -539,6 +554,10 @@ def attribute_results(cases: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
     if not dispatch_passed:
         attribution = "dispatch_membership_or_route_weight_transport"
+    elif topk1_completed and not topk4_completed:
+        attribution = "topk1_completed_topk4_not_run_in_this_process"
+    elif topk4_completed and not topk1_completed:
+        attribution = "topk4_completed_topk1_not_run_in_this_process"
     elif not topk1_identity:
         attribution = "single_route_weight_application_or_combine"
     elif not topk1_scaled:
@@ -595,6 +614,8 @@ def run_isolation() -> int:
 
     initialize_jax()
     rank, world = _assert_topology(jax)
+    selected_top_k = int(os.environ[TOP_K_ENV])
+    selected_specs = case_specs_for_top_k(selected_top_k)
     mesh = compact_grug_mesh(expert_axis_size=EP_SIZE, replica_axis_size=1)
     P = jax.sharding.PartitionSpec
     batch_sharding = jax.sharding.NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
@@ -602,17 +623,29 @@ def run_isolation() -> int:
     MeshResource = te_sharding.MeshResource
     global_shard_guard = te_sharding.global_shard_guard
 
-    routes_by_top_k = {top_k: balanced_route_table(top_k) for top_k in (1, 4)}
+    routes_by_top_k = {selected_top_k: balanced_route_table(selected_top_k)}
     routing = {str(top_k): route_capacity_report(routes) for top_k, routes in routes_by_top_k.items()}
-    topk4_distinct = distinct_route_contributions(
-        routes_by_top_k[4],
-        route_weights(4),
-        expert_scales(),
+    topk4_distinct = (
+        distinct_route_contributions(
+            routes_by_top_k[4],
+            route_weights(4),
+            expert_scales(),
+        )
+        if selected_top_k == 4
+        else None
     )
-    if not topk4_distinct:
+    if selected_top_k == 4 and not topk4_distinct:
         raise RuntimeError("top-k4 scaled route contributions must be distinct")
 
-    cases: dict[str, dict[str, Any]] = {}
+    cases: dict[str, dict[str, Any]] = {
+        spec.name: {
+            "top_k": spec.top_k,
+            "expert_transform": "per_expert_scaled_identity" if spec.expert_scaled else "identity",
+            "combine_input_dtype": spec.combine_input_dtype,
+            "status": "not_run_in_this_process",
+        }
+        for spec in case_specs()
+    }
     with jax.set_mesh(mesh), global_shard_guard(MeshResource(dp_resource="data", ep_resource="expert")):
         te_ep.ep_bootstrap(
             world_size=world,
@@ -624,10 +657,16 @@ def run_isolation() -> int:
         )
         tokens = _make_tokens(jax, jnp, batch_sharding)
         inputs_by_top_k = {
-            top_k: _make_case_inputs(jax, jnp, batch_sharding, expert_sharding, top_k) for top_k in (1, 4)
+            selected_top_k: _make_case_inputs(
+                jax,
+                jnp,
+                batch_sharding,
+                expert_sharding,
+                selected_top_k,
+            )
         }
 
-        for spec in case_specs():
+        for spec in selected_specs:
             layer_config = te_ep.EpLayerConfig(
                 top_k=spec.top_k,
                 dispatch_output_per_expert_alignment=DISPATCH_ALIGNMENT,
@@ -691,7 +730,7 @@ def run_isolation() -> int:
             "hidden_dim": HIDDEN_DIM,
             "num_experts": NUM_EXPERTS,
             "local_experts": LOCAL_EXPERTS,
-            "top_k_values": [1, 4],
+            "top_k_values": [selected_top_k],
             "token_dtype": "bfloat16",
             "routing_weight_dtype": "float32",
             "capacity_factor": CAPACITY_FACTOR,
@@ -744,6 +783,7 @@ def main() -> int:
                         "event": SUMMARY_EVENT,
                         "schema_version": 1,
                         "status": "error",
+                        "selected_top_k": os.environ.get(TOP_K_ENV),
                         "error_type": type(error).__name__,
                         "error": str(error),
                     },
