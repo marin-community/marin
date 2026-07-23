@@ -216,4 +216,24 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 ARG IRIS_PROVENANCE={}
 ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
+# Nsight Systems CLI, extracted from NVIDIA's deb (the target binary is
+# self-contained; apt-installing it pulls the whole Qt/GUI chain). Arch-aware:
+# `sbsa` on Grace/aarch64, `x86_64` elsewhere. Kept in sync with the version the
+# reports are opened against. Baked into the one task image so a GPU job can
+# profile with `nsys` already on PATH and iris needs no notion of a GPU image.
+ARG NSYS_VERSION=2026.1.3
+ARG NSYS_BUILD=2026.1.3.425-1
+RUN set -eux; \
+    case "$(uname -m)" in \
+      aarch64) nsys_arch=sbsa;   pkg_arch=arm64 ;; \
+      x86_64)  nsys_arch=x86_64; pkg_arch=amd64 ;; \
+      *) echo "no nsight-systems build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/nsys.deb \
+      "https://developer.download.nvidia.com/compute/cuda/repos/debian12/${nsys_arch}/nsight-systems-${NSYS_VERSION}_${NSYS_BUILD}_${pkg_arch}.deb"; \
+    dpkg-deb -x /tmp/nsys.deb /opt/nsight; \
+    rm -f /tmp/nsys.deb; \
+    ln -s "$(ls /opt/nsight/opt/nvidia/nsight-systems/${NSYS_VERSION}/target-linux-*/nsys | head -1)" /usr/local/bin/nsys; \
+    nsys --version
+
 WORKDIR /app

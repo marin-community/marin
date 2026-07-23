@@ -226,10 +226,11 @@ CoreWeave publishes a wildcard record, `*.<tenant>.coreweave.app`, that resolves
 that LoadBalancer. `install_cw_network.py install --apply` prints the exact CNAME
 record to create, substituting the ingress host's first label into the wildcard
 (`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
-DNS is at Namecheap, Advanced DNS panel. Routing, Host matching, and TLS all key on
-the `oa.dev` name; `coreweave.app` is only the CNAME target.
+DNS is at Cloudflare, as a DNS-only (not proxied) record. Routing, Host matching, and TLS all
+key on the `oa.dev` name; `coreweave.app` is only the CNAME target.
 
-TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+TLS terminates in-cluster (no IAP/edge layer; the record is DNS-only, so Cloudflare never
+proxies or intercepts TLS).
 `install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
@@ -512,11 +513,11 @@ max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
 deploys in whole racks of 18, so a rack pool's node count must be a multiple of
 18.
 
-**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+**2. Provision the static prerequisites (IaC).** The `infra/pulumi` Pulumi program
 declares the namespace, controller RBAC, the reserved NodePools, and the whole
 cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
 ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
-`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`provisioning:` section of the config. See `infra/pulumi/README.md`. (Pre-IaC path:
 `install_kueue.py --with-queues` for Kueue and let `cluster start` create the
 RBAC + NodePools.)
 
@@ -566,8 +567,8 @@ kubectl get svc traefik -n traefik \
   -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
 ```
 
-**(manual)** Create the record in the `oa.dev` registrar (**Namecheap**, Advanced
-DNS panel — not Cloudflare):
+**(manual)** Create the record in the `oa.dev` registrar (**Cloudflare**, DNS-only — do not
+enable the proxy):
 
 ```
 iris-cw-<cluster>.oa.dev   CNAME   iris-cw-<cluster>.<tenant>.coreweave.app
@@ -662,7 +663,7 @@ iris --controller-url=http://localhost:10000 ...
 |--------------|-----------|---------|-------------|
 | `cw-us-east-02a` | `iris` | `iris-controller-svc` | `cw-us-east-02a.yaml` |
 | `cw-rno2a` | `iris` | `iris-controller-svc` | `cw-rno2a.yaml` |
-| `ci-coreweave` | `iris-ci` | `iris-ci-controller-svc` | `ci-coreweave.yaml` (CI only) |
+| `cw-us-west-04a` | `iris-ci` | `iris-ci-controller-svc` | `cw-us-west-04a.yaml` (CI only) |
 
 ### GPU Configs
 

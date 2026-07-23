@@ -39,11 +39,14 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 ENV UV_HTTP_TIMEOUT=300
 ENV UV_RETRIES=5
 
-# marin-community/evalchemy branch `main` @ a84543c (current main HEAD — the consolidated fork carrying
-# PRs #14/#11/#13/#16; supersedes the old c4598e64 pin). Pinned to the exact main-HEAD sha so the
-# :evalchemy-tpu-<gitsha> image stays immutable/reproducible while tracking the de-pinned main branch.
+# marin-community/evalchemy, pinned to the exact sha so the :evalchemy-tpu-<gitsha> image stays
+# immutable/reproducible. The pin carries the fork's pretrain-merge and unsafe-code-forwarding
+# fixes (--log_samples emits samples_*.jsonl for lm-eval-native tasks; --confirm_run_unsafe_code
+# reaches lm-eval) plus the greedy-request normalization (do_sample=False chat benchmarks are sent
+# as temperature-0, seed-free API requests -- a temperature>0 request carrying a seed is rejected
+# by the JAX/TPU vLLM backend -- evalchemy#34) and per-sample accuracy for chat benchmarks.
 ARG EVALCHEMY_REPO=https://github.com/marin-community/evalchemy.git
-ARG EVALCHEMY_COMMIT=a84543cda02f76bd4db0ae9a84039d792d3ed6e7
+ARG EVALCHEMY_COMMIT=e006f2e9e0df606179f397e77ae1883b47d2e80b
 
 WORKDIR /opt/eval
 

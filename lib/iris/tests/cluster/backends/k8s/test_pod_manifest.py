@@ -210,6 +210,23 @@ def test_build_pod_manifest_task_hash_label():
     assert labels[_LABEL_TASK_HASH].isalnum()
 
 
+def test_pod_name_embeds_attempt_uid():
+    """The uid is part of the pod name, so two incarnations of the same
+    (task, attempt) get distinct names and never collide on create. An empty uid
+    keeps the pre-uid name for back-compat."""
+    task = JobName.from_wire("/test-job/0")
+    with_old = _pod_name(task, 0, "olduid0000000000")
+    with_new = _pod_name(task, 0, "newuid1111111111")
+    assert with_old != with_new
+    assert with_old.endswith("-olduid0000000000")
+    assert _pod_name(task, 0, "") == _pod_name(task, 0)
+
+
+def test_build_pod_manifest_pod_name_carries_uid():
+    manifest = _build_pod_manifest(make_run_req("/test-job/0", attempt_uid="abcd1234abcd1234"), pod_config())
+    assert manifest["metadata"]["name"] == _pod_name(JobName.from_wire("/test-job/0"), 0, "abcd1234abcd1234")
+
+
 def test_task_hash_distinct_for_sanitization_collisions():
     base = "a" * 63
     id_a = base + "X"

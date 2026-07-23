@@ -53,10 +53,13 @@ def test_bundle_download_intermittent(cluster):
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.timeout(120)
 def test_task_timeout(cluster, sentinel):
     """Task times out, marked FAILED."""
     job = cluster.submit(TestJobs.block, "timeout-test", sentinel, timeout=Duration.from_seconds(2))
-    status = cluster.wait(job, timeout=15)
+    # Execution timeouts are finalized by a controller sweep that runs at most
+    # once a minute, so the 2s deadline is enforced with up to ~60s of lag.
+    status = cluster.wait(job, timeout=90)
     assert status.state == job_pb2.JOB_STATE_FAILED
 
 
@@ -112,10 +115,12 @@ def test_capacity_wait(cluster, tmp_path):
 
 def test_scheduling_timeout(cluster):
     """Scheduling timeout exceeded -> UNSCHEDULABLE."""
+    # cpu=200 fits only the zero-quota v6e group's per-VM shape: submit-time
+    # feasibility accepts the job, but no slice can ever be provisioned.
     job = cluster.submit(
         TestJobs.quick,
         "unsched",
-        cpu=9999,
+        cpu=200,
         scheduling_timeout=Duration.from_seconds(2),
     )
     status = cluster.wait(job, timeout=10)
@@ -176,7 +181,10 @@ def test_worker_sequential_jobs(cluster):
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently."""
     enable_chaos("worker.register", failure_rate=1.0, error=RuntimeError("chaos: registration failed"))
-    job = cluster.submit(TestJobs.sleep, "all-workers-fail", 120, cpu=9999, scheduling_timeout=Duration.from_seconds(3))
+    # cpu=200 exceeds every buffer worker already registered before the chaos
+    # kicked in, but fits the largest group's per-VM shape so submission is
+    # accepted; with registration failing, capacity never materializes.
+    job = cluster.submit(TestJobs.sleep, "all-workers-fail", 120, cpu=200, scheduling_timeout=Duration.from_seconds(3))
     status = cluster.wait(job, timeout=10)
     assert status.state in (job_pb2.JOB_STATE_FAILED, job_pb2.JOB_STATE_UNSCHEDULABLE)
 

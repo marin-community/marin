@@ -45,9 +45,6 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.hooks import TaskHook
-from iris.cluster.hooks.multigpu import build_multigpu_hook
-from iris.cluster.hooks.nsys import NsysHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -454,30 +451,6 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
-def collect_hooks(
-    environment: EnvironmentSpec | None, resources: ResourceSpec, processes_per_task: int
-) -> list[TaskHook]:
-    """Build the ordered task hooks for this job, outer-wrapper last.
-
-    Order is the nesting: the multigpu supervisor goes first (inner), the profiler last
-    (outer), so a profiler traces every rank the supervisor spawns — one report per task.
-
-    Profiling is best-effort: a request without a GPU (nsys profiles CUDA work) is logged
-    and left to run rather than rejected, and the output URI is whatever the caller asked
-    for — unset means the task picks its cluster's temp bucket.
-    """
-    hooks: list[TaskHook] = []
-    if processes_per_task > 1:
-        hooks.append(build_multigpu_hook(resources, processes_per_task))
-    profile = environment.profile if environment is not None else None
-    if profile is not None:
-        device = resources.device
-        if isinstance(profile, NsysHook) and (device is None or not device.HasField("gpu")):
-            logger.error("nsys profiling targets CUDA work but this job requests no GPU device; the report may be empty")
-        hooks.append(profile)
-    return hooks
-
-
 class IrisClient:
     """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
@@ -645,7 +618,6 @@ class IrisClient:
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
-        processes_per_task: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
@@ -669,12 +641,9 @@ class IrisClient:
             scheduling_timeout: Maximum time to wait for scheduling (None = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
-            replicas: Number of tasks to create for gang scheduling (default: 1)
-            processes_per_task: Number of JAX processes to run inside each task,
-                one per GPU group, so ``jax.process_count()`` equals
-                ``replicas * processes_per_task`` (default: 1, one process per
-                task). Must divide the task's GPU count, and requires a GPU
-                device. ``1`` is a strict no-op.
+            replicas: Number of tasks to create for gang scheduling (default: 1).
+                Multi-process GPU execution within a task is composed into the command
+                (``python -m iris.hooks.multigpu_main --nproc N -- <cmd>``), not a submit arg.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             max_task_failures: Cumulative failed task attempts the job tolerates before
@@ -703,17 +672,9 @@ class IrisClient:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device, replicas)
 
-        if processes_per_task < 1:
-            raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        # Hooks wrap the command in order, later = outer: the multigpu supervisor first,
-        # then the profiler outside it, so a profiler traces every rank the supervisor
-        # spawns. collect_hooks owns that order; here it is a plain fold.
-        for hook in collect_hooks(environment, resources, processes_per_task):
-            entrypoint = Entrypoint(
-                command=hook.wrap(entrypoint.command),
-                workdir_files=entrypoint.workdir_files,
-                workdir_file_refs=entrypoint.workdir_file_refs,
-            )
+        # iris is a dumb scheduler: it runs the entrypoint verbatim. Multi-process GPU
+        # execution and profiling are composed into the command by the caller
+        # (e.g. `python -m iris.hooks.multigpu_main --nproc N -- <cmd>`).
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -750,11 +711,6 @@ class IrisClient:
                     extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
-                    # Carried whether or not the child owns its setup: the child's
-                    # entrypoint is already wrapped by the profiler, and dropping this here
-                    # would leave it wrapped with the profiler uninstalled (to_proto appends
-                    # the install to the inherited scripts too).
-                    profile=environment.profile,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
@@ -896,30 +852,23 @@ class IrisClient:
         """List workers registered with the controller."""
         return list(self._cluster_client.list_workers(query=query))
 
-    def terminate_prefix(
-        self,
-        prefix: JobName,
-        *,
-        exclude_finished: bool = True,
-    ) -> list[JobName]:
-        """Terminate all jobs matching a prefix.
+    def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
+        """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
+        return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
+
+    def terminate_prefix(self, prefix: str) -> list[JobName]:
+        """Terminate all active jobs matching a prefix.
 
         Args:
-            prefix: Job name prefix to match (e.g., JobName.root("alice", "my-experiment"))
-            exclude_finished: If True, skip jobs already in terminal states
+            prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
 
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix.to_wire())
-        terminated = []
-        for job in jobs:
-            if exclude_finished and is_job_finished(job.state):
-                continue
-            job_id = JobName.from_wire(job.job_id)
+        job_ids = self.active_job_names_for_prefix(prefix)
+        for job_id in job_ids:
             self.terminate(job_id)
-            terminated.append(job_id)
-        return terminated
+        return job_ids
 
     def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task.

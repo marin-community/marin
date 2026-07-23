@@ -56,6 +56,7 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
+        max_task_failures=100,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

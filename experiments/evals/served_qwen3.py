@@ -18,19 +18,21 @@ import argparse
 from enum import StrEnum
 from types import MappingProxyType
 
-from fray.types import ANY_REGION, ResourceConfig
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
-from marin.inference.vllm import (
-    BrokeredVllmBackend,
-    BrokeredVllmSystemConfig,
-    GpuVllmBackend,
-    TpuVllmBackend,
-    VllmProxyConfig,
-    VllmServerConfig,
+from marin.inference.config import (
+    BrokerConfig,
+    InferenceProxyConfig,
+    IrisConfig,
+    ServedModelConfig,
+    VllmEngineConfig,
+    VllmLauncherType,
 )
+from marin.training.run_environment import env_vars_for_dependency_groups
 
 from experiments.evals.brokered_eval_suite import brokered_eval_suite
+from experiments.evals.served_lm_eval import BrokeredEvalInference
 
 QWEN3_EVAL_VERSION = "2026.07.17"
 _VLLM_TIMEOUT = 1800
@@ -49,33 +51,44 @@ class Accelerator(StrEnum):
 
 def qwen3_inference_config(
     *,
-    backend: BrokeredVllmBackend,
+    engine: VllmEngineConfig,
     worker_resources: ResourceConfig,
+    worker_extras: tuple[str, ...],
     worker_env_vars: tuple[tuple[str, str], ...],
-) -> BrokeredVllmSystemConfig:
+) -> BrokeredEvalInference:
     """Compose Qwen3 model policy with an accelerator-specific serving backend."""
-    return BrokeredVllmSystemConfig(
-        model="Qwen/Qwen3-0.6B-Base",
-        tokenizer="Qwen/Qwen3-0.6B",
-        backend=backend,
-        worker_resources=worker_resources,
-        worker_env_vars=worker_env_vars,
-        server=VllmServerConfig(timeout_seconds=_VLLM_TIMEOUT),
-        proxy=VllmProxyConfig(
-            request_timeout_seconds=_VLLM_TIMEOUT,
-            readiness_timeout_seconds=_VLLM_TIMEOUT,
-            ignored_request_fields=("seed",),
+    return BrokeredEvalInference(
+        model=ServedModelConfig(model="Qwen/Qwen3-0.6B-Base", tokenizer="Qwen/Qwen3-0.6B"),
+        engine=engine,
+        broker=BrokerConfig(
+            proxy=InferenceProxyConfig(
+                request_timeout_seconds=_VLLM_TIMEOUT,
+                readiness_timeout_seconds=_VLLM_TIMEOUT,
+                ignored_request_fields=("seed",),
+            )
+        ),
+        iris=IrisConfig(
+            worker_resources=worker_resources,
+            worker_environment=create_environment(
+                extras=worker_extras,
+                env_vars=env_vars_for_dependency_groups(
+                    worker_resources,
+                    list(worker_extras),
+                    dict(worker_env_vars),
+                ),
+            ),
         ),
     )
 
 
 QWEN3_TPU_INFERENCE = qwen3_inference_config(
-    backend=TpuVllmBackend(),
+    engine=VllmEngineConfig(startup_timeout_seconds=_VLLM_TIMEOUT),
     worker_resources=ResourceConfig.with_tpu(
         ["v5litepod-4", "v4-8", "v5p-8", "v6e-4"],
         ram="96g",
         regions=[ANY_REGION],
     ),
+    worker_extras=("tpu", "vllm"),
     worker_env_vars=_TPU_VLLM_WORKER_ENV_VARS,
 )
 
@@ -86,7 +99,10 @@ QWEN3_TPU_EVAL_RESULTS = brokered_eval_suite(
 )
 
 QWEN3_GPU_INFERENCE = qwen3_inference_config(
-    backend=GpuVllmBackend(),
+    engine=VllmEngineConfig(
+        launcher=VllmLauncherType.CUDA,
+        startup_timeout_seconds=_VLLM_TIMEOUT,
+    ),
     worker_resources=ResourceConfig.with_gpu(
         "H100",
         count=1,
@@ -95,6 +111,7 @@ QWEN3_GPU_INFERENCE = qwen3_inference_config(
         disk="100g",
         regions=[ANY_REGION],
     ),
+    worker_extras=(),
     worker_env_vars=(),
 )
 

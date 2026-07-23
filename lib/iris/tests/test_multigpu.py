@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.cluster.hooks.multigpu_main in-task GPU process supervisor and the
-client-side entrypoint wrapping that drives it. None of this imports jax."""
+"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ import sys
 import textwrap
 
 import pytest
-from iris.cluster.hooks import multigpu_main
-from iris.cluster.hooks.multigpu import build_multigpu_hook
-from iris.cluster.hooks.multigpu_main import run
 from iris.cluster.types import ResourceSpec, gpu_device
+from iris.hooks import multigpu_main as multigpu
+from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.hooks.multigpu_main import main, run
 from rigging.timing import Duration
 
 
@@ -46,7 +46,7 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setattr(multigpu_main, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
+    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
@@ -71,7 +71,7 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
         started.append(proc)
         return proc
 
-    monkeypatch.setattr(multigpu_main.subprocess, "Popen", flaky_popen)
+    monkeypatch.setattr(multigpu.subprocess, "Popen", flaky_popen)
     with pytest.raises(OSError, match="simulated spawn failure"):
         run(nproc=3, devices_per_proc=1, child_argv=_py("import time; time.sleep(30)"))
     assert len(started) == 1
@@ -87,7 +87,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.cluster.hooks.multigpu_main import run
+        from iris.hooks.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
@@ -115,16 +115,35 @@ def test_run_rejects_empty_command() -> None:
         run(nproc=2, devices_per_proc=1, child_argv=[])
 
 
+def test_wrap_prefixes_each_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--wrap CMD makes each child run `<CMD> -- <command>` — the process-scope seam."""
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("iris.hooks.multigpu_main.run", lambda nproc, dpp, child_argv: seen.update(argv=child_argv) or 0)
+    main(["--nproc", "2", "--wrap", "python -m iris.hooks.nsys_main --tasks first", "--", "python", "train.py"])
+    assert seen["argv"] == [
+        "python",
+        "-m",
+        "iris.hooks.nsys_main",
+        "--tasks",
+        "first",
+        "--",
+        "python",
+        "train.py",
+    ]
+
+
 def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_multigpu_hook_one_process_per_gpu() -> None:
-    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=8).wrap(["python", "train.py", "--steps", "10"])
+def test_hook_wrap_builds_the_command_the_entry_point_parses() -> None:
+    """The programmatic wrap emits exactly what multigpu_main's parser accepts, so a
+    caller can compose it in code or write the same command by hand."""
+    wrapped = MultiGpuHook(nproc=8).wrap(["python", "train.py"])
     assert wrapped == [
         "python",
         "-m",
-        "iris.cluster.hooks.multigpu_main",
+        "iris.hooks.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -132,31 +151,24 @@ def test_multigpu_hook_one_process_per_gpu() -> None:
         "--",
         "python",
         "train.py",
-        "--steps",
-        "10",
     ]
 
 
-def test_multigpu_hook_groups_devices_when_fewer_processes() -> None:
-    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=4).wrap(["python", "train.py"])
-    assert wrapped[:8] == [
-        "python",
-        "-m",
-        "iris.cluster.hooks.multigpu_main",
-        "--nproc",
-        "4",
-        "--devices-per-proc",
-        "2",
-        "--",
-    ]
+def test_hook_wrap_child_composes_a_per_process_wrapper() -> None:
+    wrapped = MultiGpuHook(nproc=2, wrap_child="python -m iris.hooks.nsys_main --tasks first").wrap(["cmd"])
+    assert wrapped[wrapped.index("--wrap") + 1] == "python -m iris.hooks.nsys_main --tasks first"
 
 
-def test_multigpu_hook_requires_gpu() -> None:
+def test_build_multigpu_hook_groups_devices() -> None:
+    assert build_multigpu_hook(_gpu_resources(8), 4) == MultiGpuHook(nproc=4, devices_per_proc=2)
+
+
+def test_build_multigpu_hook_requires_gpu() -> None:
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
     with pytest.raises(ValueError, match="requires a GPU device"):
-        build_multigpu_hook(cpu_only, processes_per_task=2)
+        build_multigpu_hook(cpu_only, 2)
 
 
-def test_multigpu_hook_requires_divisible_gpu_count() -> None:
+def test_build_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
-        build_multigpu_hook(_gpu_resources(8), processes_per_task=3)
+        build_multigpu_hook(_gpu_resources(8), 3)

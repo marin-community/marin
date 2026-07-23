@@ -20,7 +20,6 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
-from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -151,18 +150,6 @@ class MistralConfig(LlamaConfig):
     @property
     def model_type(cls) -> Type["MistralLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return MistralLMHeadModel
-
-    def flops_per_token(self, vocab_size: int, context_length: int) -> float:
-        return lm_flops_per_token(
-            hidden_dim=self.hidden_dim,
-            intermediate_dim=self.intermediate_dim,
-            num_layers=self.num_layers,
-            num_kv_heads=self.num_heads,
-            num_heads=self.num_heads,
-            seq_len=context_length,
-            vocab_size=vocab_size,
-            glu=False,
-        )
 
     def attention_config(self) -> AttentionConfig:
         """Convert this MistralConfig to an AttentionConfig for use with Attention."""

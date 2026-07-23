@@ -43,6 +43,7 @@ from iris.cluster.types import (
     WellKnownAttribute,
     parse_memory_string,
 )
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -192,6 +193,19 @@ class _OneofConfig(_Config):
 class GcpPlatformConfig(_Config):
     project_id: str = ""
     zones: list[str] = Field(default_factory=list)  # all zones, for list_all_slices
+    # Pull-through cache routing: upstream registry → zone prefix (the zone's
+    # leading dash-separated segment) → mirror repo prefix the image path is
+    # appended to. Docker Hub references (bare names like ``ubuntu:24.04`` and
+    # ``docker.io/...``) match the ``docker.io`` key. Example:
+    #   registry_mirrors:
+    #     ghcr.io:
+    #       us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    #       europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    # Workers rewrite matching images so pulls stay on-continent and dodge
+    # upstream rate limits; unlisted registries and zone prefixes pull straight
+    # from upstream. Every named repo must exist and be enabled or pulls fail
+    # (provisioned by infra/pulumi from provisioning.gcp.registries).
+    registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class ManualPlatformConfig(_Config):
@@ -407,7 +421,9 @@ class WorkerConfig(_Config):
     docker_image: str = ""
     host: str = "0.0.0.0"
     port: int = 10001
-    port_range: str = "30000-40000"
+    # Task named-port allocation range (end exclusive); see
+    # DEFAULT_TASK_PORT_RANGE for why it sits below the ephemeral floor.
+    port_range: str = f"{DEFAULT_TASK_PORT_RANGE[0]}-{DEFAULT_TASK_PORT_RANGE[1]}"
     worker_id: str = ""  # auto-generated if empty
     controller_address: str = ""
     cache_dir: str = "/dev/shm/iris"
@@ -609,6 +625,7 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
+    # Image for GPU jobs (a device.gpu request), used unless a job overrides with
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
@@ -758,7 +775,7 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
-    # Infrastructure-as-code provisioning section (see infra/iac). Carried as an
+    # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
     provisioning: dict[str, Any] | None = None

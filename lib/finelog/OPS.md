@@ -108,3 +108,41 @@ To rotate a key, add the new Secret Manager version, add its public key alongsid
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
 hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
 drop the old public key and roll the hub again.
+
+## Diagnosing Kubernetes mirror readiness
+
+Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
+file's current context. Inspect the deployment, termination reason, probe events,
+and persistent cache before changing resources:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  describe pod -l app=finelog-<cluster>
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  logs deployment/finelog-<cluster> --previous --tail=300 --timestamps=true
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec deployment/finelog-<cluster> -- cat /sys/fs/cgroup/memory.events
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec deployment/finelog-<cluster> -- df -h /var/cache/finelog
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  logs deployment/finelog-<cluster> --timestamps=true | \
+  rg 'finelog (catalog sqlite ready|local segment adoption complete|namespace startup complete|store startup complete|remote reconcile complete)'
+```
+
+Exit 137 is ambiguous by itself. A nearby `Killing ... failed liveness probe`
+event with zero `oom_kill` events means kubelet terminated an unresponsive
+process; it was not a memory-limit OOM. Compare `memory.current` and
+`memory.peak` with the configured limit, and compare cache use with the PVC
+capacity before raising either. Slow `WriteRows` calls coincident with large
+compactions indicate ingest pressure; tune `cpu_request`, `cpu_limit`,
+`memory_request`, and `memory_limit` in the cluster's finelog config. Every
+Kubernetes deployment also has a five-minute startup probe so reopening an
+existing network-backed store does not feed a liveness restart loop.
+
+The startup events carry millisecond timings for SQLite open, one-time catalog
+adoption, local directory discovery, catalog reads, Parquet footer reconciliation,
+batched catalog refresh, namespace rehydration, and total store open. The catalog
+event also reports the effective SQLite journal and synchronous modes. Remote
+reconcile runs after the listener binds and reports object listing, footer fetch,
+catalog update, and delete timings separately; a slow remote phase cannot explain
+pre-bind readiness delay.

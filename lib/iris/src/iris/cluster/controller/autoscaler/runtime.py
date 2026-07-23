@@ -42,8 +42,6 @@ from iris.cluster.controller.autoscaler.operations import (
 from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.provisioning import (
     ERROR_MESSAGE_MAX_LEN,
-    IrisProvisioning,
-    ProvisioningOutcome,
     classify_create_failure,
 )
 from iris.cluster.controller.autoscaler.recovery import (
@@ -73,6 +71,7 @@ from iris.cluster.platforms.types import (
     SliceHandle,
     SliceStatus,
 )
+from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
 from iris.rpc import job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto

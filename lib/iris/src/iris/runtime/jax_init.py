@@ -23,7 +23,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.hooks.multigpu import (
+from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
@@ -187,7 +187,7 @@ def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: in
 def _initialize_supervised_jax(
     jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
 ) -> None:
-    """Join the JAX mesh for a process launched by ``iris.cluster.hooks.multigpu_main``.
+    """Join the JAX mesh for a process launched by ``iris.hooks.multigpu_main``.
 
     The supervisor runs N JAX processes inside one Iris task and stamps each
     child with its global rank (``IRIS_MULTIGPU_PROCESS_INDEX``), the global world

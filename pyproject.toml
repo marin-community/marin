@@ -88,6 +88,9 @@ override-dependencies = [
     "multipart>=1.3.1",
     "nltk>=3.9.4",
     "notebook>=7.5.6",
+    # Work around https://github.com/NVIDIA/cutlass/issues/3259, fixed in
+    # CUTLASS DSL 4.6.0; remove this override when upgrading to >=4.6.0.
+    "nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
@@ -140,7 +143,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
-    "infra/iac",
+    "infra/pulumi",
 ]
 # The native (maturin) companions are NOT members: their extensions are consumed
 # as pre-built wheels by default and only built from source under
@@ -184,8 +187,8 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8
 # temporary and must be replaced by the landed fork main SHA.
 # https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -459,17 +462,20 @@ markers = [
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "requires_cluster: mark Iris tests that start or connect to a cluster",
+    "docker: mark tests that require a Docker daemon",
     "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
 pythonpath = ["."]
 
-# Don't run slow, integration, data_integration, cluster-bound, or manual tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, Docker, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
-# cluster tests submit a real job to a standing Marin cluster (tests/cluster/);
+# cluster and requires_cluster tests submit jobs or start cluster infrastructure;
+# Docker tests require a local daemon;
 # manual tests are run by hand (e.g. live TPU smokes in a custom container).
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
-# requires_cluster lives in lib/iris's own config, so no top-level test uses it.
-addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not manual' --import-mode=importlib"
+# the Iris markers also apply when lib/iris test paths are passed from the root.
+addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

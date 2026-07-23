@@ -17,6 +17,15 @@ bridge_pid=$!
 # Grafana reads its port from the config/env; Cloud Run tells us which one.
 export GF_SERVER_HTTP_PORT="${PORT:-8080}"
 
+# Grafana's host/port database settings reject Cloud SQL socket paths (the
+# instance connection name's colons break host:port splitting), so the socket
+# deployment hands us the socket directory separately and we compose the one
+# database setting that accepts it: a URL with the directory as the `host`
+# query parameter. The password must stay URL-safe (see infra/cloudsql/README.md).
+if [ -n "${DATABASE_SOCKET_DIR:-}" ]; then
+  export GF_DATABASE_URL="postgres://${GF_DATABASE_USER}:${GF_DATABASE_PASSWORD}@/${GF_DATABASE_NAME}?host=${DATABASE_SOCKET_DIR}"
+fi
+
 /run.sh "$@" &
 grafana_pid=$!
 

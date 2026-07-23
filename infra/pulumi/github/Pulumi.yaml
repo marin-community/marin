@@ -1,0 +1,6 @@
+name: marin-github
+runtime:
+  name: python
+  options:
+    virtualenv: ../../../.venv
+description: GitHub organization and repository resources for Marin.

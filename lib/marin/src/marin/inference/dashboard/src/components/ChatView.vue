@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from 'vue'
-import { streamSse } from '../lib/api'
+import { requestCompletion } from '../lib/api'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import { splitThinking } from '../lib/thinking'
 import type { Conversation, SamplingParams } from '../lib/types'
@@ -11,6 +11,7 @@ const props = defineProps<{
   params: SamplingParams
   model: string
   hasChatTemplate: boolean
+  streaming: boolean
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -91,19 +92,20 @@ async function send(text?: string) {
   let reasoningStream = ''
   let thinkingStartedAt: number | null = null
   try {
-    await streamSse(
+    await requestCompletion(
       'v1/chat/completions',
       {
         model: props.model,
         messages: request,
-        stream: true,
+        stream: props.streaming,
         temperature: props.params.temperature,
         max_tokens: props.params.maxTokens,
         top_p: props.params.topP,
       },
+      props.streaming,
       abort.signal,
       (data) => {
-        const delta = data.choices?.[0]?.delta
+        const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
         if (!delta) return
         // Reasoning arrives either as a dedicated delta field (vLLM reasoning
         // parsers) or as raw <think> tags inside content (untouched templates).

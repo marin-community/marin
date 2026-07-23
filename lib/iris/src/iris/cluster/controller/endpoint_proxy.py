@@ -122,16 +122,18 @@ _HOP_BY_HOP: frozenset[str] = frozenset(
 # the dashboards we proxy and are left alone for now.
 _LOCATION_HEADERS: frozenset[str] = frozenset({"location", "content-location"})
 
-# Bound the connection pool explicitly so httpx default drift cannot silently
-# change resource usage on the controller.
-#
 # max_keepalive_connections=0 disables connection reuse to upstreams. Reuse
 # races with upstream keepalive lifecycle — the browser fires a burst of asset
 # requests and cancels in-flight ones on refresh, leaving a pooled connection
 # half-read; the next request on it fails mid-stream with httpx.ReadError, which
-# surfaces as an uncaught 500. Dashboard-proxy traffic is low, so a fresh
-# connection per request is a fine trade for eliminating that flakiness.
-_HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=0)
+# surfaces as an uncaught 500. A fresh connection per request avoids that
+# cross-request failure mode.
+#
+# Do not cap active connections in this shared client. Model requests can stream
+# for minutes, and a controller-wide cap queues unrelated endpoints and federation
+# peers behind them for the whole per-endpoint timeout. Inference services apply
+# their own per-endpoint admission limits; the controller remains a transparent hop.
+_HTTPX_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=0)
 
 # How much of a rejected upstream's response body is echoed back as the proxy's
 # error detail. Bounds the buffering an upstream can force on the controller.
@@ -289,7 +291,7 @@ async def _send_upstream(
         logger.warning("Proxy timeout for %s: %s", name, exc)
         raise _UpstreamError(f"{kind} timeout after {timeout_seconds:g}s", status_code=504) from exc
     except httpx.HTTPError as exc:
-        logger.warning("Proxy %s error for %s: %s", kind.lower(), name, exc)
+        logger.warning("Proxy %s error for %s: %r", kind.lower(), name, exc)
         raise _UpstreamError(f"{kind} error: {exc!r}", status_code=502) from exc
 
     if upstream_resp.status_code == 401:

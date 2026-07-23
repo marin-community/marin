@@ -56,8 +56,8 @@ SNOWBALL = ModelIdentity(
         "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3"
     ),
     checkpoint_step=42150,
-    export_sha256="781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
-    export_uri="s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/",
+    export_sha256="d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0",
+    export_uri="s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/",
 )
 
 

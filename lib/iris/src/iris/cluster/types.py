@@ -28,7 +28,6 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.hooks import TaskHook
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -742,9 +741,6 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
-    # A launch-wrapping profiler hook (e.g. NsysHook); wraps the run command and may
-    # contribute a build-phase install. See iris.cluster.hooks and the CLI's --profile.
-    profile: TaskHook | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -783,17 +779,6 @@ class EnvironmentSpec:
                 setup_scripts.append(cuda_toolchain_setup_script())
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
-        # Appended even to a custom setup list, unlike the CUDA toolchain: the run
-        # command is wrapped by the profiler whenever one is requested, so its binary has
-        # to be there. The no-setup case cannot install it and the wrapper looks nowhere
-        # else, so the combination is rejected rather than left to fail on a GPU.
-        if self.profile is not None and (install := self.profile.setup()) is not None:
-            if not setup_scripts:
-                raise ValueError(
-                    "profiling needs its install, which setup_scripts=[] (bring-your-own image) skips; "
-                    "drop the profile hook or let iris build the setup"
-                )
-            setup_scripts.append(install)
 
         return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 

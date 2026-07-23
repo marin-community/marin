@@ -16,39 +16,65 @@ permissions:
   packages: write
 
 jobs:
-  # Iris Images - Worker, controller, and task images pushed to GHCR
-  # Uses a single multi-stage Dockerfile (lib/iris/Dockerfile) with --target.
-  # Controller and worker share all layers up to Python deps; the worker adds
-  # only the Docker CLI. All targets build from the marin repo root context:
-  # the deps stage COPYs the root uv.lock and every workspace member's
-  # pyproject.toml (plus lib/rigging source), all of which live above lib/iris.
-  iris-images:
-    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+  # Tags shared by every iris image, resolved once so the per-arch builds and the
+  # manifest merge agree (recomputing the date in each job can straddle midnight).
+  iris-tags:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - image: iris-worker
-            target: worker
-          - image: iris-controller
-            target: controller
-          - image: iris-task
-            target: task
+    outputs:
+      date: ${{ steps.set-tags.outputs.DATE_TAG }}
+      hash: ${{ steps.set-tags.outputs.HASH_TAG }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
 
       - name: Set tags
         id: set-tags
         run: |
           echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
           echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+  # Iris Images - Worker, controller, and task images pushed to GHCR
+  # Uses a single multi-stage Dockerfile (lib/iris/Dockerfile) with --target.
+  # Controller and worker share all layers up to Python deps; the worker adds
+  # only the Docker CLI. All targets build from the marin repo root context:
+  # the deps stage COPYs the root uv.lock and every workspace member's
+  # pyproject.toml (plus lib/rigging source), all of which live above lib/iris.
+  #
+  # Each arch builds on a native runner and pushes an arch-suffixed tag; the
+  # iris-manifests job then merges those into one multi-arch tag. CoreWeave GB200
+  # nodes are aarch64 (Grace), so an amd64-only image fails there with "exec
+  # format error". Native runners rather than QEMU: these images build a full
+  # Python dep tree from source, which emulation makes untenably slow.
+  iris-images:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    needs: iris-tags
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: iris-worker
+            target: worker
+          - name: iris-controller
+            target: controller
+          - name: iris-task
+            target: task
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -57,19 +83,49 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push ${{ matrix.image }}
+      - name: Build and push ${{ matrix.image.name }} (${{ matrix.platform.arch }})
         run: |
           docker buildx build --file lib/iris/Dockerfile \
-            --target ${{ matrix.target }} \
-            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }} \
-            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }},mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
+            --target ${{ matrix.image.target }} \
+            --platform linux/${{ matrix.platform.arch }} \
+            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.image.target }}-${{ matrix.platform.arch }} \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.image.target }}-${{ matrix.platform.arch }},mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
             --output type=image,compression=zstd,compression-level=3,push=true \
             --provenance=false \
-            --build-arg IRIS_GIT_HASH=${{ steps.set-tags.outputs.HASH_TAG }} \
-            --tag ghcr.io/marin-community/${{ matrix.image }}:latest \
-            --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --build-arg IRIS_GIT_HASH=${{ needs.iris-tags.outputs.hash }} \
+            --tag ghcr.io/marin-community/${{ matrix.image.name }}:${{ needs.iris-tags.outputs.hash }}-${{ matrix.platform.arch }} \
             .
+
+  # Merge the per-arch tags into the multi-arch tags that clusters actually pull.
+  iris-manifests:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    needs: [iris-tags, iris-images]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [iris-worker, iris-controller, iris-task]
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Merge ${{ matrix.image }} manifests
+        env:
+          IMAGE: ghcr.io/marin-community/${{ matrix.image }}
+          DATE_TAG: ${{ needs.iris-tags.outputs.date }}
+          HASH_TAG: ${{ needs.iris-tags.outputs.hash }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:latest" \
+            --tag "$IMAGE:$DATE_TAG" \
+            --tag "$IMAGE:$HASH_TAG" \
+            "$IMAGE:$HASH_TAG-amd64" \
+            "$IMAGE:$HASH_TAG-arm64"
 
   # Finelog Image - Standalone log server (lib/finelog)
   finelog-image:

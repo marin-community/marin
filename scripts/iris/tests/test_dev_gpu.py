@@ -13,6 +13,7 @@ from scripts.iris.dev_gpu import (
     CoreweaveTarget,
     DevGpuState,
     PodRef,
+    Priority,
     parse_running_pod,
     require_coreweave_platform,
 )
@@ -25,6 +26,8 @@ def test_state_round_trip():
         config_file="/abs/coreweave.yaml",
         job_id="/matt/dev-gpu-matt",
         gpu_count=8,
+        gpu_variant="H100",
+        priority=Priority.BATCH,
         target=CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg"),
         pod=PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task"),
     )

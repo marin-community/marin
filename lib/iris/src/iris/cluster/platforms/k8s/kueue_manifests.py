@@ -36,10 +36,35 @@ CW_CHART = f"{CW_REPO_NAME}/cks-kueue"
 RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
 
+# Controller-manager feature gates for the cks-kueue chart. Helm replaces list values
+# wholesale, so this enumerates the full set the chart ships with, changing one entry:
+# TASBalancedPlacement stays OFF. That Alpha gate's balanced-placement scheduler divides
+# the pod-slice count by the number of selected topology domains and panics (integer
+# divide by zero) when that count is zero, crashing the controller-manager process — which
+# drops the admission-webhook endpoints and fail-closes every pod CREATE in the Iris
+# namespace. Iris requests explicit per-rack slice sizes for balanced multi-rack placement
+# (podset-slice-size, under TopologyAwareScheduling), so it never relies on this heuristic;
+# every other gate stays at the chart default.
+CKS_KUEUE_FEATURE_GATES = [
+    {"name": "VisibilityOnDemand", "enabled": True},
+    {"name": "LendingLimit", "enabled": True},
+    {"name": "ObjectRetentionPolicies", "enabled": True},
+    {"name": "TopologyAwareScheduling", "enabled": True},
+    {"name": "TASBalancedPlacement", "enabled": False},
+    {"name": "TASMultiLayerTopology", "enabled": True},
+]
+
 # Namespace(s) Iris submits gang pods into (the k8s provider namespace, default
 # "iris"). Kueue's admission webhooks are scoped to ONLY these — see
 # build_controller_manager_config for why a broad selector is dangerous.
 DEFAULT_POD_NAMESPACES = ("iris",)
+
+# Kueue's Kubernetes API client is shared by reconcilers, event recording, and
+# leader election. Iris clusters routinely carry enough Pods and Workloads for
+# Kueue's upstream 20-QPS/30-burst defaults to delay a lease renewal during a
+# restart resync.
+DEFAULT_CLIENT_CONNECTION_QPS = 100.0
+DEFAULT_CLIENT_CONNECTION_BURST = 200
 
 # Standard k8s per-node label, the finest topology level.
 _K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
@@ -96,11 +121,13 @@ RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
 # occupying the topology to free room. Quota stays non-binding precisely so this
 # stays TAS-driven and does not fight the autoscaler.
 NON_BINDING_QUOTA = {
-    "cpu": "1000000000",  # cores
+    # Use "1G" not "1000000000" because the Kubernetes API server canonicalizes to 1G
+    # and always returns that, which causes a perpetual, cosmetic `pulumi preview` diff
+    "cpu": "1G",  # cores
     "memory": "1Pi",
     "ephemeral-storage": "1Pi",
-    "nvidia.com/gpu": "1000000000",
-    "rdma/ib": "1000000000",
+    "nvidia.com/gpu": "1G",
+    "rdma/ib": "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
@@ -115,7 +142,12 @@ CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
 # --------------------------------------------------------------------------
 # Pure builders (return plain dicts; no I/O).
 # --------------------------------------------------------------------------
-def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
+def build_controller_manager_config(
+    pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
+    *,
+    client_connection_qps: float = DEFAULT_CLIENT_CONNECTION_QPS,
+    client_connection_burst: int = DEFAULT_CLIENT_CONNECTION_BURST,
+) -> dict:
     """Return the kueue ``Configuration`` (controller-manager config) as a dict.
 
     Serialized to YAML and embedded as the chart's ``controllerManagerConfigYaml``
@@ -139,7 +171,7 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
     it can't reach (no network yet) → the pod is rejected → the node never goes
     Ready. Opt-in scoping keeps the webhooks off every namespace but our own.
     """
-    return {
+    config: dict[str, object] = {
         "apiVersion": "config.kueue.x-k8s.io/v1beta1",
         "kind": "Configuration",
         "health": {"healthProbeBindAddress": ":8081"},
@@ -166,10 +198,21 @@ def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_
         "integrations": {
             "frameworks": ["batch/job", "pod"],
         },
+        "clientConnection": {
+            "qps": client_connection_qps,
+            "burst": client_connection_burst,
+        },
     }
+    return config
 
 
-def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
+def build_cks_values(
+    pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
+    *,
+    manager_memory_limit: str | None = None,
+    client_connection_qps: float = DEFAULT_CLIENT_CONNECTION_QPS,
+    client_connection_burst: int = DEFAULT_CLIENT_CONNECTION_BURST,
+) -> dict:
     """Return the ``cks-kueue`` (CoreWeave) helm values (managerConfig only).
 
     cks-kueue nests the upstream kueue subchart under ``kueue:``. The chart's
@@ -177,17 +220,38 @@ def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> 
     apiVersion the CRD no longer serves (see module docstring); the Topology CRs
     are kubectl-applied after install instead.
 
-    NB: the chart already enables ``--feature-gates=TopologyAwareScheduling=true``
-    by default (its ``controllerManager.featureGates`` value is a *list*), so we
-    deliberately do NOT set ``featureGates`` — overriding it (especially as a map)
-    breaks the chart's ``kueue.featureGates`` template.
+    ``controllerManager.featureGates`` is CKS_KUEUE_FEATURE_GATES — the chart's own
+    list shape with the crash-prone TASBalancedPlacement gate turned off. The chart
+    takes this value as a *list*; overriding it as a map breaks the chart's
+    ``kueue.featureGates`` template.
+
+    ``manager_memory_limit``, when set, overrides ``controllerManager.manager.resources``
+    (requests == limits for memory). CPU is left out of the override: Helm deep-merges map
+    values against the chart's own ``values.yaml`` (unlike lists, which replace wholesale —
+    see the featureGates note above), so omitting ``cpu`` here preserves the chart's own CPU
+    request/limit instead of duplicating it.
     """
     config_yaml = yaml.safe_dump(
-        build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
+        build_controller_manager_config(
+            pod_namespaces,
+            client_connection_qps=client_connection_qps,
+            client_connection_burst=client_connection_burst,
+        ),
+        default_flow_style=False,
+        sort_keys=False,
     )
+    controller_manager: dict = {"featureGates": CKS_KUEUE_FEATURE_GATES}
+    if manager_memory_limit is not None:
+        controller_manager["manager"] = {
+            "resources": {
+                "limits": {"memory": manager_memory_limit},
+                "requests": {"memory": manager_memory_limit},
+            }
+        }
     return {
         "kueue": {
             "enableKueueViz": False,
+            "controllerManager": controller_manager,
             "managerConfig": {"controllerManagerConfigYaml": config_yaml},
         },
     }

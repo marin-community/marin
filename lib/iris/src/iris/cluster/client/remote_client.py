@@ -23,6 +23,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
+from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.cluster.types import (
     EndpointAccess,
     Entrypoint,
@@ -32,7 +33,6 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
-from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync

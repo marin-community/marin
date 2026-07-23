@@ -16,16 +16,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
-
-
-class FakeStatsTable:
-    """Records every Table.write call so tests can assert on emitted rows."""
-
-    def __init__(self) -> None:
-        self.writes: list[list[object]] = []
-
-    def write(self, rows) -> None:
-        self.writes.append(list(rows))
+from iris.test_util import FakeStatsTable
 
 
 @pytest.fixture
@@ -80,10 +71,12 @@ def make_run_req(
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
     priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.attempt_uid = attempt_uid
     req.num_tasks = num_tasks
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.environment.env_vars["IRIS_JOB_ID"] = "test-job"

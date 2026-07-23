@@ -47,7 +47,7 @@ function toggleDark() {
 
 <template>
   <header class="flex h-12 shrink-0 items-center gap-3 border-b border-surface-border px-4">
-    <div class="whitespace-nowrap font-semibold tracking-tight">marin · quick serve</div>
+    <div class="whitespace-nowrap font-semibold tracking-tight">marin · serve</div>
     <div class="flex min-w-0 flex-1 items-center gap-2">
       <span class="truncate font-mono text-sm text-text-secondary" :title="model">{{ model }}</span>
       <span class="hidden items-center gap-1.5 lg:flex">

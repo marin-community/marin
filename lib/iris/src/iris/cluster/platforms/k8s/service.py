@@ -54,6 +54,10 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# API error bodies quote the offending manifest; keep enough to identify the
+# verdict without flooding logs.
+_ERROR_BODY_MAX_LEN: int = 500
+
 
 @runtime_checkable
 class K8sService(Protocol):
@@ -270,20 +274,22 @@ class CloudK8sService:
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
-                raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+                raise KubectlError(
+                    f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
+                ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
 
-        A task attempt's pod name is stable and its manifest deterministic, so a
-        pod that already exists — in any phase — is the one we want; we must NOT
-        delete and recreate it. Delete-then-create would destroy a running task
-        on every redrive and, because the delete and the create race, fail with
-        409 AlreadyExists ("object is being deleted") while the prior pod is
-        still Terminating — which the dispatch loop then mistakes for worker loss
-        and retries, churning the task through attempts until it fails. A pod
-        that genuinely needs to change comes from a new attempt (new name); one
-        that should go away is removed by stray-pod GC.
+        The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
+        fresh incarnation — a resubmit that reuses (task_id, attempt_id) but mints a
+        new uid — never collides with a previous run's leftover pod: ``create`` just
+        succeeds. A 409 therefore means our own attempt's pod already exists, in any
+        phase; a redrive fires every reconcile tick until a (slower) poll observes
+        it, and it must be left untouched. Deleting and recreating would destroy a
+        running task and race its own deletion (409 AlreadyExists while the prior pod
+        is still Terminating). The stale pod from a superseded incarnation carries a
+        different name and is reaped by the age-based terminal GC.
         """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}

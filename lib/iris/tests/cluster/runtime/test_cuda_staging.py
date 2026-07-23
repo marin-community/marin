@@ -161,11 +161,15 @@ def test_restores_cuda13_cudnn_package_when_present(tmp_path):
 
     wheelhouse = tmp_path / "wheelhouse"
     _write_cudnn_cu13_wheel(wheelhouse)
+    # --no-cache: uv installs by hardlinking out of its cache, so the in-place
+    # sentinel overwrite below would otherwise corrupt the shared cached wheel
+    # and every later install (including the restore step) would re-link it.
     subprocess.run(
         [
             "uv",
             "pip",
             "install",
+            "--no-cache",
             "--python",
             str(venv / "bin" / "python"),
             "--no-index",
@@ -188,9 +192,13 @@ def test_restores_cuda13_cudnn_package_when_present(tmp_path):
         venv,
         workdir,
         path=os.environ["PATH"],
+        # A private empty cache plus offline mode leaves the wheelhouse as the
+        # restore's only source; the machine's shared cache may hold the real
+        # cuDNN wheel at this exact version, which would win otherwise.
         extra_env={
             "UV_FIND_LINKS": str(wheelhouse),
             "UV_OFFLINE": "1",
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
         },
     )
 

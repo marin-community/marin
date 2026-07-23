@@ -37,7 +37,8 @@ from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.platforms.k8s.service import K8sService
-from iris.cluster.worker.stats import IrisWorkerStat, stats_timestamp
+from iris.cluster.stats.emitter import PeriodicEmitter
+from iris.cluster.stats.tables import IrisWorkerStat, stats_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -514,7 +515,7 @@ def build_node_stat(target: NodeTarget, metrics: NodeMetrics | None) -> IrisWork
 
 
 class NodeStatsCollector:
-    """Background thread that scrapes node metrics and writes ``iris.worker`` rows.
+    """Periodic emitter that scrapes node metrics and writes ``iris.worker`` rows.
 
     The reconcile loop declares the current node set via :meth:`set_nodes` once
     per cluster-scan cycle. Each ``poll_interval`` the collector scrapes those
@@ -534,26 +535,15 @@ class NodeStatsCollector:
     ) -> None:
         self._scraper = NodeStatsScraper(kubectl, exporters_namespace=exporters_namespace)
         self._table = node_stats_table
-        self._poll_interval = poll_interval
         self._on_snapshot = on_snapshot
         self._targets: list[NodeTarget] = []
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="node-stats-collector")
-        self._thread.start()
+        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="node-stats-collector")
 
     def set_nodes(self, targets: list[NodeTarget]) -> None:
         """Declare the authoritative node set to scrape (called once per sync cycle)."""
         with self._lock:
             self._targets = list(targets)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self.collect_once()
-            except Exception:
-                logger.debug("node-stats collect cycle failed", exc_info=True)
-            self._stop.wait(timeout=self._poll_interval)
 
     def collect_once(self) -> None:
         with self._lock:
@@ -562,6 +552,7 @@ class NodeStatsCollector:
             return
         metrics = self._scraper.scrape(targets)
         rows = [build_node_stat(t, metrics.get(t.name)) for t in targets]
+        # A failed write still hands the snapshot to the status RPC below.
         try:
             self._table.write(rows)
         except Exception:
@@ -570,5 +561,4 @@ class NodeStatsCollector:
             self._on_snapshot(metrics, Timestamp.now().epoch_ms())
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=5)
+        self._emitter.close()
