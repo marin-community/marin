@@ -379,6 +379,41 @@ def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
+def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str) -> list[str]:
+    """Pod names an attempt may be running under, current scheme first.
+
+    Pods are created under the uid-embedded name, but an attempt dispatched by a
+    controller predating that scheme is running under a name without the uid.
+    Those pods stay in flight across a controller upgrade, so every lookup that
+    resolves a live attempt to its pod has to accept the pre-uid name as well:
+    recomputing only the current name misses them, and the poll path reads that
+    miss as the pod having vanished.
+
+    The legacy name is consulted only when no uid-named pod exists. A freshly
+    dispatched attempt creates its uid-named pod before it is ever polled, so the
+    fallback cannot re-adopt the leftover pod that the uid exists to disambiguate.
+    """
+    current = _pod_name(task_id, attempt_id, attempt_uid)
+    legacy = _pod_name(task_id, attempt_id)
+    return [current] if legacy == current else [current, legacy]
+
+
+def _lookup_pod(
+    pods_by_name: dict[str, dict], task_id: JobName, attempt_id: int, attempt_uid: str
+) -> tuple[str, dict | None]:
+    """Resolve an attempt to its pod in *pods_by_name*, tolerating the pre-uid name.
+
+    Returns the matched name and pod, or the current-scheme name and ``None``
+    when the attempt has no pod under either name.
+    """
+    candidates = _pod_name_candidates(task_id, attempt_id, attempt_uid)
+    for name in candidates:
+        pod = pods_by_name.get(name)
+        if pod is not None:
+            return name, pod
+    return candidates[0], None
+
+
 def _build_volumes_and_mounts(
     cache_dir: str,
     has_accelerator: bool,
@@ -2417,6 +2452,19 @@ class K8sTaskProvider:
 
         return updates
 
+    def _live_pod_name(self, target: TaskTarget) -> str:
+        """Pod name for *target*, falling back to the pre-uid name when it is live.
+
+        Attempts dispatched before pod names embedded ``attempt_uid`` are still
+        reachable under their original name; probe the current name first and
+        only pay a GET when both schemes are possible.
+        """
+        candidates = _pod_name_candidates(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        for name in candidates[:-1]:
+            if self.kubectl.get_json(K8sResource.PODS, name) is not None:
+                return name
+        return candidates[-1]
+
     def profile_task(
         self,
         target: TaskTarget,
@@ -2431,7 +2479,7 @@ class K8sTaskProvider:
         the profile duration itself.
         """
         attempt_id = target.attempt_id
-        pod_name = _pod_name(JobName.from_wire(target.task_id), attempt_id, target.attempt_uid)
+        pod_name = self._live_pod_name(target)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
@@ -2472,7 +2520,7 @@ class K8sTaskProvider:
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
@@ -2496,7 +2544,7 @@ class K8sTaskProvider:
         memory, cpu, thread, and fd counters. Logs are served separately via
         FetchLogs, so ``log_entries`` stays empty.
         """
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        pod_name = self._live_pod_name(target)
         result = self.kubectl.exec(
             pod_name, ["sh", "-c", _POD_PROC_STATUS_SCRIPT], container="task", timeout=_POD_PROC_STATUS_TIMEOUT
         )
@@ -2923,7 +2971,9 @@ class K8sTaskProvider:
         # each. Lazy: only fetched on cycles where at least one pod is missing,
         # so steady-state cycles add no call. setdefault keeps the active entry
         # if a name somehow appears in both.
-        if any(_pod_name(entry.task_id, entry.attempt_id, entry.attempt_uid) not in pods_by_name for entry in running):
+        if any(
+            _lookup_pod(pods_by_name, entry.task_id, entry.attempt_id, entry.attempt_uid)[1] is None for entry in running
+        ):
             for pod in self._list_terminal_pods():
                 pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
 
@@ -2937,10 +2987,9 @@ class K8sTaskProvider:
         event_log = self._ensure_task_event_log()
 
         for entry in running:
-            pod_name = _pod_name(entry.task_id, entry.attempt_id, entry.attempt_uid)
+            pod_name, pod = _lookup_pod(pods_by_name, entry.task_id, entry.attempt_id, entry.attempt_uid)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             event_key = (entry.task_id.to_wire(), entry.attempt_id)
-            pod = pods_by_name.get(pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1

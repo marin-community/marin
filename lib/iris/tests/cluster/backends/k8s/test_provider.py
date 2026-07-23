@@ -290,6 +290,45 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     assert result[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
+def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
+    """An in-flight attempt whose pod predates uid-embedded names stays RUNNING.
+
+    Pod names gained the attempt_uid while these pods were already running, and
+    attempt_uid is populated for every attempt, so recomputing only the current
+    name misses them. Reading that miss as a vanished pod fails live tasks on the
+    first controller restart after the upgrade.
+    """
+    task_id = JobName.from_wire("/job/preexisting")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="a1b2c3d4e5f60718")
+
+    populate_pod(k8s, _pod_name(task_id, 0), "Running")
+
+    batch = make_batch(running_tasks=[entry])
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES + 1):
+        result = provider.sync(batch)
+        assert len(result) == 1
+        assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+
+def test_sync_prefers_uid_pod_over_stale_legacy_pod(provider, k8s):
+    """The uid-named pod wins, so a resubmit never re-adopts the previous run's pod.
+
+    Both names can exist at once while pre-upgrade pods drain; the fallback must
+    not undo the incarnation-uniqueness that the uid in the name provides.
+    """
+    task_id = JobName.from_wire("/job/resubmitted")
+    uid = "0f1e2d3c4b5a6978"
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=uid)
+
+    populate_pod(k8s, _pod_name(task_id, 0), "Failed")
+    populate_pod(k8s, _pod_name(task_id, 0, uid), "Running")
+
+    result = provider.sync(make_batch(running_tasks=[entry]))
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+
 def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
     """A vanished pod for a coscheduled task is billed as WORKER_FAILED (gang preemption),
     not FAILED — Kueue deletes every pod in a preempted group, leaving only the absence."""
