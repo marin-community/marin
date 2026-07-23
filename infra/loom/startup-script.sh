@@ -12,8 +12,11 @@ DOTENV_SECRET_VERSION="$(meta instance/attributes/dotenv-secret-version)"
 DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
+COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
 DATA_DISK_DEVICE="/dev/disk/by-id/google-$(meta instance/attributes/data-disk-device)"
 DATA_MOUNT=/mnt/loom-data
+DOCKER_CONFIG=/etc/docker/daemon.json
+HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 
 echo "== loom startup-script: ${LOOM_DOMAIN} =="
 if [[ "$LOOM_IMAGE" != *@sha256:* ]]; then
@@ -75,8 +78,8 @@ grep -q "^${DATA_DISK_DEVICE} " /etc/fstab || \
   echo "${DATA_DISK_DEVICE} ${DATA_MOUNT} ext4 discard,defaults,nofail 0 2" >>/etc/fstab
 mkdir -p "${DATA_MOUNT}/docker" /etc/docker
 desired_daemon_config="$(printf '{\n  "data-root": "%s/docker"\n}\n' "$DATA_MOUNT")"
-if [ ! -f /etc/docker/daemon.json ] || [ "$(cat /etc/docker/daemon.json)" != "$desired_daemon_config" ]; then
-  printf '%s\n' "$desired_daemon_config" >/etc/docker/daemon.json
+if [ ! -f "$DOCKER_CONFIG" ] || [ "$(cat "$DOCKER_CONFIG")" != "$desired_daemon_config" ]; then
+  printf '%s\n' "$desired_daemon_config" >"$DOCKER_CONFIG"
   docker_config_changed=true
 else
   docker_config_changed=false
@@ -87,7 +90,7 @@ if [ "${docker_config_changed:-false}" = true ] || [ "$data_disk_mounted" = true
 fi
 
 install -d -m 0755 "$RUNTIME_DIR"
-meta instance/attributes/loom-compose >"${RUNTIME_DIR}/docker-compose.yml"
+meta instance/attributes/loom-compose >"$COMPOSE_FILE"
 meta instance/attributes/loom-caddyfile >"${RUNTIME_DIR}/Caddyfile"
 
 ENV_FILE="${RUNTIME_DIR}/.env"
@@ -120,18 +123,18 @@ chmod 0600 "$ENV_FILE"
 
 registry="${LOOM_IMAGE%%/*}"
 gcloud auth configure-docker "$registry" --quiet
-docker compose -f "${RUNTIME_DIR}/docker-compose.yml" pull
-docker compose -f "${RUNTIME_DIR}/docker-compose.yml" up -d
+docker compose -f "$COMPOSE_FILE" pull
+docker compose -f "$COMPOSE_FILE" up -d
 
 for _ in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:${LOOM_PORT}/api/health" >/dev/null && break
+  curl -fsS "$HEALTH_URL" >/dev/null && break
   sleep 2
 done
-curl -fsS "http://127.0.0.1:${LOOM_PORT}/api/health" >/dev/null
+curl -fsS "$HEALTH_URL" >/dev/null
 
 DEPLOYMENT_FILE=/run/loom-deployment.json
 meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE"
-docker compose -f "${RUNTIME_DIR}/docker-compose.yml" exec -T loom \
+docker compose -f "$COMPOSE_FILE" exec -T loom \
   loom deployment apply --file - <"$DEPLOYMENT_FILE"
 rm -f "$DEPLOYMENT_FILE"
 echo "== loom startup-script done =="

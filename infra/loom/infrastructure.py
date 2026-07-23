@@ -56,10 +56,6 @@ def _artifact_image_path(project: str, region: str) -> str:
     return f"{region}-docker.pkg.dev/{project}/{ARTIFACT_REPOSITORY_ID}/{ARTIFACT_IMAGE_NAME}"
 
 
-def _service_account_member(email: str) -> str:
-    return f"serviceAccount:{email}"
-
-
 def _validated_image_reference(value: str, project: str, region: str) -> str:
     image_path = re.escape(_artifact_image_path(project, region))
     if not re.fullmatch(rf"{image_path}(?::[^@]+)?@sha256:[0-9a-f]{{64}}", value):
@@ -319,20 +315,12 @@ class DeploymentConfig:
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
-            if workload.name in workload_names:
-                raise ValueError(f"duplicate workload name {workload.name!r}")
-            if workload.profile not in profile_names:
-                raise ValueError(f"workload {workload.name!r} references unknown profile {workload.profile!r}")
-            workload_names.add(workload.name)
+            _validate_profile_reference("workload", workload.name, workload.profile, workload_names, profile_names)
         federation_names: set[str] = set()
         for federation in self.github_federations:
-            if federation.name in federation_names:
-                raise ValueError(f"duplicate GitHub federation name {federation.name!r}")
-            if federation.profile not in profile_names:
-                raise ValueError(
-                    f"GitHub federation {federation.name!r} references unknown profile {federation.profile!r}"
-                )
-            federation_names.add(federation.name)
+            _validate_profile_reference(
+                "GitHub federation", federation.name, federation.profile, federation_names, profile_names
+            )
         if self.prune_deployment and not (self.profiles or self.workloads or self.github_federations):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
@@ -403,6 +391,20 @@ class DeploymentConfig:
 class Infrastructure:
     instance: gcp.compute.Instance
     activation: command.local.Command
+
+
+def _validate_profile_reference(
+    kind: str,
+    name: str,
+    profile: str,
+    seen_names: set[str],
+    profile_names: set[str],
+) -> None:
+    if name in seen_names:
+        raise ValueError(f"duplicate {kind} name {name!r}")
+    if profile not in profile_names:
+        raise ValueError(f"{kind} {name!r} references unknown profile {profile!r}")
+    seen_names.add(name)
 
 
 def _enable_apis(project: str) -> list[gcp.projects.Service]:
@@ -502,7 +504,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         location=artifact_repository.location,
         repository=artifact_repository.repository_id,
         role="roles/artifactregistry.reader",
-        member=vm_account.email.apply(_service_account_member),
+        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
     )
     web_firewall = gcp.compute.Firewall(
         "loom-web",
@@ -595,7 +597,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         project=config.project,
         secret_id=dotenv_secret.secret_id,
         role=SECRET_ACCESSOR_ROLE,
-        member=vm_account.email.apply(_service_account_member),
+        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
     )
     profile_secret_readers = []
     for secret_project, secret_name in sorted(set(profile_secret_refs)):
@@ -606,7 +608,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
                 project=secret_project,
                 secret_id=secret_name,
                 role=SECRET_ACCESSOR_ROLE,
-                member=vm_account.email.apply(_service_account_member),
+                member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
                 opts=api_options,
             )
         )

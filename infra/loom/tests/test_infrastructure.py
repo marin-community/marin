@@ -35,8 +35,6 @@ class RecordingMocks(Mocks):
             outputs["email"] = f"{args.name}@example.iam.gserviceaccount.com"
             outputs["uniqueId"] = "11223344556677889900"
             outputs["unique_id"] = "11223344556677889900"
-        if args.typ == "gcp:storage/bucket:Bucket":
-            outputs["url"] = f"gs://{args.name}"
         if args.typ == "docker-build:index:Image":
             outputs["digest"] = "sha256:" + "a" * 64
             outputs["ref"] = f"{outputs['tags'][0]}@sha256:" + "a" * 64
@@ -44,10 +42,6 @@ class RecordingMocks(Mocks):
 
     def call(self, args: MockCallArgs) -> tuple[dict, list[tuple[str, str]] | None]:
         outputs = dict(args.args)
-        if args.token == "gcp:artifactregistry/getDockerImage:getDockerImage":
-            image = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "b" * 64
-            outputs["selfLink"] = image
-            outputs["self_link"] = image
         return outputs, []
 
 
