@@ -75,6 +75,7 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
+from nightly_config import NIGHTLY_LANES
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -513,7 +514,10 @@ def main() -> None:
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     if config.github_app_credentials is None:
         logger.warning("no GitHub App credentials; GitHub panels run unauthenticated and the build panel shows no data")
-    github_auth = GithubAppAuth(config.github_app_credentials, GITHUB_REPO) if config.github_app_credentials else None
+    # The shared GitHub client reads the main repo (ferries/builds) and every nightly
+    # lane repo, so the installation token must be scoped to all of them.
+    github_repos = {GITHUB_REPO, *(lane.repository for lane in NIGHTLY_LANES)}
+    github_auth = GithubAppAuth(config.github_app_credentials, github_repos) if config.github_app_credentials else None
     github_source = GithubSource(auth=github_auth, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)

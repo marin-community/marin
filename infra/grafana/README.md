@@ -320,7 +320,8 @@ i.e. reachable by nobody until the first grant.
 The ferry, build, and nightly panels read the GitHub API. GitHub gates the GraphQL
 build query behind auth even for public repos, so the bridge authenticates as the
 "Marin Ops Agent" GitHub App: it signs a JWT with the app's private key, mints a
-read-only installation token scoped to `marin-community/marin`, and refreshes it
+read-only installation token scoped to the repos the panels read (the main repo
+plus every nightly lane repo — all under `marin-community`), and refreshes it
 before it expires (`src/github_app.py`). Nothing long-lived expires under the
 panels — a static token that did is what blanked the build panel.
 
@@ -341,7 +342,9 @@ pulumi config set marin-grafana:github_app_id <app-id>
 pulumi config set marin-grafana:github_app_installation_id <installation-id>
 ```
 
-The app needs read access to the repo's Contents, Metadata, Commit statuses,
+The app must be installed on `marin-community` with access to the main repo and
+every nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`,
+`tpu-inference`), and needs read on their Contents, Metadata, Commit statuses,
 Checks, and Actions; the minted token is attenuated to that read-only subset even
 if the app itself holds broader grants.
 

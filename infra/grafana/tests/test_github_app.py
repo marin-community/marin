@@ -28,10 +28,10 @@ def _keypair() -> tuple[str, str]:
     return private_pem, public_pem
 
 
-def _auth(private_pem: str) -> GithubAppAuth:
+def _auth(private_pem: str, repositories=("marin-community/marin",)) -> GithubAppAuth:
     return GithubAppAuth(
         GithubAppCredentials(app_id="123", installation_id="456", private_key=private_pem),
-        repository="marin-community/marin",
+        repositories,
     )
 
 
@@ -68,6 +68,29 @@ def test_mints_scoped_token_and_sends_it(monkeypatch):
     assert seen["body"]["repositories"] == ["marin"]
     assert seen["body"]["permissions"]["contents"] == "read"
     assert seen["sent_auth"] == "Bearer ghs_minted"
+
+
+def test_token_scopes_every_requested_repo(monkeypatch):
+    private_pem, _ = _keypair()
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            seen["repositories"] = json.loads(request.content)["repositories"]
+            return httpx.Response(201, json={"token": "ghs", "expires_at": "2026-07-23T20:00:00Z"})
+        return httpx.Response(200, json={})
+
+    auth = _auth(private_pem, ["marin-community/marin", "marin-community/vllm", "marin-community/harbor"])
+    _fetch(auth, handler)
+
+    assert seen["repositories"] == ["harbor", "marin", "vllm"]
+
+
+def test_rejects_repositories_from_multiple_owners():
+    private_pem, _ = _keypair()
+    with pytest.raises(ValueError):
+        _auth(private_pem, ["marin-community/marin", "vllm-project/vllm"])
 
 
 def test_caches_token_across_requests(monkeypatch):

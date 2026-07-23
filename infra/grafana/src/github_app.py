@@ -16,6 +16,7 @@ last an hour and roll themselves, so there is nothing to rotate operationally.
 
 import logging
 import time
+from collections.abc import Iterable
 from datetime import datetime
 
 import httpx
@@ -53,10 +54,16 @@ class GithubAppAuth(httpx.Auth):
     # auth_flow reads the token response body to cache the token and its expiry.
     requires_response_body = True
 
-    def __init__(self, credentials: GithubAppCredentials, repository: str) -> None:
+    def __init__(self, credentials: GithubAppCredentials, repositories: Iterable[str]) -> None:
         self._credentials = credentials
-        # Scope the token to the single repo the panels read; repository is "owner/name".
-        self._repository = repository.split("/")[1]
+        # Scope the token to the repos the panels read (ferries/builds plus every
+        # nightly lane repo). An installation token is per-owner, so they must share
+        # one owner — the installation account; the request takes bare repo names.
+        owner_and_names = [repo.split("/", 1) for repo in repositories]
+        owners = {owner for owner, _ in owner_and_names}
+        if len(owners) != 1:
+            raise ValueError(f"installation token repositories must share one owner; got {sorted(owners)}")
+        self._repositories = sorted(name for _, name in owner_and_names)
         self._token: str | None = None
         self._expires_at = 0.0
 
@@ -87,7 +94,7 @@ class GithubAppAuth(httpx.Auth):
             "POST",
             f"{GITHUB_API_BASE}/app/installations/{self._credentials.installation_id}/access_tokens",
             headers={"authorization": f"Bearer {self._app_jwt()}", "accept": "application/vnd.github+json"},
-            json={"repositories": [self._repository], "permissions": _TOKEN_PERMISSIONS},
+            json={"repositories": self._repositories, "permissions": _TOKEN_PERMISSIONS},
         )
 
     def _app_jwt(self) -> str:
