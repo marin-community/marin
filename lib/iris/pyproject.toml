@@ -16,7 +16,8 @@ dependencies = [
     "marin-finelog >= 0.2.10",
     "marin-finelog-server >= 0.2.10",
     # Platform companion wheel containing the Rust-owned public proxy listener.
-    "marin-iris-native >= 0.1.0",
+    # The dev floor opts uv into its scheduled nightly wheels.
+    "marin-iris-native >= 0.1.0.dev0",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -120,5 +121,8 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.uv.sources]
-# Build the native companion from this checkout during Iris development.
-marin-iris-native = { path = "rust" }
+# `scripts/rust_mode.py dev` points marin-iris-native at ./rust here (and at
+# lib/iris/rust in the root pyproject) so the extension builds from source;
+# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###

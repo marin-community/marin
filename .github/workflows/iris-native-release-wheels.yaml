@@ -1,7 +1,21 @@
 name: "Iris Native - Release Wheels"
 
+# Match the other native package release workflows: scheduled nightlies,
+# iris-native-v* stable tags, manually dispatched cuts, and PR build smokes.
+# Scheduled runs skip when neither the crate nor this workflow changed in 25h.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, stable, manual]
+        default: manual
+      version:
+        description: "Version (required for stable mode, e.g. 0.1.1)"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC daily nightly
   push:
     tags:
       - "iris-native-v*"
@@ -18,7 +32,66 @@ permissions:
   contents: read
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.resolved.outputs.version }}
+      skip: ${{ steps.stale.outputs.skip || 'false' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+
+      - id: stale
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/iris/rust/ .github/workflows/iris-native-release-wheels.yaml)
+          if [[ -z "$changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no Iris native changes in the last 25h, skipping nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Iris native changes since yesterday:"
+            echo "$changes"
+          fi
+
+      - id: pick
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/iris-native-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "input_version=${GITHUB_REF_NAME#iris-native-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: resolved
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "$MODE" \
+            --version "$INPUT_VERSION" \
+            --resolve-only
+
   build:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-14]
@@ -28,27 +101,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: astral-sh/setup-uv@v7
 
-      - name: Check release version
-        if: github.ref_type == 'tag'
-        working-directory: lib/iris/rust
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          expected="${RELEASE_VERSION#iris-native-v}"
-          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          pyext_version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyext/Cargo.toml | head -1)
-          test "$cargo_version" = "$expected"
-          test "$pyext_version" = "$expected"
-
       - name: Build platform wheel
-        working-directory: lib/iris/rust
-        run: uvx --from 'maturin>=1.5,<2.0' maturin build --release --out ../../../dist
-
-      - name: Build source distribution
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: lib/iris/rust
-        run: uvx --from 'maturin>=1.5,<2.0' maturin sdist --out ../../../dist
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build wheel
 
       - uses: actions/upload-artifact@v7
         with:
@@ -56,17 +114,31 @@ jobs:
           path: dist/*
 
   publish:
-    if: github.ref_type == 'tag'
-    needs: build
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+      && needs.resolve.outputs.skip != 'true'
+    needs: [resolve, build]
     runs-on: ubuntu-latest
     environment: pypi-publish
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+
+      - name: Build source distribution
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build sdist
+
       - uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           packages-dir: dist/

@@ -48,6 +48,7 @@ jobs:
               - 'pyproject.toml'
               - 'lib/dupekit/pyproject.toml'
               - 'lib/finelog/pyproject.toml'
+              - 'lib/iris/pyproject.toml'
               - 'scripts/rust_mode.py'
 
   check-user-mode:
@@ -59,10 +60,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Ensure pyprojects are in user mode
         run: |
-          # A committed path source for either native package means 'rust_mode.py dev'
+          # A committed path source for any native package means 'rust_mode.py dev'
           # leaked into a commit. CI flips to dev mode transiently for source-build test
           # legs, but that flip must never be committed.
-          if grep -qE 'marin-(dupekit-native|finelog-server) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml; then
+          if grep -qE 'marin-(dupekit-native|finelog-server|iris-native) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml lib/iris/pyproject.toml; then
             echo "ERROR: a pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi

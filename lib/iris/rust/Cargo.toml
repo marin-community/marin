@@ -7,6 +7,13 @@ lto = "thin"
 codegen-units = 16
 strip = "symbols"
 
+# Match finelog's dev/test deployment profile: keep parallel optimized codegen
+# while avoiding LTO's slow final link.
+[profile.fast]
+inherits = "release"
+lto = false
+opt-level = 2
+
 [package]
 name = "iris-proxy"
 version = "0.1.0"

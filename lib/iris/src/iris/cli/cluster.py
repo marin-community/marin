@@ -27,6 +27,8 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
 from iris.cli.build import (
+    CARGO_PROFILES,
+    DEFAULT_CARGO_PROFILE,
     build_image,
     find_marin_root,
     get_git_sha,
@@ -58,6 +60,8 @@ from iris.cluster.provenance import provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
+
+DEFAULT_IMAGE_PLATFORM = "linux/amd64,linux/arm64"
 
 
 @dataclass(frozen=True)
@@ -156,7 +160,14 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose: bool = False) -> None:
+def _build_and_push_image(
+    image_tag: str,
+    image_type: str,
+    git_sha: str,
+    verbose: bool = False,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Build and push a single image to GHCR, parsing org/name/version from the tag.
 
     The task image uses the ``task`` target in the unified Dockerfile and needs the
@@ -177,25 +188,46 @@ def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose
         tag=local_tag,
         push=True,
         context=context,
-        platform="linux/amd64,linux/arm64",
+        platform=platform,
         git_sha=git_sha,
         ghcr_org=org,
         verbose=verbose,
+        cargo_profile=cargo_profile,
     )
     click.echo()
 
 
-def _build_cluster_images(config, git_sha: str, verbose: bool = False) -> dict[str, str]:
+def _build_cluster_images(
+    config,
+    git_sha: str,
+    verbose: bool = False,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> dict[str, str]:
     built: dict[str, str] = {}
 
     for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
-            _build_and_push_image(tag, typ, git_sha, verbose=verbose)
+            _build_and_push_image(
+                tag,
+                typ,
+                git_sha,
+                verbose=verbose,
+                platform=platform,
+                cargo_profile=cargo_profile,
+            )
             built[typ] = tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
-        _build_and_push_image(task_tag, "task", git_sha, verbose=verbose)
+        _build_and_push_image(
+            task_tag,
+            "task",
+            git_sha,
+            verbose=verbose,
+            platform=platform,
+            cargo_profile=cargo_profile,
+        )
         built["task"] = task_tag
 
     return built
@@ -237,12 +269,24 @@ def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if v}
 
 
-def _build_and_pin_deploy_images(ctx, config) -> None:
+def _build_and_pin_deploy_images(
+    ctx,
+    config,
+    *,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
     git_sha = get_git_sha()
     _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, git_sha, verbose=verbose)
+    built = _build_cluster_images(
+        config,
+        git_sha,
+        verbose=verbose,
+        platform=platform,
+        cargo_profile=cargo_profile,
+    )
     if built:
         click.echo("Built image tags:")
         for name, tag in built.items():
@@ -1113,12 +1157,27 @@ def controller_checkpoint(ctx, stop: bool):
         "once a prior restart has recorded a deploy."
     ),
 )
+@click.option(
+    "--image-platform",
+    default=DEFAULT_IMAGE_PLATFORM,
+    show_default=True,
+    help="Docker platform(s) to build and push for this rollout.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
+)
 @click.pass_context
 def controller_restart(
     ctx,
     skip_checkpoint: bool,
     checkpoint_timeout: int,
     rollback: bool,
+    image_platform: str,
+    cargo_profile: str,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
@@ -1154,7 +1213,12 @@ def controller_restart(
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        new_image = _build_forward_image(ctx, config)
+        new_image = _build_forward_image(
+            ctx,
+            config,
+            platform=image_platform,
+            cargo_profile=cargo_profile,
+        )
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
@@ -1179,7 +1243,12 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    new_image = _build_forward_image(ctx, config)
+    new_image = _build_forward_image(
+        ctx,
+        config,
+        platform=image_platform,
+        cargo_profile=cargo_profile,
+    )
     previous_image = prior_record.image if prior_record else None
 
     # Record the in-flight deploy before restarting: a crash mid-restart leaves a
@@ -1234,9 +1303,20 @@ def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, pri
     _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
 
 
-def _build_forward_image(ctx, config) -> str:
+def _build_forward_image(
+    ctx,
+    config,
+    *,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> str:
     """Build deploy images from the working tree and return the controller image tag."""
-    _build_and_pin_deploy_images(ctx, config)
+    _build_and_pin_deploy_images(
+        ctx,
+        config,
+        platform=platform,
+        cargo_profile=cargo_profile,
+    )
     return config.controller.image
 
 

@@ -39,7 +39,12 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
 
     with patch("iris.cli.cluster._build_and_push_image") as build_and_push_image:
 
-        built = _build_cluster_images(config, git_sha="abc")
+        built = _build_cluster_images(
+            config,
+            git_sha="abc",
+            platform="linux/amd64",
+            cargo_profile="fast",
+        )
 
     assert built == {
         "worker": "ghcr.io/marin-community/iris-worker:v1",
@@ -52,3 +57,5 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
     for call in build_and_push_image.call_args_list:
         assert call.args[0].startswith("ghcr.io/")
         assert call.args[2] == "abc"
+        assert call.kwargs["platform"] == "linux/amd64"
+        assert call.kwargs["cargo_profile"] == "fast"

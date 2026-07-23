@@ -161,7 +161,6 @@ vllm = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
-marin-iris-native = { path = "lib/iris/rust" }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
 marin-dupekit = { workspace = true }

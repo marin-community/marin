@@ -4860,7 +4860,7 @@ requires-dist = [
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
-    { name = "marin-iris-native", directory = "lib/iris/rust" },
+    { name = "marin-iris-native", specifier = ">=0.1.0.dev0" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -4912,7 +4912,12 @@ test = [
 [[package]]
 name = "marin-iris-native"
 version = "0.1.0"
-source = { directory = "lib/iris/rust" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/a7/7c055b2b364e5c652832a8f933601114e688c79c9ec98a1768a9c961c1d1/marin_iris_native-0.1.0.tar.gz", hash = "sha256:4943e6e26a59a174a3d47ca7578a7a069603bbe33f40594246a1d552f0515361", size = 30484, upload-time = "2026-07-23T21:26:18.183Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/a4/f0d6d3e18f3fbcf84ff59e81a199a65a6c1284871b2281c70343adf11a74/marin_iris_native-0.1.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:5c13f35f1116341f684177b2f3ad2adb0203b47843e5cb8377449f61e70fdd39", size = 3297091, upload-time = "2026-07-23T21:26:14.89Z" },
+    { url = "https://files.pythonhosted.org/packages/35/ca/15db8788741404ae57f46bdb8471047c2c0aee21d57281b1d32209c1ce96/marin_iris_native-0.1.0-cp312-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:7203d359cf8632e724186ce8aa31b9d67257c5a9b6754b9cbc7d4e53a871419c", size = 3641837, upload-time = "2026-07-23T21:26:16.755Z" },
+]
 
 [[package]]
 name = "marin-levanter"
