@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from marin.execution.step_runner import StepRunner
 
 from experiments.speedrun.prism_berkeley_qwen3_scaling.muon_error_feedback_optimizer import (
+    DEFAULT_INVERSE_NEWTON_STEPS,
+    DEFAULT_SYLVESTER_STEPS,
     ErrorAwareMuonConfig,
     ErrorAwareMuonPolicy,
 )
@@ -25,6 +27,7 @@ ADAM_LR_RATIO = 0.2
 ARCHIVED_HOST_CPU = 32
 ARCHIVED_HOST_RAM = "128g"
 ARCHIVED_HOST_DISK = "50g"
+SPECTRAL_CUBIC_STEPS = 15
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,9 @@ def build_optimizer(
         blend_gain=variant.gain if variant.policy == "blend" else 0.0,
         correction_gain=variant.gain if variant.policy == "hesscorr" else 0.0,
         quintic_steps=5,
-        cubic_steps=30,
+        cubic_steps=SPECTRAL_CUBIC_STEPS,
+        sylvester_steps=DEFAULT_SYLVESTER_STEPS,
+        inverse_steps=DEFAULT_INVERSE_NEWTON_STEPS,
         weight_decay=0.1,
         adam_weight_decay=None,
         beta1=0.8,

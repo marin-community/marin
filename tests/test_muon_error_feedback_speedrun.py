@@ -72,21 +72,33 @@ def _constant_quintic_reference(matrix: np.ndarray, *, steps: int = 5, eps: floa
 
 
 @pytest.mark.parametrize("shape", [(8, 5), (5, 8)])
-def test_cubic_newton_schulz_value_and_jvp_match_svd_reference(shape):
+def test_spectral_cubic_newton_schulz_matches_svd_sign_reference(shape):
     rng = np.random.default_rng(0)
     matrix = rng.standard_normal(shape)
-    tangent = rng.standard_normal(shape)
     expected_sign = _matrix_sign_svd(matrix)
-    expected_hessian = _nuclear_hessian_svd(matrix, tangent)
 
     with jax.enable_x64(True):
         matrix_jax = jnp.asarray(matrix)
-        tangent_jax = jnp.asarray(tangent)
-        actual_sign, actual_hessian = jax.jvp(cubic_newton_schulz, (matrix_jax,), (tangent_jax,))
+        actual_sign = cubic_newton_schulz(matrix_jax, steps=15)
 
     np.testing.assert_allclose(np.asarray(actual_sign), expected_sign, atol=1e-10, rtol=1e-10)
-    relative_error = np.linalg.norm(np.asarray(actual_hessian) - expected_hessian) / np.linalg.norm(expected_hessian)
-    assert relative_error < 1e-10
+
+
+@pytest.mark.parametrize("shape", [(8, 5), (5, 8)])
+def test_sylvester_nuclear_hessian_matches_svd_reference(shape):
+    rng = np.random.default_rng(1)
+    matrix = rng.standard_normal(shape)
+    tangent = 1e-3 * rng.standard_normal(shape)
+    expected = _nuclear_hessian_svd(matrix, tangent)
+
+    with jax.enable_x64(True):
+        actual = clipped_nuclear_hessian(
+            jnp.asarray(matrix),
+            jnp.asarray(tangent),
+            steps=15,
+        )
+
+    np.testing.assert_allclose(np.asarray(actual), expected, atol=1e-10, rtol=1e-10)
 
 
 @pytest.mark.parametrize("shape", [(8, 5), (5, 8)])
@@ -141,7 +153,7 @@ def test_hesscorr_policy_matches_clipped_svd_oracle_in_float32(shape):
         jnp.asarray(gradient, dtype=jnp.float32),
         policy="hesscorr",
         correction_gain=0.3,
-        cubic_steps=30,
+        cubic_steps=15,
     )
 
     np.testing.assert_allclose(np.asarray(actual), expected, atol=2e-5, rtol=2e-5)
@@ -152,7 +164,7 @@ def test_clipped_nuclear_hessian_matches_unclipped_oracle_and_activates_cap():
     well_conditioned = rng.standard_normal((8, 5))
     tangent = 1e-3 * rng.standard_normal((8, 5))
     expected = _nuclear_hessian_svd(well_conditioned, tangent)
-    apply_correction = jax.jit(lambda matrix, direction: clipped_nuclear_hessian(matrix, direction, steps=30))
+    apply_correction = jax.jit(lambda matrix, direction: clipped_nuclear_hessian(matrix, direction, steps=15))
 
     actual = apply_correction(jnp.asarray(well_conditioned), jnp.asarray(tangent))
 
@@ -255,7 +267,7 @@ def test_optimizer_config_applies_nonzero_hessian_feedback_after_normalized_ema(
         momentum=0.5,
         policy="hesscorr",
         correction_gain=0.3,
-        cubic_steps=30,
+        cubic_steps=15,
         weight_decay=0.0,
         adam_weight_decay=0.0,
         max_grad_norm=0.0,
@@ -339,7 +351,7 @@ def test_130m_sweep_crosses_archived_learning_rates_with_deduplicated_gain_grid(
         assert optimizer.learning_rate == config.train_config.learning_rate
         assert optimizer.adam_lr == pytest.approx(ADAM_LR_RATIO * optimizer.learning_rate)
         assert optimizer.nesterov is False
-        assert optimizer.cubic_steps == 30
+        assert optimizer.cubic_steps == 15
         assert config.train_config.train_batch_size == 128
         assert config.train_config.num_train_steps == 4959
 
@@ -374,6 +386,9 @@ def test_300m_sweep_uses_archived_learning_rates_and_speedrun_geometry():
         assert optimizer.momentum == 0.98
         assert optimizer.nesterov is False
         assert optimizer.muon_epsilon == 1e-12
+        assert optimizer.cubic_steps == 15
+        assert optimizer.sylvester_steps == 400
+        assert optimizer.inverse_steps == 60
         assert config.train_config.train_batch_size == 128
         assert config.train_config.num_train_steps == 11444
         assert config.train_config.resources.cpu == 32

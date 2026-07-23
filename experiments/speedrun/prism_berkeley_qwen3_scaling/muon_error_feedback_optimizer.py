@@ -32,6 +32,11 @@ from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_optimizer 
 
 ErrorAwareMuonPolicy = Literal["muon", "blend", "hesscorr"]
 
+DEFAULT_CUBIC_POWER_ITERATIONS = 5
+DEFAULT_SYLVESTER_STEPS = 400
+DEFAULT_INVERSE_NEWTON_STEPS = 60
+SPECTRAL_NORM_SAFETY_FACTOR = 1.1
+
 
 def _compute_dtype(array: jax.Array) -> jnp.dtype:
     return jnp.promote_types(array.dtype, jnp.float32)
@@ -43,11 +48,35 @@ def quintic_newton_schulz(matrix: jax.Array, *, steps: int = 5, eps: float = 1e-
     return zeropower_via_newtonschulz5(working, steps=steps, eps=eps, coefficient_type="simple")
 
 
-def cubic_newton_schulz(matrix: jax.Array, *, steps: int = 15, eps: float = 1e-12) -> jax.Array:
-    """Apply a convergent cubic Newton-Schulz iteration suitable for differentiation."""
+def _spectral_norm_power_iteration(matrix: jax.Array, *, steps: int, eps: float) -> jax.Array:
+    """Estimate the spectral norm with deterministic power iteration."""
+    right_dimension = matrix.shape[1]
+    vector = jnp.linspace(1.0, 2.0, right_dimension, dtype=matrix.dtype)
+    vector = vector / jnp.maximum(jnp.linalg.vector_norm(vector), jnp.asarray(eps, matrix.dtype))
+
+    def iterate(_, value):
+        value = matrix.T @ (matrix @ value)
+        return value / jnp.maximum(jnp.linalg.vector_norm(value), jnp.asarray(eps, matrix.dtype))
+
+    vector = jax.lax.fori_loop(0, steps, iterate, vector)
+    return jnp.linalg.vector_norm(matrix @ vector)
+
+
+def cubic_newton_schulz(
+    matrix: jax.Array,
+    *,
+    steps: int = 15,
+    power_iterations: int = DEFAULT_CUBIC_POWER_ITERATIONS,
+    eps: float = 1e-12,
+) -> jax.Array:
+    """Apply cubic Newton-Schulz after power-iteration spectral normalization."""
     chex.assert_rank(matrix, 2)
     working = matrix.astype(_compute_dtype(matrix))
-    denominator = jnp.sqrt(jnp.sum(jnp.square(working)) + jnp.asarray(eps, working.dtype) ** 2)
+    spectral_norm = _spectral_norm_power_iteration(working, steps=power_iterations, eps=eps)
+    denominator = jnp.maximum(
+        SPECTRAL_NORM_SAFETY_FACTOR * spectral_norm,
+        jnp.asarray(eps, working.dtype),
+    )
     working = working / denominator
 
     transposed = working.shape[0] > working.shape[1]
@@ -57,12 +86,78 @@ def cubic_newton_schulz(matrix: jax.Array, *, steps: int = 15, eps: float = 1e-1
     if not jax.sharding.get_abstract_mesh().empty:
         working = jax.lax.with_sharding_constraint(working, PartitionSpec(None, ("data", "model")))
 
-    for _ in range(int(steps)):
-        working = 1.5 * working - 0.5 * working @ working.T @ working
+    def iterate(_, value):
+        return 1.5 * value - 0.5 * value @ value.T @ value
+
+    working = jax.lax.fori_loop(0, int(steps), iterate, working)
 
     if transposed:
         working = working.T
     return working
+
+
+def _inverse_spd_newton(matrix: jax.Array, *, steps: int, eps: float) -> jax.Array:
+    """Approximate an SPD inverse with Newton--Hotelling matrix products."""
+    dimension = matrix.shape[0]
+    identity = jnp.eye(dimension, dtype=matrix.dtype)
+    scale = jnp.maximum(jnp.linalg.norm(matrix, ord="fro"), jnp.asarray(eps, matrix.dtype))
+    inverse = identity / scale
+
+    def iterate(_, value):
+        return value @ (2.0 * identity - matrix @ value)
+
+    return jax.lax.fori_loop(0, steps, iterate, inverse)
+
+
+def _solve_sylvester_fixed_point(
+    hessian: jax.Array,
+    skew_term: jax.Array,
+    *,
+    steps: int,
+    eps: float,
+) -> jax.Array:
+    """Solve ``H S + S H = C`` by the damped product-only fixed point."""
+    scale = jnp.maximum(jnp.linalg.norm(hessian, ord="fro"), jnp.asarray(eps, hessian.dtype))
+    solution = jnp.zeros_like(skew_term)
+
+    def iterate(_, value):
+        return value + (skew_term - hessian @ value - value @ hessian) / (2.0 * scale)
+
+    return jax.lax.fori_loop(0, steps, iterate, solution)
+
+
+def _nuclear_hessian_sylvester(
+    matrix: jax.Array,
+    tangent: jax.Array,
+    *,
+    cubic_steps: int,
+    sylvester_steps: int,
+    inverse_steps: int,
+    eps: float,
+) -> jax.Array:
+    """Apply the nuclear-norm Hessian through the SVD-free Sylvester identity."""
+    if matrix.shape[0] < matrix.shape[1]:
+        return _nuclear_hessian_sylvester(
+            matrix.T,
+            tangent.T,
+            cubic_steps=cubic_steps,
+            sylvester_steps=sylvester_steps,
+            inverse_steps=inverse_steps,
+            eps=eps,
+        ).T
+
+    polar = cubic_newton_schulz(matrix, steps=cubic_steps, eps=eps)
+    polar_hessian = 0.5 * (polar.T @ matrix + matrix.T @ polar)
+    skew_term = polar.T @ tangent - tangent.T @ polar
+    skew_solution = _solve_sylvester_fixed_point(
+        polar_hessian,
+        skew_term,
+        steps=sylvester_steps,
+        eps=eps,
+    )
+    inverse_hessian = _inverse_spd_newton(polar_hessian, steps=inverse_steps, eps=eps)
+    normal_complement = tangent - polar @ (polar.T @ tangent)
+    return polar @ skew_solution + normal_complement @ inverse_hessian
 
 
 def clipped_nuclear_hessian(
@@ -70,19 +165,24 @@ def clipped_nuclear_hessian(
     tangent: jax.Array,
     *,
     steps: int = 15,
+    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
+    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
     eps: float = 1e-12,
 ) -> jax.Array:
-    """Apply the nuclear-norm Hessian and cap its Frobenius norm at sqrt(rank)."""
+    """Apply the SVD-free nuclear-norm Hessian and cap its Frobenius norm."""
     if matrix.shape != tangent.shape:
         raise ValueError(f"Expected matching matrix and tangent shapes, got {matrix.shape} and {tangent.shape}.")
 
     compute_dtype = _compute_dtype(matrix)
     working_matrix = matrix.astype(compute_dtype)
     working_tangent = tangent.astype(compute_dtype)
-    _, correction = jax.jvp(
-        lambda value: cubic_newton_schulz(value, steps=steps, eps=eps),
-        (working_matrix,),
-        (working_tangent,),
+    correction = _nuclear_hessian_sylvester(
+        working_matrix,
+        working_tangent,
+        cubic_steps=steps,
+        sylvester_steps=sylvester_steps,
+        inverse_steps=inverse_steps,
+        eps=eps,
     )
 
     cap = jnp.sqrt(jnp.asarray(min(matrix.shape), dtype=correction.dtype))
@@ -100,6 +200,8 @@ def error_aware_muon_step(
     correction_gain: float = 0.0,
     quintic_steps: int = 5,
     cubic_steps: int = 15,
+    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
+    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
     eps: float = 1e-12,
 ) -> jax.Array:
     """Return a unit-learning-rate Muon, blend, or Hessian-corrected step."""
@@ -123,6 +225,8 @@ def error_aware_muon_step(
             momentum_matrix,
             gradient - momentum_matrix,
             steps=cubic_steps,
+            sylvester_steps=sylvester_steps,
+            inverse_steps=inverse_steps,
             eps=eps,
         )
         return base_step + correction_gain * correction
@@ -155,12 +259,16 @@ def scale_with_error_aware_muon(
     correction_gain: float = 1.0,
     quintic_steps: int = 5,
     cubic_steps: int = 15,
+    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
+    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
     muon_eps: float = 1e-12,
     use_kimi_scaling: bool = False,
 ):
     """Build the Optax transform for error-aware Muon matrix updates."""
     quintic_steps = int(quintic_steps)
     cubic_steps = int(cubic_steps)
+    sylvester_steps = int(sylvester_steps)
+    inverse_steps = int(inverse_steps)
 
     def init_fn(params):
         return ScaleByErrorAwareMuonState(momentum_buffer=_tree_zeros_like_float32(params))
@@ -215,6 +323,8 @@ def scale_with_error_aware_muon(
                 correction_gain=correction_gain,
                 quintic_steps=quintic_steps,
                 cubic_steps=cubic_steps,
+                sylvester_steps=sylvester_steps,
+                inverse_steps=inverse_steps,
                 eps=muon_eps,
             )
             if use_kimi_scaling:
@@ -251,6 +361,8 @@ class ErrorAwareMuonConfig(OptimizerConfig):
     correction_gain: float = 1.0
     quintic_steps: int = 5
     cubic_steps: int = 15
+    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS
+    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS
     adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
@@ -270,8 +382,8 @@ class ErrorAwareMuonConfig(OptimizerConfig):
             raise ValueError(f"blend_gain must be in [0, 1], got {self.blend_gain}.")
         if self.correction_gain < 0.0:
             raise ValueError(f"correction_gain must be non-negative, got {self.correction_gain}.")
-        if self.quintic_steps <= 0 or self.cubic_steps <= 0:
-            raise ValueError("quintic_steps and cubic_steps must both be positive.")
+        if min(self.quintic_steps, self.cubic_steps, self.sylvester_steps, self.inverse_steps) <= 0:
+            raise ValueError("All Newton-Schulz, Sylvester, and inverse iteration counts must be positive.")
         if self.muon_epsilon <= 0.0:
             raise ValueError(f"muon_epsilon must be positive, got {self.muon_epsilon}.")
         if self.min_matrix_dim <= 0:
@@ -305,6 +417,8 @@ class ErrorAwareMuonConfig(OptimizerConfig):
                     correction_gain=self.correction_gain,
                     quintic_steps=self.quintic_steps,
                     cubic_steps=self.cubic_steps,
+                    sylvester_steps=self.sylvester_steps,
+                    inverse_steps=self.inverse_steps,
                     muon_eps=self.muon_epsilon,
                     use_kimi_scaling=self.use_kimi_scaling,
                 ),
