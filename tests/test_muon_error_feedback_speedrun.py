@@ -92,11 +92,7 @@ def test_sylvester_nuclear_hessian_matches_svd_reference(shape):
     expected = _nuclear_hessian_svd(matrix, tangent)
 
     with jax.enable_x64(True):
-        actual = clipped_nuclear_hessian(
-            jnp.asarray(matrix),
-            jnp.asarray(tangent),
-            steps=15,
-        )
+        actual = clipped_nuclear_hessian(jnp.asarray(matrix), jnp.asarray(tangent))
 
     np.testing.assert_allclose(np.asarray(actual), expected, atol=1e-10, rtol=1e-10)
 
@@ -153,7 +149,6 @@ def test_hesscorr_policy_matches_clipped_svd_oracle_in_float32(shape):
         jnp.asarray(gradient, dtype=jnp.float32),
         policy="hesscorr",
         correction_gain=0.3,
-        cubic_steps=15,
     )
 
     np.testing.assert_allclose(np.asarray(actual), expected, atol=2e-5, rtol=2e-5)
@@ -164,7 +159,7 @@ def test_clipped_nuclear_hessian_matches_unclipped_oracle_and_activates_cap():
     well_conditioned = rng.standard_normal((8, 5))
     tangent = 1e-3 * rng.standard_normal((8, 5))
     expected = _nuclear_hessian_svd(well_conditioned, tangent)
-    apply_correction = jax.jit(lambda matrix, direction: clipped_nuclear_hessian(matrix, direction, steps=15))
+    apply_correction = jax.jit(clipped_nuclear_hessian)
 
     actual = apply_correction(jnp.asarray(well_conditioned), jnp.asarray(tangent))
 

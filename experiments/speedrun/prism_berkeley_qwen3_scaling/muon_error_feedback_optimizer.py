@@ -38,6 +38,19 @@ DEFAULT_INVERSE_NEWTON_STEPS = 60
 SPECTRAL_NORM_SAFETY_FACTOR = 1.1
 
 
+@dataclass(frozen=True)
+class NuclearHessianSettings:
+    """Numerical controls for the SVD-free nuclear-norm Hessian."""
+
+    cubic_steps: int = 15
+    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS
+    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS
+    eps: float = 1e-12
+
+
+DEFAULT_NUCLEAR_HESSIAN_SETTINGS = NuclearHessianSettings()
+
+
 def _compute_dtype(array: jax.Array) -> jnp.dtype:
     return jnp.promote_types(array.dtype, jnp.float32)
 
@@ -130,32 +143,30 @@ def _nuclear_hessian_sylvester(
     matrix: jax.Array,
     tangent: jax.Array,
     *,
-    cubic_steps: int,
-    sylvester_steps: int,
-    inverse_steps: int,
-    eps: float,
+    settings: NuclearHessianSettings,
 ) -> jax.Array:
     """Apply the nuclear-norm Hessian through the SVD-free Sylvester identity."""
     if matrix.shape[0] < matrix.shape[1]:
         return _nuclear_hessian_sylvester(
             matrix.T,
             tangent.T,
-            cubic_steps=cubic_steps,
-            sylvester_steps=sylvester_steps,
-            inverse_steps=inverse_steps,
-            eps=eps,
+            settings=settings,
         ).T
 
-    polar = cubic_newton_schulz(matrix, steps=cubic_steps, eps=eps)
+    polar = cubic_newton_schulz(matrix, steps=settings.cubic_steps, eps=settings.eps)
     polar_hessian = 0.5 * (polar.T @ matrix + matrix.T @ polar)
     skew_term = polar.T @ tangent - tangent.T @ polar
     skew_solution = _solve_sylvester_fixed_point(
         polar_hessian,
         skew_term,
-        steps=sylvester_steps,
-        eps=eps,
+        steps=settings.sylvester_steps,
+        eps=settings.eps,
     )
-    inverse_hessian = _inverse_spd_newton(polar_hessian, steps=inverse_steps, eps=eps)
+    inverse_hessian = _inverse_spd_newton(
+        polar_hessian,
+        steps=settings.inverse_steps,
+        eps=settings.eps,
+    )
     normal_complement = tangent - polar @ (polar.T @ tangent)
     return polar @ skew_solution + normal_complement @ inverse_hessian
 
@@ -164,10 +175,7 @@ def clipped_nuclear_hessian(
     matrix: jax.Array,
     tangent: jax.Array,
     *,
-    steps: int = 15,
-    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
-    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
-    eps: float = 1e-12,
+    settings: NuclearHessianSettings = DEFAULT_NUCLEAR_HESSIAN_SETTINGS,
 ) -> jax.Array:
     """Apply the SVD-free nuclear-norm Hessian and cap its Frobenius norm."""
     if matrix.shape != tangent.shape:
@@ -179,15 +187,15 @@ def clipped_nuclear_hessian(
     correction = _nuclear_hessian_sylvester(
         working_matrix,
         working_tangent,
-        cubic_steps=steps,
-        sylvester_steps=sylvester_steps,
-        inverse_steps=inverse_steps,
-        eps=eps,
+        settings=settings,
     )
 
     cap = jnp.sqrt(jnp.asarray(min(matrix.shape), dtype=correction.dtype))
     correction_norm = jnp.linalg.norm(correction, ord="fro")
-    clip_scale = jnp.minimum(1.0, cap / jnp.maximum(correction_norm, jnp.asarray(eps, correction.dtype)))
+    clip_scale = jnp.minimum(
+        1.0,
+        cap / jnp.maximum(correction_norm, jnp.asarray(settings.eps, correction.dtype)),
+    )
     return correction * clip_scale
 
 
@@ -199,9 +207,7 @@ def error_aware_muon_step(
     blend_gain: float = 0.0,
     correction_gain: float = 0.0,
     quintic_steps: int = 5,
-    cubic_steps: int = 15,
-    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
-    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
+    hessian_settings: NuclearHessianSettings = DEFAULT_NUCLEAR_HESSIAN_SETTINGS,
     eps: float = 1e-12,
 ) -> jax.Array:
     """Return a unit-learning-rate Muon, blend, or Hessian-corrected step."""
@@ -224,10 +230,7 @@ def error_aware_muon_step(
         correction = clipped_nuclear_hessian(
             momentum_matrix,
             gradient - momentum_matrix,
-            steps=cubic_steps,
-            sylvester_steps=sylvester_steps,
-            inverse_steps=inverse_steps,
-            eps=eps,
+            settings=hessian_settings,
         )
         return base_step + correction_gain * correction
     raise ValueError(f"Unsupported error-aware Muon policy: {policy!r}.")
@@ -258,17 +261,12 @@ def scale_with_error_aware_muon(
     blend_gain: float = 0.0,
     correction_gain: float = 1.0,
     quintic_steps: int = 5,
-    cubic_steps: int = 15,
-    sylvester_steps: int = DEFAULT_SYLVESTER_STEPS,
-    inverse_steps: int = DEFAULT_INVERSE_NEWTON_STEPS,
+    hessian_settings: NuclearHessianSettings = DEFAULT_NUCLEAR_HESSIAN_SETTINGS,
     muon_eps: float = 1e-12,
     use_kimi_scaling: bool = False,
 ):
     """Build the Optax transform for error-aware Muon matrix updates."""
     quintic_steps = int(quintic_steps)
-    cubic_steps = int(cubic_steps)
-    sylvester_steps = int(sylvester_steps)
-    inverse_steps = int(inverse_steps)
 
     def init_fn(params):
         return ScaleByErrorAwareMuonState(momentum_buffer=_tree_zeros_like_float32(params))
@@ -322,9 +320,7 @@ def scale_with_error_aware_muon(
                 blend_gain=blend_gain,
                 correction_gain=correction_gain,
                 quintic_steps=quintic_steps,
-                cubic_steps=cubic_steps,
-                sylvester_steps=sylvester_steps,
-                inverse_steps=inverse_steps,
+                hessian_settings=hessian_settings,
                 eps=muon_eps,
             )
             if use_kimi_scaling:
@@ -408,6 +404,12 @@ class ErrorAwareMuonConfig(OptimizerConfig):
         )
 
         def optimizer(learning_rate, adam_lr, weight_decay, adam_weight_decay):
+            hessian_settings = NuclearHessianSettings(
+                cubic_steps=self.cubic_steps,
+                sylvester_steps=self.sylvester_steps,
+                inverse_steps=self.inverse_steps,
+                eps=self.muon_epsilon,
+            )
             muon_transform = optax.chain(
                 scale_with_error_aware_muon(
                     momentum=self.momentum,
@@ -416,9 +418,7 @@ class ErrorAwareMuonConfig(OptimizerConfig):
                     blend_gain=self.blend_gain,
                     correction_gain=self.correction_gain,
                     quintic_steps=self.quintic_steps,
-                    cubic_steps=self.cubic_steps,
-                    sylvester_steps=self.sylvester_steps,
-                    inverse_steps=self.inverse_steps,
+                    hessian_settings=hessian_settings,
                     muon_eps=self.muon_epsilon,
                     use_kimi_scaling=self.use_kimi_scaling,
                 ),
