@@ -352,8 +352,8 @@ def _datakit_data_config(
     enable_simulated_epoching: bool,
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
 ) -> LmDataConfig:
-    """Two-phase datakit ``LmDataConfig`` for one mixture (weights keyed by bucket name,
-    each phase summing to 1); reused per-run by the swarm launcher."""
+    """Two-phase datakit ``LmDataConfig`` for one mixture: weights keyed by bucket name, each
+    phase summing to 1, swapped at the 80% step boundary."""
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
     budget_kwargs: dict = {}
     if enable_simulated_epoching:
@@ -455,6 +455,54 @@ _USE_WANDB = os.environ.get("DATAKIT_TRACKER", "json_logger").lower() == "wandb"
 # for a production run too (fine when we only need eval metrics, not the checkpoint).
 _LOCAL_CKPT = _SMOKE or os.environ.get("DATAKIT_CHECKPOINTS", "s3").lower() == "local"
 
+_MP = "params=float32,compute=bfloat16,output=bfloat16"
+
+
+def build_launch_config(
+    ctx: StepContext,
+    *,
+    data: LmDataConfig,
+    run_id: str,
+    tracker: WandbConfig | JsonLoggerConfig,
+    checkpointer: CheckpointerConfig | None,
+) -> GrugMoeLaunchConfig:
+    """The launch config shared by the single-mixture and swarm launchers: same model,
+    optimizer, mesh, precision, and eval; only ``data``, ``run_id``, ``tracker``, and
+    ``checkpointer`` vary per run."""
+    eval_config = (
+        GrugEvalConfig(
+            eval_batch_size=512,
+            steps_per_eval=1000,
+            max_eval_batches=8,
+            eval_current=True,
+            eval_ema=False,
+        )
+        if _ENABLE_EVAL
+        else None
+    )
+    return GrugMoeLaunchConfig(
+        model=_model,
+        data=data,
+        output_path=ctx.output_path,
+        run_id=run_id,
+        resources=ctx.runtime_arg("train_resources"),
+        steps=_steps,
+        batch_size=_batch_size,
+        seed=0,
+        mp=_MP,
+        tracker=tracker,
+        optimizer=_optimizer,
+        grug_trainer=GrugTrainerConfig(
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            log_every=1,
+            expert_axis_size=_EXPERT_AXIS,
+            replica_axis_size=_REPLICAS,
+        ),
+        eval=eval_config,
+        checkpointer=checkpointer,
+    )
+
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Grug MoE on the CoreWeave datakit store with the mixture-3 two-phase bucket schedule."""
@@ -499,39 +547,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             if _LOCAL_CKPT
             else None
         )
-        eval_config: GrugEvalConfig | None = (
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-            if _ENABLE_EVAL
-            else None
-        )
-        return GrugMoeLaunchConfig(
-            model=_model,
-            data=data,
-            output_path=ctx.output_path,
-            run_id=_RUN_ID,
-            resources=ctx.runtime_arg("train_resources"),
-            steps=_steps,
-            batch_size=_batch_size,
-            seed=0,
-            mp="params=float32,compute=bfloat16,output=bfloat16",
-            tracker=tracker,
-            optimizer=_optimizer,
-            grug_trainer=GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-                expert_axis_size=_EXPERT_AXIS,
-                replica_axis_size=_REPLICAS,
-            ),
-            eval=eval_config,
-            checkpointer=checkpointer,
-        )
+        return build_launch_config(ctx, data=data, run_id=_RUN_ID, tracker=tracker, checkpointer=checkpointer)
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),
