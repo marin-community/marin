@@ -10,10 +10,10 @@ so these assert both are surfaced.
 
 import pytest
 from iris.cli.task import (
-    render_attempt_detail_text,
-    render_task_description_text,
     build_attempt_detail,
     build_task_description,
+    render_attempt_detail_text,
+    render_task_description_text,
 )
 from iris.rpc import controller_pb2, job_pb2
 

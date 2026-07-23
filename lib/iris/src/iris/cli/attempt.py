@@ -9,7 +9,7 @@ Usage:
 
 import click
 
-from iris.cli.task import build_attempt_detail, render_attempt_detail_text, fetch_task_status
+from iris.cli.task import build_attempt_detail, fetch_task_status, render_attempt_detail_text
 from iris.cluster.types import TaskAttempt
 
 
