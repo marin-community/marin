@@ -1026,6 +1026,10 @@ ATTEMPT_COLS = (
     task_attempts_table.c.exit_code,
     task_attempts_table.c.error,
     task_attempts_table.c.attempt_uid,
+    task_attempts_table.c.pod_name,
+    task_attempts_table.c.pod_uid,
+    task_attempts_table.c.node_name,
+    task_attempts_table.c.terminal_reason,
 )
 
 _BULK_GET_CHUNK_SIZE = 450

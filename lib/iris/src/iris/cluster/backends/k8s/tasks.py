@@ -1028,6 +1028,15 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     phase = pod.get("status", {}).get("phase", "Unknown")
     task_id = entry.task_id
     attempt_id = entry.attempt_id
+    # Backend object identity is known once the pod exists; capture it on every
+    # update (not only the terminal one) so a later preemption that deletes the pod
+    # still leaves the identity persisted.
+    metadata = pod.get("metadata", {})
+    identity = {
+        "pod_name": metadata.get("name") or None,
+        "pod_uid": metadata.get("uid") or None,
+        "node_name": pod.get("spec", {}).get("nodeName") or None,
+    }
 
     if phase == "Pending":
         return TaskUpdate(
@@ -1035,6 +1044,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_BUILDING,
             status_message=_pod_status_message(pod, workload),
+            **identity,
         )
 
     if phase == "Running":
@@ -1043,6 +1053,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
             status_message="",
+            **identity,
         )
 
     if phase == "Succeeded":
@@ -1051,6 +1062,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
             status_message="",
+            **identity,
         )
 
     # Failed or Unknown -- distinguish infrastructure vs application failure. The
@@ -1067,6 +1079,8 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         exit_code=exit_code,
         error=_extract_error(pod),
         status_message="",
+        terminal_reason=_extract_terminal_reason(pod),
+        **identity,
     )
 
 
@@ -1092,6 +1106,41 @@ def _extract_error(pod: dict) -> str | None:
     if reason == "Completed":
         return message or None
     return message or reason or None
+
+
+# An init-container failure message can be a full log tail
+# (terminationMessagePolicy: FallbackToLogsOnError), so bound what we persist.
+_TERMINAL_REASON_MAX_CHARS = 500
+
+
+def _init_container_failure(pod: dict) -> str | None:
+    """Return ``Init:<reason> <container>: <message>`` for the first init container
+    that terminated non-zero (excluding the log-shipper sidecar), else ``None``.
+
+    Task pods never surfaced init-container status, so a ``stage-workdir`` bundle
+    fetch that 404s in init showed only as a generic ``Pending`` (#7542).
+    """
+    for status in pod.get("status", {}).get("initContainerStatuses", []):
+        if status.get("name") == _LOGSHIP_CONTAINER_NAME:
+            continue
+        terminated = status.get("state", {}).get("terminated", {})
+        code = terminated.get("exitCode")
+        if isinstance(code, int) and code != 0:
+            reason = terminated.get("reason") or "Error"
+            message = (terminated.get("message") or "").strip()
+            head = f"Init:{reason} {status.get('name', '?')}"
+            return f"{head}: {message}" if message else head
+    return None
+
+
+def _extract_terminal_reason(pod: dict) -> str | None:
+    """A bounded terminal-cause string for a failed attempt.
+
+    Prefers an init-container failure — invisible to the task-container extractors —
+    over the task container's own terminal reason.
+    """
+    reason = _init_container_failure(pod) or _extract_error(pod)
+    return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
 
 
 def _format_bytes(n: int) -> str:

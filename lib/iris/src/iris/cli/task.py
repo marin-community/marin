@@ -51,6 +51,9 @@ def build_task_description(response: controller_pb2.Controller.GetTaskStatusResp
             "worker_id": a.worker_id,
             "is_worker_failure": bool(a.is_worker_failure),
             "error": a.error,
+            "pod_name": a.pod_name,
+            "node_name": a.node_name,
+            "terminal_reason": a.terminal_reason,
         }
         for a in task_status.attempts
     ]
@@ -78,8 +81,10 @@ def build_attempt_detail(response: controller_pb2.Controller.GetTaskStatusRespon
     """Build a single-attempt detail from a GetTaskStatus response.
 
     Pure over the proto. Raises ``ValueError`` if the task has no such attempt. The
-    backend object (pod name) and root cause are only carried for the current
-    attempt today; persisting them per past attempt is the next slice.
+    backend object (pod name, node) and terminal reason are persisted per attempt,
+    so a past failed attempt is described as fully as the current one. The
+    distilled ``root_cause_highlights`` are task-scoped and shown only for the
+    current attempt.
     """
     task_status = response.task
     match = next((a for a in task_status.attempts if int(a.attempt_id) == attempt_id), None)
@@ -97,7 +102,9 @@ def build_attempt_detail(response: controller_pb2.Controller.GetTaskStatusRespon
         "is_worker_failure": bool(match.is_worker_failure),
         "error": match.error,
         "is_current": is_current,
-        "container_id": task_status.container_id if is_current else "",
+        "pod_name": match.pod_name,
+        "node_name": match.node_name,
+        "terminal_reason": match.terminal_reason,
         "root_cause_highlights": list(response.root_cause_highlights) if is_current else [],
     }
 
@@ -135,11 +142,13 @@ def render_task_description_text(desc: dict) -> str:
             a["state"] + (" (worker)" if a["is_worker_failure"] else ""),
             "-" if a["exit_code"] is None else _format_exit(a["exit_code"]),
             a["worker_id"] or "-",
-            _truncate(a["error"], 60),
+            # Prefer the terminal reason (carries the init-container failure) over
+            # the task container's own error.
+            _truncate(a["terminal_reason"] or a["error"], 60),
         ]
         for a in desc["attempts"]
     ]
-    lines.append(tabulate(rows, headers=["ATTEMPT", "UID", "STATE", "EXIT", "WORKER", "ERROR"], tablefmt="plain"))
+    lines.append(tabulate(rows, headers=["ATTEMPT", "UID", "STATE", "EXIT", "WORKER", "REASON"], tablefmt="plain"))
 
     if desc["root_cause_highlights"]:
         lines.extend(["", "Root cause:"])
@@ -159,11 +168,14 @@ def render_attempt_detail_text(detail: dict) -> str:
     lines = [header, f"UID: {detail['attempt_uid']}", state_line]
     if detail["worker_id"]:
         lines.append(f"Worker: {detail['worker_id']}")
-    if detail["container_id"]:
-        lines.append(f"Backend object: {detail['container_id']}")
-    elif not detail["is_current"]:
-        lines.append("Backend object: not persisted for past attempts yet (see `task describe` for the current pod)")
-    if detail["error"]:
+    if detail["pod_name"]:
+        backend = detail["pod_name"]
+        if detail["node_name"]:
+            backend += f" on {detail['node_name']}"
+        lines.append(f"Backend object: {backend}")
+    if detail["terminal_reason"]:
+        lines.append(f"Terminal reason: {detail['terminal_reason']}")
+    if detail["error"] and detail["error"] != detail["terminal_reason"]:
         lines.append(f"Error: {detail['error']}")
     if detail["root_cause_highlights"]:
         lines.extend(["", "Root cause:"])

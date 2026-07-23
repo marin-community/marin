@@ -73,9 +73,13 @@
       "error": "reclaim",
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 10,
       "task_id": "/test-user/preempt-job/0",
+      "terminal_reason": "",
       "worker_id": "w-preempt"
     }
   ],

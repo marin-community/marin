@@ -384,6 +384,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
             attempt_uid=attempt.attempt_uid,
+            pod_name=attempt.pod_name or "",
+            pod_uid=attempt.pod_uid or "",
+            node_name=attempt.node_name or "",
+            terminal_reason=attempt.terminal_reason or "",
         )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
@@ -988,6 +992,10 @@ def _attempts_for_worker(
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
             attempt_uid=row.attempt_uid,
+            pod_name=row.pod_name or "",
+            pod_uid=row.pod_uid or "",
+            node_name=row.node_name or "",
+            terminal_reason=row.terminal_reason or "",
         )
         if row.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))

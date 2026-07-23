@@ -497,6 +497,10 @@ def apply_one_transition(
             finished_at=attempt_finished_at,
             exit_code=task_exit,
             error=update.error,
+            pod_name=update.pod_name,
+            pod_uid=update.pod_uid,
+            node_name=update.node_name,
+            terminal_reason=update.terminal_reason,
         )
     )
     state.merge_task(
