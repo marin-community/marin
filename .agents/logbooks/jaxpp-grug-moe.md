@@ -2482,3 +2482,20 @@ author: dlwh
   - Forward alone being slower than value-and-grad is counterintuitive. The historical TE microbenchmark notes that reverse-mode graph construction can eliminate FFI work when the primal is discarded; this gate used `value_and_grad`, but the inversion still warrants treating the absolute transport number as provisional. A full-MLP A/B with all parameter gradients and synchronized output leaves is the decisive measurement.
 - Next action:
   - Compare current Marin ring against NCCL_EP plus the same Haliax/Pallas-Triton BF16 expert GEMMs in one eight-process H100 job. Require finite values, explicit output/loss/gradient parity, slowest-rank timing, and at least `10%` NCCL_EP p50 speedup before integrating it into JaxPP.
+
+### 2026-07-23 08:03 PDT - paired full-MLP gate finds a small strict output mismatch
+- Hypothesis: NCCL_EP dispatch/combine plus the same Pallas-Triton expert GEMMs will match Marin ring under the existing strict BF16 parity gate, allowing a paired full-gradient timing comparison.
+- Commit Hashes:
+  - `fbda960dd0` adds the paired H100x8 full routed-MLP A/B.
+  - `5282a2f915` adds an explicit diagnostic-only timing mode after the strict run stopped before timing.
+- Command: one RNO2A H100x8 task with eight one-GPU processes, EP8, 16,384 tokens/rank, d2560/i1280, e64/top-k4, BF16 inputs and weights, FP32 routing weights, uniform balanced routing, 1.25 capacity, and Haliax Pallas-Triton expert GEMMs at `block_k=32`/8 warps in both arms. Job `/dlwh/ncclep-h100-full-mlp-ab-20260723-072833`; strict parity mode.
+- Results:
+  - Iris succeeded in `8m56.82s`; the task and all eight ranks exited `0` with no failures or preemptions. No resources remain live.
+  - Loss, token-gradient, routing-weight-gradient, W13-gradient, and W2-gradient checks all passed with zero elementwise mismatches. All values and gradients were finite and neither arm dropped assignments.
+  - Output parity alone failed: `683,013 / 335,544,320` elements (`0.203554%`) exceeded `rtol=0.1, atol=0.0002`; relative-L2 error was `0.00296233`, mean absolute error `0.000289164`, and maximum absolute error `0.0078125`.
+  - The harness stopped before timing as required. StableHLO showed ring with 4 all-gathers, 3 reduce-scatters, 5 all-reduces, and 6 custom calls; NCCL_EP showed no StableHLO collectives, 3 all-reduces, and 11 custom calls.
+- Interpretation:
+  - This is a narrow BF16 output discrepancy, not a gross adapter, routing, drop, gradient, or stability failure. It is smaller than the previously isolated approximate-QuACK discrepancy, but it still fails the declared strict gate and cannot be silently accepted.
+  - No tolerance was changed. Diagnostic timing remains non-promotable while parity is false; it is useful only to decide whether isolating the transport/reduction-order difference is worth further work.
+- Next action:
+  - Rerun the same paired program in explicit diagnostic mode. Stop NCCL_EP if it does not beat ring by at least `10%`; if it does, isolate whether the output difference comes from combine accumulation order or another adapter detail before any JaxPP training integration.
