@@ -13,8 +13,8 @@ from rigging.provenance import Provenance
 from iris.cluster.provenance import provenance_to_env
 
 GHCR_DEFAULT_ORG = "marin-community"
-DEFAULT_CARGO_PROFILE = "release"
-CARGO_PROFILES = (DEFAULT_CARGO_PROFILE, "fast")
+DEFAULT_CARGO_PROFILE = "fast"
+CARGO_PROFILES = (DEFAULT_CARGO_PROFILE, "release")
 
 # Compression for pushed images and their registry cache. The two must match: a
 # mismatch forces BuildKit to recompress every layer when exporting the cache
