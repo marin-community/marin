@@ -42,11 +42,16 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # one sequence per block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
+
+# DATAKIT_SMOKE=1 runs a tiny single-H100 plumbing job over the real buckets (the
+# SMOKE branch below); it also flips the simulated-epoching and eval defaults.
+_SMOKE = bool(env_int("DATAKIT_SMOKE", 0))
+
 # Simulated epoching truncates each bucket to `experiment_budget`; at production
 # scale every bucket is well-fed, but a tiny smoke budget starves most of the 168
-# buckets to 0 sequences (which the restart mixture rejects). Default it off for a
-# smoke, on for a real run. Override with DATAKIT_SIM_EPOCH.
-ENABLE_SIMULATED_EPOCHING = bool(env_int("DATAKIT_SIM_EPOCH", 1))
+# buckets to 0 sequences (which the restart mixture rejects), so default it off for
+# a smoke and on for a real run. Override with DATAKIT_SIM_EPOCH.
+ENABLE_SIMULATED_EPOCHING = bool(env_int("DATAKIT_SIM_EPOCH", 0 if _SMOKE else 1))
 
 # Natural size of ``datakit/store_8ac06c74`` from Will's datakit-moe-mix branch:
 # 167 mixable bucket caches plus the 33-cache tail component.
@@ -56,9 +61,7 @@ _TARGET_BUDGET_TOKENS = 10_372_343_704_053
 # the CW object store (s3://marin-us-east-02a/marin/datakit/store_8ac06c74); the
 # per-bucket cache paths resolve under MARIN_PREFIX there, so no cross-region copy.
 # regions=[ANY_REGION] keeps the job schedulable on the region-less federated GPU
-# fleet. Set DATAKIT_SMOKE=1 for a tiny single-H100 plumbing run over the real
-# buckets (see the SMOKE branch below).
-_SMOKE = bool(env_int("DATAKIT_SMOKE", 0))
+# fleet.
 _GPUS_PER_NODE = 8
 _GPU_COUNT = env_int("DATAKIT_GPU_COUNT", 1 if _SMOKE else _GPUS_PER_NODE)
 _REPLICAS = env_int("DATAKIT_REPLICAS", 1)
