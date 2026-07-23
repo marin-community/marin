@@ -100,7 +100,7 @@ SMOKE_WANDB_GROUP: str = "exp146-smoke"
 # run of the same (point, region, tpu, correction_factor). Bump to fork a clean smoke run; the old
 # run and its checkpoints are left in place untouched.
 SMOKE_VERSION: str = "v1"
-CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-unpacked-v1"
+CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-ledger-v1"
 CALIBRATION_BATCH_SIZE: int = 1024
 CALIBRATION_MODEL_SIZES: frozenset[str] = frozenset({"3b", "6b"})
 SMOKE_STEPS_DEFAULT: int = 20
@@ -581,15 +581,11 @@ def _apply_recipe_overrides(
                 keep=[{"every": checkpoint_every}],
             ),
         )
-        # The existing contacts-v1 caches predate Levanter's per-field ledger counts,
-        # which greedy packing now requires. Calibration keeps the same caches but disables
-        # packing so the one-off probes can reach train/eval/checkpoint memory paths.
-        pack_components = not calibration()
         data = replace(
             pod.train_config.data,
             shuffle=SHUFFLE,
             components={
-                key: replace(component, pack=pack_components)
+                key: replace(component, pack=True)
                 for key, component in pod.train_config.data.components.items()
             },
         )
