@@ -1,2 +1,0 @@
-secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
-encryptedkey: CiQAKk3j6Xbdxt2bhTv7cQOUujnksu0/YLApuD6JGJjbHw5NbvISSQCdtF6iKi6y017WZSPdMFjvOpKrZXr/gqe2zIB8NmibxRn8faEv5SesSAE2gUf3uLeadj9QcmQ88Tmf0GcUPLHakgHdkUzt64E=

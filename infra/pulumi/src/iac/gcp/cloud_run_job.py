@@ -122,6 +122,9 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
             name=args.job_name,
             project=args.project,
             location=args.region,
+            # A scheduled batch job is rebuilt from source on every deploy; the provider's
+            # default deletion protection only blocks stack teardown.
+            deletion_protection=False,
             template=gcp.cloudrunv2.JobTemplateArgs(
                 template=gcp.cloudrunv2.JobTemplateTemplateArgs(
                     service_account=service_account.email,
