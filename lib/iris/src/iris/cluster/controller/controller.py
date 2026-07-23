@@ -115,6 +115,7 @@ logger = logging.getLogger(__name__)
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
 _RPC_HANDLER_THREADS = 64
+_CONTROLLER_KEEPALIVE = 120
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -662,7 +663,7 @@ class Controller:
             port=self._config.port,
             log_level="warning",
             log_config=None,
-            timeout_keep_alive=120,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
             proxy_headers=True,
             forwarded_allow_ips="*",
         )

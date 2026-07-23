@@ -77,6 +77,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
+    _CONTROLLER_KEEPALIVE,
     _RPC_HANDLER_THREADS,
     Controller,
     ControllerConfig,
@@ -2444,7 +2445,8 @@ _PROXY_ASYNCIO_LOOP = "asyncio"
 _PROXY_AUTO_LOOP = "auto"
 _PROXY_LOOPS = (_PROXY_ASYNCIO_LOOP, _PROXY_AUTO_LOOP)
 _PROXY_BENCHMARK_BACKLOG = 2048
-_PROXY_BENCHMARK_KEEPALIVE = 120
+_PROXY_BENCHMARK_HEALTH_ROUTE = "/health"
+_PROXY_BENCHMARK_HOST = "127.0.0.1"
 
 
 def _wait_for_uvicorn(server: uvicorn.Server) -> None:
@@ -2485,7 +2487,7 @@ def _proxy_benchmark_app(upstream_address: str) -> Starlette:
 
     return Starlette(
         routes=[
-            Route("/health", health),
+            Route(_PROXY_BENCHMARK_HEALTH_ROUTE, health),
             Route(PROXY_ROUTE, proxy_route, methods=list(ALLOWED_METHODS)),
         ],
         lifespan=on_shutdown(proxy.close),
@@ -2504,7 +2506,7 @@ async def _exercise_proxy(base_url: str, *, connections: int) -> ProxyExerciseRe
         httpx.AsyncClient(limits=limits, timeout=timeout) as stream_client,
         httpx.AsyncClient(limits=httpx.Limits(max_connections=4), timeout=timeout) as health_client,
     ):
-        health_response = await health_client.get(f"{base_url}/health")
+        health_response = await health_client.get(f"{base_url}{_PROXY_BENCHMARK_HEALTH_ROUTE}")
         health_response.raise_for_status()
         loop_class = str(health_response.json()["loop"])
 
@@ -2521,7 +2523,7 @@ async def _exercise_proxy(base_url: str, *, connections: int) -> ProxyExerciseRe
             while not streams_done.is_set():
                 probe_started = time.perf_counter()
                 try:
-                    response = await health_client.get(f"{base_url}/health")
+                    response = await health_client.get(f"{base_url}{_PROXY_BENCHMARK_HEALTH_ROUTE}")
                     response.raise_for_status()
                     health_latencies.append((time.perf_counter() - probe_started) * 1000)
                 except httpx.HTTPError as exc:
@@ -2559,27 +2561,27 @@ def _run_proxy_trial(
     upstream = uvicorn.Server(
         uvicorn.Config(
             _proxy_benchmark_upstream(stream_spec),
-            host="127.0.0.1",
+            host=_PROXY_BENCHMARK_HOST,
             port=upstream_port,
             loop="uvloop",
             http="httptools",
             log_level="error",
             log_config=None,
             backlog=_PROXY_BENCHMARK_BACKLOG,
-            timeout_keep_alive=_PROXY_BENCHMARK_KEEPALIVE,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
         )
     )
     proxy = uvicorn.Server(
         uvicorn.Config(
-            _proxy_benchmark_app(f"127.0.0.1:{upstream_port}"),
-            host="127.0.0.1",
+            _proxy_benchmark_app(f"{_PROXY_BENCHMARK_HOST}:{upstream_port}"),
+            host=_PROXY_BENCHMARK_HOST,
             port=proxy_port,
             loop=loop,
             http="httptools",
             log_level="error",
             log_config=None,
             backlog=_PROXY_BENCHMARK_BACKLOG,
-            timeout_keep_alive=_PROXY_BENCHMARK_KEEPALIVE,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
         )
     )
     _install_rpc_executor(proxy, max_workers=_RPC_HANDLER_THREADS)
@@ -2588,7 +2590,7 @@ def _run_proxy_trial(
         _wait_for_uvicorn(upstream)
         threads.spawn_server(proxy, name="proxy-benchmark-proxy")
         _wait_for_uvicorn(proxy)
-        exercise = asyncio.run(_exercise_proxy(f"http://127.0.0.1:{proxy_port}", connections=connections))
+        exercise = asyncio.run(_exercise_proxy(f"http://{_PROXY_BENCHMARK_HOST}:{proxy_port}", connections=connections))
     finally:
         threads.stop(timeout=Duration.from_seconds(30))
 
@@ -2908,7 +2910,14 @@ def _serve_fake_worker():
         cast(WorkerService, _EchoWorker()),
         compressions=IRIS_RPC_COMPRESSIONS,
     )
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="error",
+        log_config=None,
+        timeout_keep_alive=_CONTROLLER_KEEPALIVE,
+    )
     server = uvicorn.Server(config)
 
     def _run():
