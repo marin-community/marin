@@ -4,6 +4,7 @@
 """Transformer Engine NCCL expert-parallel Grug MoE backend."""
 
 from collections.abc import Callable
+from functools import partial
 import importlib
 import math
 from typing import cast
@@ -101,6 +102,58 @@ def _local_expert_ffn(
     return expert_out.reshape(recv_tokens.shape)
 
 
+@partial(jax.custom_vjp, nondiff_argnums=(0, 4))
+def _ep_dispatch(
+    layer_config,
+    routes: jax.Array,
+    tokens: jax.Array,
+    weights: jax.Array,
+    recv_capacity: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    return _ep_dispatch_fwd(layer_config, routes, tokens, weights, recv_capacity)[0]
+
+
+def _ep_dispatch_fwd(layer_config, routes, tokens, weights, recv_capacity):
+    te_cpp = importlib.import_module("transformer_engine.jax.cpp_extensions")
+    token_counts, handle_memory = te_cpp.ep_prepare(layer_config, routes)
+    recv_tokens, recv_weights = te_cpp.ep_dispatch_fwd(
+        layer_config,
+        handle_memory,
+        routes,
+        tokens,
+        weights,
+        recv_capacity,
+    )
+    primal = (recv_tokens, recv_weights, handle_memory, token_counts)
+    return primal, (handle_memory, tuple(tokens.shape[:-1]))
+
+
+def _ep_dispatch_bwd(layer_config, recv_capacity, residual, output_cotangents):
+    del recv_capacity
+    handle_memory, output_leading_shape = residual
+    recv_token_cotangent = jax.lax.with_sharding_constraint(
+        output_cotangents[0],
+        P(_EXPERT_AXIS, None, None),
+    )
+    recv_weight_cotangent = jax.lax.with_sharding_constraint(
+        output_cotangents[1],
+        P(_EXPERT_AXIS, None),
+    )
+    te_cpp = importlib.import_module("transformer_engine.jax.cpp_extensions")
+    token_cotangent, weight_cotangent = te_cpp.ep_dispatch_bwd(
+        layer_config,
+        handle_memory,
+        recv_token_cotangent,
+        recv_weight_cotangent,
+        output_leading_shape,
+        out_partition_spec=(_EXPERT_AXIS,),
+    )
+    return None, token_cotangent, weight_cotangent
+
+
+_ep_dispatch.defvjp(_ep_dispatch_fwd, _ep_dispatch_bwd)
+
+
 def moe_mlp_ep_ncclep(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
@@ -182,7 +235,7 @@ def moe_mlp_ep_ncclep(
         tokens = jax.lax.with_sharding_constraint(tokens, input_spec)
         routes = jax.lax.with_sharding_constraint(routes, input_spec)
         weights = jax.lax.with_sharding_constraint(weights, input_spec)
-        recv_tokens, recv_weights, handle_memory, token_counts = te_ep.ep_dispatch(
+        recv_tokens, recv_weights, handle_memory, token_counts = _ep_dispatch(
             layer_config,
             routes.astype(jnp.int32),
             tokens,
