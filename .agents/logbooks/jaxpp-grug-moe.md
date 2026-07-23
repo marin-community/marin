@@ -2567,3 +2567,18 @@ author: dlwh
   - JaxPP intentionally supplies an `AbstractMesh` while tracing stage-local programs. Commit `85600cf9d5` removes the inner `jax.set_mesh`; the outer runtime mesh and TE global shard guard remain authoritative.
 - Next action:
   - Relaunch the unchanged reduced smoke from `85600cf9d5` and require it to pass JaxPR tracing before interpreting any later compiler or runtime result.
+
+### 2026-07-23 12:56 PDT - NCCL_EP auto-axes tracing reaches nested expert shard map
+- Hypothesis: Removing the redundant concrete mesh context will let JaxPP trace the Transformer Engine dispatch/combine body.
+- Commit Hash: `741018a405` (`[grug] Match NCCL EP nested shard map context`) fixes the next tracing invariant.
+- Command: unchanged reduced smoke. Parent `/dlwh/iris-run-job-20260723-185756`; child `/dlwh/iris-run-job-20260723-185756/grug-train-jaxpp-rno2a-ncclep-smoke-r3-l8-e64k4-b512-s4096-p4m16-20260723-1200`.
+- Results:
+  - TE build/import, 32-rank ordering, and four EP8 bootstraps all passed again with the expected `16384` tokens/rank and `81920` receive capacity.
+  - The prior `jax.set_mesh(AbstractMesh)` failure is cleared.
+  - JaxPP advanced through TE dispatch tracing into the nested local-expert `shard_map`, then failed before XLA compilation because `auto_axes` had installed an Auto-axis context while the nested map captured the original Explicit `AbstractMesh`.
+  - All ranks reported the same mesh-context mismatch. Parent, child, and tasks are terminal failed with zero preemptions and no live resources. No training metric was produced.
+- Interpretation:
+  - TE custom-call tracing now advances beyond dispatch. The remaining mismatch is local to nested JAX sharding context, not communicator setup or transport semantics.
+  - The validated one-node A/B already uses `jax.sharding.get_abstract_mesh()` inside the `auto_axes` body. Commit `741018a405` applies that same pattern so the nested expert FFN map uses the active Auto mesh rather than the captured Explicit mesh.
+- Next action:
+  - Relaunch the unchanged reduced smoke from `741018a405`; require JaxPR tracing to clear and capture the first lowering/compile/runtime result.
