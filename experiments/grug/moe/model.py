@@ -246,8 +246,14 @@ class ShortConv(eqx.Module):
     ``out[t] = sum_{lag=0..W-1} weight[lag] * x[t-lag]`` independently per channel. Identity-init
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0, so bolting it onto a tuned
     baseline changes nothing until training learns the local mixing. Weights are tiny (``W*C``) and
-    routed to Adam (never Muon-orthogonalized). Implemented as a pad-and-shift sum rather than
-    ``lax.conv`` so it composes with the batch-sharded activation layout with no extra reshards.
+    routed to Adam (never Muon-orthogonalized).
+
+    Implemented as a single fused depthwise ``lax.conv_general_dilated`` (``feature_group_count`` =
+    channels) so XLA emits one kernel that reads ``x`` once instead of the ~W read passes a
+    pad-and-shift sum costs -- the win on this bandwidth-bound model. The conv is per-channel and the
+    sequence axis is unsharded, so it stays shard-local under whatever layout ``x`` already has
+    (channels sharded on ``model`` for K/V, replicated for the branch outputs); the output sharding
+    constraint pins it to ``x``'s layout so no all-gather is introduced.
     """
 
     weight: Float[Array, "W C"]
@@ -259,11 +265,24 @@ class ShortConv(eqx.Module):
         return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"]) -> Float[Array, "B S C"]:
-        seq_len = x.shape[1]
-        out = self.weight[0] * x
-        for lag in range(1, self.kernel_size):
-            shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
-            out = out + self.weight[lag] * shifted
+        w = self.kernel_size
+        # Depthwise causal kernel [W, 1, C]. Flip taps: lax cross-correlates kernel[k] with x[t+k-pad];
+        # with left pad (W-1) that yields out[t] = sum_k weight[W-1-k]*x[t-(W-1-k)], so kernel = flip(weight)
+        # reproduces out[t] = sum_lag weight[lag]*x[t-lag]. Identity-init (weight[0]=1) stays pass-through.
+        kernel = jnp.flip(self.weight, axis=0)[:, None, :].astype(x.dtype)
+        out = jax.lax.conv_general_dilated(
+            x,
+            kernel,
+            window_strides=(1,),
+            padding=[(w - 1, 0)],
+            dimension_numbers=("NWC", "WIO", "NWC"),
+            feature_group_count=x.shape[-1],
+        )
+        # Pin the output to x's layout so XLA keeps the depthwise conv shard-local (no all-gather of
+        # the model-sharded K/V channels). Skipped when there is no mesh (e.g. eager unit tests).
+        mesh = get_abstract_mesh()
+        if mesh is not None and mesh.axis_names:
+            out = jax.lax.with_sharding_constraint(out, jax.typeof(x).sharding)
         return out
 
 
@@ -309,8 +328,10 @@ class CausalSelfAttention(eqx.Module):
             k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
             v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K and V projections (before head-split/RMS).
+        # Guard each site independently -- K-only leaves sconv_v None.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat)
+        if self.sconv_v is not None:
             v_flat = self.sconv_v(v_flat)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
