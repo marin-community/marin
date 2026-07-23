@@ -2788,19 +2788,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
-    nccl_ep_guard = contextlib.nullcontext()
+    nccl_ep_sharding = None
+    nccl_ep_mesh_resource = None
     if nccl_ep_modules is not None:
         if config.trainer.pipeline is None:
             raise ValueError("NCCL_EP requires a pipeline configuration")
         _, te_sharding = nccl_ep_modules
-        nccl_ep_guard = te_sharding.global_shard_guard(
-            te_sharding.MeshResource(
-                dp_resource=config.trainer.pipeline.stage_axis_name,
-                ep_resource="expert",
-            )
+        nccl_ep_sharding = te_sharding
+        nccl_ep_mesh_resource = te_sharding.MeshResource(
+            dp_resource=config.trainer.pipeline.stage_axis_name,
+            ep_resource="expert",
         )
 
-    with set_mesh(mesh), nccl_ep_guard:
+    def nccl_ep_shard_guard():
+        if nccl_ep_sharding is None:
+            return contextlib.nullcontext()
+        return nccl_ep_sharding.global_shard_guard(nccl_ep_mesh_resource)
+
+    with set_mesh(mesh), nccl_ep_shard_guard():
         if nccl_ep_modules is not None:
             te_ep, _ = nccl_ep_modules
             _bootstrap_nccl_ep(config, mesh, te_ep)
@@ -2999,26 +3004,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         _put_batch_on_stage(mpmd_mesh, mpmd_index, host_stage_batch)
                         for mpmd_index, host_stage_batch in zip(stage_mpmd_indices, host_stage_batches, strict=True)
                     )
-                if explicit_mpmd_train_step is None:
-                    explicit_mpmd_train_step = _make_explicit_mpmd_train_step(
-                        optimizer,
-                        trainer.mp,
-                        z_loss_weight=config.trainer.z_loss_weight,
-                        pipeline=config.trainer.pipeline,
-                        mpmd_mesh=mpmd_mesh,
-                        sample_state=state,
-                        sample_batches=stage_batches,
-                    )
-                    lower_explicit_mpmd = os.environ.get("GRUG_JAXPP_LOWER_EXPLICIT", "true").lower() not in (
-                        "0",
-                        "false",
-                        "no",
-                    )
-                    if mpmd_mesh.jax_mesh.is_multi_process and lower_explicit_mpmd:
-                        explicit_mpmd_train_step = _LocalLoweredExplicitMpmdStep(
-                            explicit_mpmd_train_step.lower(state, stage_batches)
+                with nccl_ep_shard_guard():
+                    if explicit_mpmd_train_step is None:
+                        explicit_mpmd_train_step = _make_explicit_mpmd_train_step(
+                            optimizer,
+                            trainer.mp,
+                            z_loss_weight=config.trainer.z_loss_weight,
+                            pipeline=config.trainer.pipeline,
+                            mpmd_mesh=mpmd_mesh,
+                            sample_state=state,
+                            sample_batches=stage_batches,
                         )
-                state, metrics, watch_stats = explicit_mpmd_train_step(state, stage_batches)
+                        lower_explicit_mpmd = os.environ.get("GRUG_JAXPP_LOWER_EXPLICIT", "true").lower() not in (
+                            "0",
+                            "false",
+                            "no",
+                        )
+                        if mpmd_mesh.jax_mesh.is_multi_process and lower_explicit_mpmd:
+                            explicit_mpmd_train_step = _LocalLoweredExplicitMpmdStep(
+                                explicit_mpmd_train_step.lower(state, stage_batches)
+                            )
+                    state, metrics, watch_stats = explicit_mpmd_train_step(state, stage_batches)
             else:
                 if mpmd_mesh is None:
                     raise ValueError("mpmd_mesh must be initialized when JaxPP pipeline training is enabled")
