@@ -10,9 +10,10 @@ not a per-task resource requirement).
 """
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 import humanfriendly
@@ -232,6 +233,18 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
     TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
 ]
 
+_BYTES_PER_GIB = 1024**3
+
+# Per-chip HBM capacities from the Google Cloud TPU specifications.
+TPU_HBM_BYTES_PER_CHIP: Mapping[str, int] = MappingProxyType(
+    {
+        "v4": 32 * _BYTES_PER_GIB,
+        "v5e": 16 * _BYTES_PER_GIB,
+        "v5p": 95 * _BYTES_PER_GIB,
+        "v6e": 32 * _BYTES_PER_GIB,
+    }
+)
+
 
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
@@ -282,6 +295,20 @@ def tpu_family(tpu_type: str) -> str:
     if tpu_type.startswith("v6e-"):
         return "v6e"
     raise ValueError(f"Cannot determine TPU family for type: {tpu_type}")
+
+
+def tpu_hbm_bytes_per_chip(family: str) -> int:
+    """Return the HBM capacity of one TPU chip in bytes."""
+    hbm_bytes = TPU_HBM_BYTES_PER_CHIP.get(family)
+    if hbm_bytes is None:
+        raise ValueError(f"Unknown TPU family {family!r}; expected one of {sorted(TPU_HBM_BYTES_PER_CHIP)}")
+    return hbm_bytes
+
+
+def tpu_hbm_capacity_bytes(tpu_type: str) -> int:
+    """Return the aggregate HBM capacity of a TPU slice in bytes."""
+    topology = get_tpu_topology(tpu_type)
+    return topology.chip_count * tpu_hbm_bytes_per_chip(tpu_family(tpu_type))
 
 
 DeviceKind = Literal["cpu", "gpu", "tpu"]
