@@ -1,0 +1,7 @@
+Your assignment is statistical identification of the phase-specific marginal-value state. Build on your prior reversal decomposition, kernel, ambiguity, and non-identification work, but do not default to another flexible residual model.
+
+Treat \(G(a)\) as an estimand. Determine which components, projections, or low-rank subspaces of \(G(a)\) are identifiable from the 280 exact fit fibers and the exposed exact-fiber archive. Separate uncertainty in aggregate response \(F\), phase-direction response, and curvature \(C\). Produce finite-sample rank, singular-spectrum, leverage, and null-space certificates. Use bootstrap or profile methods to quantify sign stability and uncertainty of the phase incentive at frontier aggregates.
+
+Investigate whether family aggregation, predeclared semantic contrasts, reversal pairs, or shared cross-target structure identify a low-dimensional projection without assuming the desired answer. Every dimension retained must have a mechanistic interpretation and a design-based identification argument. A high OOF score is not enough.
+
+Your main scientific output may be either an identified low-dimensional \(G\) with a frozen estimator or a proof that the present design leaves the decision-relevant phase direction unidentified. In the latter case, derive the smallest targeted experiment, including exact phase contrasts and sample count, that would reduce the relevant null space. Quantify how much the currently selected optimum can move inside the identified set.
