@@ -204,7 +204,7 @@ def run_row(record: EvalRunRecord) -> dict:
         "status": record.status.value,
         "results_path": record.results_path,
         "git_sha": record.provenance.git_sha,
-        "image_digest": record.provenance.evalchemy_image,
+        "image_digest": record.provenance.eval_image,
         "error": record.error,
         "record": record.model_dump(mode="json", by_alias=True),
     }

@@ -398,14 +398,14 @@ def run_inline(spec: LaunchSpec) -> list[str]:
     orchestrator job, the calling process -- which must itself be an Iris job, e.g. a pipeline
     step -- acts as the orchestrator and spawns the serve/eval children directly.
     """
-    provenance = Provenance(git_sha=_git_sha(), evalchemy_image=EVALCHEMY_IMAGE, launch_host=socket.gethostname())
+    provenance = Provenance(git_sha=_git_sha(), eval_image=EVALCHEMY_IMAGE, launch_host=socket.gethostname())
     user = _launch_user()
     return run_eval_group(_group_params(plan_runs(spec), spec, provenance, user))
 
 
 def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
     """Submit one CPU orchestrator job for the whole launch and return a handle to it."""
-    provenance = Provenance(git_sha=_git_sha(), evalchemy_image=EVALCHEMY_IMAGE, launch_host=socket.gethostname())
+    provenance = Provenance(git_sha=_git_sha(), eval_image=EVALCHEMY_IMAGE, launch_host=socket.gethostname())
     user = _launch_user()
     plans = plan_runs(spec)
     params = _group_params(plans, spec, provenance, user)
