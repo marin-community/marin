@@ -30,6 +30,31 @@ def test_run_all_children_succeed_returns_zero() -> None:
     assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
 
 
+def test_main_isolates_each_child_to_one_cuda_visible_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES", "1")
+    check = _py(
+        "import os; "
+        "rank = os.environ['IRIS_MULTIGPU_PROCESS_INDEX']; "
+        "assert os.environ['CUDA_VISIBLE_DEVICES'] == rank; "
+        "assert os.environ['IRIS_MULTIGPU_LOCAL_DEVICE_IDS'] == '0'"
+    )
+    argv = ["--nproc", "4", "--devices-per-proc", "1", "--", *check]
+    assert multigpu.main(argv) == 0
+
+
+def test_main_preserves_parent_cuda_visible_device_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-0,GPU-1,GPU-2,GPU-3")
+    check = _py(
+        "import os; "
+        "rank = os.environ['IRIS_MULTIGPU_PROCESS_INDEX']; "
+        "assert os.environ['CUDA_VISIBLE_DEVICES'] == f'GPU-{rank}'; "
+        "assert os.environ['IRIS_MULTIGPU_LOCAL_DEVICE_IDS'] == '0'"
+    )
+    argv = ["--nproc", "4", "--devices-per-proc", "1", "--", *check]
+    assert multigpu.main(argv) == 0
+
+
 def test_run_propagates_first_child_failure() -> None:
     # The rank-1 child exits 7; siblings exit 0. The supervisor surfaces 7.
     code = "import os,sys; sys.exit(7 if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='1' else 0)"

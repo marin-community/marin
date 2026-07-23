@@ -20,6 +20,12 @@ Each child inherits the supervisor's environment plus its rank::
 names are iris-private (not the JAX_*/framework namespace) so a job that already
 sets JAX rank vars never trips the supervised path.
 
+Setting ``IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES=1`` additionally gives each
+child a private ``CUDA_VISIBLE_DEVICES`` slice. Device ordinals are then remapped,
+so ``IRIS_MULTIGPU_LOCAL_DEVICE_IDS`` starts from zero in every child. An existing
+parent ``CUDA_VISIBLE_DEVICES`` list is sliced rather than replaced with ordinals,
+preserving UUID-based container mappings.
+
 The supervisor owns child lifecycle: it forwards SIGINT/SIGTERM to every child,
 tears the group down and exits non-zero if any child fails, and prefixes each
 child's output with its local rank. It deliberately does not import jax — the
@@ -58,10 +64,16 @@ _TERMINATE_GRACE = Duration.from_seconds(10.0)
 IRIS_MULTIGPU_PROCESS_COUNT_ENV = "IRIS_MULTIGPU_PROCESS_COUNT"
 IRIS_MULTIGPU_PROCESS_INDEX_ENV = "IRIS_MULTIGPU_PROCESS_INDEX"
 IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV = "IRIS_MULTIGPU_LOCAL_DEVICE_IDS"
+IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES_ENV = "IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES"
 
 
 def _child_rank_env(
-    local_rank: int, nproc: int, devices_per_proc: int, task_index: int, num_tasks: int
+    local_rank: int,
+    nproc: int,
+    devices_per_proc: int,
+    task_index: int,
+    num_tasks: int,
+    isolate_cuda_visible_devices: bool,
 ) -> dict[str, str]:
     """Compute the rank env vars handed to one child process.
 
@@ -70,11 +82,26 @@ def _child_rank_env(
     """
     begin = local_rank * devices_per_proc
     device_ids = ",".join(str(d) for d in range(begin, begin + devices_per_proc))
-    return {
+    rank_env = {
         IRIS_MULTIGPU_PROCESS_COUNT_ENV: str(num_tasks * nproc),
         IRIS_MULTIGPU_PROCESS_INDEX_ENV: str(task_index * nproc + local_rank),
         IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV: device_ids,
     }
+    if isolate_cuda_visible_devices:
+        parent_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if parent_visible_devices is None:
+            visible_devices = [str(d) for d in range(nproc * devices_per_proc)]
+        else:
+            visible_devices = [device.strip() for device in parent_visible_devices.split(",") if device.strip()]
+            required_devices = nproc * devices_per_proc
+            if len(visible_devices) < required_devices:
+                raise ValueError(
+                    f"CUDA_VISIBLE_DEVICES exposes {len(visible_devices)} device(s), "
+                    f"but the supervisor requires {required_devices}"
+                )
+        rank_env["CUDA_VISIBLE_DEVICES"] = ",".join(visible_devices[begin : begin + devices_per_proc])
+        rank_env[IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV] = ",".join(str(d) for d in range(devices_per_proc))
+    return rank_env
 
 
 def _pump_output(local_rank: int, stream, write_lock: threading.Lock) -> None:
@@ -96,7 +123,12 @@ def _signal_children(children: list[subprocess.Popen], ranks, sig: int) -> None:
 
 
 def _spawn_children(
-    nproc: int, devices_per_proc: int, task_index: int, num_tasks: int, child_argv: list[str]
+    nproc: int,
+    devices_per_proc: int,
+    task_index: int,
+    num_tasks: int,
+    child_argv: list[str],
+    isolate_cuda_visible_devices: bool,
 ) -> tuple[list[subprocess.Popen], list[threading.Thread]]:
     """Spawn all children, or SIGKILL any that started and re-raise on failure.
 
@@ -109,15 +141,23 @@ def _spawn_children(
     write_lock = threading.Lock()
     try:
         for local_rank in range(nproc):
-            rank_env = _child_rank_env(local_rank, nproc, devices_per_proc, task_index, num_tasks)
+            rank_env = _child_rank_env(
+                local_rank,
+                nproc,
+                devices_per_proc,
+                task_index,
+                num_tasks,
+                isolate_cuda_visible_devices,
+            )
             child_env = {**os.environ, **rank_env}
             logger.info(
-                "launch local rank %d: %s=%s %s=%s",
+                "launch local rank %d: %s=%s %s=%s CUDA_VISIBLE_DEVICES=%s",
                 local_rank,
                 IRIS_MULTIGPU_PROCESS_INDEX_ENV,
                 rank_env[IRIS_MULTIGPU_PROCESS_INDEX_ENV],
                 IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
                 rank_env[IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV],
+                child_env.get("CUDA_VISIBLE_DEVICES", "<unset>"),
             )
             child = subprocess.Popen(
                 child_argv,
@@ -143,7 +183,13 @@ def _spawn_children(
     return children, pumps
 
 
-def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
+def run(
+    nproc: int,
+    devices_per_proc: int,
+    child_argv: list[str],
+    *,
+    isolate_cuda_visible_devices: bool = False,
+) -> int:
     """Spawn ``nproc`` children, supervise them, return the process exit code.
 
     ``128 + signum`` if a SIGINT/SIGTERM was delivered to the supervisor (an
@@ -171,7 +217,14 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
         " ".join(child_argv),
     )
 
-    children, pumps = _spawn_children(nproc, devices_per_proc, task_index, num_tasks, child_argv)
+    children, pumps = _spawn_children(
+        nproc,
+        devices_per_proc,
+        task_index,
+        num_tasks,
+        child_argv,
+        isolate_cuda_visible_devices,
+    )
 
     terminating = threading.Event()
     shutdown_signum: int | None = None
@@ -251,7 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         "--devices-per-proc", type=int, default=1, help="local accelerator devices assigned to each process"
     )
     args = parser.parse_args(own_args)
-    return run(args.nproc, args.devices_per_proc, child_argv)
+    isolate_cuda_visible_devices = os.environ.get(IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES_ENV, "0") == "1"
+    return run(
+        args.nproc,
+        args.devices_per_proc,
+        child_argv,
+        isolate_cuda_visible_devices=isolate_cuda_visible_devices,
+    )
 
 
 if __name__ == "__main__":

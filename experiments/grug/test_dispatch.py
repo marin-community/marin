@@ -43,6 +43,14 @@ def test_dispatch_without_probe_preserves_default_environment(monkeypatch) -> No
     assert "LD_PRELOAD" not in request.environment.env_vars
 
 
+def test_dispatch_forwards_multigpu_cuda_isolation(monkeypatch) -> None:
+    monkeypatch.setenv("IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES", "1")
+
+    request = _capture_request(monkeypatch)
+
+    assert request.environment.env_vars["IRIS_MULTIGPU_ISOLATE_CUDA_VISIBLE_DEVICES"] == "1"
+
+
 def test_dispatch_with_probe_builds_and_preloads_worker_library(monkeypatch) -> None:
     request = _capture_request(
         monkeypatch,

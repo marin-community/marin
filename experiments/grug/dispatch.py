@@ -28,7 +28,16 @@ ConfigT = TypeVar("ConfigT")
 # levanter.optim.grugmuon.
 # TF_CPP_ forwards TSL logging controls (TF_CPP_VMODULE etc.) so XLA runtime
 # behavior on the train tasks can be traced from the submitter.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_", "TF_CPP_")
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "CE_",
+    "SCALE_MUON_",
+    "TF_CPP_",
+    "IRIS_MULTIGPU_",
+)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 _PROBE_LIBRARY_PATH = "/app/.venv/lib/libmarin_cuda_module_probe.so"
 _PROBE_SOURCE_PATH = "/app/experiments/grug/moe/standalone/cuda_module_probe.cc"
