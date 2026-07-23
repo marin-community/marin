@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from conftest import (
+    FINELOG_DEPLOYMENTS_PATH,
     IRIS_DEPLOY,
     KUEUE_DEPLOY,
     KUEUE_SLICES,
@@ -21,6 +22,7 @@ from conftest import (
     node,
     pod,
 )
+from finelog_health import FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sError, K8sErrorClass, K8sFleet
 from server import create_app
@@ -421,6 +423,40 @@ def test_fleet_stamps_cluster_and_keeps_healthy_clusters_on_partial_failure():
     (error_row,) = [row for row in rows if row["cluster"] == "cw-b"]
     assert error_row["error_class"] == "auth"
     assert "403" in error_row["error"]
+
+
+def test_finelog_health_reports_http_probe_readiness_for_each_mirror():
+    fleet = _fleet(("cw-a", k8s_api(healthy_k8s_routes())))
+
+    (health,) = fleet.finelog_health()
+    assert (health.cluster, health.server, health.role) == ("cw-a", "finelog-cw-a", FinelogRole.MIRROR)
+    assert health.responsive is True
+    assert (health.ready, health.desired, health.error_class) == (1, 1, "")
+
+
+def test_finelog_health_reports_not_ready_and_k8s_api_failures():
+    routes = healthy_k8s_routes()
+    routes[FINELOG_DEPLOYMENTS_PATH] = [deployment("iris", "finelog-cw-a", ready=0, containers=("finelog",))]
+    fleet = _fleet(("cw-a", k8s_api(routes)), ("cw-b", _forbidden))
+
+    health = fleet.finelog_health()
+    assert [(row.cluster, row.server, row.responsive, row.error_class) for row in health] == [
+        ("cw-a", "finelog-cw-a", False, "readiness"),
+        ("cw-b", "finelog-mirror", False, "auth"),
+    ]
+
+
+def test_finelog_health_reports_missing_deployment():
+    routes = healthy_k8s_routes()
+    routes[FINELOG_DEPLOYMENTS_PATH] = []
+
+    (health,) = _fleet(("cw-a", k8s_api(routes))).finelog_health()
+    assert (health.cluster, health.server, health.responsive, health.error_class) == (
+        "cw-a",
+        "finelog-mirror",
+        False,
+        "discovery",
+    )
 
 
 def test_alert_gpu_rack_trays_maps_trays_ready_to_value():

@@ -12,6 +12,8 @@ dashboard never sends admin RPC SQL, and every route feeds Infinity's backend pa
 Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
@@ -54,9 +56,10 @@ from datetime import UTC, datetime
 import pyarrow as pa
 import uvicorn
 from cache import TtlCache
-from config import BRIDGE_PORT, CLUSTERS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
+from config import BRIDGE_PORT, CLUSTERS, FINELOG_SLOW_THRESHOLD_MS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
 from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
+from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_source import GithubSource
 from iris_source import IrisSource
@@ -79,6 +82,7 @@ TO_MACRO = "{{to}}"
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
+_FINELOG_HUB_CLUSTER = "marin"
 
 
 def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
@@ -89,6 +93,29 @@ def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> l
             "crashlooping_containers": sum("container" in row for row in crashloop_rows),
         }
     ]
+
+
+def finelog_alert_rows(health_rows: list[FinelogHealth]) -> list[dict]:
+    """Project fleet health into Grafana's one-numeric-column alert contract."""
+    alerts = []
+    for row in health_rows:
+        if not row.responsive:
+            state = "unresponsive"
+        elif row.latency_ms is not None and row.latency_ms >= FINELOG_SLOW_THRESHOLD_MS:
+            state = "slow"
+        else:
+            state = "healthy"
+        alerts.append(
+            {
+                "cluster": row.cluster,
+                "server": row.server,
+                "role": row.role,
+                "state": state,
+                "error_class": row.error_class,
+                "value": 0 if state == "healthy" else 1,
+            }
+        )
+    return alerts
 
 
 def _sql_timestamp(at: datetime) -> str:
@@ -262,6 +289,7 @@ def create_app(
 ) -> Starlette:
     """Build the ASGI app serving finelog, Iris, GitHub, W&B, and k8s sources."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
@@ -274,6 +302,25 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+    def fleet_health_rows() -> list[FinelogHealth]:
+        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        return finelog_health_cache.get_or_compute(
+            "fleet_health",
+            lambda: [finelog_sources[_FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
+        )
+
+    def finelog_fleet_health(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse([asdict(row) for row in fleet_health_rows()])
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+
+    def finelog_alerts_fleet_health(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse(finelog_alert_rows(fleet_health_rows()))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -403,6 +450,8 @@ def create_app(
             Route("/github/nightlies", github_nightlies),
             Route("/wandb/{chart}", wandb_chart),
             Route("/finelog/{cluster}/query", query),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),

@@ -30,6 +30,8 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
+GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
+GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
@@ -54,6 +56,10 @@ Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bi
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
 `label_<key>` fields.
+
+`fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
+result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
+at or above 5 seconds is slow.
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
@@ -171,7 +177,8 @@ redeploy.
 
 Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, a dead Iris controller, a GPU pod that stays node-bound and
+degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
+pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —

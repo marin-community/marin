@@ -80,18 +80,20 @@ spec:
               cpu: "2"
               memory: "32Gi"
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 15
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
       volumes:
         - name: cache

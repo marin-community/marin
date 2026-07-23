@@ -43,6 +43,7 @@ from config import (
     WatchedComponent,
     WatchedWebhook,
 )
+from finelog_health import FinelogHealth, FinelogRole
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ STUCK_TERMINATION_OVERDUE_SECONDS = 120
 _GPU_RESOURCE = "nvidia.com/gpu"
 _IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
+_FINELOG_CONTAINER = "finelog"
+_FINELOG_FALLBACK_SERVER = "finelog-mirror"
 
 # CoreWeave physical-topology labels a GPU node carries: which rack it lives in,
 # the rack's full CoreWeave-assigned name, and its instance type.
@@ -82,6 +85,11 @@ BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 # rules filter on these values (the crashloops rule pages only on SCOPE_CONTROL_PLANE).
 SCOPE_CONTROL_PLANE = "control-plane"
 SCOPE_WORKLOAD = "workload"
+
+
+def _deployment_has_container(deployment: dict, container_name: str) -> bool:
+    pod_spec = ((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}
+    return any(container.get("name") == container_name for container in pod_spec.get("containers") or [])
 
 
 class K8sErrorClass(StrEnum):
@@ -307,6 +315,43 @@ class K8sSource:
                 }
             )
         return rows
+
+    def finelog_health(self) -> FinelogHealth:
+        """Report the mirror's HTTP-probe readiness from its Deployment status."""
+        # Name and namespace belong to finelog's deploy config, which is not in this
+        # image; discover by the stable container name instead of mirroring config.
+        deployments = self._list("/apis/apps/v1/deployments")
+        deployments = [
+            deployment for deployment in deployments if _deployment_has_container(deployment, _FINELOG_CONTAINER)
+        ]
+        if len(deployments) != 1:
+            return FinelogHealth(
+                cluster=self._target.name,
+                server=_FINELOG_FALLBACK_SERVER,
+                role=FinelogRole.MIRROR,
+                responsive=False,
+                ready=0,
+                desired=1,
+                latency_ms=None,
+                error_class="discovery",
+                error=f"expected one finelog Deployment, found {len(deployments)}",
+            )
+        deployment = deployments[0]
+        server = (deployment.get("metadata") or {}).get("name") or _FINELOG_FALLBACK_SERVER
+        desired = (deployment.get("spec") or {}).get("replicas", 1)
+        ready = (deployment.get("status") or {}).get("readyReplicas") or 0
+        responsive = desired > 0 and ready >= desired
+        return FinelogHealth(
+            cluster=self._target.name,
+            server=server,
+            role=FinelogRole.MIRROR,
+            responsive=responsive,
+            ready=ready,
+            desired=desired,
+            latency_ms=None,
+            error_class="" if responsive else "readiness",
+            error="" if responsive else "HTTP /health probe is not Ready",
+        )
 
     def _scanned_namespaces(self) -> list[str]:
         """Namespaces the pod scans cover: everything not provider-managed by prefix."""
@@ -627,6 +672,26 @@ class K8sFleet:
 
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)
+
+    def finelog_health(self) -> list[FinelogHealth]:
+        """One health row per k8s finelog mirror, including API failures."""
+
+        def on_error(source: K8sSource, err: K8sError) -> list[FinelogHealth]:
+            return [
+                FinelogHealth(
+                    cluster=source.target.name,
+                    server=_FINELOG_FALLBACK_SERVER,
+                    role=FinelogRole.MIRROR,
+                    responsive=False,
+                    ready=0,
+                    desired=1,
+                    latency_ms=None,
+                    error_class=str(err.error_class),
+                    error=str(err),
+                )
+            ]
+
+        return self._collect(lambda source: [source.finelog_health()], on_error)
 
     def alert_gpu_rack_trays(self) -> list[dict]:
         """Per rack: trays_ready as ``value``, for the below-minimum-trays alert.

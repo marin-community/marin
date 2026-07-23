@@ -11,6 +11,7 @@ KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controll
 IRIS_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/iris-controller"
 TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
 CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
+FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
 
 
@@ -28,10 +29,21 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
     )
 
 
-def deployment(namespace: str, name: str, *, ready: int = 1, desired: int = 1) -> dict:
+def deployment(
+    namespace: str,
+    name: str,
+    *,
+    ready: int = 1,
+    desired: int = 1,
+    containers: tuple[str, ...] = (),
+) -> dict:
     return {
         "metadata": {"namespace": namespace, "name": name},
-        "spec": {"replicas": desired, "selector": {"matchLabels": {"app": name}}},
+        "spec": {
+            "replicas": desired,
+            "selector": {"matchLabels": {"app": name}},
+            "template": {"spec": {"containers": [{"name": container} for container in containers]}},
+        },
         "status": {"readyReplicas": ready},
     }
 
@@ -117,6 +129,7 @@ def healthy_k8s_routes() -> dict:
         IRIS_DEPLOY: deployment("iris", "iris-controller"),
         TRAEFIK_DEPLOY: deployment("traefik", "traefik"),
         CERT_DEPLOY: deployment("cert-manager", "cert-manager"),
+        FINELOG_DEPLOYMENTS_PATH: [deployment("iris", "finelog-cw-a", containers=("finelog",))],
         "/api/v1/namespaces/kueue-system/pods": [pod("kueue-system", "kueue-controller-manager-abc")],
         "/api/v1/namespaces/iris/pods": [pod("iris", "iris-controller-abc")],
         "/api/v1/namespaces/traefik/pods": [pod("traefik", "traefik-abc")],

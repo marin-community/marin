@@ -449,6 +449,99 @@
           ]
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Finelog fleet health",
+      "description": "The marin hub reads one row from the log namespace and reports latency, exercising rotated segments. Each CoreWeave mirror reports its Kubernetes HTTP /health readiness.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "latency_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/fleet_health",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "server",
+              "text": "server",
+              "type": "string"
+            },
+            {
+              "selector": "role",
+              "text": "role",
+              "type": "string"
+            },
+            {
+              "selector": "responsive",
+              "text": "responsive",
+              "type": "boolean"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "number"
+            },
+            {
+              "selector": "desired",
+              "text": "desired",
+              "type": "number"
+            },
+            {
+              "selector": "latency_ms",
+              "text": "latency_ms",
+              "type": "number"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

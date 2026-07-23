@@ -14,6 +14,7 @@ import yaml
 from config import ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
+from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -84,14 +85,33 @@ class _FakeIris:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
 
 
+class _FakeFinelog:
+    def __init__(self, name: str) -> None:
+        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+
+    def health(self) -> FinelogHealth:
+        return FinelogHealth(
+            cluster=self.target.name,
+            server=f"finelog-{self.target.name}",
+            role=FinelogRole.HUB,
+            responsive=True,
+            ready=1,
+            desired=1,
+            latency_ms=3,
+            error_class="",
+            error="",
+        )
+
+
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
+    finelog_sources = {"marin": _FakeFinelog("marin")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
     client = TestClient(
         create_app(
             bridge_config(),
-            {},
+            finelog_sources,
             iris_sources,
             GithubSource(token=None, timeout=5.0),
             fleet,
@@ -138,6 +158,26 @@ def test_critical_contact_point_reaches_email_and_slack():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+
+
+def test_finelog_health_alert_pages_critical_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-fleet-unhealthy"]
+    assert rule["for"] == "5m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
+    assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_k8s_dashboard_shows_finelog_fleet_health():
+    dashboard = _stitched_dashboards()["k8s.json"]
+    (panel,) = [
+        panel
+        for panel in dashboard["panels"]
+        if any(target.get("url") == "/fleet_health" for target in panel.get("targets", []))
+    ]
+    assert panel["datasource"]["uid"] == "finelog-marin"
+    selectors = {column["selector"] for column in panel["targets"][0]["columns"]}
+    assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
 
 
 def test_dashboard_filter_expressions_reference_selected_columns():

@@ -253,6 +253,57 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
+  # The marin datasource combines a query-path probe of the GCE hub with the
+  # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
+  # NotReady when /health misses its fifteen-second deadline; the hub reports its
+  # measured one-row log query latency. The alert projection returns an explicit zero for
+  # every healthy server, so NoData means the monitoring path itself failed.
+  - orgId: 1
+    name: finelog-health
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: finelog-fleet-unhealthy
+        title: FinelogFleetUnhealthy
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.server }} is {{ $labels.state }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/fleet_health
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: server, text: server, type: string }
+                - { selector: role, text: role, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: error_class, text: error_class, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
   # existing per-cluster iris datasources. The health row always exists (the
   # bridge answers reachable=false rather than erroring), and `up` is its 0/1

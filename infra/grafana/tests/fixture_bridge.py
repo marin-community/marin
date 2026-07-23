@@ -188,6 +188,26 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             {"bucket": "last24h", "state": "succeeded", "count": 318},
             {"bucket": "last24h", "state": "failed", "count": 9},
         ]
+    if path == "/finelog/marin/fleet_health":
+        return [
+            {
+                "cluster": cluster,
+                "server": server,
+                "role": role,
+                "responsive": True,
+                "ready": 1,
+                "desired": 1,
+                "latency_ms": 22 if role == "hub" else None,
+                "error_class": "",
+                "error": "",
+            }
+            for cluster, server, role in (
+                ("marin", "finelog-marin", "hub"),
+                ("cw-us-east-02a", "finelog-cw-use02a", "mirror"),
+                ("cw-us-east-08a", "finelog-cw-use08a", "mirror"),
+                ("cw-rno2a", "finelog-cw-rno2a", "mirror"),
+            )
+        ]
     if path == "/k8s/health":
         return [
             {"cluster": cluster, "reachable": True, "up": 1, "latency_ms": 31, "error_class": ""}
