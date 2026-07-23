@@ -10,8 +10,6 @@ per entry and addresses it by name in the URL path.
 import dataclasses
 import os
 
-from github_app import GithubAppCredentials
-
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
 FINELOG_PORT = 10001
 
@@ -25,8 +23,22 @@ BRIDGE_PORT = 8081
 # A main-hub log query at or above this latency is unhealthy.
 FINELOG_SLOW_THRESHOLD_MS = 5_000
 
+# GitHub REST/GraphQL API base; the ferry/build/nightly panels and App auth build
+# their URLs from it.
+GITHUB_API_BASE = "https://api.github.com"
 # The GitHub repository the ferry and build panels read.
 GITHUB_REPO = "marin-community/marin"
+
+
+@dataclasses.dataclass(frozen=True)
+class GithubAppCredentials:
+    """The "Marin Ops Agent" app identity and its installation on the served repo."""
+
+    app_id: str
+    installation_id: str
+    private_key: str  # PEM
+
+
 # Ferry runs fetched per tier; commits scanned for the build panel.
 FERRY_RUN_LIMIT = 14
 BUILD_HISTORY = 100

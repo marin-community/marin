@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import httpx
-from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_REPO
+from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_API_BASE, GITHUB_REPO
 from errors import UpstreamError
 from graphql_source import graphql_data
 from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
@@ -25,8 +25,7 @@ from nightly_config import NIGHTLY_LANES, NightlyLane
 
 logger = logging.getLogger(__name__)
 
-_REST_BASE = "https://api.github.com"
-_GRAPHQL_URL = "https://api.github.com/graphql"
+_GRAPHQL_URL = f"{GITHUB_API_BASE}/graphql"
 
 # Per-commit rollup states GitHub reports; the build success rate is over finalized ones.
 _FINALIZED_STATES = ("SUCCESS", "FAILURE", "ERROR")
@@ -122,7 +121,7 @@ class GithubSource:
         for group in FERRY_GROUPS:
             for tier in group.tiers:
                 runs = self._get(
-                    f"{_REST_BASE}/repos/{GITHUB_REPO}/actions/workflows/{tier.file}/runs",
+                    f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/actions/workflows/{tier.file}/runs",
                     params={"per_page": FERRY_RUN_LIMIT, "branch": "main"},
                 ).get("workflow_runs", [])
                 finished = [r for r in runs if r.get("conclusion")]
@@ -193,7 +192,7 @@ class GithubSource:
 
     def _nightly_lane_snapshot(self, lane: NightlyLane, now: datetime) -> NightlyLaneSnapshot:
         """Fetch one lane's recent scheduled runs; a failure becomes an error snapshot, not a raise."""
-        url = f"{_REST_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
+        url = f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
         params = {
             "branch": lane.branch,
             "event": "schedule",

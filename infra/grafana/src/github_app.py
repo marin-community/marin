@@ -16,16 +16,14 @@ last an hour and roll themselves, so there is nothing to rotate operationally.
 
 import logging
 import time
-from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
 import jwt
+from config import GITHUB_API_BASE, GithubAppCredentials
 from errors import UpstreamError
 
 logger = logging.getLogger(__name__)
-
-_GITHUB_API = "https://api.github.com"
 
 # The installation token is attenuated to these read-only permissions. The app may
 # hold broader (write) grants for other automations; the bridge asks only for what
@@ -49,21 +47,8 @@ _JWT_LIFETIME = 540
 _JWT_BACKDATE = 30
 
 
-@dataclass(frozen=True)
-class GithubAppCredentials:
-    """The "Marin Ops Agent" app identity and its installation on the served repo."""
-
-    app_id: str
-    installation_id: str
-    private_key: str  # PEM
-
-
 class GithubAppAuth(httpx.Auth):
-    """An httpx auth flow that mints, caches, and refreshes an installation token.
-
-    It yields the token request through the caller's client (httpx's "auth flow
-    yields a request" pattern) rather than opening a second client.
-    """
+    """An httpx auth flow that mints, caches, and refreshes an installation token."""
 
     # auth_flow reads the token response body to cache the token and its expiry.
     requires_response_body = True
@@ -80,6 +65,8 @@ class GithubAppAuth(httpx.Auth):
         # valid. This runs about once a minute, so the contention window is tiny.
         if self._token is None or time.time() >= self._expires_at - _EXPIRY_SKEW:
             try:
+                # Yield the token request so it rides the caller's client transport
+                # (httpx's "auth flow yields a request"), avoiding a second client.
                 response = yield self._token_request()
             except httpx.TransportError as err:
                 raise UpstreamError("github", f"installation token unreachable ({err})", status_code=504) from err
@@ -98,7 +85,7 @@ class GithubAppAuth(httpx.Auth):
     def _token_request(self) -> httpx.Request:
         return httpx.Request(
             "POST",
-            f"{_GITHUB_API}/app/installations/{self._credentials.installation_id}/access_tokens",
+            f"{GITHUB_API_BASE}/app/installations/{self._credentials.installation_id}/access_tokens",
             headers={"authorization": f"Bearer {self._app_jwt()}", "accept": "application/vnd.github+json"},
             json={"repositories": [self._repository], "permissions": _TOKEN_PERMISSIONS},
         )

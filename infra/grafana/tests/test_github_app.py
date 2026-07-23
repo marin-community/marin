@@ -9,7 +9,7 @@ import time
 import httpx
 import jwt
 import pytest
-from config import _github_app_credentials
+from config import GithubAppCredentials, _github_app_credentials
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 from errors import UpstreamError
-from github_app import GithubAppAuth, GithubAppCredentials
+from github_app import GithubAppAuth
 
 
 def _keypair() -> tuple[str, str]:
