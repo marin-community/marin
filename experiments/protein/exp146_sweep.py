@@ -100,6 +100,9 @@ SMOKE_WANDB_GROUP: str = "exp146-smoke"
 # run of the same (point, region, tpu, correction_factor). Bump to fork a clean smoke run; the old
 # run and its checkpoints are left in place untouched.
 SMOKE_VERSION: str = "v1"
+CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-v1"
+CALIBRATION_BATCH_SIZE: int = 1024
+CALIBRATION_MODEL_SIZES: frozenset[str] = frozenset({"3b", "6b"})
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
@@ -338,6 +341,10 @@ def smoke() -> bool:
     return os.environ.get("SMOKE", "").strip().lower() in {"yes", "true", "1"}
 
 
+def calibration() -> bool:
+    return os.environ.get("CALIBRATION", "").strip().lower() in {"yes", "true", "1"}
+
+
 def smoke_steps() -> int:
     steps = _env_value("SMOKE_STEPS", int, SMOKE_STEPS_DEFAULT)
     if steps < 1:
@@ -508,7 +515,15 @@ def production_shape(point: Point, region: str) -> RunShape:
     )
 
 
-def smoke_shape(point: Point, region: str, steps: int, tpu: str, correction_factor: float | None) -> RunShape:
+def smoke_shape(
+    point: Point,
+    region: str,
+    steps: int,
+    tpu: str,
+    correction_factor: float | None,
+    *,
+    calibration_run: bool = False,
+) -> RunShape:
     """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
 
     Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path, but under
@@ -528,6 +543,9 @@ def smoke_shape(point: Point, region: str, steps: int, tpu: str, correction_fact
         f"correction_factor={cf:g}",
         f"smoke_version={SMOKE_VERSION}",
     ]
+    if calibration_run:
+        identity = f"{identity}-{CALIBRATION_VERSION}"
+        tags.extend(["batch-calibration", f"calibration_version={CALIBRATION_VERSION}"])
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
@@ -648,12 +666,33 @@ def _print_preview(
     )
 
 
+def validate_calibration_smoke(point: Point, tpu: str, correction_factor: float | None) -> None:
+    """Keep one-off batch calibration probes isolated from production sweep semantics."""
+    if not smoke():
+        raise SystemExit("CALIBRATION=yes requires SMOKE=yes")
+    if point.model_size not in CALIBRATION_MODEL_SIZES:
+        valid = ", ".join(sorted(CALIBRATION_MODEL_SIZES))
+        raise SystemExit(f"CALIBRATION=yes only supports MODEL_SIZE in {{{valid}}}; got {point.model_size}")
+    if point.batch_size != CALIBRATION_BATCH_SIZE:
+        raise SystemExit(f"CALIBRATION=yes requires BATCH_SIZE={CALIBRATION_BATCH_SIZE}; got {point.batch_size}")
+    config = batch_fit(point, tpu, correction_factor)
+    if config.tensor_parallelism != 1:
+        raise SystemExit(
+            f"CALIBRATION=yes must not use tensor parallelism; resolved tensor_parallelism={config.tensor_parallelism}"
+        )
+
+
 def _resolve_run(region: str, tpu: str, correction_factor: float | None) -> tuple[Point, RunShape, str]:
     """Resolve the point and mode for this invocation."""
+    calibration_run = calibration()
     if smoke():
         point = parse_point(defaults=Point(SMOKE_MODEL_SIZE_DEFAULT, *SMOKE_POINT_DEFAULTS))
-        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor)
-        return point, shape, "smoke"
+        if calibration_run:
+            validate_calibration_smoke(point, tpu, correction_factor)
+        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor, calibration_run=calibration_run)
+        return point, shape, "calibration-smoke" if calibration_run else "smoke"
+    if calibration_run:
+        raise SystemExit("CALIBRATION=yes requires SMOKE=yes")
     point = parse_point()
     validate_sweep_target(point, tpu, correction_factor)
     return point, production_shape(point, region), "sweep"
