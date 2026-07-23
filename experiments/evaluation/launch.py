@@ -28,7 +28,7 @@ from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.evaluation.eval_result import EvalchemyResult
-from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
@@ -418,7 +418,7 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
         entrypoint=Entrypoint.from_callable(run_eval_group, params),
         name=f"eval-{params.group_id}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
-        environment=EnvironmentSpec(env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS)),
+        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
         constraints=constraints,
         max_retries_failure=0,
     )
