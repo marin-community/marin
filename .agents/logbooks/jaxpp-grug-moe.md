@@ -2536,3 +2536,18 @@ author: dlwh
   - The performance gain and scoped numerical approval promote NCCL_EP to reduced JaxPP training. The integration creates four contiguous EP8 groups in a 32-process pipeline-major/expert-minor world and keeps expert weights partitioned over the `expert` mesh axis.
 - Next action:
   - Run a four-stage L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` smoke with CuTe FA4 and Pallas-Triton expert GEMMs. If finite and faster than the matched reduced ring result, scale to L24 and then the b8192/m256 capacity point.
+
+### 2026-07-23 11:47 PDT - first NCCL_EP pipeline smoke finds worker setup activation bug
+- Hypothesis: The pinned Transformer Engine setup and one-process-per-GPU launcher will reach NCCL_EP bootstrap on four RNO2A H100x8 workers.
+- Commit Hash: `a3db0171e2` (`[grug] Activate worker venv for NCCL EP setup`) fixes the failure.
+- Command: four-stage L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b`, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, three steps, and preallocation `0.65`. Parent `/dlwh/iris-run-job-20260723-183643`; child `/dlwh/iris-run-job-20260723-183643/grug-train-jaxpp-rno2a-ncclep-smoke-l8-e64k4-b512-s4096-p4m16-20260723-1138`.
+- Results:
+  - The intended 32-process topology launched correctly, with task-local rank groups `0-7`, `8-15`, `16-23`, and `24-31`.
+  - Iris custom setup ran outside `/app/.venv`. CUDA wheels were installed into that venv, but bare `python` in `cuda_wheels_env.sh` could not import `nvidia`, so `nvcc` was not found and Transformer Engine was not built.
+  - The generated setup shell lacked fail-fast semantics and continued into rank launch; all ranks then failed with `ModuleNotFoundError: No module named 'transformer_engine'`.
+  - Parent, child, and all tasks are terminal failed with no live resources. No NCCL_EP bootstrap, JaxPP compilation, training step, loss, or MFU result was produced.
+- Interpretation:
+  - This is a launcher setup failure, not a transport, topology, compiler, numerical, memory, or performance result. The rank layout validates the pipeline-major/expert-minor grouping assumption.
+  - Commit `a3db0171e2` activates `$IRIS_VENV` and enables `set -euo pipefail` before CUDA/TE setup, making interpreter selection coherent and preventing a failed build from reaching rank launch.
+- Next action:
+  - Relaunch the identical reduced smoke from `a3db0171e2`; do not change the model or performance axes.
