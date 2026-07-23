@@ -427,6 +427,148 @@ def _enable_apis(project: str) -> list[gcp.projects.Service]:
     ]
 
 
+@dataclass(frozen=True)
+class NetworkResources:
+    web_firewall: gcp.compute.Firewall
+    ssh_firewall: gcp.compute.Firewall
+    address: gcp.compute.Address
+    dns_record: cloudflare.DnsRecord
+
+
+def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> NetworkResources:
+    web_firewall = gcp.compute.Firewall(
+        "loom-web",
+        project=config.project,
+        network=config.network,
+        name=f"{config.instance_name}-allow-web",
+        direction="INGRESS",
+        source_ranges=["0.0.0.0/0"],
+        target_tags=[WEB_FIREWALL_TAG],
+        # Preserve provider-normalized ordering from the imported firewall so
+        # equivalent policy does not produce a permanent diff.
+        allows=[
+            {"protocol": "tcp", "ports": ["443"]},
+            {"protocol": "udp", "ports": ["443"]},
+            {"protocol": "tcp", "ports": ["80"]},
+        ],
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    ssh_firewall = gcp.compute.Firewall(
+        "loom-ssh",
+        project=config.project,
+        network=config.network,
+        name=f"{config.instance_name}-allow-ssh",
+        direction="INGRESS",
+        source_ranges=[config.operator_cidr],
+        target_tags=[SSH_FIREWALL_TAG],
+        allows=[{"protocol": "tcp", "ports": ["22"]}],
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    address = gcp.compute.Address(
+        "loom-address",
+        project=config.project,
+        region=config.region,
+        name=f"{config.instance_name}-ip",
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    dns_record = cloudflare.DnsRecord(
+        "loom-dns-address",
+        zone_id=config.dns_zone_id,
+        name=config.domain.rstrip("."),
+        type="A",
+        content=address.address,
+        ttl=300,
+        proxied=False,
+        opts=pulumi.ResourceOptions(protect=True),
+    )
+    return NetworkResources(web_firewall, ssh_firewall, address, dns_record)
+
+
+@dataclass(frozen=True)
+class DataResources:
+    disk: gcp.compute.Disk
+    snapshot_attachment: gcp.compute.DiskResourcePolicyAttachment
+
+
+def _create_data_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> DataResources:
+    data_disk = gcp.compute.Disk(
+        "loom-data",
+        project=config.project,
+        zone=config.zone,
+        name=f"{config.instance_name}-data",
+        type="pd-balanced",
+        size=config.data_disk_gb,
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    snapshot_policy = gcp.compute.ResourcePolicy(
+        "loom-data-snapshots",
+        project=config.project,
+        region=config.region,
+        name=f"{config.instance_name}-data-daily",
+        snapshot_schedule_policy={
+            "schedule": {"daily_schedule": {"days_in_cycle": 1, "start_time": "04:00"}},
+            "retention_policy": {
+                "max_retention_days": config.snapshot_retention_days,
+                "on_source_disk_delete": "KEEP_AUTO_SNAPSHOTS",
+            },
+            "snapshot_properties": {"storage_locations": config.region},
+        },
+        opts=pulumi.ResourceOptions(depends_on=apis),
+    )
+    snapshot_attachment = gcp.compute.DiskResourcePolicyAttachment(
+        "loom-data-snapshot-policy",
+        project=config.project,
+        zone=config.zone,
+        disk=data_disk.name,
+        name=snapshot_policy.name,
+    )
+    return DataResources(data_disk, snapshot_attachment)
+
+
+@dataclass(frozen=True)
+class ImageResources:
+    image: docker_build.Image
+    reference: pulumi.Output[str]
+    vm_reader: gcp.artifactregistry.RepositoryIamMember
+
+
+def _create_image(
+    config: DeploymentConfig,
+    apis: list[gcp.projects.Service],
+    vm_account: gcp.serviceaccount.Account,
+) -> ImageResources:
+    repository = gcp.artifactregistry.Repository(
+        "loom-images",
+        project=config.project,
+        location=config.region,
+        repository_id=ARTIFACT_REPOSITORY_ID,
+        format="DOCKER",
+        description="Loom deployment images",
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
+    vm_reader = gcp.artifactregistry.RepositoryIamMember(
+        "loom-vm-image-reader",
+        project=config.project,
+        location=repository.location,
+        repository=repository.repository_id,
+        role="roles/artifactregistry.reader",
+        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
+    )
+    image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
+    image = docker_build.Image(
+        "loom-release-image",
+        context=docker_build.BuildContextArgs(location=config.source_path),
+        build_args={"CARGO_PROFILE": "release"},
+        labels={"org.opencontainers.image.source": DEFAULT_REPO_URL},
+        platforms=[docker_build.Platform.LINUX_AMD64],
+        tags=[image_tag],
+        push=True,
+        opts=pulumi.ResourceOptions(depends_on=[repository]),
+    )
+    reference = image.ref.apply(lambda value: _validated_image_reference(value, config.project, config.region))
+    return ImageResources(image, reference, vm_reader)
+
+
 def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     """Create loom's GCP resource graph and export its operator-facing values."""
     apis = _enable_apis(config.project)
@@ -489,101 +631,10 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         )
     else:
         deployment_manifest = render_deployment_manifest([])
-    artifact_repository = gcp.artifactregistry.Repository(
-        "loom-images",
-        project=config.project,
-        location=config.region,
-        repository_id=ARTIFACT_REPOSITORY_ID,
-        format="DOCKER",
-        description="Loom deployment images",
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    vm_image_reader = gcp.artifactregistry.RepositoryIamMember(
-        "loom-vm-image-reader",
-        project=config.project,
-        location=artifact_repository.location,
-        repository=artifact_repository.repository_id,
-        role="roles/artifactregistry.reader",
-        member=pulumi.Output.format("serviceAccount:{}", vm_account.email),
-    )
-    web_firewall = gcp.compute.Firewall(
-        "loom-web",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-web",
-        direction="INGRESS",
-        source_ranges=["0.0.0.0/0"],
-        target_tags=[WEB_FIREWALL_TAG],
-        # Preserve provider-normalized ordering from the imported firewall so
-        # equivalent policy does not produce a permanent diff.
-        allows=[
-            {"protocol": "tcp", "ports": ["443"]},
-            {"protocol": "udp", "ports": ["443"]},
-            {"protocol": "tcp", "ports": ["80"]},
-        ],
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    ssh_firewall = gcp.compute.Firewall(
-        "loom-ssh",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-ssh",
-        direction="INGRESS",
-        source_ranges=[config.operator_cidr],
-        target_tags=[SSH_FIREWALL_TAG],
-        allows=[{"protocol": "tcp", "ports": ["22"]}],
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    address = gcp.compute.Address(
-        "loom-address",
-        project=config.project,
-        region=config.region,
-        name=f"{config.instance_name}-ip",
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
+    image = _create_image(config, apis, vm_account)
+    network = _create_network(config, apis)
 
-    dns_record = cloudflare.DnsRecord(
-        "loom-dns-address",
-        zone_id=config.dns_zone_id,
-        name=config.domain.rstrip("."),
-        type="A",
-        content=address.address,
-        ttl=300,
-        proxied=False,
-        opts=pulumi.ResourceOptions(protect=True),
-    )
-
-    data_disk = gcp.compute.Disk(
-        "loom-data",
-        project=config.project,
-        zone=config.zone,
-        name=f"{config.instance_name}-data",
-        type="pd-balanced",
-        size=config.data_disk_gb,
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-    snapshot_policy = gcp.compute.ResourcePolicy(
-        "loom-data-snapshots",
-        project=config.project,
-        region=config.region,
-        name=f"{config.instance_name}-data-daily",
-        snapshot_schedule_policy={
-            "schedule": {"daily_schedule": {"days_in_cycle": 1, "start_time": "04:00"}},
-            "retention_policy": {
-                "max_retention_days": config.snapshot_retention_days,
-                "on_source_disk_delete": "KEEP_AUTO_SNAPSHOTS",
-            },
-            "snapshot_properties": {"storage_locations": config.region},
-        },
-        opts=api_options,
-    )
-    snapshot_attachment = gcp.compute.DiskResourcePolicyAttachment(
-        "loom-data-snapshot-policy",
-        project=config.project,
-        zone=config.zone,
-        disk=data_disk.name,
-        name=snapshot_policy.name,
-    )
+    data = _create_data_disk(config, apis)
 
     dotenv_secret = gcp.secretmanager.Secret(
         "loom-dotenv",
@@ -613,21 +664,9 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             )
         )
 
-    image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
-    built_image = docker_build.Image(
-        "loom-release-image",
-        context=docker_build.BuildContextArgs(location=config.source_path),
-        build_args={"CARGO_PROFILE": "release"},
-        labels={"org.opencontainers.image.source": DEFAULT_REPO_URL},
-        platforms=[docker_build.Platform.LINUX_AMD64],
-        tags=[image_tag],
-        push=True,
-        opts=pulumi.ResourceOptions(depends_on=[artifact_repository]),
-    )
-    image = built_image.ref.apply(lambda value: _validated_image_reference(value, config.project, config.region))
     metadata = {
         "loom-domain": config.domain,
-        "loom-image": image,
+        "loom-image": image.reference,
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
@@ -638,16 +677,16 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         "startup-script": STARTUP_SCRIPT,
     }
     dependencies: list[pulumi.Resource] = [
-        web_firewall,
-        ssh_firewall,
-        data_disk,
+        network.web_firewall,
+        network.ssh_firewall,
+        data.disk,
         dotenv_secret,
         vm_secret_reader,
-        vm_image_reader,
-        snapshot_attachment,
+        image.vm_reader,
+        data.snapshot_attachment,
         *profile_secret_readers,
     ]
-    dependencies.append(dns_record)
+    dependencies.append(network.dns_record)
     instance_options = pulumi.ResourceOptions(
         depends_on=dependencies,
         protect=True,
@@ -672,7 +711,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             # GCE preserves separately attached persistent disks when an
             # instance is deleted; the disk resource is protected as well.
             {
-                "source": data_disk.id,
+                "source": data.disk.id,
                 "device_name": DATA_DISK_DEVICE_NAME,
                 "mode": "READ_WRITE",
             }
@@ -680,7 +719,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         network_interfaces=[
             {
                 "network": config.network,
-                "access_configs": [{"nat_ip": address.address}],
+                "access_configs": [{"nat_ip": network.address.address}],
             }
         ],
         metadata=metadata,
@@ -708,15 +747,15 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
             instance.id,
             pulumi.Output.json_dumps(metadata),
         ],
-        opts=pulumi.ResourceOptions(depends_on=[instance, dns_record]),
+        opts=pulumi.ResourceOptions(depends_on=[instance, network.dns_record]),
     )
 
-    pulumi.export("address", address.address)
+    pulumi.export("address", network.address.address)
     pulumi.export("url", f"https://{config.domain}/")
     pulumi.export("instanceName", instance.name)
     pulumi.export("zone", config.zone)
-    pulumi.export("artifactImage", image)
-    pulumi.export("builtImage", built_image.ref)
+    pulumi.export("artifactImage", image.reference)
+    pulumi.export("builtImage", image.image.ref)
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
     pulumi.export("tokenAudience", audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
