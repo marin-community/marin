@@ -2582,3 +2582,20 @@ author: dlwh
   - The validated one-node A/B already uses `jax.sharding.get_abstract_mesh()` inside the `auto_axes` body. Commit `741018a405` applies that same pattern so the nested expert FFN map uses the active Auto mesh rather than the captured Explicit mesh.
 - Next action:
   - Relaunch the unchanged reduced smoke from `741018a405`; require JaxPR tracing to clear and capture the first lowering/compile/runtime result.
+
+### 2026-07-23 13:21 PDT - JaxPP stage localization requires a one-group TE abstract view
+- Hypothesis: Using the active Auto mesh in the nested expert map will complete the TE dispatch/local-FFN trace.
+- Commit Hashes:
+  - `ad8e7284c1` first applied TE's ordinary full-mesh compound receive spec.
+  - `359a3effb9` supersedes that insufficient fix by separating the four physical communicators from each stage's one-group abstract JAX view.
+- Command: unchanged reduced smoke. Parent `/dlwh/iris-run-job-20260723-195731`; child `/dlwh/iris-run-job-20260723-195731/grug-train-jaxpp-rno2a-ncclep-smoke-r4-l8-e64k4-b512-s4096-p4m16-20260723-1300`.
+- Results:
+  - TE setup, rank ordering, and four EP8 bootstraps passed again. The prior Explicit-versus-Auto nested-mesh mismatch is cleared.
+  - Tracing reached the local FFN but saw `recv_tokens` shape `(4, 65536, 2560)` and failed when reshaping it to `(65536, 2560)`. No XLA compilation or training metric occurred.
+  - The child failed after `9m08.13s`; the parent failed after `9m54.5s`. All tasks are terminal, with zero preemptions and no live resources.
+- Interpretation:
+  - TE caches `num_ep_groups=4` in a Python `EpConfig`, so its global dispatch abstract shape has leading extent `4 * 8 = 32`. JaxPP then localizes each stage onto an unstacked mesh where the `pipeline` axis is still named but has size 1. A compound `(pipeline, expert)` spec therefore divides by only eight and leaves four groups in each local shard.
+  - Flattening those groups would be incorrect: token counts would contain 32 groups while each stage rank owns only eight local expert matrices.
+  - The C++ bootstrap already configured each process with one physical EP8 communicator. At the pinned TE revision, the separate Python `EpConfig` controls abstract output dimensions, so `359a3effb9` changes only that tracing snapshot to `num_ep_groups=1` after physical bootstrap. It also pins stage-local inputs/receives/combines to the expert axis. The expected local FFN shapes are now receive `(1, 65536, 2560)`, counts `(1, 8)`, and eight expert matrices.
+- Next action:
+  - Relaunch the unchanged reduced smoke from `359a3effb9`. If tracing clears, capture the first XLA compile/runtime result before changing any capacity or performance axis.
