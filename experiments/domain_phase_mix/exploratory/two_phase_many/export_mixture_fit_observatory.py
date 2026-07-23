@@ -34,6 +34,7 @@ import hashlib
 import json
 import math
 import sys
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -121,6 +122,19 @@ DELPHI_3E18_DATA = SCRIPT_DIR / (
     "reference_outputs/delphi_augmented_swarm_3e18_20260714/delphi_augmented_swarm_3e18_wide.csv"
 )
 DELPHI_3E18_HELDOUTS = SCRIPT_DIR / ("reference_outputs/delphi_3e18_append_only_heldouts_20260714/heldout_current.csv")
+DELPHI_3E18_ONE_PHASE_DIR = SCRIPT_DIR / "reference_outputs/delphi_one_phase_augmented_swarm_3e18_20260715"
+DELPHI_3E18_ONE_PHASE_MANIFEST = DELPHI_3E18_ONE_PHASE_DIR / "training_manifest.csv"
+DELPHI_3E18_ONE_PHASE_WEIGHTS = DELPHI_3E18_ONE_PHASE_DIR / "phase_weights.csv"
+DELPHI_3E18_ONE_PHASE_SERIES = "delphi_one_phase_augmented_swarm_3e18_20260715"
+MINIMUM_DELPHI_3E18_HELDOUTS = 1_342
+REQUIRED_DELPHI_3E18_HELDOUT_SERIES = {
+    DELPHI_3E18_ONE_PHASE_SERIES: 238,
+    "delphi_3e18_adversarial_stress_panel_20260716": 120,
+    "delphi_3e18_frontier_phase_fiber_20260719": 200,
+    "hpr_300m_to_3e18_optimum_validation_panel_20260720": 62,
+    "hpr_3e18_to_3e18_optimum_validation_panel_20260720": 62,
+    "delphi_3e18_frontier_random_phase_population_20260720": 296,
+}
 STARCODER_TARGET_COLUMN = "eval/paloma/dolma_100_programing_languages/bpb"
 STARCODER_DOMAINS = ["nemotron_full", "starcoder"]
 MODEL_IDS = (
@@ -241,7 +255,7 @@ HIERARCHICAL_PHASE_REPLAY_TOP_SHAPES = 3
 POWER_HEADS_SHAPE_COUNT = 16
 RETAINED_GRP_L2_GRID = retained_grp.L2_GRID
 RETAINED_GRP_SHAPE_COUNT = 32
-CACHE_VERSION = "mixture-fit-observatory-v8-delphi-3e18"
+CACHE_VERSION = "mixture-fit-observatory-v9-delphi-one-two-phase"
 MODEL_CACHE_VERSIONS = {model_id: "v1" for model_id in MODEL_IDS}
 MODEL_CACHE_VERSIONS["bucket_family_power_separate_heads_family_onset"] = "v2"
 LOWER_TAIL_FRACTION = 0.15
@@ -3469,7 +3483,7 @@ def cached_300m_fit_detail(
         tuning,
         TWO_PHASE,
         protocol=(
-            "Existing three-seed, five-fold panel-stratified grouped OOF; " "full model refit on 280 collapsed designs."
+            "Existing three-seed, five-fold panel-stratified grouped OOF; full model refit on 280 collapsed designs."
         ),
         oof_seeds=tuple(int(seed) for seed in legacy["dataset"]["oofSeeds"]),
     )
@@ -3709,6 +3723,107 @@ def load_delphi_3e18_fit_dataset(target_id: str) -> pooled.Dataset:
     )
 
 
+def load_delphi_3e18_single_phase_dataset(
+    target_id: str,
+    reference: pooled.Dataset,
+    heldout_frame: pd.DataFrame,
+    heldout_weights: np.ndarray,
+) -> tuple[pooled.Dataset, np.ndarray]:
+    target_column = {
+        "uncheatable": "uncheatable_bpb",
+        "table9": "table9_macro_bpb",
+    }[target_id]
+    manifest = pd.read_csv(DELPHI_3E18_ONE_PHASE_MANIFEST).sort_values("run_order").reset_index(drop=True)
+    phase_weights = pd.read_csv(DELPHI_3E18_ONE_PHASE_WEIGHTS)
+    domains = list(reference.domain_names)
+    expected_weight_rows = len(manifest) * 2 * len(domains)
+    if len(manifest) != 280 or len(phase_weights) != expected_weight_rows:
+        raise ValueError(
+            f"Expected a 280-row one-phase manifest and {expected_weight_rows} long-form weights, "
+            f"found {len(manifest)} and {len(phase_weights)}"
+        )
+    if manifest["run_name"].duplicated().any() or phase_weights.duplicated(["run_name", "phase", "domain"]).any():
+        raise ValueError("The Delphi one-phase panel contains duplicate policy or weight keys")
+    if set(phase_weights["domain"]) != set(domains):
+        raise ValueError("The Delphi one-phase panel domain set differs from the two-phase fit panel")
+
+    weight_lookup = phase_weights.set_index(["run_name", "phase", "domain"])["weight"]
+    phase0 = np.asarray(
+        [[weight_lookup.loc[(run_name, "phase_0", domain)] for domain in domains] for run_name in manifest["run_name"]],
+        dtype=float,
+    )
+    phase1 = np.asarray(
+        [[weight_lookup.loc[(run_name, "phase_1", domain)] for domain in domains] for run_name in manifest["run_name"]],
+        dtype=float,
+    )
+    if not np.allclose(phase0, phase1, atol=1e-12):
+        raise ValueError("The Delphi one-phase panel contains a phase-varying policy")
+    if not np.allclose(phase0.sum(axis=1), 1.0, atol=1e-10):
+        raise ValueError("The Delphi one-phase panel weights do not sum to one")
+
+    reference_indices = {str(name): index for index, name in enumerate(reference.frame["run_name"])}
+    heldout_indices = {str(name): index for index, name in enumerate(heldout_frame["wandb_run_base"])}
+    if len(heldout_indices) != len(heldout_frame):
+        raise ValueError("The Delphi heldout registry contains duplicate W&B run bases")
+
+    targets: list[float] = []
+    evaluation_indices: list[int] = []
+    frame_rows: list[dict[str, Any]] = []
+    disposition_counts: Counter[str] = Counter()
+    for row_index, source in manifest.iterrows():
+        run_name = str(source["run_name"])
+        source_run_name = str(source["source_run_name"])
+        disposition = str(source["disposition"])
+        disposition_counts[disposition] += 1
+        record = source.to_dict()
+        if disposition == "reused_exact_phase_tied_alias":
+            if source_run_name not in reference_indices:
+                raise ValueError(f"Missing reused two-phase source row {source_run_name}")
+            reference_index = reference_indices[source_run_name]
+            if not np.allclose(reference.weights[reference_index], np.stack([phase0[row_index], phase1[row_index]])):
+                raise ValueError(f"Reused one-phase weights differ from source row {source_run_name}")
+            source_row = reference.frame.iloc[reference_index]
+            targets.append(float(reference.y[reference_index]))
+            evaluation_indices.append(reference_index)
+            record["wandb_url"] = source_row.get("training_wandb_url")
+            record["wandb_run_id"] = source_row.get("training_wandb_run_id")
+        elif disposition == "scheduled_new_training":
+            if run_name not in heldout_indices:
+                raise ValueError(f"Missing completed one-phase heldout row {run_name}")
+            heldout_index = heldout_indices[run_name]
+            heldout_row = heldout_frame.iloc[heldout_index]
+            if str(heldout_row["training_series"]) != DELPHI_3E18_ONE_PHASE_SERIES:
+                raise ValueError(f"One-phase run {run_name} resolved to the wrong training series")
+            if not np.allclose(heldout_weights[heldout_index], np.stack([phase0[row_index], phase1[row_index]])):
+                raise ValueError(f"Completed one-phase weights differ from manifest row {run_name}")
+            targets.append(float(heldout_row[target_column]))
+            evaluation_indices.append(reference.n + heldout_index)
+            record["wandb_url"] = heldout_row["wandb_url"]
+            record["wandb_run_id"] = heldout_row["wandb_run_id"]
+        else:
+            raise ValueError(f"Unknown Delphi one-phase disposition {disposition!r}")
+        frame_rows.append(record)
+
+    expected_dispositions = {"reused_exact_phase_tied_alias": 42, "scheduled_new_training": 238}
+    if disposition_counts != expected_dispositions:
+        raise ValueError(f"Unexpected Delphi one-phase composition: {dict(disposition_counts)}")
+    target = np.asarray(targets, dtype=float)
+    if not np.isfinite(target).all() or len(set(evaluation_indices)) != len(evaluation_indices):
+        raise ValueError(f"The Delphi one-phase {target_id} panel is incomplete or maps to duplicate observations")
+    return (
+        pooled.Dataset(
+            name=f"delphi_3e18_single_{target_id}",
+            frame=pd.DataFrame(frame_rows),
+            y=target,
+            weights=np.stack([phase0, phase1], axis=1),
+            c0=np.asarray(reference.c0, dtype=float),
+            c1=np.asarray(reference.c1, dtype=float),
+            domain_names=domains,
+        ),
+        np.asarray(evaluation_indices, dtype=int),
+    )
+
+
 def load_delphi_3e18_heldouts(reference: pooled.Dataset) -> tuple[pd.DataFrame, np.ndarray]:
     frame = pd.read_csv(DELPHI_3E18_HELDOUTS)
     complete = (frame["training_state"] == "finished") & (frame["checkpoint_declared_complete"] == 1)
@@ -3722,8 +3837,15 @@ def load_delphi_3e18_heldouts(reference: pooled.Dataset) -> tuple[pd.DataFrame, 
     phase0 = np.asarray([parse_weights(value) for value in frame["phase_0_weights_json"]], dtype=float)
     phase1 = np.asarray([parse_weights(value) for value in frame["phase_1_weights_json"]], dtype=float)
     weights = np.stack([phase0, phase1], axis=1)
-    if len(frame) != 364 or not np.allclose(weights.sum(axis=2), 1.0):
-        raise ValueError(f"Expected 364 completed normalized 3e18 heldouts, found {len(frame)}")
+    if len(frame) < MINIMUM_DELPHI_3E18_HELDOUTS or not np.allclose(weights.sum(axis=2), 1.0):
+        raise ValueError(
+            f"Expected at least {MINIMUM_DELPHI_3E18_HELDOUTS} completed normalized 3e18 heldouts, found {len(frame)}"
+        )
+    series_counts = frame["training_series"].value_counts()
+    for series, expected_count in REQUIRED_DELPHI_3E18_HELDOUT_SERIES.items():
+        actual_count = int(series_counts.get(series, 0))
+        if actual_count != expected_count:
+            raise ValueError(f"Expected {expected_count} completed heldouts from {series}, found {actual_count}")
     if not np.isfinite(frame[["uncheatable_bpb", "table9_macro_bpb"]].to_numpy(dtype=float)).all():
         raise ValueError("Every completed 3e18 heldout must have both headline metrics")
     heldout_alpha0 = frame["phase_0_fraction"].to_numpy(dtype=float)
@@ -3767,10 +3889,12 @@ def delphi_3e18_rows(
     fit_table9: pooled.Dataset,
     heldout_frame: pd.DataFrame,
     heldout_weights: np.ndarray,
+    single_phase_fit: pooled.Dataset,
+    single_phase_fit_indices: np.ndarray,
 ) -> list[dict[str, Any]]:
     alpha0, alpha1 = phase_fractions(fit_uncheatable)
     natural = natural_weights(fit_uncheatable, alpha0)
-    rows = row_records(fit_uncheatable, "uncheatable", natural, alpha0, alpha1, (TWO_PHASE,))
+    rows = row_records(fit_uncheatable, "uncheatable", natural, alpha0, alpha1, POLICY_CLASSES)
     for index, row in enumerate(rows):
         row["id"] = f"fit:delphi_3e18:{index}"
         row["observed"]["table9"] = float(fit_table9.y[index])
@@ -3809,37 +3933,171 @@ def delphi_3e18_rows(
         row["isSharedAlias"] = bool(exact_coordinate)
         row["pairedRow"] = str(source["fit_panel_run_name"]) if exact_coordinate else None
         row["candidateTarget"] = str(source["objective"])
+        anchor_id = str(source.get("anchor_id", "")) if pd.notna(source.get("anchor_id")) else ""
+        if anchor_id:
+            raw_metadata = source.get("proposal_metadata_json", "")
+            proposal_metadata = json.loads(str(raw_metadata)) if pd.notna(raw_metadata) and str(raw_metadata) else {}
+            if not isinstance(proposal_metadata, dict):
+                raise ValueError(f"Invalid phase-population provenance for {source['wandb_run_name']}")
+            seed_block = safe_float(source.get("seed_block"))
+            radius_fraction = safe_float(source.get("radius_fraction"))
+            phase_information_kl = safe_float(proposal_metadata.get("phase_information_kl"))
+            feasible_radius = safe_float(proposal_metadata.get("feasible_radius"))
+            realized_radius = safe_float(proposal_metadata.get("realized_radius"))
+            if None in (
+                seed_block,
+                radius_fraction,
+                phase_information_kl,
+                feasible_radius,
+                realized_radius,
+            ):
+                raise ValueError(f"Incomplete phase-population provenance for {source['wandb_run_name']}")
+            row["directionType"] = str(source["candidate_kind"])
+            row["directionId"] = str(source["direction_id"])
+            row["phasePopulation"] = {
+                "candidateId": str(source["candidate_id"]),
+                "anchorId": anchor_id,
+                "anchorRunName": str(proposal_metadata["anchor_run_name"]),
+                "directionId": str(source["direction_id"]),
+                "directionLabel": str(proposal_metadata["direction_label"]),
+                "seedBlock": int(seed_block),
+                "radiusFraction": float(radius_fraction),
+                "contrastFamily": str(source["candidate_kind"]),
+                "phaseInformationKl": float(phase_information_kl),
+                "feasibleRadius": float(feasible_radius),
+                "realizedRadius": float(realized_radius),
+            }
+        if str(source["training_series"]) == DELPHI_3E18_ONE_PHASE_SERIES:
+            row["fitPolicies"] = [SINGLE_PHASE]
+            row["method"] = "independently trained one-phase fit-panel policy"
         row["observed"] = {
             "uncheatable": float(source["uncheatable_bpb"]),
             "table9": float(source["table9_macro_bpb"]),
         }
         row["diagnostics"]["nearestFitId"] = rows[nearest]["id"]
         row["diagnostics"]["supportDistance"] = float(distances[nearest])
-    return [*rows, *heldout_rows]
+    combined = [*rows, *heldout_rows]
+    if len(single_phase_fit_indices) != 280 or any(
+        SINGLE_PHASE not in combined[index]["fitPolicies"] for index in single_phase_fit_indices
+    ):
+        raise ValueError("The one-phase fit-panel rows were not marked as policy-matched fit observations")
+    marked_single_phase = [index for index, row in enumerate(combined) if SINGLE_PHASE in row["fitPolicies"]]
+    if marked_single_phase != sorted(single_phase_fit_indices.tolist()):
+        raise ValueError("The one-phase fit-panel membership differs from the independently assembled dataset")
+
+    two_phase_indices = {row["name"]: index for index, row in enumerate(rows)}
+    if len(two_phase_indices) != fit_uncheatable.n:
+        raise ValueError("The Delphi two-phase fit panel contains duplicate run names")
+    distinct_pair_count = 0
+    shared_pair_count = 0
+    for logical_index, source in single_phase_fit.frame.iterrows():
+        source_name = str(source["source_run_name"])
+        if source_name not in two_phase_indices:
+            raise ValueError(f"The one-phase source row {source_name} is absent from the two-phase panel")
+        two_phase_index = two_phase_indices[source_name]
+        single_phase_index = int(single_phase_fit_indices[logical_index])
+        two_phase_row = combined[two_phase_index]
+        single_phase_row = combined[single_phase_index]
+        if not np.allclose(single_phase_row["phase0"], two_phase_row["aggregate"], atol=1e-12):
+            raise ValueError(f"The one-phase row derived from {source_name} does not equal its aggregate policy")
+
+        disposition = str(source["disposition"])
+        if disposition == "reused_exact_phase_tied_alias":
+            if single_phase_index != two_phase_index:
+                raise ValueError(f"The shared phase-tied row {source_name} unexpectedly maps to a separate checkpoint")
+            shared_pair_count += 1
+            continue
+        if disposition != "scheduled_new_training":
+            raise ValueError(f"Unknown one-phase pairing disposition {disposition!r}")
+        if single_phase_index == two_phase_index:
+            raise ValueError(f"The independently trained one-phase row for {source_name} aliases its source checkpoint")
+        if two_phase_row["pairedRow"] is not None or single_phase_row["pairedRow"] is not None:
+            raise ValueError(f"The policy pair for {source_name} conflicts with an existing direct counterpart")
+        two_phase_row["pairedRow"] = single_phase_row["name"]
+        single_phase_row["pairedRow"] = two_phase_row["name"]
+        distinct_pair_count += 1
+
+    if (distinct_pair_count, shared_pair_count) != (238, 42):
+        raise ValueError(
+            "The Delphi policy-pair inventory must contain 238 independently trained pairs and 42 shared rows, "
+            f"found {distinct_pair_count} and {shared_pair_count}"
+        )
+    return combined
 
 
 def delphi_3e18_baselines(rows: list[dict[str, Any]], target_id: str) -> list[dict[str, str]]:
     def observed(row: Mapping[str, Any]) -> float:
         return float(row["observed"][target_id])
 
-    fit_rows = [row for row in rows if row["split"] == "fit"]
-    disjoint = [row for row in rows if row["split"] == "heldout" and not row["isSharedAlias"]]
+    two_phase_fit = [row for row in rows if TWO_PHASE in row["fitPolicies"]]
     options: list[dict[str, str]] = []
     for run_name, label in (
-        ("baseline_proportional", "Fit-panel proportional policy"),
-        ("baseline_unimax", "Fit-panel UniMax-8 policy"),
+        ("baseline_proportional", "Proportional (shared fit row)"),
+        ("baseline_unimax", "UniMax-8 (shared fit row)"),
     ):
-        matches = [row for row in fit_rows if row["name"] == run_name]
+        matches = [row for row in two_phase_fit if row["name"] == run_name]
         if len(matches) == 1:
             options.append({"id": matches[0]["id"], "label": label})
-    options.append({"id": min(fit_rows, key=observed)["id"], "label": "Empirical fit-panel frontier"})
     for policy_class, label in (
-        (SINGLE_PHASE, "Heldout one-phase frontier"),
-        (TWO_PHASE, "Heldout two-phase frontier"),
+        (SINGLE_PHASE, "One-phase fit-panel frontier"),
+        (TWO_PHASE, "Two-phase fit-panel frontier"),
     ):
-        candidates = [row for row in disjoint if row["phaseFamily"] == policy_class]
-        options.append({"id": min(candidates, key=observed)["id"], "label": label})
+        candidates = [row for row in rows if policy_class in row["fitPolicies"]]
+        if candidates:
+            options.append({"id": min(candidates, key=observed)["id"], "label": label})
+    for policy_class, label in (
+        (SINGLE_PHASE, "One-phase validation frontier"),
+        (TWO_PHASE, "Two-phase validation frontier"),
+    ):
+        candidates = [
+            row
+            for row in rows
+            if row["split"] == "heldout"
+            and not row["isSharedAlias"]
+            and row["phaseFamily"] == policy_class
+            and policy_class not in row["fitPolicies"]
+        ]
+        if candidates:
+            options.append({"id": min(candidates, key=observed)["id"], "label": label})
     return options
+
+
+def delphi_3e18_policy_diagnostics(
+    fit_dataset: pooled.Dataset,
+    evaluation_dataset: pooled.Dataset,
+    rows: list[dict[str, Any]],
+    prediction: np.ndarray,
+    fit_row_indices: np.ndarray,
+    policy_class: str,
+    seeds: tuple[int, ...],
+) -> dict[str, Any]:
+    if len(rows) != evaluation_dataset.n or len(prediction) != evaluation_dataset.n:
+        raise ValueError("Delphi diagnostics require one row and prediction per evaluated policy")
+    split = np.asarray([row["split"] for row in rows], dtype=object)
+    alias = np.asarray([bool(row["isSharedAlias"]) for row in rows], dtype=bool)
+    phase_family = np.asarray([row["phaseFamily"] for row in rows], dtype=object)
+    fit_mask = np.zeros(evaluation_dataset.n, dtype=bool)
+    fit_mask[fit_row_indices] = True
+    heldout = (split == "heldout") & ~alias & ~fit_mask
+    policy_heldout = heldout & (phase_family == policy_class)
+    fit_prediction = prediction[fit_row_indices]
+    return {
+        "fitOof": metric_summary(
+            fit_dataset.y,
+            fit_prediction,
+            fold_test_indices=oof_test_indices(fit_dataset, seeds),
+        ),
+        "heldout": metric_summary(evaluation_dataset.y[policy_heldout], prediction[policy_heldout]),
+        "heldoutAllPolicies": metric_summary(evaluation_dataset.y[heldout], prediction[heldout]),
+        "heldoutSinglePhase": metric_summary(
+            evaluation_dataset.y[heldout & (phase_family == SINGLE_PHASE)],
+            prediction[heldout & (phase_family == SINGLE_PHASE)],
+        ),
+        "heldoutTwoPhase": metric_summary(
+            evaluation_dataset.y[heldout & (phase_family == TWO_PHASE)],
+            prediction[heldout & (phase_family == TWO_PHASE)],
+        ),
+    }
 
 
 def delphi_3e18_noise_reference(heldout_frame: pd.DataFrame, target_column: str) -> dict[str, float | int]:
@@ -3864,13 +4122,34 @@ def build_delphi_3e18_swarm() -> dict[str, Any]:
     if fit_uncheatable.frame["run_name"].tolist() != fit_table9.frame["run_name"].tolist():
         raise ValueError("The two Delphi 3e18 target exports have different fit-row order")
     heldout_frame, heldout_weights = load_delphi_3e18_heldouts(fit_uncheatable)
-    rows = delphi_3e18_rows(fit_uncheatable, fit_table9, heldout_frame, heldout_weights)
+    one_phase_panels = {
+        target_id: load_delphi_3e18_single_phase_dataset(
+            target_id,
+            fit_dataset,
+            heldout_frame,
+            heldout_weights,
+        )
+        for target_id, fit_dataset in fit_datasets.items()
+    }
+    single_uncheatable, single_fit_indices = one_phase_panels["uncheatable"]
+    single_table9, single_table9_indices = one_phase_panels["table9"]
+    if single_uncheatable.frame["run_name"].tolist() != single_table9.frame["run_name"].tolist():
+        raise ValueError("The two Delphi one-phase target panels have different row order")
+    if not np.array_equal(single_fit_indices, single_table9_indices):
+        raise ValueError("The two Delphi one-phase target panels map to different Observatory rows")
+    rows = delphi_3e18_rows(
+        fit_uncheatable,
+        fit_table9,
+        heldout_frame,
+        heldout_weights,
+        single_uncheatable,
+        single_fit_indices,
+    )
     alpha0, alpha1 = phase_fractions(fit_uncheatable)
     domains, _natural, budget = domain_records(fit_uncheatable, alpha0)
     predictions: dict[str, Any] = {}
     diagnostics: dict[str, Any] = {}
     fits: dict[str, Any] = {}
-    evaluation_datasets: dict[str, pooled.Dataset] = {}
     seeds = (0, 1, 2)
     for target_id, fit_dataset in fit_datasets.items():
         evaluation_dataset = delphi_3e18_evaluation_dataset(
@@ -3879,61 +4158,89 @@ def build_delphi_3e18_swarm() -> dict[str, Any]:
             heldout_weights,
             target_id,
         )
-        evaluation_datasets[target_id] = evaluation_dataset
-        predictions[target_id] = {TWO_PHASE: {}}
-        diagnostics[target_id] = {TWO_PHASE: {}}
-        fits[target_id] = {TWO_PHASE: {}}
-        for model_id in DELPHI_3E18_MODEL_IDS:
-            result = cached_swarm_fit(
-                "delphi_3e18",
-                target_id,
-                fit_dataset,
-                evaluation_dataset,
-                np.arange(fit_dataset.n),
-                TWO_PHASE,
-                model_id,
-                [DELPHI_3E18_DATA, DELPHI_3E18_HELDOUTS],
-                seeds=seeds,
-            )
-            prediction = np.asarray(result["prediction"], dtype=float)
-            predictions[target_id][TWO_PHASE][model_id] = {
-                "prediction": result["prediction"],
-                "fullFitPrediction": result["fullFitPrediction"],
-            }
-            diagnostics[target_id][TWO_PHASE][model_id] = legacy_two_phase_diagnostics(
-                fit_dataset,
-                evaluation_dataset,
-                rows,
-                prediction,
-                seeds,
-            )
-            fits[target_id][TWO_PHASE][model_id] = result["fitDetail"]
-    disjoint_count = sum(row["split"] == "heldout" and not row["isSharedAlias"] for row in rows)
+        predictions[target_id] = {policy_class: {} for policy_class in POLICY_CLASSES}
+        diagnostics[target_id] = {policy_class: {} for policy_class in POLICY_CLASSES}
+        fits[target_id] = {policy_class: {} for policy_class in POLICY_CLASSES}
+        for policy_class in POLICY_CLASSES:
+            if policy_class == SINGLE_PHASE:
+                policy_fit_dataset, fit_row_indices = one_phase_panels[target_id]
+                source_paths = [
+                    DELPHI_3E18_DATA,
+                    DELPHI_3E18_HELDOUTS,
+                    DELPHI_3E18_ONE_PHASE_MANIFEST,
+                    DELPHI_3E18_ONE_PHASE_WEIGHTS,
+                ]
+            else:
+                policy_fit_dataset = fit_dataset
+                fit_row_indices = np.arange(fit_dataset.n)
+                source_paths = [DELPHI_3E18_DATA, DELPHI_3E18_HELDOUTS]
+            for model_id in DELPHI_3E18_MODEL_IDS:
+                result = cached_swarm_fit(
+                    "delphi_3e18",
+                    target_id,
+                    policy_fit_dataset,
+                    evaluation_dataset,
+                    fit_row_indices,
+                    policy_class,
+                    model_id,
+                    source_paths,
+                    seeds=seeds,
+                )
+                prediction = np.asarray(result["prediction"], dtype=float)
+                predictions[target_id][policy_class][model_id] = {
+                    "prediction": result["prediction"],
+                    "fullFitPrediction": result["fullFitPrediction"],
+                }
+                diagnostics[target_id][policy_class][model_id] = delphi_3e18_policy_diagnostics(
+                    policy_fit_dataset,
+                    evaluation_dataset,
+                    rows,
+                    prediction,
+                    fit_row_indices,
+                    policy_class,
+                    seeds,
+                )
+                fits[target_id][policy_class][model_id] = result["fitDetail"]
+    archive_disjoint_count = sum(row["split"] == "heldout" and not row["isSharedAlias"] for row in rows)
     exact_count = sum(row["split"] == "heldout" and row["isSharedAlias"] for row in rows)
+    fit_union = set(range(fit_uncheatable.n)) | set(single_fit_indices.tolist())
+    union_heldouts = [
+        row
+        for index, row in enumerate(rows)
+        if index not in fit_union and row["split"] == "heldout" and not row["isSharedAlias"]
+    ]
+    policy_heldout_counts = Counter(str(row["phaseFamily"]) for row in union_heldouts)
+    union_heldout_count = len(union_heldouts)
     return {
         "id": "delphi_3e18",
         "label": "Delphi 3e18 augmented swarm",
         "description": (
-            "The matched 280-row Dolma 3 + Dolmino fit panel retrained at 3e18 FLOPs, with every completed "
-            "historical 3e18 validation checkpoint projected as heldout evidence."
+            "Matched 280-row one-phase and two-phase Dolma 3 + Dolmino fit panels retrained at 3e18 FLOPs, "
+            "with every completed append-only 3e18 validation checkpoint projected as heldout evidence."
         ),
         "dataset": {
             "label": "Delphi 3e18 augmented swarm",
             "fitDesignCount": fit_uncheatable.n,
-            "rawFitObservationCount": fit_uncheatable.n,
-            "heldoutCount": disjoint_count,
+            "rawFitObservationCount": fit_uncheatable.n + single_uncheatable.n,
+            "heldoutCount": union_heldout_count,
+            "appendOnlyArchiveCount": len(heldout_frame),
+            "archiveCoordinateDisjointCount": archive_disjoint_count,
             "sharedAliasCount": exact_count,
             "noiseReferenceCount": 10,
-            "supplementalCandidateCount": disjoint_count,
+            "supplementalCandidateCount": len(heldout_frame),
+            "policyHeldoutCounts": dict(policy_heldout_counts),
             "phaseFractions": [alpha0, alpha1],
             "targetBudget": float(budget),
             "oofSeeds": list(seeds),
             "fitProtocol": (
-                "Three-seed, five-fold panel-stratified OOF on 280 fit designs; full fit projected onto "
-                f"{disjoint_count} coordinate-disjoint heldouts."
+                "Independent three-seed, five-fold panel-stratified OOF on matched 280-row one-phase and "
+                f"two-phase panels; metrics use {union_heldout_count} rows disjoint from the union of both fit "
+                f"panels. All {len(heldout_frame)} append-only archive rows remain visible."
             ),
-            "policyClasses": [TWO_PHASE],
-            "policyFitCounts": {TWO_PHASE: fit_uncheatable.n},
+            "policyClasses": list(POLICY_CLASSES),
+            "policyFitCounts": {SINGLE_PHASE: single_uncheatable.n, TWO_PHASE: fit_uncheatable.n},
+            "distinctPolicyPairCount": 238,
+            "sharedPhaseTiedPairCount": 42,
         },
         "domains": domains,
         "targets": {
@@ -3957,13 +4264,15 @@ def build_delphi_3e18_swarm() -> dict[str, Any]:
         "rows": rows,
         "predictions": predictions,
         "diagnostics": diagnostics,
-        "baselines": {target_id: delphi_3e18_baselines(rows, target_id) for target_id in evaluation_datasets},
+        "baselines": {target_id: delphi_3e18_baselines(rows, target_id) for target_id in fit_datasets},
         "fits": fits,
-        "nikeSwoosh": {target_id: {TWO_PHASE: {}} for target_id in evaluation_datasets},
+        "nikeSwoosh": {target_id: {policy_class: {} for policy_class in POLICY_CLASSES} for target_id in fit_datasets},
         "provenance": {
             "sources": [
                 str(DELPHI_3E18_DATA.relative_to(REPO_ROOT)),
                 str(DELPHI_3E18_HELDOUTS.relative_to(REPO_ROOT)),
+                str(DELPHI_3E18_ONE_PHASE_MANIFEST.relative_to(REPO_ROOT)),
+                str(DELPHI_3E18_ONE_PHASE_WEIGHTS.relative_to(REPO_ROOT)),
             ],
             "exporter": str(Path(__file__).relative_to(REPO_ROOT)),
         },

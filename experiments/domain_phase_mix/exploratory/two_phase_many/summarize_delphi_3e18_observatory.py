@@ -20,6 +20,7 @@ INPUT = SCRIPT_DIR / "mixture_fit_debugger/src/generated/dashboard_data.json"
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs/delphi_3e18_observatory_metrics_20260715"
 FIELDS = (
     "target",
+    "policy_class",
     "model",
     "model_label",
     "split",
@@ -64,35 +65,39 @@ def main() -> None:
     models = bundle["models"]
     rows: list[dict[str, object]] = []
     for target, policies in swarm["diagnostics"].items():
-        diagnostics = policies["two_phase"]
-        for model, model_metrics in diagnostics.items():
-            for split in SPLITS:
-                metric = model_metrics[split]
-                rows.append(
-                    {
-                        "target": target,
-                        "model": model,
-                        "model_label": models[model]["label"],
-                        "split": split,
-                        "n": metric["n"],
-                        "rmse": value(metric, "rmse"),
-                        "mae": value(metric, "mae"),
-                        "spearman": value(metric, "spearman"),
-                        "regret_at_1": value(metric, "regretAt1"),
-                        "fold_mean_regret_at_1": value(metric, "foldMeanRegretAt1"),
-                        "lower_tail_optimism": value(metric, "lowerTailOptimism"),
-                        "low_tail_rmse": value(metric, "lowTailRmse"),
-                        "lower_tail_count": metric["lowerTailCount"],
-                    }
-                )
+        for policy_class, diagnostics in policies.items():
+            for model, model_metrics in diagnostics.items():
+                for split in SPLITS:
+                    metric = model_metrics[split]
+                    rows.append(
+                        {
+                            "target": target,
+                            "policy_class": policy_class,
+                            "model": model,
+                            "model_label": models[model]["label"],
+                            "split": split,
+                            "n": metric["n"],
+                            "rmse": value(metric, "rmse"),
+                            "mae": value(metric, "mae"),
+                            "spearman": value(metric, "spearman"),
+                            "regret_at_1": value(metric, "regretAt1"),
+                            "fold_mean_regret_at_1": value(metric, "foldMeanRegretAt1"),
+                            "lower_tail_optimism": value(metric, "lowerTailOptimism"),
+                            "low_tail_rmse": value(metric, "lowTailRmse"),
+                            "lower_tail_count": metric["lowerTailCount"],
+                        }
+                    )
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     write_csv(OUTPUT_DIR / "model_metrics.csv", rows)
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "fit_rows": swarm["dataset"]["fitDesignCount"],
-        "coordinate_disjoint_heldouts": swarm["dataset"]["heldoutCount"],
+        "union_disjoint_heldouts": swarm["dataset"]["heldoutCount"],
+        "append_only_archive_rows": swarm["dataset"]["appendOnlyArchiveCount"],
+        "archive_disjoint_from_two_phase": swarm["dataset"]["archiveCoordinateDisjointCount"],
         "exact_coordinate_aliases": swarm["dataset"]["sharedAliasCount"],
         "model_count": len(models),
+        "policy_fit_counts": swarm["dataset"]["policyFitCounts"],
         "targets": list(swarm["targets"]),
     }
     (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
@@ -101,8 +106,11 @@ def main() -> None:
         "# Delphi 3e18 Observatory scorecard",
         "",
         (
-            f"Models are fit on {summary['fit_rows']} swarm designs and projected onto "
-            f"{summary['coordinate_disjoint_heldouts']} coordinate-disjoint historical validations. "
+            f"Models are independently fit on matched {summary['fit_rows']}-row one-phase and two-phase panels "
+            f"and evaluated on {summary['union_disjoint_heldouts']} rows disjoint from the union of both fit panels. "
+            f"The append-only archive has {summary['append_only_archive_rows']} rows; "
+            f"{summary['archive_disjoint_from_two_phase']} are disjoint from the original two-phase panel, including "
+            "the 238 rows now used to fit the one-phase models. "
             f"The {summary['exact_coordinate_aliases']} exact-coordinate repeats remain visible in Observatory but "
             "are excluded from heldout metrics."
         ),
@@ -114,41 +122,43 @@ def main() -> None:
         ),
     ]
     for target in swarm["targets"]:
-        report.extend(["", f"## {swarm['targets'][target]['label']}", ""])
-        target_rows = [row for row in rows if row["target"] == target]
-        by_model = {
-            model: {row["split"]: row for row in target_rows if row["model"] == model}
-            for model in sorted({str(row["model"]) for row in target_rows})
-        }
-        ranked = sorted(
-            by_model,
-            key=lambda model: float(by_model[model]["heldout"]["rmse"]),
-        )
-        report.append(
-            markdown_table(
-                [
-                    (
-                        models[model]["label"],
-                        fmt(by_model[model]["fitOof"]["rmse"]),
-                        fmt(by_model[model]["fitOof"]["spearman"], 3),
-                        fmt(by_model[model]["heldout"]["rmse"]),
-                        fmt(by_model[model]["heldout"]["spearman"], 3),
-                        fmt(by_model[model]["heldout"]["regret_at_1"]),
-                        fmt(by_model[model]["heldout"]["lower_tail_optimism"]),
-                    )
-                    for model in ranked
-                ],
-                (
-                    "Model",
-                    "OOF RMSE",
-                    "OOF rho",
-                    "Heldout RMSE",
-                    "Heldout rho",
-                    "Heldout regret@1",
-                    "Heldout tail optimism",
-                ),
+        report.extend(["", f"## {swarm['targets'][target]['label']}"])
+        for policy_class in swarm["dataset"]["policyClasses"]:
+            report.extend(["", f"### {policy_class.replace('_', ' ').title()} fit", ""])
+            target_rows = [row for row in rows if row["target"] == target and row["policy_class"] == policy_class]
+            by_model = {
+                model: {row["split"]: row for row in target_rows if row["model"] == model}
+                for model in sorted({str(row["model"]) for row in target_rows})
+            }
+            ranked = sorted(
+                by_model,
+                key=lambda model: float(by_model[model]["heldout"]["rmse"]),
             )
-        )
+            report.append(
+                markdown_table(
+                    [
+                        (
+                            models[model]["label"],
+                            fmt(by_model[model]["fitOof"]["rmse"]),
+                            fmt(by_model[model]["fitOof"]["spearman"], 3),
+                            fmt(by_model[model]["heldout"]["rmse"]),
+                            fmt(by_model[model]["heldout"]["spearman"], 3),
+                            fmt(by_model[model]["heldout"]["regret_at_1"]),
+                            fmt(by_model[model]["heldout"]["lower_tail_optimism"]),
+                        )
+                        for model in ranked
+                    ],
+                    (
+                        "Model",
+                        "OOF RMSE",
+                        "OOF rho",
+                        "Heldout RMSE",
+                        "Heldout rho",
+                        "Heldout regret@1",
+                        "Heldout tail optimism",
+                    ),
+                )
+            )
     (OUTPUT_DIR / "report.md").write_text("\n".join(report) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
 

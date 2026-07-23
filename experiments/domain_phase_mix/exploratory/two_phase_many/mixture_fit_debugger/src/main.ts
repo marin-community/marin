@@ -4,6 +4,7 @@ import rawData from "./generated/dashboard_data.json";
 import { renderMath } from "./math";
 import { renderMixtureChart } from "./mixture";
 import { modelForm } from "./modelForm";
+import { phasePopulationPoints, renderPhasePopulationChart } from "./population";
 import { renderScatter } from "./scatter";
 import "./styles.css";
 import type {
@@ -52,11 +53,11 @@ function isView(value: string | null): value is ViewMode {
 }
 
 function isSort(value: string | null): value is SortMode {
-  return value === "difference" || value === "exposure" || value === "domain";
+  return value === "difference" || value === "phase_difference" || value === "exposure" || value === "domain";
 }
 
 function isTab(value: string | null): value is ExplorerTab {
-  return value === "mixtures" || value === "fit";
+  return value === "mixtures" || value === "population" || value === "fit";
 }
 
 function isPolicyClass(value: string | null): value is PolicyClass {
@@ -99,13 +100,14 @@ const initialTargetIds = Object.keys(data.swarms[initialSwarm]!.targets);
 const initialTarget = initialTargetIds.includes(query.get("target") ?? "")
   ? (query.get("target") as string)
   : initialTargetIds[0]!;
+const initialTab = isTab(query.get("tab")) ? (query.get("tab") as ExplorerTab) : "mixtures";
 const state: DashboardState = {
   swarm: initialSwarm,
   target: initialTarget,
   policyClass: isPolicyClass(query.get("policy")) ? (query.get("policy") as PolicyClass) : "two_phase",
   policyFilter: isPolicyFilter(query.get("points")) ? (query.get("points") as PolicyFilter) : "in_policy",
   model: isModel(query.get("model")) ? (query.get("model") as ModelId) : "separate_heads",
-  tab: isTab(query.get("tab")) ? (query.get("tab") as ExplorerTab) : "mixtures",
+  tab: initialTab,
   view: isView(query.get("view")) ? (query.get("view") as ViewMode) : "prediction",
   selectedId: query.get("selected"),
   baselineId: query.get("baseline") ?? "",
@@ -114,10 +116,13 @@ const state: DashboardState = {
   showNoise: query.get("noise") === "1",
   hideAliases: query.get("aliases") === "0",
   search: query.get("search") ?? "",
-  sort: isSort(query.get("sort")) ? (query.get("sort") as SortMode) : "difference",
+  sort: isSort(query.get("sort"))
+    ? (query.get("sort") as SortMode)
+    : initialTab === "population" ? "phase_difference" : "difference",
   parameterDomain: query.get("parameterDomain") ?? "",
   parameterGroup: query.get("parameterGroup") ?? "",
 };
+let selectionExplicitlyCleared = false;
 const MODEL_DOCK_STORAGE_KEY = "mixture-observatory:model-dock-collapsed";
 const MODEL_DOCK_POSITION_STORAGE_KEY = "mixture-observatory:model-dock-position";
 const MODEL_DOCK_EDGE_MARGIN = 10;
@@ -175,6 +180,7 @@ app.innerHTML = `
         <div class="model-form" id="model-form"></div>
         <div class="workspace-tabs" role="tablist">
           <button data-action="tab" data-value="mixtures" role="tab">Mixture Explorer</button>
+          <button data-action="tab" data-value="population" role="tab">Phase Population</button>
           <button data-action="tab" data-value="fit" role="tab">Fit Explorer</button>
         </div>
       </div>
@@ -220,6 +226,7 @@ app.innerHTML = `
             <label>Compare against <select id="baseline-select"></select></label>
             <label>Order <select id="sort-select">
               <option value="difference">Largest aggregate change</option>
+              <option value="phase_difference">Largest phase-contrast change</option>
               <option value="exposure">Highest exposure</option>
               <option value="domain">Domain family</option>
             </select></label>
@@ -227,6 +234,40 @@ app.innerHTML = `
         </div>
         <div id="comparison-summary" class="comparison-summary"></div>
         <div id="mixture-chart" class="mixture-chart"></div>
+      </section>
+    </div>
+
+    <div id="population-workspace" hidden>
+      <section class="population-layout">
+        <article class="panel population-panel">
+          <div class="panel-heading">
+            <div><span class="section-index">A</span><h2>Aggregate-matched phase population</h2><p id="population-caption"></p></div>
+            <div class="population-legend" aria-label="Outcome encoding"><span><i class="population-swatch better"></i> better than tied</span><span><i class="population-swatch worse"></i> worse than tied</span><span><i class="population-swatch mean"></i> radius mean</span></div>
+          </div>
+          <div class="population-method">
+            <strong>What is held fixed</strong>
+            <span>The aggregate mixture and total compute match the anchor. Only phase order changes.</span>
+            <code>w⁽⁰⁾ = a − α₁d; w⁽¹⁾ = a + α₀d</code>
+          </div>
+          <div id="population-chart" class="population-chart"></div>
+          <div class="encoding-note"><span>The shaded band is ±1 same-configuration difference SD, not a confidence interval.</span><span>Hover highlights the same direction at all three radii; click to lock it.</span></div>
+        </article>
+        <aside class="panel population-inspector" id="population-inspector"></aside>
+      </section>
+
+      <section class="panel mixture-panel">
+        <div class="panel-heading comparison-heading">
+          <div><span class="section-index">B</span><h2>Mixture anatomy</h2><p>Selected two-phase policy in color; its exact same-anchor, same-seed tied control in gray.</p></div>
+          <div class="comparison-controls"><label>Order <select id="population-sort-select">
+            <option value="phase_difference">Largest phase-contrast change</option>
+            <option value="difference">Largest aggregate change</option>
+            <option value="exposure">Highest exposure</option>
+            <option value="domain">Domain family</option>
+          </select></label></div>
+        </div>
+        <div id="population-effect-summary" class="population-effect-summary"></div>
+        <div id="population-comparison-summary" class="comparison-summary"></div>
+        <div id="population-mixture-chart" class="mixture-chart"></div>
       </section>
     </div>
 
@@ -420,9 +461,9 @@ function isInPolicy(row: MixtureRow): boolean {
   return row.policyClasses.includes(state.policyClass);
 }
 
-function visiblePoints(): PointDatum[] {
+function visiblePoints(allPoints = pointData()): PointDatum[] {
   const search = state.search.trim().toLowerCase();
-  return pointData().filter((point) => {
+  return allPoints.filter((point) => {
     const split = effectiveSplit(point.row);
     const inPolicy = isInPolicy(point.row);
     if (split === "fit" && !state.showFit) return false;
@@ -435,6 +476,20 @@ function visiblePoints(): PointDatum[] {
     if (search && !`${point.row.name} ${point.row.panel ?? ""} ${point.row.targetDomain ?? ""}`.toLowerCase().includes(search)) return false;
     return true;
   });
+}
+
+function currentPopulationPoints() {
+  const current = swarm();
+  const target = current.targets[state.target]!;
+  return phasePopulationPoints(current.rows, state.target, target.noiseReference.differenceStandardDeviation);
+}
+
+function populationAvailable(): boolean {
+  return state.swarm === "delphi_3e18" && currentPopulationPoints().length > 0;
+}
+
+function chooseDefaultPopulationSelection(): string {
+  return d3.least(currentPopulationPoints(), (point) => point.delta)?.row.id ?? "";
 }
 
 function chooseDefaultSelection(): string {
@@ -461,14 +516,23 @@ function ensureState(): void {
   if (!targetIds.includes(state.target)) state.target = targetIds[0]!;
   const policies = availablePolicyClasses();
   if (!policies.includes(state.policyClass)) state.policyClass = policies.includes("two_phase") ? "two_phase" : policies[0]!;
+  if (state.tab === "population" && !populationAvailable()) state.tab = "mixtures";
+  if (state.tab === "population") state.policyClass = "two_phase";
   if (state.view === "swoosh" && !swooshDiagnostic()) state.view = "prediction";
   const byId = rowsById();
   const selected = state.selectedId ? byId.get(state.selectedId)?.row : undefined;
-  const selectedMatchesFilter = selected
-    && (state.policyFilter === "all"
-      || (state.policyFilter === "in_policy" && isInPolicy(selected))
-      || (state.policyFilter === "off_policy" && !isInPolicy(selected)));
-  if (!selectedMatchesFilter) state.selectedId = chooseDefaultSelection();
+  if (state.tab === "population") {
+    const selectedIsPopulationPoint = currentPopulationPoints().some((point) => point.row.id === selected?.id);
+    if (!selectedIsPopulationPoint) state.selectedId = chooseDefaultPopulationSelection();
+  } else {
+    const selectedMatchesFilter = selected
+      && (state.policyFilter === "all"
+        || (state.policyFilter === "in_policy" && isInPolicy(selected))
+        || (state.policyFilter === "off_policy" && !isInPolicy(selected)));
+    if (!selectedMatchesFilter && !(selectionExplicitlyCleared && state.selectedId === null)) {
+      state.selectedId = chooseDefaultSelection();
+    }
+  }
   const baselineIds = current.baselines[state.target]!.map((option) => option.id);
   if (!baselineIds.includes(state.baselineId)) state.baselineId = baselineIds[0] ?? "";
   const detail = currentFit();
@@ -580,6 +644,8 @@ function renderSelection(): void {
   const detail = currentFit();
   renderModelForm(detail);
   document.querySelectorAll<HTMLButtonElement>("[data-action='tab']").forEach((button) => {
+    const populationTab = button.dataset.value === "population";
+    button.hidden = populationTab && !populationAvailable();
     const active = button.dataset.value === state.tab;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
@@ -757,7 +823,11 @@ function renderInspector(): void {
   const byId = rowsById();
   const byName = rowsByName();
   const selected = state.selectedId ? byId.get(state.selectedId)?.row : undefined;
-  if (!selected) return;
+  const inspector = requiredElement<HTMLElement>("#inspector");
+  if (!selected) {
+    inspector.innerHTML = '<div class="empty-state">No checkpoint selected. Hover to preview a matched phase pair, or click a point to lock it.</div>';
+    return;
+  }
   const nearest = byId.get(selected.diagnostics.nearestFitId)?.row;
   const paired = selected.pairedRow ? byName.get(selected.pairedRow) : undefined;
   const observed = selected.observed[state.target];
@@ -765,7 +835,7 @@ function renderInspector(): void {
   const residual = observed !== null && observed !== undefined && predicted !== null ? predicted - observed : null;
   const scale = Math.max(swarm().targets[state.target]!.noiseReference.differenceStandardDeviation, 1e-12);
   const selectedSplit = effectiveSplit(selected);
-  requiredElement<HTMLElement>("#inspector").innerHTML = `
+  inspector.innerHTML = `
     <div class="inspector-topline"><span class="section-index">SELECTED</span><span>${escapeHtml(splitLabel(selected))}</span></div>
     <h2>${escapeHtml(selected.name)}</h2>
     <div class="badge-row"><span class="badge ${selected.phaseFamily === "single_phase" ? "orange" : "blue"}">${escapeHtml(selected.phaseFamily?.replace("_", " ") ?? "unknown phase")}</span><span class="badge ${isInPolicy(selected) ? "" : "warning"}">${isInPolicy(selected) ? "in-policy" : "off-policy"}</span><span class="badge">${escapeHtml(selected.panel ?? "unclassified")}</span>${selected.isSharedAlias ? '<span class="badge warning">shared alias</span>' : ""}</div>
@@ -774,7 +844,7 @@ function renderInspector(): void {
     </div>
     <p class="residual-reading">${residual === null ? "No observed value at this objective." : residual < 0 ? "Optimistic: predicted BPB is lower than observed." : "Pessimistic: observed BPB is lower than predicted."}</p>
     <div class="diagnostic-grid"><div><span>Phase TV</span><strong>${selected.diagnostics.phaseTv.toFixed(3)}</strong></div><div><span>Aggregate TV</span><strong>${selected.diagnostics.aggregateTvToProportional.toFixed(3)}</strong></div><div><span>Aggregate KL</span><strong>${selected.diagnostics.aggregateKlToProportional.toFixed(3)}</strong></div><div><span>Max exposure</span><strong>${selected.diagnostics.maxEpoch.toFixed(2)}e</strong></div><div><span>Support distance</span><strong>${selected.diagnostics.supportDistance.toFixed(3)}</strong></div><div><span>Target bucket</span><strong>${escapeHtml(selected.targetDomain ?? "—")}</strong></div></div>
-    <div class="inspector-actions">${nearest && nearest.id !== selected.id ? `<button data-action="select-row" data-value="${escapeHtml(nearest.id)}">Nearest fit: ${escapeHtml(nearest.name)}</button>` : ""}${paired ? `<button data-action="select-row" data-value="${escapeHtml(paired.id)}">Phase counterpart: ${escapeHtml(paired.name)}</button>` : ""}${selected.wandbUrl ? `<a href="${escapeHtml(selected.wandbUrl)}" target="_blank" rel="noreferrer">Open W&B run</a>` : ""}</div>
+    <div class="inspector-actions">${nearest && nearest.id !== selected.id ? `<button data-action="select-row" data-value="${escapeHtml(nearest.id)}">Nearest fit: ${escapeHtml(nearest.name)}</button>` : ""}${paired ? `<button data-action="select-counterpart" data-value="${escapeHtml(paired.id)}">Phase counterpart: ${escapeHtml(paired.name)}</button>` : ""}${selected.wandbUrl ? `<a href="${escapeHtml(selected.wandbUrl)}" target="_blank" rel="noreferrer">Open W&B run</a>` : ""}</div>
   `;
 }
 
@@ -794,14 +864,19 @@ function renderScatterPanel(): void {
     const options: SwooshChartOptions = {
       selectedId: state.selectedId,
       tooltip,
-      onSelect: (id) => { state.selectedId = id; renderAll(); },
+      onSelect: (id) => {
+        state.selectedId = id;
+        selectionExplicitlyCleared = false;
+        renderAll();
+      },
     };
     drawSwooshChart(chartElements[0]!, diagnostic, "sliceFit", options);
     drawSwooshChart(chartElements[1]!, diagnostic, "overallFit", options);
     return;
   }
 
-  const points = visiblePoints();
+  const allPoints = pointData();
+  const points = visiblePoints(allPoints);
   requiredElement<HTMLElement>("#scatter-title").textContent = "Prediction field";
   const pointScope = state.policyFilter === "in_policy"
     ? `${state.policyClass.replace("_", "-")} policies`
@@ -816,8 +891,13 @@ function renderScatterPanel(): void {
     target: swarm().targets[state.target]!,
     view: state.view,
     selectedId: state.selectedId,
+    counterpartPoints: allPoints,
     tooltip,
-    onSelect: (id) => { state.selectedId = id; renderAll(); },
+    onSelect: (id) => {
+      state.selectedId = id;
+      selectionExplicitlyCleared = id === null;
+      renderAll();
+    },
   });
 }
 
@@ -825,7 +905,11 @@ function renderComparison(): void {
   const current = swarm();
   const byId = rowsById();
   const selected = state.selectedId ? byId.get(state.selectedId)?.row : undefined;
-  if (!selected) return;
+  if (!selected) {
+    requiredElement<HTMLElement>("#comparison-summary").replaceChildren();
+    requiredElement<HTMLElement>("#mixture-chart").innerHTML = '<div class="empty-state">Select a checkpoint to inspect its mixture.</div>';
+    return;
+  }
   const baselineSelect = requiredElement<HTMLSelectElement>("#baseline-select");
   const options = current.baselines[state.target]!;
   if (!options.some((option) => option.id === state.baselineId)) state.baselineId = options[0]?.id ?? "";
@@ -835,6 +919,100 @@ function renderComparison(): void {
   if (!baseline) return;
   requiredElement<HTMLElement>("#comparison-summary").innerHTML = `${performanceBlock(selected, "Selected mixture")}${performanceBlock(baseline, "Comparison mixture")}`;
   renderMixtureChart(requiredElement<HTMLElement>("#mixture-chart"), { selected, baseline, domains: current.domains, sort: state.sort, tooltip });
+}
+
+function phaseShiftList(row: MixtureRow, direction: "early" | "late"): string {
+  const current = swarm();
+  const shifts = current.domains
+    .map((domain, index) => ({
+      label: domain.label,
+      shift: (row.phase1[index] ?? 0) - (row.phase0[index] ?? 0),
+    }))
+    .filter((entry) => direction === "late" ? entry.shift > 0 : entry.shift < 0)
+    .sort((left, right) => direction === "late" ? right.shift - left.shift : left.shift - right.shift)
+    .slice(0, 5);
+  if (shifts.length === 0) return '<li><span>No directional shift</span><strong>—</strong></li>';
+  return shifts
+    .map((entry) => `<li><span>${escapeHtml(entry.label)}</span><strong>${formatSigned(entry.shift * 100, 2)} pp</strong></li>`)
+    .join("");
+}
+
+function renderPopulationInspector(): void {
+  const points = currentPopulationPoints();
+  const selected = points.find((point) => point.row.id === state.selectedId);
+  const inspector = requiredElement<HTMLElement>("#population-inspector");
+  if (!selected) {
+    inspector.innerHTML = '<div class="empty-state">Select a phase perturbation to inspect its direction.</div>';
+    return;
+  }
+  const metadata = selected.row.phasePopulation!;
+  const predicted = predictionFor(selected.row);
+  const anchorPredicted = predictionFor(selected.anchor);
+  const predictedDelta = predicted === null || anchorPredicted === null ? null : predicted - anchorPredicted;
+  const improved = selected.delta < 0;
+  inspector.innerHTML = `
+    <div class="inspector-topline"><span class="section-index">SELECTED DIRECTION</span><span>${escapeHtml(metadata.anchorId.replaceAll("_", " "))}</span></div>
+    <h2>${escapeHtml(metadata.directionLabel)}</h2>
+    <div class="badge-row"><span class="badge blue">${d3.format(".0%")(metadata.radiusFraction)} radius</span><span class="badge ${improved ? "" : "warning"}">${improved ? "observed gain" : "observed loss"}</span><span class="badge">seed block ${metadata.seedBlock}</span></div>
+    <div class="population-effect-card ${improved ? "better" : "worse"}">
+      <span>Observed random − tied</span><strong>${formatSigned(selected.delta, 6)} BPB</strong><small>${formatSigned(selected.standardizedDelta, 2)}× repeat-difference SD</small>
+    </div>
+    <div class="diagnostic-grid population-diagnostics"><div><span>Random policy</span><strong>${selected.observed.toFixed(6)}</strong></div><div><span>Tied control</span><strong>${selected.anchorObserved.toFixed(6)}</strong></div><div><span>Predicted delta</span><strong>${formatSigned(predictedDelta, 6)}</strong></div><div><span>Phase TV</span><strong>${selected.row.diagnostics.phaseTv.toFixed(4)}</strong></div><div><span>Phase information</span><strong>${metadata.phaseInformationKl.toExponential(2)}</strong></div><div><span>Realized radius</span><strong>${metadata.realizedRadius.toFixed(5)}</strong></div></div>
+    <div class="phase-shift-columns">
+      <section><span class="control-label">Largest late upweights</span><ul>${phaseShiftList(selected.row, "late")}</ul></section>
+      <section><span class="control-label">Largest early upweights</span><ul>${phaseShiftList(selected.row, "early")}</ul></section>
+    </div>
+    <details><summary>Design provenance</summary><dl class="provenance-list"><dt>Candidate</dt><dd>${escapeHtml(metadata.candidateId)}</dd><dt>Anchor coordinate</dt><dd>${escapeHtml(metadata.anchorRunName)}</dd><dt>Direction</dt><dd>${escapeHtml(metadata.directionId)}</dd><dt>Feasible radius</dt><dd>${metadata.feasibleRadius.toFixed(6)}</dd><dt>Selected run</dt><dd>${escapeHtml(selected.row.name)}</dd><dt>Tied run</dt><dd>${escapeHtml(selected.anchor.name)}</dd></dl></details>
+    <div class="inspector-actions">${selected.row.wandbUrl ? `<a href="${escapeHtml(selected.row.wandbUrl)}" target="_blank" rel="noreferrer">Open selected W&B run</a>` : ""}${selected.anchor.wandbUrl ? `<a href="${escapeHtml(selected.anchor.wandbUrl)}" target="_blank" rel="noreferrer">Open tied-control W&B run</a>` : ""}</div>
+  `;
+}
+
+function renderPopulationComparison(): void {
+  const points = currentPopulationPoints();
+  const selected = points.find((point) => point.row.id === state.selectedId);
+  const summary = requiredElement<HTMLElement>("#population-comparison-summary");
+  const effectSummary = requiredElement<HTMLElement>("#population-effect-summary");
+  const chart = requiredElement<HTMLElement>("#population-mixture-chart");
+  requiredElement<HTMLSelectElement>("#population-sort-select").value = state.sort;
+  if (!selected) {
+    summary.replaceChildren();
+    effectSummary.replaceChildren();
+    chart.innerHTML = '<div class="empty-state">Select a phase perturbation to compare it with its tied anchor.</div>';
+    return;
+  }
+  const predicted = predictionFor(selected.row);
+  const anchorPredicted = predictionFor(selected.anchor);
+  const predictedDelta = predicted === null || anchorPredicted === null ? null : predicted - anchorPredicted;
+  effectSummary.innerHTML = `
+    <div><span>Observed phase value</span><strong>${formatSigned(selected.delta, 6)} BPB</strong><small>random − seed-matched tied control</small></div>
+    <div><span>Observed noise units</span><strong>${formatSigned(selected.standardizedDelta, 2)}×</strong><small>same-configuration difference SD</small></div>
+    <div><span>Surrogate phase value</span><strong>${formatSigned(predictedDelta, 6)} BPB</strong><small>${escapeHtml(data.models[state.model]!.label)}</small></div>
+    <div><span>Aggregate check</span><strong>${d3.format(".2e")(d3.max(selected.row.aggregate.map((weight, index) => Math.abs(weight - (selected.anchor.aggregate[index] ?? 0)))) ?? 0)}</strong><small>maximum absolute weight difference</small></div>`;
+  summary.innerHTML = `${performanceBlock(selected.row, "Selected two-phase policy")}${performanceBlock(selected.anchor, "Seed-matched tied anchor")}`;
+  renderMixtureChart(chart, {
+    selected: selected.row,
+    baseline: selected.anchor,
+    domains: swarm().domains,
+    sort: state.sort,
+    tooltip,
+  });
+}
+
+function renderPopulationWorkspace(): void {
+  const points = currentPopulationPoints();
+  requiredElement<HTMLElement>("#population-caption").textContent = `${points.length} aggregate-preserving two-phase schedules around two single-phase frontier anchors. The outcome is ${swarm().targets[state.target]!.label}; lower is better.`;
+  renderPhasePopulationChart(requiredElement<HTMLElement>("#population-chart"), points, {
+    target: swarm().targets[state.target]!,
+    selectedId: state.selectedId,
+    tooltip,
+    onSelect: (id) => {
+      state.selectedId = id;
+      selectionExplicitlyCleared = false;
+      renderAll();
+    },
+  });
+  renderPopulationInspector();
+  renderPopulationComparison();
 }
 
 function parameterRow(parameter: FitParameter): string {
@@ -1000,7 +1178,11 @@ function renderNikeSwoosh(): void {
   const options: SwooshChartOptions = {
     selectedId: state.selectedId,
     tooltip,
-    onSelect: (id) => { state.selectedId = id; renderAll(); },
+    onSelect: (id) => {
+      state.selectedId = id;
+      selectionExplicitlyCleared = false;
+      renderAll();
+    },
   };
   drawSwooshChart(chartElements[0]!, diagnostic, "sliceFit", options);
   drawSwooshChart(chartElements[1]!, diagnostic, "overallFit", options);
@@ -1022,6 +1204,7 @@ function renderMethodology(): void {
 
 function renderWorkspace(): void {
   requiredElement<HTMLElement>("#mixture-workspace").hidden = state.tab !== "mixtures";
+  requiredElement<HTMLElement>("#population-workspace").hidden = state.tab !== "population";
   requiredElement<HTMLElement>("#fit-workspace").hidden = state.tab !== "fit";
   if (state.tab === "mixtures") {
     renderViewControls();
@@ -1029,6 +1212,8 @@ function renderWorkspace(): void {
     renderInspector();
     renderScatterPanel();
     renderComparison();
+  } else if (state.tab === "population") {
+    renderPopulationWorkspace();
   } else {
     renderParameterExplorer();
     renderNikeSwoosh();
@@ -1055,6 +1240,7 @@ app.addEventListener("click", (event) => {
     const policies = data.swarms[value]!.dataset.policyClasses;
     if (!policies.includes(state.policyClass)) state.policyClass = policies.includes("two_phase") ? "two_phase" : policies[0]!;
     state.selectedId = null;
+    selectionExplicitlyCleared = false;
     state.baselineId = "";
     state.search = "";
   } else if (action === "target" && Object.keys(swarm().targets).includes(value)) {
@@ -1062,7 +1248,9 @@ app.addEventListener("click", (event) => {
     state.baselineId = "";
   } else if (action === "policy" && isPolicyClass(value) && availablePolicyClasses().includes(value)) {
     state.policyClass = value;
+    if (state.tab === "population" && value !== "two_phase") state.tab = "mixtures";
     state.selectedId = null;
+    selectionExplicitlyCleared = false;
     state.baselineId = "";
   } else if (action === "model" && isModel(value)) {
     state.model = value;
@@ -1071,10 +1259,21 @@ app.addEventListener("click", (event) => {
     window.localStorage.setItem(MODEL_DOCK_STORAGE_KEY, modelDockCollapsed ? "1" : "0");
   } else if (action === "tab" && isTab(value)) {
     state.tab = value;
+    if (value === "population") {
+      state.policyClass = "two_phase";
+      if (state.sort === "difference") state.sort = "phase_difference";
+      state.selectedId = chooseDefaultPopulationSelection();
+      selectionExplicitlyCleared = false;
+    }
   } else if (action === "view" && isView(value)) {
     state.view = value;
   } else if (action === "select-row" && rowsById().has(value)) {
     state.selectedId = value;
+    selectionExplicitlyCleared = false;
+  } else if (action === "select-counterpart" && rowsById().has(value)) {
+    state.policyFilter = "all";
+    state.selectedId = value;
+    selectionExplicitlyCleared = false;
   } else if (action === "reset-filters") {
     state.showFit = true;
     state.showHeldout = true;
@@ -1094,13 +1293,16 @@ app.addEventListener("change", (event) => {
   else if (element.id === "filter-alias") state.hideAliases = (element as HTMLInputElement).checked;
   else if (element.id === "policy-filter" && isPolicyFilter(element.value)) state.policyFilter = element.value;
   else if (element.id === "baseline-select") state.baselineId = element.value;
-  else if (element.id === "sort-select" && isSort(element.value)) state.sort = element.value;
+  else if ((element.id === "sort-select" || element.id === "population-sort-select") && isSort(element.value)) state.sort = element.value;
   else if (element.id === "parameter-domain") state.parameterDomain = element.value;
   else if (element.id === "parameter-group") state.parameterGroup = element.value;
   else if (element.id === "run-search") {
     state.search = element.value;
     const exact = rowsByName().get(element.value);
-    if (exact) state.selectedId = exact.id;
+    if (exact) {
+      state.selectedId = exact.id;
+      selectionExplicitlyCleared = false;
+    }
   }
   renderAll();
 });
@@ -1113,7 +1315,10 @@ app.addEventListener("input", (event) => {
   searchTimer = window.setTimeout(() => {
     state.search = element.value;
     const exact = rowsByName().get(element.value);
-    if (exact) state.selectedId = exact.id;
+    if (exact) {
+      state.selectedId = exact.id;
+      selectionExplicitlyCleared = false;
+    }
     renderAll();
   }, 180);
 });
@@ -1125,6 +1330,7 @@ window.addEventListener("resize", () => {
     applyModelDockPosition();
     persistModelDockPosition();
     if (state.tab === "mixtures") renderScatterPanel();
+    else if (state.tab === "population") renderPopulationWorkspace();
     else renderNikeSwoosh();
   }, 120);
 });

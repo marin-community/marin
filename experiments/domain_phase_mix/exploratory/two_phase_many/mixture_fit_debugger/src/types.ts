@@ -13,9 +13,9 @@ export type ModelId =
   | "bucket_family_power_separate_heads_family_onset"
   | "bucket_family_weibull_shared_onset"
   | "bucket_family_weibull_family_replay";
-export type ExplorerTab = "mixtures" | "fit";
+export type ExplorerTab = "mixtures" | "population" | "fit";
 export type ViewMode = "prediction" | "residual" | "standardized" | "swoosh";
-export type SortMode = "difference" | "exposure" | "domain";
+export type SortMode = "difference" | "phase_difference" | "exposure" | "domain";
 export type PolicyClass = "single_phase" | "two_phase";
 export type PolicyFilter = "in_policy" | "off_policy" | "all";
 
@@ -54,6 +54,20 @@ export interface RowDiagnostics {
   supportDistance: number;
 }
 
+export interface PhasePopulationMetadata {
+  candidateId: string;
+  anchorId: string;
+  anchorRunName: string;
+  directionId: string;
+  directionLabel: string;
+  seedBlock: number;
+  radiusFraction: number;
+  contrastFamily: "center_control" | "random_isotropic" | string;
+  phaseInformationKl: number;
+  feasibleRadius: number;
+  realizedRadius: number;
+}
+
 export interface MixtureRow {
   id: string;
   name: string;
@@ -74,6 +88,7 @@ export interface MixtureRow {
   isSharedAlias: boolean;
   pairedRow: string | null;
   candidateTarget: string | null;
+  phasePopulation?: PhasePopulationMetadata | null;
   observed: Record<string, number | null>;
   phase0: number[];
   phase1: number[];
