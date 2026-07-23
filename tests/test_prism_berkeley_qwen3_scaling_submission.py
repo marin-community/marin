@@ -4,7 +4,10 @@
 from marin.execution.lazy import materialized_config
 
 import experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support as submission_support
+from experiments.datasets.paloma import paloma_dataset
+from experiments.datasets.uncheatable import uncheatable_dataset
 from experiments.llama import llama3_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.speedrun.prism_berkeley_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
 from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_sweep import build_config
 from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import default_speedrun
@@ -113,4 +116,21 @@ def test_default_speedrun_matches_validation_tokenizer_to_archived_train_cache()
     validation_steps = [step for step in train_step.deps if step.name.startswith(("paloma/", "uncheatable_eval/"))]
 
     assert len(validation_steps) == 23
+    assert {step.version for step in validation_steps} != {"2026.06.28"}
     assert {materialized_config(step, "gs://test-prefix").tokenizer for step in validation_steps} == {llama3_tokenizer}
+
+
+def test_validation_cache_identity_distinguishes_tokenizers():
+    llama3_caches = [
+        paloma_dataset("c4_en", tokenizer=llama3_tokenizer),
+        uncheatable_dataset("bbc_news", tokenizer=llama3_tokenizer),
+    ]
+    marin_caches = [
+        paloma_dataset("c4_en", tokenizer=marin_tokenizer),
+        uncheatable_dataset("bbc_news", tokenizer=marin_tokenizer),
+    ]
+
+    llama3_identities = {(cache.name, cache.version) for cache in llama3_caches}
+    marin_identities = {(cache.name, cache.version) for cache in marin_caches}
+
+    assert llama3_identities.isdisjoint(marin_identities)

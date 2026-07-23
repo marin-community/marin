@@ -12,6 +12,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import dataset_main, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
+from experiments.datasets.validation_cache_identity import VALIDATION_CACHE_VERSION, validation_tokenizer_suffix
 from experiments.llama import llama3_tokenizer
 
 # Pinned Paloma download.
@@ -43,9 +44,9 @@ _PALOMA_SUBSETS = {
 def paloma_dataset(subset: str, *, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """One Paloma subset as a validation handle."""
     return tokenized(
-        f"paloma/{subset}-llama3",
+        f"paloma/{subset}-{validation_tokenizer_suffix(tokenizer)}",
         tokenizer=tokenizer,
-        version="2026.06.28",
+        version=VALIDATION_CACHE_VERSION,
         paths=[f"{_PALOMA_RAW}/{_PALOMA_SUBSETS[subset]}/val/val*.jsonl.gz"],
         validation=True,
     )
