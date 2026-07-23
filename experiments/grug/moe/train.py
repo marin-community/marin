@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import dataclasses
 import functools
+import importlib
 import logging
 import math
 import os
@@ -37,6 +39,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug._moe.common import _DEFAULT_EP_CAPACITY_FACTOR
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -273,6 +276,18 @@ class GrugRunConfig:
     post_setup_scripts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.model.moe_implementation == "nccl_ep":
+            pipeline = self.trainer.pipeline
+            if pipeline is None or pipeline.implementation != "explicit_mpmd":
+                raise ValueError("NCCL_EP requires the explicit MPMD JaxPP pipeline")
+            if self.processes_per_task != self.trainer.expert_axis_size:
+                raise ValueError(
+                    "NCCL_EP requires one process per expert rank; "
+                    f"got processes_per_task={self.processes_per_task} and "
+                    f"expert_axis_size={self.trainer.expert_axis_size}"
+                )
+            if self.processes_per_task <= 1:
+                raise ValueError("NCCL_EP requires more than one process per task")
         if self.model.research_fp8_expert_gemm is None:
             return
         pipeline = self.trainer.pipeline
@@ -349,6 +364,18 @@ def _require_jaxpp_explicit_mpmd():
             "jaxpp.experimental.mpmd is required when GrugTrainerConfig.pipeline.implementation='explicit_mpmd'."
         )
     return jaxpp_explicit_mpmd
+
+
+def _load_nccl_ep_modules() -> tuple[Any, Any]:
+    """Import NCCL_EP before Trainer initialization registers the CUDA client."""
+    try:
+        ep = importlib.import_module("transformer_engine.jax.ep")
+        sharding = importlib.import_module("transformer_engine.jax.sharding")
+    except ModuleNotFoundError as error:
+        raise ModuleNotFoundError(
+            "Transformer Engine with NCCL_EP is required when moe_implementation='nccl_ep'."
+        ) from error
+    return ep, sharding
 
 
 def _install_jaxpp_const_sharding_patch() -> None:
@@ -2636,8 +2663,66 @@ def _make_train_step(
     return train_step
 
 
+def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
+    pipeline = config.trainer.pipeline
+    if pipeline is None:
+        raise ValueError("NCCL_EP bootstrap requires a pipeline configuration")
+    if jax.local_device_count() != 1:
+        raise ValueError(
+            f"NCCL_EP requires one local GPU per process, got local_device_count={jax.local_device_count()}"
+        )
+
+    pipeline_groups = int(mesh.shape[pipeline.stage_axis_name])
+    expert_size = int(mesh.shape["expert"])
+    if jax.process_count() != pipeline_groups * expert_size:
+        raise ValueError(
+            "NCCL_EP requires the process world to be exactly pipeline x expert; "
+            f"got process_count={jax.process_count()}, pipeline={pipeline_groups}, expert={expert_size}"
+        )
+    for axis in ("replica_dcn", "data", "model"):
+        if int(mesh.shape[axis]) != 1:
+            raise ValueError(f"NCCL_EP currently requires mesh axis {axis!r} to have size 1, got {mesh.shape[axis]}")
+
+    max_batch_size = max(config.trainer.trainer.batch_schedule.unique_batch_sizes())
+    if max_batch_size % pipeline.microbatches != 0:
+        raise ValueError(
+            f"NCCL_EP max batch size={max_batch_size} must be divisible by microbatches={pipeline.microbatches}"
+        )
+    global_microbatch_tokens = max_batch_size // pipeline.microbatches * config.model.max_seq_len
+    if global_microbatch_tokens % expert_size != 0:
+        raise ValueError(
+            f"NCCL_EP microbatch tokens={global_microbatch_tokens} must be divisible by expert size={expert_size}"
+        )
+    max_tokens_per_rank = global_microbatch_tokens // expert_size
+
+    nccl_ep_backend = importlib.import_module("levanter.grug._moe.ep_ncclep")
+    recv_capacity_per_rank = nccl_ep_backend.ncclep_receive_capacity(
+        global_tokens=global_microbatch_tokens,
+        top_k=config.model.num_experts_per_token,
+        ep_size=expert_size,
+        capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+    )
+    ep.ep_bootstrap(
+        world_size=jax.process_count(),
+        rank=jax.process_index(),
+        num_experts=config.model.num_experts,
+        max_tokens_per_rank=max_tokens_per_rank,
+        recv_capacity_per_rank=recv_capacity_per_rank,
+        hidden_dim=config.model.hidden_dim,
+    )
+    logger.info(
+        "NCCL_EP bootstrapped: world=%d groups=%d ep=%d max_tokens_per_rank=%d recv_capacity_per_rank=%d",
+        jax.process_count(),
+        pipeline_groups,
+        expert_size,
+        max_tokens_per_rank,
+        recv_capacity_per_rank,
+    )
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    nccl_ep_modules = _load_nccl_ep_modules() if config.model.moe_implementation == "nccl_ep" else None
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -2685,7 +2770,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
-    with set_mesh(mesh):
+    nccl_ep_guard = contextlib.nullcontext()
+    if nccl_ep_modules is not None:
+        if config.trainer.pipeline is None:
+            raise ValueError("NCCL_EP requires a pipeline configuration")
+        _, te_sharding = nccl_ep_modules
+        nccl_ep_guard = te_sharding.global_shard_guard(
+            te_sharding.MeshResource(
+                dp_resource=config.trainer.pipeline.stage_axis_name,
+                ep_resource="expert",
+            )
+        )
+
+    with set_mesh(mesh), nccl_ep_guard:
+        if nccl_ep_modules is not None:
+            te_ep, _ = nccl_ep_modules
+            _bootstrap_nccl_ep(config, mesh, te_ep)
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(

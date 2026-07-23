@@ -347,6 +347,46 @@ def test_grug_moe_jaxpp_launcher_requires_explicit_fp8_expert_gemm_opt_in(monkey
         launcher.build_jaxpp_may_checkpoint()
 
 
+def test_grug_moe_nccl_ep_config_requires_one_process_per_expert_rank():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model = model_module.GrugModelConfig(
+        vocab_size=256,
+        hidden_dim=128,
+        intermediate_dim=128,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        moe_implementation="nccl_ep",
+    )
+    pipeline = train_module.GrugJaxPPConfig(
+        stages=2,
+        microbatches=2,
+        schedule="std_1f1b",
+        implementation="explicit_mpmd",
+        mpmd_dim=2,
+    )
+
+    with pytest.raises(ValueError, match="one process per expert rank"):
+        train_module.GrugRunConfig(
+            model=model,
+            data=LmDataConfig(tokenizer="passthrough", vocab_size=256, components={}),
+            resources=ResourceConfig.with_cpu(),
+            trainer=train_module.GrugTrainerConfig(expert_axis_size=2, pipeline=pipeline),
+            processes_per_task=1,
+        )
+
+    config = train_module.GrugRunConfig(
+        model=model,
+        data=LmDataConfig(tokenizer="passthrough", vocab_size=256, components={}),
+        resources=ResourceConfig.with_cpu(),
+        trainer=train_module.GrugTrainerConfig(expert_axis_size=2, pipeline=pipeline),
+        processes_per_task=2,
+    )
+    assert config.processes_per_task == 2
+
+
 def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     if jax.default_backend() != "gpu":
         pytest.skip("gpu_fa4_thd requires the JAX GPU backend")

@@ -51,6 +51,8 @@ DEFAULT_STEPS = 20
 DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 DEFAULT_DEEPEP_REVISION = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
+DEFAULT_NCCL_EP_TE_REVISION = "4adad4c218c115cd9af235fb3d4e13ef4cec55a8"
+NCCL_EP_RUNTIME_VERSION = "2.30.7"
 DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
 DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
 DEEPEP_CUDA_RUNTIME_VERSION = "13.2.75"
@@ -104,6 +106,43 @@ def deepep_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
                 f"git -C {source_root!r} fetch --depth 1 origin {revision!r}",
                 f"git -C {source_root!r} checkout --detach FETCH_HEAD",
                 "uv run python -m levanter.kernels.deepep.preflight --component transport",
+            ]
+        )
+        + "\n",
+    )
+
+
+def nccl_ep_setup_scripts() -> tuple[str, ...]:
+    """Build pinned Transformer Engine with NCCL_EP and persist its runtime environment."""
+    return (
+        "\n".join(
+            [
+                'cd "$IRIS_WORKDIR"',
+                "echo 'building Transformer Engine NCCL_EP runtime'",
+                'export WORK="/tmp/grug-nccl-ep"',
+                f'export TE_SHA="{DEFAULT_NCCL_EP_TE_REVISION}"',
+                f'export NCCL_RUNTIME_VERSION="{NCCL_EP_RUNTIME_VERSION}"',
+                "source experiments/ncclep_h100/cuda_wheels_env.sh",
+                "bash experiments/ncclep_h100/build_te_wheel.sh",
+                'jit_include="$(<"$WORK/nccl-ep-jit-include")"',
+                'mkdir -p "$WORK/nccl-ep-jit-cache"',
+                "{",
+                "  printf 'export CUDA_HOME=%q\\n' \"$CUDA_HOME\"",
+                "  printf 'export CUDA_PATH=%q\\n' \"$CUDA_PATH\"",
+                "  printf 'export CUDACXX=%q\\n' \"$CUDACXX\"",
+                "  printf 'export NVCC=%q\\n' \"$NVCC\"",
+                "  printf 'export PATH=%q:$PATH\\n' \"$CUDA_HOME/bin\"",
+                "  printf 'export LD_LIBRARY_PATH=%q:${LD_LIBRARY_PATH:-}\\n' \"$CUDA_HOME/lib64\"",
+                "  printf 'export LIBRARY_PATH=%q:${LIBRARY_PATH:-}\\n' \"$CUDA_HOME/lib64\"",
+                "  printf 'export NCCL_EP_JIT_SOURCE_DIR=%q\\n' \"$jit_include/nccl_ep\"",
+                "  printf 'export NCCL_EP_JIT_BUILD_INCLUDE_DIR=%q\\n' \"$jit_include\"",
+                "  printf 'export NCCL_EP_JIT_CUDA_INCLUDE_DIR=%q\\n' \"$CUDA_HOME/include\"",
+                "  printf 'export NCCL_EP_JIT_CACHE_DIR=%q\\n' \"$WORK/nccl-ep-jit-cache\"",
+                "  printf 'export NCCL_EP_JIT_LOG=1\\n'",
+                "  printf 'export NCCL_NVLS_ENABLE=1\\n'",
+                "  printf 'export NVTE_EP_HANDLE_CACHE_SIZE=-1\\n'",
+                "  printf 'export XLA_FLAGS=\"${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=\"\\n'",
+                '} >> "$IRIS_VENV/bin/activate"',
             ]
         )
         + "\n",
@@ -268,6 +307,10 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     model = build_model()
     pipeline = build_pipeline_config() if env_bool("MAY_PIPELINE", True) else None
+    processes_per_task = env_int(
+        "MAY_PROCESSES_PER_TASK",
+        expert_axis if model.moe_implementation == "nccl_ep" else 1,
+    )
     if model.research_fp8_expert_gemm is not None:
         if pipeline is None or pipeline.implementation != "explicit_mpmd":
             raise ValueError("research FP8 expert GEMMs require PP_IMPLEMENTATION=explicit_mpmd")
@@ -282,6 +325,15 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             raise ValueError(
                 "staged_per_step Sonic FSDP materialization requires MAY_EXPERT_AXIS=1 because Sonic does not "
                 "support expert parallelism"
+            )
+    if model.moe_implementation == "nccl_ep":
+        if pipeline is None or pipeline.implementation != "explicit_mpmd":
+            raise ValueError("NCCL_EP requires PP_IMPLEMENTATION=explicit_mpmd")
+        if expert_axis != gpus_per_replica or processes_per_task != gpus_per_replica:
+            raise ValueError(
+                "NCCL_EP requires one process per GPU and one task-local EP group; "
+                f"got MAY_EXPERT_AXIS={expert_axis}, MAY_PROCESSES_PER_TASK={processes_per_task}, "
+                f"MAY_GPUS_PER_REPLICA={gpus_per_replica}"
             )
     if (
         pipeline is not None
@@ -303,6 +355,8 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             source_root=source_root,
             revision=os.environ.get("DEEPEP_REVISION", DEFAULT_DEEPEP_REVISION),
         )
+    if model.moe_implementation == "nccl_ep":
+        post_setup_scripts += nccl_ep_setup_scripts()
 
     mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
     global_devices = replicas * gpus_per_replica
@@ -313,6 +367,11 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             f"PP_MPMD_DIM={mpmd_dim} * MAY_REPLICA_AXIS={replica_axis} * MAY_EXPERT_AXIS={expert_axis}"
         )
     data_axis = global_devices // fixed_axes
+    if model.moe_implementation == "nccl_ep" and data_axis != 1:
+        raise ValueError(
+            "NCCL_EP currently supports pipeline x expert process groups without an additional data axis; "
+            f"got data axis size={data_axis}"
+        )
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
@@ -378,7 +437,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
                 start_step=env_int("MAY_PROFILER_START", 8),
                 num_steps=env_int("MAY_PROFILER_STEPS", 0),
             ),
-            processes_per_task=env_int("MAY_PROCESSES_PER_TASK", 1),
+            processes_per_task=processes_per_task,
             post_setup_scripts=post_setup_scripts,
             checkpointer=CheckpointerConfig(
                 base_path=f"/tmp/grug-jaxpp-may-d2560-ckpt/{run_id}",

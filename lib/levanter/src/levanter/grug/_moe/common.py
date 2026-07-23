@@ -30,6 +30,7 @@ MoeImplementation: TypeAlias = Literal[
     "ring_ppermute",  # Expert-parallel streamed collective-permute backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "nccl_ep",  # Expert-parallel Transformer Engine NCCL_EP dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
@@ -42,6 +43,7 @@ _EP_MOE_IMPLEMENTATIONS = (
     "ring_ppermute",
     "ragged_all_to_all",
     "deepep",
+    "nccl_ep",
 )
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.

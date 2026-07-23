@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-TE_SHA=4adad4c218c115cd9af235fb3d4e13ef4cec55a8
+TE_SHA=${TE_SHA:-4adad4c218c115cd9af235fb3d4e13ef4cec55a8}
 WORK=${WORK:-/tmp/ncclep-h100}
 MAX_JOBS=${MAX_JOBS:-64}
 export MAX_JOBS

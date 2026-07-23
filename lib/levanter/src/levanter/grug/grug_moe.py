@@ -45,6 +45,7 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.ep_ncclep import moe_mlp_ep_ncclep
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local, _moe_mlp_ep_ring_quack_local
 from levanter.grug._moe.ep_ring_fused import _moe_mlp_ep_ring_fused_local
@@ -240,6 +241,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "nccl_ep":
+            shard_local_fn = None
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
@@ -251,6 +254,25 @@ def moe_mlp(
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+
+        if resolved_implementation == "nccl_ep":
+            out, dropped = moe_mlp_ep_ncclep(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+                mesh=mesh,
+                batch_spec=batch_spec,
+            )
+            if report_capacity_overflow:
+                return out, dropped
+            return out
+
+        assert shard_local_fn is not None
         if ragged_dot_ops is not None:
             ragged_dot_ops = jax.tree.map(
                 lambda value: _reshard_for_shard_map(value, mesh, P()) if eqx.is_array(value) else value,
