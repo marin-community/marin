@@ -78,8 +78,9 @@ class VllmType(StrEnum):
 class IsolatedCudaVllm:
     """Provide an isolated CUDA vLLM command and environment.
 
-    Both variants stream checkpoints from the CoreWeave object store. The Marin fork additionally
-    serves Marin-specific architectures.
+    The Marin fork additionally serves Marin-specific architectures.  CoreWeave
+    serves normally materialize Hugging Face weights on local NVMe; the RunAI
+    streamer is selected only by an explicit object-store model path.
     """
 
     source: VllmType = VllmType.UPSTREAM

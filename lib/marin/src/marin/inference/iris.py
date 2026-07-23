@@ -128,7 +128,10 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
         select_tensor_parallel_size,
     )
 
-    model_path = model.model_path or resolve_model_path(model.model, iris.cache_ttl_days)
+    cache_ttl_days = iris.cache_ttl_days
+    if cache_ttl_days is None:
+        raise ValueError("IrisConfig must resolve cache_ttl_days before serving")
+    model_path = model.model_path or resolve_model_path(model.model, cache_ttl_days)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
     if tensor_parallel_size is None:
