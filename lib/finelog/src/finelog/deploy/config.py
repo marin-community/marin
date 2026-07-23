@@ -69,6 +69,10 @@ class K8sDeployment:
     kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
+    cpu_request: str = "2"
+    cpu_limit: str = "8"
+    memory_request: str = "16Gi"
+    memory_limit: str = "32Gi"
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
     # Required there: `finelog deploy up` mints a Secret holding this endpoint
     # plus the operator's R2 creds, projected into the pod via envFrom so the
@@ -297,6 +301,10 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
+        cpu_request=str(raw.get("cpu_request", "2")),
+        cpu_limit=str(raw.get("cpu_limit", "8")),
+        memory_request=str(raw.get("memory_request", "16Gi")),
+        memory_limit=str(raw.get("memory_limit", "32Gi")),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
         priority_class_name=raw.get("priority_class_name"),
         priority_class_value=None if priority_class_value is None else int(priority_class_value),

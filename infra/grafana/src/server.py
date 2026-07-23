@@ -28,6 +28,8 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
+    GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
+    GET /k8s/finelog_events                      recent Warning events involving finelog
     GET /k8s/health                              per-cluster API server reachability + latency
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
@@ -399,6 +401,19 @@ def create_app(
     def k8s_events(_: Request) -> JSONResponse:
         return k8s_endpoint("events", k8s_fleet.warning_events)
 
+    def k8s_finelog(_: Request) -> JSONResponse:
+        return k8s_endpoint("finelog", k8s_fleet.finelog_pods)
+
+    def k8s_finelog_events(_: Request) -> JSONResponse:
+        events = k8s_cache.get_or_compute("events", k8s_fleet.warning_events)
+        return JSONResponse(
+            [
+                row
+                for row in events
+                if "finelog" in (row.get("object") or "").lower() or "finelog" in (row.get("message") or "").lower()
+            ]
+        )
+
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
@@ -462,6 +477,8 @@ def create_app(
             Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),
+            Route("/k8s/finelog", k8s_finelog),
+            Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),

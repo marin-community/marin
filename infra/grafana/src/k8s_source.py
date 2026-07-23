@@ -247,12 +247,12 @@ class K8sSource:
         path = f"/apis/apps/v1/namespaces/{component.namespace}/deployments/{component.deployment}"
         return self._get(path, none_on_404=True)
 
-    def _deployment_pods(self, component: WatchedComponent, deployment: dict) -> list[dict]:
+    def _deployment_pods(self, namespace: str, deployment: dict) -> list[dict]:
         match_labels = ((deployment.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
         if not match_labels:
             return []
         selector = ",".join(f"{key}={value}" for key, value in sorted(match_labels.items()))
-        return self._list(f"/api/v1/namespaces/{component.namespace}/pods", {"labelSelector": selector})
+        return self._list(f"/api/v1/namespaces/{namespace}/pods", {"labelSelector": selector})
 
     def component_status(self, component: WatchedComponent) -> dict:
         """Ready/desired replicas plus restart and waiting state from the pods behind one Deployment.
@@ -275,7 +275,7 @@ class K8sSource:
         ready = (deployment.get("status") or {}).get("readyReplicas") or 0
         restarts = 0
         waiting_reason = ""
-        for pod in self._deployment_pods(component, deployment):
+        for pod in self._deployment_pods(component.namespace, deployment):
             for status in _container_statuses(pod):
                 restarts += status.get("restartCount") or 0
                 reason = ((status.get("state") or {}).get("waiting") or {}).get("reason")
@@ -352,6 +352,84 @@ class K8sSource:
             error_class="" if responsive else "readiness",
             error="" if responsive else "HTTP /health probe is not Ready",
         )
+
+    def finelog_pods(self) -> list[dict]:
+        """Runtime and provisioning details for every finelog pod in this cluster."""
+        deployments = [
+            deployment
+            for deployment in self._list("/apis/apps/v1/deployments")
+            if _deployment_has_container(deployment, _FINELOG_CONTAINER)
+        ]
+        rows = []
+        for deployment in deployments:
+            metadata = deployment.get("metadata") or {}
+            namespace = metadata.get("namespace") or "default"
+            deployment_name = metadata.get("name") or _FINELOG_FALLBACK_SERVER
+            pod_spec = ((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}
+            container = next(
+                (item for item in pod_spec.get("containers") or [] if item.get("name") == _FINELOG_CONTAINER),
+                {},
+            )
+            resources = container.get("resources") or {}
+            requests = resources.get("requests") or {}
+            limits = resources.get("limits") or {}
+            pvc_name = next(
+                (
+                    (volume.get("persistentVolumeClaim") or {}).get("claimName")
+                    for volume in pod_spec.get("volumes") or []
+                    if (volume.get("persistentVolumeClaim") or {}).get("claimName")
+                ),
+                "",
+            )
+            pvc = None
+            if pvc_name:
+                pvc = self._get(
+                    f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}",
+                    none_on_404=True,
+                )
+            pvc_spec = (pvc or {}).get("spec") or {}
+            pvc_status = (pvc or {}).get("status") or {}
+            storage_capacity = (pvc_status.get("capacity") or {}).get("storage")
+            if storage_capacity is None:
+                storage_capacity = ((pvc_spec.get("resources") or {}).get("requests") or {}).get("storage", "")
+
+            pods = self._deployment_pods(namespace, deployment)
+            if not pods:
+                pods = [{"metadata": {}, "spec": {}, "status": {}}]
+            for pod in pods:
+                pod_metadata = pod.get("metadata") or {}
+                runtime_spec = pod.get("spec") or {}
+                status = pod.get("status") or {}
+                container_status = next(
+                    (item for item in status.get("containerStatuses") or [] if item.get("name") == _FINELOG_CONTAINER),
+                    {},
+                )
+                last_terminated = (container_status.get("lastState") or {}).get("terminated") or {}
+                rows.append(
+                    {
+                        "namespace": namespace,
+                        "deployment": deployment_name,
+                        "pod": pod_metadata.get("name") or "",
+                        "node": runtime_spec.get("nodeName") or "",
+                        "phase": status.get("phase") or "Missing",
+                        "ready": bool(container_status.get("ready")),
+                        "restarts": container_status.get("restartCount") or 0,
+                        "last_exit_code": last_terminated.get("exitCode"),
+                        "last_exit_reason": last_terminated.get("reason") or "",
+                        "image": container.get("image") or "",
+                        "cpu_request": str(requests.get("cpu", "")),
+                        "cpu_limit": str(limits.get("cpu", "")),
+                        "memory_request": str(requests.get("memory", "")),
+                        "memory_limit": str(limits.get("memory", "")),
+                        "startup_probe": bool(container.get("startupProbe")),
+                        "readiness_probe": bool(container.get("readinessProbe")),
+                        "liveness_probe": bool(container.get("livenessProbe")),
+                        "pvc": pvc_name,
+                        "storage_class": pvc_spec.get("storageClassName") or "",
+                        "storage_capacity": str(storage_capacity),
+                    }
+                )
+        return rows
 
     def _scanned_namespaces(self) -> list[str]:
         """Namespaces the pod scans cover: everything not provider-managed by prefix."""
@@ -692,6 +770,9 @@ class K8sFleet:
             ]
 
         return self._collect(lambda source: [source.finelog_health()], on_error)
+
+    def finelog_pods(self) -> list[dict]:
+        return self._fan_out(lambda source: source.finelog_pods(), self._error_row)
 
     def alert_gpu_rack_trays(self) -> list[dict]:
         """Per rack: trays_ready as ``value``, for the below-minimum-trays alert.

@@ -39,6 +39,7 @@ GET /wandb/{train-loss,paloma-macro-loss,mfu}      public report runset and samp
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
+GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
@@ -59,7 +60,9 @@ time column without casting. finelog has JSON SQL UDFs, so a panel groups by a l
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
-at or above 5 seconds is slow.
+at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod
+resources, restart history, probe presence, node placement, PVC class/capacity, and
+recent matching Kubernetes Warning events.
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
@@ -155,7 +158,8 @@ health, Kubernetes workload state, and hero training), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
-grouped by run), `k8s.json` (current CW control-plane state from the k8s source).
+grouped by run), `k8s.json` (current CW control-plane state from the k8s source), and
+`finelog.json` (fleet readiness plus mirror pod, probe, resource, and PVC details).
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,

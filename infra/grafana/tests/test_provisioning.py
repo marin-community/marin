@@ -180,6 +180,34 @@ def test_k8s_dashboard_shows_finelog_fleet_health():
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
 
 
+def test_finelog_dashboard_shows_health_pods_storage_and_events():
+    dashboard = _stitched_dashboards()["finelog.json"]
+    targets = [target for panel in dashboard["panels"] for target in panel.get("targets", [])]
+
+    assert {(target["url"], target.get("parser")) for target in targets} == {
+        ("/fleet_health", "backend"),
+        ("/finelog", "backend"),
+        ("/finelog_events", "backend"),
+    }
+    pod_target = next(target for target in targets if target["url"] == "/finelog")
+    selectors = {column["selector"] for column in pod_target["columns"]}
+    assert {
+        "cluster",
+        "namespace",
+        "pod",
+        "node",
+        "restarts",
+        "cpu_request",
+        "cpu_limit",
+        "memory_request",
+        "memory_limit",
+        "startup_probe",
+        "pvc",
+        "storage_class",
+        "storage_capacity",
+    } <= selectors
+
+
 def test_dashboard_filter_expressions_reference_selected_columns():
     # Infinity's backend parser applies filterExpression to the frame built from
     # `columns`, so every field a filter references must also be selected.

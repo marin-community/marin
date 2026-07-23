@@ -74,11 +74,21 @@ spec:
               mountPath: /var/cache/finelog
           resources:
             requests:
-              cpu: "500m"
-              memory: "4Gi"
+              cpu: "{{ cpu_request }}"
+              memory: "{{ memory_request }}"
             limits:
-              cpu: "2"
-              memory: "32Gi"
+              cpu: "{{ cpu_limit }}"
+              memory: "{{ memory_limit }}"
+          # Opening an existing store can take over a minute on a network-backed
+          # PVC. Gate liveness and readiness until startup succeeds so recovery
+          # work cannot trigger a self-sustaining liveness restart loop.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /health

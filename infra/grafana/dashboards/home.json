@@ -51,6 +51,16 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Finelog",
+      "type": "link",
+      "url": "/d/marin-finelog"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "K8s",
       "type": "link",
       "url": "/d/marin-k8s"
