@@ -8,7 +8,8 @@ path so the serve child runs the marin VllmBackend/vLLM-fork stack (MoE / exotic
 support) and the eval child is a CPU-only ``eval.eval --model local-chat-completions``
 client against the served OpenAI URL (:evalchemy-gpu image, has fsspec/s3fs).
 
-Submits ONE parent CPU orchestrator to ``cw-us-east-02a``; serve_and_eval spawns:
+Submits ONE parent CPU orchestrator to the selected CoreWeave H100 cluster; ``EVAL_CLUSTER``
+defaults to ``cw-us-east-02a`` and may be set to ``cw-rno2a``. ``serve_and_eval`` spawns:
   * serve child  (8xH100)  — marin VllmBackend, TP=$TP, max_model_len=32768, bf16.
   * eval  child  (CPU)     — one ``eval.eval`` per task (own num_fewshot), chat route,
                              --apply_chat_template, --log_samples, --verbosity INFO.
@@ -24,6 +25,7 @@ Env knobs (all optional; defaults = the Qwen3-30B-A3B-Thinking-2507 pathfinder, 
     EVAL_MODEL        HF id to serve+eval          (default Qwen/Qwen3-30B-A3B-Thinking-2507)
     EVAL_TOKENIZER    HF tokenizer id              (default = EVAL_MODEL)
     EVAL_TP           tensor_parallel_size         (default 8; must divide num_attention_heads)
+    EVAL_CLUSTER      Iris GPU cluster              (default cw-us-east-02a; e.g. cw-rno2a)
     EVAL_TIER         1 | 2                         (default 1 = 14 lm-harness tasks)
     EVAL_OUT_PATH     fsspec out_path              (default pod-local /tmp/<slug>-tier<N>out)
     EVAL_MAX_MODEL_LEN                              (default 32768)
@@ -52,7 +54,7 @@ from experiments.evals.evalchemy.serve_and_eval import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-CLUSTER = "cw-us-east-02a"
+CLUSTER = os.environ.get("EVAL_CLUSTER", "cw-us-east-02a")
 # :evalchemy-gpu (built via evalchemy infra/docker/build_evalchemy_gpu_kaniko.sh, PR #18) — CPU-only eval
 # client; python at /opt/eval/evalchemy/.venv. Pinned to evalchemy main HEAD 676fb85f which carries #28
 # (per-sample records now persist for lm-eval-native tasks under --log_samples → offline rescore, e.g. drop).
