@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from fsspec.core import url_to_fs
-from marin.evaluation.samples import EvalSample, SampleKind, write_sample_parquet
+from marin.evaluation.samples import EvalSample, SampleKind, sample_from_lm_eval, write_sample_parquet
 
 from infra.evaldash.src.samples import fetch_samples, list_sample_tasks
 
@@ -47,3 +47,27 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     assert page.offset == 0
     assert page.limit == 1
     assert [row.doc_id for row in page.rows] == ["incorrect"]
+
+
+def test_grading_is_derived_and_round_trips(tmp_path) -> None:
+    fs, root = url_to_fs(str(tmp_path))
+    sample = sample_from_lm_eval(
+        "gsm8k",
+        {
+            "doc_id": 3,
+            "arguments": [["2+2?", " 4"]],
+            "resps": [[" 4"]],
+            "target": "4",
+            "exact_match,flexible-extract": 1.0,
+        },
+    )
+    write_sample_parquet(fs, f"{root}/samples_gsm8k_20260723.parquet", [sample])
+
+    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, correct="all")
+
+    (row,) = page.rows
+    assert row.grading is not None
+    assert row.grading.method == "lm-eval:exact_match"
+    assert row.grading.metric == "exact_match,flexible-extract"
+    assert row.grading.filter == "flexible-extract"
+    assert row.grading.passed is True

@@ -137,10 +137,6 @@ def list_sample_tasks(results_path: str | None) -> SampleTasksResponse:
     return SampleTasksResponse(available=True, error=None, tasks=tasks)
 
 
-def _correct(sample: EvalSample) -> bool:
-    return bool(sample.correct)
-
-
 def _empty_samples(
     *,
     available: bool,
@@ -202,30 +198,38 @@ def fetch_samples(
             limit=limit,
         )
 
-    all_samples = tuple(EvalSample.model_validate(row) for row in table.to_pylist())
-    metric_columns = tuple(sorted({name for sample in all_samples for name in sample.metrics}))
+    # Counts and the correctness filter need only the light ``correct`` and ``metrics`` columns, so
+    # compute them straight from the arrow columns and validate just the page's rows. Validating every
+    # row (and materializing every fat column, e.g. per-token logprobs) on each page request is what
+    # made this reader scale with the whole run instead of the page.
+    columns = set(table.column_names)
+    correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
+    metric_maps = table.column("metrics").to_pylist() if "metrics" in columns else [None] * table.num_rows
+    metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
     primary = picked[0] if picked is not None else None
-    n_correct = sum(1 for sample in all_samples if _correct(sample))
+    n_correct = sum(1 for value in correct_values if bool(value))
     counts = SampleCounts(
-        all=len(all_samples),
+        all=table.num_rows,
         correct=n_correct,
-        incorrect=len(all_samples) - n_correct,
+        incorrect=table.num_rows - n_correct,
     )
     if correct == "correct":
-        filtered = tuple(sample for sample in all_samples if _correct(sample))
+        indices = [i for i, value in enumerate(correct_values) if bool(value)]
     elif correct == "incorrect":
-        filtered = tuple(sample for sample in all_samples if not _correct(sample))
+        indices = [i for i, value in enumerate(correct_values) if not bool(value)]
     else:
-        filtered = all_samples
-    page = filtered[offset : offset + limit]
+        indices = list(range(table.num_rows))
+    page_indices = indices[offset : offset + limit]
+    page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist()
+    page = tuple(EvalSample.model_validate(row) for row in page_rows)
     return SamplesResponse(
         available=True,
         error=None,
         task=task,
         primary_metric=primary,
         metric_columns=metric_columns,
-        total=len(filtered),
+        total=len(indices),
         offset=offset,
         limit=limit,
         counts=counts,
