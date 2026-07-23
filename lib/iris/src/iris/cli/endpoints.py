@@ -9,6 +9,7 @@ it.
 """
 
 import time
+from typing import Any
 
 import click
 from rigging.connect import capability_path
@@ -31,6 +32,40 @@ def _access_label(access: int) -> str:
         return EndpointAccess.Name(access).removeprefix("ENDPOINT_ACCESS_").lower()
     except ValueError:
         return str(access)
+
+
+def _wait_for_endpoint(
+    client: Any,
+    name: str,
+    *,
+    timeout_seconds: float,
+    poll_seconds: float,
+    require_peer: bool,
+) -> Any:
+    """Wait for an exact endpoint registration, optionally requiring a peer mirror."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        response = client.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix=name, exact=True))
+        if response.endpoints:
+            endpoint = response.endpoints[0]
+            if not require_peer or endpoint.peer_id:
+                return endpoint
+            raise click.ClickException(f"endpoint {name!r} is local; expected a federated peer mirror")
+        if time.monotonic() >= deadline:
+            raise click.ClickException(f"timed out waiting {timeout_seconds:g}s for endpoint {name!r}")
+        time.sleep(poll_seconds)
+
+
+def _capability_url(client: Any, name: str, ttl_hours: float, dashboard_url: str) -> str:
+    response = client.mint_endpoint_token(
+        controller_pb2.Controller.MintEndpointTokenRequest(
+            endpoint_name=name,
+            ttl=duration_to_proto(Duration.from_hours(ttl_hours)),
+        )
+    )
+    if not dashboard_url:
+        raise click.ClickException("controller has no dashboard URL for an off-cluster capability URL")
+    return f"{dashboard_url.rstrip('/')}{capability_path(name, response.token)}/"
 
 
 @endpoints.command("list")
@@ -102,3 +137,29 @@ def mint(ctx, name: str, ttl_hours: float):
         # No public origin on this config — front the controller's /proxy/t route.
         click.echo(f"  path       {path}/  (front the controller's /proxy/t route to reach it off-cluster)")
         click.echo(f"  expires    in {hours_left:.1f}h")
+
+
+@endpoints.command("wait-and-mint")
+@click.argument("name")
+@click.option("--ttl-hours", type=float, default=24.0, show_default=True)
+@click.option("--timeout-seconds", type=float, default=180.0, show_default=True)
+@click.option("--poll-seconds", type=float, default=3.0, show_default=True)
+@click.option("--require-peer", is_flag=True, help="Require NAME to be mirrored from a federation peer.")
+@click.pass_context
+def wait_and_mint(
+    ctx, name: str, ttl_hours: float, timeout_seconds: float, poll_seconds: float, require_peer: bool
+):
+    """Wait for NAME, mint its capability URL, and print only that URL."""
+    if timeout_seconds <= 0 or poll_seconds <= 0:
+        raise click.BadParameter("timeout and poll intervals must be positive")
+    config = (ctx.obj or {}).get("config")
+    dashboard_url = (config.dashboard_url if config else "").rstrip("/")
+    with rpc_client_for_ctx(ctx) as client:
+        _wait_for_endpoint(
+            client,
+            name,
+            timeout_seconds=timeout_seconds,
+            poll_seconds=poll_seconds,
+            require_peer=require_peer,
+        )
+        click.echo(_capability_url(client, name, ttl_hours, dashboard_url))
