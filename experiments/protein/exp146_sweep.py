@@ -103,6 +103,7 @@ SMOKE_VERSION: str = "v1"
 CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-exp117fix-v1"
 CALIBRATION_BATCH_SIZE: int = 1024
 CALIBRATION_MODEL_SIZES: frozenset[str] = frozenset({"3b", "6b"})
+CALIBRATION_TPU_RAM_ENV: str = "CALIBRATION_TPU_RAM"
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
@@ -345,6 +346,19 @@ def calibration() -> bool:
     return os.environ.get("CALIBRATION", "").strip().lower() in {"yes", "true", "1"}
 
 
+def calibration_tpu_ram() -> str | None:
+    """Optional calibration-only TPU host RAM override, e.g. ``192g``."""
+    if not calibration():
+        return None
+    ram = os.environ.get(CALIBRATION_TPU_RAM_ENV)
+    if ram is None:
+        return None
+    ram = ram.strip()
+    if not ram:
+        return None
+    return ram
+
+
 def smoke_steps() -> int:
     steps = _env_value("SMOKE_STEPS", int, SMOKE_STEPS_DEFAULT)
     if steps < 1:
@@ -398,6 +412,11 @@ def _fmt_wd(wd: float) -> str:
 def _fmt_correction(correction_factor: float) -> str:
     """Path-safe correction-factor tag, e.g. ``0.3`` -> ``0p3``, ``1.0`` -> ``1``."""
     return f"{correction_factor:g}".replace(".", "p")
+
+
+def _fmt_path_token(value: str) -> str:
+    """Path-safe token for short env-driven identity fragments."""
+    return value.lower().replace(".", "p").replace("/", "-")
 
 
 def _batch_bytes(point: Point, correction_factor: float) -> int:
@@ -546,6 +565,9 @@ def smoke_shape(
     if calibration_run:
         identity = f"{identity}-{CALIBRATION_VERSION}"
         tags.extend(["batch-calibration", f"calibration_version={CALIBRATION_VERSION}"])
+        if ram := calibration_tpu_ram():
+            identity = f"{identity}-ram{_fmt_path_token(ram)}"
+            tags.append(f"{CALIBRATION_TPU_RAM_ENV}={ram}")
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
@@ -610,6 +632,9 @@ def build_run(
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     batch_config = batch_fit(point, tpu, correction_factor)
+    resource_kwargs = {"regions": singleton_region_list(region)}
+    if ram := calibration_tpu_ram():
+        resource_kwargs["ram"] = ram
     step = train_lm(
         name=name,
         model=point.model_config,
@@ -627,7 +652,7 @@ def build_run(
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
         evals=None,
-        resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
+        resources=ResourceConfig.with_tpu(tpu, **resource_kwargs),
         version=SWEEP_VERSION,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
@@ -662,6 +687,7 @@ def _print_preview(
         f"data_parallelism={config.data_parallelism} tensor_parallelism={config.tensor_parallelism}\n"
         f"  per_device_parallelism={config.per_device_parallelism} "
         f"gradient_accumulation={config.gradient_accumulation}\n"
+        f"  calibration_tpu_ram={calibration_tpu_ram() or '<default>'}\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
