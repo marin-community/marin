@@ -32,6 +32,7 @@ from pathlib import Path
 import pg8000.dbapi
 import schema
 import sqlalchemy
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 MARINMIRROR_URL = os.environ.get("MARINMIRROR_URL", "https://marinmirror.exe.xyz")
@@ -91,37 +92,51 @@ def chunk_record(row: tuple) -> dict:
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
-    """Upsert every github/discord chunk; delete rows gone upstream. Returns (upserted, deleted).
+    """Upsert changed github/discord chunks; delete rows gone upstream. Returns (upserted, deleted).
+
+    Rows whose (id, hash) already match the database are skipped — the hash is the corpus's
+    own incremental-embed key, and re-upserting an unchanged row still pays an HNSW graph
+    insertion (~100 rows/s), so a typical sync touches hundreds of rows, not all 73k.
 
     Streams one BATCH of decoded rows at a time: the decoded embeddings are ~30x larger
     than their sqlite blobs (73k rows of boxed floats exceed the job's memory), so only
     the id list is held for the whole corpus. Each batch is one multi-row VALUES statement
-    — executemany with ON CONFLICT falls back to a round-trip per row (~80 rows/s over
-    the connector socket vs ~600/s batched).
+    — executemany with ON CONFLICT falls back to a round-trip per row.
     """
+    existing = dict(conn.execute(sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.hash)).fetchall())
     placeholders = ",".join("?" * len(SOURCES))
     cursor = sqlite3.connect(corpus).execute(
         f"SELECT {', '.join(CHUNK_COLUMNS)} FROM chunks WHERE source IN ({placeholders}) ORDER BY id",
         SOURCES,
     )
     ids: list[int] = []
+    upserted = 0
     started = time.time()
     while rows := cursor.fetchmany(BATCH):
         records = [chunk_record(row) for row in rows]
-        statement = pg_insert(schema.chunks).values(records)
+        ids.extend(record["id"] for record in records)
+        changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
+        if not changed:
+            continue
+        statement = pg_insert(schema.chunks).values(changed)
         statement = statement.on_conflict_do_update(
             index_elements=[schema.chunks.c.id],
             set_={name: statement.excluded[name] for name in CHUNK_COLUMNS if name != "id"},
         )
         conn.execute(statement)
-        ids.extend(record["id"] for record in records)
-        if len(ids) % 8000 == 0:
-            print(f"  upserted {len(ids)} rows ({len(ids) / (time.time() - started):.0f}/s)")
+        upserted += len(changed)
+        if upserted % 8000 < len(changed):
+            print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")
 
+    # One array bind, not id.not_in(ids): expanding 73k+ ids into individual parameters
+    # exceeds pg8000's 65535-parameter wire-protocol limit.
+    id_array = sqlalchemy.cast(ids, postgresql.ARRAY(sqlalchemy.BigInteger))
     deleted = conn.execute(
-        sqlalchemy.delete(schema.chunks).where(schema.chunks.c.source.in_(SOURCES)).where(schema.chunks.c.id.not_in(ids))
+        sqlalchemy.delete(schema.chunks)
+        .where(schema.chunks.c.source.in_(SOURCES))
+        .where(sqlalchemy.not_(schema.chunks.c.id == sqlalchemy.any_(id_array)))
     ).rowcount
-    return len(ids), deleted
+    return upserted, deleted
 
 
 def fetch_manifest() -> dict:
