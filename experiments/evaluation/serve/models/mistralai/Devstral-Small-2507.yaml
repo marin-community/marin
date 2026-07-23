@@ -1,0 +1,20 @@
+name: devstral-small-2507
+location: mistralai/Devstral-Small-2507
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 2
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  tool_call_parser: mistral
+  vllm_extra_args:
+  - --tokenizer-mode
+  - mistral
+  - --config-format
+  - mistral
+  - --load-format
+  - mistral
+  - --enable-prefix-caching

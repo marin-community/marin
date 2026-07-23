@@ -1,0 +1,21 @@
+name: sera-4.5a-full-t1-v3-1000-axolotl__qwen3-8b
+location: laion/Sera-4.5A-Full-T1-v3-1000-axolotl__Qwen3-8B
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 1
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  swap_space_gb: 32
+  trust_remote_code: true
+  tool_call_parser: hermes
+  vllm_extra_args:
+  - --enforce-eager
+  - --disable-cascade-attn
+  - --seed
+  - '42'
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

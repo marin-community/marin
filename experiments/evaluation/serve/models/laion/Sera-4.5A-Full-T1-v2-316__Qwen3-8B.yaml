@@ -1,0 +1,16 @@
+name: sera-4.5a-full-t1-v2-316__qwen3-8b
+location: laion/Sera-4.5A-Full-T1-v2-316__Qwen3-8B
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 1
+  trust_remote_code: true
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

@@ -179,3 +179,15 @@ def test_model_config_defaults_are_serve_and_chat_ready():
     assert config.serve == ServeConfig()
     assert config.generation == GenerationConfig()
     assert config.serve.auto_overrides is True
+
+
+def test_shipped_catalog_loads_and_every_model_can_size_a_slice():
+    # The imported serve catalog must load into ModelConfig with no draccus error, and every entry must
+    # carry the sizing signal the hardware selector needs (hbm_gb or a pinned GPU) or a launch of it
+    # would fail deep in accelerator selection rather than at load.
+    from experiments.evaluation.models import MODELS, MODEL_CATALOG_DIR
+
+    catalog = scan_model_configs(MODEL_CATALOG_DIR)
+    assert len(catalog) >= 40  # the OT-Agent catalog import
+    for name, config in MODELS.items():
+        assert config.serve.hbm_gb is not None or config.serve.fixed_gpu is not None, name

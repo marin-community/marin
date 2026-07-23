@@ -1,0 +1,16 @@
+name: swe-lego-qwen3-8b
+location: SWE-Lego/SWE-Lego-Qwen3-8B
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 1
+  trust_remote_code: true
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --override-generation-config
+  - '{"temperature":0.0,"top_p":1.0,"top_k":-1}'
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

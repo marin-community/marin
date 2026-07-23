@@ -1,0 +1,17 @@
+name: glm-4.7-flash
+location: zai-org/GLM-4.7-Flash
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 2
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  trust_remote_code: true
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

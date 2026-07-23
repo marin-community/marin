@@ -1,0 +1,13 @@
+name: r2egym-32b-agent
+location: R2E-Gym/R2EGym-32B-Agent
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 2
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  vllm_extra_args:
+  - --enable-prefix-caching

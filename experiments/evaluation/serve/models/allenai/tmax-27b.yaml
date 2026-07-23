@@ -1,0 +1,16 @@
+name: tmax-27b
+location: allenai/tmax-27b
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 4
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

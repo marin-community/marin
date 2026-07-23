@@ -1,0 +1,27 @@
+name: glm-4.7-awq
+location: QuantTrio/GLM-4.7-AWQ
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 4
+  tensor_parallel_size: 4
+  max_model_len: 32768
+  swap_space_gb: 4
+  trust_remote_code: true
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --enable-prefix-caching
+  - --enable-chunked-prefill
+  - --max-num-seqs
+  - '52'
+  - --max-num-batched-tokens
+  - '32768'
+  - --dtype
+  - bfloat16
+  - --kv-cache-dtype
+  - fp8
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

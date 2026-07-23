@@ -1,0 +1,12 @@
+name: coderforge-preview-v2-10000__qwen3-8b
+location: laion/CoderForge-Preview-v2-10000__Qwen3-8B
+apply_chat_template: true
+serve:
+  gpu_only: true
+  fixed_gpu:
+  - H100
+  - 1
+  tool_call_parser: hermes
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
