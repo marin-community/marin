@@ -114,7 +114,7 @@ SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
 # Subdirectory of MARIN_PREFIX these scale runs write their per-run output dirs
 # into, so they stay grouped instead of cluttering the prefix root.
 OUTPUT_SUBDIR = "experiments/grug-moe-cw"
-_PROBE_ENV_PREFIX = "MARIN_CUDA_MODULE_PROBE_"
+_PROBE_ENV_PREFIXES = ("MARIN_CUDA_MODULE_PROBE_", "MARIN_NGC_XLA_")
 
 # SlimPajama block-shuffle: a small, R2-local corpus for the scale/throughput run.
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -308,7 +308,11 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
         data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
-        probe_env = {key: value for key, value in os.environ.items() if key.startswith(_PROBE_ENV_PREFIX)}
+        probe_env = {
+            key: value
+            for key, value in os.environ.items()
+            if any(key.startswith(prefix) for prefix in _PROBE_ENV_PREFIXES)
+        }
         if "MARIN_CUDA_MODULE_PROBE_PROFILE" in probe_env:
             probe_env.setdefault("MARIN_CUDA_MODULE_PROBE_REQUIRED", "1")
             probe_env.setdefault("MARIN_CUDA_MODULE_PROBE_LOG_DIR", "/tmp/marin-cuda-module-probe")

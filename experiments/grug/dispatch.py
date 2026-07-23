@@ -4,6 +4,7 @@
 import logging
 import os
 import re
+import shlex
 import sys
 from collections.abc import Callable
 from typing import TypeVar
@@ -41,6 +42,17 @@ _FORWARDED_ENV_PREFIXES = (
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 _PROBE_LIBRARY_PATH = "/app/.venv/lib/libmarin_cuda_module_probe.so"
 _PROBE_SOURCE_PATH = "/app/experiments/grug/moe/standalone/cuda_module_probe.cc"
+_NGC_XLA_CUDA_PLUGIN_PATH = "/opt/jaxlibs/jax_cuda13_pjrt/jax_plugins/xla_cuda13/xla_cuda_plugin.so"
+_NGC_XLA_STOCK_CUDA_PLUGIN_SHA256 = "d368aae61feb78c14b7549ff034c7f1a637f2222d9421f868e680679234a5265"
+_NGC_XLA_LIBRARY_PATHS = (
+    "/usr/lib/aarch64-linux-gnu/nvshmem/13",
+    "/usr/lib/x86_64-linux-gnu/nvshmem/13",
+    "/usr/local/cuda/targets/aarch64-linux/lib",
+    "/usr/local/cuda/targets/x86_64-linux/lib",
+    "/usr/local/cuda/compat/lib",
+    "/usr/local/nvidia/lib",
+    "/usr/local/nvidia/lib64",
+)
 _NVIDIA_JAX_IMAGE_PREFIX = "nvcr.io/nvidia/jax:"
 _NVIDIA_JAX_UV_VERSION = "0.11.21"
 _NVIDIA_JAX_PROTECTED_PACKAGES = (
@@ -158,6 +170,44 @@ mkdir -p "$MARIN_CUDA_MODULE_PROBE_LOG_DIR"
 """
 
 
+def _ngc_xla_cuda_plugin_setup_script(artifact_uri: str, expected_sha256: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ValueError("MARIN_NGC_XLA_CUDA_PLUGIN_SHA256 must be 64 lowercase hexadecimal characters")
+    copy_command = (
+        "from pathlib import Path; import sys; "
+        "from experiments.grug.moe.standalone.ngc_xla_kernel_cache_probe import copy_artifact; "
+        "print(copy_artifact(sys.argv[1], Path(sys.argv[2]), sys.argv[3]))"
+    )
+    return f"""set -eu
+test -f {_NGC_XLA_CUDA_PLUGIN_PATH}
+printf '%s  %s\\n' {_NGC_XLA_STOCK_CUDA_PLUGIN_SHA256} {_NGC_XLA_CUDA_PLUGIN_PATH} | sha256sum --check --status
+"$IRIS_VENV/bin/python" -c {shlex.quote(copy_command)} \\
+  {shlex.quote(artifact_uri)} \\
+  {_NGC_XLA_CUDA_PLUGIN_PATH} \\
+  {expected_sha256}
+"$IRIS_VENV/bin/python" - <<'PY'
+from pathlib import Path
+
+import jax
+import jaxlib
+
+jax.devices()
+maps = Path("/proc/self/maps").read_text()
+assert (
+    "/opt/jaxlibs/jax_cuda13_pjrt/jax_plugins/xla_cuda13/xla_cuda_plugin.so" in maps
+), "instrumented NGC CUDA PJRT plugin not present in /proc/self/maps"
+assert jax.__file__.startswith("/opt/jax/"), jax.__file__
+assert jaxlib.__file__.startswith("/opt/jaxlibs/"), jaxlib.__file__
+print("loaded instrumented NGC CUDA PJRT plugin")
+PY
+"""
+
+
+def _prepend_ld_preload(env: dict[str, str], library: str) -> None:
+    current = env.get("LD_PRELOAD")
+    env["LD_PRELOAD"] = f"{library}:{current}" if current else library
+
+
 def _forwarded_env_vars() -> dict[str, str]:
     return {
         k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and k not in _FORWARDED_ENV_EXCLUDE
@@ -188,8 +238,21 @@ def dispatch_grug_training_run(
         if resources.image is not None and resources.image.startswith(_NVIDIA_JAX_IMAGE_PREFIX)
         else None
     )
+    ngc_xla_artifact = explicit_env.get("MARIN_NGC_XLA_CUDA_PLUGIN_URI")
+    ngc_xla_sha256 = explicit_env.get("MARIN_NGC_XLA_CUDA_PLUGIN_SHA256")
+    if ngc_xla_artifact is not None or ngc_xla_sha256 is not None:
+        if ngc_xla_artifact is None or ngc_xla_sha256 is None:
+            raise ValueError("NGC XLA overlay requires both the artifact URI and SHA-256")
+        if setup_scripts is None:
+            raise ValueError("NGC XLA overlay requires an nvcr.io/nvidia/jax task image")
+        setup_scripts.append(_ngc_xla_cuda_plugin_setup_script(ngc_xla_artifact, ngc_xla_sha256))
+        current_library_path = child_env.get("LD_LIBRARY_PATH")
+        ngc_library_path = ":".join(_NGC_XLA_LIBRARY_PATHS)
+        child_env["LD_LIBRARY_PATH"] = (
+            f"{ngc_library_path}:{current_library_path}" if current_library_path else ngc_library_path
+        )
     if "MARIN_CUDA_MODULE_PROBE_PROFILE" in explicit_env:
-        child_env["LD_PRELOAD"] = _PROBE_LIBRARY_PATH
+        _prepend_ld_preload(child_env, _PROBE_LIBRARY_PATH)
         if setup_scripts is None:
             extras = extras_for_resources(resources)
             setup_scripts = [

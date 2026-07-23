@@ -119,6 +119,30 @@ def test_dispatch_with_nvidia_jax_image_and_probe_keeps_guarded_overlay(monkeypa
     assert len(request.environment.setup_scripts) == 3
 
 
+def test_dispatch_with_ngc_xla_probe_installs_patched_cuda_plugin(monkeypatch) -> None:
+    artifact_uri = "s3://marin-us-east-02a/tmp/ttl=30d/cubin7421/diagnostic/xla_cuda_plugin.so"
+    artifact_sha256 = "a" * 64
+    request = _capture_request(
+        monkeypatch,
+        resources=ResourceConfig.with_gpu("GB200", count=4, image="nvcr.io/nvidia/jax:26.06-py3"),
+        env_vars={
+            "MARIN_NGC_XLA_CUDA_PLUGIN_URI": artifact_uri,
+            "MARIN_NGC_XLA_CUDA_PLUGIN_SHA256": artifact_sha256,
+        },
+    )
+
+    assert request.environment.setup_scripts is not None
+    assert len(request.environment.setup_scripts) == 2
+    assert "LD_PRELOAD" not in request.environment.env_vars
+    assert artifact_uri in request.environment.setup_scripts[1]
+    assert artifact_sha256 in request.environment.setup_scripts[1]
+    plugin_path = "/opt/jaxlibs/jax_cuda13_pjrt/jax_plugins/xla_cuda13/xla_cuda_plugin.so"
+    assert plugin_path in request.environment.setup_scripts[1]
+    assert "/usr/lib/aarch64-linux-gnu/nvshmem/13" in request.environment.env_vars["LD_LIBRARY_PATH"]
+    assert "/usr/lib/x86_64-linux-gnu/nvshmem/13" in request.environment.env_vars["LD_LIBRARY_PATH"]
+    assert "instrumented NGC CUDA PJRT plugin not present" in request.environment.setup_scripts[1]
+
+
 def test_scale_checkpoint_routes_task_image_to_train_workers(monkeypatch) -> None:
     image = "nvcr.io/nvidia/jax:26.06-py3"
     monkeypatch.setenv("SCALE_TASK_IMAGE", image)
@@ -139,3 +163,17 @@ def test_scale_checkpoint_can_skip_final_checkpoint(monkeypatch) -> None:
 
     assert config.grug_trainer.final_checkpoint.value == "skip"
     assert config.max_retries_failure == 0
+
+
+def test_scale_checkpoint_forwards_ngc_xla_probe_artifact(monkeypatch) -> None:
+    artifact_uri = "s3://marin-us-east-02a/tmp/ttl=30d/cubin7421/diagnostic/xla_cuda_plugin.so"
+    artifact_sha256 = "b" * 64
+    monkeypatch.setenv("MARIN_NGC_XLA_CUDA_PLUGIN_URI", artifact_uri)
+    monkeypatch.setenv("MARIN_NGC_XLA_CUDA_PLUGIN_SHA256", artifact_sha256)
+    monkeypatch.setenv("RUN_ID", "ngc-xla-probe-test")
+
+    step = launch_cw_scale.build_scale_checkpoint()
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+
+    assert config.env_vars["MARIN_NGC_XLA_CUDA_PLUGIN_URI"] == artifact_uri
+    assert config.env_vars["MARIN_NGC_XLA_CUDA_PLUGIN_SHA256"] == artifact_sha256

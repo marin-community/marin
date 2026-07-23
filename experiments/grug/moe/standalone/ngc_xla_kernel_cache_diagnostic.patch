@@ -1,0 +1,23 @@
+diff --git a/xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.cc b/xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.cc
+index a466b8700..bd3b8aa15 100644
+--- a/xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.cc
++++ b/xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.cc
+@@ -423,6 +423,18 @@ absl::StatusOr<FusionEmissionResult> MlirKernelFusion::Emit(
+     if (kernel_cached) {
+       VLOG(3) << "Reuse: " << fusion.name() << " -> " << entry->kernel_name;
+     }
++    if (entry->binary.empty()) {
++      LOG(ERROR) << "CUBIN7421_EMPTY_KERNEL_CACHE_ENTRY"
++                 << " fusion=" << fusion.name()
++                 << " was_cached=" << kernel_cached
++                 << " entry_kernel=" << entry->kernel_name
++                 << " launch_dimensions="
++                 << entry->launch_dimensions.ToString();
++      return Internal(
++          "CUBIN7421_EMPTY_KERNEL_CACHE_ENTRY fusion=%s was_cached=%d "
++          "entry_kernel=%s",
++          fusion.name(), kernel_cached, entry->kernel_name);
++    }
+     ASSIGN_OR_RETURN(CustomKernel custom_kernel,
+                      kernel::CreateOwnedCubinCustomKernel(
+                          entry->kernel_name, entry->binary, args.args().size(),
