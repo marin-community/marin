@@ -26,8 +26,10 @@ from haliax.partitioning import set_mesh
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.profiler import ProfileOptionsConfig
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+from rigging.filesystem import StoragePath
 
 try:  # iris is only present on cluster jobs; single-process runs don't need it
     from iris.runtime.jax_init import initialize_jax as _iris_initialize_jax
@@ -2312,6 +2314,22 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
             "(process 0 only) to this directory"
         ),
     )
+    p.add_argument("--profile-start-step", type=int, default=_PROFILE_START_STEP)
+    p.add_argument(
+        "--profile-num-steps",
+        type=int,
+        default=_PROFILE_STOP_STEP - _PROFILE_START_STEP + 1,
+    )
+    p.add_argument(
+        "--readable-profile",
+        action="store_true",
+        help="capture host scopes and HLO metadata for semantic trace attribution",
+    )
+    p.add_argument(
+        "--profile-upload-uri",
+        default=None,
+        help="upload the completed profile directory before interpreter teardown",
+    )
     return p.parse_args(argv)
 
 
@@ -2388,6 +2406,16 @@ def main():
     mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis_size)
     metrics = []
     tps = a.batch_size * a.seq_len
+    if a.profile_dir and a.profile_num_steps <= 0:
+        raise ValueError("--profile-num-steps must be positive")
+    profile_stop_step = a.profile_start_step + a.profile_num_steps - 1
+    profile_options = None
+    if a.readable_profile:
+        profile_options = ProfileOptionsConfig(
+            host_tracer_level=1,
+            python_tracer_level=0,
+            enable_hlo_proto=True,
+        ).build_jax_profile_options()
     with set_mesh(mesh):
 
         @jax.jit
@@ -2396,16 +2424,23 @@ def main():
 
         state = init(jax.random.PRNGKey(0))
         for step in range(a.steps):
-            if a.profile_dir and is_main_process and step == _PROFILE_START_STEP:
-                jax.profiler.start_trace(a.profile_dir)
+            if a.profile_dir and is_main_process and step == a.profile_start_step:
+                jax.profiler.start_trace(
+                    a.profile_dir,
+                    create_perfetto_trace=True,
+                    profiler_options=profile_options,
+                )
             batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
             t0 = time.perf_counter()
             state, sm, _w = train_step(state, batch, compute_watch=False)
             loss = sm["train/loss"]
             jax.block_until_ready(loss)
             dur = time.perf_counter() - t0
-            if a.profile_dir and is_main_process and step == _PROFILE_STOP_STEP:
+            if a.profile_dir and is_main_process and step == profile_stop_step:
                 jax.profiler.stop_trace()
+                if a.profile_upload_uri:
+                    StoragePath(a.profile_upload_uri).upload_from(a.profile_dir, recursive=True)
+                    print(f"PROFILE_UPLOAD {a.profile_upload_uri}", flush=True)
             s = int(state.step) - 1
             eps = a.batch_size / dur
             achieved = flops_per_example * eps
