@@ -57,7 +57,6 @@ provisioning:
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
       active_cluster_issuer: letsencrypt-http01-prod
     federation_dns:
-      zone_id: 169959d6aafcbfd77764b8efafa3a509
       hostname: iris-cw-us-east-08a.oa.dev
       target: iris-cw-us-east-08a.208261-marin-us-east-08a.coreweave.app
     rbac: { service_account: iris-controller }

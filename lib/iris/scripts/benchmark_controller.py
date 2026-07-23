@@ -2459,6 +2459,7 @@ _PROXY_BENCHMARK_BACKLOG = 2048
 _PROXY_BENCHMARK_HEALTH_ROUTE = "/health"
 _PROXY_BENCHMARK_HOST = "127.0.0.1"
 _PROXY_BENCHMARK_HTTP = "httptools"
+_PROXY_BENCHMARK_REQUEST_TIMEOUT = 30.0
 
 
 def _proxy_benchmark_upstream(stream_spec: ProxyStreamSpec) -> Starlette:
@@ -2476,7 +2477,10 @@ def _proxy_benchmark_upstream(stream_spec: ProxyStreamSpec) -> Starlette:
 
 
 def _proxy_benchmark_app(upstream_address: str) -> Starlette:
-    proxy = EndpointProxy({"/bench/stream": upstream_address}.get, timeout_seconds=30)
+    proxy = EndpointProxy(
+        {"/bench/stream": upstream_address}.get,
+        timeout_seconds=_PROXY_BENCHMARK_REQUEST_TIMEOUT,
+    )
 
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"loop": type(asyncio.get_running_loop()).__name__})
@@ -2501,7 +2505,7 @@ def _proxy_benchmark_app(upstream_address: str) -> Starlette:
 
 async def _exercise_proxy(base_url: str, *, connections: int) -> ProxyExerciseResult:
     limits = httpx.Limits(max_connections=None, max_keepalive_connections=0)
-    timeout = httpx.Timeout(30)
+    timeout = httpx.Timeout(_PROXY_BENCHMARK_REQUEST_TIMEOUT)
     started = asyncio.Event()
     streams_done = asyncio.Event()
     health_latencies: list[float] = []

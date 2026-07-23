@@ -60,7 +60,7 @@ clientConnection:
 
 `infra/pulumi/src/iac/config.py` exposes the pair as a typed provisioning block with the same shared defaults, while retaining per-cluster overrides. Pulumi applied only the `cw-rno2a` Kueue Helm release during recovery; other clusters will receive the defaults through their normal Pulumi updates.
 
-`infra/pulumi/src/iac/coreweave/dns.py` also declares each existing DNS-only Cloudflare record with deletion protection. Every CoreWeave config carries its zone, hostname, and allocated LoadBalancer target. Operators load `cloudflare-oa-dns-token` into `CLOUDFLARE_API_TOKEN` for previews and updates.
+`infra/pulumi/src/iac/coreweave/dns.py` also declares each existing DNS-only Cloudflare record with deletion protection. The typed schema owns the shared `oa.dev` zone ID, while every CoreWeave config carries its hostname and allocated LoadBalancer target. Operators load `cloudflare-oa-dns-token` into `CLOUDFLARE_API_TOKEN` for previews and updates.
 
 ## How OPS.md could have shortened this
 
