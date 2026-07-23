@@ -149,7 +149,7 @@ class XprofGateway:
             return _response(start_response, "200 OK", b"ok\n", "text/plain; charset=utf-8")
         if path == "/open":
             return self._open(environ, start_response)
-        return self._serve_xprof(environ, start_response)
+        return self._serve_xprof(path, environ, start_response)
 
     def shutdown(self) -> None:
         self._profiles.shutdown()
@@ -182,8 +182,7 @@ class XprofGateway:
         start_response("303 See Other", [("Location", location), ("Content-Length", "0")])
         return [b""]
 
-    def _serve_xprof(self, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
-        path = environ.get("PATH_INFO", "/")
+    def _serve_xprof(self, path: str, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
         if path != "/" and not path.endswith(_REWRITE_SUFFIXES):
             return self._xprof_app(environ, start_response)
 
