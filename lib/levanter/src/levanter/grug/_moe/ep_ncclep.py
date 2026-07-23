@@ -197,7 +197,7 @@ def moe_mlp_ep_ncclep(
                 local_w2,
                 activation_fn=activation_fn,
             ),
-            mesh=mesh,
+            mesh=jax.sharding.get_abstract_mesh(),
             in_specs=(leading_spec, leading_spec_2d, expert_spec, expert_spec),
             out_specs=leading_spec,
             check_vma=False,
