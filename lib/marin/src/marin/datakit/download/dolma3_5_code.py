@@ -29,9 +29,9 @@ SUBSETS = ("dolma_code_prose",)
 
 
 def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
-    """Return ``(download, normalize)`` chains for the dolma3.5_pool code subsets.
+    """Return the ``(download, normalize)`` chain for the code-prose subset.
 
-    Keyed by the registry name, which matches the upstream directory name.
+    The key matches the upstream directory name.
     """
     return {
         subset: hf_normalize_steps(

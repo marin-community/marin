@@ -6,6 +6,7 @@
 from pathlib import PurePosixPath
 
 from fray.types import ResourceConfig
+from rigging.filesystem import prefix_join
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_parquet
@@ -46,16 +47,19 @@ def row_to_doc(row: dict) -> list[dict]:
 def transform(input_path: str, output_path: str) -> None:
     """Serialize each repository in deterministic depth-first file order."""
     pipeline = (
-        Dataset.from_files(f"{input_path}/data/*.parquet")
+        Dataset.from_files(prefix_join(input_path, TRAIN_PARQUET_GLOB))
         .flat_map(load_parquet)
         .flat_map(row_to_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            skip_existing=True,
+        )
     )
     ctx = ZephyrContext(name="stack-v3-transform", resources=ResourceConfig(cpu=2, ram="32g", disk="10g"))
     ctx.execute(pipeline)
 
 
-def download_stack_v3_step() -> StepSpec:
+def processed_stack_v3_step() -> StepSpec:
     """Download and serialize Stack v3 repositories."""
     download = download_hf_step(
         "raw/stack-v3",
@@ -77,7 +81,7 @@ def download_stack_v3_step() -> StepSpec:
 
 def stack_v3_normalize_steps() -> tuple[StepSpec, ...]:
     """Return the Stack v3 download, repository transform, and normalize chain."""
-    processed = download_stack_v3_step()
+    processed = processed_stack_v3_step()
     return (
         processed,
         normalize_step(name="normalized/stack-v3", download=processed, id_field="repo_id"),
