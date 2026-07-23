@@ -38,7 +38,8 @@ from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
 
 PROJECT = "hai-gcp-models"
-INSTANCE = "hai-gcp-models:us-central1:marin-context"
+REGION = "us-central1"
+INSTANCE = f"{PROJECT}:{REGION}:marin-context"
 DATABASE = "context"
 DB_USER = "agents"
 PASSWORD_SECRET = "cloudsql-agents-password"
@@ -55,8 +56,9 @@ def db_password() -> str:
     ).stdout
 
 
-def chunk_filters(args: argparse.Namespace) -> tuple[str, list]:
-    where, params = ["true"], []
+def chunk_filters(args: argparse.Namespace) -> tuple[str, list[str]]:
+    where: list[str] = ["true"]
+    params: list[str] = []
     if args.source:
         where.append("source = %s")
         params.append(args.source)
