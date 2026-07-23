@@ -10,10 +10,20 @@ from typing import TypeVar
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
 logger = logging.getLogger(__name__)
+
+
+def _priority_band_from_env() -> int:
+    """Scheduling band for the dispatched training job from ``GRUG_PRIORITY_BAND``
+    (``batch`` | ``interactive`` | ``production``); unset leaves the backend default.
+    ``batch`` lets a swarm soak idle capacity without preempting interactive work."""
+    band = os.environ.get("GRUG_PRIORITY_BAND")
+    return priority_band_value(band) if band else 0
+
 
 ConfigT = TypeVar("ConfigT")
 
@@ -57,6 +67,7 @@ def dispatch_grug_training_run(
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,
+        priority=_priority_band_from_env(),
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

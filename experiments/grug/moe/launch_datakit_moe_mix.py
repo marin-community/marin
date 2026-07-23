@@ -38,7 +38,9 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # one sequence per block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
-ENABLE_SIMULATED_EPOCHING = True
+# On by default (production); DATAKIT_SIM_EPOCH=0 for a short smoke, where the tiny
+# step budget would otherwise truncate buckets to 0 sequences.
+ENABLE_SIMULATED_EPOCHING = bool(env_int("DATAKIT_SIM_EPOCH", 1))
 
 # Natural size of ``datakit/store_8ac06c74`` from Will's datakit-moe-mix branch:
 # 167 mixable bucket caches plus the 33-cache tail component.
@@ -389,6 +391,8 @@ _model, _optimizer, _batch_size, _steps = build_from_heuristic(
 # untouched.
 _SEQ_LEN = 2048
 _model = dataclasses.replace(_model, max_seq_len=_SEQ_LEN, sliding_window=_SEQ_LEN)
+# DATAKIT_STEPS caps the run for a smoke / clean-teardown check (default: full run).
+_steps = env_int("DATAKIT_STEPS", _steps)
 _SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
 
 # Eval on paloma + uncheatable perplexity; DATAKIT_EVAL=0 skips it and its dataset
@@ -424,7 +428,7 @@ def build_launch_config(
     eval_config = (
         GrugEvalConfig(
             eval_batch_size=512,
-            steps_per_eval=1000,
+            steps_per_eval=env_int("DATAKIT_STEPS_PER_EVAL", 1000),
             max_eval_batches=8,
             eval_current=True,
             eval_ema=False,
