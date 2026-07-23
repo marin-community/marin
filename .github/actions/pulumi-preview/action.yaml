@@ -26,6 +26,9 @@ inputs:
   comment-on-pr:
     description: "Post/update the preview as a PR comment. Set false for non-PR triggers (e.g. workflow_dispatch), which have no PR to comment on."
     default: "true"
+  cloudflare-secret-name:
+    description: "GCP Secret Manager secret to export as CLOUDFLARE_API_TOKEN before preview (e.g. cloudflare-oa-dns-token, for stacks with provisioning.coreweave.federation_dns). Leave empty to skip."
+    default: ""
 
 runs:
   using: composite
@@ -41,6 +44,15 @@ runs:
       uses: google-github-actions/setup-gcloud@v3
       with:
         project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Fetch Cloudflare DNS token
+      if: inputs.cloudflare-secret-name != ''
+      shell: bash
+      run: |
+        TOKEN="$(gcloud secrets versions access latest \
+          --secret="${{ inputs.cloudflare-secret-name }}" --project="${{ inputs.gcp-project-id }}")"
+        echo "::add-mask::$TOKEN"
+        echo "CLOUDFLARE_API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7
