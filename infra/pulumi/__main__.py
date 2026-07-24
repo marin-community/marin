@@ -120,7 +120,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     if grafana_observer := coreweave_provisioning.grafana_observer_rbac:
         GrafanaObserverRbac(
             "grafana-observer-rbac",
-            GrafanaObserverRbacArgs(username=grafana_observer.username, adopt=adopt),
+            GrafanaObserverRbacArgs(usernames=grafana_observer.usernames, adopt=adopt),
             k8s_provider=k8s_provider,
         )
 

@@ -129,9 +129,9 @@ class RbacSpec(BaseModel):
 
 
 class GrafanaObserverRbacSpec(BaseModel):
-    """CoreWeave Managed Auth username used by Grafana's cluster observer."""
+    """CoreWeave Managed Auth usernames accepted during Grafana token rotation."""
 
-    username: str
+    usernames: tuple[str, ...] = Field(min_length=1)
 
 
 class CoreweaveProvisioning(BaseModel):

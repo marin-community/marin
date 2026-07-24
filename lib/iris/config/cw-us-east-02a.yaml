@@ -55,7 +55,7 @@ provisioning:
       target: iris-cw-us-east-02a.208261-marin-gpu.coreweave.app
     rbac: { service_account: iris-controller }
     grafana_observer_rbac:
-      username: cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token
+      usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
 
 platform:
   label_prefix: cw-use02a

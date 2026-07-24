@@ -250,22 +250,26 @@ unauthenticated and the build panel shows no data.
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
 cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
-CoreWeave Pulumi stacks bind the token's exact Managed Auth username to the
-nodes-only `marin-grafana-node-reader` role. The username lives under
-`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config.
+CoreWeave Pulumi stacks bind each exact Managed Auth username to the nodes-only
+`marin-grafana-node-reader` role. The usernames live under
+`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config so
+both tokens can retain access during a rotation.
 
 Rotation is overlap-safe:
 
 1. Mint a second read-role token in the CoreWeave console. Save it as a single
    line with no CR/LF; Secret Manager preserves trailing newlines.
 2. Use the token against one cluster's `SelfSubjectReview` to get its
-   `cwtoken-…` username. Update `grafana_observer_rbac.username` in
-   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`.
-3. Preview and update the three CoreWeave Pulumi stacks. Verify `list nodes=yes`,
-   while pod creation, Secret reads, and impersonation remain denied.
-4. Add the token as a new `marin-grafana-cw-read-token` version, deploy a fresh
-   Grafana revision, and verify every k8s bridge route before disabling the old
-   secret version and revoking the old CoreWeave token.
+   `cwtoken-…` username. Append it to `grafana_observer_rbac.usernames` in
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
+   the old username during the handoff.
+3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
+   `list nodes`, while pod creation, Secret reads, and impersonation remain
+   denied.
+4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
+   Grafana revision, and verify every k8s bridge route.
+5. Remove the old username from the three configs and update the stacks again.
+   Then disable the old secret version and revoke the old CoreWeave token.
 
 The same Secret Manager overlap pattern applies to the Slack webhook and SMTP
 password: add a version, redeploy, then retire the old credential.

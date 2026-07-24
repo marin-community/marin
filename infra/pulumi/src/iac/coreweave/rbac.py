@@ -97,11 +97,11 @@ class IrisRbac(pulumi.ComponentResource):
 
 @dataclass(frozen=True)
 class GrafanaObserverRbacArgs:
-    username: str
+    usernames: tuple[str, ...]
     adopt: bool = False
 
 
-def grafana_observer_manifests(username: str) -> tuple[dict, dict]:
+def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
     """Return the nodes-only read role and its token-specific binding."""
     labels = {
         "app.kubernetes.io/name": "marin-grafana",
@@ -124,6 +124,7 @@ def grafana_observer_manifests(username: str) -> tuple[dict, dict]:
                 "kind": "User",
                 "name": username,
             }
+            for username in usernames
         ],
     }
     return role, binding
@@ -141,7 +142,7 @@ class GrafanaObserverRbac(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:coreweave:GrafanaObserverRbac", name, None, opts)
-        role_manifest, binding_manifest = grafana_observer_manifests(args.username)
+        role_manifest, binding_manifest = grafana_observer_manifests(args.usernames)
 
         def child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
