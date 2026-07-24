@@ -1,8 +1,7 @@
 # Debugging log for the Iris Rust proxy auth handoff
 
-Restore trusted direct controller RPCs through the Rust public listener without
-letting untrusted public traffic inherit the private Python server's loopback
-identity.
+Authenticate controller RPCs at the Rust public listener, then pass only the
+verified identity to the private Python server for authorization.
 
 ## Initial status
 
@@ -15,24 +14,28 @@ Pulumi prerequisites, Kueue resources, the controller RBAC, and
 `iris-controller-env` were present. The rollout was stopped and the restored
 Deployment removed.
 
-## Hypothesis 1
+## Root cause
 
 The native listener adds `X-Forwarded-For` before forwarding every request to
 the private Uvicorn server. Rigging intentionally refuses loopback and CIDR
 authentication when that header is present, so the Rust-to-Python hop discards
 the direct caller's trusted-network identity.
 
-Simply removing the header is unsafe: every untrusted public request would then
-arrive at private Uvicorn from the Rust listener's loopback socket and inherit
-admin access.
+Treating every request as loopback in Python is also unsafe unless Python can
+distinguish a request admitted by Rust from a caller that reached the private
+port directly. The private hop needs a capability-bound identity rather than
+another interpretation of the public request headers.
 
 ## Changes to make
 
 - Add a boundary regression covering trusted direct and untrusted direct
   controller requests through the native listener.
-- Preserve a trusted direct caller as a direct request on the private hop.
-- Continue marking untrusted or already-forwarded requests as forwarded before
-  Python authentication.
+- Authenticate JWT, IAP, trusted-network, and permissive-mode callers in Rust.
+- Strip public credentials and caller-supplied internal headers before the
+  private hop.
+- Stamp the verified user, role, and audience together with the per-process
+  decision secret. Python accepts only this identity and retains method and
+  resource authorization.
 - Build the native extension from the checked-out Rust source in local tests and
   the controller Docker image.
 
@@ -41,21 +44,16 @@ admin access.
 The regression failed before the fix: both the direct and explicitly forwarded
 controller RPCs returned HTTP 401.
 
-The native listener now preserves the private hop as direct only when:
+The native listener now owns public authentication. It removes `Authorization`,
+cookies, IAP assertions, and spoofed Iris-internal headers before forwarding to
+Uvicorn. A request that Rust authenticates carries a percent-encoded identity
+stamp plus the per-process decision secret. Python does not re-read the public
+credential; it accepts the stamp and applies Iris authorization.
 
-1. the incoming request had no `X-Forwarded-For`;
-2. the request is for the controller rather than an endpoint proxy; and
-3. Rust independently verifies the original socket peer as loopback or a member
-   of the configured trusted CIDRs.
-
-Endpoint-proxy requests and every untrusted or already-forwarded controller
-request still carry `X-Forwarded-For`. Python therefore refuses
-network-location authentication for those requests and requires its token or
-IAP layers.
-
-The boundary regression passes against a source-built `marin-iris-native`: the
-direct controller RPC returns HTTP 200 and an otherwise identical request with
-an external `X-Forwarded-For` returns HTTP 401.
+The boundary regressions pass against a source-built `marin-iris-native`: a
+trusted direct request and a valid bearer request return HTTP 200, a forwarded
+request without credentials returns HTTP 401, and a caller-supplied identity
+stamp cannot bypass Rust.
 
 ## CI rollout attempt
 

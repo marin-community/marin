@@ -29,14 +29,19 @@ trusted peer does authenticate, via the separate
 """
 
 import dataclasses
+import json
 import logging
 import secrets
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
+from urllib.parse import unquote
 
 from rigging.server_auth import (
     IAP_ISSUER,
     IAP_PUBLIC_KEYS_URL,
+    AuthDecision,
+    AuthOutcome,
+    AuthRequest,
     IapAssertionVerifier,
     RequestAuthPolicy,
     TokenVerifier,
@@ -51,11 +56,13 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.controller.native_proxy import DECISION_SECRET_HEADER
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
+VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
 
 # Role for an authenticated non-admin on a gcp cluster (and the fallback default
 # anywhere config carries no more specific rule). "user" is the ordinary
@@ -168,6 +175,50 @@ class NativeProxyAuthConfig:
     iap_issuer: str = IAP_ISSUER
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+    admin_users: tuple[str, ...] = ()
+    default_user_role: str = DEFAULT_USER_ROLE
+
+
+@dataclasses.dataclass(frozen=True)
+class NativeProxyIdentityAuthenticator:
+    """Accept only identities authenticated and stamped by the native listener."""
+
+    handoff_secret: str
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        supplied_secret = request.headers.get(DECISION_SECRET_HEADER, "")
+        if not secrets.compare_digest(supplied_secret, self.handoff_secret):
+            return AuthOutcome(AuthDecision.REJECTED, reason="Untrusted controller ingress")
+
+        encoded_identity = request.headers.get(VERIFIED_IDENTITY_HEADER)
+        if encoded_identity is None:
+            return AuthOutcome(AuthDecision.ABSENT)
+        try:
+            payload = json.loads(unquote(encoded_identity))
+        except (json.JSONDecodeError, TypeError):
+            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+        if not isinstance(payload, dict):
+            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+
+        user_id = payload.get("user_id")
+        role = payload.get("role")
+        audience = payload.get("audience")
+        if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
+            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+        if audience is not None and not isinstance(audience, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+        return AuthOutcome(
+            AuthDecision.AUTHENTICATED,
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+        )
+
+
+def native_proxy_auth_policy(external_policy: RequestAuthPolicy, handoff_secret: str) -> RequestAuthPolicy:
+    """Trust only the native listener's capability-bound identity stamp."""
+    return RequestAuthPolicy(
+        authenticators=(NativeProxyIdentityAuthenticator(handoff_secret),),
+        verifier=external_policy.verifier,
+    )
 
 
 # ---------------------------------------------------------------------------

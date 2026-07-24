@@ -115,9 +115,12 @@ def _prepare_local_db_dir(
         return
 
     probe = probe_database_dir(db_dir)
-    remote_ms = (
-        parse_checkpoint_epoch_ms(checkpoint_path) if checkpoint_path else latest_checkpoint_epoch_ms(remote_state_dir)
-    )
+    if checkpoint_path:
+        remote_ms = parse_checkpoint_epoch_ms(checkpoint_path)
+        if remote_ms is None:
+            raise ValueError(f"Checkpoint path must end with a numeric epoch: {checkpoint_path}")
+    else:
+        remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
     if probe.healthy and remote_ms is None:
         logger.info("Local DB at %s is healthy and no remote checkpoint exists, skipping restore", db_dir)
         return

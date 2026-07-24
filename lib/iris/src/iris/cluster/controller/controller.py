@@ -31,6 +31,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
+    DEFAULT_USER_ROLE,
     ENDPOINT_TOKEN_SCOPE,
     FEDERATION_AUDIENCE,
     NATIVE_PROXY_JWT_CACHE_CAPACITY,
@@ -41,6 +42,7 @@ from iris.cluster.controller.auth import (
     FederationTokenProvider,
     NativeProxyAuthConfig,
     NativeProxyAuthMode,
+    native_proxy_auth_policy,
     request_auth_policy,
 )
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
@@ -499,16 +501,20 @@ class Controller:
             with self._db.read_snapshot() as q:
                 return reads.has_received_job_from_peer(q, peer_id, root_job)
 
-        self._auth_policy = request_auth_policy(config.auth)
+        external_auth_policy = request_auth_policy(config.auth)
+        proxy_decision_secret = secrets.token_urlsafe(32)
+        self._auth_policy = native_proxy_auth_policy(external_auth_policy, proxy_decision_secret)
+        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
+            auth_optional=self._external_auth_allows_anonymous,
             jwt_manager=config.auth.jwt_manager if config.auth else None,
             federated_handoff=federated_handoff,
             federation_owner_check=_federation_owner_check,
-            proxy_decision_secret=secrets.token_urlsafe(32),
+            proxy_decision_secret=proxy_decision_secret,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -768,7 +774,7 @@ class Controller:
         auth = self._config.auth
         if auth is None or auth.provider is None:
             mode = NativeProxyAuthMode.PERMISSIVE
-        elif self._auth_policy.allows_anonymous:
+        elif self._external_auth_allows_anonymous:
             mode = NativeProxyAuthMode.OPTIONAL
         else:
             mode = NativeProxyAuthMode.ENFORCING
@@ -793,6 +799,10 @@ class Controller:
             iap_issuer=IAP_ISSUER,
             iap_audience=auth.iap_audience if auth is not None else None,
             federation_keys=auth.federation_keys if auth is not None else {},
+            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            default_user_role=(
+                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
+            ),
         )
 
     def stop(self) -> None:

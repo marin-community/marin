@@ -3,11 +3,17 @@
 
 import json
 from dataclasses import asdict
+from urllib.parse import unquote
 
 import httpx
 import uvicorn
 from iris.cluster.config import AuthConfig
-from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode, create_controller_auth
+from iris.cluster.controller.auth import (
+    VERIFIED_IDENTITY_HEADER,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
+    create_controller_auth,
+)
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.managed_thread import ThreadContainer
@@ -65,6 +71,9 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
                 "authorization": request.headers.get("authorization"),
                 "cookie": request.headers.get("cookie"),
                 "proxy_prefix": request.headers.get("x-forwarded-prefix"),
+                "verified_identity": request.headers.get(VERIFIED_IDENTITY_HEADER),
+                "decision_secret": request.headers.get("x-iris-decision-secret"),
+                "iap_assertion": request.headers.get("x-goog-iap-jwt-assertion"),
             },
             headers={"x-native-upstream": "reached"},
         )
@@ -136,6 +145,9 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
             "authorization": None,
             "cookie": None,
             "proxy_prefix": f"/proxy/{_ENCODED_NAME}",
+            "verified_identity": None,
+            "decision_secret": None,
+            "iap_assertion": None,
         }
         assert received_bodies == [payload]
     finally:
@@ -188,6 +200,8 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
         auth=auth,
     )
     controller.start()
+    assert auth.jwt_manager is not None
+    token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
 
     direct = httpx.post(
         f"{controller.url}/iris.cluster.ControllerService/ListJobs",
@@ -202,9 +216,85 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
             "x-forwarded-for": "203.0.113.10",
         },
     )
+    authenticated = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
+    spoofed = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.10",
+            VERIFIED_IDENTITY_HEADER: "%7B%22user_id%22%3A%22admin%22%2C%22role%22%3A%22admin%22%7D",
+        },
+    )
 
     assert direct.status_code == 200
     assert forwarded.status_code == 401
+    assert authenticated.status_code == 200
+    assert spoofed.status_code == 401
+
+
+def test_native_listener_stamps_controller_identity_and_strips_caller_credentials() -> None:
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads)
+        auth = create_controller_auth(None, cluster_name="native-controller-handoff")
+        assert auth.jwt_manager is not None
+        token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
+        issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            upstream,
+            "controller-handoff-secret",
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=issuers,
+                        jwks=jwks,
+                        leeway_seconds=0,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+
+        response = httpx.get(
+            f"{proxy.address}/echo",
+            headers={
+                "authorization": f"Bearer {token}",
+                "cookie": "iris_session=caller-cookie",
+                "x-goog-iap-jwt-assertion": "caller-assertion",
+                VERIFIED_IDENTITY_HEADER: "caller-spoof",
+                "x-iris-decision-secret": "caller-spoof",
+                "x-forwarded-for": "203.0.113.10",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["authorization"] is None
+        assert payload["cookie"] is None
+        assert payload["iap_assertion"] is None
+        assert payload["decision_secret"] == "controller-handoff-secret"
+        assert json.loads(unquote(payload["verified_identity"])) == {
+            "user_id": "alice",
+            "role": "user",
+            "audience": None,
+        }
+        proxy.stop()
+    finally:
+        threads.stop()
 
 
 def test_native_listener_owns_endpoint_access_policy() -> None:

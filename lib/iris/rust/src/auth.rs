@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 const IAP_KEYS_TTL: Duration = Duration::from_secs(3600);
 const IAP_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const ADMIN_ROLE: &str = "admin";
 pub(crate) const IAP_ASSERTION_HEADER: HeaderName =
     HeaderName::from_static("x-goog-iap-jwt-assertion");
 
@@ -49,12 +50,21 @@ pub struct NativeAuthConfig {
     pub iap_audience: Option<String>,
     #[serde(default)]
     pub federation_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub admin_users: Vec<String>,
+    pub default_user_role: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct VerifiedIdentity {
+    pub user_id: String,
+    pub role: String,
+    pub audience: Option<String>,
+    #[serde(skip)]
     pub endpoint: Option<String>,
+    #[serde(skip)]
     pub federation_peer: Option<String>,
+    #[serde(skip)]
     pub(crate) expires_at: u64,
 }
 
@@ -62,6 +72,7 @@ pub struct VerifiedIdentity {
 pub enum VerifyOutcome {
     Verified(VerifiedIdentity),
     Invalid,
+    Missing,
     Anonymous,
 }
 
@@ -85,6 +96,9 @@ pub struct NativeVerifier {
 struct Claims {
     aud: String,
     exp: u64,
+    sub: String,
+    #[serde(default = "default_user_role")]
+    role: String,
     #[serde(default)]
     scope: Option<String>,
     #[serde(default)]
@@ -114,8 +128,13 @@ struct IapClaims {
     #[serde(rename = "aud")]
     _aud: String,
     exp: u64,
+    email: String,
     #[serde(rename = "iss")]
     _iss: String,
+}
+
+fn default_user_role() -> String {
+    "user".to_string()
 }
 
 struct IapKeyCache {
@@ -127,6 +146,8 @@ struct IapVerifier {
     audience: String,
     public_keys_url: String,
     issuer: String,
+    admin_users: Vec<String>,
+    default_user_role: String,
     client: reqwest::Client,
     cache: Mutex<IapKeyCache>,
 }
@@ -168,6 +189,8 @@ impl NativeVerifier {
                     audience.clone(),
                     config.iap_public_keys_url.clone(),
                     config.iap_issuer.clone(),
+                    config.admin_users.clone(),
+                    config.default_user_role.clone(),
                 )
             })
             .transpose()?;
@@ -228,7 +251,7 @@ impl NativeVerifier {
         ) {
             VerifyOutcome::Anonymous
         } else {
-            VerifyOutcome::Invalid
+            VerifyOutcome::Missing
         }
     }
 
@@ -342,6 +365,9 @@ impl NativeVerifier {
             match decode::<FederationClaims>(token, key, &validation) {
                 Ok(token_data) if token_data.claims.sub == *peer_id => {
                     return Ok(VerifiedIdentity {
+                        user_id: peer_id.clone(),
+                        role: "federation-peer".to_string(),
+                        audience: None,
                         endpoint: None,
                         federation_peer: Some(peer_id.clone()),
                         expires_at: token_data.claims.exp,
@@ -369,6 +395,9 @@ impl NativeVerifier {
             return Err("proxy JWT has no endpoint claim".to_string());
         }
         Ok(VerifiedIdentity {
+            user_id: claims.sub,
+            role: claims.role,
+            audience: claims.endpoint.clone().filter(|_| proxy_scope),
             endpoint: claims.endpoint.filter(|_| proxy_scope),
             federation_peer: None,
             expires_at: claims.exp,
@@ -404,7 +433,13 @@ fn unix_time() -> u64 {
 }
 
 impl IapVerifier {
-    fn new(audience: String, public_keys_url: String, issuer: String) -> Result<Self, String> {
+    fn new(
+        audience: String,
+        public_keys_url: String,
+        issuer: String,
+        admin_users: Vec<String>,
+        default_user_role: String,
+    ) -> Result<Self, String> {
         if audience.is_empty() || public_keys_url.is_empty() || issuer.is_empty() {
             return Err("IAP audience, public-key URL, and issuer must not be empty".to_string());
         }
@@ -416,6 +451,8 @@ impl IapVerifier {
             audience,
             public_keys_url,
             issuer,
+            admin_users,
+            default_user_role,
             client,
             cache: Mutex::new(IapKeyCache {
                 expires_at: Instant::now(),
@@ -469,6 +506,13 @@ impl IapVerifier {
             .map_err(|error| format!("IAP JWT verification failed: {error}"))?
             .claims;
         Ok(VerifiedIdentity {
+            user_id: claims.email.clone(),
+            role: if self.admin_users.contains(&claims.email) {
+                ADMIN_ROLE.to_string()
+            } else {
+                self.default_user_role.clone()
+            },
+            audience: None,
             endpoint: None,
             federation_peer: None,
             expires_at: claims.exp,
@@ -499,6 +543,7 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
         aud: &'a str,
         exp: u64,
         iss: &'a str,
+        email: &'a str,
     }
 
     async fn verifier() -> IapVerifier {
@@ -506,6 +551,8 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
             "iap-audience".to_string(),
             "https://unused.example/iap-keys".to_string(),
             TEST_IAP_ISSUER.to_string(),
+            vec![],
+            "dashboard".to_string(),
         )
         .unwrap();
         let mut cache = verifier.cache.lock().await;
@@ -527,6 +574,7 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
                 aud: audience,
                 exp: unix_time() + 60,
                 iss: TEST_IAP_ISSUER,
+                email: "alice@example.com",
             },
             &EncodingKey::from_ec_pem(PRIVATE_KEY).unwrap(),
         )
@@ -537,7 +585,10 @@ C/edCMRM78P8eQTBCDUTK1ywSYaszvQZvneiW6gNtWEJndSreEcyyUdVvg==
     async fn iap_verifier_checks_signature_and_audience() {
         let verifier = verifier().await;
 
-        assert!(verifier.verify(&token("iap-audience"), 0).await.is_ok());
+        let identity = verifier.verify(&token("iap-audience"), 0).await.unwrap();
+        assert_eq!(identity.user_id, "alice@example.com");
+        assert_eq!(identity.role, "dashboard");
+        assert_eq!(identity.audience, None);
         assert!(verifier.verify(&token("wrong-audience"), 0).await.is_err());
     }
 }

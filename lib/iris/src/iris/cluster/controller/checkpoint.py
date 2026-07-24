@@ -288,10 +288,9 @@ def upload_checkpoint(
     backup: DatabaseBackup,
     remote_state_dir: str,
 ) -> tuple[str, CheckpointResult]:
-    """Compress, upload, count rows, and prune old checkpoints.
+    """Publish a prepared backup, record its ancestry, and prune old checkpoints.
 
-    This is the slow half of checkpointing (zstd compression + GCS upload)
-    and does not need any write lock on the database.
+    The live database records the published checkpoint as its restore ancestor.
     """
     prefix = prefix_join(remote_state_dir, "controller-state")
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"

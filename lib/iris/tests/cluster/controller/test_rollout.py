@@ -201,6 +201,19 @@ def test_checkpoint_path_not_found_raises(tmp_path, monkeypatch):
         )
 
 
+def test_checkpoint_path_requires_numeric_epoch(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    _no_rollout_record(monkeypatch)
+
+    with pytest.raises(ValueError, match="must end with a numeric epoch"):
+        controller_main._prepare_local_db_dir(
+            db_dir,
+            "gs://b/state",
+            fresh=False,
+            checkpoint_path="gs://b/state/controller-state/not-an-epoch",
+        )
+
+
 def test_corrupt_local_db_is_preserved_before_remote_restore(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     _seed_db(db_dir, "corrupt")

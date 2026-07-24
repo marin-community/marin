@@ -175,6 +175,7 @@ class ControllerDashboard:
         endpoint_service: EndpointServiceImpl | None = None,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        auth_optional: bool | None = None,
         jwt_manager: JwtTokenManager | None = None,
         federated_handoff: FederatedEndpointHandoff | None = None,
         federation_owner_check: FederationOwnerCheck | None = None,
@@ -186,6 +187,7 @@ class ControllerDashboard:
         self._endpoint_service = endpoint_service or service.endpoint_service
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        self._auth_optional = auth_policy.allows_anonymous if auth_optional is None else auth_optional
         # The signing authority, for serving public keys at /.well-known/jwks.json
         # (None when the controller has no auth configured, so no signer exists).
         self._jwt_manager = jwt_manager
@@ -374,7 +376,7 @@ class ControllerDashboard:
                     "name": representative.name,
                     "capabilities": representative.capabilities,
                 },
-                "optional": self._auth_policy.allows_anonymous,
+                "optional": self._auth_optional,
             }
         )
 
