@@ -28,50 +28,6 @@ _NCCLEP_DISPATCH_ALIGNMENT = 16
 _EXPERT_AXIS = "expert"
 
 
-def _debug_local_route_fingerprint(
-    routes: jax.Array,
-    tokens: jax.Array,
-    *,
-    num_experts: int,
-    ep_size: int,
-) -> jax.Array:
-    num_local_experts = num_experts // ep_size
-    process_index = jax.process_index()
-
-    def print_local(local_routes: jax.Array, local_tokens: jax.Array) -> jax.Array:
-        flat_routes = local_routes.reshape(-1)
-        tokens_f32 = local_tokens.astype(jnp.float32)
-        destination_counts = jnp.bincount(
-            flat_routes // num_local_experts,
-            length=ep_size,
-        )
-        jax.debug.print(
-            "NCCL_EP route fingerprint process={process}: shape={shape} min={minimum} max={maximum} "
-            "first={first} destination_counts={counts} token_finite={finite}/{size} "
-            "token_nonzero={nonzero} token_min={token_min} token_max={token_max}",
-            process=process_index,
-            shape=local_routes.shape,
-            minimum=jnp.min(flat_routes),
-            maximum=jnp.max(flat_routes),
-            first=local_routes[0],
-            counts=destination_counts,
-            finite=jnp.sum(jnp.isfinite(tokens_f32)),
-            size=tokens_f32.size,
-            nonzero=jnp.sum(tokens_f32 != 0),
-            token_min=jnp.nanmin(tokens_f32),
-            token_max=jnp.nanmax(tokens_f32),
-        )
-        return local_routes
-
-    return jax.shard_map(
-        print_local,
-        mesh=jax.sharding.get_abstract_mesh(),
-        in_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
-        out_specs=P(_EXPERT_AXIS, None),
-        check_vma=False,
-    )(routes, tokens)
-
-
 def ncclep_receive_capacity(
     global_tokens: int,
     top_k: int,
@@ -158,44 +114,150 @@ def _ep_dispatch(
 
 
 def _ep_dispatch_fwd(layer_config, routes, tokens, weights, recv_capacity):
-    te_cpp = importlib.import_module("transformer_engine.jax.cpp_extensions")
-    token_counts, handle_memory = te_cpp.ep_prepare(layer_config, routes)
-    recv_tokens, recv_weights = te_cpp.ep_dispatch_fwd(
-        layer_config,
-        handle_memory,
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
+
+    def local_dispatch(local_routes, local_tokens, local_weights):
+        # TE's outer custom-partitioning primitive can retain the global token
+        # extent under JaxPP auto_axes. Bind the registered local FFI primitives
+        # inside shard_map so native code sees only the physical rank buffer.
+        token_counts, handle_memory = te_cpp_ep.EpPreparePrimitive.inner_primitive.bind(
+            local_routes,
+            top_k=int(layer_config.top_k),
+            dispatch_output_per_expert_alignment=int(layer_config.dispatch_output_per_expert_alignment),
+            is_outer=False,
+        )
+        recv_tokens, recv_weights = te_cpp_ep.EpDispatchPrimitive.inner_primitive.bind(
+            handle_memory,
+            local_routes,
+            local_tokens,
+            local_weights,
+            top_k=int(layer_config.top_k),
+            dispatch_output_per_expert_alignment=int(layer_config.dispatch_output_per_expert_alignment),
+            recv_capacity_per_rank=recv_capacity,
+            is_outer=False,
+        )
+        return recv_tokens, recv_weights, handle_memory, token_counts
+
+    local_dispatch = te_cpp_ep._on_collective_stream(local_dispatch)
+    primal = jax.shard_map(
+        local_dispatch,
+        mesh=jax.sharding.get_abstract_mesh(),
+        in_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
+        out_specs=(
+            P(_EXPERT_AXIS, None, None),
+            P(_EXPERT_AXIS, None),
+            P(_EXPERT_AXIS, None),
+            P(_EXPERT_AXIS, None),
+        ),
+        check_vma=False,
+    )(
         routes,
         tokens,
         weights,
-        recv_capacity,
     )
-    primal = (recv_tokens, recv_weights, handle_memory, token_counts)
+    _, _, handle_memory, _ = primal
     return primal, (handle_memory, tuple(tokens.shape[:-1]))
 
 
 def _ep_dispatch_bwd(layer_config, recv_capacity, residual, output_cotangents):
     del recv_capacity
     handle_memory, output_leading_shape = residual
-    recv_token_cotangent = jax.lax.with_sharding_constraint(
-        output_cotangents[0],
-        P(_EXPERT_AXIS, None, None),
-    )
-    recv_weight_cotangent = jax.lax.with_sharding_constraint(
-        output_cotangents[1],
-        P(_EXPERT_AXIS, None),
-    )
-    te_cpp = importlib.import_module("transformer_engine.jax.cpp_extensions")
-    token_cotangent, weight_cotangent = te_cpp.ep_dispatch_bwd(
-        layer_config,
-        handle_memory,
-        recv_token_cotangent,
-        recv_weight_cotangent,
-        output_leading_shape,
-        out_partition_spec=(_EXPERT_AXIS,),
-    )
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
+    ep_size = int(jax.sharding.get_abstract_mesh().shape[_EXPERT_AXIS])
+    local_output_leading_shape = (output_leading_shape[0] // ep_size, *output_leading_shape[1:])
+
+    def local_dispatch_bwd(local_handle, local_token_cotangent, local_weight_cotangent):
+        return te_cpp_ep.EpDispatchBwdPrimitive.inner_primitive.bind(
+            local_handle,
+            local_token_cotangent,
+            local_weight_cotangent,
+            top_k=int(layer_config.top_k),
+            dispatch_output_per_expert_alignment=int(layer_config.dispatch_output_per_expert_alignment),
+            out_leading_shape=local_output_leading_shape,
+            out_partition_spec=None,
+        )
+
+    local_dispatch_bwd = te_cpp_ep._on_collective_stream(local_dispatch_bwd)
+    token_cotangent, weight_cotangent = jax.shard_map(
+        local_dispatch_bwd,
+        mesh=jax.sharding.get_abstract_mesh(),
+        in_specs=(
+            P(_EXPERT_AXIS, None),
+            P(_EXPERT_AXIS, None, None),
+            P(_EXPERT_AXIS, None),
+        ),
+        out_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
+        check_vma=False,
+    )(handle_memory, output_cotangents[0], output_cotangents[1])
     return None, token_cotangent, weight_cotangent
 
 
 _ep_dispatch.defvjp(_ep_dispatch_fwd, _ep_dispatch_bwd)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(0, 3))
+def _ep_combine(
+    layer_config,
+    handle_memory: jax.Array,
+    expert_out: jax.Array,
+    output_leading_shape: tuple[int, ...],
+) -> jax.Array:
+    return _ep_combine_fwd(layer_config, handle_memory, expert_out, output_leading_shape)[0]
+
+
+def _ep_combine_fwd(layer_config, handle_memory, expert_out, output_leading_shape):
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
+    ep_size = int(jax.sharding.get_abstract_mesh().shape[_EXPERT_AXIS])
+    local_output_leading_shape = (output_leading_shape[0] // ep_size, *output_leading_shape[1:])
+
+    def local_combine(local_handle, local_expert_out):
+        return te_cpp_ep.EpCombinePrimitive.inner_primitive.bind(
+            local_handle,
+            local_expert_out,
+            top_k=int(layer_config.top_k),
+            dispatch_output_per_expert_alignment=int(layer_config.dispatch_output_per_expert_alignment),
+            out_leading_shape=local_output_leading_shape,
+            out_partition_spec=None,
+        )
+
+    local_combine = te_cpp_ep._on_collective_stream(local_combine)
+    output = jax.shard_map(
+        local_combine,
+        mesh=jax.sharding.get_abstract_mesh(),
+        in_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None, None)),
+        out_specs=P(_EXPERT_AXIS, None),
+        check_vma=False,
+    )(handle_memory, expert_out)
+    return output, (handle_memory, expert_out.shape[-2])
+
+
+def _ep_combine_bwd(layer_config, output_leading_shape, residual, output_cotangent):
+    del output_leading_shape
+    handle_memory, recv_capacity = residual
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
+
+    def local_combine_bwd(local_handle, local_output_cotangent):
+        return te_cpp_ep.EpCombineBwdPrimitive.inner_primitive.bind(
+            local_handle,
+            local_output_cotangent,
+            top_k=int(layer_config.top_k),
+            dispatch_output_per_expert_alignment=int(layer_config.dispatch_output_per_expert_alignment),
+            recv_capacity_per_rank=recv_capacity,
+            is_outer=False,
+        )
+
+    local_combine_bwd = te_cpp_ep._on_collective_stream(local_combine_bwd)
+    expert_out_cotangent = jax.shard_map(
+        local_combine_bwd,
+        mesh=jax.sharding.get_abstract_mesh(),
+        in_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
+        out_specs=P(_EXPERT_AXIS, None, None),
+        check_vma=False,
+    )(handle_memory, output_cotangent)
+    return None, expert_out_cotangent
+
+
+_ep_combine.defvjp(_ep_combine_fwd, _ep_combine_bwd)
 
 
 def moe_mlp_ep_ncclep(
@@ -279,12 +341,6 @@ def moe_mlp_ep_ncclep(
         tokens = jax.lax.with_sharding_constraint(tokens, input_spec)
         routes = jax.lax.with_sharding_constraint(routes, input_spec)
         weights = jax.lax.with_sharding_constraint(weights, input_spec)
-        routes = _debug_local_route_fingerprint(
-            routes,
-            tokens,
-            num_experts=num_experts,
-            ep_size=ep_size,
-        )
         recv_tokens, recv_weights, handle_memory, token_counts = _ep_dispatch(
             layer_config,
             routes.astype(jnp.int32),
@@ -317,13 +373,11 @@ def moe_mlp_ep_ncclep(
             jnp.zeros((), dtype=expert_out.dtype),
         )
         weighted_out = jax.lax.with_sharding_constraint(weighted_out, leading_spec)
-        return te_ep.ep_combine(
+        return _ep_combine(
             layer_config,
             handle_memory,
-            token_counts,
             weighted_out,
             tuple(tokens.shape[:-1]),
-            out_sharding=(_EXPERT_AXIS,),
         ).astype(tokens.dtype)
 
     # The runtime owns the concrete mesh context and Transformer Engine's
