@@ -39,6 +39,8 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `provisioning:` as an opaque dict;
   `iac.config` owns the typed schema. (The package is `infra/pulumi/src/iac/`, imported as
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
+- Kueue's controller-manager memory request and limit default to `2Gi`.
+  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
 
 ## Operations
 
