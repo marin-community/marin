@@ -116,7 +116,6 @@ def register_collector(collector: Collector) -> None:
 
 
 def unregister_collector(collector: Collector) -> None:
-    """Remove a custom collector previously registered by this process."""
     with _lock:
         if collector not in _collectors:
             return
