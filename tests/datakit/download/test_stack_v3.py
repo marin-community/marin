@@ -40,11 +40,11 @@ def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
     [doc] = row_to_doc(row)
 
     assert doc["text"] == (
-        "<|repo_name|>marin-community/marin\n"
-        "<|file_sep|>a.py\nroot\n"
-        "<|file_sep|>b.py\nb\n"
-        "<|file_sep|>a/z.py\nz\n"
-        "<|file_sep|>a/nested/x.py\nx"
+        "Repository: marin-community/marin\n\n"
+        "File: a.py\nroot\n\n"
+        "File: b.py\nb\n\n"
+        "File: a/z.py\nz\n\n"
+        "File: a/nested/x.py\nx"
     )
     assert doc["source"] == HF_DATASET_ID
     assert doc["repo_path"] == row["repo_path"]

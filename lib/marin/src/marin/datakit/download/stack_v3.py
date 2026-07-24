@@ -19,9 +19,9 @@ HF_DATASET_ID = "HuggingFaceCode/stack-v3-train"
 HF_REVISION = "bb2fa95033c00931906761bed7bc37b525155db6"
 TRAIN_PARQUET_GLOB = "data/*.parquet"
 
-REPO_NAME_TOKEN = "<|repo_name|>"
-FILE_SEPARATOR_TOKEN = "<|file_sep|>"
-SERIALIZATION_FORMAT = "repo_name_file_sep_directory_block_dfs_v1"
+REPOSITORY_HEADER = "Repository:"
+FILE_HEADER = "File:"
+SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v1"
 
 FILE_SORT_MARKER = 0
 DIRECTORY_SORT_MARKER = 1
@@ -37,12 +37,12 @@ def _directory_block_dfs_key(file: dict) -> tuple[tuple[int, str], ...]:
 
 def row_to_doc(row: dict) -> list[dict]:
     files = sorted(row["files"], key=_directory_block_dfs_key)
-    sections = [f"{REPO_NAME_TOKEN}{row['repo_path']}"]
-    sections.extend(f"{FILE_SEPARATOR_TOKEN}{file['file_path']}\n{file['content']}" for file in files)
+    sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
+    sections.extend(f"{FILE_HEADER} {file['file_path']}\n{file['content']}" for file in files)
 
     return [
         {
-            "text": "\n".join(sections),
+            "text": "\n\n".join(sections),
             "source": HF_DATASET_ID,
             "repo_path": row["repo_path"],
             "repo_id": row["repo_id"],
@@ -84,8 +84,8 @@ def processed_stack_v3_step() -> StepSpec:
         fn=lambda output_path: transform(input_path=download.output_path, output_path=output_path),
         hash_attrs={
             "serialization_format": SERIALIZATION_FORMAT,
-            "repo_name_token": REPO_NAME_TOKEN,
-            "file_separator_token": FILE_SEPARATOR_TOKEN,
+            "repository_header": REPOSITORY_HEADER,
+            "file_header": FILE_HEADER,
         },
     )
 
