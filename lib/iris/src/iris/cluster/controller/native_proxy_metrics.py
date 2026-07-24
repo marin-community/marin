@@ -12,22 +12,18 @@ deltas.
 
 import json
 from collections.abc import Iterable
-from typing import Protocol
 
 from prometheus_client.core import Metric
 from prometheus_client.registry import Collector
 from rigging import telltale
 
-
-class _NativeProxy(Protocol):
-    @property
-    def rpc_metrics_json(self) -> str: ...
+from iris.cluster.controller.native_proxy import NativeProxy
 
 
 class NativeProxyMetricsCollector(Collector):
     """A Telltale bridge that never owns or mutates native metric values."""
 
-    def __init__(self, proxy: _NativeProxy) -> None:
+    def __init__(self, proxy: NativeProxy) -> None:
         self._proxy = proxy
 
     def collect(self) -> Iterable[Metric]:
@@ -53,7 +49,7 @@ class NativeProxyMetricsCollector(Collector):
         return (requests, responses, in_flight, duration)
 
 
-def install_native_proxy_metrics(proxy: _NativeProxy) -> NativeProxyMetricsCollector:
+def install_native_proxy_metrics(proxy: NativeProxy) -> NativeProxyMetricsCollector:
     """Make ``proxy`` the source for the process's Iris RPC Telltale series."""
     collector = NativeProxyMetricsCollector(proxy)
     telltale.register_collector(collector)
@@ -62,5 +58,4 @@ def install_native_proxy_metrics(proxy: _NativeProxy) -> NativeProxyMetricsColle
 
 
 def uninstall_native_proxy_metrics(collector: NativeProxyMetricsCollector) -> None:
-    """Remove the collector before its native proxy shuts down."""
     telltale.unregister_collector(collector)
