@@ -3022,3 +3022,24 @@ author: dlwh
   - Commit `0486695991` removes that artificial group extension while preserving exact NCCL_EP receive capacity and the existing tail masks. Focused tests pass `7/7`; changed-file precommit including Pyrefly passes.
 - Next action:
   - Babysit matched sparse-tail r11n parent `/dlwh/iris-run-job-20260724-225848`. Require finite forward and backward execution plus a material steady-state speedup before considering L24. If the static worst-case buffer still dominates Triton launch overhead, evaluate a bounded `NCCL_EP_OVERFLOW_DROP` variant under the user's explicit `0.2%` relative-error ceiling with separate loss and gradient measurements.
+
+### 2026-07-24 16:44 PDT - sparse exact compute is stable but remains below ring
+- Hypothesis: Leaving the exact 524,288-row receive buffer allocated while limiting grouped GEMM work to live expert rows will recover NCCL_EP's direct routed-MLP advantage without reintroducing undefined-tail gradients.
+- Commit Hashes:
+  - `0486695991` removes the artificial final-expert group extension.
+  - `61a0de2c49` masks undefined outputs after both ragged GEMMs in the primal and transpose.
+- Commands:
+  - r11n parent `/dlwh/iris-run-job-20260724-225848`, child `/dlwh/iris-run-job-20260724-225848/grug-train-jaxpp-rno2a-ncclep-sparsetail-r11n-xla070-l8-e64k4-b512-s4096-p4m16-20260724-1640`.
+  - r11o parent `/dlwh/iris-run-job-20260724-231912`, child `/dlwh/iris-run-job-20260724-231912/grug-train-jaxpp-rno2a-ncclep-sparsetailmask-r11o-xla070-l8-e64k4-b512-s4096-p4m16-20260724-1620`.
+  - Both used the matched L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` configuration, four H100x8 nodes, exact receive capacity 524,288, XLA preallocation `0.70`, CuTe FA4, and Pallas-Triton `block_k=32`/8 warps.
+- Results:
+  - r11n produced finite step-0 loss `11.79250431060791` and then NaN at step 1 on every training rank. The first ragged GEMM correctly skipped unused rows but left its output tail undefined; applying SiLU before another mask allowed undefined values to poison the transpose. The babysitter stopped the retry; no resource remains live.
+  - r11o succeeded parent `1/1`, child `4/4`, with all ranks exit `0`, finite losses and gradient/watch checks, and no live pod.
+  - r11o step 2: loss `11.379260063171387`, `8.7061116s`, `240,882.7391 tokens/s`, `5.0270083%` MFU. Step 3: loss `11.258472442626953`, `8.7148441s`, `240,641.3676 tokens/s`, `5.0219711%` MFU. Mean steady MFU was `5.0244897%`.
+  - W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-sparsetailmask-r11o-xla070-l8-e64k4-b512-s4096-p4m16-20260724-1620>.
+- Interpretation:
+  - Masking each undefined ragged output tail fixes the sparse-compute gradient path. Focused tests pass `8/8`, and changed-file precommit including Pyrefly passes.
+  - Sparse exact compute is `2.5378x` r11m's padded exact `1.9805654%` MFU, but it reaches only `53.35%` of the matched reduced bulk-ring result `9.4180%`. Exact 524,288-row NCCL_EP is therefore not a credible L24 path and must not be scaled.
+  - Commits `a724542264`, `9f35f8499f`, and `9284db9761` add an opt-in patched TE overflow policy, a separately named `nccl_ep_drop` backend with aligned capacity `81,920`, and a full-gradient ring-versus-drop parity gate. Exact `nccl_ep` retains pristine TE, trap semantics, and worst-case capacity.
+- Next action:
+  - Babysit H100x8 parity job `/dlwh/ncclep-h100-overflow-drop-parity-r1-20260724-1646`. Require finite loss and all gradient groups with relative-L2 error at most `0.002`; report output accumulation-order mismatch separately. Only then run reduced JaxPP `nccl_ep_drop`.
