@@ -139,10 +139,7 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
-    cutlass_site=$(.venv/bin/python -c \
-      "from pathlib import Path; import cutlass; print(Path(cutlass.__file__).resolve().parent.parent)")
-    patch --batch --forward -p0 -d "$cutlass_site" \
-      < "$IRIS_WORKDIR/experiments/grug/moe/cutlass_dsl_mlir_type_guard.patch"
+    bash experiments/grug/moe/patch_cutlass_dsl_mlir_type_guard.sh .venv/bin/python
     .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
     .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
@@ -179,10 +176,7 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
-    cutlass_site=$(.venv/bin/python -c \
-      "from pathlib import Path; import cutlass; print(Path(cutlass.__file__).resolve().parent.parent)")
-    patch --batch --forward -p0 -d "$cutlass_site" \
-      < "$IRIS_WORKDIR/experiments/grug/moe/cutlass_dsl_mlir_type_guard.patch"
+    bash experiments/grug/moe/patch_cutlass_dsl_mlir_type_guard.sh .venv/bin/python
     .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
     .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
