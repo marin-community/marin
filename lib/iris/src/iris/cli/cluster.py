@@ -514,8 +514,21 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 @click.option(
     "--fresh", is_flag=True, default=False, help="Start with an empty database, ignoring any remote checkpoint"
 )
+@click.option(
+    "--image-platform",
+    default=DEFAULT_IMAGE_PLATFORM,
+    show_default=True,
+    help="Docker platform(s) to build and push for this start.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start(ctx, local: bool, fresh: bool):
+def cluster_start(ctx, local: bool, fresh: bool, image_platform: str, cargo_profile: str):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -535,7 +548,13 @@ def cluster_start(ctx, local: bool, fresh: bool):
         git_sha = get_git_sha()
         _pin_latest_images(config, git_sha)
         verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
+        built = _build_cluster_images(
+            config,
+            git_sha,
+            verbose=verbose,
+            platform=image_platform,
+            cargo_profile=cargo_profile,
+        )
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():
@@ -574,8 +593,30 @@ def cluster_start(ctx, local: bool, fresh: bool):
 @click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
 @click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
 @click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
+@click.option(
+    "--image-platform",
+    default=DEFAULT_IMAGE_PLATFORM,
+    show_default=True,
+    help="Docker platform(s) to build and push for this smoke cluster.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout, clear_state):
+def cluster_start_smoke(
+    ctx,
+    label_prefix,
+    url_file,
+    min_workers,
+    worker_timeout,
+    clear_state,
+    image_platform,
+    cargo_profile,
+):
     """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
 
     Designed for CI: run in background, poll for url_file, then pass URL to pytest.
@@ -594,7 +635,13 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     git_sha = get_git_sha()
     _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    _build_cluster_images(config, git_sha, verbose=verbose)
+    _build_cluster_images(
+        config,
+        git_sha,
+        verbose=verbose,
+        platform=image_platform,
+        cargo_profile=cargo_profile,
+    )
 
     bundle = provider_bundle(config)
 
