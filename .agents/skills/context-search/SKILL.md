@@ -5,10 +5,9 @@ description: "Semantic and substring search over the echo corpus — GitHub issu
 
 # Skill: Context Search
 
-The `chunks` table on echo (the `context` database on the shared `marin-metadata` instance) mirrors the github+discord slice of the
-marinmirror corpus — 73k+ chunks, re-synced every 10 minutes — with pgvector embeddings
-for semantic search (see `infra/echo/README.md`). Every hit carries a canonical URL:
-cite it, don't paraphrase from memory.
+Semantic and substring search over the echo corpus of Marin's GitHub and Discord activity
+(see `infra/echo/README.md`). Every hit carries a canonical URL: cite it, don't paraphrase
+from memory.
 
 ## When to use
 
@@ -34,13 +33,15 @@ scripts/context_search.py show <id>                                   # full tex
   on-topic.
 - `grep` is a plain ILIKE scan — use it for identifiers, run names, and exact strings;
   semantic search is for intent.
-- Discord hits are noisier than GitHub ones: messages are embedded with their conversation
-  context, but only the single message is displayed — `show` the id or open the URL before
-  citing.
+- `show <id>` prints one chunk's stored text verbatim (search/grep show a truncated
+  snippet). Discord hits are the single message only — its surrounding thread isn't stored,
+  so open the URL when you need the conversation.
 
 ## Access
 
 Cloud SQL IAM, no password: you connect as your own ADC identity, which must be a member
 of `echo@openathena.ai` (granted `roles/cloudsql.instanceUser` + `roles/cloudsql.client`).
-Read-only on `chunks`. If your ADC is a service-account key, set `MARIN_DB_USER` or grant
-that principal directly.
+Read-only on `chunks`. The database username is resolved from ADC — a service account's
+email, or a user's; set `MARIN_DB_USER` only for principals it can't resolve (impersonated
+or external-account credentials). If the Cloud SQL Admin API isn't enabled on your ADC's
+quota project, set `GOOGLE_CLOUD_QUOTA_PROJECT`.
