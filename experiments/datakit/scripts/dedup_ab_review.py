@@ -10,6 +10,7 @@ must be either a labeled member or a canonical referenced by a label.
 """
 
 import argparse
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Iterable, Iterator
@@ -53,8 +54,9 @@ class DedupLabel(BaseModel):
 class DedupLabels(BaseModel):
     """Labels and provenance for one immutable audit score artifact."""
 
-    version: Literal["v1"] = "v1"
+    version: Literal["v2"] = "v2"
     scores_dir: str
+    pairs_dir: str
     method: str = Field(min_length=1)
     labels: list[DedupLabel]
 
@@ -98,6 +100,24 @@ def _label_drop(label: DedupLabel) -> DropKey:
     )
 
 
+def _pair_drop(pair: dict[str, Any]) -> DropKey:
+    variant = pair["variant"]
+    return DropKey(
+        member=OccurrenceKey(
+            variant=variant,
+            source_main_dir=pair["member_source_main_dir"],
+            basename=pair["member_basename"],
+            doc_id=pair["member_id"],
+        ),
+        canonical=OccurrenceKey(
+            variant=variant,
+            source_main_dir=pair["canonical_source_main_dir"],
+            basename=pair["canonical_basename"],
+            doc_id=pair["canonical_id"],
+        ),
+    )
+
+
 def _unique_map[T](items: Iterable[tuple[T, Any]], kind: str) -> dict[T, Any]:
     result: dict[T, Any] = {}
     for key, value in items:
@@ -119,9 +139,10 @@ def _require_machine_evidence(label: DedupLabel, score: dict[str, Any]) -> None:
 
 def validate_label_coverage(
     score_records: Iterable[dict[str, Any]],
+    pair_records: Iterable[dict[str, Any]],
     labels: DedupLabels,
 ) -> dict[str, Any]:
-    """Require one valid label per drop and coverage of every marker occurrence."""
+    """Require one hash-verified full-text pair and one valid label per drop."""
     score_rows = list(score_records)
     score_occurrences = _unique_map(
         ((_score_occurrence(record), record) for record in score_rows),
@@ -131,6 +152,21 @@ def validate_label_coverage(
         ((_score_drop(record), record) for record in score_rows if record["role"] == "drop"),
         "score drop",
     )
+    pairs = _unique_map(((_pair_drop(record), record) for record in pair_records), "materialized pair")
+    missing_pairs = sorted(drops.keys() - pairs.keys())
+    extra_pairs = sorted(pairs.keys() - drops.keys())
+    if missing_pairs or extra_pairs:
+        raise AssertionError(
+            f"Pair/drop mismatch: missing={len(missing_pairs)} {missing_pairs[:5]}, "
+            f"extra={len(extra_pairs)} {extra_pairs[:5]}"
+        )
+    for key, pair in pairs.items():
+        score = drops[key]
+        if pair["raw_sha256"] != score["raw_sha256"]:
+            raise AssertionError(f"Materialized member hash differs from score: {key}")
+        if pair["canonical_raw_sha256"] != score["canonical_raw_sha256"]:
+            raise AssertionError(f"Materialized canonical hash differs from score: {key}")
+
     label_rows = _unique_map(((_label_drop(label), label) for label in labels.labels), "drop label")
 
     missing = sorted(drops.keys() - label_rows.keys())
@@ -175,7 +211,9 @@ def validate_label_coverage(
     return {
         "valid": True,
         "scores_dir": labels.scores_dir,
+        "pairs_dir": labels.pairs_dir,
         "score_markers": len(score_occurrences),
+        "materialized_pairs": len(pairs),
         "labeled_drops": len(drops),
         "covered_markers": len(covered_occurrences),
         "variants": variants,
@@ -186,10 +224,54 @@ def _score_records(scores_dir: str) -> Iterator[dict[str, Any]]:
     paths = sorted(str(path) for path in StoragePath(f"{scores_dir.rstrip('/')}/*.parquet").glob())
     if not paths:
         raise FileNotFoundError(f"No score Parquet files under {scores_dir}")
+    columns = [
+        "variant",
+        "role",
+        "source_main_dir",
+        "basename",
+        "id",
+        "canonical_source_main_dir",
+        "canonical_basename",
+        "canonical_id",
+        "exact_raw_text",
+        "evidence_class",
+        "raw_sha256",
+        "canonical_raw_sha256",
+    ]
     for path in paths:
         with StoragePath(path).open("rb") as handle:
-            for batch in pq.ParquetFile(handle).iter_batches():
+            for batch in pq.ParquetFile(handle).iter_batches(columns=columns):
                 yield from batch.to_pylist()
+
+
+def _pair_records(pairs_dir: str) -> Iterator[dict[str, Any]]:
+    paths = sorted(str(path) for path in StoragePath(f"{pairs_dir.rstrip('/')}/*.parquet").glob())
+    if not paths:
+        raise FileNotFoundError(f"No materialized pair Parquet files under {pairs_dir}")
+    columns = [
+        "variant",
+        "member_source_main_dir",
+        "member_basename",
+        "member_id",
+        "canonical_source_main_dir",
+        "canonical_basename",
+        "canonical_id",
+        "raw_sha256",
+        "canonical_raw_sha256",
+        "member_text",
+        "canonical_text",
+    ]
+    for path in paths:
+        with StoragePath(path).open("rb") as handle:
+            for batch in pq.ParquetFile(handle).iter_batches(batch_size=16, columns=columns):
+                for record in batch.to_pylist():
+                    member_text = record.pop("member_text")
+                    canonical_text = record.pop("canonical_text")
+                    if hashlib.sha256(member_text.encode()).hexdigest() != record["raw_sha256"]:
+                        raise AssertionError(f"Persisted member text hash differs for {_pair_drop(record)}")
+                    if hashlib.sha256(canonical_text.encode()).hexdigest() != record["canonical_raw_sha256"]:
+                        raise AssertionError(f"Persisted canonical text hash differs for {_pair_drop(record)}")
+                    yield record
 
 
 def main() -> None:
@@ -199,7 +281,11 @@ def main() -> None:
     args = parser.parse_args()
 
     labels = DedupLabels.model_validate_json(StoragePath(args.labels).read_text())
-    result = validate_label_coverage(_score_records(labels.scores_dir), labels)
+    result = validate_label_coverage(
+        _score_records(labels.scores_dir),
+        _pair_records(labels.pairs_dir),
+        labels,
+    )
     payload = json.dumps(result, indent=2, sort_keys=True)
     if args.output:
         StoragePath(args.output).write_text(payload)
