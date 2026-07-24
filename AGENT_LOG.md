@@ -76,8 +76,30 @@ Control (gather-dispatch, XLA-autodiff backward) — DATE=$(date +%Y%m%d-%H%M):
     -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
     -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER ep25d1-adj-control-120-vDATE.metrics \
     -e SCALE_DISABLE_CHECKPOINT 1 \
-    -- python -m experiments.grug.moe.launch_cw_scale --version ep25d1-adj-control --run
+    -- python -m experiments.grug.moe.launch_cw_scale --version ep25d1-adj-dev --run
 
 Treatment (adds custom adjoint): identical EXCEPT job-name/RUN_ID -> ep25d1-adj-custom-120-vDATE, add
-    -e SCALE_A2A_CUSTOM_ADJOINT 1 , and --version ep25d1-adj-custom .
+    -e SCALE_A2A_CUSTOM_ADJOINT 1 , and --version ep25d1-adj-dev .
 Report p10/p50/p90 MFU (2.5 PF/s denom), tok/s, step time, drop fraction (dropped/assignments), loss trajectory for both.
+
+## Check-in 23:37 UTC — profile-lead assessment + smoke status
+Profile leads from EVIDENCE-slack (HLO on 8-CPU-device shard_map repro of the real fixed-a2a path, grad HLO):
+- **unstack (David's lead 2)**: 18 unstack ops, ALL in op_name .../combine/unstack, and they lower to
+  `slice`+`bitcast` (views), not kernels. Origin: jnp.stack(output_parts) in the combine scope + its
+  backward transpose (stack->unstack) and the per-local-expert loop indexing. VERDICT: cosmetic, ~free;
+  not worth a dedicated fix. Ranks LOW.
+- **reduce-scatter.10 (David's lead 3)**: NOT reproducible without full FSDP weight sharding — my repE
+  shows all-reduce (shard_map psum for dropped_total + grad psum), reduce-scatter=0. On the rack it is the
+  FSDP gradient reduce-scatter across the data axis; overlapping it with next-layer compute is blocked by
+  the layer scan (ties to #7507 "scan blocks weight-gather overlap"). VERDICT: real but it's a
+  scheduling/overlap item belonging to the pipelined-a2a / overlap direction (peer), NOT an adjoint
+  sub-direction; LHS/auto-PGLE sealed null here so it needs manual structural overlap. Ranks MEDIUM,
+  owned by the overlap thread.
+- Post-adjoint the bottleneck is comm: rav's profile shows 29.5% comm / SendRecv 22.4%. So the a2a
+  SendRecv legs (fixed-A2A) and overlap are now the top remaining costs — raises the value of the
+  overlap/leg-batching directions over the two leads above.
+
+Smoke A/B (4-GPU EP4, remat+scan+shard_map e2e; confirms adjoint survives e2e, directional delta):
+- ep25d1-smoke-ep4-custom-0724-1633: RUNNING (past setup -> bundle+code ship OK; sentinel/custom path active).
+- ep25d1-smoke-ep4-control-0724-1636: resubmitted (prior two control attempts hit transient [iris setup] step 1/2).
+Confidence: 8/10 (unchanged). Next: collect smoke MFU delta + drop fractions; tripwire-poll rav.
