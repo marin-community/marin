@@ -269,3 +269,31 @@ statistics for performance comparisons.
   623–628 MB, treatment 621–634 MB). These are interim steady-round numbers,
   not the final total; recover missing early rows from archived finelog and
   include all iterations plus marker emission before reporting.
+
+### 2026-07-24T11:36:00Z — archive recovery and convergence through round 15
+
+- Connected-components changes now extend through baseline iteration 13 and
+  treatment iteration 15:
+  - baseline: 922,366; 249,346; 206,516; 142,637; 114,607; 85,577;
+    70,279; 62,095; 55,204; 49,510; 44,698; 38,120; 32,140;
+  - treatment: 182,128; 18,892; 14,942; 7,342; 6,503; 4,407; 3,363;
+    3,136; 2,462; 2,146; 1,521; 932; 564; 328; 192.
+  Neither arm has yet recorded a zero-change convergence round.
+- Latest per-round worker CPU and peak shard RSS remain stable: baseline
+  iteration 13 used 5,849.23 CPU-seconds and 619,982,848 bytes; treatment
+  iteration 15 used 5,518.38 CPU-seconds and 621,023,232 bytes. All completed
+  graph stages still have zero failures and zero preemptions.
+- A batch-priority in-cluster archive query recovered early `zephyr.stage`
+  rows that had aged out of the live finelog cache. Exact Iris child submission
+  times map treatment's initial graph build to
+  `20260724-082900-2c45bc51` and baseline's to
+  `20260724-083236-74cc35d9`. Their two-stage totals are 58,553.08 and
+  57,196.64 worker CPU-seconds respectively. Treatment processed fewer graph
+  items, so these raw initial-build totals are not a normalized speed claim.
+- The first archive helper never ran because its workspace package scope used
+  the CLI name rather than `marin-finelog`. The second reached the query but
+  exposed a finelog archive-CLI limitation: CoreWeave S3 segment metadata does
+  not populate the GCS-style creation-time field, causing the time-window
+  prefilter to drop every file. The successful third query omitted that broken
+  metadata prefilter and retained the exact execution-ID SQL predicate. These
+  helper failures did not read corpus data or affect either A/B arm.
