@@ -4,6 +4,7 @@
 """HuggingFaceCode/stack-v3-train download and repository-context transform."""
 
 from pathlib import PurePosixPath
+from typing import TypedDict
 
 import pyarrow as pa
 from fray.types import ResourceConfig
@@ -71,8 +72,20 @@ OUTPUT_SCHEMA = pa.schema(
 )
 
 
-def _directory_block_dfs(files: list[dict]) -> list[dict]:
-    files_by_directory: dict[tuple[str, ...], list[dict]] = {}
+class StackV3File(TypedDict):
+    content_id: str
+    content: str
+    detected_licenses: list[str]
+    file_path: str
+    file_timestamp: int
+    is_vendor: bool
+    language: str
+    license_type: str
+    size_bytes: int
+
+
+def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
+    files_by_directory: dict[tuple[str, ...], list[StackV3File]] = {}
     child_directories: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
     for file in files:
         *directory_parts, _ = PurePosixPath(file["file_path"]).parts

@@ -106,10 +106,8 @@ _COMMON_PILE_ENTRIES: tuple[tuple[str, str, str, str], ...] = (
 def common_pile_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     """Return ``(download, normalize)`` chains for every common-pile entry.
 
-    common-pile is published in the Dolma gzipped-JSON format rather than
-    parquet. Accept both common filename variants so existing normalized cache
-    identities remain stable. The default ``text``/``id`` fields match Dolma's
-    schema.
+    Both ``.json.gz`` and ``.jsonl.gz`` shards are accepted. The default
+    ``text``/``id`` fields match Dolma's schema.
     """
     return {
         marin_name: hf_normalize_steps(
