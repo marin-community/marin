@@ -120,6 +120,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | `decontam/` | Eval-corpus preparation (the decon step itself lives in `marin.datakit.decon`) |
 | `store/datakit_store.py` | 5-way join → per-(cluster, quality) Levanter caches |
 | `reports/` | Per-stage single-page HTML reports (`common.py` + one module/template per stage) |
+| `scripts/` | Manual source triggering and synchronization, tier-2 dataset reproduction, and tier-1 output validation |
 | `testbed/` | Sampled-corpus testbed used by the smoke and decon experiments |
 
 ## Running

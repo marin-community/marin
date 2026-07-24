@@ -501,33 +501,6 @@ def test_list_endpoints_filters_by_task_ids(client, state):
     assert endpoints[0]["name"] == "/svc/ep-0"
 
 
-def test_proxy_refuses_ambiguous_endpoint_name(client, state, job_request):
-    """A /proxy name that resolves to disagreeing rows — a local and a remote one —
-    is refused with 404 rather than forwarded to an arbitrarily-picked row. Guards
-    against falling back to EndpointProxy's single-row re-resolution when
-    resolve_proxy_target fails closed on the ambiguity.
-    """
-    job_id = submit_job(state, "amb", job_request)
-    task = job_id.task(0)
-    with state._db.transaction() as cur:
-        for endpoint_id, peer in (("local-row", None), ("remote-row", "cw")):
-            state._endpoints.add(
-                cur,
-                EndpointRow(
-                    endpoint_id=endpoint_id,
-                    name="/serve/amb",
-                    address="10.0.0.9:8000",
-                    task_id=task,
-                    metadata={},
-                    registered_at=Timestamp.now(),
-                    peer_id=peer,
-                ),
-            )
-
-    resp = client.get("/proxy/serve.amb/")
-    assert resp.status_code == 404
-
-
 def test_list_jobs_includes_retry_counts(client, state, job_request):
     """ListJobs RPC includes retry count fields aggregated from tasks."""
     job_id = submit_job(state, "test-job", job_request)
@@ -1289,19 +1262,6 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 # Task Logs Proxy Tests
 # =============================================================================
-
-
-def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """The endpoint proxy forwards FetchLogs to the registered log server."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/proxy/system.log-server/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
 
 
 @pytest.mark.parametrize(

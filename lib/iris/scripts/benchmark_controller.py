@@ -25,8 +25,6 @@ Usage:
     uv run python lib/iris/scripts/benchmark_controller.py reconcile \\
         --num-tasks 5000 --tasks-per-worker 64 --payload-bytes 100000
 
-    # Compare proxy throughput and health latency at up to 1,600 streams.
-    uv run --isolated --directory lib/iris python -m scripts.benchmark_controller proxy
 """
 
 import asyncio
@@ -43,13 +41,12 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
 import click
-import httpx
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
@@ -78,13 +75,10 @@ from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendW
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _CONTROLLER_KEEPALIVE,
-    _RPC_HANDLER_THREADS,
     Controller,
     ControllerConfig,
-    _install_rpc_executor,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.endpoint_proxy import ALLOWED_METHODS, PROXY_ROUTE, EndpointProxy
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
@@ -121,8 +115,6 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.dashboard_common import on_shutdown
-from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
@@ -132,10 +124,6 @@ from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import CursorTransitionReader
 
@@ -2402,302 +2390,6 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
     stop.wait()
     controller.stop()
     db.close()
-
-
-# ---------------------------------------------------------------------------
-# Endpoint proxy benchmark (real Uvicorn -> Starlette -> HTTPX -> Uvicorn)
-# ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class ProxyBenchmarkResult:
-    loop: str
-    loop_class: str
-    connections: int
-    trial: int
-    elapsed: float
-    bytes_transferred: int
-    health_latencies_ms: tuple[float, ...]
-    health_errors: tuple[str, ...]
-
-    @property
-    def streams_per_second(self) -> float:
-        return self.connections / self.elapsed
-
-    @property
-    def mebibytes_per_second(self) -> float:
-        return self.bytes_transferred / self.elapsed / 1024**2
-
-    @property
-    def health_percentiles_ms(self) -> LatencyPercentiles:
-        if not self.health_latencies_ms:
-            nan = float("nan")
-            return LatencyPercentiles(p50=nan, p95=nan, p99=nan, p999=nan, maximum=nan)
-        return _percentiles_ms(list(self.health_latencies_ms))
-
-
-@dataclasses.dataclass(frozen=True)
-class ProxyExerciseResult:
-    bytes_transferred: int
-    elapsed: float
-    loop_class: str
-    health_latencies_ms: tuple[float, ...]
-    health_errors: tuple[str, ...]
-
-
-@dataclasses.dataclass(frozen=True)
-class ProxyStreamSpec:
-    chunks: int
-    chunk_bytes: int
-    chunk_interval: float
-
-
-_PROXY_ASYNCIO_LOOP = "asyncio"
-_PROXY_AUTO_LOOP = "auto"
-_PROXY_LOOPS = (_PROXY_ASYNCIO_LOOP, _PROXY_AUTO_LOOP)
-_PROXY_BENCHMARK_BACKLOG = 2048
-_PROXY_BENCHMARK_HEALTH_ROUTE = "/health"
-_PROXY_BENCHMARK_HOST = "127.0.0.1"
-_PROXY_BENCHMARK_HTTP = "httptools"
-_PROXY_BENCHMARK_REQUEST_TIMEOUT = 30.0
-
-
-def _proxy_benchmark_upstream(stream_spec: ProxyStreamSpec) -> Starlette:
-    payload = b"x" * stream_spec.chunk_bytes
-
-    async def stream(_request: Request) -> StreamingResponse:
-        async def body():
-            for _ in range(stream_spec.chunks):
-                yield payload
-                await asyncio.sleep(stream_spec.chunk_interval)
-
-        return StreamingResponse(body(), media_type="application/octet-stream")
-
-    return Starlette(routes=[Route("/stream", stream)])
-
-
-def _proxy_benchmark_app(upstream_address: str) -> Starlette:
-    proxy = EndpointProxy(
-        {"/bench/stream": upstream_address}.get,
-        timeout_seconds=_PROXY_BENCHMARK_REQUEST_TIMEOUT,
-    )
-
-    async def health(_request: Request) -> JSONResponse:
-        return JSONResponse({"loop": type(asyncio.get_running_loop()).__name__})
-
-    async def proxy_route(request: Request) -> Response:
-        name = request.path_params["endpoint_name"]
-        return await proxy.dispatch(
-            request,
-            encoded_name=name,
-            sub_path=request.path_params["sub_path"],
-            proxy_prefix=f"/proxy/{name}",
-        )
-
-    return Starlette(
-        routes=[
-            Route(_PROXY_BENCHMARK_HEALTH_ROUTE, health),
-            Route(PROXY_ROUTE, proxy_route, methods=list(ALLOWED_METHODS)),
-        ],
-        lifespan=on_shutdown(proxy.close),
-    )
-
-
-async def _exercise_proxy(base_url: str, *, connections: int) -> ProxyExerciseResult:
-    limits = httpx.Limits(max_connections=None, max_keepalive_connections=0)
-    timeout = httpx.Timeout(_PROXY_BENCHMARK_REQUEST_TIMEOUT)
-    started = asyncio.Event()
-    streams_done = asyncio.Event()
-    health_latencies: list[float] = []
-    health_errors: list[str] = []
-
-    async with (
-        httpx.AsyncClient(limits=limits, timeout=timeout) as stream_client,
-        httpx.AsyncClient(limits=httpx.Limits(max_connections=4), timeout=timeout) as health_client,
-    ):
-        health_response = await health_client.get(f"{base_url}{_PROXY_BENCHMARK_HEALTH_ROUTE}")
-        health_response.raise_for_status()
-        loop_class = str(health_response.json()["loop"])
-
-        async def read_stream() -> int:
-            await started.wait()
-            received = 0
-            async with stream_client.stream("GET", f"{base_url}/proxy/bench.stream/stream") as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    received += len(chunk)
-            return received
-
-        async def probe_health() -> None:
-            while not streams_done.is_set():
-                probe_started = time.perf_counter()
-                try:
-                    response = await health_client.get(f"{base_url}{_PROXY_BENCHMARK_HEALTH_ROUTE}")
-                    response.raise_for_status()
-                    health_latencies.append((time.perf_counter() - probe_started) * 1000)
-                except httpx.HTTPError as exc:
-                    health_errors.append(f"{type(exc).__name__}: {exc}")
-                await asyncio.sleep(0.01)
-
-        stream_tasks = [asyncio.create_task(read_stream()) for _ in range(connections)]
-        health_task = asyncio.create_task(probe_health())
-        benchmark_started = time.perf_counter()
-        started.set()
-        byte_counts = await asyncio.gather(*stream_tasks)
-        elapsed = time.perf_counter() - benchmark_started
-        streams_done.set()
-        await health_task
-
-    return ProxyExerciseResult(
-        bytes_transferred=sum(byte_counts),
-        elapsed=elapsed,
-        loop_class=loop_class,
-        health_latencies_ms=tuple(health_latencies),
-        health_errors=tuple(health_errors),
-    )
-
-
-def _run_proxy_trial(
-    *,
-    loop: str,
-    connections: int,
-    stream_spec: ProxyStreamSpec,
-    trial: int,
-) -> ProxyBenchmarkResult:
-    threads = ThreadContainer(f"proxy-benchmark-{loop}-{trial}")
-    upstream_port = find_free_port()
-    proxy_port = find_free_port()
-    upstream = uvicorn.Server(
-        uvicorn.Config(
-            _proxy_benchmark_upstream(stream_spec),
-            host=_PROXY_BENCHMARK_HOST,
-            port=upstream_port,
-            loop="uvloop",
-            http=_PROXY_BENCHMARK_HTTP,
-            log_level="error",
-            log_config=None,
-            backlog=_PROXY_BENCHMARK_BACKLOG,
-            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
-        )
-    )
-    proxy = uvicorn.Server(
-        uvicorn.Config(
-            _proxy_benchmark_app(f"{_PROXY_BENCHMARK_HOST}:{upstream_port}"),
-            host=_PROXY_BENCHMARK_HOST,
-            port=proxy_port,
-            loop=loop,
-            http=_PROXY_BENCHMARK_HTTP,
-            log_level="error",
-            log_config=None,
-            backlog=_PROXY_BENCHMARK_BACKLOG,
-            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
-        )
-    )
-    _install_rpc_executor(proxy, max_workers=_RPC_HANDLER_THREADS)
-    try:
-        threads.spawn_server(upstream, name="proxy-benchmark-upstream")
-        _wait_for_server_start(lambda: upstream.started, "benchmark upstream did not start within 10s")
-        threads.spawn_server(proxy, name="proxy-benchmark-proxy")
-        _wait_for_server_start(lambda: proxy.started, "benchmark proxy did not start within 10s")
-        exercise = asyncio.run(_exercise_proxy(f"http://{_PROXY_BENCHMARK_HOST}:{proxy_port}", connections=connections))
-    finally:
-        threads.stop(timeout=Duration.from_seconds(30))
-
-    return ProxyBenchmarkResult(
-        loop=loop,
-        loop_class=exercise.loop_class,
-        connections=connections,
-        trial=trial,
-        elapsed=exercise.elapsed,
-        bytes_transferred=exercise.bytes_transferred,
-        health_latencies_ms=exercise.health_latencies_ms,
-        health_errors=exercise.health_errors,
-    )
-
-
-def _proxy_trials(
-    *, connections: tuple[int, ...], trials: int, stream_spec: ProxyStreamSpec
-) -> Iterator[ProxyBenchmarkResult]:
-    for connection_count in connections:
-        for trial in range(1, trials + 1):
-            loop_order = _PROXY_LOOPS if trial % 2 else tuple(reversed(_PROXY_LOOPS))
-            for loop in loop_order:
-                yield _run_proxy_trial(
-                    loop=loop,
-                    connections=connection_count,
-                    stream_spec=stream_spec,
-                    trial=trial,
-                )
-
-
-def _print_proxy_result(result: ProxyBenchmarkResult) -> None:
-    percentiles = result.health_percentiles_ms
-    print(
-        f"{result.connections:5d}  {result.loop:>7}  {result.loop_class:>10}  {result.trial:5d}  "
-        f"{result.elapsed:7.3f}s  {result.streams_per_second:9.1f}  "
-        f"{result.mebibytes_per_second:8.1f}  {percentiles.p50:9.1f}ms  {percentiles.p99:7.1f}ms  "
-        f"{percentiles.maximum:7.1f}ms  {len(result.health_latencies_ms):6d}  {len(result.health_errors):4d}"
-    )
-    for error in result.health_errors:
-        print(f"         health error: {error}")
-
-
-def _print_proxy_comparison(results: list[ProxyBenchmarkResult], connections: tuple[int, ...]) -> None:
-    print("\nMedian comparison (auto relative to asyncio):")
-    for connection_count in connections:
-        by_loop = {
-            loop: [r for r in results if r.connections == connection_count and r.loop == loop] for loop in _PROXY_LOOPS
-        }
-        baseline = statistics.median(r.streams_per_second for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment = statistics.median(r.streams_per_second for r in by_loop[_PROXY_AUTO_LOOP])
-        baseline_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment_p99 = statistics.median(r.health_percentiles_ms.p99 for r in by_loop[_PROXY_AUTO_LOOP])
-        baseline_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_ASYNCIO_LOOP])
-        treatment_errors = sum(len(r.health_errors) for r in by_loop[_PROXY_AUTO_LOOP])
-        print(
-            f"  {connection_count:5d} connections: throughput {baseline:.1f} -> {treatment:.1f} streams/s "
-            f"({(treatment / baseline - 1) * 100:+.1f}%); health p99 {baseline_p99:.1f} -> {treatment_p99:.1f} ms "
-            f"({(treatment_p99 / baseline_p99 - 1) * 100:+.1f}%); errors {baseline_errors} -> {treatment_errors}"
-        )
-
-
-@main.command("proxy")
-@click.option("--connections", type=int, multiple=True, default=(200, 800, 1600), show_default=True)
-@click.option("--trials", type=int, default=3, show_default=True)
-@click.option("--chunks", type=int, default=64, show_default=True)
-@click.option("--chunk-bytes", type=int, default=1024, show_default=True)
-@click.option("--chunk-interval-ms", type=float, default=10.0, show_default=True)
-def proxy_cmd(
-    connections: tuple[int, ...], trials: int, chunks: int, chunk_bytes: int, chunk_interval_ms: float
-) -> None:
-    """Compare the old asyncio controller loop with Uvicorn's auto-selected loop.
-
-    Each request crosses a real Uvicorn/Starlette endpoint proxy and a real
-    HTTPX upstream stream. Health requests share the proxy event loop so their
-    tail latency exposes starvation under concurrent streaming load.
-    """
-    if min((*connections, trials, chunks, chunk_bytes)) <= 0 or chunk_interval_ms < 0:
-        raise click.BadParameter("connections, trials, chunks, and chunk-bytes must be positive")
-
-    stream_spec = ProxyStreamSpec(
-        chunks=chunks,
-        chunk_bytes=chunk_bytes,
-        chunk_interval=chunk_interval_ms / 1000,
-    )
-    print(
-        f"Proxy benchmark: connections={list(connections)} trials={trials} "
-        f"body={chunks}x{chunk_bytes}B interval={chunk_interval_ms:g}ms"
-    )
-    print(
-        f"{'conn':>5}  {'loop':>7}  {'runtime':>10}  {'trial':>5}  {'elapsed':>8}  "
-        f"{'streams/s':>9}  {'MiB/s':>8}  {'health p50':>10}  {'p99':>8}  {'max':>8}  "
-        f"{'probes':>6}  {'errs':>4}"
-    )
-    results: list[ProxyBenchmarkResult] = []
-    for result in _proxy_trials(connections=connections, trials=trials, stream_spec=stream_spec):
-        results.append(result)
-        _print_proxy_result(result)
-    _print_proxy_comparison(results, connections)
 
 
 # ---------------------------------------------------------------------------

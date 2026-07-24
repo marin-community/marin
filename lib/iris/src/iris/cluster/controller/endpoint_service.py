@@ -12,7 +12,9 @@ endpoints are served from an in-memory map and never expire.
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any
 
 from connectrpc.code import Code
@@ -22,7 +24,9 @@ from rigging.timing import Duration, Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
+    EndpointDelta,
     EndpointQuery,
+    EndpointReset,
     EndpointRow,
     EndpointsProjection,
 )
@@ -76,21 +80,40 @@ def parse_proxy_timeout(metadata: dict[str, str]) -> float | None:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedEndpoint:
-    """A proxy request's resolved target: canonical endpoint name, address, and access mode."""
+class ProxyEndpointMapping:
+    """Endpoint fields required by the native proxy data plane."""
 
+    endpoint_id: str
     name: str
     address: str
-    # A Controller.EndpointAccess value.
-    access: int
-    # Set when the endpoint is mirrored from a federated child: the /proxy route
-    # forwards to this peer's controller instead of dialing ``address``. None = local.
-    peer_id: str | None = None
-    # The task that owns the endpoint; used to authorize a federation-peer's proxy
-    # against the owning job's federation handle. None for ``/system/`` endpoints.
-    task_id: JobName | None = None
-    # Per-endpoint upstream proxy timeout in seconds, or None to use the proxy default.
-    timeout_seconds: float | None = None
+    link_access: bool
+    peer_id: str | None
+    task_id: str | None
+    timeout_seconds: float | None
+    lease_deadline_epoch_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyMappingDelta:
+    """One atomic registry transition between adjacent generations."""
+
+    base_generation: int
+    next_generation: int
+    upserts: tuple[ProxyEndpointMapping, ...]
+    deletes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyRegistryReset:
+    """Notification that consumers must install a complete current snapshot."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyRegistrySnapshot:
+    """Complete native-proxy bootstrap or recovery state."""
+
+    generation: int
+    endpoints: tuple[ProxyEndpointMapping, ...]
 
 
 class EndpointServiceImpl:
@@ -106,10 +129,98 @@ class EndpointServiceImpl:
         self._db = db
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._lease = lease
+        self._proxy_lock = RLock()
+        self._proxy_generation = 0
+        self._proxy_listeners: list[Callable[[ProxyMappingDelta | ProxyRegistryReset], None]] = []
+        db.caches[EndpointsProjection].subscribe(self._endpoint_mutated)
 
     def register_system_endpoint(self, name: str, address: str) -> None:
         """Register a never-expiring ``/system/`` endpoint (e.g. the log server)."""
-        self._system_endpoints[name] = address
+        with self._proxy_lock:
+            if self._system_endpoints.get(name) == address:
+                return
+            self._system_endpoints[name] = address
+        self._publish_proxy_delta(
+            upserts=(self._system_proxy_mapping(name, address),),
+            deletes=(),
+        )
+
+    def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
+        """Subscribe to committed endpoint-registry transitions."""
+        with self._proxy_lock:
+            self._proxy_listeners.append(listener)
+
+    def proxy_registry_snapshot(self) -> ProxyRegistrySnapshot:
+        """Return a complete generation-stamped native proxy registry."""
+        with self._proxy_lock:
+            generation = self._proxy_generation
+            system_endpoints = tuple(self._system_endpoints.items())
+            task_endpoints = tuple(self._db.caches[EndpointsProjection].all())
+        mappings = tuple(self._task_proxy_mapping(row) for row in task_endpoints)
+        mappings += tuple(self._system_proxy_mapping(name, address) for name, address in system_endpoints)
+        return ProxyRegistrySnapshot(generation=generation, endpoints=mappings)
+
+    def _endpoint_mutated(self, mutation: EndpointDelta | EndpointReset) -> None:
+        if isinstance(mutation, EndpointReset):
+            self._publish_proxy_reset()
+            return
+        self._publish_proxy_delta(
+            upserts=tuple(self._task_proxy_mapping(row) for row in mutation.upserts),
+            deletes=mutation.deletes,
+        )
+
+    def _publish_proxy_delta(
+        self,
+        *,
+        upserts: tuple[ProxyEndpointMapping, ...],
+        deletes: tuple[str, ...],
+    ) -> None:
+        with self._proxy_lock:
+            base_generation = self._proxy_generation
+            next_generation = base_generation + 1
+            self._proxy_generation = next_generation
+            listeners = tuple(self._proxy_listeners)
+        delta = ProxyMappingDelta(
+            base_generation=base_generation,
+            next_generation=next_generation,
+            upserts=upserts,
+            deletes=deletes,
+        )
+        for listener in listeners:
+            listener(delta)
+
+    def _publish_proxy_reset(self) -> None:
+        with self._proxy_lock:
+            self._proxy_generation += 1
+            listeners = tuple(self._proxy_listeners)
+        for listener in listeners:
+            listener(ProxyRegistryReset())
+
+    @staticmethod
+    def _task_proxy_mapping(row: EndpointRow) -> ProxyEndpointMapping:
+        return ProxyEndpointMapping(
+            endpoint_id=row.endpoint_id,
+            name=row.name,
+            address=row.address,
+            link_access=row.access == EndpointAccess.ENDPOINT_ACCESS_LINK,
+            peer_id=row.peer_id,
+            task_id=row.task_id.to_wire(),
+            timeout_seconds=parse_proxy_timeout(row.metadata),
+            lease_deadline_epoch_ms=row.lease_deadline.epoch_ms() if row.lease_deadline is not None else None,
+        )
+
+    @staticmethod
+    def _system_proxy_mapping(name: str, address: str) -> ProxyEndpointMapping:
+        return ProxyEndpointMapping(
+            endpoint_id=f"system:{name}",
+            name=name,
+            address=address,
+            link_access=False,
+            peer_id=None,
+            task_id=None,
+            timeout_seconds=None,
+            lease_deadline_epoch_ms=None,
+        )
 
     def _granted_lease(self, request: controller_pb2.Controller.RegisterEndpointRequest) -> Duration:
         """Lease to grant: the client's request clamped to ``[MIN_ENDPOINT_LEASE, self._lease]``.
@@ -232,7 +343,8 @@ class EndpointServiceImpl:
         row = self._db.caches[EndpointsProjection].resolve(name)
         if row is not None:
             return row.address
-        return self._system_endpoints.get(name)
+        with self._proxy_lock:
+            return self._system_endpoints.get(name)
 
     def resolve_task_endpoint(self, name: str) -> EndpointRow | None:
         """Resolve a task-registered endpoint row by wire name, or None.
@@ -247,39 +359,12 @@ class EndpointServiceImpl:
                 return row
         return None
 
-    def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
-        """Resolve a proxy request's ``encoded_name`` to its target, or None.
-
-        A remote (federated) row carries ``peer_id`` so the proxy forwards to that
-        peer. When one name resolves to disagreeing targets — a local and a remote
-        row, or remote rows from different peers — this fails closed (returns None),
-        since a mistaken pick would forward a request to the wrong place or apply the
-        wrong access mode. ``/system/`` endpoints always resolve as ``PRIVATE``.
-        """
-        for name in proxy_name_to_endpoint_names(encoded_name):
-            rows = self._db.caches[EndpointsProjection].resolve_all(name)
-            if rows:
-                if len({row.peer_id for row in rows}) > 1:
-                    logger.warning("Ambiguous endpoint %r resolves to multiple peers; refusing to proxy", name)
-                    return None
-                row = rows[0]
-                return ResolvedEndpoint(
-                    name=row.name,
-                    address=row.address,
-                    access=row.access,
-                    peer_id=row.peer_id,
-                    task_id=row.task_id,
-                    timeout_seconds=parse_proxy_timeout(row.metadata),
-                )
-            address = self._system_endpoints.get(name)
-            if address is not None:
-                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)
-        return None
-
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""
         results: list[controller_pb2.Controller.Endpoint] = []
-        for name, address in self._system_endpoints.items():
+        with self._proxy_lock:
+            system_endpoints = tuple(self._system_endpoints.items())
+        for name, address in system_endpoints:
             matches = name == prefix if exact else name.startswith(prefix)
             if matches:
                 results.append(controller_pb2.Controller.Endpoint(endpoint_id=name, name=name, address=address))

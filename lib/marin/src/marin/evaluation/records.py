@@ -61,14 +61,30 @@ class EvalTaskRef(BaseModel):
     num_fewshot: int
 
 
+class HarborRef(BaseModel):
+    """The Harbor dataset a run evaluated: registry name, version, agent, and sandbox environment."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dataset: str
+    version: str
+    agent: str
+    env: str
+
+
 class EvalRef(BaseModel):
-    """The eval suite that was run: its name, mechanism, and constituent tasks."""
+    """The eval that was run: its name, mechanism, and mechanism-specific detail.
+
+    ``tasks`` carries the lm-eval task list for the ``evalchemy`` mechanism; ``harbor`` carries the
+    dataset descriptor for the ``harbor`` mechanism. Exactly one is populated per record.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     mechanism: str
-    tasks: tuple[EvalTaskRef, ...]
+    tasks: tuple[EvalTaskRef, ...] = ()
+    harbor: HarborRef | None = None
 
 
 class HardwareRef(BaseModel):
@@ -82,12 +98,16 @@ class HardwareRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval container digest, and launch host."""
+    """Where the run came from: launch-time git SHA, eval container digest, and launch host.
+
+    ``eval_image`` is the eval mechanism's container: the evalchemy client image for an evalchemy run,
+    the Harbor sandbox image for a Harbor run.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    evalchemy_image: str
+    eval_image: str
     launch_host: str
 
 

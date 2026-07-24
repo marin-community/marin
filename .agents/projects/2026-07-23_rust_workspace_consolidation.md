@@ -421,23 +421,32 @@ behavior, so the maturin pin is load-bearing).
 
 ## Migration plan
 
-Status: this PR executes the finelog and dupekit move as one change (Phases 1a
-and 1b combined, at the issue owner's direction — "do the full migration in this
-PR and see how it feels"). iris follows when `lib/iris/rust` lands. `marin-jwt`
-(Phase 2) is deferred to its own PR because it is security-critical and needs the
+Status: this PR executes the finelog, dupekit, AND iris move as one change (at the
+issue owner's direction — "do the full migration in this PR"). iris's native crate
+(`lib/iris/rust`) landed on main mid-effort (#7537), so it was folded in here
+rather than deferred: it moves to `rust/iris-proxy` (the endpoint-proxy dataplane
+lib) and `rust/iris-pyext` (the `iris_native` cdylib). `marin-jwt` (Phase 2) is
+still deferred to its own PR because it is security-critical and needs the
 regression suite below.
 
-Finding from doing it: pyo3 and arrow are coupled and cannot be unified
-independently. dupekit's `pyarrow` feature pulls `arrow-pyarrow`, which pins the
-pyo3 version (arrow-pyarrow 57.x → pyo3 0.26, 58.x → pyo3 0.28, 59.1 → pyo3 0.29).
-Unifying pyo3 therefore also fixes dupekit's arrow version. The workspace settled
-on pyo3 0.28 + arrow 58 — 58 is the version finelog already uses, so both pyo3 and
-arrow unified in one step (dupekit moved 0.26→0.28 and arrow 57.1→58; finelog-pyext
-moved 0.29→0.28). The dupekit bump surfaced two pyo3-0.28 deprecations (`downcast`
-→ `cast`; the `#[pyclass]` Clone auto-`FromPyObject` becoming opt-in via
-`from_py_object`), both mechanical. So the design's "arrow unification is a
-separate, deferrable change" is wrong when a crate uses `pyarrow`: the pyo3
-`links` constraint drags arrow along with it.
+Finding from doing it: pyo3 and arrow are coupled through dupekit. dupekit's
+`pyarrow` feature pulls `arrow-pyarrow`, which pins the pyo3 version (arrow-pyarrow
+57.x → pyo3 0.26, 58.x → pyo3 0.28, 59.x → pyo3 0.29). pyo3 MUST be one version
+(`links = "python"`), and iris's pyext is on 0.29, so the workspace unifies UP to
+pyo3 0.29 — which forces dupekit onto arrow 59 (dupekit moved 0.26→0.29 and arrow
+57.1→59; finelog-pyext moved back to 0.29). The dupekit pyo3 bump surfaced two
+mechanical deprecations (`downcast` → `cast`; the `#[pyclass]` Clone
+auto-`FromPyObject` becoming opt-in via `from_py_object`).
+
+arrow does NOT fully unify, though: finelog's datafusion 53 stack requires arrow
+58, and no datafusion release ships arrow 59 yet (54, the latest, is still arrow
+58). So arrow stays split — finelog on 58, dupekit on 59 — which is safe because
+they compile into different wheels and never share arrow objects; the lock carries
+both majors until datafusion catches up. finelog's datafusion/arrow are left
+untouched (bumping datafusion to 54 gains nothing and risks its fragile
+`ParquetAccessPlan` downcast seam). So the pyo3 `links` constraint is the hard
+one; arrow can tolerate a contained duplicate when a downstream (datafusion) pins
+it below the pyarrow-coupled version.
 
 The phased plan below is the general recipe; the notes above record where this PR
 diverged.

@@ -56,7 +56,7 @@ def deployment_config() -> DeploymentConfig:
         domain="loom.example.com",
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
-        source_path="/tmp/loom-source",
+        build_context="/tmp/loom-source",
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",

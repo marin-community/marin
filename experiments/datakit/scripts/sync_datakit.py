@@ -64,7 +64,7 @@ Usage::
 
     AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \\
     AWS_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com \\
-    uv run python scripts/datakit/sync_datakit.py \\
+    uv run python experiments/datakit/scripts/sync_datakit.py \\
         --src-prefix gs://marin-us-central1 \\
         --dest-prefix s3://marin-na/marin
 """

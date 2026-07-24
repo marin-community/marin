@@ -4,7 +4,7 @@
 """Upload a tier2 skewed-distribution synthetic dataset to HuggingFace Hub.
 
 Reads the parquet shards staged at ``--source-path`` (a GCS prefix produced by
-``scripts/datakit/generate_tier2_skewed.py``), copies them to a local scratch
+``experiments/datakit/scripts/generate_tier2_skewed.py``), copies them to a local scratch
 directory, then uploads them to ``--repo-id`` on HuggingFace via
 ``HfApi.upload_folder``. Also writes a dataset-card README that propagates the
 upstream FineWeb-Edu attribution and ODC-By license.
@@ -31,7 +31,6 @@ from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCE_PATH = "gs://marin-us-central2/tmp/ttl=3d/datakit-tier2-skew-v2/data"
 DEFAULT_MARIN_YAML = "~/projects/marin/.marin.yaml"
 
 DATASET_CARD_TEMPLATE = """\
@@ -66,7 +65,7 @@ cover. Don't use it for training without re-evaluating its distribution.
 
 - **Source text**: [`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
   `sample/10BT` split, revision `87f0914`. License: ODC-By 1.0.
-- **Generator**: `scripts/datakit/generate_tier2_skewed.py` in
+- **Generator**: `experiments/datakit/scripts/generate_tier2_skewed.py` in
   [marin-community/marin](https://github.com/marin-community/marin).
 - **Method**: per-doc target length sampled from a 3-mode mixture (normal
   log-normal, heavy Pareto, plus a deterministic injection of mega docs in
@@ -136,7 +135,11 @@ def _build_card(source_path: str) -> bytes:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-id", required=True, help="HF repo id, e.g. 'marin-community/datakit-tier2-skewed'.")
-    parser.add_argument("--source-path", default=DEFAULT_SOURCE_PATH)
+    parser.add_argument(
+        "--source-path",
+        required=True,
+        help="GCS prefix containing parquet shards from generate_tier2_skewed.py.",
+    )
     parser.add_argument("--marin-yaml", default=DEFAULT_MARIN_YAML)
     parser.add_argument("--token", default=None)
     parser.add_argument("--private", action="store_true", help="Create the HF repo as private.")

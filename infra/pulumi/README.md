@@ -21,7 +21,7 @@ federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
 used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky`).
+around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -67,12 +67,10 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
 - **GCP credentials**: `gcloud auth application-default login`. Decrypting stack secrets is
   authorized by your own GCP credentials against the shared KMS key — see "Backend" below for
   getting the IAM role granted.
-- **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read
-  `CLOUDFLARE_API_TOKEN`. Load the DNS-only token without copying it into stack config:
-  ```bash
-  export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-    --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-  ```
+- **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read the
+  DNS-only Cloudflare token straight from Secret Manager (`cloudflare-oa-dns-token` in
+  `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no
+  separate export needed, just `roles/secretmanager.secretAccessor` on that secret.
 - **Backend login**: `pulumi login gs://marin-iac-state`.
 - **Cluster access** (for the k8s dry-run): the CoreWeave kubeconfig at the path in the
   cluster's `platform.coreweave.kubeconfig_path` (typically `~/.kube/coreweave-iris`).
@@ -149,6 +147,16 @@ already provisioned:
     --member="user:<operator email>" \
     --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
   ```
+
+## CI preview
+
+`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+**CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
+`pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
+write) access in [`infra/permissions`](../permissions/README.md).
+
+Adapting this to another Pulumi project means a new thin workflow that triggers on that
+project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
 
 ## Unsupported
 

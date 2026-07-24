@@ -349,6 +349,8 @@ def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
     assert result.native_changed == {"dupekit"}
     assert classify(["rust/finelog/src/lib.rs"], tmp_path).native_changed == {"finelog"}
     assert classify(["rust/finelog-pyext/src/lib.rs"], tmp_path).native_changed == {"finelog"}
+    assert classify(["rust/iris-proxy/src/lib.rs"], tmp_path).native_changed == {"iris"}
+    assert classify(["rust/iris-pyext/src/lib.rs"], tmp_path).native_changed == {"iris"}
 
 
 def test_shared_crate_change_source_builds_every_consumer(tmp_path: Path, monkeypatch) -> None:
@@ -360,8 +362,8 @@ def test_shared_crate_change_source_builds_every_consumer(tmp_path: Path, monkey
 
 def test_workspace_root_change_source_builds_all_native_scopes(tmp_path: Path) -> None:
     """The workspace manifest/lock feed every wheel, so a change there selects all native scopes."""
-    assert classify(["rust/Cargo.lock"], tmp_path).native_changed == {"dupekit", "finelog"}
-    assert classify(["rust/Cargo.toml"], tmp_path).native_changed == {"dupekit", "finelog"}
+    assert classify(["rust/Cargo.lock"], tmp_path).native_changed == {"dupekit", "finelog", "iris"}
+    assert classify(["rust/Cargo.toml"], tmp_path).native_changed == {"dupekit", "finelog", "iris"}
 
 
 def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:

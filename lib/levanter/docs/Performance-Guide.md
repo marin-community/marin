@@ -11,68 +11,80 @@ See also the [JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profilin
 
 ### Enabling the Profiler
 
-Levanter uses JAX's built-in profiler. You can enable it by adding the `--trainer.profiler.enabled true` flag
-to the command line. This will generate a trace file in the `./logs` directory, under `./logs/<run_id>/profiler/plugins/profile/<datetime>`.
-(Yeah, it's a mess, but it's what JAX wants to do.)
-The trace stays on disk in the run directory, so you can inspect it from whatever durable storage backs `log_dir`.
+Levanter captures JAX XPlane data, uploads it to `MARIN_PREFIX` TTL storage, and
+logs an authenticated XProf URL:
 
-Install profiling dependencies (TensorBoard) with one of:
+```bash
+uv run ... \
+  --trainer.profiler.enabled true \
+  --trainer.profiler.start_step 5 \
+  --trainer.profiler.num_steps 10
+```
+
+Profiles default to a 30-day lifetime. Set
+`--trainer.profiler.upload.ttl_days 3` to request another lifetime or
+`--trainer.profiler.upload.enabled false` for local-only capture. A local
+`MARIN_PREFIX` also disables upload.
+
+Install local viewers with one of:
 
 - `pip install "levanter[profiling]"`
 - `uv sync --extra profiling`
 
-Here are the full list of profiling related options:
+| Argument | Description | Default |
+|---|---|---|
+| `--trainer.profiler.enabled` | Capture, upload, and log an XProf link | `false` |
+| `--trainer.profiler.start_step` | First profiled training step | `5` |
+| `--trainer.profiler.num_steps` | Number of profiled steps | `25` |
+| `--trainer.profiler.upload.enabled` | Upload to TTL storage and print a hosted link | `true` |
+| `--trainer.profiler.upload.ttl_days` | Remote profile lifetime | `30` |
+| `--trainer.profiler.process_index` | Capture one JAX process; unset captures all hosts | unset |
+| `--trainer.profiler.create_perfetto_trace` | Also export Perfetto JSON | `false` |
+| `--trainer.profiler.perfetto_link` | Generate the interactive Perfetto URL | `false` |
 
-| Argument                                  | Description | Default |
-|-------------------------------------------|-------------|---------|
-| `--trainer.profiler.enabled`              | Enable the profiler | `false` |
-| `--trainer.profiler.start_step`           | The step to start profiling | `5`     |
-| `--trainer.profiler.num_steps`            | The number of steps to profile | `25`    |
-| `--trainer.profiler.perfetto_link`        | Whether to generate a Perfetto URL | `false` |
+The same fields are available in YAML. All JAX processes capture into one remote
+XProf run unless `process_index` selects one process.
 
-As usual, these can be specified in the yaml configuration file as well.
+### Adding HLO graphs
 
-In a multi-process setup, each node saves its own profile under that node's `log_dir` tree. JAX does not merge or align
-those traces automatically, so compare the per-host `plugins/profile/<datetime>/` directories directly if you need a
-cross-host view.
+HLO metadata enables XProf graph and memory views and increases artifact size:
 
+```bash
+uv run ... \
+  --trainer.profiler.enabled true \
+  --trainer.profiler.num_steps 5 \
+  --trainer.profiler.profile_options.enable_hlo_proto true
+```
+
+`profile_options` also exposes host, Python, and device tracer levels,
+`include_dataset_ops`, and `advanced_configuration`.
 
 ### Examining a Profile
 
-See the [JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profiling.html) for more information on how to examine a profile.
-
-JAX offers two main ways to examine a profile: Perfetto and TensorBoard.
+Open the logged `XProf profile:` URL. The service stages the GCS or CoreWeave S3
+tree and opens the XProf interface. See the
+[JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profiling.html) for
+profiler details.
 
 #### Perfetto
 
-[Perfetto](https://ui.perfetto.dev/) is a web-based tool for examining profiles.
-
-Open the trace from the run directory, then go to https://ui.perfetto.dev/ and upload `perfetto_trace.json.gz`.
-The file lives under `plugins/profile/<datetime>/` inside the profiler output directory.
+[Perfetto](https://ui.perfetto.dev/) displays standalone timelines. Set
+`--trainer.profiler.create_perfetto_trace true`, then upload
+`plugins/profile/<datetime>/perfetto_trace.json.gz`.
 
 If you enabled host profiling, the companion `host_profile.pstats` and `host_profile.txt` files are written alongside the
 JAX trace files in that same profiler directory.
 
-Alternatively, you can enable the `--trainer.profiler.perfetto_link` flag.
-This will generate a link that will automatically upload the `perfetto_trace.json.gz` file in the same directory as the TensorBoard profile.
-This link is a little tricky to use on TPU. The JAX guide has [some instructions](https://docs.jax.dev/en/latest/profiling.html#remote-profiling)
-on how to use it. (Basically, set up SSH port forwarding and then use the link in your local browser.)
+`--trainer.profiler.perfetto_link true` prints an interactive link. TPU runs need
+the [JAX remote profiling setup](https://docs.jax.dev/en/latest/profiling.html#remote-profiling).
 
-#### TensorBoard
+#### Local XProf or TensorBoard
 
-TensorBoard is a locally-run tool for examining profiles.
-You want to download the trace files (e.g. `plugins/profile/2024_03_16_07_26_24`)
-and run `tensorboard --logdir <dir>` where `<dir>` is the *directory containing plugins* (not the plugins directory itself).
-Then you can navigate to http://localhost:6006/#profile in your browser and see the profile.
-
-#### Fetching traces
-
-If your run directory is on durable remote storage, download or sync the profiler output directory locally and point
-TensorBoard at the directory containing `plugins/`.
+For offline inspection, download the profiler directory and point XProf or
+TensorBoard at the directory containing `plugins/`:
 
 ```bash
-# Example: launch TensorBoard from a local copy of a profiler output directory
-tensorboard --logdir /path/to/run/profiler
+uv run --with xprof xprof --logdir /path/to/run/profiler
 ```
 
 TensorBoard install tips:
@@ -84,12 +96,11 @@ TensorBoard install tips:
   - Ensure `xprof` matches your TensorBoard (stable TB → `xprof`, nightly TB → `xprof-nightly`).
   - Restart TensorBoard after upgrading.
 
-There are three sections I find particularly useful:
+Useful XProf views:
 
 1. The overview page tells you MMU utilization and the top 10 operations.
-2. **op_profile** shows you the time spent in each operation (by type). You end up with annoying names like `fusion.1772`,
-but with some patience and work you can back those out by looking at the next section (under XLA Ops).
-3. **trace_viewer** shows you the actual trace of operations as a big timeline. It takes a long time to load.
+2. `op_profile` groups time by operation type.
+3. `trace_viewer` displays the operation timeline and can be slow for large traces.
 
 ## Interpreting JAX terms in profiles
 

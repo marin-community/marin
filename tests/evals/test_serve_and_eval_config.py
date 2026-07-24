@@ -22,6 +22,7 @@ from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
     EvalUnit,
     ServedEndpoint,
+    _auto_serve_overrides_from_config,
     _client_config_json,
 )
 
@@ -161,6 +162,44 @@ def test_model_args_carry_served_max_length():
     args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False, 4096).split(","))
     assert args["max_length"] == "4096"
     assert args["tokenized_requests"] == "False"
+
+
+def test_auto_overrides_clamps_context_and_leaves_plain_model_alone():
+    # A vanilla dense model needs no derived vLLM flags, and max_model_len clamps down to the model's
+    # own context so lm-eval never asks for more window than the checkpoint was trained for.
+    config = {"architectures": ["Qwen3ForCausalLM"], "max_position_embeddings": 8192}
+    extra_args, max_model_len = _auto_serve_overrides_from_config("Qwen/Qwen3-1.7B", config, 40960, ())
+    assert extra_args == ()
+    assert max_model_len == 8192
+
+
+def test_auto_overrides_derives_gdn_and_vision_flags():
+    # A linear-attention (GDN) multimodal checkpoint needs the triton prefill backend and, since these
+    # evals are text-only, an explicit zero multimodal limit so vLLM does not reserve image/video slots.
+    config = {
+        "architectures": ["Qwen3NextForConditionalGeneration"],
+        "vision_config": {"depth": 24},
+        "text_config": {"max_position_embeddings": 262144},
+    }
+    extra_args, max_model_len = _auto_serve_overrides_from_config("Qwen/Qwen3-Next-Thinking", config, 32768, ())
+    assert "--gdn-prefill-backend" in extra_args
+    assert extra_args[extra_args.index("--gdn-prefill-backend") + 1] == "triton"
+    assert "--limit-mm-per-prompt" in extra_args
+    assert "--reasoning-parser" in extra_args
+    # The nested text_config context wins, and 32768 is already below it, so the cap is left untouched.
+    assert max_model_len == 32768
+
+
+def test_auto_overrides_never_overrides_explicit_flags():
+    # An explicitly configured backend must win over the derived default; the merge only fills gaps.
+    # The org/model name is deliberately non-Qwen so only the GDN rule (via architecture) fires.
+    config = {"architectures": ["Qwen3NextForCausalLM"], "max_position_embeddings": 262144}
+    existing = ("--gdn-prefill-backend", "cuda")
+    extra_args, _ = _auto_serve_overrides_from_config("org/gdn-model", config, None, existing)
+    assert extra_args == existing
+    # A None cap stays None: vLLM then falls back to the model's own default context.
+    _, max_model_len = _auto_serve_overrides_from_config("org/gdn-model", config, None, ())
+    assert max_model_len is None
 
 
 def _write_results(local_out: str, results: dict) -> None:

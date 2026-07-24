@@ -12,10 +12,11 @@ concurrency:
 permissions:
   contents: read
 
-# cargo fmt/clippy/test over the single top-level rust/ workspace, plus a guard that
-# no rust dev-mode source leaked into a committed pyproject. The `changes` job always
-# runs so the downstream jobs report a status on every PR (a workflow-level `paths:`
-# filter would leave a required check pending forever on non-matching PRs).
+# cargo fmt/clippy/test over the single top-level rust/ workspace (the finelog,
+# dupekit, and iris crates), plus a guard that no rust dev-mode source leaked into a
+# committed pyproject. The `changes` job always runs so the downstream jobs report a
+# status on every PR (a workflow-level `paths:` filter would leave a required check
+# pending forever on non-matching PRs).
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -40,6 +41,7 @@ jobs:
               - 'pyproject.toml'
               - 'lib/dupekit/pyproject.toml'
               - 'lib/finelog/pyproject.toml'
+              - 'lib/iris/pyproject.toml'
               - 'scripts/rust_mode.py'
 
   check-user-mode:
@@ -51,10 +53,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Ensure pyprojects are in user mode
         run: |
-          # A committed path source for either native package means 'rust_mode.py dev'
+          # A committed path source for any native package means 'rust_mode.py dev'
           # leaked into a commit. CI flips to dev mode transiently for source-build test
           # legs, but that flip must never be committed.
-          if grep -qE 'marin-(dupekit-native|finelog-server) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml; then
+          if grep -qE 'marin-(dupekit-native|finelog-server|iris-native) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml lib/iris/pyproject.toml; then
             echo "ERROR: a pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi
@@ -63,7 +65,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable

@@ -74,6 +74,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_PRODUCTION,
     K8sResource,
     KubectlError,
+    parse_k8s_cpu,
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
@@ -1581,10 +1582,8 @@ def _node_status_summary(node: dict) -> str:
 
 
 def _node_cpu_millicores(node: dict) -> int:
-    allocatable = node.get("status", {}).get("allocatable", {})
-    cpu_str = str(allocatable.get("cpu", "0"))
-    cpu_val = parse_k8s_quantity(cpu_str)
-    return cpu_val if cpu_str.endswith("m") else cpu_val * 1000
+    cpu_str = str(node.get("status", {}).get("allocatable", {}).get("cpu", "0"))
+    return parse_k8s_cpu(cpu_str)
 
 
 def _node_memory_bytes(node: dict) -> int:

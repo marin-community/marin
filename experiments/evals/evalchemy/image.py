@@ -8,8 +8,8 @@ live in the source tree and its declared deps fight the base image's pins), so i
 container rather than a wheel — see ``docker/evalchemy-tpu/Dockerfile``. The eval client hits a
 served OpenAI URL (``eval.eval --model local-completions``), so it needs none of the image's
 vLLM/TPU stack and runs on a CPU slice; making the fork ``uvx``-installable to drop the container is
-tracked in #7270. Both the composable eval path (``serve_and_eval``) and the standalone launcher
-(``marin_evalchemy_tpu``) reference the image through these constants so the pin lives in one place.
+tracked in #7270. The composable eval path (``serve_and_eval``) references the image through these
+constants so the pin lives in one place.
 """
 
 import os

@@ -46,23 +46,6 @@ _DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
     "output_cost_per_token": 0.0,
 }
 
-HARBOR_EVAL_ENV_KEYS = (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
-    "HF_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "DAYTONA_API_KEY",
-    "E2B_API_KEY",
-    "MODAL_API_KEY",
-    "TPU_CI",
-    "MARIN_PREFIX",
-    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-    "VLLM_TPU_SKIP_PRECOMPILE",
-)
-
 
 def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     """Return a Harbor-safe canonical name for `hosted_vllm/<canonical>`.
@@ -84,15 +67,6 @@ def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
         candidate = f"model_{digest}"
 
     return candidate
-
-
-def env_vars_from_keys(keys: list[str] | tuple[str, ...]) -> dict[str, str]:
-    env_vars: dict[str, str] = {}
-    for key in keys:
-        value = os.environ.get(key)
-        if value:
-            env_vars[key] = value
-    return env_vars
 
 
 def _generate_stable_job_name(dataset: str, version: str, model_name: str, agent: str, task_limit: int | None) -> str:

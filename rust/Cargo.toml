@@ -9,25 +9,34 @@ members = [
     "finelog",         # finelog server lib + `finelog-server` binary
     "finelog-pyext",   # cdylib -> finelog_server -> marin-finelog-server
     "dupekit-pyext",   # cdylib -> dupekit_native -> marin-dupekit-native
+    "iris-proxy",      # iris controller endpoint-proxy dataplane lib
+    "iris-pyext",      # cdylib -> iris_native -> marin-iris-native
     # crates/marin-jwt (shared EdDSA/JWT verify) is added when it is extracted.
 ]
 
 # A dependency belongs here only when more than one member uses it: it is declared
-# once and inherited with `<dep>.workspace = true`. Today only pyo3 qualifies —
-# both `*-pyext` crates build against it — and it MUST be one version because it
-# carries `links = "python"`, so a workspace-wide `cargo build`/`cargo test` cannot
-# contain two pyo3 versions. That version is coupled to arrow: dupekit's `pyarrow`
-# feature pulls `arrow-pyarrow`, which pins pyo3 (arrow 58 -> pyo3 0.28), so
-# unifying pyo3 also fixes dupekit's arrow at 58 — the version finelog already uses.
+# once and inherited with `<dep>.workspace = true`. pyo3 MUST be one version because
+# it carries `links = "python"`, so a workspace-wide `cargo build`/`cargo test`
+# cannot contain two pyo3 versions (all three `*-pyext` crates build against it).
+# That version is coupled to arrow: dupekit's `pyarrow` feature pulls `arrow-pyarrow`,
+# which pins pyo3 (arrow 59 -> pyo3 0.29), so the workspace pyo3 and dupekit's arrow
+# move together.
 #
-# arrow and parquet themselves stay declared per-member: finelog wants arrow's
-# default features while dupekit's wheel wants a minimal `default-features = false`
-# build, and workspace inheritance cannot express both. The single Cargo.lock still
-# pins each to one version. jsonwebtoken and serde live inline in finelog, their
-# only consumer; jsonwebtoken moves here when the shared marin-jwt crate is
-# extracted and gives it a second consumer.
+# jsonwebtoken/axum/serde are shared by finelog and iris (both terminate authed
+# ingress: finelog/src/server/auth.rs and iris-proxy/src/auth.rs verify EdDSA JWTs
+# with the same jsonwebtoken build). One pin keeps that verification consistent — the
+# groundwork for extracting the shared marin-jwt crate.
+#
+# arrow and parquet stay per-member and, for now, at two majors: dupekit's kernels
+# are on arrow 59 (whose arrow-pyarrow matches pyo3 0.29), while finelog's datafusion
+# 53 stack still requires arrow 58 — no datafusion release ships arrow 59 yet. The two
+# compile into different wheels and never share arrow objects, so the duplicate is
+# contained; it collapses to one major once datafusion catches up to arrow 59.
 [workspace.dependencies]
-pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
 
 # Thin LTO + parallel codegen: within ~1% of fat-LTO runtime at a fraction of the
 # link time. Profiles are only honored at the workspace root, so they live here

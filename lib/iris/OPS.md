@@ -65,6 +65,15 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
+Restarts default to the fast Rust profile, which skips LTO and reduces native link time, and amd64+arm64 images. For an amd64-only dev cluster:
+
+```bash
+iris --cluster=marin-dev cluster controller restart \
+  --image-platform linux/amd64
+```
+
+Pass `--cargo-profile release` for an LTO build. Keep the default multi-platform build when the deployed cluster needs arm64 images.
+
 **Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
 
 **A failed SSH leg aborts the restart safely.** On a GCE cluster the restart drives the VM over `gcloud compute ssh --tunnel-through-iap`; if that SSH fails (it retries 3×), the CLI prints `Rollback restart failed: Command failed after 3 attempts: SSH exit code 255` and exits — but the running controller was never touched. Confirm with `iris cluster status`: the old version still healthy means nothing deployed and nothing needs rolling back; fix SSH and retry the restart.

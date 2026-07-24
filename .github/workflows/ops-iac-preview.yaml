@@ -1,0 +1,98 @@
+name: "Ops - IaC preview"
+
+# Posts `pulumi preview` for each affected infra/pulumi (marin-iac) stack as a PR comment.
+# Also runnable via workflow_dispatch (e.g. to check for drift outside a PR)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "infra/pulumi/**"
+      - "lib/iris/config/**"
+      - ".github/workflows/ops-iac-preview.yaml"
+      - ".github/actions/pulumi-preview/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PULUMI_CI_SERVICE_ACCOUNT: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+  PULUMI_CI_PROJECT: hai-gcp-models
+
+jobs:
+  preview-coreweave:
+    # Fork PRs can't reach repo secrets (WIF, kubeconfig); skip rather than fail.
+    # Manual dispatch has no PR to check and is already gated to repo collaborators by GitHub.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    concurrency:
+      group: iac-preview-${{ matrix.stack }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [cw-rno2a, cw-us-east-02a, cw-us-east-08a, cw-us-west-04a]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+
+      # Required for TraefikAddon's Traefik/cert-manager Releases to resolve their charts
+      # during `pulumi preview` — see infra/pulumi/README.md's Prerequisites.
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Add CoreWeave Helm repo
+        run: |
+          helm repo add coreweave https://charts.core-services.ingress.coreweave.com
+          helm repo update coreweave
+
+      - name: Preview ${{ matrix.stack }}
+        uses: ./.github/actions/pulumi-preview
+        with:
+          stack: ${{ matrix.stack }}
+          work-dir: infra/pulumi
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-on-pr: ${{ github.event_name == 'pull_request' }}
+
+  preview-gcp:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    concurrency:
+      group: iac-preview-marin-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Preview marin
+        uses: ./.github/actions/pulumi-preview
+        with:
+          stack: marin
+          work-dir: infra/pulumi
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-on-pr: ${{ github.event_name == 'pull_request' }}
+          # The live GCP resources predate this empty stack. Show their adoption diff instead
+          # of reporting creates that would fail because the names already exist. Remove this
+          # after the first successful `pulumi up` adopts the six resources into the marin stack.
+          config-map: '{"marin-iac:import": {"value": "true"}}'

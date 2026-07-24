@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -57,6 +57,7 @@ class SampleKind(StrEnum):
 
     MULTIPLE_CHOICE = "multiple_choice"
     GENERATION = "generation"
+    AGENTIC = "agentic"
 
 
 class Message(BaseModel):
@@ -75,13 +76,36 @@ class Choice(BaseModel):
     is_greedy: bool | None = None
 
 
+class Grading(BaseModel):
+    """How one prediction was scored, made explicit so the UI can show *why* a sample is (in)correct.
+
+    ``method`` names the grader: ``lm-eval:<metric>`` for a harness metric, ``harbor:<verifier>`` for a
+    Harbor trial's verifier, ``judge:<model>`` for an LLM judge. ``metric`` is the full headline key
+    (with lm-eval's ``,<filter>`` suffix), ``filter`` the extraction filter that produced it, ``score``
+    its value, and ``passed`` whether it cleared the pass threshold. ``detail`` carries the grader's raw
+    output verbatim (the verifier/judge JSON) as the escape hatch for anything the fields do not.
+    """
+
+    method: str
+    metric: str | None = None
+    filter: str | None = None
+    score: float | None = None
+    passed: bool | None = None
+    detail: str = "{}"
+
+
 class EvalSample(BaseModel):
     """One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 
     ``prompt_text`` and ``prompt_messages`` are mutually exclusive; ``choices``/``model_choice``/
     ``target_choice`` are set for ``multiple_choice`` samples, ``output``/``extracted`` for
-    ``generation`` samples. ``doc`` is the source dataset row as a JSON string, kept verbatim as the
-    escape hatch for anything the normalized fields do not carry.
+    ``generation`` samples, and ``trajectory_uri`` for ``agentic`` (Harbor) samples. ``grading`` makes
+    the scoring decision explicit for the UI. ``doc`` is the source dataset row as a JSON string, kept
+    verbatim as the escape hatch for anything the normalized fields do not carry.
+
+    Rows stay bounded: the two unbounded payloads (an agentic trajectory, a prediction's raw
+    request/response exchange) are stored as sibling artifact files and referenced here by URI, so the
+    columnar reader never has to materialize them to page the light columns.
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -96,6 +120,9 @@ class EvalSample(BaseModel):
     output: str | None = None
     extracted: str | None = None
     target_text: str | None = None
+    trajectory_uri: str | None = None
+    exchange_uri: str | None = None
+    grading: Grading | None = None
     metrics: dict[str, float] = {}
     correct: bool | None = None
     doc: str = "{}"
@@ -225,6 +252,22 @@ def _correct(metrics: dict[str, float]) -> bool | None:
     return picked[1] >= 1.0
 
 
+def _lm_eval_grading(metrics: dict[str, float]) -> Grading | None:
+    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag."""
+    picked = primary_metric(metrics)
+    if picked is None:
+        return None
+    name, value = picked
+    metric_filter = name.split(",", 1)[1] if "," in name else None
+    return Grading(
+        method=f"lm-eval:{base_metric(name)}",
+        metric=name,
+        filter=metric_filter,
+        score=value,
+        passed=value >= 1.0,
+    )
+
+
 def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
 
@@ -244,6 +287,7 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
         "doc_id": str(raw.get("doc_id")),
         "metrics": metrics,
         "correct": _correct(metrics),
+        "grading": _lm_eval_grading(metrics),
         "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
         "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
     }

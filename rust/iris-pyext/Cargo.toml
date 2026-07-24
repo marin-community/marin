@@ -1,0 +1,15 @@
+[package]
+name = "iris-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "iris_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-proxy = { path = "../iris-proxy" }
+pyo3.workspace = true
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tracing = "0.1"

@@ -563,6 +563,17 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         )
         return JSONResponse(payload.model_dump(mode="json"))
 
+    async def api_run_samples_artifact(request: Request) -> JSONResponse:
+        params = request.query_params
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        uri = params.get("uri")
+        if not uri:
+            return JSONResponse({"error": "uri is required"}, status_code=400)
+        payload = await asyncio.to_thread(samples.fetch_artifact, record.get("results_path"), uri)
+        return JSONResponse(payload.model_dump(mode="json"))
+
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]
         record = await asyncio.to_thread(store.get_record, run_id)
@@ -626,6 +637,7 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         Route("/api/runs/{run_id:str}/jobs", api_run_jobs),
         Route("/api/runs/{run_id:str}/logs", api_run_logs),
         Route("/api/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
+        Route("/api/runs/{run_id:str}/samples/artifact", api_run_samples_artifact),
         Route("/api/runs/{run_id:str}/samples", api_run_samples),
         Route("/api/runs/{run_id:str}/group", api_run_group),
         Route("/api/runs/{run_id:str}", api_run_detail),

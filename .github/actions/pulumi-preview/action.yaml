@@ -1,0 +1,66 @@
+name: "Pulumi preview"
+description: "Preview a stack against the shared iac backend and post the plan as a PR comment: GCP auth, then pulumi preview."
+
+inputs:
+  stack:
+    description: "Pulumi stack name (e.g. cw-us-east-02a, marin-grafana)."
+    required: true
+  work-dir:
+    description: "Directory holding the Pulumi.yaml (e.g. infra/pulumi)."
+    required: true
+  service-account:
+    description: "GCP service account impersonated through Workload Identity Federation."
+    required: true
+  workload-identity-provider:
+    description: "GCP workload identity provider resource name."
+    default: "projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc"
+  gcp-project-id:
+    description: "GCP project id."
+    required: true
+  github-token:
+    description: "Token used to post/update the preview comment on the PR (needs pull-requests: write)."
+    required: true
+  uv-sync-args:
+    description: "Arguments for the venv sync (stacks whose program imports more than iac widen this)."
+    default: "--package marin-iac --extra deploy --frozen"
+  comment-on-pr:
+    description: "Post/update the preview as a PR comment. Set false for non-PR triggers (e.g. workflow_dispatch), which have no PR to comment on."
+    default: "true"
+  config-map:
+    description: "Optional pulumi/actions config-map JSON applied before preview."
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.service-account }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Sync the iac venv
+      shell: bash
+      run: uv sync ${{ inputs.uv-sync-args }}
+
+    - name: Preview the stack
+      uses: pulumi/actions@v6
+      env:
+        # infra/pulumi's plain `runtime: python` (no `virtualenv:` option) resolves `python3`
+        # from PATH, which `uv sync` above does not add to this step's PATH — without this,
+        # Pulumi runs the program under the runner's system Python and fails with
+        # `ModuleNotFoundError: No module named 'pulumi'` instead of previewing.
+        PULUMI_PYTHON_CMD: ${{ github.workspace }}/.venv/bin/python
+      with:
+        command: preview
+        stack-name: ${{ inputs.stack }}
+        work-dir: ${{ inputs.work-dir }}
+        cloud-url: gs://marin-iac-state
+        diff: true
+        config-map: ${{ inputs.config-map }}
+        comment-on-pr: ${{ inputs.comment-on-pr }}
+        github-token: ${{ inputs.github-token }}

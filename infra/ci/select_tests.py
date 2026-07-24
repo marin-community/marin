@@ -112,6 +112,7 @@ MIN_FILES_PER_SHARD = 15
 NATIVE_CRATE_DIRS: dict[str, list[str]] = {
     "dupekit": ["rust/dupekit-pyext"],
     "finelog": ["rust/finelog", "rust/finelog-pyext"],
+    "iris": ["rust/iris-proxy", "rust/iris-pyext"],
 }
 # Shared internal crates under rust/crates/ → the scopes that must source-build on a
 # change. Empty until the first shared crate is extracted; e.g. extracting marin-jwt

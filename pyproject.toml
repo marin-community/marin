@@ -146,7 +146,8 @@ members = [
 # maturin project dirs so uv treats them as external path deps, not members.
 #   - rust/finelog-pyext -> marin-finelog-server (module `finelog_server`)
 #   - rust/dupekit-pyext -> marin-dupekit-native  (module `dupekit_native`)
-exclude = ["rust/finelog-pyext", "rust/dupekit-pyext"]
+#   - rust/iris-pyext    -> marin-iris-native     (module `iris_native`)
+exclude = ["rust/finelog-pyext", "rust/dupekit-pyext", "rust/iris-pyext"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -374,7 +375,6 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",

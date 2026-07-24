@@ -23,6 +23,8 @@ from iac.config import (
     GcpRemoteRepositorySpec,
 )
 
+DOCKER_HUB_URI = "https://registry-1.docker.io"
+
 
 @dataclass(frozen=True)
 class GcpArtifactRegistriesArgs:
@@ -38,20 +40,12 @@ def _import_id(project: str, location: str, repo_name: str) -> str:
     return f"projects/{project}/locations/{location}/repositories/{repo_name}"
 
 
-def _remote_config(spec: GcpRemoteRepositorySpec) -> gcp.artifactregistry.RepositoryRemoteRepositoryConfigArgs:
-    """Build the Docker upstream config: GCP's predefined Docker Hub, or a custom registry URI."""
-    if spec.docker_upstream == DOCKER_HUB_UPSTREAM:
-        docker = gcp.artifactregistry.RepositoryRemoteRepositoryConfigDockerRepositoryArgs(
-            public_repository="DOCKER_HUB"
-        )
-    else:
-        docker = gcp.artifactregistry.RepositoryRemoteRepositoryConfigDockerRepositoryArgs(
-            custom_repository=gcp.artifactregistry.RepositoryRemoteRepositoryConfigDockerRepositoryCustomRepositoryArgs(
-                uri=spec.docker_upstream
-            )
-        )
+def remote_repository_config(
+    spec: GcpRemoteRepositorySpec,
+) -> gcp.artifactregistry.RepositoryRemoteRepositoryConfigArgs:
+    upstream_uri = DOCKER_HUB_URI if spec.docker_upstream == DOCKER_HUB_UPSTREAM else spec.docker_upstream
     return gcp.artifactregistry.RepositoryRemoteRepositoryConfigArgs(
-        description=spec.description or None, docker_repository=docker
+        common_repository=gcp.artifactregistry.RepositoryRemoteRepositoryConfigCommonRepositoryArgs(uri=upstream_uri)
     )
 
 
@@ -92,7 +86,7 @@ class GcpArtifactRegistries(pulumi.ComponentResource):
                     format="DOCKER",
                     mode="REMOTE_REPOSITORY",
                     description=spec.description or None,
-                    remote_repository_config=_remote_config(spec),
+                    remote_repository_config=remote_repository_config(spec),
                     cleanup_policies=[_cleanup_policy(p) for p in spec.cleanup_policies],
                     # Enforce the policies (actually delete), not just report a dry-run plan.
                     cleanup_policy_dry_run=False,

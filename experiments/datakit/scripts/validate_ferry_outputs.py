@@ -7,12 +7,15 @@ Run after the iris job for the datakit smoke ferry has completed.
 ``MARIN_PREFIX`` must be set to the GCS prefix the ferry wrote to
 (read from ``ferry_run_status.json`` by the workflow).
 
-Checks the full pipeline chain:
+Checks the persisted output invariants:
   download (14 files, ~9.7M rows)
   → normalize (106 files under outputs/main, ~9.3M rows)
   → fuzzy_dups (106 cluster-member attr files per source)
   → consolidate (106 files, normalize - non_canonical rows)
   → tokenize (cache ledger rows == consolidate rows)
+
+Successful ferry completion covers the minhash step, which has no additional
+invariant in this validator.
 """
 
 import logging
