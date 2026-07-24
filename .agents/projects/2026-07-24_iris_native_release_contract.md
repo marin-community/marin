@@ -24,16 +24,18 @@ would permanently identify a commit that is not an ancestor of `main`.
 ## Current state
 
 - PyPI stable: `marin-iris-native==0.1.0`.
-- Latest published nightly:
-  `marin-iris-native==0.1.1.dev202607240809`.
-- `lib/iris/pyproject.toml` currently accepts
-  `marin-iris-native >= 0.1.0.dev0`.
-- The root `uv.lock` currently selects `0.1.0`.
+- PR #7598 nightly:
+  `marin-iris-native==0.1.1.dev202607241746`, published from rebased commit
+  `db5ef9411c`.
+- Before this PR's dependency update, `lib/iris/pyproject.toml` accepted
+  `marin-iris-native >= 0.1.0.dev0` and the root `uv.lock` selected `0.1.0`.
 - PR #7598 requires the new `NativeProxy.rpc_metrics_json` property, so allowing
   or locking `0.1.0` is not valid after this PR merges.
 
-The nightly already on PyPI predates PR #7598. A new nightly must be built from
-the rebased PR head before its dependency floor and lockfile are updated.
+Release workflow run
+[#30114319841](https://github.com/marin-community/marin/actions/runs/30114319841)
+published the PR nightly for macOS arm64, Linux x86_64, and Linux aarch64,
+plus its source distribution.
 
 ## Why the two-stage release is preferable
 
@@ -66,7 +68,7 @@ replaces it.
 5. Set the Iris dependency floor to that exact nightly and run:
 
    ```bash
-   uv lock -U marin-iris-native
+   uv lock --upgrade-package marin-iris-native
    uv sync --all-packages
    ```
 
