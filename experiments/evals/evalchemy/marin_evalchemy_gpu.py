@@ -192,7 +192,10 @@ def _grug_profile(model: str) -> dict:
         # revision lets vLLM consume the checkpoint's own metadata; do not keep a
         # separately fetched template as a second, drift-prone source of truth.
         "revision": "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
-        "tokenizer": "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
+        # Keep the tokenizer in the model repository.  The tokenizer-only
+        # companion repo has a different commit history, so a model metadata
+        # revision is not a valid --tokenizer-revision there.
+        "tokenizer": model,
         # Grug MoE expert-parallel serve.  vLLM loads both model and tokenizer
         # metadata at the same repaired immutable revision.
         # ``distributed`` was a RunAI-streamer loader option. The canonical local-weight path
@@ -361,8 +364,8 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
 
 def main() -> None:
     model = os.environ.get("EVAL_MODEL", "Qwen/Qwen3-30B-A3B-Thinking-2507")
-    # grug thinking: default to the sanitized -tok tokenizer (the model dir's own tokenizer also works,
-    # but the -tok repo is the proven sanitized PreTrainedTokenizerFast). EVAL_TOKENIZER overrides.
+    # Grug defaults to the model repository's tokenizer so its immutable revision
+    # covers the template, generation config, and tokenizer together.
     tokenizer = os.environ.get("EVAL_TOKENIZER") or _grug_profile(model).get("tokenizer") or model
     tier = int(os.environ.get("EVAL_TIER", "1"))
     suffix = os.environ.get("EVAL_JOB_SUFFIX", "")

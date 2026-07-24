@@ -204,6 +204,7 @@ def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving
     )
     assert "--model-loader-extra-config" not in args
     assert profile["revision"] == "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b"
+    assert profile["tokenizer"] == model
 
     # The repaired checkpoint embeds the authoritative Delphi template.  The
     # default must not copy a second template into the serve config.
