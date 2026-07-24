@@ -20,14 +20,14 @@ import logging
 import os
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
 from marin.evaluation.config_artifacts import HARBOR_CONFIG
-from marin.evaluation.harbor_config import HarborRuntime, resolve_harbor_config
+from marin.evaluation.harbor_config import HarborRuntimeBinding, ResolvedHarborPolicy
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 
@@ -47,24 +47,11 @@ _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 @dataclass(frozen=True)
-class HarborRunConfig:
-    """One Harbor eval of one served model."""
+class HarborEndpoint:
+    """The only Harbor runner input unavailable before the endpoint is live."""
 
-    dataset: str
-    version: str
-    agent: str
     served_model_name: str
-    """The name the model is served under (slash-free); the agent calls ``hosted_vllm/<name>``."""
     api_base: str
-    """OpenAI base URL the Harbor agent calls (the in-cluster endpoint, or a minted capability URL)."""
-    env: str = "daytona"
-    n_concurrent: int = 4
-    max_output_tokens: int = 8192
-    task_limit: int | None = None
-    agent_kwargs: dict = field(default_factory=dict)
-    preset: str = "standard"
-    config_document: dict | None = None
-    config_patch: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -111,11 +98,11 @@ def canonical_served_name(name: str) -> str:
     return candidate
 
 
-def _job_name(config: HarborRunConfig) -> str:
+def _job_name(policy: ResolvedHarborPolicy, endpoint: HarborEndpoint) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
-    key = f"{config.dataset}|{config.version}|{config.served_model_name}|{config.agent}|{config.task_limit}"
+    key = f"{policy.sha256}|{endpoint.served_model_name}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", policy.dataset)[:32]
     return f"harbor_{safe}_{digest}"
 
 
@@ -240,15 +227,14 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
             upload_to_gcs(str(trial_dir), prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
 
 
-def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
-    """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
+def run_harbor_eval(policy: ResolvedHarborPolicy, endpoint: HarborEndpoint, out_path: str) -> HarborRunResult:
+    """Run one complete Harbor policy against a live endpoint and write normalized outputs.
 
-    Serving is the caller's job: ``config.api_base`` already points at a live endpoint. Harbor runs as
-    an isolated subprocess (see :mod:`marin.evaluation.harbor_trial_driver`); this resumes any
-    completed trials it finds under ``out_path`` first, then reads Harbor's native trial files back and
-    writes the per-sample parquet plus the aggregate for the record.
+    Policy fields never flow through this runner one by one. It binds only the endpoint and generated
+    job location into an already resolved Harbor document, then executes that document in Harbor's
+    isolated runtime.
     """
-    job_name = _job_name(config)
+    job_name = _job_name(policy, endpoint)
     workdir = Path("/tmp/harbor_workdir") / job_name
     output_dir = workdir / "harbor_results"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -259,24 +245,13 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, out_path)
 
-    resolved = resolve_harbor_config(
-        preset=config.preset,
-        n_concurrent=config.n_concurrent,
-        agent=config.agent,
-        environment=config.env,
-        default_max_output_tokens=config.max_output_tokens,
-        agent_kwargs=config.agent_kwargs,
-        runtime=HarborRuntime(
+    resolved = policy.bind(
+        HarborRuntimeBinding(
             job_name=job_name,
             jobs_dir=str(output_dir),
-            dataset=config.dataset,
-            version=config.version,
-            task_limit=config.task_limit,
-            served_model_name=config.served_model_name,
-            api_base=config.api_base,
-        ),
-        document=config.config_document,
-        patch=config.config_patch,
+            served_model_name=endpoint.served_model_name,
+            api_base=endpoint.api_base,
+        )
     )
     driver_config = {"job_config": resolved.document}
     config_file = workdir / "driver_config.json"
@@ -286,14 +261,14 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
         json.dumps(resolved.persisted_metadata(), indent=2, sort_keys=True)
     )
 
-    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, config.dataset, config.env)
+    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, policy.dataset, policy.environment)
     _run_driver(config_file)
 
     trials = _read_trials(job_dir)
     if is_remote_path(out_path):
         _upload_trials(job_dir, out_path)
-    samples_path = _write_samples(trials, config.dataset, out_path)
-    result = _aggregate(trials, config.dataset, samples_path)
+    samples_path = _write_samples(trials, policy.dataset, out_path)
+    result = _aggregate(trials, policy.dataset, samples_path)
     StoragePath(prefix_join(out_path, "harbor_result.json")).write_text(
         json.dumps(
             {
@@ -308,7 +283,7 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
     )
     logger.info(
         "Harbor %s: %d/%d solved (accuracy=%.3f mean_reward=%.3f)",
-        config.dataset,
+        policy.dataset,
         result.solved_trials,
         result.total_trials,
         result.accuracy,

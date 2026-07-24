@@ -31,7 +31,8 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.eval_result import EvalchemyResult
-from marin.evaluation.harbor_runner import HarborRunConfig, canonical_served_name, run_harbor_eval
+from marin.evaluation.harbor_config import HarborPolicyDefaults, ResolvedHarborPolicy, resolve_harbor_policy
+from marin.evaluation.harbor_runner import HarborEndpoint, canonical_served_name, run_harbor_eval
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
@@ -62,7 +63,7 @@ from experiments.evals.evalchemy.serve_and_eval import (
     run_eval_units,
     serve_model,
 )
-from experiments.evaluation.evals import EVALS, EvalMechanism, EvalSuiteConfig, HarborSpec
+from experiments.evaluation.evals import EVALS, EvalMechanism, EvalSuiteConfig
 from experiments.evaluation.hardware import AcceleratorChoice, Platform, select_accelerator
 from experiments.evaluation.models import MODELS, EvalModelConfig
 
@@ -84,8 +85,8 @@ _ORCHESTRATOR_DISK = "16g"
 class EvalRunParams:
     """One recorded eval within a group: its identity, its durable results path, and its mechanism.
 
-    Exactly one of ``unit`` (evalchemy) or ``harbor`` (Harbor) is set; ``limit`` caps the run's
-    instances for either mechanism.
+    Exactly one of ``unit`` (evalchemy) or ``harbor_policy`` (Harbor) is set. Each mechanism carries
+    its own resolved policy instead of reconstructing a third copy of its schema in this launcher.
     """
 
     run_id: str
@@ -93,10 +94,7 @@ class EvalRunParams:
     out_path: str
     eval_ref: EvalRef
     unit: EvalUnit | None = None
-    harbor: HarborSpec | None = None
-    limit: int | None = None
-    harbor_config_document: dict | None = None
-    harbor_config_patch: dict | None = None
+    harbor_policy: ResolvedHarborPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -169,7 +167,7 @@ def run_eval_group(params: EvalGroupParams) -> list[str]:
     orchestrator job itself fails at the end if any eval failed.
     """
     configure_coreweave_s3()
-    if any(run.harbor is not None for run in params.runs):
+    if any(run.harbor_policy is not None for run in params.runs):
         return _run_harbor_group(params)
     base_jobs = {"orchestrator": str(iris_ctx().job_id)}
     units = [run.unit for run in params.runs if run.unit is not None]
@@ -248,26 +246,16 @@ def _run_harbor_group(params: EvalGroupParams) -> list[str]:
             api_base = _harbor_api_base(endpoint, params.mint_origin)
             serve_jobs = {"serve": endpoint.job}
             for run in params.runs:
-                assert run.harbor is not None
+                assert run.harbor_policy is not None
                 status = RunStatus.SUCCEEDED
                 error: str | None = None
                 metrics: dict[str, dict[str, float]] = {}
                 try:
                     result = run_harbor_eval(
-                        HarborRunConfig(
-                            dataset=run.harbor.dataset,
-                            version=run.harbor.version,
-                            agent=run.harbor.agent,
+                        run.harbor_policy,
+                        HarborEndpoint(
                             served_model_name=served_name,
                             api_base=api_base,
-                            env=run.harbor.env,
-                            n_concurrent=run.harbor.n_concurrent,
-                            max_output_tokens=run.harbor.max_output_tokens,
-                            task_limit=run.limit,
-                            agent_kwargs=dict(run.harbor.agent_kwargs),
-                            preset=run.harbor.preset,
-                            config_document=run.harbor_config_document,
-                            config_patch=run.harbor_config_patch,
                         ),
                         run.out_path,
                     )
@@ -479,19 +467,44 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
         run_id = _run_id(plan.model_key, plan.eval_key)
         out_path = f"{records_prefix.rstrip('/')}/{run_id}/results"
         harbor = plan.suite.harbor
+        harbor_policy = (
+            resolve_harbor_policy(
+                HarborPolicyDefaults(
+                    dataset=harbor.dataset,
+                    version=harbor.version,
+                    agent=harbor.agent,
+                    environment=harbor.env,
+                    n_concurrent_trials=harbor.n_concurrent,
+                    max_output_tokens=harbor.max_output_tokens,
+                    agent_kwargs=harbor.agent_kwargs,
+                    task_limit=plan.suite.max_eval_instances,
+                    preset=harbor.preset,
+                ),
+                document=spec.harbor_config_document,
+                patch=spec.harbor_config_patch,
+                task_limit_override=spec.limit,
+            )
+            if harbor is not None
+            else None
+        )
         eval_ref = EvalRef(
             name=plan.suite.name,
             mechanism=plan.suite.mechanism.value,
             tasks=tuple(EvalTaskRef(name=t.name, num_fewshot=t.num_fewshot) for t in plan.suite.tasks),
             harbor=(
-                HarborRef(dataset=harbor.dataset, version=harbor.version, agent=harbor.agent, env=harbor.env)
-                if harbor is not None
+                HarborRef(
+                    dataset=harbor_policy.dataset,
+                    version=harbor_policy.version,
+                    agent=harbor_policy.agent,
+                    env=harbor_policy.environment,
+                )
+                if harbor_policy is not None
                 else None
             ),
         )
         unit = (
             None
-            if harbor is not None
+            if harbor_policy is not None
             else EvalUnit(
                 name=plan.eval_key,
                 tasks=plan.suite.tasks,
@@ -507,10 +520,7 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
                 out_path=out_path,
                 eval_ref=eval_ref,
                 unit=unit,
-                harbor=harbor,
-                limit=plan.limit,
-                harbor_config_document=spec.harbor_config_document,
-                harbor_config_patch=spec.harbor_config_patch,
+                harbor_policy=harbor_policy,
             )
         )
     if len({run.eval_ref.name for run in runs}) != len(runs):

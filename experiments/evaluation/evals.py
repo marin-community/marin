@@ -189,6 +189,19 @@ EVALS: dict[str, EvalSuiteConfig] = {
         harbor=HarborSpec(dataset="aime", version="1.0", n_concurrent=2),
         max_eval_instances=2,
     ),
+    "grug-opencode-id": EvalSuiteConfig(
+        name="grug-opencode-id",
+        mechanism=EvalMechanism.HARBOR,
+        harbor=HarborSpec(
+            dataset="DCAgent/dev_set_v2",
+            version="1.0",
+            agent="opencode",
+            env="daytona",
+            n_concurrent=256,
+            max_output_tokens=16384,
+            preset="grug-opencode-id",
+        ),
+    ),
 }
 
 # A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
