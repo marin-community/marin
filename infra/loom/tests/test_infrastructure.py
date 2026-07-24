@@ -11,6 +11,7 @@ import pytest
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    REPOSITORY_URL,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -104,6 +105,34 @@ def by_name(mocks: RecordingMocks, name: str) -> MockResourceArgs:
 
 def field(inputs: dict, snake: str, camel: str):
     return inputs.get(snake, inputs.get(camel))
+
+
+def test_pulumi_config_defaults_to_loom_repository_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOOM_SOURCE", raising=False)
+    pulumi.runtime.set_mocks(RecordingMocks(), project="marin-loom", stack="test", preview=False)
+    pulumi.runtime.set_all_config(
+        {
+            "gcp:project": "example",
+            "marin-loom:region": "us-central1",
+            "marin-loom:zone": "us-central1-a",
+            "marin-loom:domain": "loom.example.com",
+            "marin-loom:operatorCidr": "203.0.113.7/32",
+            "marin-loom:dnsZoneId": "cloudflare-zone",
+            "marin-loom:network": "default",
+            "marin-loom:instanceName": "loom",
+            "marin-loom:vmServiceAccountName": "loom-vm",
+            "marin-loom:machineType": "e2-highmem-4",
+            "marin-loom:bootDiskGb": "100",
+            "marin-loom:dataDiskGb": "500",
+            "marin-loom:dotenvSecretVersion": "3",
+            "marin-loom:snapshotRetentionDays": "14",
+        }
+    )
+
+    try:
+        assert DeploymentConfig.from_pulumi().source_path == REPOSITORY_URL
+    finally:
+        pulumi.runtime.set_all_config({})
 
 
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:

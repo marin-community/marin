@@ -31,21 +31,25 @@ The local Docker builder must support `linux/amd64`.
 
 ## Deploy
 
-Set `LOOM_SOURCE` to the Loom worktree to build. Pulumi builds that tree during
-preview to catch image failures without pushing it. `pulumi up` rebuilds and
-pushes the image, places the provider-produced digest in VM metadata, and waits
-for `https://loom.oa.dev/api/ready` after activation.
+By default, Pulumi builds the HEAD of Loom's default branch during preview to
+catch image failures without pushing it. `pulumi up` rebuilds and pushes the
+image, places the provider-produced digest in VM metadata, and waits for
+`https://loom.oa.dev/api/ready` after activation.
 
 ```sh
-cd /path/to/loom
-export LOOM_SOURCE="$(git rev-parse --show-toplevel)"
 pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
 pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
 curl -fsS https://loom.oa.dev/api/ready
 ```
 
-The build includes tracked and untracked files allowed by the Loom worktree's
-`.dockerignore`. Review the local diff before deployment.
+Set `LOOM_SOURCE` to a Loom worktree to deploy local changes instead. The local
+build includes tracked and untracked files allowed by that worktree's
+`.dockerignore`; review its diff before deployment.
+
+```sh
+export LOOM_SOURCE=/path/to/loom
+pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
+```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
 startup unit mounts the persistent disk, reads one numbered `LOOM_DOTENV`

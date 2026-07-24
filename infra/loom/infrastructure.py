@@ -331,11 +331,12 @@ class DeploymentConfig:
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
         source_path = os.environ.get("LOOM_SOURCE")
-        if source_path is None:
-            raise ValueError("LOOM_SOURCE must point to the Loom worktree to build")
-        source = Path(source_path).expanduser().resolve()
-        if not (source / "Dockerfile").is_file():
-            raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {source}")
+        source = REPOSITORY_URL
+        if source_path is not None:
+            local_source = Path(source_path).expanduser().resolve()
+            if not (local_source / "Dockerfile").is_file():
+                raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {local_source}")
+            source = str(local_source)
         region = config.require("region")
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
@@ -368,7 +369,7 @@ class DeploymentConfig:
             domain=config.require("domain"),
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
-            source_path=str(source),
+            source_path=source,
             network=config.require("network"),
             instance_name=config.require("instanceName"),
             vm_service_account_name=config.require("vmServiceAccountName"),
