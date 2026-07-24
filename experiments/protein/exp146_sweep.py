@@ -5,14 +5,19 @@
 
 Runs exactly one explicit ``(model_size, epochs, lr, wd, batch_size, tpu, region)``
 point per invocation. External adaptive-sweep tooling owns point selection and dispatch.
-``SMOKE=yes`` launches a tiny identity-isolated run through the same data, model, and
-batch-fitting path.
+``SMOKE=yes`` launches a tiny identity-isolated run through the same data, model,
+batch-fitting, checkpointing, and eval path.
 
 The data recipe and token caches are identical to exp117. The production grid is exactly
 MarinFold issue #146: models ``{1.5B, 3B, 6B}``, batch sizes ``{64, 128, 256}``,
 learning rates ``{3.1623e-4, 1e-3, 3.1623e-3}``, weight decays
 ``{0.1, 0.2, 0.4, 0.8, 1.6}``, and epochs ``{2, 4, 8}``. The optimized metric is
 final-step ``eval/tokenized/contacts-v1-val/loss``.
+
+6B checkpointing note: 6B may need more TPU-worker host RAM during checkpoint
+serialization than the default resource request provides. We do not know yet whether
+this is always required; set ``TPU_RAM`` (for example ``448g``) to pass a
+resource-only RAM override through ``ResourceConfig.with_tpu``.
 
 Preview a point (builds and submits nothing)::
 
@@ -33,7 +38,7 @@ Launch one run (secrets come from the iris command, never the config)::
 
 Smoke-test one model/slice/region under an isolated identity. Point coordinates are
 optional in smoke mode but honored when supplied; ``SMOKE_STEPS`` overrides the step
-budget, and ``CORRECTION_FACTOR`` overrides the model-size/TPU-family batch estimate::
+budget::
 
     source ~/marin.env && uv run iris --cluster marin job run \
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \
@@ -95,21 +100,19 @@ WANDB_GROUP: str = "exp146-contacts-v1-model-size-tune"
 # W&B group, "smoke" tag, tiny cadence) so it never resumes or shares a run with a real point.
 SMOKE_RUN_PREFIX: str = "prot-exp146-smoke"
 SMOKE_WANDB_GROUP: str = "exp146-smoke"
-# Manual smoke identity token (not dated). Folded into the smoke run id so a re-run after a code
-# or recipe change gets a FRESH run + checkpoint path instead of resuming/merging the prior smoke
-# run of the same (point, region, tpu, correction_factor). Bump to fork a clean smoke run; the old
-# run and its checkpoints are left in place untouched.
+# Manual smoke identity token. Bump to fork a clean smoke run after a recipe/library change;
+# previous smoke runs and checkpoints are left in place untouched.
 SMOKE_VERSION: str = "v1"
-CALIBRATION_VERSION: str = "batchcal-tp1-bs1024-exp117fix-v1"
-CALIBRATION_BATCH_SIZE: int = 1024
-CALIBRATION_MODEL_SIZES: frozenset[str] = frozenset({"3b", "6b"})
-CALIBRATION_TPU_RAM_ENV: str = "CALIBRATION_TPU_RAM"
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
 # values override it.
 SMOKE_MODEL_SIZE_DEFAULT: str = "1_5b"
 SMOKE_POINT_DEFAULTS: tuple[int, float, float, int] = (1, 1e-3, 0.1, 128)
+
+# Optional resource-only host RAM override passed through ResourceConfig.with_tpu. This is
+# intentionally not part of run identity.
+TPU_RAM_ENV: str = "TPU_RAM"
 
 
 # --- Data (contacts-v1 documents, tokenized in-pipeline) ---------------------
@@ -194,12 +197,12 @@ NUM_EVALS_PER_EPOCH: int = 2
 WANDB_WATCH_CONFIG = WatchConfig(watch_targets=[], interval=0)
 
 # Batch-fit correction factors. The 1.5B row comes from exp117 calibration; the
-# 3B row and 6B/v6e were confirmed with representative calibration smoke runs
-# that exercised training, checkpointing, and eval. The 6B/v5p value is an
-# extrapolated guess from 3B/v5p and 6B/v6e because v5p capacity did not become
-# available for a full run. The 6B/v5e (v5litepod) value is not a viable
-# calibrated result: 6B still OOMed at TP=1 once per-device batch reached 1, so
-# correction-factor tuning alone cannot make that case representative.
+# 3B row was confirmed with representative calibration smoke runs. 6B/v6e reached
+# the representative milestones (training, permanent checkpoint, full eval) at 0.70,
+# though Iris did not terminal-succeed after container cleanup. The 6B/v5p value is
+# an extrapolated guess from 3B/v5p and 6B/v6e because v5p capacity did not become
+# available for a full run. The 6B/v5e (v5litepod) value is not a viable calibrated
+# result: 6B still OOMed at TP=1 once per-device batch reached 1.
 CORRECTION_FACTORS: dict[str, dict[str, float]] = {
     "1_5b": {"v5e": 0.50, "v6e": 0.30, "v5p": 0.45},
     "3b": {"v5e": 1.20, "v6e": 0.30, "v5p": 0.30},
@@ -334,9 +337,9 @@ def validate_sweep_point(point: Point) -> None:
         raise SystemExit(f"point is outside the MarinFold issue #146 grid: {', '.join(invalid)}")
 
 
-def validate_sweep_target(point: Point, tpu: str, correction_factor: float | None) -> None:
+def validate_sweep_target(point: Point, tpu: str) -> None:
     """Validate topology, model placement, and minimum microbatch memory."""
-    batch_fit(point, tpu, correction_factor)
+    batch_fit(point, tpu)
 
 
 def preview() -> bool:
@@ -347,21 +350,13 @@ def smoke() -> bool:
     return os.environ.get("SMOKE", "").strip().lower() in {"yes", "true", "1"}
 
 
-def calibration() -> bool:
-    return os.environ.get("CALIBRATION", "").strip().lower() in {"yes", "true", "1"}
-
-
-def calibration_tpu_ram() -> str | None:
-    """Optional calibration-only TPU host RAM override, e.g. ``192g``."""
-    if not calibration():
-        return None
-    ram = os.environ.get(CALIBRATION_TPU_RAM_ENV)
+def resource_ram() -> str | None:
+    """Optional TPU-worker host RAM override, e.g. ``448g``."""
+    ram = os.environ.get(TPU_RAM_ENV)
     if ram is None:
         return None
     ram = ram.strip()
-    if not ram:
-        return None
-    return ram
+    return ram or None
 
 
 def smoke_steps() -> int:
@@ -371,31 +366,12 @@ def smoke_steps() -> int:
     return steps
 
 
-def parse_correction_factor() -> float | None:
-    """Optional per-launch override of the batch-fit correction factor via the ``CORRECTION_FACTOR`` env.
-
-    ``None`` (env unset) means use the slice's calibrated per-family default. A smaller value shrinks
-    the estimate, admitting a larger per-device batch (less gradient accumulation).
-    """
-    raw = os.environ.get("CORRECTION_FACTOR")
-    if raw is None or not raw.strip():
-        return None
-    factor = float(raw)
-    if factor <= 0:
-        raise SystemExit(f"CORRECTION_FACTOR must be > 0, got {factor}")
-    return factor
-
-
-def correction_factor_for(model_size: str, tpu: str, override: float | None) -> float:
-    """Resolve the per-launch override or this model-size/TPU-family estimate."""
-    if override is not None:
-        return override
+def correction_factor_for(model_size: str, tpu: str) -> float:
+    """Resolve this model-size/TPU-family batch-fit estimate."""
     family = tpu_family(tpu)
     factors = CORRECTION_FACTORS[model_size]
     if family not in factors:
-        raise SystemExit(
-            f"no correction factor for MODEL_SIZE={model_size!r}, TPU family={family!r}; set CORRECTION_FACTOR"
-        )
+        raise SystemExit(f"no correction factor for MODEL_SIZE={model_size!r}, TPU family={family!r}")
     return factors[family]
 
 
@@ -419,11 +395,6 @@ def _fmt_correction(correction_factor: float) -> str:
     return f"{correction_factor:g}".replace(".", "p")
 
 
-def _fmt_path_token(value: str) -> str:
-    """Path-safe token for short env-driven identity fragments."""
-    return value.lower().replace(".", "p").replace("/", "-")
-
-
 def _batch_bytes(point: Point, correction_factor: float) -> int:
     """Estimate full-global-batch HBM with the model from PR #7380."""
     model = point.model_config
@@ -444,9 +415,9 @@ def _batch_bytes(point: Point, correction_factor: float) -> int:
     )
 
 
-def batch_fit(point: Point, tpu: str, correction_factor: float | None) -> TpuBatchConfig:
+def batch_fit(point: Point, tpu: str) -> TpuBatchConfig:
     """Derive DP, TP, per-device parallelism, and accumulation using PR #7380."""
-    factor = correction_factor_for(point.model_size, tpu, correction_factor)
+    factor = correction_factor_for(point.model_size, tpu)
     return tpu_batch_config(tpu, point.batch_size, _batch_bytes(point, factor))
 
 
@@ -523,42 +494,48 @@ class RunShape:
     wandb_group: str
     num_train_steps: int
     steps_per_eval: int
-    checkpoint_every: int  # permanent-checkpoint keep interval (in steps)
+    checkpoint_keep: list[dict[str, int]] | None
+    checkpoint_policy: str
     tags: list[str]
 
 
+def _production_checkpoint_policy(point: Point) -> tuple[list[dict[str, int]] | None, str]:
+    """Return the permanent checkpoint keep policy for a production sweep point.
+
+    Levanter still saves the forced final checkpoint when ``keep`` is ``None``;
+    only 8-epoch runs get periodic permanent checkpoints before the final save.
+    """
+    if point.epochs == 8:
+        return [{"every": point.steps_per_epoch}], f"every {point.steps_per_epoch} steps"
+    return None, "final only"
+
+
 def production_shape(point: Point, region: str) -> RunShape:
-    """Full point with two evals and one permanent checkpoint per epoch."""
+    """Full point with two evals per epoch and epoch checkpoints only for 8ep runs."""
+    checkpoint_keep, checkpoint_policy = _production_checkpoint_policy(point)
     return RunShape(
         run_id=run_id(point, region),
         wandb_group=WANDB_GROUP,
         num_train_steps=point.num_train_steps,
         steps_per_eval=point.steps_per_eval,
-        checkpoint_every=point.steps_per_epoch,
+        checkpoint_keep=checkpoint_keep,
+        checkpoint_policy=checkpoint_policy,
         tags=_tags(point, region, num_train_steps=point.num_train_steps),
     )
 
 
-def smoke_shape(
-    point: Point,
-    region: str,
-    steps: int,
-    tpu: str,
-    correction_factor: float | None,
-    *,
-    calibration_run: bool = False,
-) -> RunShape:
-    """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
+def smoke_shape(point: Point, region: str, steps: int, tpu: str) -> RunShape:
+    """Tiny, identity-isolated end-to-end run with evals and a final checkpoint.
 
-    Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path, but under
-    a smoke-only identity and with an eval/checkpoint every ``steps // SMOKE_NUM_EVALS`` so at least one
-    of each fires within the short run. The slice, effective ``correction_factor``, and ``SMOKE_VERSION``
-    are folded into the run id (and tagged), and ``SMOKE_VERSION`` forks a fresh identity after a
-    recipe/library change so a re-run never resumes/merges a prior smoke run rather than colliding.
+    Reuses the real caches, model, and TPU batch-fit so it validates the actual launch
+    path, but under a smoke-only identity and with evals every
+    ``steps // SMOKE_NUM_EVALS``. The final checkpoint is still forced by Levanter at
+    shutdown. The slice, effective correction factor, and ``SMOKE_VERSION`` are folded
+    into the run id so smoke re-runs do not collide across resource or recipe changes.
     """
     every = max(1, steps // SMOKE_NUM_EVALS)
     base = run_id(point, region, SMOKE_RUN_PREFIX)
-    cf = correction_factor_for(point.model_size, tpu, correction_factor)
+    cf = correction_factor_for(point.model_size, tpu)
     identity = f"{base}-{tpu}-cf{_fmt_correction(cf)}-{SMOKE_VERSION}"
     tags = [
         *_tags(point, region, num_train_steps=steps),
@@ -567,18 +544,13 @@ def smoke_shape(
         f"correction_factor={cf:g}",
         f"smoke_version={SMOKE_VERSION}",
     ]
-    if calibration_run:
-        identity = f"{identity}-{CALIBRATION_VERSION}"
-        tags.extend(["batch-calibration", f"calibration_version={CALIBRATION_VERSION}"])
-        if ram := calibration_tpu_ram():
-            identity = f"{identity}-ram{_fmt_path_token(ram)}"
-            tags.append(f"{CALIBRATION_TPU_RAM_ENV}={ram}")
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
         num_train_steps=steps,
         steps_per_eval=every,
-        checkpoint_every=every,
+        checkpoint_keep=None,
+        checkpoint_policy="final only",
         tags=tags,
     )
 
@@ -587,8 +559,7 @@ def _apply_recipe_overrides(
     step: ArtifactStep[LevanterCheckpoint],
     point: Point,
     tpu: str,
-    checkpoint_every: int,
-    correction_factor: float | None,
+    checkpoint_keep: list[dict[str, int]] | None,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply recipe settings not exposed directly by :func:`train_lm`.
 
@@ -605,7 +576,7 @@ def _apply_recipe_overrides(
             watch=WANDB_WATCH_CONFIG,
             checkpointer=replace(
                 pod.train_config.trainer.checkpointer,
-                keep=[{"every": checkpoint_every}],
+                keep=checkpoint_keep,
             ),
         )
         data = replace(
@@ -617,7 +588,7 @@ def _apply_recipe_overrides(
             },
         )
         if not ctx.is_fingerprint:
-            config = batch_fit(point, tpu, correction_factor)
+            config = batch_fit(point, tpu)
             trainer = replace(
                 trainer,
                 per_device_parallelism=config.per_device_parallelism,
@@ -629,16 +600,14 @@ def _apply_recipe_overrides(
     return replace(step, build_config=build_config)
 
 
-def build_run(
-    point: Point, shape: RunShape, tpu: str, region: str, correction_factor: float | None
-) -> ArtifactStep[LevanterCheckpoint]:
+def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble one production or smoke training run."""
     name = shape.run_id
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
-    batch_config = batch_fit(point, tpu, correction_factor)
+    batch_config = batch_fit(point, tpu)
     resource_kwargs = {"regions": singleton_region_list(region)}
-    if ram := calibration_tpu_ram():
+    if ram := resource_ram():
         resource_kwargs["ram"] = ram
     step = train_lm(
         name=name,
@@ -666,16 +635,14 @@ def build_run(
         tags=shape.tags,
         env_vars=_training_env(region),
     )
-    return _apply_recipe_overrides(step, point, tpu, shape.checkpoint_every, correction_factor)
+    return _apply_recipe_overrides(step, point, tpu, shape.checkpoint_keep)
 
 
 # --- Preview + entry point ---------------------------------------------------
 
 
-def _print_preview(
-    point: Point, shape: RunShape, tpu: str, region: str, mode: str, correction_factor: float | None
-) -> None:
-    config = batch_fit(point, tpu, correction_factor)
+def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str) -> None:
+    config = batch_fit(point, tpu)
     params = point.model_config.total_trainable_params(VOCAB_SIZE)
     tokens = point.batch_size * SEQ_LEN * shape.num_train_steps
     print(
@@ -684,49 +651,27 @@ def _print_preview(
         f"  model_size={point.model_size} epochs={point.epochs} lr={point.learning_rate:g} "
         f"wd={point.weight_decay:g} batch_size={point.batch_size}\n"
         f"  steps={shape.num_train_steps} (steps/eval={shape.steps_per_eval}, "
-        f"permanent ckpt every {shape.checkpoint_every} steps)\n"
+        f"permanent ckpts={shape.checkpoint_policy})\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B "
         f"schedule={LR_SCHEDULE} warmup={WARMUP}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
-        f"  correction_factor={correction_factor_for(point.model_size, tpu, correction_factor):g} "
+        f"  correction_factor={correction_factor_for(point.model_size, tpu):g} "
         f"data_parallelism={config.data_parallelism} tensor_parallelism={config.tensor_parallelism}\n"
         f"  per_device_parallelism={config.per_device_parallelism} "
         f"gradient_accumulation={config.gradient_accumulation}\n"
-        f"  calibration_tpu_ram={calibration_tpu_ram() or '<default>'}\n"
+        f"  resource_ram={resource_ram() or '<default>'}\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
 
 
-def validate_calibration_smoke(point: Point, tpu: str, correction_factor: float | None) -> None:
-    """Keep one-off batch calibration probes isolated from production sweep semantics."""
-    if not smoke():
-        raise SystemExit("CALIBRATION=yes requires SMOKE=yes")
-    if point.model_size not in CALIBRATION_MODEL_SIZES:
-        valid = ", ".join(sorted(CALIBRATION_MODEL_SIZES))
-        raise SystemExit(f"CALIBRATION=yes only supports MODEL_SIZE in {{{valid}}}; got {point.model_size}")
-    if point.batch_size != CALIBRATION_BATCH_SIZE:
-        raise SystemExit(f"CALIBRATION=yes requires BATCH_SIZE={CALIBRATION_BATCH_SIZE}; got {point.batch_size}")
-    config = batch_fit(point, tpu, correction_factor)
-    if config.tensor_parallelism != 1:
-        raise SystemExit(
-            f"CALIBRATION=yes must not use tensor parallelism; resolved tensor_parallelism={config.tensor_parallelism}"
-        )
-
-
-def _resolve_run(region: str, tpu: str, correction_factor: float | None) -> tuple[Point, RunShape, str]:
+def _resolve_run(region: str, tpu: str) -> tuple[Point, RunShape, str]:
     """Resolve the point and mode for this invocation."""
-    calibration_run = calibration()
     if smoke():
         point = parse_point(defaults=Point(SMOKE_MODEL_SIZE_DEFAULT, *SMOKE_POINT_DEFAULTS))
-        if calibration_run:
-            validate_calibration_smoke(point, tpu, correction_factor)
-        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor, calibration_run=calibration_run)
-        return point, shape, "calibration-smoke" if calibration_run else "smoke"
-    if calibration_run:
-        raise SystemExit("CALIBRATION=yes requires SMOKE=yes")
+        return point, smoke_shape(point, region, smoke_steps(), tpu), "smoke"
     point = parse_point()
-    validate_sweep_target(point, tpu, correction_factor)
+    validate_sweep_target(point, tpu)
     return point, production_shape(point, region), "sweep"
 
 
@@ -734,17 +679,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     tpu = parse_tpu()
     region = parse_region()
-    correction_factor = parse_correction_factor()
 
     # No MARIN_PREFIX: driver and worker each resolve marin_prefix() from their own region (both
     # pinned via --region / ResourceConfig), so caches and outputs land region-local.
-    point, shape, mode = _resolve_run(region, tpu, correction_factor)
+    point, shape, mode = _resolve_run(region, tpu)
 
     if preview():
-        _print_preview(point, shape, tpu, region, mode, correction_factor)
+        _print_preview(point, shape, tpu, region, mode)
         return
 
-    StepRunner().run([lower(build_run(point, shape, tpu, region, correction_factor))])
+    StepRunner().run([lower(build_run(point, shape, tpu, region))])
 
 
 if __name__ == "__main__":
