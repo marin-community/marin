@@ -639,6 +639,74 @@ def _prepare_vllm_compilation_cache(
     return cache, cache.environment()
 
 
+def _launch_vllm_process(
+    *,
+    command: list[str],
+    environment: dict[str, str],
+    server_url: str,
+    port: int,
+    log_dir: str,
+    compilation_cache: VllmCompilationCache,
+) -> VllmServerHandle:
+    stdout_path = os.path.join(log_dir, "stdout.log")
+    stderr_path = os.path.join(log_dir, "stderr.log")
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=environment,
+            # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
+            # release the TPU instead of leaving libtpu held by a stale child.
+            start_new_session=True,
+        )
+    except Exception:
+        compilation_cache.close()
+        raise
+
+    log_pump = _LogPump(process, stdout_path, stderr_path)
+    log_pump.start()
+    try:
+        process_group_id = os.getpgid(process.pid)
+    except ProcessLookupError:
+        process_group_id = None
+    return VllmServerHandle(
+        server_url=server_url,
+        port=port,
+        process=process,
+        process_group_id=process_group_id,
+        log_dir=log_dir,
+        log_pump=log_pump,
+        compilation_cache=compilation_cache,
+    )
+
+
+def _wait_for_vllm_server(handle: VllmServerHandle, *, command: list[str], timeout_seconds: int) -> None:
+    process = handle.process
+    assert handle.log_pump is not None
+
+    def _check_process_alive() -> None:
+        if process.poll() is not None:
+            # Child has exited; drain the readers before reading the tail so it has the final lines.
+            handle.log_pump.join(timeout=5)
+            logs = _native_logs_tail(handle.log_dir)
+            raise RuntimeError(
+                "vLLM server process exited before becoming ready.\n"
+                f"Command: {command}\n"
+                f"Exit code: {process.returncode}\n"
+                f"Logs: {handle.log_dir}\n"
+                f"{logs}"
+            )
+
+    _poll_until_ready(
+        handle.server_url,
+        timeout_seconds=timeout_seconds,
+        check_alive=_check_process_alive,
+    )
+
+
 def _start_vllm_native_server(
     *,
     model_name_or_path: str,
@@ -669,8 +737,6 @@ def _start_vllm_native_server(
     ]
 
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
-    stdout_path = os.path.join(log_dir, "stdout.log")
-    stderr_path = os.path.join(log_dir, "stderr.log")
     cache, native_env = _prepare_vllm_compilation_cache(
         model_name_or_path=model_name_or_path,
         extra_cli_args=extra_cli_args,
@@ -682,61 +748,18 @@ def _start_vllm_native_server(
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env=native_env,
-            # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
-            # release the TPU instead of leaving libtpu held by a stale child.
-            start_new_session=True,
-        )
-    except Exception:
-        cache.close()
-        raise
-    # Pump before readiness polling: vLLM logs heavily during the long weight-load/compile, and an
-    # undrained pipe would block the child mid-startup.
-    log_pump = _LogPump(process, stdout_path, stderr_path)
-    log_pump.start()
-    try:
-        process_group_id = os.getpgid(process.pid)
-    except ProcessLookupError:
-        process_group_id = None
-
     server_url: str = f"http://{host}:{resolved_port}/v1"
-
-    def _check_process_alive() -> None:
-        if process.poll() is not None:
-            # Child has exited; drain the readers before reading the tail so it has the final lines.
-            log_pump.join(timeout=5)
-            logs = _native_logs_tail(log_dir)
-            raise RuntimeError(
-                "vLLM server process exited before becoming ready.\n"
-                f"Command: {cmd}\n"
-                f"Exit code: {process.returncode}\n"
-                f"Logs: {log_dir}\n"
-                f"{logs}"
-            )
-
-    handle = VllmServerHandle(
+    handle = _launch_vllm_process(
+        command=cmd,
+        environment=native_env,
         server_url=server_url,
         port=resolved_port,
-        process=process,
-        process_group_id=process_group_id,
         log_dir=log_dir,
-        log_pump=log_pump,
         compilation_cache=cache,
     )
 
     try:
-        _poll_until_ready(
-            server_url,
-            timeout_seconds=timeout_seconds,
-            check_alive=_check_process_alive,
-        )
+        _wait_for_vllm_server(handle, command=cmd, timeout_seconds=timeout_seconds)
     except Exception:
         handle.stop()
         raise

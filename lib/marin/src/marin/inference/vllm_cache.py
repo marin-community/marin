@@ -24,6 +24,7 @@ from typing import Any
 from rigging.filesystem import StoragePath, marin_temp_bucket
 
 from marin.inference.config import VllmCompilationCacheMode
+from marin.profiling.trace_summary import sha256_for_path
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ _LATEST_FILENAME = "latest.json"
 _GENERATIONS_DIR = "generations"
 _MANIFEST_FILENAME = "manifest.json"
 _ARCHIVE_FILENAME = "cache.tar.gz"
+_XLA_CACHE_SUBDIR = "xla"
 
 
 class _CacheMiss(Exception):
@@ -61,6 +63,33 @@ class VllmCompileIdentity:
 
     model_name_or_path: str
     extra_cli_args: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class _NamespaceIdentity:
+    schema_version: int
+    launcher: str
+    compile: VllmCompileIdentity
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "_NamespaceIdentity":
+        compile_identity = value.get("compile")
+        if not isinstance(compile_identity, dict):
+            raise ValueError("namespace compile identity is not an object")
+        extra_cli_args = compile_identity.get("extra_cli_args")
+        if not isinstance(extra_cli_args, list):
+            raise ValueError("namespace extra CLI arguments are not a list")
+        return cls(
+            schema_version=value.get("schema_version"),
+            launcher=value.get("launcher"),
+            compile=VllmCompileIdentity(
+                model_name_or_path=compile_identity.get("model_name_or_path"),
+                extra_cli_args=tuple(extra_cli_args),
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
 
 
 @dataclasses.dataclass(frozen=True, order=True)
@@ -90,7 +119,7 @@ class _Extraction:
 class _Manifest:
     schema_version: int
     namespace: str
-    namespace_identity: dict[str, Any]
+    namespace_identity: _NamespaceIdentity
     generation_id: str
     archive_sha256: str
     archive_size_bytes: int
@@ -99,10 +128,13 @@ class _Manifest:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "_Manifest":
+        namespace_identity = value.get("namespace_identity")
+        if not isinstance(namespace_identity, dict):
+            raise ValueError("manifest namespace identity is not an object")
         return cls(
             schema_version=value.get("schema_version"),
             namespace=value.get("namespace"),
-            namespace_identity=value.get("namespace_identity"),
+            namespace_identity=_NamespaceIdentity.from_dict(namespace_identity),
             generation_id=value.get("generation_id"),
             archive_sha256=value.get("archive_sha256"),
             archive_size_bytes=value.get("archive_size_bytes"),
@@ -145,9 +177,8 @@ class _TransferResult:
 class VllmCompilationCache(ABC):
     """Compilation-cache lifecycle owned by a vLLM server handle."""
 
-    @classmethod
+    @staticmethod
     def prepare(
-        cls,
         *,
         launcher_identity: str,
         compile_identity: VllmCompileIdentity,
@@ -220,7 +251,7 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
         root: Path,
         remote_prefix: str,
         namespace: str,
-        namespace_identity: dict[str, Any],
+        namespace_identity: _NamespaceIdentity,
     ) -> None:
         self._environment = environment
         self._work_dir = work_dir
@@ -245,16 +276,13 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
         work_dir = Path(tempfile.mkdtemp(prefix="vllm_compilation_cache_"))
         root = work_dir / "cache"
         root.mkdir()
-        namespace_identity = json.loads(
-            _canonical_json(
-                {
-                    "schema_version": _ARCHIVE_SCHEMA_VERSION,
-                    "launcher": launcher_identity,
-                    "compile": dataclasses.asdict(compile_identity),
-                }
-            )
+        namespace_identity = _NamespaceIdentity(
+            schema_version=_ARCHIVE_SCHEMA_VERSION,
+            launcher=launcher_identity,
+            compile=compile_identity,
         )
-        namespace = hashlib.sha256(_canonical_json(namespace_identity).encode()).hexdigest()
+        namespace_payload = _canonical_json(namespace_identity.to_dict()).encode()
+        namespace = hashlib.sha256(namespace_payload).hexdigest()
 
         remote_prefix = str(
             StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{_ARCHIVE_SCHEMA_VERSION}/{namespace}"
@@ -262,8 +290,8 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
 
         child_environment.update(
             {
-                "JAX_COMPILATION_CACHE_DIR": str(root / "xla"),
-                "VLLM_XLA_CACHE_PATH": str(root / "xla"),
+                "JAX_COMPILATION_CACHE_DIR": str(root / _XLA_CACHE_SUBDIR),
+                "VLLM_XLA_CACHE_PATH": str(root / _XLA_CACHE_SUBDIR),
                 "JAX_ENABLE_COMPILATION_CACHE": "1",
                 "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": "-1",
                 "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "-1",
@@ -474,7 +502,7 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
             raise _CacheMiss("invalid archive digest")
         if generation_id != expected_sha256:
             raise _CacheMiss("generation id does not match the archive digest")
-        actual_sha256 = _file_sha256(archive_path)
+        actual_sha256 = sha256_for_path(archive_path)
         if actual_sha256 != expected_sha256:
             raise _CacheMiss(f"archive digest mismatch: expected {expected_sha256}, got {actual_sha256}")
 
@@ -488,14 +516,6 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _is_transient(path: Path) -> bool:
@@ -580,7 +600,7 @@ def _create_archive(root: Path, destination: Path) -> _Archive | None:
         raise ValueError(f"cache archive exceeds {_MAX_ARCHIVE_BYTES} bytes")
     return _Archive(
         path=destination,
-        sha256=_file_sha256(destination),
+        sha256=sha256_for_path(destination),
         size=archive_size,
         source_size=source_size,
         entry_count=len(before),
@@ -701,7 +721,7 @@ def _run_transfer(
     *,
     timeout_seconds: int = _TRANSFER_DEADLINE_SECONDS,
 ) -> _TransferResult:
-    """Run a local transfer directly or bound remote I/O in a killable subprocess."""
+    """Return the transfer outcome, reporting remote deadline expiry as an error."""
     result_path.unlink(missing_ok=True)
     if StoragePath(remote_prefix).is_local:
         target(*args, str(result_path))
