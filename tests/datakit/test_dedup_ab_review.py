@@ -188,6 +188,25 @@ def test_low_overlap_requires_strong_false_positive_evidence() -> None:
         validate_label_coverage(scores, [_pair()], _labels(label))
 
 
+def test_complete_text_low_overlap_pair_can_use_machine_evidence() -> None:
+    scores = [
+        _score(variant="baseline", role="canonical", doc_id="canonical", canonical_id="canonical"),
+        _score(
+            variant="baseline",
+            role="drop",
+            doc_id="member",
+            canonical_id="canonical",
+            evidence_class="strong_false_positive",
+        ),
+    ]
+    label = _label(method="low_overlap")
+
+    result = validate_label_coverage(scores, [_pair()], _labels(label))
+
+    assert result["valid"] is True
+    assert result["variants"]["baseline"]["false_positives"] == 1
+
+
 def test_truncated_low_overlap_pair_requires_semantic_review() -> None:
     scores = [
         _score(variant="baseline", role="canonical", doc_id="canonical", canonical_id="canonical"),
