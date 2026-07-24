@@ -153,15 +153,11 @@ def _tagged_eval_loss_fn(
     mp: jmp.Policy,
     per_pos_sharding: NamedSharding,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Per-position tagged-eval loss, run in the trainer compute dtype.
-
-    Evaluation reuses the training mixed-precision cast (`mp.cast_to_compute`) so
-    the forward runs in the same dtype as training instead of the stored
-    parameter dtype; otherwise float32 weights reach the bfloat16-only attention
-    kernel and evaluation fails.
-    """
+    """Per-position tagged-eval loss, run in the trainer compute dtype."""
     if isinstance(batch, LmExample):
         batch = grug_lm_example_from_named(batch)
+    # Reuse the train step's compute cast: the attention kernel rejects the
+    # stored float32 parameters.
     compute_model = mp.cast_to_compute(model)
     per_pos_loss = compute_model.next_token_loss(
         batch.tokens,
