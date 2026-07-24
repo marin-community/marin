@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from marin.datakit.download.stack_v3 import (
     HF_DATASET_ID,
     SERIALIZATION_FORMAT,
-    row_to_docs,
+    row_to_doc,
     transform,
 )
 
@@ -27,7 +27,7 @@ def _file(path: str, content: str, content_id: str) -> dict:
     }
 
 
-def test_row_to_docs_keeps_same_directory_files_together_in_depth_first_order():
+def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
     row = {
         "repo_path": "marin-community/marin",
         "repo_id": 123,
@@ -42,7 +42,7 @@ def test_row_to_docs_keeps_same_directory_files_together_in_depth_first_order():
         ],
     }
 
-    [doc] = row_to_docs(row)
+    doc = row_to_doc(row)
 
     assert doc["text"] == (
         "Repository: marin-community/marin\n\n"
@@ -71,6 +71,22 @@ def test_row_to_docs_keeps_same_directory_files_together_in_depth_first_order():
         "x-id",
     ]
     assert all("content" not in metadata for metadata in doc["file_metadata"])
+
+
+def test_row_to_doc_serializes_empty_file_path():
+    row = {
+        "repo_path": "marin-community/marin",
+        "repo_id": 123,
+        "commit_id": "abc123",
+        "github_metadata": {"branch": "main", "stars": 42},
+        "num_files": 1,
+        "files": [_file("", "orphaned content", "orphaned-id")],
+    }
+
+    doc = row_to_doc(row)
+
+    assert doc["text"] == "Repository: marin-community/marin\n\nFile: (unknown path)\norphaned content"
+    assert doc["file_metadata"][0]["file_path"] == ""
 
 
 def test_transform_writes_nullable_metadata_with_stable_schema(tmp_path: Path):

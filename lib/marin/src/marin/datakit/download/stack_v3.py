@@ -23,6 +23,7 @@ TRAIN_PARQUET_GLOB = "data/*.parquet"
 
 REPOSITORY_HEADER = "Repository:"
 FILE_HEADER = "File:"
+UNKNOWN_FILE_PATH = "(unknown path)"
 SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v1"
 
 OUTPUT_SCHEMA = pa.schema(
@@ -88,8 +89,7 @@ def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     files_by_directory: dict[tuple[str, ...], list[StackV3File]] = {}
     child_directories: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
     for file in files:
-        *directory_parts, _ = PurePosixPath(file["file_path"]).parts
-        directory = tuple(directory_parts)
+        directory = PurePosixPath(file["file_path"]).parts[:-1]
         files_by_directory.setdefault(directory, []).append(file)
         for depth in range(len(directory)):
             parent = directory[:depth]
@@ -106,24 +106,22 @@ def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     return ordered_files
 
 
-def row_to_docs(row: dict) -> list[dict]:
+def row_to_doc(row: dict) -> dict:
     files = _directory_block_dfs(row["files"])
     sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
-    sections.extend(f"{FILE_HEADER} {file['file_path']}\n{file['content']}" for file in files)
+    sections.extend(f"{FILE_HEADER} {file['file_path'] or UNKNOWN_FILE_PATH}\n{file['content']}" for file in files)
 
-    return [
-        {
-            "text": "\n\n".join(sections),
-            "source": HF_DATASET_ID,
-            "repo_path": row["repo_path"],
-            "repo_id": row["repo_id"],
-            "commit_id": row["commit_id"],
-            "github_metadata": row["github_metadata"],
-            "num_files": row["num_files"],
-            "file_metadata": [{key: value for key, value in file.items() if key != "content"} for file in files],
-            "serialization_format": SERIALIZATION_FORMAT,
-        }
-    ]
+    return {
+        "text": "\n\n".join(sections),
+        "source": HF_DATASET_ID,
+        "repo_path": row["repo_path"],
+        "repo_id": row["repo_id"],
+        "commit_id": row["commit_id"],
+        "github_metadata": row["github_metadata"],
+        "num_files": row["num_files"],
+        "file_metadata": [{key: value for key, value in file.items() if key != "content"} for file in files],
+        "serialization_format": SERIALIZATION_FORMAT,
+    }
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -131,7 +129,7 @@ def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(prefix_join(input_path, TRAIN_PARQUET_GLOB))
         .flat_map(load_parquet)
-        .flat_map(row_to_docs)
+        .map(row_to_doc)
         .write_parquet(
             prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             schema=OUTPUT_SCHEMA,
@@ -158,6 +156,7 @@ def processed_stack_v3_step() -> StepSpec:
             "serialization_format": SERIALIZATION_FORMAT,
             "repository_header": REPOSITORY_HEADER,
             "file_header": FILE_HEADER,
+            "unknown_file_path": UNKNOWN_FILE_PATH,
             "output_schema": str(OUTPUT_SCHEMA),
         },
     )
