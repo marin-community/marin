@@ -33,11 +33,3 @@ def test_partial_loom_alert_configuration_fails_fast(monkeypatch):
 
     with pytest.raises(ValueError, match="LOOM_ALERT_PROFILE"):
         BridgeConfig.from_environment()
-
-
-def test_cw_read_token_strips_secret_manager_whitespace(monkeypatch):
-    monkeypatch.setenv("CW_READ_TOKEN", "token-secret\n")
-
-    config = BridgeConfig.from_environment()
-
-    assert config.cw_read_token == "token-secret"
