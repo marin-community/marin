@@ -299,18 +299,21 @@ class ShortConv(eqx.Module):
         return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
     @staticmethod
-    def init_pko(channels: int, head_dim: int, rope_dim: int) -> "ShortConv":
-        """Kernel-2 conv initialized to copy PKO: per (head, dim) channel, the rope dims
-        (``dim < rope_dim``) get [1, 0] (current token), the stationary dims get [0, 1] (previous
-        token). With the segment-aware shift this reproduces PKO at step 0 -- but the conv is learnable
-        so training can move off the PKO point. ``channels`` = num_kv_heads * head_dim.
+    def init_pko(channels: int, head_dim: int, rope_dim: int, kernel_size: int = 2) -> "ShortConv":
+        """Conv initialized to copy PKO in its first two taps: per (head, dim) channel, the rope dims
+        (``dim < rope_dim``) get lag-0 = 1 (current token), the stationary dims get lag-1 = 1 (previous
+        token). Taps beyond lag-1 start at zero -- extra learnable longer-range context on top of the
+        PKO shift. With the segment-aware conv this reproduces PKO at step 0. ``channels`` =
+        num_kv_heads * head_dim; ``kernel_size >= 2``.
         """
+        if kernel_size < 2:
+            raise ValueError("PKO-init requires kernel_size >= 2")
         dim_idx = jnp.arange(channels) % head_dim
         stationary = dim_idx >= rope_dim  # [channels]
-        w0 = jnp.where(stationary, 0.0, 1.0)  # lag-0 (current) tap: 1 on rope dims, 0 on stationary
-        w1 = jnp.where(stationary, 1.0, 0.0)  # lag-1 (previous) tap: 0 on rope dims, 1 on stationary
-        weight = jnp.stack([w0, w1], axis=0)  # [2, channels]
-        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=2)
+        weight = jnp.zeros((kernel_size, channels))
+        weight = weight.at[0].set(jnp.where(stationary, 0.0, 1.0))  # lag-0 current: 1 on rope dims
+        weight = weight.at[1].set(jnp.where(stationary, 1.0, 0.0))  # lag-1 previous: 1 on stationary
+        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # Depthwise causal shift-and-sum. When segment_ids are given (packed documents), a tap that
@@ -352,7 +355,7 @@ class CausalSelfAttention(eqx.Module):
             attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
             sconv_k=(
                 (
-                    ShortConv.init_pko(m * h, h, cfg.rope_dim)
+                    ShortConv.init_pko(m * h, h, cfg.rope_dim, cfg.sconv_kernel)
                     if cfg.sconv_pko_init
                     else ShortConv.init(m * h, cfg.sconv_kernel)
                 )
