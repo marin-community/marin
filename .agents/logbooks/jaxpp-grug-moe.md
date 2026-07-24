@@ -2659,3 +2659,21 @@ author: dlwh
   - The standalone transport and full-MLP gates already validated factor `1.25`. The next fix uses that bound for both NCCL_EP model buffers and bootstrap, while retaining Grug's existing factor `1.0` for ring and every other backend.
 - Next action:
   - Relaunch the identical reduced smoke with the backend-scoped `1.25` receive bound. Require at least one finite training step before any performance comparison.
+
+### 2026-07-23 14:55 PDT - NCCL_EP capacity clears and exposes local expert IDs before dispatch
+- Hypothesis: A matching backend-scoped `1.25` receive bound will clear the first live dispatch and produce a finite reduced training step.
+- Commit Hashes:
+  - `df532f2e28` (`[grug] Reserve NCCL EP routing headroom`) was the code under test.
+  - `460da06052` (`[grug] Preserve global expert IDs during routing`) fixes the route ownership failure exposed by the run.
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` smoke with CuTe FA4, Pallas-Triton `block_k=32`/8 warps, three steps, and preallocation `0.65`. Parent `/dlwh/iris-run-job-20260723-213929`; child `/dlwh/iris-run-job-20260723-213929/grug-train-jaxpp-rno2a-ncclep-smoke-r9-l8-e64k4-b512-s4096-p4m16-20260723-1442`.
+- Results:
+  - All 32 ranks bootstrapped four EP8 groups with the expected matching `recv_capacity_per_rank=81,920`.
+  - Complete JaxPR construction, TE partitioning, lowering, stage-local compilation, and the first stage-0 forward dispatch all passed the prior shape and capacity checks.
+  - Rank 0 then repeatedly reported `padded EM slots 524288 > max_recv_tokens_per_rank 81920`. The value is exactly the global microbatch assignment count: `131,072` tokens times top-k `4`.
+  - The babysitter stopped the stalled parent. Parent, child, and all tasks are terminal with no live resources. No loss, MFU, duration, or W&B history was produced.
+- Interpretation:
+  - This is not a receive-capacity requirement: no rank can legitimately own every assignment in balanced e64/top-k4 routing, and increasing the bound to the global assignment count would only hide incorrect ownership.
+  - The router score tensor's expert dimension was not explicitly replicated before `top_k`. Under JaxPP stage tracing, each EP rank selected among its local eight columns and emitted local indices `0..7`; NCCL_EP correctly interpreted those values as global expert IDs, so rank 0 claimed every assignment.
+  - `460da06052` replicates the expert-score and bias dimensions before `top_k`, then explicitly shards selected global IDs and combine weights only over token axes. An independent EP8 CPU probe preserved winners `[63, 62, 61, 60]` through the same `auto_axes` boundary, and routing statistics remain correctly replicated/reduced.
+- Next action:
+  - Run the unchanged reduced smoke from merged commit `012111e22a` as r10. Require global expert ownership and at least one finite step before scaling to L24.
