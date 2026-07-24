@@ -77,6 +77,32 @@ def _expert_mlp_bwd(res, dy):
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
+def shared_expert_sonic_cute(
+    x_flat: Float[Array, "T H"],
+    w_gate: Float[Array, "H I"],
+    w_up: Float[Array, "H I"],
+    w_down: Float[Array, "I H"],
+) -> Float[Array, "T H"]:
+    """Dense (all-token) SwiGLU expert via the QuACK SM100 kernel, as a single expert group.
+
+    Reuses the routed-expert fused-SwiGLU forward and custom-VJP backward (:func:`_expert_mlp`)
+    with ``E=1`` and ``cu=[0, T]`` — the gate/up GEMM fuses ``silu(gate) * up`` in its epilogue
+    instead of materializing the ``[T, I]`` activation like the plain-einsum dense path.
+
+    The kernel is local/per-device: ``w_gate``/``w_up`` (``[H, I]``) and ``w_down`` (``[I, H]``)
+    must already be replicated over the data axis; ``x_flat`` (``[T, H]``) stays token-sharded so
+    GSPMD runs the ``cutlass_call`` data-parallel.
+    """
+    t = x_flat.shape[0]
+    moe_dim = w_gate.shape[1]
+    w13 = jnp.concatenate([w_gate, w_up], axis=-1)[None]  # [1, H, 2I], gate then up
+    w13_il = _interleave_gate_up(w13, moe_dim)  # QuACK interleaved [g0,u0,g1,u1,...]
+    w2 = w_down[None]  # [1, I, H], n-major for the down GEMM
+    group_sizes = jnp.asarray([t], dtype=jnp.int32)
+    cu = jnp.asarray([0, t], dtype=jnp.int32)
+    return _expert_mlp(x_flat, w13_il, w2, group_sizes, cu)
+
+
 def _moe_mlp_local_sonic_cute(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],

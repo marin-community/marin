@@ -369,6 +369,7 @@ class DenseMLP(eqx.Module):
         x: Float[Array, "B S D"],
         *,
         activation: MoeActivation = ActivationFunctionEnum.silu,
+        use_quack: bool = False,
     ) -> Float[Array, "B S D"]:
         if isinstance(activation, ActivationFunctionEnum):
             activation_fn = activation.to_jax_fn()
@@ -376,7 +377,18 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _batch_spec())
+        if use_quack:
+            # Fused-SwiGLU QuACK kernel (single expert group). Replicate the FSDP-sharded weights
+            # over the data axis so the local per-device kernel sees full weights; x stays
+            # token-sharded (data-parallel). Guarded import: quack is B200-only.
+            from levanter.grug._moe.sonic_cute import shared_expert_sonic_cute  # noqa: PLC0415
+
+            w_gate = reshard(self.w_gate, P(None, None))
+            w_up = reshard(self.w_up, P(None, None))
+            w_down = reshard(self.w_down, P(None, None))
+            out_flat = shared_expert_sonic_cute(x_flat, w_gate, w_up, w_down)
+            return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
@@ -567,8 +579,15 @@ class Block(eqx.Module):
             mlp_in = self.mlp_gated_norm(mlp_in)
         mlp_out, qb_beta = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
+            # SCALE_SHARED_QUACK: run each dense shared expert through the QuACK fused-SwiGLU kernel
+            # (single expert group) instead of the plain-einsum path. Only valid on the sonic_cute
+            # (B200) backend, which supplies the kernel.
+            use_quack = (
+                os.environ.get("SCALE_SHARED_QUACK") == "1"
+                and resolve_moe_implementation(self.mlp.cfg.moe_implementation) == "sonic_cute"
+            )
             for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu, use_quack=use_quack)
         return x + mlp_out, qb_beta
 
 
