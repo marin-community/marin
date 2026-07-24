@@ -41,6 +41,7 @@ author: dlwh
 - FP8 pipeline transfer remains positive at realistic L24 stage depth but is too small for the objective. The matched b512/m16 confirmation improves clean p50 MFU from `16.2447` to `16.5358` (`+1.79%`) and p90 by `1.81%`, with finite loss and `+0.0343%` final relative drift. Applying that gain to the `18.2583` m256 best projects only about `18.59` MFU. Do not launch exact m256 FP8; resume with a different transport/overlap mechanism.
 - FP8 expert GEMMs clear the direct EP8 kernel gate. At the exact e64/top-k4/d2560 pipeline microbatch, keeping ring routing and BF16 collectives while replacing W13/W2 with E4M3 ragged GEMMs improves median forward from `10.3631ms` to `8.3563ms` (`1.240x`) and median value-and-grad from `22.9143ms` to `18.1024ms` (`1.266x`). Output and four gradient relative-L2 errors are all below the declared `0.10` diagnostic limit. This is an approximate research mode, not exact semantic parity; the next gate is a reduced JaxPP training A/B with correct FP8 overwrite-state handling.
 - Transformer Engine NCCL_EP is promoted as an explicitly approximate research transport after exact route fingerprints, bitwise top-k1 combine parity, and top-k4 isolation showed only BF16 accumulation-order differences. The paired full routed-MLP is `1.452489x` faster than ring (`22.73490ms -> 15.65238ms` median value-and-grad). The user explicitly accepted the observed `0.203554%` top-k4 output mismatch for this backend only; strict loss and all four gradient-group checks remain unchanged. Pipeline integration snapshot: `df57afef9d`.
+- CUTLASS DSL 4.5.2's generated `_isa` helper caused the JaxPP-localized CuTe FA4 full-block exit `139` by constructing MLIR type wrappers while probing their type. Replacing that probe with the `isinstance` check used by CUTLASS DSL 4.6 clears both matched two-rank BF16 and FP8 full-block gates. The production JaxPP setup now applies the guard to a private venv copy so it cannot mutate UV's shared package cache. Integration snapshot: `30183d2d4f`.
 
 ## Hypothesis Queue
 
@@ -50,7 +51,7 @@ author: dlwh
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the best full shape still needs another `9.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, and occupancy scaling reaches `18.2583` at batch8192/m256. Approximate QuACK is finite-step stable but neutral under the reduced pipeline, so it is no longer a scaling candidate.
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 - `GRUG-JAXPP-013`: Transformer Engine NCCL_EP cleared the one-node transport and full routed-MLP gates and is integrated as a scoped approximate backend at `df57afef9d`. Evidence: [2026-07-23 08:27 PDT - paired diagnostic shows a 1.45x NCCL_EP full-MLP gain](#2026-07-23-0827-pdt---paired-diagnostic-shows-a-145x-nccl_ep-full-mlp-gain) and [2026-07-23 11:35 PDT - NCCL_EP combine isolation and pipeline promotion](#2026-07-23-1135-pdt---nccl_ep-combine-isolation-and-pipeline-promotion). Next test: reduced four-stage JaxPP training at L8/e64/top-k4/seq4096/b512/m16 before scaling the L24 capacity point.
-- `GRUG-JAXPP-015`: Hopper FP8 expert GEMMs may supply the missing local-compute gain without changing ring routing or BF16 collectives, but the reduced pipeline A/B is blocked before the FP8 axis. The near-complete BF16 full-block reproducer exits `139` in `nvidia_cutlass_dsl` only under JaxPP localization; the matched distributed-direct control succeeds. Evidence: [2026-07-22 16:21 PDT - BF16 full-block failure is JaxPP-localization-specific](#2026-07-22-1621-pdt---bf16-full-block-failure-is-jaxpp-localization-specific) and Marin bug [#7529](https://github.com/marin-community/marin/issues/7529). Next test: minimize the JaxPP/CuTe FA4 interaction or consume a JaxPP fix before running FP8.
+- `GRUG-JAXPP-015`: Hopper FP8 expert GEMMs may supply the missing local-compute gain without changing ring routing or BF16 collectives. The CUTLASS MLIR type guard clears both BF16 and FP8 JaxPP full-block gates, removing the #7529 compiler blocker. Evidence: [2026-07-22 16:21 PDT - BF16 full-block failure is JaxPP-localization-specific](#2026-07-22-1621-pdt---bf16-full-block-failure-is-jaxpp-localization-specific) and [2026-07-23 21:48 PDT - CUTLASS type guard clears BF16 and FP8 full-block gates](#2026-07-23-2148-pdt---cutlass-type-guard-clears-bf16-and-fp8-full-block-gates). Next test: paired L8/d2560/e64/top-k4/seq4096/b512/m16 ring-versus-FP8 training A/B before scaling to L24.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -2693,3 +2694,40 @@ author: dlwh
   - Do not raise receive capacity to `524,288`; that would mask a TE/NCCL_EP prepare or stage-local partitioning defect and allocate an unjustified global-assignment buffer on every rank.
 - Next action:
   - Add a bounded route fingerprint immediately before `ep_prepare` and rerun the unchanged shape once. Capture each local shard's route min/max and eight destination-rank counts to distinguish valid global routes from corruption inside TE/NCCL_EP. Preserve the backend-only accepted `0.203554%` forward mismatch; keep loss and gradient parity strict.
+
+### 2026-07-23 21:32 PDT - r11b is infrastructure-invalid before NCCL_EP diagnostics
+- Hypothesis: Route ownership and token-health fingerprints immediately before `ep_prepare` will distinguish a Transformer Engine prepare defect from corrupted output produced by an earlier NCCL_EP dispatch/combine.
+- Commit Hash: `a8cc300327` (`[grug] Trace NCCL EP input health`).
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` NCCL_EP smoke with four stages, 16 microbatches, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, three steps, and preallocation `0.65`. Parent `/dlwh/iris-run-job-20260724-035839`; child `/dlwh/iris-run-job-20260724-035839/grug-train-jaxpp-rno2a-ncclep-routefp-r11b-l8-e64k4-b512-s4096-p4m16-20260723-2058`.
+- Results:
+  - Attempt 0 failed before model execution when task 3 local rank 2 could not start its telltale server on port `39535`.
+  - Attempts 1 and 2 failed before model execution when task 2/task 3 local rank 3 aborted in `CoordinationServiceAgent::Connect()` with exit `-6`; peers then exited from the failed distributed group.
+  - The babysitter stopped attempt 3 during its repeated Transformer Engine rebuild. Parent, child, and all four tasks are terminal killed; counters are three failures and four preemptions, with no live resources.
+  - The run emitted zero `NCCL_EP route fingerprint` lines, never reached `ep_prepare`, and produced no W&B run, loss, duration, throughput, or MFU.
+- Interpretation:
+  - This run contains no NCCL_EP correctness evidence. It neither supports nor falsifies the TE prepare defect and preceding-dispatch corruption hypotheses.
+  - Preserve the bounded instrumentation for a clean allocation. Do not classify coordination bootstrap failures as transport failures or retry them through repeated expensive TE rebuilds.
+- Next action:
+  - Prioritize the now-unblocked FP8 expert path while retaining the NCCL_EP fingerprint probe for one later clean retry. Do not increase NCCL_EP capacity or weaken strict loss/gradient checks.
+
+### 2026-07-23 21:48 PDT - CUTLASS type guard clears BF16 and FP8 full-block gates
+- Hypothesis: CUTLASS DSL 4.5.2's `_isa` helper segfaults because it constructs MLIR wrapper types while probing a JaxPP-localized CuTe FA4 graph; using the `isinstance` test adopted by CUTLASS DSL 4.6 will remove that operation without changing the pinned FA4 or QuACK APIs.
+- Commit Hashes:
+  - `54242b3494` adds the minimal CUTLASS DSL 4.5.2 patch and updates the full-block reproducer commands.
+  - `fe40556c56` copies the symlinked CUTLASS package into the worker venv before patching, preventing writes into UV's shared cache.
+  - `d52c5b6e35` makes the helper portable to the minimal worker image.
+  - `30183d2d4f` applies the validated helper in the production JaxPP setup.
+- Commands:
+  - Matched two-replica H100x8 BF16 and FP8 full-block commands in `experiments/grug/moe/repro_jaxpp_fp8_expert_compile.README.md`, using JAX/JAXLIB `0.10.1`, JaxPP `7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`, CUTLASS DSL `4.5.2`, CuTe FA4, learned QB routing, two layers/rank, 32,768 tokens, four microbatches, d2560/e64/top-k4, and `save_moe`.
+  - BF16 job `/dlwh/jaxpp-full-block-cutlassisa-bf16-20260724-042818`.
+  - Final FP8 job `/dlwh/jaxpp-full-block-cutlassisa-fp8-r3-20260724-044227`.
+- Results:
+  - BF16 succeeded 2/2. `jaxpp.lower()` returned in `2.3061s/2.3048s`; `lowered.eval_local()` returned in `11.4238s/109.7833s`; both ranks emitted pass verdicts. There was no segfault, traceback, OOM, or compiler exception.
+  - FP8 succeeded 2/2. `jaxpp.lower()` returned in `4.3066s/4.2637s`; `lowered.eval_local()` returned in `16.6283s/123.4899s`; both ranks emitted pass verdicts. The 120-second watchdog showed active CUTLASS code generation on rank 1 rather than a hang.
+  - The first two FP8 submissions were setup-only invalids: the direct patch mutated a symlinked UV cache entry, then the private-copy helper assumed `rg` existed in the worker image. Neither attempt reached external-worker bootstrap or FP8 compilation. The final helper is private-copying, idempotent, and uses `grep`.
+  - The recurring FABRIC VMM `CUDA_ERROR_NOT_PERMITTED` warning fell back to simpler handle types and was nonfatal in both successful gates.
+- Interpretation:
+  - The exact unsafe MLIR type probe was causal for #7529's exit `139`. A broad CUTLASS 4.6/FA4/QuACK dependency migration is unnecessary for this experiment.
+  - Both BF16 and FP8 full-block graphs now compile and execute under JaxPP localization, so FP8 expert GEMMs are unblocked for a real training comparison.
+- Next action:
+  - Babysit paired reduced parents `/dlwh/iris-run-job-20260724-044921` (BF16 ring) and `/dlwh/iris-run-job-20260724-044937` (FP8 expert), both L8/d2560/e64/top-k4/seq4096/b512/m16 for 20 steps. Scale only if the matched finite-step result credibly contributes the missing `9.5%` relative gain.
