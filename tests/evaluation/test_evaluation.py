@@ -26,7 +26,7 @@ from rigging.filesystem import StoragePath
 def _successful_evaluation(
     model: RunningModel,
     output_dir: str,
-    env_vars: Mapping[str, str],
+    _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
     output = StoragePath(output_dir)
     output.mkdirs()
@@ -35,9 +35,9 @@ def _successful_evaluation(
 
 
 def _failed_evaluation(
-    model: RunningModel,
-    output_dir: str,
-    env_vars: Mapping[str, str],
+    _model: RunningModel,
+    _output_dir: str,
+    _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
     raise EvaluationError(
         "evaluation failed",

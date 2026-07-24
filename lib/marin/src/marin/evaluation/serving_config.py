@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lower evaluation model policy into exact remote-inference configuration."""
+"""Lower evaluation model policy into remote-inference configuration."""
 
 import json
 from collections.abc import Mapping
@@ -29,6 +29,8 @@ ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
+_MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
+_QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
 DEFAULT_SERVE_MEMORY = "64g"
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
@@ -43,6 +45,8 @@ def _auto_serve_overrides_from_config(
     """Derive portable text-eval vLLM flags without overriding explicit choices."""
     serialized_config = json.dumps(config).lower()
     architectures = " ".join(config.get("architectures") or ()).lower()
+    model_lower = model.lower()
+    is_qwen_next = any(marker in model_lower for marker in _QWEN_NEXT_MODEL_MARKERS)
     text_config = config.get("text_config")
     if not isinstance(text_config, dict):
         text_config = config
@@ -53,15 +57,12 @@ def _auto_serve_overrides_from_config(
         or "linear_attn" in serialized_config
         or "qwen3next" in architectures
         or "qwen3_5" in architectures
-        or "qwen3.5" in model.lower()
-        or "qwen3-next" in model.lower()
+        or is_qwen_next
     ):
         derived += (("--gdn-prefill-backend", "triton"),)
     if config.get("vision_config") or "forconditionalgeneration" in architectures:
         derived += (("--limit-mm-per-prompt", '{"image":0,"video":0}'),)
-    if "qwen" in model.lower() and (
-        "thinking" in model.lower() or "qwen3.5" in model.lower() or "qwen3-next" in model.lower()
-    ):
+    if "qwen" in model_lower and ("thinking" in model_lower or is_qwen_next):
         derived += (("--reasoning-parser", "qwen3"),)
 
     merged = list(existing_extra_args)
@@ -69,7 +70,7 @@ def _auto_serve_overrides_from_config(
         if not has_vllm_option(existing_extra_args, option):
             merged.extend((option, value))
 
-    native_max_model_len = text_config.get("max_position_embeddings") or config.get("max_position_embeddings")
+    native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
     if isinstance(native_max_model_len, int | float) and max_model_len is not None:
         max_model_len = min(max_model_len, int(native_max_model_len))
     return tuple(merged), max_model_len
@@ -103,7 +104,7 @@ def inference_config_for_model(
     instances: int = 1,
     broker: BrokerConfig | None = None,
 ) -> RemoteInferenceConfig:
-    """Lower one model and selected accelerator into the inference subsystem's exact configs."""
+    """Lower one model and selected accelerator into remote inference configuration."""
     serve = model.serve
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len

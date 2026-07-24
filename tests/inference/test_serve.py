@@ -102,16 +102,16 @@ def test_resolve_model_path_passthrough(model, ttl_days):
 
 
 def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
-    observed: list[str] = []
+    observed: list[tuple[str, int, str]] = []
 
-    def resolve(model: str, **kwargs) -> str:
-        observed.append(model)
+    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str) -> str:
+        observed.append((model, cache_ttl_days, cache_prefix))
         return "gs://cache/pinned-model"
 
     monkeypatch.setattr("marin.inference.model_preparation.resolve_cached_model_path", resolve)
 
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
-    assert observed == ["Qwen/Qwen3-0.6B@abc123"]
+    assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
 
 
 def test_vllm_backend_serves_the_pinned_revision(monkeypatch):

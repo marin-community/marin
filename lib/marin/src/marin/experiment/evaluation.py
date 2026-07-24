@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 def _orchestrator_resources(accelerator: AcceleratorChoice) -> ResourceConfig:
     regions = [accelerator.region] if accelerator.region else None
-    return ResourceConfig.with_cpu(cpu=1, regions=regions)
+    return ResourceConfig.with_cpu(cpu=1, regions=regions, target_cluster=accelerator.target_cluster)
 
 
 @dataclass(frozen=True)

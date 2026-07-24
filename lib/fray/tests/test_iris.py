@@ -99,6 +99,13 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
 
+    def test_target_cluster_produces_eq_constraint(self):
+        constraints = convert_constraints(ResourceConfig(target_cluster="cw-us-east-02a"))
+        cluster_constraints = [constraint for constraint in constraints if constraint.key == "cluster"]
+        assert len(cluster_constraints) == 1
+        assert cluster_constraints[0].op == ConstraintOp.EQ
+        assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):

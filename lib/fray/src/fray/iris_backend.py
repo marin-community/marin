@@ -26,7 +26,9 @@ from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
@@ -134,6 +136,14 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    if resources.target_cluster:
+        constraints.append(
+            Constraint.create(
+                key=CLUSTER_CONSTRAINT_KEY,
+                op=ConstraintOp.EQ,
+                value=resources.target_cluster,
+            )
+        )
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]

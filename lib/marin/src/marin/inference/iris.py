@@ -22,6 +22,7 @@ from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     BrokerConfig,
@@ -47,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
-_OPENAI_API_SUFFIX = "/v1"
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
@@ -148,7 +148,7 @@ def _prepared_local_inference(
 
 
 def _server_root(model: RunningModel) -> str:
-    return model.endpoint.base_url.removesuffix(_OPENAI_API_SUFFIX)
+    return model.endpoint.base_url.removesuffix(OPENAI_API_SUFFIX)
 
 
 def _endpoint_metadata(
@@ -180,7 +180,7 @@ def _capability_model(model: RunningModel, endpoint_name: str, capability_origin
     response = iris_ctx().client.mint_endpoint_token(endpoint_name, ttl=_CAPABILITY_TTL)
     endpoint = replace(
         model.endpoint,
-        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{_OPENAI_API_SUFFIX}",
+        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{OPENAI_API_SUFFIX}",
     )
     return replace(model, endpoint=endpoint)
 
@@ -372,7 +372,7 @@ def _start_direct_inference(
                 jobs=(job,),
             ) from exc
         running_model = RunningModel(
-            endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}{_OPENAI_API_SUFFIX}", model=model.model_id),
+            endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}{OPENAI_API_SUFFIX}", model=model.model_id),
             tokenizer=model.tokenizer,
         )
         yield RemoteInferenceSession(
