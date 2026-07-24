@@ -30,14 +30,14 @@ def _run_trial(trial: StandaloneTrial) -> None:
     runpy.run_module("experiments.grug.moe.standalone.grug_moe_mfu", run_name="__main__")
 
 
-def ncclep_setup_script(stash: str = NCCLEP_STASH, work: str = NCCLEP_WORK) -> str:
-    """Install the historical NCCL-EP wheel without replacing NGC dependencies."""
+def ncclep_setup_script(stash: str = NCCLEP_STASH, work: str = NCCLEP_WORK, wheel_pattern: str = "") -> str:
+    """Install the pinned NCCL-EP wheel without replacing NGC dependencies."""
     return f"""set -eu
 work={shlex.quote(work)}
 stash={shlex.quote(stash)}
 rm -rf "$work"
 mkdir -p "$work"
-"$IRIS_VENV/bin/python" - "$stash" "$work" <<'PY'
+"$IRIS_VENV/bin/python" - "$stash" "$work" {shlex.quote(wheel_pattern)} <<'PY'
 import hashlib
 from pathlib import Path
 import subprocess
@@ -49,13 +49,22 @@ import fsspec
 stash = sys.argv[1].rstrip("/")
 work = Path(sys.argv[2])
 filesystem, stash_path = fsspec.core.url_to_fs(stash)
+pattern = sys.argv[3]
 wheels = sorted(filesystem.glob(stash_path + "/wheels/*.whl"))
 assert wheels, f"no wheels under {{stash}}/wheels/"
+if pattern:
+    wheels = [w for w in wheels if pattern in w]
+    assert wheels, f"no wheels matching {{pattern!r}}"
 wheel_path = wheels[-1]
 wheel = work / Path(wheel_path).name
 headers = work / "nccl-ep-jit-headers.tgz"
 filesystem.get(wheel_path, str(wheel))
-filesystem.get(stash_path + "/jit/nccl-ep-jit-headers.tgz", str(headers))
+sha = Path(wheel_path).name.split("+")[1].split("-")[0][:7]
+suffixed = stash_path + f"/jit/nccl-ep-jit-headers-{{sha}}.tgz"
+if filesystem.exists(suffixed):
+    filesystem.get(suffixed, str(headers))
+else:
+    filesystem.get(stash_path + "/jit/nccl-ep-jit-headers.tgz", str(headers))
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -134,6 +143,7 @@ def launch_trial(
     gpus_per_node: int,
     cmd_buffer: str = "off",
     extra_xla_flags: str = "",
+    wheel_pattern: str = "",
 ) -> None:
     resources = ResourceConfig.with_gpu(
         "GB200",
@@ -162,7 +172,7 @@ def launch_trial(
             "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
             "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.90",
         },
-        task_setup_scripts=(ncclep_setup_script(),),
+        task_setup_scripts=(ncclep_setup_script(wheel_pattern=wheel_pattern),),
     )
 
 
@@ -173,6 +183,7 @@ def main() -> None:
     parser.add_argument("--gpus-per-node", type=int, default=4)
     parser.add_argument("--cmd-buffer", default="off", help="off | default | explicit CommandBufferCmdType list")
     parser.add_argument("--extra-xla-flags", default="")
+    parser.add_argument("--wheel-pattern", default="", help="pin the TE wheel by substring (e.g. 68493d2)")
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     arguments = tuple(args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments)
@@ -185,6 +196,7 @@ def main() -> None:
         gpus_per_node=args.gpus_per_node,
         cmd_buffer=args.cmd_buffer,
         extra_xla_flags=args.extra_xla_flags,
+        wheel_pattern=args.wheel_pattern,
     )
 
 
