@@ -3,6 +3,7 @@
 
 """Ragged all-to-all expert-parallel Grug MoE backend."""
 
+import logging
 import math
 import os
 from collections.abc import Callable
@@ -26,6 +27,42 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
+
+logger = logging.getLogger(__name__)
+
+
+def _dispatch_rows(
+    x_local: Float[Array, "Tlocal H"],
+    linear_indices: Int[Array, "A"],
+    send_size: int,
+    topk: int,
+) -> Float[Array, "S H"]:
+    """Build the flat fixed-capacity dispatch buffer from local activations.
+
+    With SCALE_A2A_GATHER_DISPATCH=1, scatters int32 assignment indices and gathers
+    activation rows from ``x_local`` (avoids materializing the topk-repeated activation
+    and the full-row random scatter). Otherwise scatters repeated bf16 rows directly.
+    """
+    tokens_per_shard, hidden_dim = x_local.shape
+    assignments_per_shard = linear_indices.shape[0]
+    if os.environ.get("SCALE_A2A_GATHER_DISPATCH") == "1":
+        assignment_sources = (
+            jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32)
+            .at[linear_indices]
+            .set(jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop")
+        )
+        token_sources = jnp.where(
+            assignment_sources < assignments_per_shard,
+            assignment_sources // topk,
+            tokens_per_shard,
+        )
+        padded_x = jnp.concatenate(
+            [x_local, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+            axis=0,
+        )
+        return padded_x[token_sources]
+    repeated_x = jnp.repeat(x_local, topk, axis=0)
+    return jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
 
 
 def _moe_mlp_ep_fixed_a2a_local(
@@ -106,7 +143,6 @@ def _fixed_a2a_core(
     if use_barrier:
         x_local, combine_weights_local = jax.lax.optimization_barrier((x_local, combine_weights_local))
 
-    repeated_x = jnp.repeat(x_local, topk, axis=0)
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
 
     order = jnp.argsort(flat_experts, stable=True)
@@ -120,6 +156,25 @@ def _fixed_a2a_core(
     destination_shards = (flat_experts // local_experts).astype(jnp.int32)
     bucket_size = expert_shards * capacity
     send_size = local_experts * bucket_size
+
+    rotate_groups = int(os.environ.get("SCALE_A2A_ROTATE", "0") or "0")
+    if rotate_groups > 0:
+        return _fixed_a2a_rotation(
+            x_local,
+            combine_weights_local,
+            moe_w13_local,
+            moe_w2_local,
+            slot=slot,
+            keep=keep,
+            local_expert_indices=local_expert_indices,
+            destination_shards=destination_shards,
+            activation_fn=activation_fn,
+            capacity=capacity,
+            expert_shards=expert_shards,
+            groups=rotate_groups,
+            use_barrier=use_barrier,
+        )
+
     linear_indices = jnp.where(
         keep,
         local_expert_indices * bucket_size + destination_shards * capacity + slot,
@@ -128,7 +183,7 @@ def _fixed_a2a_core(
 
     moe_dim = moe_w2_local.shape[1]
     with jax.named_scope("dispatch"):
-        send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
+        send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     output_parts = []
@@ -170,6 +225,126 @@ def _fixed_a2a_core(
             combine_weights_local.astype(gathered.dtype),
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
+        dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    if use_barrier:
+        out_local = jax.lax.optimization_barrier(out_local)
+    return out_local, dropped_total
+
+
+def _fixed_a2a_rotation(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    slot: Int[Array, "A"],
+    keep: Array,
+    local_expert_indices: Int[Array, "A"],
+    destination_shards: Int[Array, "A"],
+    activation_fn: Callable[[jax.Array], jax.Array],
+    capacity: int,
+    expert_shards: int,
+    groups: int,
+    use_barrier: bool,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Fixed-capacity dispatch/combine decomposed into round-robin ppermute rounds.
+
+    The dispatch buffer is laid out by peer *offset* r = (destination - self) mod P
+    instead of destination shard id, so round r is a compile-time slice exchanged with
+    ppermute perm i -> (i+r) mod P. Rounds are processed in ``groups`` groups: the
+    group g+1 permutes are issued before group g's expert GEMM, so the permutes for the
+    next group have no data dependency on the current group's compute and can overlap
+    it. Combine returns each processed block with the inverted permutation. Bucket
+    granularity, capacity, and the overflow policy are identical to the monolithic
+    path; only the buffer layout and the collective decomposition differ.
+    """
+    if expert_shards % groups != 0:
+        raise ValueError(f"expert_shards={expert_shards} must be divisible by SCALE_A2A_ROTATE={groups}")
+    group_size = expert_shards // groups
+    local_experts = moe_w13_local.shape[0]
+    tokens_per_shard, hidden_dim = x_local.shape
+    topk = combine_weights_local.shape[1]
+    moe_dim = moe_w2_local.shape[1]
+    block_rows = local_experts * capacity
+    send_size = expert_shards * block_rows
+    logger.info(
+        "fixed-a2a rotation active: groups=%d group_size=%d expert_shards=%d capacity=%d",
+        groups,
+        group_size,
+        expert_shards,
+        capacity,
+    )
+
+    my_index = jax.lax.axis_index("expert")
+    offsets = jnp.mod(destination_shards - my_index, expert_shards).astype(jnp.int32)
+    linear_indices = jnp.where(
+        keep,
+        offsets * block_rows + local_expert_indices * capacity + slot,
+        send_size,
+    )
+
+    with jax.named_scope("dispatch"):
+        send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
+        send_x = send_x.reshape(expert_shards, local_experts, capacity, hidden_dim)
+
+    def permute_group(g: int) -> Float[Array, "S Elocal C H"]:
+        parts = []
+        for s in range(group_size):
+            r = g * group_size + s
+            if r == 0:
+                parts.append(send_x[0])
+                continue
+            perm = [(i, (i + r) % expert_shards) for i in range(expert_shards)]
+            parts.append(jax.lax.ppermute(send_x[r], "expert", perm))
+        return tree_checkpoint_name(jnp.stack(parts, axis=0), _CHECKPOINT_DISPATCH_INPUT)
+
+    def gemm_group(arrived: Float[Array, "S Elocal C H"]) -> Float[Array, "S Elocal C H"]:
+        expert_input = arrived.transpose(1, 0, 2, 3).reshape(local_experts, group_size * capacity, hidden_dim)
+        hidden = jnp.einsum("eth,ehi->eti", expert_input, moe_w13_local)
+        gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+        expert_output = jnp.einsum("eti,eih->eth", activation_fn(gate) * up, moe_w2_local)
+        return expert_output.reshape(local_experts, group_size, capacity, hidden_dim).transpose(1, 0, 2, 3)
+
+    def combine_group(expert_output: Float[Array, "S Elocal C H"], g: int) -> list[jax.Array]:
+        parts = []
+        for s in range(group_size):
+            r = g * group_size + s
+            if r == 0:
+                parts.append(expert_output[0])
+                continue
+            perm = [(i, (i - r) % expert_shards) for i in range(expert_shards)]
+            parts.append(jax.lax.ppermute(expert_output[s], "expert", perm))
+        return parts
+
+    output_parts: list[jax.Array] = []
+    with jax.named_scope("dispatch"):
+        arrived = permute_group(0)
+    for g in range(groups):
+        if g + 1 < groups:
+            with jax.named_scope("dispatch"):
+                next_arrived = permute_group(g + 1)
+        with jax.named_scope("moe_up_down"):
+            expert_output = gemm_group(arrived)
+        with jax.named_scope("combine"):
+            output_parts.extend(combine_group(expert_output, g))
+        if g + 1 < groups:
+            arrived = next_arrived
+
+    with jax.named_scope("combine"):
+        send_output = jnp.stack(output_parts, axis=0)
+        send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+        send_output = send_output.reshape(send_size, hidden_dim)
+        gathered = send_output[jnp.minimum(linear_indices, send_size - 1)]
+        gathered = jnp.where(keep[:, None], gathered, 0)
+        gathered = gathered.reshape(tokens_per_shard, topk, hidden_dim)
+        out_local = jnp.einsum(
+            "tkh,tk->th",
+            gathered,
+            combine_weights_local.astype(gathered.dtype),
+            preferred_element_type=jnp.float32,
+        ).astype(x_local.dtype)
+        assignments_per_shard = tokens_per_shard * topk
         dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     if use_barrier:
