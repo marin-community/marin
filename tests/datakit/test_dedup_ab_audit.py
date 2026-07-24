@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.datakit.scripts.dedup_ab_audit import _evidence_class, _set_metrics
+from experiments.datakit.scripts import dedup_ab_audit
+from experiments.datakit.scripts.dedup_ab_audit import _cc_distance_entries, _evidence_class, _set_metrics
 
 
 def test_set_metrics_preserves_containment_direction() -> None:
@@ -68,3 +69,21 @@ def test_low_jaccard_with_containment_requires_review() -> None:
     )
 
     assert evidence == "ambiguous"
+
+
+def test_graph_distance_discovers_iterations_beyond_original_run_cap(monkeypatch) -> None:
+    iteration_count = 58
+
+    def fake_cc_shards(directory: str) -> dict[int, str]:
+        iteration = int(directory.rsplit("it_", 1)[1])
+        if iteration >= iteration_count:
+            return {}
+        return {0: f"{directory}/part-00000.parquet"}
+
+    monkeypatch.setattr(dedup_ab_audit, "_cc_shards", fake_cc_shards)
+
+    entries = _cc_distance_entries("s3://bucket/dedup", {"s3://bucket/source"})
+
+    assert len(entries) == 1
+    assert len(entries[0]["iteration_paths"]) == iteration_count
+    assert entries[0]["iteration_paths"][-1].endswith("/it_57/part-00000.parquet")

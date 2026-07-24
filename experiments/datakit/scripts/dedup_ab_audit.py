@@ -39,7 +39,6 @@ EXPECTED_BASELINE_VERSION = "v2"
 EXPECTED_TREATMENT_VERSION = "v3"
 EXPECTED_BASELINE_NGRAM = "char"
 EXPECTED_TREATMENT_NGRAM = "word"
-CC_MAX_ITERATIONS = 50
 CC_SHARD_PATTERN = re.compile(r"part-(\d+)")
 
 logger = logging.getLogger(__name__)
@@ -180,7 +179,8 @@ def _cc_shards(directory: str) -> dict[int, str]:
 def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[dict[str, Any]]:
     iterations: list[dict[int, str]] = []
     expected_shards: set[int] | None = None
-    for iteration in range(CC_MAX_ITERATIONS + 1):
+    iteration = 0
+    while True:
         shards = _cc_shards(f"{dedup_path.rstrip('/')}/metadata/cc/it_{iteration}")
         if not shards:
             break
@@ -192,6 +192,7 @@ def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[di
                 f"missing={sorted(expected_shards - set(shards))}, extra={sorted(set(shards) - expected_shards)}"
             )
         iterations.append(shards)
+        iteration += 1
     if not iterations or expected_shards is None:
         raise FileNotFoundError(f"No complete connected-components iterations under {dedup_path}/metadata/cc")
 
