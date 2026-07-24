@@ -28,10 +28,16 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
+    MinHashParams,
+    _shard_attr_records,
     compute_minhash_attrs,
 )
+from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.writers import write_parquet_file
 
 from experiments.datakit.reference_pipeline import sample_sources
 from experiments.datakit.reports.dedup import dedup_report
@@ -56,6 +62,13 @@ class SourceInventory:
     shards: int
     rows: int
     bytes: int
+
+
+class MinhashCollection(BaseModel):
+    """All per-source MinHash artifacts produced by one combined Zephyr run."""
+
+    inputs: list[MinHashAttrData]
+    counters: dict[str, int | float]
 
 
 def _parquet_stats(item: tuple[str, str]) -> tuple[str, int, int]:
@@ -130,6 +143,55 @@ def _minhash_kwargs(variant: str) -> dict[str, Any]:
     return kwargs
 
 
+def _write_minhash_entry(entry: dict[str, str], params: MinHashParams) -> dict:
+    return write_parquet_file(_shard_attr_records(entry["source_path"], params), entry["attr_path"])
+
+
+def _combined_minhash_collection(
+    *,
+    source_steps: dict[str, StepSpec],
+    output_path: str,
+    variant: str,
+    worker: ResourceConfig,
+    max_workers: int,
+) -> MinhashCollection:
+    params = MinHashParams(**_minhash_kwargs(variant))
+    entries: list[dict[str, str]] = []
+    inputs: list[MinHashAttrData] = []
+    for source_index, (name, source_step) in enumerate(sorted(source_steps.items())):
+        source = read_artifact(source_step.output_path, NormalizedData)
+        shards = sorted(str(path) for path in StoragePath(f"{source.main_output_dir.rstrip('/')}/*.parquet").glob())
+        if not shards:
+            raise FileNotFoundError(f"No parquet shards found for {name}: {source.main_output_dir}")
+        attr_dir = f"{output_path.rstrip('/')}/outputs/source_{source_index:03d}"
+        entries.extend(
+            {
+                "source_path": shard,
+                "attr_path": f"{attr_dir}/{shard.rsplit('/', 1)[-1]}",
+            }
+            for shard in shards
+        )
+        inputs.append(
+            MinHashAttrData(
+                params=params,
+                source_main_dir=source.main_output_dir,
+                attr_dir=attr_dir,
+                counters={},
+            )
+        )
+
+    context = ZephyrContext(
+        name=f"dedup-ab-{variant}-minhash",
+        max_workers=max_workers,
+        resources=worker,
+    )
+    outcome = context.execute(
+        Dataset.from_list(entries).map(lambda entry: _write_minhash_entry(entry, params)),
+        verbose=True,
+    )
+    return MinhashCollection(inputs=inputs, counters=dict(outcome.counters))
+
+
 def run(
     *,
     variant: str,
@@ -139,6 +201,7 @@ def run(
     max_workers: int,
     dedup_parallelism: int,
     max_concurrent_sources: int,
+    layout: str,
 ) -> None:
     """Run MinHash, connected components, marker emission, and the HTML report."""
     _assert_variant(variant)
@@ -147,33 +210,64 @@ def run(
     coordinator = ResourceConfig(cpu=4, ram="16g", disk="16g", preemptible=False)
     minhash_kwargs = _minhash_kwargs(variant)
 
-    minhash_steps: list[StepSpec] = []
-    for name, source_step in sources.items():
-        minhash_steps.append(
-            StepSpec(
-                name=f"research/datakit/issue6854/{variant}/minhash/{name}",
-                deps=[source_step],
-                fn=lambda output_path, source_step=source_step: compute_minhash_attrs(
-                    source=read_artifact(source_step.output_path, NormalizedData),
-                    output_path=output_path,
-                    worker_resources=worker,
-                    max_workers=max_workers,
-                    **minhash_kwargs,
-                ),
-                hash_attrs={
-                    "variant": variant,
-                    "code_ref": code_ref,
-                    **{key: str(value) for key, value in minhash_kwargs.items()},
-                },
-                override_output_path=f"{output_prefix.rstrip('/')}/{variant}/minhash/{name}",
+    if layout == "per-source":
+        minhash_steps: list[StepSpec] = []
+        for name, source_step in sources.items():
+            minhash_steps.append(
+                StepSpec(
+                    name=f"research/datakit/issue6854/{variant}/minhash/{name}",
+                    deps=[source_step],
+                    fn=lambda output_path, source_step=source_step: compute_minhash_attrs(
+                        source=read_artifact(source_step.output_path, NormalizedData),
+                        output_path=output_path,
+                        worker_resources=worker,
+                        max_workers=max_workers,
+                        **minhash_kwargs,
+                    ),
+                    hash_attrs={
+                        "variant": variant,
+                        "code_ref": code_ref,
+                        **{key: str(value) for key, value in minhash_kwargs.items()},
+                    },
+                    override_output_path=f"{output_prefix.rstrip('/')}/{variant}/minhash/{name}",
+                )
             )
+        minhash_dependency: StepSpec | list[StepSpec] = minhash_steps
+        minhash_artifact_paths = [f"{step.output_path}/.artifact.json" for step in minhash_steps]
+
+        def minhash_inputs() -> list[MinHashAttrData]:
+            return [read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps]
+
+    else:
+        collection_step = StepSpec(
+            name=f"research/datakit/issue6854/{variant}/minhash-combined",
+            deps=list(sources.values()),
+            fn=lambda output_path: _combined_minhash_collection(
+                source_steps=sources,
+                output_path=output_path,
+                variant=variant,
+                worker=worker,
+                max_workers=max_workers,
+            ),
+            hash_attrs={
+                "variant": variant,
+                "code_ref": code_ref,
+                "layout": layout,
+                **{key: str(value) for key, value in minhash_kwargs.items()},
+            },
+            override_output_path=f"{output_prefix.rstrip('/')}/{variant}/minhash-combined",
         )
+        minhash_dependency = collection_step
+        minhash_artifact_paths = [f"{collection_step.output_path}/.artifact.json"]
+
+        def minhash_inputs() -> list[MinHashAttrData]:
+            return read_artifact(collection_step.output_path, MinhashCollection).inputs
 
     dedup_step = StepSpec(
         name=f"research/datakit/issue6854/{variant}/dedup",
-        deps=minhash_steps,
+        deps=minhash_dependency if isinstance(minhash_dependency, list) else [minhash_dependency],
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps],
+            inputs=minhash_inputs(),
             output_path=output_path,
             cc_max_iterations=CC_MAX_ITERATIONS,
             cc_resume=True,
@@ -184,6 +278,7 @@ def run(
         hash_attrs={
             "variant": variant,
             "code_ref": code_ref,
+            "layout": layout,
             "cc_max_iterations": CC_MAX_ITERATIONS,
             "cc_resume": True,
         },
@@ -207,7 +302,7 @@ def run(
         "code_ref": code_ref,
         "sample_prefix": sample_prefix,
         "source_count": len(sources),
-        "minhash_artifacts": [f"{step.output_path}/.artifact.json" for step in minhash_steps],
+        "minhash_artifacts": minhash_artifact_paths,
         "dedup_artifact": f"{dedup_step.output_path}/.artifact.json",
         "report_artifact": f"{report_step.output_path}/.artifact.json",
         "report_html": f"{report_step.output_path}/report.html",
@@ -218,6 +313,7 @@ def run(
             "max_workers": max_workers,
             "dedup_parallelism": dedup_parallelism,
             "max_concurrent_sources": max_concurrent_sources,
+            "layout": layout,
         },
     }
     manifest_path = f"{output_prefix.rstrip('/')}/{variant}/manifest.json"
@@ -240,6 +336,7 @@ def main() -> None:
     run_parser.add_argument("--max-workers", type=int, default=128)
     run_parser.add_argument("--dedup-parallelism", type=int, default=512)
     run_parser.add_argument("--max-concurrent-sources", type=int, default=4)
+    run_parser.add_argument("--layout", choices=("combined", "per-source"), default="combined")
 
     args = parser.parse_args()
     configure_logging(logging.INFO)
@@ -254,6 +351,7 @@ def main() -> None:
         max_workers=args.max_workers,
         dedup_parallelism=args.dedup_parallelism,
         max_concurrent_sources=args.max_concurrent_sources,
+        layout=args.layout,
     )
 
 
