@@ -125,7 +125,10 @@ impl NativeProxy {
 
     #[getter]
     fn rpc_metrics_json(&self) -> PyResult<String> {
-        let metrics = self.control.rpc_metrics().map_err(PyRuntimeError::new_err)?;
+        let metrics = self
+            .control
+            .rpc_metrics()
+            .map_err(PyRuntimeError::new_err)?;
         serde_json::to_string(&metrics).map_err(|error| {
             PyRuntimeError::new_err(format!("failed to encode proxy RPC metrics: {error}"))
         })

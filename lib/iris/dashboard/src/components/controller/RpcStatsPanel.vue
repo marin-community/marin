@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { formatRelativeTime, timestampMs } from '@/utils/formatting'
+import { formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
 
@@ -41,40 +41,51 @@ const { data, loading, error, refresh } = useLogServerStatsRpc<{ arrowIpc?: stri
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
-type SortKey = 'method' | 'count' | 'errorCount' | 'p50' | 'p95' | 'p99' | 'max' | 'last'
-interface RpcCallSample {
-  durationMs?: number
-  errorCode?: string
-  timestamp?: unknown
-  caller?: string
-  peer?: string
-  errorMessage?: string
-  requestPreview?: string
-  userAgent?: string
-}
+type SortKey = 'method' | 'count' | 'errorCount' | 'inFlight' | 'p50' | 'p95' | 'p99' | 'last'
 const sortKey = ref<SortKey>('p95')
 const sortDir = ref<'asc' | 'desc'>('desc')
 const expanded = ref<Set<string>>(new Set())
-const sampleTab = ref<Record<string, 'recent' | 'slow'>>({})
-
-function toNum(value: string | number | undefined): number {
-  if (typeof value === 'number') return value
-  if (typeof value === 'string') return parseInt(value, 10) || 0
-  return 0
-}
 
 interface MethodRow {
   method: string
   count: number
   errorCount: number
+  inFlight: number
   p50: number
   p95: number
   p99: number
-  max: number
   last: number
   buckets: number[]
   bounds: number[]
   totalDurationMs: number
+  durationCount: number
+  bucketSamples: Array<{ bound: number; cumulative: number }>
+}
+
+function percentileBound(samples: MethodRow['bucketSamples'], count: number, quantile: number): number {
+  if (!count) return 0
+  const target = count * quantile
+  for (const sample of samples) {
+    if (sample.cumulative >= target) return sample.bound
+  }
+  return samples.at(-1)?.bound ?? 0
+}
+
+function finalizeHistogram(row: MethodRow): void {
+  row.bucketSamples.sort((a, b) => {
+    if (!a.bound) return 1
+    if (!b.bound) return -1
+    return a.bound - b.bound
+  })
+  let previous = 0
+  for (const sample of row.bucketSamples) {
+    row.bounds.push(sample.bound)
+    row.buckets.push(Math.max(0, sample.cumulative - previous))
+    previous = sample.cumulative
+  }
+  row.p50 = percentileBound(row.bucketSamples, row.durationCount, 0.5)
+  row.p95 = percentileBound(row.bucketSamples, row.durationCount, 0.95)
+  row.p99 = percentileBound(row.bucketSamples, row.durationCount, 0.99)
 }
 
 const rows = computed<MethodRow[]>(() => {
@@ -84,22 +95,26 @@ const rows = computed<MethodRow[]>(() => {
     if (!metric.service || !metric.method || !metric.upstream) continue
     const method = `${metric.service}/${metric.method} (${metric.upstream})`
     const row = byMethod.get(method) ?? {
-      method, count: 0, errorCount: 0, p50: 0, p95: 0, p99: 0, max: 0, last: 0,
-      buckets: [], bounds: [], totalDurationMs: 0,
+      method, count: 0, errorCount: 0, inFlight: 0, p50: 0, p95: 0, p99: 0, last: 0,
+      buckets: [], bounds: [], totalDurationMs: 0, durationCount: 0, bucketSamples: [],
     }
     row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
     const value = Number(metric.value ?? 0)
     if (metric.name === 'iris_rpc_requests_total') row.count = value
     if (metric.name === 'iris_rpc_responses_total' && metric.status !== '200') row.errorCount += value
+    if (metric.name === 'iris_rpc_in_flight') row.inFlight = value
     if (metric.name === 'iris_rpc_duration_seconds_sum') row.totalDurationMs = value * 1000
+    if (metric.name === 'iris_rpc_duration_seconds_count') row.durationCount = value
     if (metric.name === 'iris_rpc_duration_seconds_bucket') {
-      const upper = metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000
-      row.bounds.push(upper)
-      row.buckets.push(value)
+      row.bucketSamples.push({
+        bound: metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000,
+        cumulative: value,
+      })
     }
     byMethod.set(method, row)
   }
   const list = [...byMethod.values()]
+  for (const row of list) finalizeHistogram(row)
   const dir = sortDir.value === 'asc' ? 1 : -1
   const key = sortKey.value
   return [...list].sort((a, b) => {
@@ -108,19 +123,16 @@ const rows = computed<MethodRow[]>(() => {
   })
 })
 
-const slowByMethod = computed<Record<string, never[]>>(() => ({}))
-const discoveryByMethod = computed<Record<string, never[]>>(() => ({}))
-
 const totalCount = computed(() => rows.value.reduce((a, r) => a + r.count, 0))
 const totalErrors = computed(() => rows.value.reduce((a, r) => a + r.errorCount, 0))
-const collectorStartedAt = computed(() => rows.value.reduce((oldest, row) => !oldest || row.last < oldest ? row.last : oldest, 0))
+const totalInFlight = computed(() => rows.value.reduce((a, r) => a + r.inFlight, 0))
+const lastUpdatedAt = computed(() => rows.value.reduce((latest, row) => Math.max(latest, row.last), 0))
 
 function toggleExpand(method: string) {
   const next = new Set(expanded.value)
   if (next.has(method)) next.delete(method)
   else next.add(method)
   expanded.value = next
-  if (!sampleTab.value[method]) sampleTab.value[method] = 'recent'
 }
 
 function setSort(key: SortKey) {
@@ -149,11 +161,6 @@ function fmtSince(epochMs: number): string {
   if (!epochMs) return '—'
   return formatRelativeTime(epochMs)
 }
-
-function prettyPreview(raw: string | undefined): string {
-  return raw ?? ''
-}
-
 
 function methodLabel(method: string): string {
   const slash = method.lastIndexOf('/')
@@ -217,11 +224,7 @@ function errorRate(row: MethodRow): string {
 }
 
 function avgMs(row: MethodRow): number {
-  return row.count ? row.totalDurationMs / row.count : 0
-}
-
-function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[] {
-  return tab === 'recent' ? (discoveryByMethod.value[method] ?? []) : (slowByMethod.value[method] ?? [])
+  return row.durationCount ? row.totalDurationMs / row.durationCount : 0
 }
 </script>
 
@@ -235,7 +238,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
     </div>
 
     <!-- Summary strip -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Methods</div>
         <div class="font-mono text-lg text-text">{{ rows.length }}</div>
@@ -243,6 +246,10 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Calls</div>
         <div class="font-mono text-lg text-text">{{ totalCount.toLocaleString() }}</div>
+      </div>
+      <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+        <div class="text-[10px] uppercase tracking-wider text-text-muted">In flight</div>
+        <div class="font-mono text-lg text-text">{{ totalInFlight.toLocaleString() }}</div>
       </div>
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
         <div class="text-[10px] uppercase tracking-wider text-text-muted">Errors</div>
@@ -254,8 +261,8 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
         </div>
       </div>
       <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
-        <div class="text-[10px] uppercase tracking-wider text-text-muted">Since</div>
-        <div class="font-mono text-sm text-text pt-1">{{ fmtSince(collectorStartedAt) }}</div>
+        <div class="text-[10px] uppercase tracking-wider text-text-muted">Updated</div>
+        <div class="font-mono text-sm text-text pt-1">{{ fmtSince(lastUpdatedAt) }}</div>
       </div>
     </div>
 
@@ -269,13 +276,16 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
       <!-- Header -->
       <div
         class="grid items-center gap-x-3 px-2 py-1.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-border"
-        style="grid-template-columns: minmax(0,1fr) 72px 90px 64px 64px 64px 200px 72px"
+        style="grid-template-columns: minmax(0,1fr) 72px 64px 90px 64px 64px 64px 200px 72px"
       >
         <button class="text-left cursor-pointer hover:text-text" @click="setSort('method')">
           Method <span class="text-accent">{{ sortIndicator('method') }}</span>
         </button>
         <button class="text-right cursor-pointer hover:text-text" @click="setSort('count')">
           Count <span class="text-accent">{{ sortIndicator('count') }}</span>
+        </button>
+        <button class="text-right cursor-pointer hover:text-text" @click="setSort('inFlight')">
+          Live <span class="text-accent">{{ sortIndicator('inFlight') }}</span>
         </button>
         <button class="text-right cursor-pointer hover:text-text" @click="setSort('errorCount')">
           Err <span class="text-accent">{{ sortIndicator('errorCount') }}</span>
@@ -304,7 +314,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
         <div v-for="row in rows" :key="row.method">
           <button
             class="w-full grid items-center gap-x-3 px-2 py-2 text-sm text-left hover:bg-surface-raised transition-colors cursor-pointer"
-            style="grid-template-columns: minmax(0,1fr) 72px 90px 64px 64px 64px 200px 72px"
+            style="grid-template-columns: minmax(0,1fr) 72px 64px 90px 64px 64px 64px 200px 72px"
             @click="toggleExpand(row.method)"
           >
             <div class="flex items-center gap-1.5 min-w-0">
@@ -321,6 +331,7 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
               </div>
             </div>
             <div class="text-right font-mono text-text">{{ row.count.toLocaleString() }}</div>
+            <div class="text-right font-mono text-text-secondary">{{ row.inFlight.toLocaleString() }}</div>
             <div
               class="text-right font-mono"
               :class="row.errorCount > 0 ? 'text-status-danger' : 'text-text-muted'"
@@ -377,8 +388,8 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
                 <div class="font-mono">{{ fmtMs(avgMs(row)) }}</div>
               </div>
               <div class="border border-surface-border-subtle rounded px-2 py-1.5 bg-surface">
-                <div class="text-[10px] uppercase text-text-muted tracking-wider">max</div>
-                <div class="font-mono">{{ fmtMs(row.max) }}</div>
+                <div class="text-[10px] uppercase text-text-muted tracking-wider">in flight</div>
+                <div class="font-mono">{{ row.inFlight.toLocaleString() }}</div>
               </div>
               <div class="border border-surface-border-subtle rounded px-2 py-1.5 bg-surface">
                 <div class="text-[10px] uppercase text-text-muted tracking-wider">total time</div>
@@ -427,72 +438,6 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
               </div>
             </div>
 
-            <div>
-              <div class="flex items-center gap-1 mb-2 text-xs">
-                <button
-                  class="px-2 py-1 border-b-2 font-mono uppercase text-[10px] tracking-wider cursor-pointer"
-                  :class="(sampleTab[row.method] ?? 'recent') === 'recent'
-                    ? 'border-accent text-text'
-                    : 'border-transparent text-text-muted hover:text-text'"
-                  @click="sampleTab[row.method] = 'recent'"
-                >Recent · {{ (discoveryByMethod[row.method] ?? []).length }}</button>
-                <button
-                  class="px-2 py-1 border-b-2 font-mono uppercase text-[10px] tracking-wider cursor-pointer"
-                  :class="sampleTab[row.method] === 'slow'
-                    ? 'border-accent text-text'
-                    : 'border-transparent text-text-muted hover:text-text'"
-                  @click="sampleTab[row.method] = 'slow'"
-                >Slow &amp; errors · {{ (slowByMethod[row.method] ?? []).length }}</button>
-              </div>
-
-              <div
-                v-if="!currentSamples(row.method, sampleTab[row.method] ?? 'recent').length"
-                class="text-xs text-text-muted italic py-2"
-              >
-                {{ (sampleTab[row.method] ?? 'recent') === 'slow'
-                  ? 'No slow calls or errors captured for this method.'
-                  : 'No samples captured yet.' }}
-              </div>
-              <ul v-else class="space-y-1.5">
-                <li
-                  v-for="(s, i) in currentSamples(row.method, sampleTab[row.method] ?? 'recent')"
-                  :key="i"
-                  class="border border-surface-border-subtle rounded text-xs bg-surface"
-                >
-                  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 py-1.5">
-                    <span
-                      class="font-mono"
-                      :class="s.errorCode
-                        ? 'text-status-danger'
-                        : ((s.durationMs ?? 0) > 1000 ? 'text-status-warning' : 'text-text')"
-                    >{{ fmtMs(s.durationMs ?? 0) }}</span>
-                    <span v-if="s.errorCode" class="font-mono text-status-danger text-[10px] uppercase">{{ s.errorCode }}</span>
-                    <span class="text-text-muted">{{ fmtSince(timestampMs(s.timestamp)) }}</span>
-                    <span v-if="s.caller" class="text-text-muted">
-                      <span class="text-[10px] uppercase tracking-wider">caller</span>
-                      <span class="font-mono ml-1">{{ s.caller }}</span>
-                    </span>
-                    <span v-if="s.peer" class="text-text-muted">
-                      <span class="text-[10px] uppercase tracking-wider">peer</span>
-                      <span class="font-mono ml-1">{{ s.peer }}</span>
-                    </span>
-                  </div>
-                  <div v-if="s.errorMessage" class="px-2 pb-1.5 font-mono text-status-danger break-all">
-                    {{ s.errorMessage }}
-                  </div>
-                  <details v-if="s.requestPreview" class="px-2 pb-1.5">
-                    <summary class="cursor-pointer text-text-muted text-[10px] uppercase tracking-wider hover:text-text">
-                      request · <span class="normal-case tracking-normal">redacted preview</span>
-                    </summary>
-                    <pre class="mt-1 font-mono text-[11px] whitespace-pre-wrap break-all bg-surface-sunken rounded p-2 border border-surface-border-subtle">{{ prettyPreview(s.requestPreview) }}</pre>
-                    <div v-if="s.userAgent" class="mt-1 text-[10px] text-text-muted">
-                      <span class="uppercase tracking-wider">ua</span>
-                      <span class="font-mono ml-1">{{ s.userAgent }}</span>
-                    </div>
-                  </details>
-                </li>
-              </ul>
-            </div>
           </div>
         </div>
       </div>

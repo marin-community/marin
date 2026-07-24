@@ -115,6 +115,15 @@ def register_collector(collector: Collector) -> None:
         _collectors.add(collector)
 
 
+def unregister_collector(collector: Collector) -> None:
+    """Remove a custom collector previously registered by this process."""
+    with _lock:
+        if collector not in _collectors:
+            return
+        REGISTRY.unregister(collector)
+        _collectors.remove(collector)
+
+
 def metric_name(name: str, prefix: str = "") -> str:
     """Convert an arbitrary counter/metric key into a legal Prometheus name.
 

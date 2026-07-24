@@ -27,24 +27,11 @@ class _NativeProxy(Protocol):
 class NativeProxyMetricsCollector(Collector):
     """A Telltale bridge that never owns or mutates native metric values."""
 
-    def __init__(self) -> None:
-        self._proxy: _NativeProxy | None = None
-
-    def set_proxy(self, proxy: _NativeProxy | None) -> None:
+    def __init__(self, proxy: _NativeProxy) -> None:
         self._proxy = proxy
 
-    def clear_proxy(self, proxy: _NativeProxy) -> None:
-        if self._proxy is proxy:
-            self._proxy = None
-
     def collect(self) -> Iterable[Metric]:
-        proxy = self._proxy
-        if proxy is None:
-            return ()
-        payload = getattr(proxy, "rpc_metrics_json", None)
-        if payload is None:
-            return ()
-        snapshot = json.loads(payload)
+        snapshot = json.loads(self._proxy.rpc_metrics_json)
         requests = Metric("iris_rpc_requests", "Iris RPC requests handled by the native proxy", "counter")
         responses = Metric("iris_rpc_responses", "Iris RPC responses returned by the native proxy", "counter")
         in_flight = Metric("iris_rpc_in_flight", "Iris RPC requests currently handled by the native proxy", "gauge")
@@ -62,20 +49,18 @@ class NativeProxyMetricsCollector(Collector):
             for bound, count in series["latency_buckets"]:
                 duration.add_sample("iris_rpc_duration_seconds_bucket", labels={**labels, "le": bound}, value=count)
             duration.add_sample("iris_rpc_duration_seconds_sum", labels=labels, value=series["latency_sum_seconds"])
-            duration.add_sample("iris_rpc_duration_seconds_count", labels=labels, value=series["requests"])
+            duration.add_sample("iris_rpc_duration_seconds_count", labels=labels, value=series["latency_count"])
         return (requests, responses, in_flight, duration)
 
 
-_COLLECTOR = NativeProxyMetricsCollector()
-
-
-def install_native_proxy_metrics(proxy: _NativeProxy) -> None:
+def install_native_proxy_metrics(proxy: _NativeProxy) -> NativeProxyMetricsCollector:
     """Make ``proxy`` the source for the process's Iris RPC Telltale series."""
-    _COLLECTOR.set_proxy(proxy)
-    telltale.register_collector(_COLLECTOR)
+    collector = NativeProxyMetricsCollector(proxy)
+    telltale.register_collector(collector)
     telltale.set_global_labels(source="iris")
+    return collector
 
 
-def clear_native_proxy_metrics(proxy: _NativeProxy) -> None:
-    """Stop exposing a proxy that has been shut down."""
-    _COLLECTOR.clear_proxy(proxy)
+def uninstall_native_proxy_metrics(collector: NativeProxyMetricsCollector) -> None:
+    """Remove the collector before its native proxy shuts down."""
+    telltale.unregister_collector(collector)

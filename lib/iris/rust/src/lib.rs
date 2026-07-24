@@ -136,6 +136,7 @@ pub struct RpcMetricSeries {
     pub responses: BTreeMap<u16, u64>,
     pub in_flight: u64,
     pub latency_buckets: Vec<(String, u64)>,
+    pub latency_count: u64,
     pub latency_sum_seconds: f64,
 }
 
@@ -187,20 +188,24 @@ impl RpcMetrics {
             series: self
                 .series
                 .iter()
-                .map(|(key, state)| RpcMetricSeries {
-                    service: key.service.clone(),
-                    method: key.method.clone(),
-                    upstream: key.upstream.to_string(),
-                    requests: state.requests,
-                    responses: state.responses.clone(),
-                    in_flight: state.in_flight,
-                    latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
-                        .iter()
-                        .zip(state.latency_bucket_counts)
-                        .map(|(bound, count)| (bound.to_string(), count))
-                        .chain(std::iter::once(("+Inf".to_string(), state.requests)))
-                        .collect(),
-                    latency_sum_seconds: state.latency_sum_seconds,
+                .map(|(key, state)| {
+                    let latency_count = state.responses.values().sum();
+                    RpcMetricSeries {
+                        service: key.service.clone(),
+                        method: key.method.clone(),
+                        upstream: key.upstream.to_string(),
+                        requests: state.requests,
+                        responses: state.responses.clone(),
+                        in_flight: state.in_flight,
+                        latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
+                            .iter()
+                            .zip(state.latency_bucket_counts)
+                            .map(|(bound, count)| (bound.to_string(), count))
+                            .chain(std::iter::once(("+Inf".to_string(), latency_count)))
+                            .collect(),
+                        latency_count,
+                        latency_sum_seconds: state.latency_sum_seconds,
+                    }
                 })
                 .collect(),
         }
@@ -912,7 +917,11 @@ fn method_allowed(method: &Method) -> bool {
 }
 
 fn rpc_metric_key(request: &Request) -> Option<RpcMetricKey> {
-    let segments = request.uri().path().split('/').filter(|segment| !segment.is_empty());
+    let segments = request
+        .uri()
+        .path()
+        .split('/')
+        .filter(|segment| !segment.is_empty());
     let mut segments = segments.skip_while(|segment| !segment.starts_with("iris."));
     let service = segments.next()?;
     let method = segments.next()?;
@@ -1452,6 +1461,17 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let timer = RpcRequestTimer::begin(&control, &request).unwrap();
+
+        let snapshot = control.rpc_metrics().unwrap();
+        let series = snapshot.series.first().unwrap();
+        assert_eq!(series.requests, 1);
+        assert_eq!(series.in_flight, 1);
+        assert_eq!(series.latency_count, 0);
+        assert_eq!(
+            series.latency_buckets.last(),
+            Some(&("+Inf".to_string(), 0))
+        );
+
         timer.finish(StatusCode::INTERNAL_SERVER_ERROR);
 
         let snapshot = control.rpc_metrics().unwrap();
@@ -1462,7 +1482,11 @@ mod tests {
         assert_eq!(series.requests, 1);
         assert_eq!(series.responses.get(&500), Some(&1));
         assert_eq!(series.in_flight, 0);
-        assert_eq!(series.latency_buckets.last(), Some(&("+Inf".to_string(), 1)));
+        assert_eq!(series.latency_count, 1);
+        assert_eq!(
+            series.latency_buckets.last(),
+            Some(&("+Inf".to_string(), 1))
+        );
     }
 
     fn mapping(endpoint_id: &str, name: &str) -> EndpointMapping {

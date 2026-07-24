@@ -73,8 +73,12 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyM
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats, rpc_metrics_from_json
-from iris.cluster.controller.native_proxy_metrics import clear_native_proxy_metrics, install_native_proxy_metrics
+from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
+from iris.cluster.controller.native_proxy_metrics import (
+    NativeProxyMetricsCollector,
+    install_native_proxy_metrics,
+    uninstall_native_proxy_metrics,
+)
 from iris.cluster.controller.ops.task import (
     Assignment,
     finalize,
@@ -537,6 +541,7 @@ class Controller:
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
+        self._native_proxy_metrics: NativeProxyMetricsCollector | None = None
         self._telltale_forwarding = False
         self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
@@ -740,7 +745,7 @@ class Controller:
             self._dashboard.proxy_decision_secret,
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
-        install_native_proxy_metrics(self._native_proxy)
+        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
         self._telltale_forwarding = telltale.start_forwarding(FinelogMetricSink(self._log_service_address))
         self._replace_native_proxy_registry()
 
@@ -842,11 +847,13 @@ class Controller:
             self._task_state_collector.close()
         self._federation.stop()
 
-        if self._native_proxy is not None:
-            clear_native_proxy_metrics(self._native_proxy)
-            self._native_proxy.stop()
         if self._telltale_forwarding:
             telltale.stop_forwarding()
+        if self._native_proxy_metrics is not None:
+            uninstall_native_proxy_metrics(self._native_proxy_metrics)
+            self._native_proxy_metrics = None
+        if self._native_proxy is not None:
+            self._native_proxy.stop()
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
         # stops the platform) and releases the backend's own resources.
@@ -1809,15 +1816,6 @@ class Controller:
         if self._native_proxy is None:
             return None
         return NativeProxyStats.from_json(self._native_proxy.stats_json)
-
-    @property
-    def native_proxy_rpc_metrics(self) -> dict | None:
-        """Snapshot native-proxy RPC metrics for local diagnostics and tests."""
-        if self._native_proxy is None:
-            return None
-        if not hasattr(self._native_proxy, "rpc_metrics_json"):
-            return None
-        return rpc_metrics_from_json(self._native_proxy.rpc_metrics_json)
 
     @property
     def external_host(self) -> str:
