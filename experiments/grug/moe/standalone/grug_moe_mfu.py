@@ -2320,15 +2320,19 @@ def main():
             if tokens_per_rank % dispatch_tokens != 0:
                 raise ValueError(f"--ep-chunk-tokens {a.ep_chunk_tokens} must divide per-rank tokens {tokens_per_rank}")
             recv_capacity = a.expert_parallelism * dispatch_tokens * a.num_experts_per_token
-            _te_ep_bootstrap(
-                world_size=jax.process_count(),
-                rank=jax.process_index(),
-                num_experts=a.num_experts,
-                max_tokens_per_rank=dispatch_tokens,
-                recv_capacity_per_rank=recv_capacity,
-                hidden_dim=a.hidden_dim,
-                max_num_sms=a.ep_max_num_sms,
-            )
+            # Legacy mesh context for the eager bootstrap: TE tip's _get_mesh
+            # prefers the thread-resources physical mesh, and the #3226 domain
+            # grouping reads mesh.devices (AbstractMesh raises under set_mesh).
+            with mesh:
+                _te_ep_bootstrap(
+                    world_size=jax.process_count(),
+                    rank=jax.process_index(),
+                    num_experts=a.num_experts,
+                    max_tokens_per_rank=dispatch_tokens,
+                    recv_capacity_per_rank=recv_capacity,
+                    hidden_dim=a.hidden_dim,
+                    max_num_sms=a.ep_max_num_sms,
+                )
             configure_nccl_ep(a.num_experts_per_token, recv_capacity, chunk_tokens_per_rank=a.ep_chunk_tokens)
         elif a.moe_implementation == "te_moe":
             # Full TE MoE block: moe() re-derives its no-drop capacity per
@@ -2345,15 +2349,16 @@ def main():
                 a.num_experts_per_token,
                 a.num_experts // a.expert_parallelism,
             )
-            _te_ep_bootstrap(
-                world_size=jax.process_count(),
-                rank=jax.process_index(),
-                num_experts=a.num_experts,
-                max_tokens_per_rank=tokens_per_rank,
-                recv_capacity_per_rank=recv_capacity,
-                hidden_dim=a.hidden_dim,
-                max_num_sms=a.ep_max_num_sms,
-            )
+            with mesh:
+                _te_ep_bootstrap(
+                    world_size=jax.process_count(),
+                    rank=jax.process_index(),
+                    num_experts=a.num_experts,
+                    max_tokens_per_rank=tokens_per_rank,
+                    recv_capacity_per_rank=recv_capacity,
+                    hidden_dim=a.hidden_dim,
+                    max_num_sms=a.ep_max_num_sms,
+                )
             record_ep_bootstrap_signature_for_moe(
                 num_experts=a.num_experts,
                 max_tokens_per_rank=tokens_per_rank,
