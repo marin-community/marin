@@ -10,7 +10,12 @@ import jax.numpy as jnp
 import pytest
 from jax.sharding import AbstractMesh, PartitionSpec as P
 
-from levanter.grug._moe.ep_ncclep import _apply_recv_weights, moe_mlp_ep_ncclep, ncclep_receive_capacity
+from levanter.grug._moe.ep_ncclep import (
+    _apply_recv_weights,
+    _mask_unused_recv_rows,
+    moe_mlp_ep_ncclep,
+    ncclep_receive_capacity,
+)
 
 
 class _FakePrimitive:
@@ -77,6 +82,31 @@ def test_ncclep_recv_weighting_masks_unused_rows_from_values_and_gradients() -> 
         jnp.array([[0.5, 0.5], [0.25, 0.25], [0.0, 0.0], [0.0, 0.0]]),
     )
     assert jnp.array_equal(weight_gradient, jnp.array([5.0, 12.0, 0.0, 0.0]))
+
+
+def test_ncclep_masks_unused_ragged_dot_rows_from_values_and_gradients() -> None:
+    values = jnp.array(
+        [
+            [2.0, 3.0],
+            [5.0, 7.0],
+            [jnp.nan, jnp.nan],
+            [jnp.nan, jnp.nan],
+        ],
+        dtype=jnp.float32,
+    )
+    token_counts = jnp.array([1, 1], dtype=jnp.int32)
+
+    def masked_sum(inputs):
+        return _mask_unused_recv_rows(inputs, token_counts).sum()
+
+    masked = _mask_unused_recv_rows(values, token_counts)
+    gradient = jax.grad(masked_sum)(values)
+
+    assert jnp.array_equal(masked, jnp.array([[2.0, 3.0], [5.0, 7.0], [0.0, 0.0], [0.0, 0.0]]))
+    assert jnp.array_equal(
+        gradient,
+        jnp.array([[1.0, 1.0], [1.0, 1.0], [0.0, 0.0], [0.0, 0.0]]),
+    )
 
 
 def test_ncclep_backend_passes_rank_local_shapes_to_transformer_engine(

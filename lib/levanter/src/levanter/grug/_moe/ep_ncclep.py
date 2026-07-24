@@ -62,6 +62,11 @@ def _batch_leading_axes(batch_spec: P) -> tuple[str, ...]:
     return axes
 
 
+def _mask_unused_recv_rows(values: jax.Array, token_counts: jax.Array) -> jax.Array:
+    valid_rows = jnp.arange(values.shape[-2], dtype=jnp.int32) < jnp.sum(token_counts, dtype=jnp.int32)
+    return jnp.where(valid_rows[:, None], values, jnp.zeros((), dtype=values.dtype))
+
+
 def _local_expert_ffn(
     recv_tokens: jax.Array,
     token_counts: jax.Array,
@@ -72,18 +77,23 @@ def _local_expert_ffn(
 ) -> jax.Array:
     dispatched = recv_tokens.reshape(recv_tokens.shape[-2], recv_tokens.shape[-1])
     group_sizes = token_counts.reshape(-1).astype(jnp.int32)
-    valid_rows = jnp.arange(dispatched.shape[0], dtype=jnp.int32) < jnp.sum(group_sizes, dtype=jnp.int32)
-    dispatched = jnp.where(valid_rows[:, None], dispatched, jnp.zeros((), dtype=dispatched.dtype))
+    dispatched = _mask_unused_recv_rows(dispatched, group_sizes)
     dispatched = tree_checkpoint_name(dispatched, _CHECKPOINT_DISPATCH_INPUT)
 
     w13_out = tree_checkpoint_name(
-        ragged_dot(dispatched, w_up_gate, group_sizes, implementation="triton"),
+        _mask_unused_recv_rows(
+            ragged_dot(dispatched, w_up_gate, group_sizes, implementation="triton"),
+            group_sizes,
+        ),
         _CHECKPOINT_EXPERT_HIDDEN,
     )
     intermediate_dim = w_down.shape[1]
     gate, up = split_moe_w13_output(w13_out, intermediate_dim=intermediate_dim, interleaved=False)
     expert_out = tree_checkpoint_name(
-        ragged_dot(activation_fn(gate) * up, w_down, group_sizes, implementation="triton"),
+        _mask_unused_recv_rows(
+            ragged_dot(activation_fn(gate) * up, w_down, group_sizes, implementation="triton"),
+            group_sizes,
+        ),
         _CHECKPOINT_DISPATCH_OUTPUT,
     )
     return expert_out.reshape(recv_tokens.shape)
