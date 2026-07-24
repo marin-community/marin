@@ -15,7 +15,9 @@ import stat
 import tarfile
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -34,12 +36,23 @@ _MAX_METADATA_BYTES = 1 << 20
 _MAX_ARCHIVE_BYTES = 20 << 30
 _MAX_EXTRACTED_BYTES = 20 << 30
 _MAX_ENTRIES = 200_000
+_TRANSFER_PROCESS_GRACE_SECONDS = 5
 _GENERATION_PATTERN = re.compile(r"[0-9a-f]{64}")
 _TRANSIENT_SUFFIXES = (".lock", ".tmp")
+_LATEST_FILENAME = "latest.json"
+_GENERATIONS_DIR = "generations"
+_MANIFEST_FILENAME = "manifest.json"
+_ARCHIVE_FILENAME = "cache.tar.gz"
 
 
 class _CacheMiss(Exception):
     pass
+
+
+class _TransferStatus(StrEnum):
+    OK = "ok"
+    MISS = "miss"
+    ERROR = "error"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -67,21 +80,148 @@ class _Archive:
     entry_count: int
 
 
-class VllmCompilationCache:
-    """Own a local compiler cache and synchronize it with Marin temporary storage."""
+@dataclasses.dataclass(frozen=True)
+class _Extraction:
+    entry_count: int
+    size: int
 
+
+@dataclasses.dataclass(frozen=True)
+class _Manifest:
+    schema_version: int
+    namespace: str
+    namespace_identity: dict[str, Any]
+    generation_id: str
+    archive_sha256: str
+    archive_size_bytes: int
+    source_size_bytes: int
+    entry_count: int
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "_Manifest":
+        return cls(
+            schema_version=value.get("schema_version"),
+            namespace=value.get("namespace"),
+            namespace_identity=value.get("namespace_identity"),
+            generation_id=value.get("generation_id"),
+            archive_sha256=value.get("archive_sha256"),
+            archive_size_bytes=value.get("archive_size_bytes"),
+            source_size_bytes=value.get("source_size_bytes"),
+            entry_count=value.get("entry_count"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class _TransferResult:
+    status: _TransferStatus
+    reason: str | None = None
+    generation_id: str | None = None
+    manifest: _Manifest | None = None
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "_TransferResult":
+        manifest = value.get("manifest")
+        return cls(
+            status=_TransferStatus(value["status"]),
+            reason=value.get("reason"),
+            generation_id=value.get("generation_id"),
+            manifest=_Manifest.from_dict(manifest) if isinstance(manifest, dict) else None,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {"status": self.status.value}
+        if self.reason is not None:
+            value["reason"] = self.reason
+        if self.generation_id is not None:
+            value["generation_id"] = self.generation_id
+        if self.manifest is not None:
+            value["manifest"] = self.manifest.to_dict()
+        return value
+
+
+class VllmCompilationCache(ABC):
+    """Compilation-cache lifecycle owned by a vLLM server handle."""
+
+    @classmethod
+    def prepare(
+        cls,
+        *,
+        launcher_identity: str,
+        compile_identity: VllmCompileIdentity,
+        environment: dict[str, str],
+        mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+    ) -> "VllmCompilationCache":
+        """Build a disabled cache or create and restore a manager-owned local cache."""
+        if mode is VllmCompilationCacheMode.DISABLED:
+            return _DisabledVllmCompilationCache(dict(environment))
+        return _ManagedVllmCompilationCache._prepare(
+            launcher_identity=launcher_identity,
+            compile_identity=compile_identity,
+            environment=environment,
+        )
+
+    @property
+    @abstractmethod
+    def root(self) -> Path: ...
+
+    @property
+    @abstractmethod
+    def remote_prefix(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def namespace(self) -> str: ...
+
+    @abstractmethod
+    def environment(self) -> dict[str, str]: ...
+
+    @abstractmethod
+    def publish_after_ready(self) -> None: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+
+class _DisabledVllmCompilationCache(VllmCompilationCache):
+    def __init__(self, environment: dict[str, str]) -> None:
+        self._environment = environment
+
+    @property
+    def root(self) -> Path:
+        raise RuntimeError("Disabled vLLM compilation caches do not have a local root")
+
+    @property
+    def remote_prefix(self) -> str:
+        raise RuntimeError("Disabled vLLM compilation caches do not have a remote prefix")
+
+    @property
+    def namespace(self) -> str:
+        raise RuntimeError("Disabled vLLM compilation caches do not have a namespace")
+
+    def environment(self) -> dict[str, str]:
+        return dict(self._environment)
+
+    def publish_after_ready(self) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+
+class _ManagedVllmCompilationCache(VllmCompilationCache):
     def __init__(
         self,
         *,
-        mode: VllmCompilationCacheMode,
         environment: dict[str, str],
-        work_dir: Path | None,
-        root: Path | None,
-        remote_prefix: str | None,
-        namespace: str | None,
-        namespace_identity: dict[str, Any] | None,
+        work_dir: Path,
+        root: Path,
+        remote_prefix: str,
+        namespace: str,
+        namespace_identity: dict[str, Any],
     ) -> None:
-        self._mode = mode
         self._environment = environment
         self._work_dir = work_dir
         self._root = root
@@ -93,26 +233,14 @@ class VllmCompilationCache:
         self._published = False
 
     @classmethod
-    def prepare(
+    def _prepare(
         cls,
         *,
         launcher_identity: str,
         compile_identity: VllmCompileIdentity,
         environment: dict[str, str],
-        mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
-    ) -> "VllmCompilationCache":
-        """Create a local cache, restore its latest generation, and build the child environment."""
+    ) -> "_ManagedVllmCompilationCache":
         child_environment = dict(environment)
-        if mode is VllmCompilationCacheMode.DISABLED:
-            return cls(
-                mode=mode,
-                environment=child_environment,
-                work_dir=None,
-                root=None,
-                remote_prefix=None,
-                namespace=None,
-                namespace_identity=None,
-            )
 
         work_dir = Path(tempfile.mkdtemp(prefix="vllm_compilation_cache_"))
         root = work_dir / "cache"
@@ -128,18 +256,9 @@ class VllmCompilationCache:
         )
         namespace = hashlib.sha256(_canonical_json(namespace_identity).encode()).hexdigest()
 
-        remote_prefix: str | None
-        try:
-            remote_prefix = str(
-                StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX))
-                / f"v{_ARCHIVE_SCHEMA_VERSION}/{namespace}"
-            )
-        except Exception:
-            remote_prefix = None
-            logger.warning(
-                "vLLM compilation cache has no remote prefix; using an ephemeral local cache",
-                exc_info=True,
-            )
+        remote_prefix = str(
+            StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{_ARCHIVE_SCHEMA_VERSION}/{namespace}"
+        )
 
         child_environment.update(
             {
@@ -156,7 +275,6 @@ class VllmCompilationCache:
             }
         )
         cache = cls(
-            mode=mode,
             environment=child_environment,
             work_dir=work_dir,
             root=root,
@@ -169,20 +287,14 @@ class VllmCompilationCache:
 
     @property
     def root(self) -> Path:
-        if self._root is None:
-            raise RuntimeError("Disabled vLLM compilation caches do not have a local root")
         return self._root
 
     @property
     def remote_prefix(self) -> str:
-        if self._remote_prefix is None:
-            raise RuntimeError("This vLLM compilation cache does not have a remote prefix")
         return self._remote_prefix
 
     @property
     def namespace(self) -> str:
-        if self._namespace is None:
-            raise RuntimeError("Disabled vLLM compilation caches do not have a namespace")
         return self._namespace
 
     def environment(self) -> dict[str, str]:
@@ -191,15 +303,7 @@ class VllmCompilationCache:
 
     def publish_after_ready(self) -> None:
         """Publish a stable cache generation without failing an otherwise ready server."""
-        if (
-            self._mode is VllmCompilationCacheMode.DISABLED
-            or self._published
-            or self._remote_prefix is None
-            or self._work_dir is None
-            or self._root is None
-            or self._namespace is None
-            or self._namespace_identity is None
-        ):
+        if self._published:
             return
 
         self._published = True
@@ -220,32 +324,32 @@ class VllmCompilationCache:
                 return
 
             generation_id = archive.sha256
-            manifest = {
-                "schema_version": _ARCHIVE_SCHEMA_VERSION,
-                "namespace": self._namespace,
-                "namespace_identity": self._namespace_identity,
-                "generation_id": generation_id,
-                "archive_sha256": archive.sha256,
-                "archive_size_bytes": archive.size,
-                "source_size_bytes": archive.source_size,
-                "entry_count": archive.entry_count,
-            }
+            manifest = _Manifest(
+                schema_version=_ARCHIVE_SCHEMA_VERSION,
+                namespace=self._namespace,
+                namespace_identity=self._namespace_identity,
+                generation_id=generation_id,
+                archive_sha256=archive.sha256,
+                archive_size_bytes=archive.size,
+                source_size_bytes=archive.source_size,
+                entry_count=archive.entry_count,
+            )
             result = _run_transfer(
                 _publish_transfer_worker,
                 (
                     self._remote_prefix,
                     generation_id,
                     str(archive.path),
-                    _canonical_json(manifest),
+                    _canonical_json(manifest.to_dict()),
                 ),
                 self._work_dir / "publish-result.json",
-                use_subprocess=StoragePath(self._remote_prefix).is_remote,
+                self._remote_prefix,
             )
-            if result.get("status") != "ok":
+            if result.status is not _TransferStatus.OK:
                 logger.warning(
                     "Skipping vLLM compilation cache publication namespace=%s reason=%s",
                     self._namespace,
-                    result.get("reason", "unknown transfer failure"),
+                    result.reason or "unknown transfer failure",
                 )
                 return
             self._restored_sha256 = archive.sha256
@@ -273,16 +377,12 @@ class VllmCompilationCache:
         if self._closed:
             return
         self._closed = True
-        if self._work_dir is not None:
-            try:
-                shutil.rmtree(self._work_dir)
-            except OSError:
-                logger.warning("Failed to remove local vLLM compilation cache %s", self._work_dir, exc_info=True)
+        try:
+            shutil.rmtree(self._work_dir)
+        except OSError:
+            logger.warning("Failed to remove local vLLM compilation cache %s", self._work_dir, exc_info=True)
 
     def _restore(self) -> None:
-        if self._remote_prefix is None or self._work_dir is None or self._root is None or self._namespace is None:
-            return
-
         started = time.monotonic()
         archive_path = self._work_dir / "restore.tar.gz"
         staging = self._work_dir / "restored"
@@ -291,47 +391,48 @@ class VllmCompilationCache:
                 _restore_transfer_worker,
                 (self._remote_prefix, str(archive_path)),
                 self._work_dir / "restore-result.json",
-                use_subprocess=StoragePath(self._remote_prefix).is_remote,
+                self._remote_prefix,
             )
-            status = result.get("status")
-            if status == "miss":
+            if result.status is _TransferStatus.MISS:
                 logger.info(
                     "vLLM compilation cache miss namespace=%s reason=%s",
                     self._namespace,
-                    result.get("reason", "no published generation"),
+                    result.reason or "no published generation",
                 )
                 return
-            if status != "ok":
-                raise _CacheMiss(str(result.get("reason", "unknown transfer failure")))
+            if result.status is not _TransferStatus.OK:
+                raise _CacheMiss(result.reason or "unknown transfer failure")
 
-            manifest = result.get("manifest")
-            if not isinstance(manifest, dict):
+            manifest = result.manifest
+            if manifest is None or result.generation_id is None:
                 raise _CacheMiss("generation manifest is not an object")
-            self._validate_manifest(manifest, str(result.get("generation_id")), archive_path)
+            self._validate_manifest(manifest, result.generation_id, archive_path)
 
-            source_size = int(manifest.get("source_size_bytes", 0))
+            source_size = manifest.source_size_bytes
             required_space = archive_path.stat().st_size + source_size
             if shutil.disk_usage(self._work_dir).free < required_space:
                 raise _CacheMiss(f"insufficient local disk for {required_space} cache bytes")
 
             staging.mkdir()
-            entry_count, extracted_size = _extract_archive(archive_path, staging)
-            if entry_count != manifest["entry_count"]:
-                raise _CacheMiss(f"archive entry count mismatch: expected {manifest['entry_count']}, got {entry_count}")
-            if extracted_size != manifest["source_size_bytes"]:
+            extraction = _extract_archive(archive_path, staging)
+            if extraction.entry_count != manifest.entry_count:
                 raise _CacheMiss(
-                    f"extracted cache size mismatch: expected {manifest['source_size_bytes']}, got {extracted_size}"
+                    f"archive entry count mismatch: expected {manifest.entry_count}, got {extraction.entry_count}"
+                )
+            if extraction.size != manifest.source_size_bytes:
+                raise _CacheMiss(
+                    f"extracted cache size mismatch: expected {manifest.source_size_bytes}, got {extraction.size}"
                 )
             self._root.rmdir()
             staging.replace(self._root)
-            self._restored_sha256 = str(manifest["archive_sha256"])
+            self._restored_sha256 = manifest.archive_sha256
             logger.info(
                 "Restored vLLM compilation cache namespace=%s entries=%s source_bytes=%s "
                 "archive_bytes=%s duration=%.1fs",
                 self._namespace,
-                manifest.get("entry_count", "unknown"),
-                manifest.get("source_size_bytes", "unknown"),
-                manifest["archive_size_bytes"],
+                manifest.entry_count,
+                manifest.source_size_bytes,
+                manifest.archive_size_bytes,
                 time.monotonic() - started,
             )
         except Exception as error:
@@ -348,27 +449,27 @@ class VllmCompilationCache:
         finally:
             _remove_local_file(archive_path)
 
-    def _validate_manifest(self, manifest: dict[str, Any], expected_generation_id: str, archive_path: Path) -> None:
-        if manifest.get("schema_version") != _ARCHIVE_SCHEMA_VERSION:
+    def _validate_manifest(self, manifest: _Manifest, expected_generation_id: str, archive_path: Path) -> None:
+        if manifest.schema_version != _ARCHIVE_SCHEMA_VERSION:
             raise _CacheMiss("unsupported archive schema")
-        if manifest.get("namespace") != self._namespace:
+        if manifest.namespace != self._namespace:
             raise _CacheMiss("namespace mismatch")
-        if manifest.get("namespace_identity") != self._namespace_identity:
+        if manifest.namespace_identity != self._namespace_identity:
             raise _CacheMiss("namespace identity mismatch")
-        generation_id = manifest.get("generation_id")
+        generation_id = manifest.generation_id
         if not isinstance(generation_id, str) or _GENERATION_PATTERN.fullmatch(generation_id) is None:
             raise _CacheMiss("invalid generation id")
         if generation_id != expected_generation_id:
             raise _CacheMiss("generation manifest does not match the latest pointer")
 
-        expected_size = manifest.get("archive_size_bytes")
+        expected_size = manifest.archive_size_bytes
         if not isinstance(expected_size, int) or expected_size < 0 or expected_size > _MAX_ARCHIVE_BYTES:
             raise _CacheMiss("invalid archive size")
         actual_size = archive_path.stat().st_size
         if actual_size != expected_size:
             raise _CacheMiss(f"archive size mismatch: expected {expected_size}, got {actual_size}")
 
-        expected_sha256 = manifest.get("archive_sha256")
+        expected_sha256 = manifest.archive_sha256
         if not isinstance(expected_sha256, str) or _GENERATION_PATTERN.fullmatch(expected_sha256) is None:
             raise _CacheMiss("invalid archive digest")
         if generation_id != expected_sha256:
@@ -377,10 +478,10 @@ class VllmCompilationCache:
         if actual_sha256 != expected_sha256:
             raise _CacheMiss(f"archive digest mismatch: expected {expected_sha256}, got {actual_sha256}")
 
-        source_size = manifest.get("source_size_bytes")
+        source_size = manifest.source_size_bytes
         if not isinstance(source_size, int) or source_size < 0 or source_size > _MAX_EXTRACTED_BYTES:
             raise _CacheMiss("invalid extracted cache size")
-        entry_count = manifest.get("entry_count")
+        entry_count = manifest.entry_count
         if not isinstance(entry_count, int) or entry_count < 0 or entry_count > _MAX_ENTRIES:
             raise _CacheMiss("invalid cache entry count")
 
@@ -443,6 +544,7 @@ def _current_entry(root: Path, entry: _FileEntry) -> _FileEntry:
 
 
 def _create_archive(root: Path, destination: Path) -> _Archive | None:
+    """Create a stable archive, or return ``None`` when the cache has no files."""
     before = _inventory(root)
     if not before:
         return None
@@ -485,7 +587,7 @@ def _create_archive(root: Path, destination: Path) -> _Archive | None:
     )
 
 
-def _extract_archive(archive_path: Path, destination: Path) -> tuple[int, int]:
+def _extract_archive(archive_path: Path, destination: Path) -> _Extraction:
     entry_count = 0
     extracted_size = 0
     names: set[str] = set()
@@ -506,7 +608,7 @@ def _extract_archive(archive_path: Path, destination: Path) -> tuple[int, int]:
             if extracted_size > _MAX_EXTRACTED_BYTES:
                 raise _CacheMiss(f"archive expands past {_MAX_EXTRACTED_BYTES} bytes")
             archive.extract(member, path=destination, filter="data")
-    return entry_count, extracted_size
+    return _Extraction(entry_count=entry_count, size=extracted_size)
 
 
 def _remove_local_file(path: Path) -> None:
@@ -528,22 +630,28 @@ def _read_small_json(path: StoragePath) -> dict[str, Any]:
 def _restore_transfer_worker(remote_prefix: str, archive_path: str, result_path: str) -> None:
     try:
         remote = StoragePath(remote_prefix)
-        latest_path = remote / "latest.json"
+        latest_path = remote / _LATEST_FILENAME
         if not latest_path.exists():
-            _write_result(result_path, {"status": "miss", "reason": "latest pointer not found"})
+            _write_result(
+                result_path,
+                _TransferResult(status=_TransferStatus.MISS, reason="latest pointer not found"),
+            )
             return
         latest = _read_small_json(latest_path)
         generation_id = latest.get("generation_id")
         if not isinstance(generation_id, str) or _GENERATION_PATTERN.fullmatch(generation_id) is None:
             raise ValueError("latest pointer has an invalid generation id")
-        generation = remote / f"generations/{generation_id}"
-        manifest_path = generation / "manifest.json"
-        archive_remote = generation / "cache.tar.gz"
+        generation = remote / f"{_GENERATIONS_DIR}/{generation_id}"
+        manifest_path = generation / _MANIFEST_FILENAME
+        archive_remote = generation / _ARCHIVE_FILENAME
         if not manifest_path.exists() or not archive_remote.exists():
-            _write_result(result_path, {"status": "miss", "reason": "latest generation is incomplete"})
+            _write_result(
+                result_path,
+                _TransferResult(status=_TransferStatus.MISS, reason="latest generation is incomplete"),
+            )
             return
-        manifest = _read_small_json(manifest_path)
-        archive_size = manifest.get("archive_size_bytes")
+        manifest = _Manifest.from_dict(_read_small_json(manifest_path))
+        archive_size = manifest.archive_size_bytes
         if not isinstance(archive_size, int) or archive_size < 0 or archive_size > _MAX_ARCHIVE_BYTES:
             raise ValueError("manifest has an invalid archive size")
         if archive_remote.size() != archive_size:
@@ -551,10 +659,14 @@ def _restore_transfer_worker(remote_prefix: str, archive_path: str, result_path:
         archive_remote.download_to(archive_path)
         _write_result(
             result_path,
-            {"status": "ok", "generation_id": generation_id, "manifest": manifest},
+            _TransferResult(
+                status=_TransferStatus.OK,
+                generation_id=generation_id,
+                manifest=manifest,
+            ),
         )
     except Exception as error:
-        _write_result(result_path, {"status": "error", "reason": str(error)})
+        _write_result(result_path, _TransferResult(status=_TransferStatus.ERROR, reason=str(error)))
 
 
 def _publish_transfer_worker(
@@ -566,36 +678,34 @@ def _publish_transfer_worker(
 ) -> None:
     try:
         remote = StoragePath(remote_prefix)
-        generation = remote / f"generations/{generation_id}"
+        generation = remote / f"{_GENERATIONS_DIR}/{generation_id}"
         generation.mkdirs()
-        (generation / "cache.tar.gz").upload_from(archive_path)
-        (generation / "manifest.json").write_text(manifest_json)
+        (generation / _ARCHIVE_FILENAME).upload_from(archive_path)
+        (generation / _MANIFEST_FILENAME).write_text(manifest_json)
         remote.mkdirs()
-        (remote / "latest.json").write_text(_canonical_json({"generation_id": generation_id}))
-        _write_result(result_path, {"status": "ok"})
+        (remote / _LATEST_FILENAME).write_text(_canonical_json({"generation_id": generation_id}))
+        _write_result(result_path, _TransferResult(status=_TransferStatus.OK))
     except Exception as error:
-        _write_result(result_path, {"status": "error", "reason": str(error)})
+        _write_result(result_path, _TransferResult(status=_TransferStatus.ERROR, reason=str(error)))
 
 
-def _write_result(path: str, value: dict[str, Any]) -> None:
-    Path(path).write_text(_canonical_json(value))
+def _write_result(path: str, result: _TransferResult) -> None:
+    Path(path).write_text(_canonical_json(result.to_dict()))
 
 
 def _run_transfer(
     target: Callable[..., None],
     args: tuple[Any, ...],
     result_path: Path,
+    remote_prefix: str,
     *,
     timeout_seconds: int = _TRANSFER_DEADLINE_SECONDS,
-    use_subprocess: bool = True,
-) -> dict[str, Any]:
+) -> _TransferResult:
+    """Run a local transfer directly or bound remote I/O in a killable subprocess."""
     result_path.unlink(missing_ok=True)
-    if not use_subprocess:
+    if StoragePath(remote_prefix).is_local:
         target(*args, str(result_path))
-        result = json.loads(result_path.read_text())
-        if not isinstance(result, dict):
-            return {"status": "error", "reason": "transfer helper returned an invalid result"}
-        return result
+        return _read_transfer_result(result_path)
 
     context = multiprocessing.get_context(_TRANSFER_START_METHOD)
     process = context.Process(target=target, args=(*args, str(result_path)))
@@ -603,17 +713,30 @@ def _run_transfer(
     process.join(timeout_seconds)
     if process.is_alive():
         process.terminate()
-        process.join(5)
+        process.join(_TRANSFER_PROCESS_GRACE_SECONDS)
         if process.is_alive():
             process.kill()
-            process.join(5)
+            process.join(_TRANSFER_PROCESS_GRACE_SECONDS)
         process.close()
-        return {"status": "error", "reason": f"transfer exceeded {timeout_seconds}s deadline"}
+        return _TransferResult(
+            status=_TransferStatus.ERROR,
+            reason=f"transfer exceeded {timeout_seconds}s deadline",
+        )
     exit_code = process.exitcode
     process.close()
     if not result_path.exists():
-        return {"status": "error", "reason": f"transfer helper exited with code {exit_code}"}
-    result = json.loads(result_path.read_text())
-    if not isinstance(result, dict):
-        return {"status": "error", "reason": "transfer helper returned an invalid result"}
-    return result
+        return _TransferResult(
+            status=_TransferStatus.ERROR,
+            reason=f"transfer helper exited with code {exit_code}",
+        )
+    return _read_transfer_result(result_path)
+
+
+def _read_transfer_result(path: Path) -> _TransferResult:
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        return _TransferResult(
+            status=_TransferStatus.ERROR,
+            reason="transfer helper returned an invalid result",
+        )
+    return _TransferResult.from_dict(value)

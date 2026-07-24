@@ -589,7 +589,7 @@ JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS = 2
 
 
 def default_jax_compilation_cache_dir() -> str:
-    """Persistent XLA/JAX compilation cache shared by every serving backend on this slice."""
+    """Persistent XLA/JAX compilation cache used by Levanter serving on this slice."""
     return f"{marin_prefix()}/compilation-cache"
 
 
@@ -616,6 +616,27 @@ def _vllm_env() -> dict[str, str]:
     for key, default in _VLLM_ENV_DEFAULTS:
         env.setdefault(key, default)
     return env
+
+
+def _prepare_vllm_compilation_cache(
+    *,
+    model_name_or_path: str,
+    extra_cli_args: list[str] | None,
+    launcher: VllmLauncher,
+    mode: VllmCompilationCacheMode,
+) -> tuple[VllmCompilationCache, dict[str, str]]:
+    native_env = _vllm_env()
+    native_env.update(launcher.env())
+    cache = VllmCompilationCache.prepare(
+        launcher_identity=launcher.cache_identity(),
+        compile_identity=VllmCompileIdentity(
+            model_name_or_path=model_name_or_path,
+            extra_cli_args=tuple(extra_cli_args or ()),
+        ),
+        environment=native_env,
+        mode=mode,
+    )
+    return cache, cache.environment()
 
 
 def _start_vllm_native_server(
@@ -650,20 +671,12 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    native_env = _vllm_env()
-    # A launcher (e.g. the isolated TPU build) may require extra env, such as the
-    # vLLM build target; overlay it after the canonical defaults so it wins.
-    native_env.update(launcher.env())
-    cache = VllmCompilationCache.prepare(
-        launcher_identity=launcher.cache_identity(),
-        compile_identity=VllmCompileIdentity(
-            model_name_or_path=model_name_or_path,
-            extra_cli_args=tuple(extra_cli_args or ()),
-        ),
-        environment=native_env,
+    cache, native_env = _prepare_vllm_compilation_cache(
+        model_name_or_path=model_name_or_path,
+        extra_cli_args=extra_cli_args,
+        launcher=launcher,
         mode=compilation_cache,
     )
-    native_env = cache.environment()
     logger.info(
         "Starting vLLM native server (output streams to the job log). "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "

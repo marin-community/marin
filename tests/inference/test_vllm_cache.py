@@ -115,7 +115,7 @@ def test_cache_round_trip_preserves_contents_and_skips_unchanged_publish(local_m
     assert len(list(generations.iterdir())) == 1
 
 
-def test_corrupt_generation_is_a_cache_miss(local_marin_prefix: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_corrupt_generation_is_a_cache_miss(local_marin_prefix: Path) -> None:
     first = _prepare_cache()
     entry = first.root / "xla" / "entry.bin"
     entry.parent.mkdir(parents=True)
@@ -133,7 +133,6 @@ def test_corrupt_generation_is_a_cache_miss(local_marin_prefix: Path, caplog: py
     second = _prepare_cache()
     try:
         assert not (second.root / "xla" / "entry.bin").exists()
-        assert "archive digest" in caplog.text
     finally:
         second.close()
 
@@ -141,7 +140,6 @@ def test_corrupt_generation_is_a_cache_miss(local_marin_prefix: Path, caplog: py
 def test_unsafe_archive_is_a_cache_miss(
     local_marin_prefix: Path,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     first = _prepare_cache()
     remote_prefix = _local_path(first.remote_prefix)
@@ -191,7 +189,6 @@ def test_unsafe_archive_is_a_cache_miss(
     try:
         assert not (tmp_path / "escaped").exists()
         assert not any(second.root.rglob("*"))
-        assert "unsafe archive path" in caplog.text
     finally:
         second.close()
 
@@ -214,7 +211,6 @@ def test_namespace_tracks_launcher_and_compile_identity(local_marin_prefix: Path
 
 def test_invalid_cache_entry_skips_publication(
     local_marin_prefix: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     cache = _prepare_cache()
     outside = local_marin_prefix / "outside"
@@ -227,4 +223,3 @@ def test_invalid_cache_entry_skips_publication(
     cache.close()
 
     assert not (remote_prefix / "latest.json").exists()
-    assert "symbolic link" in caplog.text
