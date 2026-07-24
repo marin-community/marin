@@ -133,7 +133,12 @@ def _require_machine_evidence(label: DedupLabel, score: dict[str, Any]) -> None:
             raise AssertionError(f"raw_identity label lacks exact raw identity: {_label_drop(label)}")
         return
     if label.method == "low_overlap":
-        if label.label != "false_positive" or score["evidence_class"] != "strong_false_positive":
+        if (
+            label.label != "false_positive"
+            or score["evidence_class"] != "strong_false_positive"
+            or score["member_text_truncated_for_minhash"]
+            or score["canonical_text_truncated_for_minhash"]
+        ):
             raise AssertionError(f"low_overlap label lacks strong false-positive evidence: {_label_drop(label)}")
 
 
@@ -235,6 +240,8 @@ def _score_records(scores_dir: str) -> Iterator[dict[str, Any]]:
         "canonical_id",
         "exact_raw_text",
         "evidence_class",
+        "member_text_truncated_for_minhash",
+        "canonical_text_truncated_for_minhash",
         "raw_sha256",
         "canonical_raw_sha256",
     ]

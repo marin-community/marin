@@ -30,7 +30,7 @@ from zephyr.execution import ZephyrContext
 class DedupReviewData(BaseModel):
     """Paths and exact counters for an exhaustive full-text review corpus."""
 
-    version: str = "v1"
+    version: str = "v2"
     scores_dir: str
     pairs_dir: str
     counters: dict[str, int | float]
@@ -137,10 +137,26 @@ def _pair_texts(review_key: str, records: Iterator[dict[str, str]]) -> dict[str,
         "canonical_basename": score["canonical_basename"],
         "canonical_id": score["canonical_id"],
         "evidence_class": score["evidence_class"],
+        "cross_source": score["cross_source"],
+        "raw_chars": score["raw_chars"],
+        "canonical_raw_chars": score["canonical_raw_chars"],
+        "clean_chars": score["clean_chars"],
+        "canonical_clean_chars": score["canonical_clean_chars"],
+        "length_ratio": score["length_ratio"],
+        "member_is_longer": score["member_is_longer"],
+        "member_text_truncated_for_minhash": score["member_text_truncated_for_minhash"],
+        "canonical_text_truncated_for_minhash": score["canonical_text_truncated_for_minhash"],
         "exact_raw_text": score["exact_raw_text"],
+        "exact_clean_text": score["exact_clean_text"],
+        "member_clean_text_contained": score["member_clean_text_contained"],
+        "char_5gram_jaccard": score["char_5gram_jaccard"],
+        "char_5gram_canonical_containment": score["char_5gram_canonical_containment"],
+        "char_5gram_member_containment": score["char_5gram_member_containment"],
         "word_5gram_jaccard": score["word_5gram_jaccard"],
         "word_5gram_canonical_containment": score["word_5gram_canonical_containment"],
         "word_5gram_member_containment": score["word_5gram_member_containment"],
+        "baseline_shared_buckets": score["baseline_shared_buckets"],
+        "treatment_shared_buckets": score["treatment_shared_buckets"],
         "raw_sha256": score["raw_sha256"],
         "canonical_raw_sha256": score["canonical_raw_sha256"],
         "member_text": member_text,

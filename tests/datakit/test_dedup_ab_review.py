@@ -18,6 +18,8 @@ def _score(
     canonical_id: str,
     exact_raw_text: bool = False,
     evidence_class: str = "ambiguous",
+    member_text_truncated_for_minhash: bool = False,
+    canonical_text_truncated_for_minhash: bool = False,
 ) -> dict:
     raw_sha256 = "same-sha" if exact_raw_text else "member-sha"
     canonical_raw_sha256 = "same-sha" if exact_raw_text else "canonical-sha"
@@ -32,6 +34,8 @@ def _score(
         "canonical_id": canonical_id,
         "exact_raw_text": exact_raw_text,
         "evidence_class": evidence_class,
+        "member_text_truncated_for_minhash": member_text_truncated_for_minhash,
+        "canonical_text_truncated_for_minhash": canonical_text_truncated_for_minhash,
         "raw_sha256": raw_sha256,
         "canonical_raw_sha256": canonical_raw_sha256,
     }
@@ -176,6 +180,24 @@ def test_low_overlap_requires_strong_false_positive_evidence() -> None:
             doc_id="member",
             canonical_id="canonical",
             evidence_class="ambiguous",
+        ),
+    ]
+    label = _label(method="low_overlap")
+
+    with pytest.raises(AssertionError, match="lacks strong false-positive evidence"):
+        validate_label_coverage(scores, [_pair()], _labels(label))
+
+
+def test_truncated_low_overlap_pair_requires_semantic_review() -> None:
+    scores = [
+        _score(variant="baseline", role="canonical", doc_id="canonical", canonical_id="canonical"),
+        _score(
+            variant="baseline",
+            role="drop",
+            doc_id="member",
+            canonical_id="canonical",
+            evidence_class="strong_false_positive",
+            canonical_text_truncated_for_minhash=True,
         ),
     ]
     label = _label(method="low_overlap")
