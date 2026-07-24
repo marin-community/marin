@@ -5,6 +5,7 @@
 
 Each invocation trains one ``(epochs, lr, wd, batch_size)`` point on an explicit
 TPU slice and region. ``SMOKE=yes`` runs the same path under an isolated identity.
+``TPU_RAM`` optionally overrides TPU-worker host RAM without changing run identity.
 
 Preview a point (builds and submits nothing)::
 
@@ -93,6 +94,9 @@ SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the 
 # Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
 # values override it.
 SMOKE_POINT_DEFAULTS: tuple[int, float, float, int] = (1, 1e-3, 0.1, 128)
+
+# Optional resource-only host RAM override passed through ResourceConfig.with_tpu.
+TPU_RAM_ENV: str = "TPU_RAM"
 
 
 # --- Data (contacts-v1 documents, tokenized in-pipeline) ---------------------
@@ -248,6 +252,14 @@ def preview() -> bool:
 
 def smoke() -> bool:
     return os.environ.get("SMOKE", "").strip().lower() in {"yes", "true", "1"}
+
+
+def resource_ram() -> str | None:
+    """Optional TPU-worker host RAM override, e.g. ``448g``."""
+    ram = os.environ.get(TPU_RAM_ENV)
+    if ram is None:
+        return None
+    return ram.strip() or None
 
 
 def smoke_steps() -> int:
@@ -494,6 +506,9 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     batch_config = batch_fit(point, tpu)
+    resource_kwargs = {"regions": singleton_region_list(region)}
+    if ram := resource_ram():
+        resource_kwargs["ram"] = ram
     step = train_lm(
         name=name,
         model=MODEL_CONFIG,
@@ -511,7 +526,7 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
         evals=None,
-        resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
+        resources=ResourceConfig.with_tpu(tpu, **resource_kwargs),
         version=SWEEP_VERSION,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
@@ -544,6 +559,7 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
         f"data_parallelism={config.data_parallelism} tensor_parallelism={config.tensor_parallelism}\n"
         f"  per_device_parallelism={config.per_device_parallelism} "
         f"gradient_accumulation={config.gradient_accumulation}\n"
+        f"  resource_ram={resource_ram() or '<default>'}\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
