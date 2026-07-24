@@ -23,11 +23,13 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
+    NgramKind,
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -67,9 +69,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
     minhash = StepSpec(
         name="datakit-smoke/minhash",
         deps=[normalized],
+        hash_attrs={"ngram_kind": str(NgramKind.WORD)},
         fn=lambda output_path: compute_minhash_attrs(
             source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
+            ngram_kind=NgramKind.WORD,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
         ),
         override_output_path=f"{base}/minhash",
@@ -80,7 +84,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     deduped = StepSpec(
         name="datakit-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={"candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE, "cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
@@ -99,9 +103,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             filetype="parquet",
             filters=[
-                # Default fuzzy-dedup policy: keep the CC-picked canonical of each
-                # cluster, drop the rest. Singletons have no attr row, so
-                # keep_if_missing=True passes them through.
+                # Keep the CC-picked canonical and drop its marked direct
+                # candidates. Singletons and transitive-only members have no
+                # attr row, so keep_if_missing=True passes them through.
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
                     attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)

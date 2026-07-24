@@ -17,11 +17,19 @@ from marin.processing.classification.deduplication.fuzzy_dups import compute_fuz
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     MinHashParams,
+    NgramKind,
     compute_minhash_attrs,
 )
 from zephyr.writers import write_jsonl_file, write_parquet_file
 
-TEST_MINHASH_PARAMS = MinHashParams(num_perms=286, num_bands=26, ngram_size=5, seed=42)
+TEST_MINHASH_PARAMS = MinHashParams(
+    num_perms=286,
+    num_bands=26,
+    ngram_size=5,
+    ngram_kind=NgramKind.WORD,
+    seed=42,
+)
+CHAR_MINHASH_PARAMS = TEST_MINHASH_PARAMS.model_copy(update={"ngram_kind": NgramKind.CHAR})
 
 
 @pytest.fixture(autouse=True)
@@ -366,11 +374,13 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     cap_mh = compute_minhash_attrs(
         source=norm,
         output_path=str(tmp_path / "mh_cap"),
+        ngram_kind=NgramKind.CHAR,
         text_cap_chars=cap_chars,
     )
     nocap_mh = compute_minhash_attrs(
         source=norm,
         output_path=str(tmp_path / "mh_nocap"),
+        ngram_kind=NgramKind.CHAR,
         text_cap_chars=None,
     )
 
@@ -400,18 +410,17 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     # Params + version metadata.
     assert cap_mh.params.text_cap_chars == cap_chars
     assert nocap_mh.params.text_cap_chars is None
-    assert cap_mh.version == "v2"
+    assert cap_mh.version == "v3"
 
 
 # ---------------------------------------------------------------------------
 # Char-5-gram Jaccard recall / precision tests.
 #
-# The dupekit MinHash pipeline shingles by character (lib/dupekit/rust/src/
-# minhash_ops.rs:69-76: text.chars().windows(ngram_size)), so char-Jaccard
-# directly governs LSH collision probability. We construct text from a
-# lowercase-only alphabet so dupekit's CleanText (lowercase + strip punct +
-# collapse whitespace) is the identity, and the Jaccard we measure on the
-# raw string equals what the system sees internally.
+# These tests explicitly pin character shingles, so character Jaccard directly
+# governs LSH collision probability. We construct text from a lowercase-only
+# alphabet so dupekit's CleanText (lowercase + strip punctuation + collapse
+# whitespace) is the identity, and the Jaccard measured on the raw string is
+# what the system sees internally.
 # ---------------------------------------------------------------------------
 
 _CHAR_VOCAB = string.ascii_lowercase
@@ -474,6 +483,10 @@ def _dupekit_pipeline(params: MinHashParams) -> list:
             output_col="signature",
             num_perms=params.num_perms,
             ngram_size=params.ngram_size,
+            ngram_kind={
+                NgramKind.CHAR: dupekit.NgramKind.Char,
+                NgramKind.WORD: dupekit.NgramKind.Word,
+            }[params.ngram_kind],
             seed=params.seed,
         ),
         dupekit.Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=params.num_bands),
@@ -484,7 +497,7 @@ def _dupekit_pipeline(params: MinHashParams) -> list:
 def _shared_lsh_bucket(text_a: str, text_b: str) -> bool:
     """Return True iff (a, b) share at least one MinHash-LSH bucket."""
     batch = pa.RecordBatch.from_pylist([{"id": "a", "text": text_a}, {"id": "b", "text": text_b}])
-    out = dupekit.transform(batch, _dupekit_pipeline(TEST_MINHASH_PARAMS))
+    out = dupekit.transform(batch, _dupekit_pipeline(CHAR_MINHASH_PARAMS))
     return bool(set(out["buckets"][0].as_py()) & set(out["buckets"][1].as_py()))
 
 
@@ -554,9 +567,8 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path, parser_variant
 
     Pinning current pipeline behavior on the HF-hosted fixtures: at the default
     MinHash params (num_perms=286, num_bands=26), trafilatura and readability
-    extract sufficiently similar text from the same page (measured char-Jaccard
-    ~0.89 on these fixtures) to share an LSH bucket and end up in the same
-    dup_cluster_id. Cross-article pairs do not cluster (~0.22).
+    extract sufficiently similar text from the same page to share an LSH bucket
+    and end up in the same dup_cluster_id. Cross-article pairs do not cluster.
 
     The html2text variant is intentionally NOT asserted here; see
     ``test_html_parser_variants_all_three_cluster_per_article`` for the gap.
@@ -588,9 +600,9 @@ def test_html_parser_variants_cluster_per_article(tmp_path: Path, parser_variant
     strict=True,
     reason=(
         "html2text preserves Wikipedia nav/sidebar/edit-links/citations as inline text. "
-        "The resulting char-Jaccard with trafilatura/readability is ~0.5, below the LSH "
-        "threshold at b=26, r=11, so the pipeline does not cluster these as duplicates "
-        "today. When boilerplate handling improves (pre-strip, threshold tune, or "
+        "The resulting text does not share an LSH bucket with trafilatura/readability, "
+        "so the pipeline does not cluster these as duplicates today. When boilerplate "
+        "handling improves (pre-strip, threshold tune, or "
         "extractor-specific cleanup), this xfail flips and the main parser-variant test "
         "should be tightened to assert all three variants cluster."
     ),
@@ -636,9 +648,8 @@ def test_wikipedia_revisions_cluster_per_article(tmp_path: Path, wikipedia_revis
     ``article_slug`` matches must share one ``dup_cluster_id``, and rows
     with different slugs must not cross-cluster.
 
-    Fixture char-Jaccard between same-article revisions measures around
-    0.76-0.85; cross-article around 0.21. The MinHash params keep the
-    same-article pairs reliably above the LSH collision threshold.
+    The MinHash parameters keep same-article pairs reliably above the LSH
+    collision threshold while cross-article pairs remain separate.
     """
     by_source_id = _run_dedup_on_corpus(tmp_path, wikipedia_revisions_docs)
     assert wikipedia_revisions_articles, "no revision fixtures discovered"
@@ -700,3 +711,53 @@ def test_quote_inclusion_clusters_with_host_not_quoted(tmp_path: Path, quote_inc
         f"article_b clustered (over-merge with quoter): cluster={b_cluster!r}; "
         "the source of a quote should not be merged with the quoter unless the quote dominates"
     )
+
+
+def test_repetitive_vocabulary_documents_remain_distinct(tmp_path: Path):
+    """Long documents sharing vocabulary but not word sequences remain singletons."""
+    vocabulary = (
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec "
+        "romeo sierra tango uniform victor whiskey xray yankee zulu amber birch cedar dune ember frost grove harbor "
+        "ivory jasmine knoll lagoon meadow nectar olive prairie quartz ridge solar timber umber valley willow xenon "
+        "yarrow zenith"
+    ).split()
+    docs = []
+    for seed in (1, 2):
+        rng = random.Random(seed)
+        docs.append({"id": f"document_{seed}", "text": " ".join(rng.choice(vocabulary) for _ in range(4_000))})
+
+    assert not _run_dedup_on_corpus(tmp_path, docs)
+
+
+def test_transitive_lsh_chain_keeps_members_not_adjacent_to_canonical(fox_corpus):
+    """A~B~C candidate chains do not make C a duplicate of canonical A."""
+    main_dir = os.path.join(fox_corpus["output_dir"], "chain_main")
+    texts = [f"chain document {i}" for i in range(5)]
+    ids = sorted(generate_id(text) for text in texts)
+    rows = [
+        {
+            "id": doc_id,
+            "buckets": ([f"edge_{i - 1}_{i}"] if i else []) + ([f"edge_{i}_{i + 1}"] if i < len(ids) - 1 else []),
+        }
+        for i, doc_id in enumerate(ids)
+    ]
+    minhash = _write_minhash_attr_dataset(
+        output_dir=os.path.join(fox_corpus["output_dir"], "mh_chain"),
+        source_main_dir=main_dir,
+        rows=rows,
+    )
+
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[minhash],
+        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups_chain"),
+        max_parallelism=4,
+    )
+    markers = _read_cluster_attrs(dups.sources[main_dir].attr_dir)
+    marked_ids = {row["id"] for row in markers}
+    canonical_id = next(row["id"] for row in markers if row["attributes"]["is_cluster_canonical"])
+    canonical_index = ids.index(canonical_id)
+    expected_ids = {ids[index] for index in range(max(0, canonical_index - 1), min(len(ids), canonical_index + 2))}
+
+    assert marked_ids == expected_ids
+    assert len(marked_ids) <= 3
+    assert dups.counters["dedup/fuzzy/document/transitive_members_kept"] == len(ids) - len(marked_ids)

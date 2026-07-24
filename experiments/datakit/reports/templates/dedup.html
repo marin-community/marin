@@ -59,13 +59,14 @@ const fmt = n => n >= 1e12 ? (n/1e12).toFixed(2)+"T" : n >= 1e9 ? (n/1e9).toFixe
 const pct = x => (100*x).toFixed(2)+"%";
 const S = D.stats;
 document.getElementById("meta").textContent =
-  `${S.n_sources} sources · sampled ≤${D.sample_limit} cluster members/source`;
+  `${S.n_sources} sources · sampled ≤${D.sample_limit} direct candidates/source`;
 document.getElementById("sampling").textContent = D.sampling;
 const cards = [
-  ["cluster members", fmt(S.cluster_members), "non-singleton docs"],
+  ["cluster members", fmt(S.cluster_members), "direct candidates"],
   ["clusters", fmt(S.clusters), "one canonical each"],
   ["duplicates to drop", fmt(S.duplicates_to_drop), "members − canonicals"],
   ["singletons skipped", fmt(S.singletons_skipped), "no duplicate found"],
+  ["transitive members kept", fmt(S.transitive_members_kept), "not adjacent to canonical"],
   ["dup rate", pct(S.dup_rate), "drop / all docs"],
 ];
 document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>

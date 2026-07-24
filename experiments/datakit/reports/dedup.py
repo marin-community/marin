@@ -4,9 +4,9 @@
 """Stage report for the cross-source fuzzy dedup step.
 
 Headline numbers come from the artifact's aggregated counters. The per-source
-table and the cluster-size histogram come from a bounded sample of each
-source's dup-marker parquet, which is sparse: only non-singleton cluster
-members get a row, and sources with zero non-singletons have empty shards.
+table and cluster-size histogram come from a bounded sample of each source's
+duplicate-marker parquet, which contains only the canonical and its direct LSH
+neighbors.
 """
 
 from collections import Counter
@@ -28,8 +28,9 @@ def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
     cluster_members = int(dedup.counters.get(f"{COUNTER_PREFIX}/cluster_members", 0))
     clusters = int(dedup.counters.get(f"{COUNTER_PREFIX}/canonicals", 0))
     singletons_skipped = int(dedup.counters.get(f"{COUNTER_PREFIX}/singletons_skipped", 0))
+    transitive_members_kept = int(dedup.counters.get(f"{COUNTER_PREFIX}/transitive_members_kept", 0))
     duplicates_to_drop = cluster_members - clusters
-    total_docs = cluster_members + singletons_skipped
+    total_docs = cluster_members + singletons_skipped + transitive_members_kept
 
     # dup_cluster_id is global across sources, so pooling the per-source
     # samples yields cross-source cluster sizes (within the sample).
@@ -53,6 +54,7 @@ def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
         "clusters": clusters,
         "duplicates_to_drop": duplicates_to_drop,
         "singletons_skipped": singletons_skipped,
+        "transitive_members_kept": transitive_members_kept,
         "dup_rate": duplicates_to_drop / total_docs if total_docs else 0.0,
         "n_sources": len(dedup.sources),
     }
@@ -66,7 +68,7 @@ def dedup_report(output_path: str, dedup: FuzzyDupsAttrData) -> StageReport:
         "sample_limit": SAMPLE_LIMIT,
         "sampling": (
             f"headline numbers from dedup counters (exact); per-source table + cluster-size histogram "
-            f"from the first {SAMPLE_LIMIT} non-singleton rows per source (file order)"
+            f"from the first {SAMPLE_LIMIT} direct-candidate marker rows per source (file order)"
         ),
     }
     page = render_template("dedup.html", title="Datakit dedup", data=data)

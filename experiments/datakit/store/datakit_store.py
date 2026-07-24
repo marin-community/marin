@@ -13,7 +13,8 @@ for the datakit attribute datasets that the global pipelines produce:
                     (fast-transformer output; ``quality_bucket`` is already the
                     calibrated fixed-cutpoint bucket, consumed as-is)
     dedup           per-source ``{id, attributes: {is_cluster_canonical, ...}}``,
-                    SPARSE -- singletons omitted by ``compute_fuzzy_dups_attrs``
+                    SPARSE -- singletons and transitive-only members omitted by
+                    ``compute_fuzzy_dups_attrs``
 
 All five are co-partitioned with the source ``NormalizedData`` by basename, so
 a single map-side pass joins them per shard with no shuffle. The pass:
@@ -22,8 +23,8 @@ a single map-side pass joins them per shard with no shuffle. The pass:
 2. Reads dedup into ``{id -> is_canonical}`` if present.
 3. Streams tokenize via ``ParquetFile.iter_batches`` in positional lockstep
    with the three dense attribute tables (sanity-asserts id alignment).
-4. Drops contaminated rows; drops dedup-cluster non-canonicals (rows missing
-   from dedup are singletons -> kept).
+4. Drops contaminated rows and marked direct duplicate candidates; rows
+   missing from dedup are singletons or transitive-only members and are kept.
 5. Routes each surviving doc by ``(cluster_<view>, quality_bucket)`` directly into one
    of up to ``K_clusters * K_quality`` lazily-opened ``SerialCacheWriter``
    instances under ``<output>/cluster=<C>/quality=<Q>/part-NNNNN-of-MMMMM``.
@@ -140,7 +141,7 @@ def _per_source_shard_tuples(
     Returns a list of
     ``{tokenize, decontam, cluster, quality, dedup, source_name, basename}``
     dicts -- one per source shard. ``dedup`` may be absent for source shards
-    with zero non-singletons; worker handles that case.
+    with zero marked candidates; the worker handles that case.
     """
     tok_dir = tokenize.output_dirs.get(split)
     if tok_dir is None:
@@ -164,7 +165,7 @@ def _per_source_shard_tuples(
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
             # ``dedup`` may legitimately be absent for shards with zero
-            # non-singletons. Worker checks existence before opening.
+            # marked candidates. The worker checks existence before opening.
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
@@ -229,16 +230,17 @@ def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
 def _load_dedup_canonical(path: str) -> dict[str, bool]:
     """Return ``{id -> is_cluster_canonical}`` for one dedup shard, or ``{}`` if absent.
 
-    Dedup is sparse: ids missing from this dict are singletons (kept). Ids
-    present are non-singleton cluster members; only the canonical one survives.
+    Dedup is sparse: ids missing from this dict are singletons or
+    transitive-only component members (kept). Present ids are the canonical
+    and its direct LSH neighbors; only the canonical survives.
     """
     if not StoragePath(path).exists():
         return {}
     with StoragePath(path).open("rb") as fh:
         pf = pq.ParquetFile(fh)
-        # Sources with zero non-singletons get an empty parquet stub from the
-        # dedup writer -- num_rows=0, zero data columns. Treat that as "no
-        # non-singletons" rather than letting the column projection raise
+        # Sources with zero marked candidates get an empty parquet stub from
+        # the dedup writer -- num_rows=0, zero data columns. Treat that as "no
+        # candidates" rather than letting the column projection raise
         # ArrowInvalid because the columns don't exist in the empty schema.
         if pf.metadata.num_rows == 0:
             return {}
@@ -452,7 +454,7 @@ def _join_filter_stream_shard(
                         if dedup_canonical.get(doc_id) is False:
                             n_dedup_dropped_total += 1
                             continue
-                        # canonical True OR id missing from dedup (singleton) -> keep
+                        # Canonical True or no marker (singleton/transitive-only) -> keep.
                         key = (int(cluster_slice[i]), int(quality_slice[i]))
                         # ``.values.to_numpy()`` copies just this row's tokens
                         # into a fresh int32 buffer (~4 bytes/token vs ~28 for

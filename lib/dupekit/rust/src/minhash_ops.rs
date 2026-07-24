@@ -7,6 +7,14 @@ use regex::Regex;
 use std::sync::Arc;
 use xxhash_rust::xxh3;
 
+/// Unit used to form MinHash shingles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[pyclass(eq, eq_int, module = "dupekit")]
+pub enum NgramKind {
+    Char,
+    Word,
+}
+
 /// Clean text using the SlimPajama text cleaning process.
 /// 1. Lowercase
 /// 2. Remove punctuation
@@ -41,6 +49,7 @@ pub fn compute_minhash(
     arr: &StringArray,
     num_perms: usize,
     ngram_size: usize,
+    ngram_kind: NgramKind,
     seed: u64,
 ) -> PyResult<Arc<dyn Array>> {
     // Generate permutations using Duplodocus strategy (Single u128 coefficient)
@@ -66,17 +75,61 @@ pub fn compute_minhash(
         }
 
         let text = arr.value(i);
-        let chars: Vec<char> = text.chars().collect();
         let mut signature = vec![u64::MAX; num_perms];
 
-        if chars.len() < ngram_size {
-            let hash = xxh3::xxh3_64(text.as_bytes()) as u128;
-            update_signature(&mut signature, hash, &coeffs);
-        } else {
-            for window in chars.windows(ngram_size) {
-                let s: String = window.iter().collect();
-                let hash = xxh3::xxh3_64(s.as_bytes()) as u128;
-                update_signature(&mut signature, hash, &coeffs);
+        match ngram_kind {
+            NgramKind::Char => {
+                let chars: Vec<char> = text.chars().collect();
+                if chars.len() < ngram_size {
+                    update_signature(
+                        &mut signature,
+                        xxh3::xxh3_64(text.as_bytes()) as u128,
+                        &coeffs,
+                    );
+                } else {
+                    for window in chars.windows(ngram_size) {
+                        let shingle: String = window.iter().collect();
+                        update_signature(
+                            &mut signature,
+                            xxh3::xxh3_64(shingle.as_bytes()) as u128,
+                            &coeffs,
+                        );
+                    }
+                }
+            }
+            NgramKind::Word => {
+                let mut word_bounds = Vec::new();
+                let mut word_start = None;
+                for (offset, character) in text.char_indices() {
+                    if character.is_whitespace() {
+                        if let Some(start) = word_start.take() {
+                            word_bounds.push((start, offset));
+                        }
+                    } else if word_start.is_none() {
+                        word_start = Some(offset);
+                    }
+                }
+                if let Some(start) = word_start {
+                    word_bounds.push((start, text.len()));
+                }
+
+                if word_bounds.len() < ngram_size {
+                    update_signature(
+                        &mut signature,
+                        xxh3::xxh3_64(text.as_bytes()) as u128,
+                        &coeffs,
+                    );
+                } else {
+                    for window in word_bounds.windows(ngram_size) {
+                        let start = window[0].0;
+                        let end = window[ngram_size - 1].1;
+                        update_signature(
+                            &mut signature,
+                            xxh3::xxh3_64(&text.as_bytes()[start..end]) as u128,
+                            &coeffs,
+                        );
+                    }
+                }
             }
         }
         list_builder.values().append_slice(&signature);

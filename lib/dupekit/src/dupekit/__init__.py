@@ -22,6 +22,7 @@ try:
         Bloom,
         Document,
         HashAlgorithm,
+        NgramKind,
         Transformation,
     )
 except ImportError:

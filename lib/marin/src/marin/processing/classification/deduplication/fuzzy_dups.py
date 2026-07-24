@@ -5,8 +5,8 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-annotating every non-singleton cluster member. Each source's attr tree is
-co-partitioned with its underlying ``NormalizedData``, so
+annotating each component canonical and its direct LSH neighbors. Each
+source's attr tree is co-partitioned with its underlying ``NormalizedData``, so
 :mod:`marin.processing.classification.consolidate` can join them directly.
 
 Per-document attr rows have schema::
@@ -19,12 +19,11 @@ Per-document attr rows have schema::
       }
     }
 
-Rows are emitted for every member of a non-singleton cluster (canonical +
-non-canonicals). Singletons get no row, preserving the
-``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
-canonical-selection policy live in consolidate (e.g. the default
-``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
+Rows are emitted for the canonical and members directly LSH-adjacent to it.
+Singletons and transitive-only connected-component members get no row,
+preserving the ``consolidate(..., keep_if_missing=True)`` pattern while
+preventing sparse candidate chains from dropping unrelated documents.
+Consolidate keeps the canonical marker and drops the other marked candidates.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -52,6 +51,8 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
+
+FUZZY_DUPS_CANDIDATE_SCOPE = "canonical_star_v1"
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -193,12 +194,30 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
 _SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
 
 
+def _duplicate_marker_record(record: dict) -> dict:
+    """Return the per-shard marker state for one connected-component node."""
+    id_norm = record["id_norm"]
+    component_id = record["component_id"]
+    adjacency = record["adjacency_list"]
+    is_canonical = component_id == id_norm
+    is_singleton = len(adjacency) == 1 and adjacency[0] == id_norm
+    is_direct_candidate = is_canonical or component_id in adjacency
+    return {
+        "id": _strip_cc_prefix(record["record_id"]),
+        "component_id": component_id,
+        "is_canonical": is_canonical,
+        "emit": not is_singleton and is_direct_candidate,
+        "is_singleton": is_singleton,
+        "file_idx": record["file_idx"],
+    }
+
+
 def _make_per_shard_writer(output_path: str, counter_prefix: str):
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
-    Skips singletons entirely. For every non-singleton cluster member, writes
-    ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
-    already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
+    Writes a marker for the canonical and documents directly LSH-adjacent to
+    it. Singletons and transitive-only connected-component members are omitted.
+    Rows are sorted by ``id`` by the upstream ``group_by(sort_by=id)``.
 
     The ``entries`` list is loaded via ``zephyr_worker_ctx().get_shared`` so it
     is shipped to workers once (via Zephyr shared-data) rather than captured
@@ -216,8 +235,11 @@ def _make_per_shard_writer(output_path: str, counter_prefix: str):
         def cluster_member_rows():
             nonlocal cluster_members, canonicals
             for record in records:
-                if record["is_singleton"]:
-                    counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
+                if not record["emit"]:
+                    if record["is_singleton"]:
+                        counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
+                    else:
+                        counters.pipeline.update_counter(f"{counter_prefix}/transitive_members_kept", 1)
                     continue
                 cluster_members += 1
                 counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
@@ -259,12 +281,16 @@ def compute_fuzzy_dups_attrs(
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
     All inputs must share identical :class:`MinHashParams`. The job builds a
-    global LSH bucket graph across every input shard, runs connected
-    components, and emits a per-source attribute tree under
+    global LSH bucket graph across every input shard and runs connected
+    components. It emits markers only for the canonical and members that
+    shared an LSH bucket directly with that canonical, preventing sparse
+    A~B~C chains from making C a duplicate of A. The per-source attribute
+    tree lives under
     ``<output_path>/outputs/source_NNN/`` with one parquet file per source
     shard (filenames preserved from the source). Each row annotates one
     cluster member with ``{id: str, attributes: {dup_cluster_id: str,
-    is_cluster_canonical: bool}}``; singletons are omitted.
+    is_cluster_canonical: bool}}``; singletons and transitive-only members are
+    omitted.
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
@@ -357,22 +383,13 @@ def compute_fuzzy_dups_attrs(
     ctx.put(_SHARED_ENTRIES_KEY, entries)
     aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")
 
-    # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
-    # so `component_id == id_norm` cheaply identifies the natural canonical.
-    # `preserve_singletons=True` wires singletons as self-links, so a node is a
-    # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
+    # CC's Hash-to-Min makes the component id its minimum id. The minimum is the
+    # hub of every LSH bucket it belongs to, so a member contains component_id in
+    # its adjacency list exactly when it shared a bucket with the canonical.
     shard_pipeline = (
         Dataset.from_list(cc_files)
         .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
-        )
+        .map(_duplicate_marker_record)
         .group_by(
             lambda r: r["file_idx"],
             sort_by=lambda r: r["id"],
@@ -426,6 +443,6 @@ def compute_fuzzy_dups_attrs_step(
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={"cc_max_iterations": cc_max_iterations, "candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE},
         override_output_path=override_output_path,
     )

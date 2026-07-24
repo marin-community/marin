@@ -97,11 +97,13 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
+    NgramKind,
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.attributes import (
@@ -230,6 +232,7 @@ class MinhashConfig:
     num_perms: int = 286
     num_bands: int = 26
     ngram_size: int = 5
+    ngram_kind: NgramKind = NgramKind.WORD
     text_cap_chars: int | None = 500_000
     seed: int = 42
 
@@ -612,6 +615,7 @@ def reference_datakit_steps(
                 "num_perms": mh.num_perms,
                 "num_bands": mh.num_bands,
                 "ngram_size": mh.ngram_size,
+                "ngram_kind": str(mh.ngram_kind),
                 "text_cap_chars": mh.text_cap_chars,
                 "seed": mh.seed,
                 "v": 1,
@@ -622,6 +626,7 @@ def reference_datakit_steps(
                 num_perms=mh.num_perms,
                 num_bands=mh.num_bands,
                 ngram_size=mh.ngram_size,
+                ngram_kind=mh.ngram_kind,
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
                 worker_resources=scale.pool.worker,
@@ -645,7 +650,7 @@ def reference_datakit_steps(
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
-        hash_attrs={"v": 1},
+        hash_attrs={"candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE, "v": 2},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,

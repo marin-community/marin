@@ -34,6 +34,7 @@ pub enum Transformation {
         output_col: String,
         num_perms: usize,
         ngram_size: usize,
+        ngram_kind: minhash_ops::NgramKind,
         seed: u64,
     },
     MinHashLSH {
@@ -83,6 +84,7 @@ impl Transformation {
         output_col: String,
         num_perms: usize,
         ngram_size: usize,
+        ngram_kind: minhash_ops::NgramKind,
         seed: u64,
     ) -> Transformation {
         Self::MinHash {
@@ -90,6 +92,7 @@ impl Transformation {
             output_col,
             num_perms,
             ngram_size,
+            ngram_kind,
             seed,
         }
     }
@@ -146,11 +149,17 @@ fn apply_transformation(batch: RecordBatch, step: &Transformation) -> PyResult<R
             output_col,
             num_perms,
             ngram_size,
+            ngram_kind,
             seed,
         } => {
             let input_arr = ops::get_string_array(&batch, input_col)?;
-            let signature_arr =
-                minhash_ops::compute_minhash(&input_arr, *num_perms, *ngram_size, *seed)?;
+            let signature_arr = minhash_ops::compute_minhash(
+                &input_arr,
+                *num_perms,
+                *ngram_size,
+                *ngram_kind,
+                *seed,
+            )?;
             ops::add_column(&batch, output_col, signature_arr)
         }
 

@@ -33,11 +33,13 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
+    NgramKind,
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -78,9 +80,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
     minhash = StepSpec(
         name="datakit-tier2-skewed-smoke/minhash",
         deps=[normalized],
+        hash_attrs={"ngram_kind": str(NgramKind.WORD)},
         fn=lambda output_path: compute_minhash_attrs(
             source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
+            ngram_kind=NgramKind.WORD,
         ),
         override_output_path=f"{ttl_base}/minhash",
     )
@@ -89,7 +93,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     deduped = StepSpec(
         name="datakit-tier2-skewed-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={"candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE, "cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,

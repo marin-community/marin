@@ -17,6 +17,7 @@ fn dupekit_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DEFAULT_HASH_ALGORITHM", hashing::DEFAULT_HASH_ALGO)?;
 
     // Composable Pipeline
+    m.add_class::<minhash_ops::NgramKind>()?;
     m.add_class::<pipeline::Transformation>()?;
     m.add_function(wrap_pyfunction!(pipeline::transform, m)?)?;
 

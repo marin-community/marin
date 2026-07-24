@@ -141,9 +141,10 @@ def _validate_fuzzy_dups(base: str, normalize_rows: int) -> int:
 
     Fuzzy dedup writes one cluster-member parquet per normalize shard, per source,
     under ``<attr_dir>/*.parquet`` with schema ``{id, attributes: {dup_cluster_id,
-    is_cluster_canonical}}``. Singletons are omitted, and exactly one cluster
-    member is flagged ``is_cluster_canonical=True``. Consolidate's default policy
-    keeps canonicals and singletons, so non-canonicals == rows dropped.
+    is_cluster_canonical}}``. Singletons and transitive-only component members
+    are omitted, and exactly one marked member per cluster is flagged
+    ``is_cluster_canonical=True``. Consolidate keeps canonicals and unmarked
+    rows, so non-canonical markers equal rows dropped.
     """
     dedup = read_artifact(f"{base}/fuzzy_dups", FuzzyDupsAttrData)
     if len(dedup.sources) != FUZZY_DUPS_EXPECTED_SOURCES:

@@ -20,7 +20,7 @@ import pyarrow.parquet as pq
 from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
+from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams, NgramKind
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from zephyr.shard_keys import deterministic_hash
 
@@ -95,7 +95,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
-    # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
+    # Dedup is sparse: only a canonical and its direct candidates appear.
     marked = [(d[0], d[4]) for d in docs if d[4] is not None]
     if marked:
         _write_parquet(
@@ -159,7 +159,7 @@ def _build_inputs(tmp_path):
         )
     }
     dedup = FuzzyDupsAttrData(
-        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
+        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, ngram_kind=NgramKind.WORD, seed=0),
         sources={main_dir: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
         counters={},
     )

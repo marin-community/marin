@@ -27,8 +27,16 @@ from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_CANDIDATE_SCOPE,
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    NgramKind,
+    compute_minhash_attrs,
+)
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
 
@@ -52,24 +60,35 @@ _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
 
-def _minhash_step(src_name: str, sampled: StepSpec, **params: int) -> StepSpec:
+def _minhash_step(
+    src_name: str,
+    sampled: StepSpec,
+    *,
+    num_perms: int,
+    num_bands: int,
+    ngram_size: int,
+    ngram_kind: NgramKind,
+    seed: int,
+) -> StepSpec:
     """MinHash bucket attrs for one sampled source."""
     return StepSpec(
         name=f"data/datakit/minhash/{src_name}",
         deps=[sampled],
         hash_attrs={
-            "num_perms": params["num_perms"],
-            "num_bands": params["num_bands"],
-            "ngram_size": params["ngram_size"],
-            "seed": params["seed"],
+            "num_perms": num_perms,
+            "num_bands": num_bands,
+            "ngram_size": ngram_size,
+            "ngram_kind": str(ngram_kind),
+            "seed": seed,
         },
         fn=lambda output_path, sampled=sampled: compute_minhash_attrs(
             source=read_artifact(sampled.output_path, NormalizedData),
             output_path=output_path,
-            num_perms=params["num_perms"],
-            num_bands=params["num_bands"],
-            ngram_size=params["ngram_size"],
-            seed=params["seed"],
+            num_perms=num_perms,
+            num_bands=num_bands,
+            ngram_size=ngram_size,
+            ngram_kind=ngram_kind,
+            seed=seed,
             worker_resources=_MINHASH_WORKER_RESOURCES,
         ),
     )
@@ -80,7 +99,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     return StepSpec(
         name="data/datakit/fuzzy_dups",
         deps=list(minhash_steps),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={"candidate_scope": FUZZY_DUPS_CANDIDATE_SCOPE, "cc_max_iterations": cc_max_iterations},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
@@ -129,6 +148,7 @@ def dedup(
     fuzzy_dedup_num_perms: int = 286,
     fuzzy_dedup_num_bands: int = 26,
     fuzzy_dedup_ngram_size: int = 5,
+    fuzzy_dedup_ngram_kind: NgramKind = NgramKind.WORD,
     fuzzy_dedup_seed: int = 42,
     fuzzy_dedup_cc_max_iterations: int = 10,
 ) -> StepSpec:
@@ -148,6 +168,7 @@ def dedup(
         "num_perms": fuzzy_dedup_num_perms,
         "num_bands": fuzzy_dedup_num_bands,
         "ngram_size": fuzzy_dedup_ngram_size,
+        "ngram_kind": fuzzy_dedup_ngram_kind,
         "seed": fuzzy_dedup_seed,
     }
     minhash_by_source = {
