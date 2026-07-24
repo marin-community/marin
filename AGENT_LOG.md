@@ -53,3 +53,31 @@ Confidence: 8/10 that this direction is a significant step toward 25% MFU (rav's
   scatter->0 HLO + 1e-5 parity all agree; the only gap is a clean completed 120-step matched A/B).
 Next: coordinate before burning a shared rack (etiquette: avoid duplicating rav's in-flight work,
   cluster heavily contended). Messaging coordinator with numbers + recommendation.
+
+## Handoff artifact (commits on agent/ep25-d1-adjoint)
+- 45ce02d20  gather-dispatch reconstruction (SCALE_A2A_GATHER_DISPATCH) — the 20.558% control path.
+- c9e30f848  structured custom_vjp for BOTH gathers (SCALE_A2A_CUSTOM_ADJOINT) — the treatment. THIS is the deliverable.
+- f2cbc192c  black formatting. Tests live in lib/levanter/tests/grug/test_grugformer_moe.py
+  (test_gather_dispatch_matches_scatter_forward_and_drops, test_custom_adjoint_matches_autodiff_gradients).
+Do NOT hand to rav directly (coordinator's call).
+
+## Prepared rack A/B (one keystroke when a window opens; coordinator deferred the rack for now)
+Control (gather-dispatch, XLA-autodiff backward) — DATE=$(date +%Y%m%d-%H%M):
+  IRIS_USER=mwittmann .venv/bin/iris --cluster=marin job run --no-wait \
+    --target-cluster cw-us-east-08a --priority interactive \
+    --job-name ep25d1-adj-control-120-vDATE -e RUN_ID ep25d1-adj-control-120-vDATE \
+    -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
+    -e SCALE_A2A_FIXED 1 -e SCALE_A2A_CHUNKS 1 -e SCALE_A2A_NO_BARRIER 1 -e SCALE_A2A_GATHER_DISPATCH 1 \
+    -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
+    -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 8 \
+    -e SCALE_HIDDEN_DIM 5120 -e SCALE_NUM_LAYERS 48 -e SCALE_INTERMEDIATE 1280 -e SCALE_SHARED_INTERMEDIATE 5120 \
+    -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 1024 -e SCALE_SLIDING_WINDOW 2048 \
+    -e SCALE_STEPS 120 -e SCALE_MOE_IMPL ragged_all_to_all -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
+    -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
+    -e SCALE_TRACKER json_logger -e SCALE_JSON_LOGGER ep25d1-adj-control-120-vDATE.metrics \
+    -e SCALE_DISABLE_CHECKPOINT 1 \
+    -- python -m experiments.grug.moe.launch_cw_scale --version ep25d1-adj-control --run
+
+Treatment (adds custom adjoint): identical EXCEPT job-name/RUN_ID -> ep25d1-adj-custom-120-vDATE, add
+    -e SCALE_A2A_CUSTOM_ADJOINT 1 , and --version ep25d1-adj-custom .
+Report p10/p50/p90 MFU (2.5 PF/s denom), tok/s, step time, drop fraction (dropped/assignments), loss trajectory for both.
