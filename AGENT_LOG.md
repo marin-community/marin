@@ -103,3 +103,16 @@ Smoke A/B (4-GPU EP4, remat+scan+shard_map e2e; confirms adjoint survives e2e, d
 - ep25d1-smoke-ep4-custom-0724-1633: RUNNING (past setup -> bundle+code ship OK; sentinel/custom path active).
 - ep25d1-smoke-ep4-control-0724-1636: resubmitted (prior two control attempts hit transient [iris setup] step 1/2).
 Confidence: 8/10 (unchanged). Next: collect smoke MFU delta + drop fractions; tripwire-poll rav.
+
+## SMOKE A/B RESULT (4-GPU EP4, hidden3072 L12 e64 top8 batch16 seq4096, remat_all + scan, muonh, 40 steps)
+| arm | p10 | p50 | p90 | tok/s | loss@39 | samples |
+|---|---|---|---|---|---|---|
+| control (gather-dispatch, autodiff backward) | 11.99 | 12.146 | 12.27 | 81.5K | 6.819 | 39 |
+| treatment (+SCALE_A2A_CUSTOM_ADJOINT) | 12.16 | 12.392 | 12.56 | 82.2K | 6.857 | 39 |
+Delta: p50 +0.246pp (+2.0% rel tok/s), medians cleanly separated (control p90 12.27 < treatment p50 12.39).
+Both ran 40 steps clean on real GB200 (no OOM/NaN), loss descending 9->6.8. CONFIRMS the custom adjoint
+survives remat_all + layer scan + shard_map/EP end-to-end and gives a consistent throughput win.
+CAVEAT: EP4 tiny model -> backward-scatter is a small step fraction, so +0.25pp here understates the
+operating point; rav's live EP64 signal (~20.6% gather-dispatch -> 25.4% custom, +~4.9pp) is the scale-up.
+Loss 0.04 apart = known independent-run RNG divergence (baseline saw 0.064 gather-vs-scatter); kernel test
+proves grad parity at 1e-5, so this is not a numerics bug.
