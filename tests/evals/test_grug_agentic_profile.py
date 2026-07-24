@@ -5,9 +5,9 @@
 
 from dataclasses import replace
 
+from experiments.evals.evalchemy.serve_and_eval import _shared_inference_config
 from experiments.evaluation.hardware import Platform
 from experiments.evaluation.launch import LaunchSpec, plan_runs
-from experiments.evals.evalchemy.serve_and_eval import _shared_inference_config
 
 
 def test_grug_agentic_profile_resolves_validated_h100_serving_contract():
