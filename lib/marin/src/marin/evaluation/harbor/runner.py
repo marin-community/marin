@@ -17,21 +17,18 @@ The ``harbor`` dependency is optional and imported lazily, so importing this mod
 import hashlib
 import json
 import logging
-import os
 import re
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fsspec.core import url_to_fs
-from rigging.filesystem import StoragePath, is_remote_path, prefix_join
+from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
-from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -88,6 +85,7 @@ class HarborRunResult:
     dataset: str
     total_trials: int
     solved_trials: int
+    failed_trials: int
     mean_reward: float
     accuracy: float
     samples_path: str | None
@@ -129,11 +127,11 @@ def _restore_completed_trials(out_path: str, job_dir: Path) -> int:
         return 0
     restored = 0
     for result_file in StoragePath(prefix_join(trials_root, "*/result.json")).glob():
-        trial_dir = os.path.dirname(str(result_file))
-        local = job_dir / os.path.basename(trial_dir)
+        trial_dir = result_file.parent
+        local = job_dir / trial_dir.name
         if (local / "result.json").exists():
             continue
-        download_from_gcs(trial_dir, str(local))
+        trial_dir.download_to(str(local), recursive=True)
         restored += 1
     return restored
 
@@ -205,11 +203,13 @@ def _write_samples(trials: list[HarborTrial], dataset: str, out_path: str) -> st
 def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None) -> HarborRunResult:
     total = len(trials)
     solved = sum(1 for trial in trials if trial.reward >= SOLVED_REWARD)
+    failed = sum(1 for trial in trials if trial.error is not None)
     total_reward = sum(trial.reward for trial in trials)
     return HarborRunResult(
         dataset=dataset,
         total_trials=total,
         solved_trials=solved,
+        failed_trials=failed,
         mean_reward=(total_reward / total) if total else 0.0,
         accuracy=(solved / total) if total else 0.0,
         samples_path=samples_path,
@@ -240,7 +240,8 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
     """Upload each finished trial directory under ``job_dir`` to ``out_path/harbor_trials`` for resume."""
     for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
         if (trial_dir / "result.json").exists():
-            upload_to_gcs(str(trial_dir), prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
+            target = StoragePath(prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
+            target.upload_from(str(trial_dir), recursive=True)
 
 
 def run_harbor(
@@ -306,6 +307,7 @@ def run_harbor(
                 "dataset": result.dataset,
                 "total_trials": result.total_trials,
                 "solved_trials": result.solved_trials,
+                "failed_trials": result.failed_trials,
                 "mean_reward": result.mean_reward,
                 "accuracy": result.accuracy,
             },
@@ -347,6 +349,12 @@ class HarborExecutor:
         if not result.total_trials:
             raise EvaluationError(
                 f"Harbor eval finished with no trials under {output_dir!r}",
+                status=RunStatus.FAILED,
+            )
+        if result.failed_trials:
+            raise EvaluationError(
+                f"Harbor eval finished with {result.failed_trials} of {result.total_trials} failed trials "
+                f"under {output_dir!r}",
                 status=RunStatus.FAILED,
             )
         return EvaluationOutcome(metrics=result.task_metrics())
