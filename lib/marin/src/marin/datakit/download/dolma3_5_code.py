@@ -28,18 +28,13 @@ from marin.execution.step_spec import StepSpec
 SUBSET = "dolma_code_prose"
 
 
-def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
-    """Return the ``(download, normalize)`` chain for the code-prose subset.
-
-    The key matches the upstream directory name.
-    """
-    return {
-        SUBSET: hf_normalize_steps(
-            marin_name=SUBSET,
-            hf_dataset_id=HF_DATASET_ID,
-            revision=HF_REVISION,
-            staged_path=prefix_join(STAGED_ROOT, SUBSET),
-            hf_urls_glob=(prefix_join(SUBSET, DATA_FILE_GLOB),),
-            file_extensions=(DATA_FILE_EXTENSION,),
-        )
-    }
+def dolma3_5_code_prose_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the ``(download, normalize)`` chain for the code-prose subset."""
+    return hf_normalize_steps(
+        marin_name=SUBSET,
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        staged_path=prefix_join(STAGED_ROOT, SUBSET),
+        hf_urls_glob=(prefix_join(SUBSET, DATA_FILE_GLOB),),
+        file_extensions=(DATA_FILE_EXTENSION,),
+    )
