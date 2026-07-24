@@ -33,6 +33,7 @@ from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import DEFAULT_PLATFORMS
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
@@ -105,6 +106,27 @@ def _dispatch_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
 @click.group()
 def cli() -> None:
     """Manage finelog deployments."""
+
+
+@cli.command("build-image")
+@click.option("--image", "images", multiple=True, required=True, help="Image tag to publish. Repeat for aliases.")
+@click.option("--platform", default=DEFAULT_PLATFORMS, show_default=True)
+@click.option("--cargo-profile", type=click.Choice(["release", "fast"]), default="release", show_default=True)
+@click.option("--cache-image", help="Registry image used for BuildKit cache import and export.")
+def build_image_cmd(
+    images: tuple[str, ...],
+    platform: str,
+    cargo_profile: str,
+    cache_image: str | None,
+) -> None:
+    """Build and publish a finelog image."""
+    build_finelog_image(
+        image=images[0],
+        additional_tags=images[1:],
+        platform=platform,
+        cargo_profile=cargo_profile,
+        cache_image=cache_image,
+    )
 
 
 @cli.group("deploy")

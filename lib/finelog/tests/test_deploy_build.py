@@ -15,6 +15,13 @@ def test_pushed_image_targets_both_coreweave_control_node_architectures(monkeypa
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    build_image(image="example.invalid/finelog:test")
+    build_image(
+        image="example.invalid/finelog:test",
+        additional_tags=("example.invalid/finelog:alias",),
+        cache_image="example.invalid/finelog-cache:test",
+    )
 
     assert calls[0][calls[0].index("--platform") + 1] == "linux/amd64,linux/arm64"
+    assert calls[0].count("--tag") == 2
+    assert "--cache-from" in calls[0]
+    assert "--cache-to" in calls[0]

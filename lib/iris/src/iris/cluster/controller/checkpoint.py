@@ -406,7 +406,7 @@ def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
     return _entry_epoch_ms(found)
 
 
-def checkpoint_epoch_ms(checkpoint_dir: str) -> int | None:
+def parse_checkpoint_epoch_ms(checkpoint_dir: str) -> int | None:
     return _entry_epoch_ms(checkpoint_dir)
 
 
@@ -508,7 +508,7 @@ def download_checkpoint_to_local(
             logger.info("No checkpoint at %s, starting fresh", source_dir)
             return False
 
-        source_epoch_ms = checkpoint_epoch_ms(source_dir)
+        source_epoch_ms = parse_checkpoint_epoch_ms(source_dir)
         if source_epoch_ms is not None:
             connection = sqlite3.connect(str(main_path))
             try:

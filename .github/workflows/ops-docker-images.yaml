@@ -140,6 +140,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Set tags
         id: set-tags
         run: |
@@ -155,16 +158,11 @@ jobs:
 
       - name: Build and push finelog
         run: |
-          docker buildx build --file lib/finelog/deploy/Dockerfile \
-            --platform linux/amd64,linux/arm64 \
-            --cache-from type=registry,ref=ghcr.io/marin-community/finelog-cache:latest \
-            --cache-to type=registry,ref=ghcr.io/marin-community/finelog-cache:latest,mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
-            --output type=image,compression=zstd,compression-level=3,push=true \
-            --provenance=false \
-            --tag ghcr.io/marin-community/finelog:latest \
-            --tag ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.DATE_TAG }} \
-            --tag ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.HASH_TAG }} \
-            .
+          uv run --frozen --package marin-finelog finelog build-image \
+            --image ghcr.io/marin-community/finelog:latest \
+            --image ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --image ghcr.io/marin-community/finelog:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --cache-image ghcr.io/marin-community/finelog-cache:latest
 
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:

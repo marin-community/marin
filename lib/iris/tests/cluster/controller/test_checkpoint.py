@@ -4,9 +4,9 @@
 """Tests for controller checkpoint: remote-only write and download-before-create restore."""
 
 from iris.cluster.controller.checkpoint import (
-    checkpoint_epoch_ms,
     download_checkpoint_to_local,
     latest_checkpoint_epoch_ms,
+    parse_checkpoint_epoch_ms,
     probe_database_dir,
     prune_old_checkpoints,
     write_checkpoint,
@@ -33,7 +33,7 @@ def test_write_checkpoint_uploads_compressed(tmp_path, make_controller):
     assert result.job_count == 0
     assert result.task_count == 0
     assert result.worker_count == 0
-    assert probe_database_dir(controller._db.db_path.parent).checkpoint_epoch_ms == checkpoint_epoch_ms(path)
+    assert probe_database_dir(controller._db.db_path.parent).checkpoint_epoch_ms == parse_checkpoint_epoch_ms(path)
 
 
 def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):

@@ -14,6 +14,7 @@ The image must be pushed to a registry the deployment can pull from
 """
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import click
@@ -48,9 +49,11 @@ def find_marin_root() -> Path:
 def build_image(
     *,
     image: str = DEFAULT_IMAGE,
+    additional_tags: Sequence[str] = (),
     push: bool = True,
     platform: str = DEFAULT_PLATFORMS,
     cargo_profile: str = "release",
+    cache_image: str | None = None,
 ) -> None:
     """Build the finelog Docker image and (by default) push it to the registry.
 
@@ -58,9 +61,9 @@ def build_image(
     cluster will keep pulling the old digest. ``push=False`` is useful for
     smoke-testing the Dockerfile locally without registry access.
 
-    Pushed images cover both architectures used by CoreWeave control nodes.
-    Docker cannot load a multi-platform image into the local engine, so
-    ``push=False`` builds the first requested platform only.
+    The default platform list covers both CoreWeave control-node architectures;
+    callers may override it. Docker cannot load a multi-platform image into the
+    local engine, so ``push=False`` builds the first requested platform only.
 
     ``cargo_profile`` selects the Rust build profile baked into the image.
     ``release`` (default) is the optimized fat-LTO production build; ``fast``
@@ -84,7 +87,19 @@ def build_image(
         image,
         "--provenance=false",
     ]
+    for tag in additional_tags:
+        cmd.extend(["--tag", tag])
     if push:
+        if cache_image is not None:
+            cmd.extend(
+                [
+                    "--cache-from",
+                    f"type=registry,ref={cache_image}",
+                    "--cache-to",
+                    f"type=registry,ref={cache_image},mode=max,compression=zstd,"
+                    "compression-level=3,oci-mediatypes=true,image-manifest=true",
+                ]
+            )
         cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
     else:
         cmd.extend(["--output", f"type=docker,name={image}"])
