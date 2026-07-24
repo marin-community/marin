@@ -42,7 +42,7 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
         built = _build_cluster_images(
             config,
             git_sha="abc",
-            platform="linux/amd64",
+            workload_platforms="linux/amd64,linux/arm64",
             cargo_profile="fast",
         )
 
@@ -54,8 +54,13 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
     assert build_image.call_count == 3
     image_types = [call.kwargs["image_type"] for call in build_image.call_args_list]
     assert sorted(image_types) == ["controller", "task", "worker"]
+    platforms = {call.kwargs["image_type"]: call.kwargs["platform"] for call in build_image.call_args_list}
+    assert platforms == {
+        "controller": "linux/amd64",
+        "task": "linux/amd64,linux/arm64",
+        "worker": "linux/amd64,linux/arm64",
+    }
     for call in build_image.call_args_list:
         assert call.kwargs["tag"].endswith(":v1")
         assert call.kwargs["git_sha"] == "abc"
-        assert call.kwargs["platform"] == "linux/amd64"
         assert call.kwargs["cargo_profile"] == "fast"

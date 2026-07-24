@@ -67,14 +67,14 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
-Restarts default to the fast Rust profile, which skips LTO and reduces native link time, and amd64+arm64 images. For an amd64-only dev cluster:
+Restarts default to the fast Rust profile, which skips LTO and reduces native link time. The controller is built for amd64 because controller nodes are pinned to that architecture. Worker and task images remain amd64+arm64 by default for clusters with arm64 GPU nodes. To build amd64-only workload images on a dev cluster:
 
 ```bash
 iris --cluster=marin-dev cluster controller restart \
   --image-platform linux/amd64
 ```
 
-Pass `--cargo-profile release` for an LTO build. Keep the default multi-platform build when the deployed cluster needs arm64 images.
+Pass `--cargo-profile release` for an LTO build. Keep the default workload image platforms when the deployed cluster needs arm64 workers.
 
 **Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
 

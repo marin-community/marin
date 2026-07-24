@@ -21,7 +21,7 @@ from pathlib import Path
 import click
 
 DEFAULT_IMAGE = "ghcr.io/marin-community/finelog:latest"
-DEFAULT_PLATFORMS = "linux/amd64,linux/arm64"
+DEFAULT_PLATFORM = "linux/amd64"
 REGISTRY_COMPRESSION = "compression=zstd,compression-level=3"
 
 
@@ -73,7 +73,7 @@ def build_image(
     image: str = DEFAULT_IMAGE,
     additional_tags: Sequence[str] = (),
     push: bool = True,
-    platform: str = DEFAULT_PLATFORMS,
+    platform: str = DEFAULT_PLATFORM,
     cargo_profile: str = "release",
     cache_image: str | None = None,
 ) -> None:
@@ -83,9 +83,10 @@ def build_image(
     cluster will keep pulling the old digest. ``push=False`` is useful for
     smoke-testing the Dockerfile locally without registry access.
 
-    The default platform list covers both CoreWeave control-node architectures;
-    callers may override it. Docker cannot load a multi-platform image into the
-    local engine, so ``push=False`` builds the first requested platform only.
+    Finelog deployments are pinned to amd64 control nodes, so builds default to
+    amd64. Callers may request multiple platforms explicitly. Docker cannot load
+    a multi-platform image into the local engine, so ``push=False`` builds the
+    first requested platform only.
 
     ``cargo_profile`` selects the Rust build profile baked into the image.
     ``release`` (default) is the optimized fat-LTO production build; ``fast``

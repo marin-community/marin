@@ -9,21 +9,11 @@ import pytest
 from finelog.deploy.build import build_image
 
 
-def test_pushed_image_targets_both_coreweave_control_node_architectures(monkeypatch) -> None:
+def test_pushed_image_defaults_to_amd64(monkeypatch) -> None:
     calls: list[list[str]] = []
 
     def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess:
         calls.append(argv)
-        if "imagetools" in argv:
-            stdout = json.dumps(
-                {
-                    "manifests": [
-                        {"platform": {"os": "linux", "architecture": "amd64"}},
-                        {"platform": {"os": "linux", "architecture": "arm64"}},
-                    ]
-                }
-            )
-            return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -34,8 +24,8 @@ def test_pushed_image_targets_both_coreweave_control_node_architectures(monkeypa
         cache_image="example.invalid/finelog-cache:test",
     )
 
-    argv, inspect_argv = calls
-    assert argv[argv.index("--platform") + 1] == "linux/amd64,linux/arm64"
+    [argv] = calls
+    assert argv[argv.index("--platform") + 1] == "linux/amd64"
     assert [argv[index + 1] for index, argument in enumerate(argv) if argument == "--tag"] == [
         "example.invalid/finelog:test",
         "example.invalid/finelog:alias",
@@ -45,14 +35,6 @@ def test_pushed_image_targets_both_coreweave_control_node_architectures(monkeypa
         "type=registry,ref=example.invalid/finelog-cache:test,mode=max,compression=zstd,"
         "compression-level=3,oci-mediatypes=true,image-manifest=true"
     )
-    assert inspect_argv == [
-        "docker",
-        "buildx",
-        "imagetools",
-        "inspect",
-        "--raw",
-        "example.invalid/finelog:test",
-    ]
 
 
 def test_multiarch_build_fails_if_published_index_is_missing_a_platform(monkeypatch) -> None:
@@ -65,4 +47,4 @@ def test_multiarch_build_fails_if_published_index_is_missing_a_platform(monkeypa
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(click.ClickException):
-        build_image(image="example.invalid/finelog:test")
+        build_image(image="example.invalid/finelog:test", platform="linux/amd64,linux/arm64")

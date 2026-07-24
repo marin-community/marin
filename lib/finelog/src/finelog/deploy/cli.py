@@ -33,7 +33,7 @@ from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
-from finelog.deploy.build import DEFAULT_PLATFORMS
+from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
@@ -110,7 +110,7 @@ def cli() -> None:
 
 @cli.command("build-image")
 @click.option("--image", "images", multiple=True, required=True, help="Image tag to publish. Repeat for aliases.")
-@click.option("--platform", default=DEFAULT_PLATFORMS, show_default=True)
+@click.option("--platform", default=DEFAULT_PLATFORM, show_default=True)
 @click.option("--cargo-profile", type=click.Choice(["release", "fast"]), default="release", show_default=True)
 @click.option("--cache-image", help="Registry image used for BuildKit cache import and export.")
 def build_image_cmd(

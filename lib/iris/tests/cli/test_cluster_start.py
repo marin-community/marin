@@ -37,7 +37,7 @@ def test_cluster_start_passes_requested_image_build_settings(monkeypatch):
         config,
         "tree-hash",
         verbose=False,
-        platform="linux/amd64",
+        workload_platforms="linux/amd64",
         cargo_profile="release",
     )
 
@@ -85,6 +85,6 @@ def test_cluster_start_smoke_passes_requested_image_build_settings(monkeypatch, 
         config,
         "tree-hash",
         verbose=False,
-        platform="linux/amd64",
+        workload_platforms="linux/amd64",
         cargo_profile="fast",
     )
