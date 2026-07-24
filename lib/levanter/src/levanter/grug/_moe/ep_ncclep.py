@@ -186,7 +186,7 @@ def _ep_dispatch_bwd(layer_config, recv_capacity, residual, output_cotangents):
             P(_EXPERT_AXIS, None, None),
             P(_EXPERT_AXIS, None),
         ),
-        out_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
+        out_specs=[P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)],
         check_vma=False,
     )(handle_memory, output_cotangents[0], output_cotangents[1])
     return None, token_cotangent, weight_cotangent
