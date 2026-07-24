@@ -128,12 +128,19 @@ class RbacSpec(BaseModel):
     service_account: str = "iris-controller"
 
 
+class GrafanaObserverRbacSpec(BaseModel):
+    """CoreWeave Managed Auth usernames accepted during Grafana token rotation."""
+
+    usernames: tuple[str, ...] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
     ingress: IngressSpec
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
+    grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):
