@@ -47,11 +47,14 @@ watch([selectedTask, correct], () => {
   if (selectedTask.value) refresh()
 })
 
-/** A short "answer" summary for a row: the model's picked choice, or the extracted generation. */
+/** A short "answer" summary for a row: the picked choice, the extracted generation, or a trajectory hint. */
 function answerSummary(row: SampleRow): string {
   if (row.kind === 'multiple_choice') {
     const choice = row.model_choice !== null ? (row.choices?.[row.model_choice] ?? null) : null
     return choice ? `${choice.label}: ${choice.text.trim()}` : '—'
+  }
+  if (row.kind === 'agentic') {
+    return row.trajectory_uri ? 'agentic trajectory' : '—'
   }
   return row.extracted ?? ''
 }
@@ -142,6 +145,7 @@ function openViewer(rowIndex: number) {
               <tr class="border-b border-surface-border bg-surface-raised text-text-secondary">
                 <th class="px-2 py-1.5 text-left w-16">Doc</th>
                 <th class="px-2 py-1.5 text-left w-16">Metric</th>
+                <th class="px-2 py-1.5 text-left w-28">Grading</th>
                 <th class="px-2 py-1.5 text-left">Gold target</th>
                 <th class="px-2 py-1.5 text-left">Model answer</th>
               </tr>
@@ -162,6 +166,7 @@ function openViewer(rowIndex: number) {
                       : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
                   >{{ primaryValue(row) ?? (row.correct ? '✓' : '✗') }}</span>
                 </td>
+                <td class="px-2 py-1.5 font-mono text-text-muted truncate">{{ row.grading?.method ?? '—' }}</td>
                 <td class="px-2 py-1.5 font-mono max-w-[24ch] truncate">{{ truncate(row.target_text ?? '', 60) }}</td>
                 <td class="px-2 py-1.5 font-mono max-w-[40ch] truncate">{{ truncate(answerSummary(row)) }}</td>
               </tr>
