@@ -23,8 +23,8 @@ uv run ... \
 
 Profiles default to a 30-day lifetime. Set
 `--trainer.profiler.upload.ttl_days 3` to request another lifetime or
-`--trainer.profiler.upload.enabled false` for local-only capture. A local
-`MARIN_PREFIX` also disables upload.
+`--trainer.profiler.upload.enabled false` for local-only capture. A
+`MARIN_PREFIX` without lifecycle-backed `ttl=Nd` storage also disables upload.
 
 Install local viewers with one of:
 

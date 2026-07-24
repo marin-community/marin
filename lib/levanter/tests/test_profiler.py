@@ -124,7 +124,14 @@ def test_profiler_upload_can_be_disabled(monkeypatch, tmp_path):
     assert captured["xprof_service_url"] is None
 
 
-def test_local_marin_fallback_does_not_copy_or_log_hosted_link(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "fallback",
+    [
+        "file://{tmp_path}/marin-tmp/{prefix}",
+        "s3://some-other-bucket/marin/tmp/{prefix}",
+    ],
+)
+def test_non_ttl_marin_fallback_does_not_copy_or_log_hosted_link(monkeypatch, tmp_path, fallback):
     captured = {}
 
     def fake_profile(path, **kwargs):
@@ -135,7 +142,7 @@ def test_local_marin_fallback_does_not_copy_or_log_hosted_link(monkeypatch, tmp_
     monkeypatch.setattr(
         profiler_module,
         "marin_temp_bucket",
-        lambda _ttl_days, prefix: f"file://{tmp_path}/marin-tmp/{prefix}",
+        lambda _ttl_days, prefix: fallback.format(tmp_path=tmp_path, prefix=prefix),
     )
     ProfilerConfig().build(str(tmp_path / "capture"), run_id="local-run")
 
