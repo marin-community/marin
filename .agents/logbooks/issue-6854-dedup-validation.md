@@ -167,3 +167,37 @@ statistics for performance comparisons.
   CPU-seconds versus 233.93 treatment CPU-seconds (-2.7%). Total MinHash plus
   dedup CPU was 342.81s versus 275.58s (-19.6%). Graph-stage item counts differ
   slightly because the graph semantics differ; only MinHash has identical work.
+
+### 2026-07-24T08:31:00Z — full 100B A/B launched and MinHash complete
+
+- Launched both non-preemptible full arms against the pinned 103,716,988-document
+  inventory with identical resources and only the intended implementation
+  difference:
+  - baseline `/rav/datakit-6854-ab-baseline-100b-20260724`, submitted
+    2026-07-24T08:18:53Z;
+  - treatment `/rav/datakit-6854-ab-treatment-100b-20260724`, submitted within
+    23 seconds of the baseline.
+- Exact command shape for both arms:
+  `uv run python experiments/datakit/scripts/dedup_ab_run.py run --variant
+  <arm> --code-ref <pinned-sha> --max-workers 256 --dedup-parallelism 512
+  --max-concurrent-sources 4 --layout combined`.
+- Both MinHash stages completed all 768 input shards with identical accounting:
+  103,716,988 documents, 2,696,641,688 buckets, 31,351 capped texts, and
+  141,312 input-list bytes. Inline worker CPU was 84,007.55 seconds for
+  baseline character 5-grams and 24,982.35 seconds for treatment word 5-grams
+  (-70.3%). Peak aggregate worker memory was 3,859,361,792 versus
+  3,819,208,704 bytes. Final performance claims will use the matched finelog
+  records after all stages finish.
+- The frequent best-effort endpoint-unregister and finelog send warnings during
+  the 256-worker shutdown burst did not fail or preempt either job and did not
+  change the exact output counters.
+- Baseline combined and per-source smoke layouts are exactly equivalent:
+  115 sources, 115 shards, 13 marker rows, and five canonical rows. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-layout-verification-20260724-v1/baseline.json`.
+- The corrected audit invariant run additionally rejects duplicate marker IDs
+  and requires strictly sorted normalized IDs. Its score and graph passes
+  reproduced the prior smoke counts, including exact graph distances 0/1/2 =
+  5/6/2. `/rav/datakit-6854-dedup-audit-smoke-v3-20260724` then completed
+  successfully with all 15 distinct occurrences accounted for and the same
+  seven baseline-only drops, one treatment-only drop, one shared drop, and six
+  canonical-only occurrences.
