@@ -15,9 +15,8 @@ CONCAT_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\
 class ModelSpec:
     """Resolved model inputs required by every local backend."""
 
-    model: str
-    served_model_name: str
-    model_path: str
+    weights: str
+    api_model: str
     num_chips: int | None
     tensor_parallel_size: int | None
     dtype: str

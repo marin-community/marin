@@ -24,7 +24,7 @@ serve:
       - --enable-prefix-caching
     gh200-65k:
       tensor_parallel_size: 1
-      max_model_len: 32768
+      max_model_len: 65536
       swap_space_gb: 32
       trust_remote_code: true
       vllm_extra_args:

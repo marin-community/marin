@@ -6,12 +6,12 @@
 import json
 import logging
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
-from iris.cluster.types import EndpointAccess
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
@@ -30,6 +30,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
+from marin.inference.iris import RemoteInferenceSession, remote_inference
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,6 @@ class ServeSpec:
     chat_template_content: str | None = None
     instances: int = 1
     broker: BrokerConfig | None = None
-    endpoint_access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     auto_overrides: bool = True
 
     def __post_init__(self) -> None:
@@ -81,18 +81,42 @@ class InferenceLaunch:
     iris: IrisConfig
     instances: int
     broker: BrokerConfig | None
-    endpoint_access: int
+    endpoint_origin: str | None
+
+    def start(self) -> AbstractContextManager[RemoteInferenceSession]:
+        """Start this inference configuration and return its managed session."""
+        return remote_inference(
+            self.model,
+            self.engine,
+            self.iris,
+            instances=self.instances,
+            broker=self.broker,
+            endpoint_origin=self.endpoint_origin,
+        )
 
 
 @dataclass(frozen=True)
 class EvaluationServingConfig:
     """Model and serving policy resolved by the evaluation worker."""
 
-    model: str
+    weights: str
     tokenizer: str
     spec: ServeSpec
+    endpoint_origin: str
     revision: str | None = None
-    served_model_name: str | None = None
+    api_model: str | None = None
+
+    def resolve(self, env_vars: Mapping[str, str]) -> InferenceLaunch:
+        """Resolve this evaluation policy into a startable inference launch."""
+        return build_inference_launch(
+            self.weights,
+            self.tokenizer,
+            self.spec,
+            env_vars=env_vars,
+            endpoint_origin=self.endpoint_origin,
+            revision=self.revision,
+            api_model=self.api_model,
+        )
 
 
 def _auto_serve_overrides_from_config(
@@ -154,20 +178,21 @@ def auto_serve_overrides(
 
 
 def build_inference_launch(
-    model: str,
+    weights: str,
     tokenizer: str,
     spec: ServeSpec,
     *,
     env_vars: Mapping[str, str],
+    endpoint_origin: str | None = None,
     revision: str | None = None,
-    served_model_name: str | None = None,
+    api_model: str | None = None,
 ) -> InferenceLaunch:
     """Resolve ``spec`` into the shared inference layer's model, engine, and Iris configs."""
     vllm_extra_args = spec.vllm_extra_args
     max_model_len = spec.max_model_len
     if spec.backend is ServeBackend.VLLM and spec.auto_overrides:
         vllm_extra_args, max_model_len = auto_serve_overrides(
-            model,
+            weights,
             spec.max_model_len,
             spec.vllm_extra_args,
             revision=revision,
@@ -219,9 +244,9 @@ def build_inference_launch(
 
     return InferenceLaunch(
         model=ServedModelConfig(
-            model=model,
+            weights=weights,
             revision=revision,
-            served_model_name=served_model_name,
+            api_model=api_model,
             tokenizer=tokenizer,
             dtype=spec.dtype,
             max_model_len=max_model_len,
@@ -236,22 +261,7 @@ def build_inference_launch(
         ),
         instances=spec.instances,
         broker=spec.broker,
-        endpoint_access=spec.endpoint_access,
-    )
-
-
-def resolve_inference_launch(
-    config: EvaluationServingConfig,
-    env_vars: Mapping[str, str],
-) -> InferenceLaunch:
-    """Resolve a worker payload into shared inference-layer inputs."""
-    return build_inference_launch(
-        config.model,
-        config.tokenizer,
-        config.spec,
-        env_vars=env_vars,
-        revision=config.revision,
-        served_model_name=config.served_model_name,
+        endpoint_origin=endpoint_origin,
     )
 
 

@@ -1,25 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The model registry for the eval launcher.
-
-Each entry is a :class:`~marin.evaluation.model_config.ModelConfig` -- the one contract the launcher,
-the serve path, and the agentic benchmarks share. Two population paths feed one registry:
-
-- **Python factories** (``_snowball``, ``_base_hf``) for the parametric entries whose serve options are
-  computed (a 256-expert MoE that resolves to ``tensor_parallel_size=1`` plus expert parallelism, a
-  base model pinned to an immutable revision).
-- **YAML catalog** under :data:`MODEL_CATALOG_DIR` (``serve/models/<org>/<model>.yaml``), scanned by
-  :func:`~marin.evaluation.model_config.scan_model_configs` -- the bulk per-model serve catalog
-  imported from OT-Agent's agentic-evals package.
-
-:mod:`experiments.evaluation.hardware` turns ``serve.hbm_gb`` into a slice; :mod:`experiments.evaluation.launch`
-turns the rest into a ``ServeSpec``. HBM sizes follow the bf16 rule of thumb:
-``params_billions * 2 GB * ~1.3`` for weights plus runtime overhead.
-"""
+"""Models available to the evaluation launcher."""
 
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 
 from marin.evaluation.model_config import (
@@ -31,7 +17,6 @@ from marin.evaluation.model_config import (
 )
 from marin.inference.backend import CONCAT_CHAT_TEMPLATE
 
-# The imported per-model YAML catalog. One file per model, mirroring HF's <org>/<model> namespacing.
 MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
 
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
@@ -85,9 +70,6 @@ def _base_hf(name: str, location: str, revision: str, hbm_gb: int) -> ModelConfi
     )
 
 
-# The parametric / curated entries defined in Python. Simple curated checkpoints could equally live as
-# YAML; they stay here so the migration off the earlier registry is a straight rename + grouping and
-# the auto_serve_overrides parity is asserted in one place (tests/evaluation/test_model_config.py).
 _FACTORY_MODELS: tuple[ModelConfig, ...] = (
     # Base reference models, pinned to the revisions used elsewhere in experiments/models.py.
     _base_hf("llama-3.1-8b-base", "meta-llama/Llama-3.1-8B", "d04e592", 21),
@@ -101,9 +83,6 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         serve=ServeConfig(hbm_gb=24),
         generation=GenerationConfig(max_gen_toks=32768),
     ),
-    # The single unified Qwen3-8B entry: evalchemy sizing (TPU-servable at hbm_gb=21) plus the agentic
-    # serve/agent knobs the OT-Agent catalog carried for it (a hermes tool-call parser, and thinking
-    # enabled for the agent). auto_serve_overrides derives the qwen3 reasoning parser.
     ModelConfig(
         name="qwen3-8b",
         location="Qwen/Qwen3-8B",
@@ -147,11 +126,6 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
 
 
 def _build_registry() -> dict[str, ModelConfig]:
-    """The full model registry: the Python factory entries plus the scanned YAML catalog.
-
-    A ``name`` collision between a factory entry and a catalog file is an error -- one would silently
-    shadow the other, and both paths produce the same ``ModelConfig`` type so nothing signals the clash.
-    """
     registry = {model.name: model for model in _FACTORY_MODELS}
     for name, config in scan_model_configs(MODEL_CATALOG_DIR).items():
         if name in registry:
@@ -160,4 +134,6 @@ def _build_registry() -> dict[str, ModelConfig]:
     return registry
 
 
-MODELS: dict[str, ModelConfig] = _build_registry()
+@cache
+def models() -> dict[str, ModelConfig]:
+    return _build_registry()

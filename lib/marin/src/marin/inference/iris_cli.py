@@ -58,7 +58,6 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
-    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
@@ -532,7 +531,7 @@ def main(
         setup_scripts=setup_scripts,
     )
     model_config = ServedModelConfig(
-        model=model,
+        weights=model,
         dtype=dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
@@ -552,7 +551,6 @@ def main(
         endpoint_name=endpoint,
         instances=instances,
         broker=broker_config,
-        access=EndpointAccess.ENDPOINT_ACCESS_LINK,
         timeout_hours=timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
     )

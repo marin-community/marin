@@ -7,11 +7,10 @@ endpoint in order, and writes one durable `record.json` per eval as it finishes 
 in progressively, each eval independently inspectable (own record, own eval-child job and logs, own
 parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
 
-The reusable engine is `marin.evaluation.group_runner`: it opens one `remote_inference` session and
-passes each resolved `RunningModel` to the selected mechanism (`marin.evaluation.evalchemy` or
-`marin.evaluation.harbor_runner`). One eval failing doesn't stop the rest; if inference itself dies,
-the remaining evals are recorded as infrastructure failures without running. This directory contains
-the concrete catalogs, suite aliases, Marin fleet policy, CLI, and submission policy.
+`marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
+each runner. An evaluation failure is recorded and later evaluations continue. If inference fails,
+the current and remaining evaluations are recorded as infrastructure failures. This directory holds
+the model and suite catalogs, Marin fleet policy, and CLI choices.
 
 ## Commands
 
@@ -102,15 +101,15 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-
 
 A Harbor launch needs `DAYTONA_EVAL_API_KEY` (the Google Secret Manager secret of that name) loaded
 into the launch environment; the launcher bridges it to the SDK's `DAYTONA_API_KEY` and copies only
-the sandbox-needed credentials into the trial env. A Harbor group runs its own serve (not a shared
-one held open for hours) and Harbor itself as an isolated `uv` subprocess, out of the marin lock.
+the sandbox-needed credentials into the trial env. Harbor runs as an isolated `uv` subprocess
+outside the Marin lock.
 
 ## Adding a model or eval
 
 A model is a `ModelConfig` (`marin.evaluation.model_config`): its `location` (HF id or `gs://`/`s3://`
 export), a `serve: ServeConfig` (slice sizing + vLLM knobs), a `generation: GenerationConfig`
 (`--gen_kwargs`), and an `agent: AgentConfig` (Harbor agent kwargs). Two population paths feed the one
-`MODELS` registry in `models.py`:
+cached `models()` registry in `models.py`:
 
 - **YAML catalog** under `serve/models/<org>/<model>.yaml` -- one file per model, decoded by draccus
   against `ModelConfig` (an unknown or mistyped field fails at load). This is the bulk catalog; see
@@ -118,8 +117,8 @@ export), a `serve: ServeConfig` (slice sizing + vLLM knobs), a `generation: Gene
 - **Python factory** in `models.py` for the parametric entries whose serve options are computed
   (`_snowball`, `_base_hf`) or the curated hand-tuned ones.
 
-Set `serve.hbm_gb` honestly (bf16 weights are `params_billions * 2 GB`, times roughly 1.3 for runtime
-overhead) so the sizing heuristic picks the smallest slice that fits, or pin `serve.fixed_gpu`
+Set `serve.hbm_gb` to the estimated serving footprint (bf16 weights are
+`params_billions * 2 GB`, times roughly 1.3 for runtime overhead), or pin `serve.fixed_gpu`
 (`["H100", 8]`) and `serve.target_cluster` for an exact GPU shape. Set `tokenizer` when `location` is
 an object-store export (the eval client loads its tokenizer through HF and cannot read a `gs://` path).
 Set `serve.serve_memory` for large exports: weight streaming stages shards through host buffers, so the
@@ -128,9 +127,8 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an eval by adding an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then
-add its key to `SUITES` when it belongs in a named group. The discriminated types prevent a definition
-from mixing Evalchemy tasks with Harbor configuration. Task flags that matter for served evals:
+Add an `EvalchemyRunner` or `HarborRunner` to `EVALS` in `evals.py`, then add its key to `SUITES`
+when it belongs in a named group. Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.

@@ -17,9 +17,8 @@ Marin supports three evaluation paths:
 ## Post-hoc evaluation (evalchemy over a served endpoint)
 
 A post-hoc eval is decoupled from the model backend by an OpenAI-compatible URL. Each `EvalGroup` is
-run inside one [`remote_inference`][marin.inference.iris.remote_inference] context. The generic group
-runner resolves a [`RunningModel`][marin.inference.types.RunningModel] and passes it to
-[`run_evalchemy`][marin.evaluation.evalchemy.run_evalchemy], then inference is torn down.
+run inside one `remote_inference` context. The generic group runner passes its `RunningModel` to
+`run_evalchemy`, then inference is torn down.
 Multiple-choice tasks use the served backend's logprob API, so they run the same way as generation —
 no separate JAX-logprob backend.
 
@@ -27,11 +26,10 @@ The lifecycle and the evaluator are separate APIs:
 
 ```python
 with remote_inference(model, engine, iris) as session:
-    running_model = session.resolve_model()
-    run_evalchemy(running_model, eval_config, output_path)
+    run_evalchemy(session.model, eval_config, output_path, env_vars=env)
 ```
 
-`remote_inference` owns startup, liveness, endpoint changes, and teardown. Endpoint-oriented
+`remote_inference` owns startup, liveness, Iris link registration, and teardown. Endpoint-oriented
 mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor` own only their native task and
 result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
 or outcomes behind a universal `do_eval` interface.
@@ -76,8 +74,8 @@ them.
 ## Harbor-based evaluation
 
 Agentic launcher runs pass the same `RunningModel` boundary to
-[`run_harbor`][marin.evaluation.harbor_runner.run_harbor]. Off-cluster sandboxes receive a scoped
-capability route resolved by the inference session.
+`run_harbor`. Off-cluster sandboxes receive a scoped capability route resolved by the inference
+session.
 
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.

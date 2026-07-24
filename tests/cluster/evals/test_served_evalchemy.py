@@ -22,6 +22,7 @@ import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
 from marin.evaluation.eval_result import EvalchemyResult
+from marin.evaluation.evalchemy import EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.model_config import ServeBackend
 from marin.evaluation.serving_config import ServeSpec
@@ -43,10 +44,9 @@ def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> N
     out_path = f"gs://marin-{smoke_region}/tmp/eval7267-serve-and-eval-smoke/qwen3-0p6b"
     config = EvalchemyEvalConfig(
         model="Qwen/Qwen3-0.6B",
-        tasks=SMOKE_TASKS,
+        run=EvalchemyRunConfig(name="smoke", tasks=SMOKE_TASKS, max_eval_instances=3),
         out_path=out_path,
         serve=ServeSpec(backend=ServeBackend.VLLM, tpu_type="v6e-4", region=smoke_region),
-        max_eval_instances=3,
     )
 
     # The adapter submits its own serve + eval children, so run it as a plain CPU job rather than

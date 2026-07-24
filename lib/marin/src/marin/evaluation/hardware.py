@@ -40,6 +40,19 @@ class AcceleratorChoice:
 
 
 @dataclass(frozen=True)
+class GpuProfile:
+    """Capacity and placement for one GPU type."""
+
+    hbm_gb: int
+    max_count: int
+    cluster: str
+
+    def __post_init__(self) -> None:
+        if self.hbm_gb <= 0 or self.max_count <= 0:
+            raise ValueError("GPU capacity and maximum count must be positive")
+
+
+@dataclass(frozen=True)
 class HardwarePolicy:
     """Fleet values consumed by the generic sizing algorithm."""
 
@@ -47,15 +60,43 @@ class HardwarePolicy:
     tpu_slices: tuple[str, ...]
     tpu_family_regions: dict[str, str]
     gpu_preference: tuple[str, ...]
-    gpu_hbm_gb: dict[str, int]
-    gpu_max_count: dict[str, int]
-    gpu_clusters: dict[str, str]
+    gpu_profiles: dict[str, GpuProfile]
 
     def __post_init__(self) -> None:
         if not 0 < self.utilization <= 1:
             raise ValueError("utilization must be in (0, 1]")
         if not self.tpu_slices or not self.gpu_preference:
             raise ValueError("hardware policy requires TPU and GPU choices")
+        missing = set(self.gpu_preference) - self.gpu_profiles.keys()
+        if missing:
+            raise ValueError(f"GPU preferences have no profile: {sorted(missing)}")
+
+    def select(
+        self,
+        model: ModelConfig,
+        platform: Platform,
+        override: str | None,
+    ) -> AcceleratorChoice:
+        """Resolve one serving slice under this fleet policy."""
+        if override:
+            return _parse_override(override, self)
+        serve = model.serve
+        if serve.fixed_gpu is not None:
+            gpu_type, gpu_count = serve.fixed_gpu
+            profile = self.gpu_profiles.get(gpu_type)
+            return AcceleratorChoice(
+                platform=Platform.GPU,
+                gpu_type=gpu_type,
+                gpu_count=gpu_count,
+                target_cluster=serve.target_cluster or (profile.cluster if profile is not None else None),
+            )
+        if serve.hbm_gb is None:
+            raise ValueError(f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice")
+        if platform is Platform.GPU:
+            return _select_gpu(serve.hbm_gb, serve.target_cluster, self)
+        if serve.gpu_only:
+            raise ValueError(f"model {model.name!r} is gpu_only; launch with --platform gpu")
+        return _select_tpu(serve.hbm_gb, self)
 
 
 def default_platform(model: ModelConfig) -> Platform:
@@ -88,14 +129,15 @@ def _select_gpu(
     policy: HardwarePolicy,
 ) -> AcceleratorChoice:
     for gpu_type in policy.gpu_preference:
+        profile = policy.gpu_profiles[gpu_type]
         count = 1
-        while count <= policy.gpu_max_count[gpu_type]:
-            if policy.gpu_hbm_gb[gpu_type] * count * policy.utilization >= hbm_gb:
+        while count <= profile.max_count:
+            if profile.hbm_gb * count * policy.utilization >= hbm_gb:
                 return AcceleratorChoice(
                     platform=Platform.GPU,
                     gpu_type=gpu_type,
                     gpu_count=count,
-                    target_cluster=target_cluster or policy.gpu_clusters[gpu_type],
+                    target_cluster=target_cluster or profile.cluster,
                 )
             count *= 2
     raise ValueError(f"no GPU slice fits {hbm_gb} GB HBM at {policy.utilization:.0%} utilization")
@@ -106,13 +148,14 @@ def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
     match = _GPU_OVERRIDE.match(text)
     if match:
         gpu_type = match["type"].upper()
-        if gpu_type not in policy.gpu_hbm_gb:
+        if gpu_type not in policy.gpu_profiles:
             raise ValueError(f"unknown GPU type {gpu_type!r} in accelerator override {override!r}")
+        profile = policy.gpu_profiles[gpu_type]
         return AcceleratorChoice(
             platform=Platform.GPU,
             gpu_type=gpu_type,
             gpu_count=int(match["count"]),
-            target_cluster=policy.gpu_clusters[gpu_type],
+            target_cluster=profile.cluster,
         )
     get_tpu_topology(text)
     if text not in policy.tpu_slices:
@@ -125,30 +168,3 @@ def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
         tpu_type=text,
         region=policy.tpu_family_regions[tpu_family(text)],
     )
-
-
-def select_accelerator(
-    model: ModelConfig,
-    platform: Platform,
-    override: str | None,
-    policy: HardwarePolicy,
-) -> AcceleratorChoice:
-    """Resolve one serving slice under ``policy``."""
-    if override:
-        return _parse_override(override, policy)
-    serve = model.serve
-    if serve.fixed_gpu is not None:
-        gpu_type, gpu_count = serve.fixed_gpu
-        return AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type=gpu_type,
-            gpu_count=gpu_count,
-            target_cluster=serve.target_cluster or policy.gpu_clusters.get(gpu_type),
-        )
-    if serve.hbm_gb is None:
-        raise ValueError(f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice")
-    if platform is Platform.GPU:
-        return _select_gpu(serve.hbm_gb, serve.target_cluster, policy)
-    if serve.gpu_only:
-        raise ValueError(f"model {model.name!r} is gpu_only; launch with --platform gpu")
-    return _select_tpu(serve.hbm_gb, policy)

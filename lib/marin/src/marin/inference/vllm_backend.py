@@ -89,7 +89,7 @@ class VllmBackend:
             engine_kwargs["max_model_len"] = spec.max_model_len
         if self.config.max_num_batched_tokens is not None:
             engine_kwargs["max_num_batched_tokens"] = self.config.max_num_batched_tokens
-        model = InferenceModelConfig(name=spec.model, path=spec.model_path, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)
         with _chat_template_argument(spec.chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
@@ -103,7 +103,7 @@ class VllmBackend:
                         else ()
                     ),
                     "--served-model-name",
-                    spec.served_model_name,
+                    spec.api_model,
                     *chat_template_args,
                     *self.config.extra_args,
                 ],
@@ -113,6 +113,6 @@ class VllmBackend:
                     raise RuntimeError("vLLM server did not report a model id")
                 yield VllmServedModel(
                     base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
-                    model_id=spec.served_model_name,
+                    model_id=spec.api_model,
                     environment=environment,
                 )

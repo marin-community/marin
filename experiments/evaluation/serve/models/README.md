@@ -2,9 +2,9 @@
 
 One `<org>/<model>.yaml` per model. Each file deserializes (via draccus) into a
 `marin.evaluation.model_config.ModelConfig`; unknown fields or mistyped values fail at load, not at
-serve time. `experiments.evaluation.models.MODELS` scans this directory and merges the entries with the
-Python factory entries defined in `models.py`. Files and directories whose names start with `_` or `.`
-are skipped.
+serve time. `experiments.evaluation.models.models()` scans this directory once and merges the entries
+with the Python factory entries defined in `models.py`. Files and directories whose names start with
+`_` or `.` are skipped.
 
 ## Schema
 
@@ -48,5 +48,5 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 ```
 
 Every explicit `serve` value wins over what `auto_serve_overrides` would derive from the model's
-`config.json`. `variants` carry per-hardware overrides imported from OT-Agent's catalog; they apply
+`config.json`. `variants` carry per-hardware overrides; they apply
 only when the served slice's label matches (the marin H100/GB200/TPU slices do not match `gh200`).

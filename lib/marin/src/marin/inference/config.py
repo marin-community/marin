@@ -35,10 +35,9 @@ class VllmSource(StrEnum):
 
 @dataclass(frozen=True)
 class ServedModelConfig:
-    model: str
+    weights: str
     revision: str | None = None
-    served_model_name: str | None = None
-    model_path: str | None = None
+    api_model: str | None = None
     tokenizer: str | None = None
     dtype: str = "bfloat16"
     max_model_len: int | None = None
@@ -46,24 +45,24 @@ class ServedModelConfig:
     chat_template_content: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.model:
-            raise ValueError("model must not be empty")
-        if self.served_model_name == "":
-            raise ValueError("served_model_name must not be empty")
+        if not self.weights:
+            raise ValueError("weights must not be empty")
+        if self.api_model == "":
+            raise ValueError("api_model must not be empty")
         if self.max_model_len is not None and self.max_model_len <= 0:
             raise ValueError("max_model_len must be positive")
         if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
             raise ValueError("tensor_parallel_size must be positive")
 
     @property
-    def endpoint_model(self) -> str:
+    def model_id(self) -> str:
         """Model identifier accepted by the served OpenAI endpoint."""
-        return self.served_model_name or self.model
+        return self.api_model or self.weights
 
 
 @dataclass
 class InferenceModelConfig:
-    """Legacy in-process vLLM model inputs used by evaluator and server code."""
+    """Model inputs shared by in-process vLLM and evaluator entry points."""
 
     name: str
     path: str | None

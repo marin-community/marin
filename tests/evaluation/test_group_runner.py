@@ -1,91 +1,90 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior of the generic serve-once evaluation group."""
+"""Durable behavior of the serve-once evaluation executor."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
-from marin.evaluation.definitions import (
-    EvalRunIdentity,
-    ResolvedEvalchemyRun,
-)
-from marin.evaluation.evalchemy import (
-    EndpointMovedError,
-    EvalchemyOutcome,
-    EvalchemyRunConfig,
-    EvalPipelineError,
-    PipelineStage,
-)
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.group_runner import EvalGroupParams, run_eval_group
-from marin.evaluation.records import (
-    EvalRef,
-    HardwareRef,
-    ModelRef,
-    Provenance,
-    RunStatus,
+from marin.evaluation.records import EvalRef, HardwareRef, ModelRef, Provenance, RunStatus
+from marin.evaluation.runner import (
+    EvalRunner,
+    Evaluation,
+    EvaluationBatch,
+    EvaluationError,
+    EvaluationIdentity,
+    EvaluationOutcome,
+    run_evaluation_batch,
 )
 from marin.evaluation.serving_config import EvaluationServingConfig, ServeSpec
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 
-class _Result:
-    def task_metrics(self) -> dict[str, dict[str, float]]:
-        return {"task": {"acc": 0.5}}
+@dataclass(frozen=True)
+class _Runner:
+    name: str
+    error: EvaluationError | None = None
+    mechanism: str = "test"
+    max_eval_instances: int | None = None
+    task_names: tuple[str, ...] = ()
+
+    def bind(self, model, *, limit, region):
+        return self
+
+    def reference(self) -> EvalRef:
+        return EvalRef(name=self.name, mechanism=self.mechanism)
+
+    def run(self, model, output_dir, env_vars) -> EvaluationOutcome:
+        if self.error is not None:
+            raise self.error
+        return EvaluationOutcome(metrics={"task": {"acc": 0.5}}, jobs={"eval": f"/{self.name}"})
 
 
 class _Session:
     jobs = ()
-    wait_count = 0
-
-    def resolve_model(self, *args, **kwargs) -> RunningModel:
-        return RunningModel(
-            endpoint=OpenAIEndpoint(base_url="http://inference/v1", model="model"),
-            tokenizer="tokenizer",
-        )
-
-    def wait_model(self, timeout: float) -> RunningModel:
-        assert timeout > 0
-        self.wait_count += 1
-        return self.resolve_model()
-
-    def endpoint_departed(self, model: RunningModel) -> bool:
-        return False
+    model = RunningModel(
+        endpoint=OpenAIEndpoint(base_url="https://iris.example/proxy/t/token/endpoint/v1", model="model"),
+        tokenizer="tokenizer",
+    )
 
     def check_alive(self) -> None:
         return None
 
+    def endpoint_generation(self) -> frozenset[str]:
+        return frozenset({"endpoint"})
 
-def _run(name: str) -> ResolvedEvalchemyRun:
-    return ResolvedEvalchemyRun(
-        identity=EvalRunIdentity(
-            run_id=f"run-{name}",
+    def wait_for_restart(self, previous: frozenset[str], timeout: float) -> bool:
+        return False
+
+
+def _evaluation(runner: EvalRunner) -> Evaluation:
+    return Evaluation(
+        identity=EvaluationIdentity(
+            run_id=f"run-{runner.name}",
             created_at="2026-07-24T00:00:00+00:00",
-            output_dir=f"gs://bucket/{name}/results",
-            eval_ref=EvalRef(name=name, mechanism="evalchemy"),
+            output_dir=f"gs://bucket/{runner.name}/results",
+            eval_ref=runner.reference(),
         ),
-        config=EvalchemyRunConfig(
-            name=name,
-            tasks=(EvalTaskConfig("task", 0),),
-        ),
+        runner=runner,
     )
 
 
-def _group(*runs: ResolvedEvalchemyRun) -> EvalGroupParams:
-    return EvalGroupParams(
+def _batch(*runners: EvalRunner) -> EvaluationBatch:
+    return EvaluationBatch(
         group_id="group",
         user="tester",
         version=None,
         description=None,
         records_prefix="gs://bucket/runs",
         serving=EvaluationServingConfig(
-            model="model",
+            weights="model",
             tokenizer="tokenizer",
             spec=ServeSpec(tpu_type="v6e-4"),
+            endpoint_origin="https://iris.example",
         ),
-        runs=runs,
+        evaluations=tuple(_evaluation(runner) for runner in runners),
         model_ref=ModelRef(name="model", location="model", backend="vllm"),
         hardware_ref=HardwareRef(
             platform="tpu",
@@ -96,83 +95,84 @@ def _group(*runs: ResolvedEvalchemyRun) -> EvalGroupParams:
     )
 
 
-def _patch_runtime(monkeypatch, session: _Session, records: list):
+def _patch_runtime(monkeypatch, records: list, session: _Session | None = None):
+    session = session or _Session()
+
     @contextmanager
     def inference(*args, **kwargs):
+        assert kwargs["endpoint_origin"] == "https://iris.example"
         yield session
 
-    monkeypatch.setattr("marin.evaluation.group_runner.remote_inference", inference)
     monkeypatch.setattr(
-        "marin.evaluation.group_runner.resolve_inference_launch",
-        lambda config, env_vars: SimpleNamespace(
-            model=None,
-            engine=None,
-            iris=None,
-            instances=1,
-            broker=None,
-            endpoint_access=0,
-        ),
+        EvaluationServingConfig,
+        "resolve",
+        lambda config, env_vars: SimpleNamespace(start=lambda: inference(endpoint_origin=config.endpoint_origin)),
     )
-    monkeypatch.setattr("marin.evaluation.group_runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(
-        "marin.evaluation.group_runner.iris_ctx",
-        lambda: SimpleNamespace(job_id="/group"),
-    )
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/group"))
 
     def write(record, prefix):
         assert prefix == "gs://bucket/runs"
         records.append(record)
         return f"{prefix}/{record.run_id}/record.json"
 
-    monkeypatch.setattr("marin.evaluation.group_runner.write_record", write)
+    monkeypatch.setattr("marin.evaluation.runner.write_record", write)
 
 
-def test_endpoint_move_retries_once_and_records_success(monkeypatch):
+def test_evaluation_failure_is_recorded_and_later_evaluations_continue(monkeypatch):
     records = []
-    session = _Session()
-    _patch_runtime(monkeypatch, session, records)
-    calls = 0
-
-    def evalchemy(model, config, output_dir, observer, env_vars):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise EndpointMovedError(
-                "moved",
-                stage=PipelineStage.EVAL,
-                jobs={"eval": "/stale"},
-                log_tails={},
-            )
-        return EvalchemyOutcome(jobs={"eval": "/fresh"}, result=_Result())
-
-    monkeypatch.setattr("marin.evaluation.group_runner.run_evalchemy", evalchemy)
-
-    paths = run_eval_group(_group(_run("one")))
-
-    assert paths == ["gs://bucket/runs/run-one/record.json"]
-    assert session.wait_count == 1
-    assert records[0].status is RunStatus.SUCCEEDED
-    assert records[0].jobs["eval"] == "/fresh"
-
-
-def test_eval_failure_is_recorded_and_later_runs_continue(monkeypatch):
-    records = []
-    _patch_runtime(monkeypatch, _Session(), records)
-
-    def evalchemy(model, config, output_dir, observer, env_vars):
-        if config.name == "one":
-            raise EvalPipelineError(
-                "bad answer",
-                stage=PipelineStage.EVAL,
-                jobs={"eval": "/failed"},
-                log_tails={"eval": ("tail",)},
-            )
-        return EvalchemyOutcome(jobs={"eval": "/succeeded"}, result=_Result())
-
-    monkeypatch.setattr("marin.evaluation.group_runner.run_evalchemy", evalchemy)
+    _patch_runtime(monkeypatch, records)
+    failure = EvaluationError(
+        "bad answer",
+        status=RunStatus.FAILED,
+        jobs={"eval": "/failed"},
+        log_tails={"eval": ("tail",)},
+    )
 
     with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
-        run_eval_group(_group(_run("one"), _run("two")))
+        run_evaluation_batch(_batch(_Runner("one", error=failure), _Runner("two")))
 
     assert [record.status for record in records] == [RunStatus.FAILED, RunStatus.SUCCEEDED]
+    assert records[0].jobs["eval"] == "/failed"
     assert records[0].log_tails == {"eval": ("tail",)}
+    assert records[1].jobs["eval"] == "/two"
+
+
+def test_evaluation_retries_after_the_inference_endpoint_is_replaced(monkeypatch):
+    records = []
+
+    class _RestartedSession(_Session):
+        def wait_for_restart(self, previous: frozenset[str], timeout: float) -> bool:
+            assert previous == frozenset({"endpoint"})
+            assert timeout > 0
+            return True
+
+    class _RetryRunner:
+        name = "one"
+        mechanism = "test"
+        max_eval_instances = None
+        task_names = ()
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def bind(self, model, *, limit, region):
+            return self
+
+        def reference(self) -> EvalRef:
+            return EvalRef(name=self.name, mechanism=self.mechanism)
+
+        def run(self, model, output_dir, env_vars) -> EvaluationOutcome:
+            self.calls += 1
+            if self.calls == 1:
+                raise EvaluationError("endpoint unavailable", status=RunStatus.FAILED)
+            return EvaluationOutcome(metrics={"task": {"acc": 0.5}})
+
+    session = _RestartedSession()
+    _patch_runtime(monkeypatch, records, session)
+    runner = _RetryRunner()
+
+    run_evaluation_batch(_batch(runner))
+
+    assert runner.calls == 2
+    assert records[0].status is RunStatus.SUCCEEDED

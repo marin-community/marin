@@ -37,9 +37,8 @@ def local_inference(
     """Start one inference server in this process and yield its OpenAI endpoint."""
 
     spec = ModelSpec(
-        model=model.model,
-        served_model_name=model.endpoint_model,
-        model_path=model.model_path or model.model,
+        weights=model.weights,
+        api_model=model.model_id,
         num_chips=num_chips,
         tensor_parallel_size=model.tensor_parallel_size,
         dtype=model.dtype,

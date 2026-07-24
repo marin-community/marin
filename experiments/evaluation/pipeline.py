@@ -29,7 +29,7 @@ from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
 from experiments.evaluation.launch import LaunchSpec, run_inline
-from experiments.evaluation.models import MODELS
+from experiments.evaluation.models import models
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        platform=default_platform(MODELS[config.model]),
+        platform=default_platform(models()[config.model]),
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=config.records_prefix,

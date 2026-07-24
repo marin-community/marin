@@ -1,27 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The canonical model/serve configuration protocol for the eval launcher.
-
-One :class:`ModelConfig` is the single in-memory contract every eval consumer imports: the group
-launcher (evalchemy and Harbor), the serve path, and the agentic benchmarks all read the same object.
-It supersedes the earlier per-launcher ``EvalModelConfig`` and folds in the per-model serve catalog
-extracted from OT-Agent's agentic-evals package.
-
-Two population paths produce one identical ``ModelConfig``:
-
-- **YAML** (:func:`load_model_config` / :func:`scan_model_configs`) is the validated front-door for
-  the bulk catalog. draccus decodes ``serve/models/<org>/<model>.yaml`` against the dataclass, so an
-  unknown field or a mistyped value fails at load, not at serve time. One file per model mirrors HF's
-  ``<org>/<model>`` namespacing and keeps the catalog diff-friendly.
-- **Python factories** (in ``experiments.evaluation.models``) stay for the parametric entries whose
-  serve options are computed rather than curated (e.g. the 256-expert MoE that resolves to
-  ``tensor_parallel_size=1`` plus expert parallelism).
-
-Both feed the same normalization boundary: :func:`serve_config_vllm_args` renders the typed serve
-knobs into ``vllm serve`` flags, and the launcher's ``auto_serve_overrides`` fills the remaining gaps
-from the model's ``config.json`` (an explicit value always wins).
-"""
+"""Validated model, serving, generation, and agent configuration."""
 
 from __future__ import annotations
 
@@ -32,11 +12,11 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
+import fsspec
 
 
 class ServeBackend(StrEnum):
-    """Which marin-serve backend serves the model under eval. Both expose the same OpenAI API, so the
-    eval client is identical either way."""
+    """Inference backend used for evaluation."""
 
     VLLM = "vllm"
     LEVANTER = "levanter"
@@ -54,8 +34,7 @@ class ServeConfig:
     vLLM knobs map onto ``vllm serve`` flags through :func:`serve_config_vllm_args`; every explicit
     value here wins over what ``auto_serve_overrides`` would derive from the model's ``config.json``.
     ``vllm_extra_args`` is the escape hatch for flags without a typed field. ``variants`` carries
-    per-hardware overrides (e.g. ``gh200``) from the imported catalog; :func:`resolve_serve_variant`
-    applies one when the served slice's label matches.
+    per-hardware overrides; :func:`resolve_serve_variant` applies one when the slice label matches.
     """
 
     backend: ServeBackend = ServeBackend.VLLM
@@ -84,14 +63,7 @@ class ServeConfig:
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """Generation knobs for the evalchemy client: the token budget and extra sampler settings.
-
-    ``max_gen_toks`` overrides a suite's default generation budget for a verbose reasoning model whose
-    chain would otherwise truncate before the answer. ``extra_gen_kwargs`` are forwarded verbatim into
-    lm-eval's ``--gen_kwargs`` (``key=value`` pairs); ``snowball-sft`` needs
-    ``skip_special_tokens=false`` so its ``<|start_think|>`` delimiters survive, plus
-    ``repetition_penalty=1.1``.
-    """
+    """Model-specific generation overrides."""
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
@@ -99,11 +71,7 @@ class GenerationConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    """Agent knobs for the Harbor/agentic path, forwarded to the agent driving each sandbox trial.
-
-    ``agent_kwargs`` are passed through to the Harbor agent (``enable_thinking``, an ``extra_body``
-    template, ...); they flow into the OpenAI request the agent makes against the served endpoint.
-    """
+    """Model-specific Harbor agent arguments."""
 
     agent_kwargs: Mapping[str, str] = field(default_factory=dict)
 
@@ -172,11 +140,8 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
 def resolve_serve_variant(serve: ServeConfig, hardware_label: str | None) -> ServeConfig:
     """Overlay ``serve.variants[hardware_label]`` onto ``serve`` when the served slice matches.
 
-    A variant carries per-hardware overrides (e.g. a ``gh200`` slice collapsing tensor parallelism to
-    1). Only the variant fields that differ from a fresh :class:`ServeConfig` default overlay the base,
-    so a partial variant leaves the base's other knobs intact. No matching variant returns ``serve``
-    unchanged; the marin clusters (H100/GB200/TPU) do not match the imported ``gh200`` variants, so
-    those are inert until a matching hardware label exists.
+    Only fields that differ from a fresh :class:`ServeConfig` overlay the base, so a partial variant
+    leaves the other serve settings intact. No matching variant returns ``serve`` unchanged.
     """
     if hardware_label is None or hardware_label not in serve.variants:
         return serve
@@ -196,7 +161,7 @@ def load_model_config(path: Path) -> ModelConfig:
     draccus validates the YAML against the dataclass schema, so an unknown field or a mistyped value
     raises at load rather than surfacing as a bad serve flag later.
     """
-    with open(path) as handle:
+    with fsspec.open(str(path), "r") as handle:
         return draccus.load(ModelConfig, handle)
 
 

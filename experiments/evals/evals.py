@@ -3,6 +3,7 @@
 
 """Post-hoc evaluation definitions composed from the shared evaluation framework."""
 
+from marin.evaluation.evalchemy import EvalchemyRunConfig
 from marin.evaluation.serving_config import ServeSpec
 from marin.experiment.evaluation import EvalGroup
 
@@ -21,7 +22,7 @@ from experiments.evals.task_configs import (
 def core_evals(serve: ServeSpec | None = None) -> list[EvalGroup]:
     """The core multiple-choice tasks as one served group."""
     serve = serve or ServeSpec(tpu_type="v6e-8")
-    return [EvalGroup(tasks=CORE_TASKS, id="core", serve=serve)]
+    return [EvalGroup(config=EvalchemyRunConfig(name="core", tasks=CORE_TASKS), serve=serve)]
 
 
 def key_evals(
@@ -32,17 +33,21 @@ def key_evals(
     serve = serve or ServeSpec(tpu_type="v6e-8")
     return [
         EvalGroup(
-            tasks=KEY_GENERATION_TASKS,
-            id="key_generation",
+            config=EvalchemyRunConfig(
+                name="key_generation",
+                tasks=KEY_GENERATION_TASKS,
+                max_gen_toks=4096,
+                max_eval_instances=max_eval_instances,
+            ),
             serve=serve,
-            max_gen_toks=4096,
-            max_eval_instances=max_eval_instances,
         ),
         EvalGroup(
-            tasks=KEY_MULTIPLE_CHOICE_TASKS,
-            id="key_multiple_choice",
+            config=EvalchemyRunConfig(
+                name="key_multiple_choice",
+                tasks=KEY_MULTIPLE_CHOICE_TASKS,
+                max_eval_instances=max_eval_instances,
+            ),
             serve=serve,
-            max_eval_instances=max_eval_instances,
         ),
     ]
 
@@ -57,26 +62,22 @@ def base_model_evals(
     discover = discover_latest_checkpoint
     groups = [
         EvalGroup(
-            CORE_TASKS_PLUS_LEADERBOARD,
-            "core_leaderboard",
+            EvalchemyRunConfig(name="core_leaderboard", tasks=CORE_TASKS_PLUS_LEADERBOARD),
             serve=serve,
             discover_latest_checkpoint=discover,
         ),
         EvalGroup(
-            (MMLU_0_SHOT,),
-            "mmlu_0shot",
+            EvalchemyRunConfig(name="mmlu_0shot", tasks=(MMLU_0_SHOT,)),
             serve=serve,
             discover_latest_checkpoint=discover,
         ),
         EvalGroup(
-            (MMLU_5_SHOT,),
-            "mmlu_5shot",
+            EvalchemyRunConfig(name="mmlu_5shot", tasks=(MMLU_5_SHOT,)),
             serve=serve,
             discover_latest_checkpoint=discover,
         ),
         EvalGroup(
-            (MMLU_PRO_5_SHOT,),
-            "mmlu_pro_5shot",
+            EvalchemyRunConfig(name="mmlu_pro_5shot", tasks=(MMLU_PRO_5_SHOT,)),
             serve=serve,
             discover_latest_checkpoint=discover,
         ),
@@ -84,10 +85,12 @@ def base_model_evals(
     if run_generation_evals:
         groups.append(
             EvalGroup(
-                BASE_GENERATION_TASKS,
-                "base_generation",
+                EvalchemyRunConfig(
+                    name="base_generation",
+                    tasks=BASE_GENERATION_TASKS,
+                    max_gen_toks=4096,
+                ),
                 serve=serve,
-                max_gen_toks=4096,
                 discover_latest_checkpoint=discover,
             )
         )

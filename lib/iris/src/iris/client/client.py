@@ -896,7 +896,7 @@ class IrisClient:
         return self._cluster_client.resolve_endpoint(url)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        """List registered endpoints without exposing the low-level cluster client."""
+        """List registered endpoints matching a name prefix."""
         return self._cluster_client.list_endpoints(prefix, exact=exact)
 
     def mint_endpoint_token(

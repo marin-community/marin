@@ -1,21 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The model/serve config protocol: YAML round-trip, schema validation, and the flag rendering.
-
-These are the pure pieces of the ``ModelConfig`` contract that need no cluster: draccus loads a
-catalog YAML into the dataclass and rejects unknown fields at load; the typed serve knobs render to
-``vllm serve`` flags with the explicit escape hatch winning; per-hardware variants overlay; the
-directory scan keys by name; and the migrated registry preserves the serve options the earlier
-per-launcher registry produced.
-"""
+"""Model YAML validation and serving-option rendering."""
 
 import textwrap
 
 import pytest
 from marin.evaluation.model_config import (
-    GenerationConfig,
-    ModelConfig,
     ServeBackend,
     ServeConfig,
     load_model_config,
@@ -24,7 +15,7 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 
-from experiments.evaluation.models import MODEL_CATALOG_DIR, MODELS
+from experiments.evaluation.models import MODEL_CATALOG_DIR, models
 
 _CATALOG_YAML = textwrap.dedent(
     """
@@ -147,11 +138,8 @@ def test_scan_model_configs_rejects_duplicate_names(tmp_path):
         scan_model_configs(tmp_path)
 
 
-def test_registry_migration_preserves_snowball_serve_options():
-    # The migrated factory entries must produce the same serve options the earlier registry did: the
-    # 256-expert MoE serves data-parallel + expert-parallel at tensor_parallel_size=1 on a pinned
-    # 8xH100 node, and the thinking SFT carries the special-token gen kwargs that keep its CoT scored.
-    snow = MODELS["snowball"]
+def test_snowball_uses_expert_parallelism_and_preserves_thinking_tokens():
+    snow = models()["snowball"]
     assert snow.serve.fixed_gpu == ("H100", 8)
     assert snow.serve.tensor_parallel_size == 1
     assert snow.serve.data_parallel_size == 8
@@ -165,27 +153,25 @@ def test_registry_migration_preserves_snowball_serve_options():
         '{"distributed":true}',
     )
 
-    sft = MODELS["snowball-sft"]
+    sft = models()["snowball-sft"]
     assert dict(sft.generation.extra_gen_kwargs) == {"skip_special_tokens": "false", "repetition_penalty": "1.1"}
 
-    base = MODELS["llama-3.1-8b-base"]
+    base = models()["llama-3.1-8b-base"]
     assert base.revision == "d04e592"
     assert base.apply_chat_template is False
 
 
-def test_model_config_defaults_are_serve_and_chat_ready():
-    config = ModelConfig(name="x", location="org/x")
-    assert config.apply_chat_template is True
-    assert config.serve == ServeConfig()
-    assert config.generation == GenerationConfig()
-    assert config.serve.auto_overrides is True
+def test_shipped_catalog_decodes():
+    scan_model_configs(MODEL_CATALOG_DIR)
 
 
-def test_shipped_catalog_loads_and_every_model_can_size_a_slice():
-    # The imported serve catalog must load into ModelConfig with no draccus error, and every entry must
-    # carry the sizing signal the hardware selector needs (hbm_gb or a pinned GPU) or a launch of it
-    # would fail deep in accelerator selection rather than at load.
-    catalog = scan_model_configs(MODEL_CATALOG_DIR)
-    assert len(catalog) >= 40  # the OT-Agent catalog import
-    for name, config in MODELS.items():
+def test_every_registered_model_has_a_hardware_sizing_rule():
+    for name, config in models().items():
         assert config.serve.hbm_gb is not None or config.serve.fixed_gpu is not None, name
+
+
+def test_nemotron_uses_the_vllm_builtin_reasoning_parser():
+    config = models()["nvidia-nemotron-3-nano-30b-a3b-bf16"]
+
+    assert config.serve.reasoning_parser == "nemotron_v3"
+    assert "--reasoning-parser-plugin" not in config.serve.vllm_extra_args

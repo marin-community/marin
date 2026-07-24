@@ -14,7 +14,6 @@ import json
 import os
 
 from marin.evaluation.evalchemy import (
-    _EVAL_CLIENT_SCRIPT,
     EvalchemyRunConfig,
     _run_config_json,
 )
@@ -43,10 +42,6 @@ def _config(**overrides) -> EvalchemyRunConfig:
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
-
-
-def test_eval_client_uses_workspace_relative_script():
-    assert _EVAL_CLIENT_SCRIPT == "lib/marin/src/marin/evaluation/evalchemy_client.py"
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():

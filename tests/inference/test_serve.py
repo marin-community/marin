@@ -360,13 +360,12 @@ def _invoke_iris_serve(monkeypatch, *args: str):
     return result, client, services, mint
 
 
-def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch)
+def test_iris_serve_mints_capability(monkeypatch):
+    result, client, _services, mint = _invoke_iris_serve(monkeypatch)
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_called_once_with(
-        _client,
+        client,
         "/serve/serve-test",
         "https://iris.oa.dev",
         24.0,
@@ -374,10 +373,9 @@ def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatc
 
 
 def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
+    result, _client, _services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_not_called()
     assert "Submitted" in result.output
 

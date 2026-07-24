@@ -22,20 +22,18 @@ from marin.evaluation.evalchemy_client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy_runtime import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.samples import export_lm_eval_samples
-from marin.inference.types import InferenceObserver, RunningModel
+from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
-_CHILD_WAIT_SLICE_SECONDS = 60.0
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy_client.py"
 
 
 class PipelineStage(StrEnum):
     """Stage used to classify a mechanism failure in an eval record."""
 
-    SERVE = "serve"
     EVAL = "eval"
     ARTIFACTS = "artifacts"
 
@@ -55,10 +53,6 @@ class EvalPipelineError(RuntimeError):
         self.stage = stage
         self.jobs = jobs
         self.log_tails = log_tails
-
-
-class EndpointMovedError(EvalPipelineError):
-    """The concrete endpoint moved while lm-eval was retrying its old address."""
 
 
 def job_log_tail(job: Job, limit: int = LOG_TAIL_LINES) -> tuple[str, ...]:
@@ -161,7 +155,6 @@ def _submit_evalchemy_child(
     model: RunningModel,
     config: EvalchemyRunConfig,
     output_dir: str,
-    observer: InferenceObserver | None,
     env_vars: Mapping[str, str],
 ) -> str:
     client = iris_ctx().client
@@ -198,20 +191,7 @@ def _submit_evalchemy_child(
         model.endpoint.model,
     )
     try:
-        while True:
-            try:
-                eval_job.wait(timeout=_CHILD_WAIT_SLICE_SECONDS)
-                break
-            except TimeoutError:
-                pass
-            if observer is not None and observer.endpoint_departed(model):
-                eval_job.terminate()
-                raise EndpointMovedError(
-                    f"Evalchemy job {eval_path} terminated after its inference endpoint moved",
-                    stage=PipelineStage.EVAL,
-                    jobs={"eval": eval_path},
-                    log_tails={"eval": job_log_tail(eval_job)},
-                )
+        eval_job.wait(timeout=float("inf"))
     except JobFailedError as exc:
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
@@ -227,7 +207,6 @@ def run_evalchemy(
     config: EvalchemyRunConfig,
     output_dir: str,
     *,
-    observer: InferenceObserver | None = None,
     env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
     """Run Evalchemy against ``model`` and validate its durable result tree."""
@@ -235,7 +214,7 @@ def run_evalchemy(
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _submit_evalchemy_child(model, config, output_dir, observer, env_vars)
+    eval_job = _submit_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
         parquets = export_lm_eval_samples(output_dir)

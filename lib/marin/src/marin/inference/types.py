@@ -4,8 +4,7 @@
 """Shared inference serving types."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, field
 from typing import Protocol
 
 # Keep logs readable when a poll returns many request IDs.
@@ -24,9 +23,9 @@ def format_request_ids(ids: list[str]) -> str:
 class OpenAIEndpoint:
     """OpenAI-compatible HTTP endpoint for a served model."""
 
-    base_url: str
+    base_url: str = field(repr=False)
     model: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
 
     def url(self, path: str) -> str:
         """Return an endpoint URL under the API root."""
@@ -39,21 +38,6 @@ class RunningModel:
 
     endpoint: OpenAIEndpoint
     tokenizer: str | None = None
-
-
-class EndpointRoute(StrEnum):
-    """How a remote inference endpoint is addressed by its caller."""
-
-    INTERNAL = "internal"
-    CAPABILITY = "capability"
-
-
-class InferenceObserver(Protocol):
-    """Liveness operations needed while an evaluator is using a concrete endpoint."""
-
-    def endpoint_departed(self, model: RunningModel) -> bool: ...
-
-    def check_alive(self) -> None: ...
 
 
 @dataclass(frozen=True)

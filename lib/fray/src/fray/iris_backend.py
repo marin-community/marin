@@ -501,7 +501,7 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
+        endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
         for ep in endpoints:

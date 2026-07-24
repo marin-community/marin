@@ -1,0 +1,548 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Serve one model and run a batch of endpoint-oriented evaluations."""
+
+import logging
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from typing import Protocol
+
+from fray.iris_backend import IrisJobHandle
+from iris.client import IrisClient, Job, iris_ctx
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
+from marin.evaluation.evalchemy import (
+    EvalchemyRunConfig,
+    EvalPipelineError,
+    PipelineStage,
+    job_log_tail,
+    run_evalchemy,
+)
+from marin.evaluation.harbor_runner import HarborRunConfig, run_harbor
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import (
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HarborRef,
+    HardwareRef,
+    ModelRef,
+    Provenance,
+    RunStatus,
+    read_record,
+    record_path,
+    write_record,
+)
+from marin.evaluation.serving_config import ENDPOINT_READY_TIMEOUT_SECONDS, EvaluationServingConfig
+from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
+from marin.inference.types import RunningModel
+
+logger = logging.getLogger(__name__)
+
+_SERVE_ROLE = "serve"
+_ORCHESTRATOR_CPU = 4.0
+_ORCHESTRATOR_MEMORY = "16g"
+_ORCHESTRATOR_DISK = "16g"
+_REPORT_TAIL_LINES = 15
+
+
+@dataclass(frozen=True)
+class EvaluationOutcome:
+    metrics: dict[str, dict[str, float]]
+    jobs: dict[str, str] = field(default_factory=dict)
+
+
+class EvaluationError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: RunStatus,
+        jobs: dict[str, str] | None = None,
+        log_tails: dict[str, tuple[str, ...]] | None = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.jobs = jobs or {}
+        self.log_tails = log_tails or {}
+
+
+class EvalRunner(Protocol):
+    name: str
+    mechanism: str
+    max_eval_instances: int | None
+
+    @property
+    def task_names(self) -> tuple[str, ...]: ...
+
+    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "EvalRunner": ...
+
+    def reference(self) -> EvalRef: ...
+
+    def run(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome: ...
+
+
+@dataclass(frozen=True)
+class EvalchemyRunner:
+    config: EvalchemyRunConfig
+    mechanism: str = field(default="evalchemy", init=False)
+
+    @property
+    def name(self) -> str:
+        return self.config.name
+
+    @property
+    def max_eval_instances(self) -> int | None:
+        return self.config.max_eval_instances
+
+    @property
+    def task_names(self) -> tuple[str, ...]:
+        return tuple(task.name for task in self.config.tasks)
+
+    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "EvalchemyRunner":
+        return replace(
+            self,
+            config=replace(
+                self.config,
+                apply_chat_template=model.apply_chat_template,
+                max_gen_toks=model.generation.max_gen_toks or self.config.max_gen_toks,
+                max_eval_instances=limit,
+                extra_gen_kwargs=dict(model.generation.extra_gen_kwargs),
+                runtime=replace(self.config.runtime, region=region),
+            ),
+        )
+
+    def reference(self) -> EvalRef:
+        return EvalRef(
+            name=self.name,
+            mechanism=self.mechanism,
+            tasks=tuple(
+                EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks
+            ),
+        )
+
+    def run(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        try:
+            outcome = run_evalchemy(model, self.config, output_dir, env_vars=env_vars)
+        except EvalPipelineError as exc:
+            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
+            raise EvaluationError(
+                str(exc),
+                status=status,
+                jobs=exc.jobs,
+                log_tails=exc.log_tails,
+            ) from exc
+        metrics = outcome.result.task_metrics()
+        if not metrics:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.INFRA_FAILED,
+                jobs=outcome.jobs,
+            )
+        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)
+
+
+@dataclass(frozen=True)
+class HarborRunner:
+    name: str
+    config: HarborRunConfig
+    max_eval_instances: int | None = None
+    mechanism: str = field(default="harbor", init=False)
+
+    @property
+    def task_names(self) -> tuple[str, ...]:
+        return ()
+
+    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "HarborRunner":
+        del region
+        config = self.config
+        if model.agent.agent_kwargs:
+            config = replace(
+                config,
+                agent_kwargs={**model.agent.agent_kwargs, **config.agent_kwargs},
+            )
+        return replace(self, config=replace(config, task_limit=limit), max_eval_instances=limit)
+
+    def reference(self) -> EvalRef:
+        return EvalRef(
+            name=self.name,
+            mechanism=self.mechanism,
+            harbor=HarborRef(
+                dataset=self.config.dataset,
+                version=self.config.version,
+                agent=self.config.agent,
+                env=self.config.env,
+            ),
+        )
+
+    def run(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        try:
+            result = run_harbor(
+                model,
+                self.config,
+                output_dir,
+                hf_token=env_vars.get("HF_TOKEN"),
+            )
+        except Exception as exc:
+            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+        if not result.total_trials:
+            raise EvaluationError(
+                f"Harbor eval finished with no trials under {output_dir!r}",
+                status=RunStatus.FAILED,
+            )
+        return EvaluationOutcome(metrics=result.task_metrics())
+
+
+@dataclass(frozen=True)
+class EvaluationIdentity:
+    run_id: str
+    created_at: str
+    output_dir: str
+    eval_ref: EvalRef
+
+
+@dataclass(frozen=True)
+class Evaluation:
+    identity: EvaluationIdentity
+    runner: EvalRunner
+
+
+@dataclass(frozen=True)
+class EvaluationBatch:
+    group_id: str
+    user: str
+    version: str | None
+    description: str | None
+    records_prefix: str
+    serving: EvaluationServingConfig
+    evaluations: tuple[Evaluation, ...]
+    model_ref: ModelRef
+    hardware_ref: HardwareRef
+    provenance: Provenance
+    target_cluster: str | None = None
+
+
+@dataclass(frozen=True)
+class SubmittedEvaluation:
+    run_id: str
+    eval_name: str
+
+
+@dataclass(frozen=True)
+class SubmittedEvaluationBatch:
+    group_id: str
+    job: Job
+    records_prefix: str
+    model_name: str
+    evaluations: tuple[SubmittedEvaluation, ...]
+
+
+def _record(
+    batch: EvaluationBatch,
+    identity: EvaluationIdentity,
+    status: RunStatus,
+    error: str | None,
+    metrics: dict[str, dict[str, float]],
+    jobs: dict[str, str],
+    log_tails: dict[str, tuple[str, ...]],
+) -> str:
+    record = EvalRunRecord(
+        run_id=identity.run_id,
+        group_id=batch.group_id,
+        created_at=identity.created_at,
+        user=batch.user,
+        version=batch.version,
+        description=batch.description,
+        model=batch.model_ref,
+        eval=identity.eval_ref,
+        hardware=batch.hardware_ref,
+        status=status,
+        error=error,
+        results_path=identity.output_dir,
+        metrics=metrics,
+        provenance=batch.provenance,
+        jobs=jobs,
+        log_tails=log_tails,
+    )
+    path = write_record(record, batch.records_prefix)
+    logger.info("wrote eval record %s (status=%s)", path, status.value)
+    return path
+
+
+def _serve_role(index: int) -> str:
+    return _SERVE_ROLE if index == 0 else f"{_SERVE_ROLE}-{index}"
+
+
+def _serve_jobs(session: RemoteInferenceSession) -> dict[str, str]:
+    return {_serve_role(index): str(job.job_id) for index, job in enumerate(session.jobs)}
+
+
+def _startup_diagnostics(exc: RemoteInferenceStartupError) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    jobs: dict[str, str] = {}
+    tails: dict[str, tuple[str, ...]] = {}
+    for index, handle in enumerate(exc.jobs):
+        role = _serve_role(index)
+        jobs[role] = str(handle.job_id)
+        if isinstance(handle, IrisJobHandle):
+            tails[role] = job_log_tail(handle.iris_job)
+    return jobs, tails
+
+
+def _session_tail(session: RemoteInferenceSession) -> dict[str, tuple[str, ...]]:
+    return {
+        _serve_role(index): job_log_tail(handle.iris_job)
+        for index, handle in enumerate(session.jobs)
+        if isinstance(handle, IrisJobHandle)
+    }
+
+
+def _record_unstarted(
+    batch: EvaluationBatch,
+    evaluations: tuple[Evaluation, ...],
+    error: Exception,
+    jobs: dict[str, str],
+    tails: dict[str, tuple[str, ...]],
+    paths: list[str],
+) -> None:
+    message = f"{type(error).__name__}: {error}"
+    for evaluation in evaluations:
+        paths.append(
+            _record(
+                batch,
+                evaluation.identity,
+                RunStatus.INFRA_FAILED,
+                message,
+                {},
+                jobs,
+                tails,
+            )
+        )
+
+
+def _run_with_endpoint_retry(
+    evaluation: Evaluation,
+    session: RemoteInferenceSession,
+    env_vars: Mapping[str, str],
+) -> EvaluationOutcome:
+    session.check_alive()
+    generation = session.endpoint_generation()
+    try:
+        return evaluation.runner.run(session.model, evaluation.identity.output_dir, env_vars)
+    except EvaluationError as exc:
+        try:
+            restarted = session.wait_for_restart(generation, ENDPOINT_READY_TIMEOUT_SECONDS)
+        except Exception as restart_exc:
+            raise EvaluationError(
+                f"inference did not recover after evaluation failure: {restart_exc}",
+                status=RunStatus.INFRA_FAILED,
+                jobs=exc.jobs,
+                log_tails=exc.log_tails,
+            ) from restart_exc
+        if not restarted:
+            raise
+        logger.info("retrying %s after inference endpoint restart", evaluation.identity.eval_ref.name)
+        return evaluation.runner.run(session.model, evaluation.identity.output_dir, env_vars)
+
+
+@dataclass(frozen=True)
+class _EvaluationExecution:
+    record_path: str
+    failure: str | None
+    inference_failure: Exception | None
+    jobs: dict[str, str]
+    log_tails: dict[str, tuple[str, ...]]
+
+
+def _run_one_evaluation(
+    batch: EvaluationBatch,
+    evaluation: Evaluation,
+    session: RemoteInferenceSession,
+    base_jobs: dict[str, str],
+    env_vars: Mapping[str, str],
+) -> _EvaluationExecution:
+    jobs = base_jobs | _serve_jobs(session)
+    tails: dict[str, tuple[str, ...]] = {}
+    metrics: dict[str, dict[str, float]] = {}
+    status = RunStatus.SUCCEEDED
+    error: str | None = None
+    inference_failure: Exception | None = None
+    try:
+        outcome = _run_with_endpoint_retry(evaluation, session, env_vars)
+        metrics = outcome.metrics
+        jobs |= outcome.jobs
+    except Exception as exc:
+        if isinstance(exc, EvaluationError):
+            status = exc.status
+            jobs |= exc.jobs
+            tails = exc.log_tails
+        else:
+            logger.exception("unexpected failure in evaluation %s", evaluation.identity.eval_ref.name)
+            status = RunStatus.FAILED
+        error = f"{type(exc).__name__}: {exc}"
+        try:
+            session.check_alive()
+        except Exception as serve_exc:
+            status = RunStatus.INFRA_FAILED
+            error = f"{error}; inference failed: {serve_exc}"
+            tails |= _session_tail(session)
+            inference_failure = serve_exc
+
+    path = _record(batch, evaluation.identity, status, error, metrics, jobs, tails)
+    failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
+    return _EvaluationExecution(
+        record_path=path,
+        failure=failure,
+        inference_failure=inference_failure,
+        jobs=jobs,
+        log_tails=tails,
+    )
+
+
+def _run_evaluations(
+    batch: EvaluationBatch,
+    session: RemoteInferenceSession,
+    base_jobs: dict[str, str],
+    env_vars: Mapping[str, str],
+) -> list[str]:
+    paths: list[str] = []
+    failed: list[str] = []
+
+    for index, evaluation in enumerate(batch.evaluations):
+        execution = _run_one_evaluation(batch, evaluation, session, base_jobs, env_vars)
+        paths.append(execution.record_path)
+        if execution.failure is not None:
+            failed.append(execution.failure)
+        if execution.inference_failure is None:
+            continue
+        remaining = batch.evaluations[index + 1 :]
+        _record_unstarted(
+            batch,
+            remaining,
+            execution.inference_failure,
+            execution.jobs,
+            execution.log_tails,
+            paths,
+        )
+        failed.extend(f"{rest.identity.eval_ref.name} ({RunStatus.INFRA_FAILED.value})" for rest in remaining)
+        break
+
+    if failed:
+        raise RuntimeError(f"{len(failed)} of {len(batch.evaluations)} evals failed: {', '.join(failed)}")
+    return paths
+
+
+def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
+    """Serve once, run every evaluation, and write each record as it finishes."""
+    configure_coreweave_s3()
+    if not batch.evaluations:
+        raise ValueError("an evaluation batch requires at least one evaluation")
+    base_jobs = {"orchestrator": str(iris_ctx().job_id)}
+    runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    inference = batch.serving.resolve(runtime_env)
+    try:
+        with inference.start() as session:
+            return _run_evaluations(batch, session, base_jobs, runtime_env)
+    except RemoteInferenceStartupError as exc:
+        jobs, tails = _startup_diagnostics(exc)
+        paths: list[str] = []
+        _record_unstarted(batch, batch.evaluations, exc, base_jobs | jobs, tails, paths)
+        raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
+
+
+def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
+    """Submit a resolved batch to one CPU orchestrator."""
+    constraints = None
+    if batch.target_cluster:
+        constraints = [
+            Constraint.create(
+                key=CLUSTER_CONSTRAINT_KEY,
+                op=ConstraintOp.EQ,
+                value=batch.target_cluster,
+            )
+        ]
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(run_evaluation_batch, batch),
+        name=f"eval-{batch.group_id}",
+        resources=ResourceSpec(
+            cpu=_ORCHESTRATOR_CPU,
+            memory=_ORCHESTRATOR_MEMORY,
+            disk=_ORCHESTRATOR_DISK,
+        ),
+        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
+        constraints=constraints,
+        max_retries_failure=0,
+    )
+    logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
+    return SubmittedEvaluationBatch(
+        group_id=batch.group_id,
+        job=job,
+        records_prefix=batch.records_prefix,
+        model_name=batch.model_ref.name,
+        evaluations=tuple(
+            SubmittedEvaluation(
+                run_id=evaluation.identity.run_id,
+                eval_name=evaluation.identity.eval_ref.name,
+            )
+            for evaluation in batch.evaluations
+        ),
+    )
+
+
+def _print_record(record: EvalRunRecord) -> None:
+    print(f"{record.run_id}  [{record.status.value}]  {record.model.name} / {record.evaluation.name}")
+    if record.error:
+        print(f"  error: {record.error}")
+        for role, job_path in sorted(record.jobs.items()):
+            print(f"  {role} job: {job_path}")
+        for role, lines in sorted(record.log_tails.items()):
+            if not lines:
+                continue
+            print(f"  last {min(len(lines), _REPORT_TAIL_LINES)} log lines of the {role} child:")
+            for line in lines[-_REPORT_TAIL_LINES:]:
+                print(f"    {line}")
+    if not record.metrics:
+        print("  (no metrics)")
+        return
+    for task in sorted(record.metrics):
+        for metric in sorted(record.metrics[task]):
+            print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
+
+
+def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> None:
+    """Wait for submitted batches and print their durable records."""
+    configure_coreweave_s3()
+    for batch in batches:
+        batch.job.wait(timeout=float("inf"), raise_on_failure=False)
+        for evaluation in batch.evaluations:
+            path = record_path(batch.records_prefix, evaluation.run_id)
+            try:
+                record = read_record(path)
+            except Exception:
+                logger.warning(
+                    "no readable record.json for run %s at %s",
+                    evaluation.run_id,
+                    path,
+                    exc_info=True,
+                )
+                print(f"{evaluation.run_id}  [no record]  {batch.model_name} / {evaluation.eval_name}")
+                continue
+            _print_record(record)

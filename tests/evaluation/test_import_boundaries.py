@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The reusable Marin package must not depend on experiment definitions."""
+"""The Marin package must not import experiment definitions."""
 
 import ast
 from pathlib import Path
