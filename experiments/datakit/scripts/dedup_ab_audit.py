@@ -533,6 +533,33 @@ def _validate_score_counts(
             )
 
 
+def _validate_comparison_counts(
+    comparison_counters: dict[str, int | float],
+    baseline_dedup: dict[str, Any],
+    treatment_dedup: dict[str, Any],
+) -> None:
+    """Require every drop in each arm to appear in exactly one A/B category."""
+    both_drop = int(comparison_counters.get("audit/comparison/both_drop", 0))
+    baseline_only = int(comparison_counters.get("audit/comparison/baseline_drop_treatment_keep", 0))
+    treatment_only = int(comparison_counters.get("audit/comparison/treatment_drop_baseline_keep", 0))
+
+    expected: dict[str, int] = {}
+    for variant, dedup in (("baseline", baseline_dedup), ("treatment", treatment_dedup)):
+        artifact_counters = dedup["counters"]
+        markers = int(artifact_counters.get("dedup/fuzzy/document/cluster_members", 0))
+        canonicals = int(artifact_counters.get("dedup/fuzzy/document/canonicals", 0))
+        expected[variant] = markers - canonicals
+
+    actual_baseline = both_drop + baseline_only
+    actual_treatment = both_drop + treatment_only
+    if actual_baseline != expected["baseline"] or actual_treatment != expected["treatment"]:
+        raise AssertionError(
+            "A/B drop comparison mismatch: "
+            f"baseline={actual_baseline}/{expected['baseline']}, "
+            f"treatment={actual_treatment}/{expected['treatment']}"
+        )
+
+
 def _comparison_input_records(entry: dict[str, str]) -> Iterator[dict[str, Any]]:
     for record in _parquet_records(entry["path"]):
         if entry["kind"] == "graph_distance":
@@ -763,6 +790,11 @@ def audit(
         .write_parquet(f"{comparisons_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     comparison_outcome = comparison_context.execute(comparison_pipeline, verbose=True)
+    _validate_comparison_counts(
+        dict(comparison_outcome.counters),
+        baseline_dedup,
+        treatment_dedup,
+    )
     merged_counters = {
         **{f"scores/{key}": value for key, value in score_outcome.counters.items()},
         **{f"graph_distances/{key}": value for key, value in graph_outcome.counters.items()},

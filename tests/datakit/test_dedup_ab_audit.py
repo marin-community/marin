@@ -10,6 +10,7 @@ from experiments.datakit.scripts.dedup_ab_audit import (
     _evidence_class,
     _graph_distance_records,
     _set_metrics,
+    _validate_comparison_counts,
     _validate_score_counts,
 )
 
@@ -149,3 +150,29 @@ def test_score_counts_require_every_artifact_marker_and_drop() -> None:
     counters["audit/drops/treatment"] = 1
     with pytest.raises(AssertionError, match="treatment score coverage mismatch"):
         _validate_score_counts(counters, baseline, treatment)
+
+
+def test_comparison_counts_partition_every_drop() -> None:
+    baseline = {
+        "counters": {
+            "dedup/fuzzy/document/cluster_members": 13,
+            "dedup/fuzzy/document/canonicals": 5,
+        }
+    }
+    treatment = {
+        "counters": {
+            "dedup/fuzzy/document/cluster_members": 4,
+            "dedup/fuzzy/document/canonicals": 2,
+        }
+    }
+    counters = {
+        "audit/comparison/both_drop": 1,
+        "audit/comparison/baseline_drop_treatment_keep": 7,
+        "audit/comparison/treatment_drop_baseline_keep": 1,
+    }
+
+    _validate_comparison_counts(counters, baseline, treatment)
+
+    counters["audit/comparison/baseline_drop_treatment_keep"] = 6
+    with pytest.raises(AssertionError, match="A/B drop comparison mismatch"):
+        _validate_comparison_counts(counters, baseline, treatment)
