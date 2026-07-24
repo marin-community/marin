@@ -191,7 +191,7 @@ def _grug_profile(model: str) -> dict:
         # Delphi thinking template.  Pinning the immutable model *and tokenizer*
         # revision lets vLLM consume the checkpoint's own metadata; do not keep a
         # separately fetched template as a second, drift-prone source of truth.
-        "revision": "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+        "revision": "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
         "tokenizer": "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
         # Grug MoE expert-parallel serve.  vLLM loads both model and tokenizer
         # metadata at the same repaired immutable revision.
@@ -202,9 +202,9 @@ def _grug_profile(model: str) -> dict:
             "8",
             "--enable-expert-parallel",
             "--revision",
-            "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+            "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
             "--tokenizer-revision",
-            "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+            "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
         ),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel

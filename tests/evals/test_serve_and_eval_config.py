@@ -198,12 +198,12 @@ def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving
         "8",
         "--enable-expert-parallel",
         "--revision",
-        "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+        "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
         "--tokenizer-revision",
-        "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+        "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
     )
     assert "--model-loader-extra-config" not in args
-    assert profile["revision"] == "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a"
+    assert profile["revision"] == "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b"
 
     # The repaired checkpoint embeds the authoritative Delphi template.  The
     # default must not copy a second template into the serve config.
