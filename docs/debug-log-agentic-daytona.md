@@ -34,8 +34,6 @@ dataset.
 The materialization regression test and the 66 tests under `tests/evaluation` and `tests/evals`
 pass. All eight imported DCAgent repositories resolve at the configured `main` revision.
 
-The live retry is pending.
-
 ## Hypothesis 2
 
 The first retry materialized all 861 Terminal-Bench files, started two Daytona trials, and sent model
@@ -48,6 +46,26 @@ link access explicitly while in-cluster eval sessions retain the private default
 exposed a result-path bug: the raw `hf://` dataset identifier was interpolated into the sample parquet
 filename. Agentic runs now use the run-local `samples_harbor.parquet` name.
 
-## Future work
+## Final validation
+
+Run `20260724-004403-qwen3-0.6b-tb2-lite-8f6f` completed successfully on commit
+`954f7cd8798f4a2be75b872828300bc0b186bdfc`. The group launcher served `qwen3-0.6b`
+on a `v5litepod-4`, registered `/serve/inference-6f9ecea3` with link access, and minted a scoped
+capability URL. Both Daytona trials made repeated model requests through that URL with HTTP 200
+responses.
+
+Harbor ran two Terminal-Bench 2 tasks, `adaptive-rejection-sampler` and `bn-fit-modify`. The
+0.6-billion-parameter smoke model solved neither task, so the recorded accuracy and mean reward are
+both 0.0. This validation measures plumbing rather than model quality: both trial directories,
+verifier outputs, and normalized trajectories were uploaded, and the launcher wrote a successful
+`EvalRunRecord`.
+
+The run's `samples_harbor.parquet` contains two schema-v2 rows. Both have `kind=agentic`,
+`Grading(method="harbor:verifier")`, and trajectory URIs for the corresponding task. Evaldash indexes
+the run at
+`https://evaldash.oa.dev/runs/20260724-004403-qwen3-0.6b-tb2-lite-8f6f`.
 
 - [x] Confirm all imported DCAgent preset repositories still exist at their configured revisions.
+- [x] Materialize a DCAgent task repository and create Daytona sandboxes.
+- [x] Exercise the minted capability URL from both terminal-agent trials.
+- [x] Upload Harbor results, trajectories, and schema-v2 agentic samples to evaldash storage.
