@@ -764,7 +764,7 @@ def _start_vllm_native_server(
         handle.stop()
         raise
 
-    cache.publish_after_ready()
+    cache.publish()
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.

@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
@@ -114,7 +115,7 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
         environment={},
         mode=VllmCompilationCacheMode.MANAGED,
     )
-    compilation_cache_root = compilation_cache.root
+    compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
     handle = VllmServerHandle(
         server_url="http://127.0.0.1:0/v1",
         port=0,
