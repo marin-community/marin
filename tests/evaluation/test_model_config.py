@@ -60,7 +60,7 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.serve.backend is ServeBackend.VLLM
     assert config.serve.tensor_parallel_size == 2
     assert config.serve.swap_space_gb == 32
-    # YAML lists decode to the tuple field, and nested variants to a recursive ServeConfig.
+    # YAML lists decode to tuples, and nested variants retain only their explicit overlays.
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert config.serve.variants["gh200"].tensor_parallel_size == 1
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}

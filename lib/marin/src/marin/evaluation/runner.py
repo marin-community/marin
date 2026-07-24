@@ -355,7 +355,7 @@ def _run_with_endpoint_retry(
         return evaluation.runner.run(session.model, evaluation.identity.output_dir, env_vars)
     except EvaluationError as exc:
         try:
-            restarted = session.wait_for_restart(generation, ENDPOINT_READY_TIMEOUT_SECONDS)
+            restarted = session.replacement_ready(generation, ENDPOINT_READY_TIMEOUT_SECONDS)
         except Exception as restart_exc:
             raise EvaluationError(
                 f"inference did not recover after evaluation failure: {restart_exc}",

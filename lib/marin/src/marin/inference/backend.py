@@ -22,6 +22,7 @@ class ModelSpec:
     dtype: str
     max_model_len: int | None
     chat_template_content: str | None
+    revision: str | None = None
 
 
 class ServedModel(Protocol):

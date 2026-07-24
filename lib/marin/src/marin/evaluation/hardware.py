@@ -4,6 +4,7 @@
 """Pure accelerator selection from a model budget and explicit fleet policy."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -58,9 +59,9 @@ class HardwarePolicy:
 
     utilization: float
     tpu_slices: tuple[str, ...]
-    tpu_family_regions: dict[str, str]
+    tpu_family_regions: Mapping[str, str]
     gpu_preference: tuple[str, ...]
-    gpu_profiles: dict[str, GpuProfile]
+    gpu_profiles: Mapping[str, GpuProfile]
 
     def __post_init__(self) -> None:
         if not 0 < self.utilization <= 1:

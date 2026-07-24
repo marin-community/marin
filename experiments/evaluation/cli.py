@@ -23,6 +23,8 @@ from experiments.evaluation.evals import EVALS, SUITES
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch, launch_group
 from experiments.evaluation.models import models
 
+_DRY_RUN_IDENTITY = "dry-run"
+
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     keys: tuple[str, ...] = SUITES.get(evals_arg) or tuple(part.strip() for part in evals_arg.split(",") if part.strip())
@@ -37,8 +39,12 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
 def _print_plan(spec: LaunchSpec) -> None:
     batch = build_evaluation_batch(
         spec,
-        Provenance(git_sha="dry-run", eval_image="dry-run", launch_host="dry-run"),
-        "dry-run",
+        Provenance(
+            git_sha=_DRY_RUN_IDENTITY,
+            eval_image=_DRY_RUN_IDENTITY,
+            launch_host=_DRY_RUN_IDENTITY,
+        ),
+        _DRY_RUN_IDENTITY,
     )
     click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
     for evaluation in batch.evaluations:

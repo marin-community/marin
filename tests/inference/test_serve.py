@@ -20,6 +20,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     LevanterEngineConfig,
@@ -52,7 +53,7 @@ from marin.inference.model_preparation import (
 )
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
-from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -111,6 +112,35 @@ def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
 
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
     assert observed == ["Qwen/Qwen3-0.6B@abc123"]
+
+
+def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(model_id="public-model", server_url="http://127.0.0.1:8000/v1")
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    spec = ModelSpec(
+        weights="org/model",
+        revision="abc123",
+        api_model="public-model",
+        num_chips=1,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        max_model_len=1024,
+        chat_template_content=None,
+    )
+
+    with VllmBackend(VllmEngineConfig()).serve(spec):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert isinstance(extra_args, list)
+    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():

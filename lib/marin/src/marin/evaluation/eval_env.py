@@ -16,12 +16,17 @@ name the SDK expects, rather than shipping the raw GSM name into every sandbox.
 
 import os
 
-# Forwarded verbatim from the launch environment into an eval job (present ones only).
-EVAL_ENV_KEYS: tuple[str, ...] = (
+# Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
+EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_PROJECT",
     "HF_TOKEN",
+)
+
+# Forwarded verbatim from the launch environment into an eval job (present ones only).
+EVAL_ENV_KEYS: tuple[str, ...] = (
+    *EVAL_RUNTIME_ENV_KEYS,
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "E2B_API_KEY",
@@ -31,14 +36,6 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
     "VLLM_TPU_SKIP_PRECOMPILE",
-)
-
-# Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
-EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
-    "HF_TOKEN",
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
 )
 
 # The Google Secret Manager / launch-env name for the Daytona eval key.

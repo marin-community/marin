@@ -43,6 +43,12 @@ _MIN_QUEUED_TOKENS = 512
 LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
 
 
+def _checkpoint_ref(spec: ModelSpec) -> str:
+    if spec.revision is None:
+        return spec.weights
+    return f"{spec.weights}@{spec.revision}"
+
+
 @runtime_checkable
 class SupportsPagedGeneration(Protocol):
     """A Levanter model the paged-decode inference engine can drive.
@@ -106,7 +112,7 @@ class LevanterBackend:
         num_chips = spec.num_chips or jax.device_count()
         tensor_parallel_size = spec.tensor_parallel_size
         if tensor_parallel_size is None:
-            attention_heads, key_value_heads = read_attention_heads(spec.weights)
+            attention_heads, key_value_heads = read_attention_heads(spec.weights, spec.revision)
             tensor_parallel_size = select_tensor_parallel_size(attention_heads, num_chips, key_value_heads)
         return replace(spec, num_chips=num_chips, tensor_parallel_size=tensor_parallel_size)
 
@@ -134,8 +140,9 @@ class LevanterBackend:
         jax.config.update("jax_persistent_cache_min_compile_time_secs", JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS)
 
         dtype = validate_levanter_dtype(spec.dtype)
+        checkpoint_ref = _checkpoint_ref(spec)
         # Resolve the model class first: whether the mesh needs explicit axes is a model property.
-        converter = HFCheckpointConverter.from_hf(spec.weights)
+        converter = HFCheckpointConverter.from_hf(checkpoint_ref)
         model_config = converter.default_config
         if config_overrides:
             model_config = dataclasses.replace(model_config, **dict(config_overrides))
@@ -144,7 +151,7 @@ class LevanterBackend:
             mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
-        tokenizer = load_tokenizer(spec.weights)
+        tokenizer = load_tokenizer(checkpoint_ref)
         if spec.chat_template_content is not None:
             tokenizer.chat_template = spec.chat_template_content
 
@@ -163,7 +170,7 @@ class LevanterBackend:
         with trainer.use_device_mesh():
             model = converter.load_pretrained(
                 model_config.model_type,
-                ref=spec.weights,
+                ref=checkpoint_ref,
                 config=model_config,
                 dtype=trainer.mp.compute_dtype,
                 axis_mapping=trainer.parameter_axis_mapping,
@@ -181,7 +188,8 @@ class LevanterBackend:
         # Reject models the inference engine cannot drive before the weight load: resolving the model
         # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
         # load_model has no such requirement.)
-        model_type = HFCheckpointConverter.from_hf(spec.weights).default_config.model_type
+        checkpoint_ref = _checkpoint_ref(spec)
+        model_type = HFCheckpointConverter.from_hf(checkpoint_ref).default_config.model_type
         if not issubclass(model_type, SupportsPagedGeneration):
             raise NotImplementedError(
                 f"{model_type.__name__} implements only the full-forward LmHeadModel interface (no "
@@ -194,7 +202,7 @@ class LevanterBackend:
             server = InferenceServer.create(
                 InferenceServerConfig(
                     trainer=loaded.trainer,
-                    tokenizer=spec.weights,
+                    tokenizer=checkpoint_ref,
                     model_name=spec.api_model,
                     service=InferenceEngineConfig(
                         max_seq_len=loaded.max_seq_len,

@@ -24,6 +24,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import EvaluationServingConfig, ServeSpec
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from rigging.filesystem import prefix_join
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,7 @@ class _Session:
     def endpoint_generation(self) -> frozenset[str]:
         return frozenset({"endpoint"})
 
-    def wait_for_restart(self, previous: frozenset[str], timeout: float) -> bool:
+    def replacement_ready(self, previous: frozenset[str], timeout: float) -> bool:
         return False
 
 
@@ -148,7 +149,7 @@ def _patch_runtime(monkeypatch, records: list, session: _Session | None = None):
     def write(record, prefix):
         assert prefix == "gs://bucket/runs"
         records.append(record)
-        return f"{prefix}/{record.run_id}/record.json"
+        return prefix_join(prefix, f"{record.run_id}/record.json")
 
     monkeypatch.setattr("marin.evaluation.runner.write_record", write)
 
@@ -176,7 +177,7 @@ def test_evaluation_retries_after_the_inference_endpoint_is_replaced(monkeypatch
     records = []
 
     class _RestartedSession(_Session):
-        def wait_for_restart(self, previous: frozenset[str], timeout: float) -> bool:
+        def replacement_ready(self, previous: frozenset[str], timeout: float) -> bool:
             assert previous == frozenset({"endpoint"})
             assert timeout > 0
             return True

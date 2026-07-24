@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 
 from marin.evaluation.model_config import (
     AgentConfig,
@@ -135,5 +137,5 @@ def _build_registry() -> dict[str, ModelConfig]:
 
 
 @cache
-def models() -> dict[str, ModelConfig]:
-    return _build_registry()
+def models() -> Mapping[str, ModelConfig]:
+    return MappingProxyType(_build_registry())

@@ -84,8 +84,8 @@ class RemoteInferenceSession:
         endpoints = iris_ctx().client.list_endpoints(self._endpoint_name, exact=True)
         return frozenset(endpoint.endpoint_id for endpoint in endpoints)
 
-    def wait_for_restart(self, previous: frozenset[str], timeout: float) -> bool:
-        """Return whether a replacement registration becomes ready after ``previous`` departs."""
+    def replacement_ready(self, previous: frozenset[str], timeout: float) -> bool:
+        """Return whether the current registration replaced ``previous`` and is ready."""
         if self._endpoint_name is None:
             return False
         current = self.endpoint_generation()
@@ -148,11 +148,11 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
+    revision = model.revision if weights == model.weights else None
     if tensor_parallel_size is None:
-        config_revision = model.revision if weights == model.weights else None
-        num_attention_heads, num_key_value_heads = read_attention_heads(weights, config_revision)
+        num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
-    return replace(model, weights=weights, tensor_parallel_size=tensor_parallel_size), num_chips
+    return replace(model, weights=weights, revision=revision, tensor_parallel_size=tensor_parallel_size), num_chips
 
 
 @contextlib.contextmanager

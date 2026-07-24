@@ -44,6 +44,7 @@ def local_inference(
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        revision=model.revision,
     )
     if isinstance(engine, VllmEngineConfig):
         # Import only the selected implementation; Levanter pulls in JAX and Transformers.

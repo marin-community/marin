@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy_client.py"
+_EVAL_JOB_ROLE = "eval"
 
 
 class PipelineStage(StrEnum):
@@ -196,8 +197,8 @@ def _submit_evalchemy_child(
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
             stage=PipelineStage.EVAL,
-            jobs={"eval": eval_path},
-            log_tails={"eval": job_log_tail(eval_job)},
+            jobs={_EVAL_JOB_ROLE: eval_path},
+            log_tails={_EVAL_JOB_ROLE: job_log_tail(eval_job)},
         ) from exc
     return eval_path
 
@@ -222,7 +223,7 @@ def run_evalchemy(
         raise EvalPipelineError(
             str(exc),
             stage=PipelineStage.ARTIFACTS,
-            jobs={"eval": eval_job},
+            jobs={_EVAL_JOB_ROLE: eval_job},
             log_tails={},
         ) from exc
     logger.info(
@@ -232,6 +233,6 @@ def run_evalchemy(
         output_dir,
     )
     return EvalchemyOutcome(
-        jobs={"eval": eval_job},
+        jobs={_EVAL_JOB_ROLE: eval_job},
         result=EvalchemyResult(path=output_dir),
     )

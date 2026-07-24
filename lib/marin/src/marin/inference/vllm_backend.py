@@ -90,6 +90,7 @@ class VllmBackend:
         if self.config.max_num_batched_tokens is not None:
             engine_kwargs["max_num_batched_tokens"] = self.config.max_num_batched_tokens
         model = InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)
+        revision_args = ("--revision", spec.revision) if spec.revision is not None else ()
         with _chat_template_argument(spec.chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
@@ -104,6 +105,7 @@ class VllmBackend:
                     ),
                     "--served-model-name",
                     spec.api_model,
+                    *revision_args,
                     *chat_template_args,
                     *self.config.extra_args,
                 ],

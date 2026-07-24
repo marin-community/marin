@@ -186,11 +186,7 @@ def resolve_serve_variant(serve: ServeConfig, hardware_label: str | None) -> Ser
 
 
 def load_model_config(path: Path) -> ModelConfig:
-    """Decode one ``serve/models/<org>/<model>.yaml`` into a :class:`ModelConfig`.
-
-    draccus validates the YAML against the dataclass schema, so an unknown field or a mistyped value
-    raises at load rather than surfacing as a bad serve flag later.
-    """
+    """Load one model catalog file, rejecting fields outside the configuration schema."""
     with fsspec.open(str(path), "r") as handle:
         return draccus.load(ModelConfig, handle)
 

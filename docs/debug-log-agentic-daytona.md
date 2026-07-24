@@ -12,7 +12,8 @@ URL for `/serve/inference-eadde315`. Harbor failed before creating Daytona sandb
 
 ## Hypothesis 1
 
-The DCAgent benchmark identifiers imported from #7246 name Hugging Face repositories containing raw
+The DCAgent benchmark identifiers imported from
+[#7246](https://github.com/marin-community/marin/pull/7246) name Hugging Face repositories containing raw
 Harbor task directories. The unified suite registered them as Harbor package-registry names, so
 Harbor 0.20 interpreted the slash as a package reference and looked for a package tag.
 
@@ -23,7 +24,8 @@ dataset.
 ## Changes to make
 
 - Reuse the existing `hf://` convention in the unified runner.
-- Register the #7246 agentic presets as `hf://DCAgent...` sources with an explicit Hugging Face
+- Register the [#7246](https://github.com/marin-community/marin/pull/7246) agentic presets as
+  `hf://DCAgent...` sources with an explicit Hugging Face
   revision.
 - Pass a materialized local task path across the isolated Harbor-driver boundary.
 - Set both Harbor's legacy `version` and package-registry `ref` fields for registry-backed datasets.

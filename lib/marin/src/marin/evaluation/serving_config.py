@@ -84,7 +84,7 @@ class InferenceLaunch:
     endpoint_origin: str | None
 
     def start(self) -> AbstractContextManager[RemoteInferenceSession]:
-        """Start this inference configuration and return its managed session."""
+        """Return the context manager that owns this inference launch."""
         return remote_inference(
             self.model,
             self.engine,
@@ -107,7 +107,6 @@ class EvaluationServingConfig:
     api_model: str | None = None
 
     def resolve(self, env_vars: Mapping[str, str]) -> InferenceLaunch:
-        """Resolve this evaluation policy into a startable inference launch."""
         return build_inference_launch(
             self.weights,
             self.tokenizer,
@@ -269,8 +268,6 @@ def serve_spec_for_model(model: ModelConfig, accelerator: AcceleratorChoice) -> 
     """Map a canonical model and selected accelerator onto serving policy."""
     serve = resolve_serve_variant(model.serve, accelerator.label)
     extra_args = serve_config_vllm_args(serve)
-    if model.revision is not None:
-        extra_args = (*extra_args, "--revision", model.revision)
     common = dict(
         backend=serve.backend,
         tensor_parallel_size=serve.tensor_parallel_size,
