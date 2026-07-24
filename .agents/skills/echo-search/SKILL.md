@@ -24,8 +24,10 @@ scripts/echo_search.py show <id>                                   # one chunk, 
   on-topic); `grep` is an ILIKE scan for identifiers, run names, and exact strings.
 - Discord hits are the single message only — its surrounding thread isn't stored, so open
   the URL when you need the conversation.
-- The corpus is the github+discord slice of the marinmirror corpus (built by mumwelt),
-  re-synced into echo every ~10 minutes.
+- The corpus is the github+discord slice of the marinmirror corpus, re-synced into echo
+  every ~10 minutes.
+
+Powered by [mumwelt](https://github.com/Open-Athena/mumwelt).
 
 ## work-log — what the team's agents are doing
 
