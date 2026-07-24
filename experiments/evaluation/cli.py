@@ -10,7 +10,11 @@ rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import click
+from harbor_config import load_config_path
 from iris.cli.connect import open_iris_client
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
 from marin.evaluation.samples import export_lm_eval_samples
@@ -45,6 +49,26 @@ def _print_plan(spec: LaunchSpec) -> None:
         )
 
 
+def _load_harbor_document(path: Path | None) -> dict | None:
+    """Read a Harbor YAML/JSON document through the pinned Harbor resolver wheel."""
+    if path is None:
+        return None
+    return load_config_path(path).model_dump(mode="json")
+
+
+def _parse_harbor_patch(value: str | None) -> dict | None:
+    """Require an explicit JSON object so structured launch overrides remain auditable."""
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"--harbor-patch must be JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise click.BadParameter("--harbor-patch must be a JSON object")
+    return parsed
+
+
 @click.group()
 def cli() -> None:
     """Launch and track model evaluations."""
@@ -68,6 +92,17 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--harbor-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Advanced Harbor YAML/JSON policy; Marin still owns model, dataset, job name, and durable root.",
+)
+@click.option(
+    "--harbor-patch",
+    default=None,
+    help="Advanced JSON object overlaid onto the Harbor policy before Marin's protected runtime wiring.",
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -84,6 +119,8 @@ def launch(
     limit: int | None,
     version: str | None,
     description: str | None,
+    harbor_config: Path | None,
+    harbor_patch: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -104,6 +141,8 @@ def launch(
         cluster=cluster,
         version=version,
         description=description,
+        harbor_config_document=_load_harbor_document(harbor_config),
+        harbor_config_patch=_parse_harbor_patch(harbor_patch),
     )
     if dry_run:
         _print_plan(spec)

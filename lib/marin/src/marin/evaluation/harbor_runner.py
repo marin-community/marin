@@ -26,6 +26,8 @@ from pathlib import Path
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
+from marin.evaluation.config_artifacts import HARBOR_CONFIG
+from marin.evaluation.harbor_config import HarborRuntime, resolve_harbor_config
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 
@@ -33,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
-_HARBOR_SPEC = "harbor>=0.8.0"
+_HARBOR_SPEC = HARBOR_CONFIG.source_requirement
 _DAYTONA_SPEC = "daytona>=0.200.1"
 _DRIVER = str(Path(__file__).with_name("harbor_trial_driver.py"))
 
@@ -42,13 +44,6 @@ _DRIVER = str(Path(__file__).with_name("harbor_trial_driver.py"))
 SOLVED_REWARD = 0.99
 
 _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-
-_DEFAULT_MODEL_INFO = {
-    "max_input_tokens": 32768,
-    "max_output_tokens": 8192,
-    "input_cost_per_token": 0.0,
-    "output_cost_per_token": 0.0,
-}
 
 
 @dataclass(frozen=True)
@@ -67,6 +62,9 @@ class HarborRunConfig:
     max_output_tokens: int = 8192
     task_limit: int | None = None
     agent_kwargs: dict = field(default_factory=dict)
+    preset: str = "standard"
+    config_document: dict | None = None
+    config_patch: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -261,23 +259,32 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, out_path)
 
-    agent_kwargs = dict(config.agent_kwargs)
-    agent_kwargs.setdefault("api_base", config.api_base)
-    agent_kwargs.setdefault("model_info", {**_DEFAULT_MODEL_INFO, "max_output_tokens": config.max_output_tokens})
-    driver_config = {
-        "job_name": job_name,
-        "jobs_dir": str(output_dir),
-        "dataset": config.dataset,
-        "version": config.version,
-        "n_tasks": config.task_limit,
-        "agent": config.agent,
-        "model_name": f"hosted_vllm/{config.served_model_name}",
-        "agent_kwargs": agent_kwargs,
-        "n_concurrent": config.n_concurrent,
-        "env": config.env,
-    }
+    resolved = resolve_harbor_config(
+        preset=config.preset,
+        n_concurrent=config.n_concurrent,
+        agent=config.agent,
+        environment=config.env,
+        default_max_output_tokens=config.max_output_tokens,
+        agent_kwargs=config.agent_kwargs,
+        runtime=HarborRuntime(
+            job_name=job_name,
+            jobs_dir=str(output_dir),
+            dataset=config.dataset,
+            version=config.version,
+            task_limit=config.task_limit,
+            served_model_name=config.served_model_name,
+            api_base=config.api_base,
+        ),
+        document=config.config_document,
+        patch=config.config_patch,
+    )
+    driver_config = {"job_config": resolved.document}
     config_file = workdir / "driver_config.json"
     config_file.write_text(json.dumps(driver_config))
+    config_file.chmod(0o600)
+    StoragePath(prefix_join(out_path, "harbor_config.json")).write_text(
+        json.dumps(resolved.persisted_metadata(), indent=2, sort_keys=True)
+    )
 
     logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, config.dataset, config.env)
     _run_driver(config_file)

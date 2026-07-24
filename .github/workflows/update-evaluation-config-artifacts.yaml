@@ -1,0 +1,64 @@
+name: Update evaluation configuration artifacts
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-evaluation-config-artifacts
+  cancel-in-progress: false
+
+jobs:
+  propose-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Download discovery manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir artifacts
+          gh release download harbor-config-latest --repo marin-community/harbor \
+            --pattern harbor-config-manifest.json --dir artifacts/harbor
+          gh release download evalchemy-config-latest --repo marin-community/evalchemy \
+            --pattern evalchemy-config-manifest.json --dir artifacts/evalchemy
+      - name: Verify and apply immutable pins
+        run: >-
+          uv run --no-project python scripts/ci/update_evaluation_config_artifacts.py
+          --harbor-manifest artifacts/harbor/harbor-config-manifest.json
+          --evalchemy-manifest artifacts/evalchemy/evalchemy-config-manifest.json
+      - name: Refresh the lock and run the consumer contract
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          uv lock
+          uv sync --locked --package marin-core
+          uv run --package marin-core pytest tests/evals/test_config_artifacts.py -q
+      - name: Propose the verified update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          branch="automation/evaluation-config-artifacts-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git add lib/marin/src/marin/evaluation/config_artifacts.py lib/marin/pyproject.toml pyproject.toml uv.lock
+          git commit -m "deps: update evaluation config artifacts"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --title "deps: update evaluation config artifacts" \
+            --body "Pins Harbor and Evalchemy configuration resolvers to verified immutable release manifests. The runtime Harbor revision and lockfile are updated together." \
+            --label agent-generated \
+            --base main \
+            --head "$branch"

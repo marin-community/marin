@@ -41,6 +41,8 @@ class HarborSpec:
     n_concurrent: int = 4
     max_output_tokens: int = 8192
     agent_kwargs: dict = field(default_factory=dict)
+    preset: str = "standard"
+    """Named Marin policy preset. Advanced Harbor policy is supplied at launch, not copied here."""
 
 
 @dataclass(frozen=True)

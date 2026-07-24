@@ -95,6 +95,8 @@ class EvalRunParams:
     unit: EvalUnit | None = None
     harbor: HarborSpec | None = None
     limit: int | None = None
+    harbor_config_document: dict | None = None
+    harbor_config_patch: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +265,9 @@ def _run_harbor_group(params: EvalGroupParams) -> list[str]:
                             max_output_tokens=run.harbor.max_output_tokens,
                             task_limit=run.limit,
                             agent_kwargs=dict(run.harbor.agent_kwargs),
+                            preset=run.harbor.preset,
+                            config_document=run.harbor_config_document,
+                            config_patch=run.harbor_config_patch,
                         ),
                         run.out_path,
                     )
@@ -327,6 +332,8 @@ class LaunchSpec:
     cluster: str
     version: str | None = None
     description: str | None = None
+    harbor_config_document: dict | None = None
+    harbor_config_patch: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +406,10 @@ def plan_runs(spec: LaunchSpec) -> list[RunPlan]:
     mechanisms = {EVALS[eval_key].mechanism for eval_key in spec.evals}
     if len(mechanisms) > 1:
         raise ValueError(f"a launch group must be one mechanism, got {sorted(m.value for m in mechanisms)}")
+    if (spec.harbor_config_document is not None or spec.harbor_config_patch is not None) and mechanisms != {
+        EvalMechanism.HARBOR
+    }:
+        raise ValueError("--harbor-config/--harbor-patch require a Harbor eval suite")
     plans: list[RunPlan] = []
     for eval_key in spec.evals:
         suite = EVALS[eval_key]
@@ -498,6 +509,8 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
                 unit=unit,
                 harbor=harbor,
                 limit=plan.limit,
+                harbor_config_document=spec.harbor_config_document,
+                harbor_config_patch=spec.harbor_config_patch,
             )
         )
     if len({run.eval_ref.name for run in runs}) != len(runs):

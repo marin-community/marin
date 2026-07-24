@@ -40,6 +40,30 @@ Key options: `--evals` takes a suite name (`smoke`, `core`) or comma-separated e
 sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
 `--records-prefix` and `--cluster` override where records land and which iris cluster to submit to.
 
+## Harbor configuration and override policy
+
+Harbor evals use the same command, selecting a Harbor suite such as `aime-harbor`. The common path
+needs no Harbor file: the suite's named preset supplies conservative defaults. Operators who need a
+different retry policy, Daytona resources, agent harness, timeout, verifier setting, or generation
+budget can pass a complete Harbor YAML/JSON document with `--harbor-config`, then optionally apply a
+structured JSON object with `--harbor-patch`. Both are loaded and validated by the immutable
+`harbor-config` artifact produced from the exact Harbor revision the isolated trial driver executes.
+
+The precedence is deliberate, from lowest to highest:
+
+1. The selected suite's named Harbor preset and its default agent/output settings.
+2. `--harbor-config`, if supplied, replaces that preset with any valid Harbor document.
+3. `--harbor-patch` recursively overlays that document using Harbor's documented semantics (mappings
+   merge; lists replace), so it can override every Harbor policy field.
+4. Explicit launcher selections that define the evaluation itself: `--model`, `--evals`, and `--limit`.
+5. Runtime values that can only be discovered after serving: the generated Harbor job name, durable
+   jobs directory, served model name, and minted endpoint capability URL.
+
+The final layer is intentionally narrow. It does **not** overwrite agent choice, environment,
+resources, attempts, retries, timeouts, verifier policy, task filtering (unless `--limit` is passed),
+or `model_info.max_output_tokens`. A resolved, credential-redacted config plus its Harbor revision,
+schema fingerprint, resolver fingerprint, and SHA-256 is saved beside each run's results.
+
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
 winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval and

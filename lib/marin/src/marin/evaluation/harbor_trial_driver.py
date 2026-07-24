@@ -20,32 +20,11 @@ import sys
 from pathlib import Path
 
 from harbor.job import Job
-from harbor.models.environment_type import EnvironmentType
-from harbor.models.job.config import DatasetConfig, JobConfig
-from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+from harbor_config import JobConfig
 
 
 async def _run(config: dict) -> None:
-    try:
-        env_type = EnvironmentType(config["env"])
-    except ValueError:
-        env_type = EnvironmentType.DOCKER
-    job = await Job.create(
-        JobConfig(
-            job_name=config["job_name"],
-            jobs_dir=Path(config["jobs_dir"]),
-            datasets=[DatasetConfig(name=config["dataset"], version=config["version"], n_tasks=config["n_tasks"])],
-            agents=[
-                AgentConfig(
-                    name=config["agent"],
-                    model_name=config["model_name"],
-                    kwargs=config["agent_kwargs"],
-                )
-            ],
-            n_concurrent_trials=config["n_concurrent"],
-            environment=EnvironmentConfig(type=env_type),
-        )
-    )
+    job = await Job.create(JobConfig.model_validate(config["job_config"]))
     await job.run()
 
 

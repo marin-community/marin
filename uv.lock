@@ -1770,6 +1770,24 @@ epy = [
 ]
 
 [[package]]
+name = "evalchemy-config"
+version = "0.1.0"
+source = { url = "https://github.com/marin-community/evalchemy/releases/download/evalchemy-config-12a73251f540428e8ea01cdeefa2611d2344a8f266b4c2c38a181de5106c3b24/evalchemy_config-0.1.0-py3-none-any.whl" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+wheels = [
+    { url = "https://github.com/marin-community/evalchemy/releases/download/evalchemy-config-12a73251f540428e8ea01cdeefa2611d2344a8f266b4c2c38a181de5106c3b24/evalchemy_config-0.1.0-py3-none-any.whl", hash = "sha256:ef95d211e9f4bf5a6b8dec7bd3436b3cda88e685096587b9ae7cd06e59dfae00" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "evaluate"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2744,8 +2762,8 @@ wheels = [
 
 [[package]]
 name = "harbor"
-version = "0.8.0"
-source = { git = "https://github.com/marin-community/harbor.git?rev=0d0dbe8904ed984137a0dfa764583f1508cf3274#0d0dbe8904ed984137a0dfa764583f1508cf3274" }
+version = "0.8.1"
+source = { git = "https://github.com/marin-community/harbor.git?rev=95dcdfd3f1f2fdc745b15f9ca411755abc6734c5#95dcdfd3f1f2fdc745b15f9ca411755abc6734c5" }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "datasets" },
@@ -2769,6 +2787,30 @@ dependencies = [
     { name = "typer" },
     { name = "universal-pathlib" },
     { name = "uvicorn" },
+]
+
+[[package]]
+name = "harbor-config"
+version = "0.1.0"
+source = { url = "https://github.com/marin-community/harbor/releases/download/harbor-config-95dcdfd3f1f2fdc745b15f9ca411755abc6734c5/harbor_config-0.1.0-py3-none-any.whl" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "shortuuid" },
+    { name = "toml" },
+    { name = "universal-pathlib" },
+]
+wheels = [
+    { url = "https://github.com/marin-community/harbor/releases/download/harbor-config-95dcdfd3f1f2fdc745b15f9ca411755abc6734c5/harbor_config-0.1.0-py3-none-any.whl", hash = "sha256:eebfe87f7a0408c0540f0e633822158b45a2f95933fa1e19cf13b41c498777f9" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "shortuuid", specifier = ">=1.0.13" },
+    { name = "toml", specifier = ">=0.10.2" },
+    { name = "universal-pathlib", specifier = ">=0.2.6" },
 ]
 
 [[package]]
@@ -4131,11 +4173,13 @@ dependencies = [
     { name = "braceexpand" },
     { name = "datasets" },
     { name = "draccus" },
+    { name = "evalchemy-config" },
     { name = "fasttext-wheel" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-api-python-client" },
     { name = "google-cloud-storage" },
+    { name = "harbor-config" },
     { name = "jax" },
     { name = "jaxopt" },
     { name = "marin-fray" },
@@ -4294,6 +4338,7 @@ requires-dist = [
     { name = "datasets", specifier = "<5.0.0" },
     { name = "draccus", specifier = ">=0.11.6" },
     { name = "duckdb", marker = "extra == 'datakit'", specifier = ">=1.0.0" },
+    { name = "evalchemy-config", url = "https://github.com/marin-community/evalchemy/releases/download/evalchemy-config-12a73251f540428e8ea01cdeefa2611d2344a8f266b4c2c38a181de5106c3b24/evalchemy_config-0.1.0-py3-none-any.whl" },
     { name = "faiss-cpu", marker = "extra == 'datakit'" },
     { name = "fasttext-wheel", specifier = ">=0.9.2" },
     { name = "flash-attn-4", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.0.0b16,<4.1" },
@@ -4302,7 +4347,8 @@ requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.175.0" },
     { name = "google-cloud-storage" },
     { name = "google-vizier", extras = ["jax"], marker = "extra == 'vizier'" },
-    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=0d0dbe8904ed984137a0dfa764583f1508cf3274" },
+    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=95dcdfd3f1f2fdc745b15f9ca411755abc6734c5" },
+    { name = "harbor-config", url = "https://github.com/marin-community/harbor/releases/download/harbor-config-95dcdfd3f1f2fdc745b15f9ca411755abc6734c5/harbor_config-0.1.0-py3-none-any.whl" },
     { name = "huggingface-hub", marker = "extra == 'datakit'" },
     { name = "jax", specifier = ">=0.9.2,<0.11" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.10.1" },

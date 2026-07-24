@@ -9,6 +9,10 @@ version = "0.2.0"
 
 requires-python = ">=3.12"
 dependencies = [
+    # BEGIN GENERATED CONFIG ARTIFACT DEPENDENCIES
+    "harbor-config @ https://github.com/marin-community/harbor/releases/download/harbor-config-95dcdfd3f1f2fdc745b15f9ca411755abc6734c5/harbor_config-0.1.0-py3-none-any.whl#sha256=eebfe87f7a0408c0540f0e633822158b45a2f95933fa1e19cf13b41c498777f9",
+    "evalchemy-config @ https://github.com/marin-community/evalchemy/releases/download/evalchemy-config-12a73251f540428e8ea01cdeefa2611d2344a8f266b4c2c38a181de5106c3b24/evalchemy_config-0.1.0-py3-none-any.whl#sha256=ef95d211e9f4bf5a6b8dec7bd3436b3cda88e685096587b9ae7cd06e59dfae00",
+    # END GENERATED CONFIG ARTIFACT DEPENDENCIES
     # Provides the compression.zstd module that fsspec imports to register its
     # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
     "backports-zstd>=1.0.0; python_version < '3.14'",
