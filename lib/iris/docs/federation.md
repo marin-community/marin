@@ -136,6 +136,32 @@ There is no cross-cloud identity. A job on CoreWeave cannot read `gs://`, and a 
 `marin` cannot read `s3://marin-us-east-02a` unless it is handed AWS credentials explicitly.
 Every artifact a federated job touches must live in the peer's object store.
 
+## Reaching a serving endpoint through the parent
+
+A CoreWeave cluster is not world-visible, so a capability URL minted against a child
+origin cannot be used from outside. A serving endpoint on a child is reached through
+the public parent (`iris.oa.dev`) instead: the parent's proxy resolves the endpoint,
+mints a fresh federation bearer, and forwards to the child, which resolves it locally.
+
+The parent learns a child's endpoints two ways. An endpoint on a job the parent
+*handed off* mirrors back with the rest of that job's state, keyed to the received
+handle. An endpoint on a job started *directly on the child* — no handoff, no handle
+— is instead **absorbed**: every `FederationSync` reports the child's own
+link-access endpoints to the syncing parent, and the parent mirrors each as a remote
+(`peer_id`) row with no backing job (endpoints carry no FK to `jobs`/`tasks`). The
+mint path reads only the endpoint row and takes the owner from its task-id string, so
+a user can `endpoints mint` against the parent for a job the parent never ran.
+
+Absorption is scoped to link access. A private endpoint is never reported and never
+forwarded without the received handle; only a link-access endpoint — where the URL is
+itself the credential — is absorbed and reachable through a configured parent. The
+trust this rests on is that a child's configured federation parents (its
+`federation_peers`) may reach its link endpoints; the child admits a parent's
+forwarded request for any endpoint it currently advertises as link-access, which adds
+no reach a link endpoint did not already grant. A child that pins two parents exposes
+its link endpoints to both. A child never re-exports an endpoint it itself mirrored
+from a third cluster.
+
 ## Observing federation
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come

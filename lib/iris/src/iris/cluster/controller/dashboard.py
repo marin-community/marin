@@ -253,15 +253,20 @@ class ControllerDashboard:
                 PROXY_TIMEOUT_HEADER: str(decision.timeout_seconds or DEFAULT_PROXY_TIMEOUT_SECONDS),
             }
             if decision.direction == "inbound":
-                if (
-                    decision.task_id is None
-                    or decision.local_upstream is None
-                    or self._federation_owner_check is None
-                    or not self._federation_owner_check(
-                        JobName.from_wire(decision.task_id).root_job,
-                        decision.peer_id,
-                    )
-                ):
+                if decision.task_id is None or decision.local_upstream is None:
+                    return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
+                # A configured parent (already authenticated as a federation peer
+                # before this decision is reached) may forward to either an endpoint
+                # on a job it handed here — any access mode, gated on the received
+                # handle — or a link-access endpoint this cluster serves locally,
+                # even one it never received. A link endpoint already means "the URL
+                # is the credential", so admitting the forward adds no reach; a
+                # private endpoint stays gated on the handoff.
+                root = JobName.from_wire(decision.task_id).root_job
+                handoff_owned = self._federation_owner_check is not None and self._federation_owner_check(
+                    root, decision.peer_id
+                )
+                if not handoff_owned and not self._endpoint_service.advertises_link_endpoint(decision.encoded_name):
                     return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
                 headers[UPSTREAM_URL_HEADER] = decision.local_upstream
                 return Response(status_code=204, headers=headers)

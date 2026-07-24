@@ -389,22 +389,20 @@ class EndpointsProjection(Projection):
         tick; this makes the parent's mirror match it. Rows previously mirrored under
         this peer but absent from ``rows`` are deleted; the rest are upserted. Every
         change registers a post-commit cache update so ``_by_name`` never serves a
-        dropped remote row (raw CASCADE would desync the cache — see pruner).
+        dropped remote row.
 
-        Each row must reference a task already mirrored on this controller (the job
-        deltas in the same sync batch create them). A row whose task row is absent is
-        skipped defensively — the FK would otherwise abort the whole sync batch.
+        Endpoints carry no FK to jobs/tasks (see migration 0048), so a row is stored
+        whether or not its task is mirrored here. An endpoint under a handed-off root
+        has a mirror job/task from the same sync batch; an endpoint absorbed from a
+        job the parent never received (a link endpoint the child started locally) has
+        none, and the mint/proxy paths read only the endpoint row.
         """
         with self._lock:
             existing_ids = {eid for eid, row in self._by_id.items() if row.peer_id == peer_id}
 
-        present = self._present_task_ids(cur, [row.task_id for row in rows])
         # Stamp peer_id so the persisted column and the cached row never disagree,
         # whatever peer_id the caller's row objects carried.
-        keep = [replace(row, peer_id=peer_id) for row in rows if row.task_id in present]
-        for row in rows:
-            if row.task_id not in present:
-                logger.debug("skipping remote endpoint %s: task %s not mirrored yet", row.name, row.task_id)
+        keep = [replace(row, peer_id=peer_id) for row in rows]
 
         new_by_id = {row.endpoint_id: row for row in keep}
         stale = existing_ids - new_by_id.keys()
@@ -436,16 +434,6 @@ class EndpointsProjection(Projection):
             pending.delete(endpoint_id)
         for row in keep:
             pending.upsert(row)
-
-    def _present_task_ids(self, cur: db.Tx, task_ids: Sequence[JobName]) -> set[JobName]:
-        """Which of ``task_ids`` have a persisted task row (FK target for an endpoint)."""
-        if not task_ids:
-            return set()
-        found = cur.execute(
-            select(tasks_table.c.task_id).where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
-            {"task_ids": list(task_ids)},
-        ).all()
-        return {r.task_id for r in found}
 
     def remove(self, cur: db.Tx, endpoint_id: str) -> EndpointRow | None:
         """Remove a single endpoint by id. Returns the removed row snapshot, if any."""

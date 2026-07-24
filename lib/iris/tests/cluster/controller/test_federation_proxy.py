@@ -53,7 +53,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ._test_support import ControllerTestState
-from .conftest import promote_queued_federation, query_task
+from .conftest import promote_queued_federation, query_task, submit_direct_job
 from .test_federation_handoff import (
     _attach_federation,
     _cluster_pinned_request,
@@ -163,6 +163,133 @@ def threads() -> Iterator[ThreadContainer]:
         yield container
     finally:
         container.stop()
+
+
+def _register_local_link_endpoint(
+    peer_service: ControllerServiceImpl, peer_state, task_id: JobName, address: str
+) -> str:
+    """Register a LINK endpoint on a locally-owned (never handed-off) task."""
+    response = peer_service.endpoint_service.register_endpoint(
+        controller_pb2.Controller.RegisterEndpointRequest(
+            name=ENDPOINT_NAME,
+            address=address,
+            task_id=task_id.to_wire(),
+            attempt_id=query_task(peer_state, task_id).current_attempt_id,
+            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ),
+        None,
+    )
+    return response.endpoint_id
+
+
+def test_absorbed_local_link_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path, log_client, threads):
+    """A serving job started directly on the peer — never handed off, so the peer holds
+    no RECEIVED handle for the parent — is still reachable through the parent's public
+    proxy: the peer absorbs its link endpoint over sync, the parent mirrors it, and the
+    peer's inbound check admits the forward on the endpoint's link access alone."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        upstream = UpstreamObservation()
+        upstream_url = _serve(threads, _build_upstream_app(upstream), name="upstream")
+
+        # A local job on the peer (not a handoff): the peer materializes its own task
+        # and registers a link endpoint on it. There is no RECEIVED handle.
+        [local_task] = submit_direct_job(peer_state, "local-serve")
+        _register_local_link_endpoint(peer_service, peer_state, local_task, upstream_url)
+
+        # The peer's received-handle check returns False for this job — so if the
+        # forward is authorized, it is authorized by the link-access relaxation alone.
+        def peer_owns(root_job: JobName, peer_id: str) -> bool:
+            with peer_state._db.read_snapshot() as q:
+                return reads.has_received_job_from_peer(q, peer_id, root_job)
+
+        assert peer_owns(local_task.root_job, PARENT_ID) is False
+
+        mint_token, peer_verifier, parent_public_key = _federation_auth(PARENT_ID)
+        decision_secret = "federation-native-proxy-test"
+        peer_dashboard = ControllerDashboard(
+            peer_service,
+            auth_policy=RequestAuthPolicy.enforcing(verifier=peer_verifier),
+            federation_owner_check=peer_owns,
+            proxy_decision_secret=decision_secret,
+        )
+        peer_private_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
+        peer_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            peer_private_url,
+            decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                        federation_keys={PARENT_ID: parent_public_key},
+                    )
+                )
+            ),
+        )
+        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(peer_proxy.stop)
+        peer_url = peer_proxy.address
+
+        parent_decision_secret = "parent-federation-native-proxy-test"
+        parent_dashboard = ControllerDashboard(
+            parent_service,
+            auth_policy=RequestAuthPolicy.permissive(),
+            federated_handoff=FederatedEndpointHandoff(
+                lambda pid: peer_url if pid == PEER_ID else None,
+                mint_token,
+            ),
+            proxy_decision_secret=parent_decision_secret,
+        )
+        parent_private_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
+
+        # Sync absorbs the peer's local link endpoint onto the parent as a remote row,
+        # with no backing job/task on the parent.
+        manager.sync_once()
+        with parent_state._db.read_snapshot() as q:
+            mirrored = parent_service.endpoint_service.resolve_task_endpoint(ENDPOINT_NAME)
+            assert mirrored is not None and mirrored.peer_id == PEER_ID
+            assert reads.get_job_state(q, local_task.root_job) is None
+
+        parent_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            parent_private_url,
+            parent_decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.PERMISSIVE,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(parent_proxy.stop)
+        parent_url = parent_proxy.address
+
+        with httpx.Client() as client:
+            resp = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet", params={"q": "1"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["marker"] == UPSTREAM_MARKER
+        assert upstream.paths[-1] == "/greet?q=1"
 
 
 def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path, log_client, threads):

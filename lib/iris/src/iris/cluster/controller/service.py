@@ -3437,15 +3437,26 @@ class ControllerServiceImpl:
     def _federation_endpoint_snapshot(
         self, q, requester_id: str, now: Timestamp
     ) -> list[controller_pb2.Controller.FederationEndpoint]:
-        """The requester's full current endpoint set across its RECEIVED jobs.
+        """The requester's full current endpoint set: its RECEIVED-job endpoints plus
+        this cluster's locally-owned link-access endpoints.
 
-        Sent every sync so the parent set-replaces; a re-register, access change, or
-        lease expiry on this peer self-heals within one sync interval. Lease time is
-        reported as remaining duration (parent adds it to its own clock), avoiding
-        cross-cluster skew.
+        The RECEIVED set carries any access mode (the requester owns those jobs); the
+        local set is link-access only, so a parent can mint a capability URL for a
+        job started directly here without a handoff, and no private endpoint leaves
+        the cluster. Both are sent every sync so the parent set-replaces; a
+        re-register, access change, or lease expiry self-heals within one sync
+        interval. Lease time is reported as remaining duration (parent adds it to its
+        own clock), avoiding cross-cluster skew. A link endpoint under a received
+        root appears in both reads and is emitted once (deduped by endpoint_id).
         """
         endpoints: list[controller_pb2.Controller.FederationEndpoint] = []
-        for e in reads.live_endpoints_for_requester(q, requester_id, now):
+        seen: set[str] = set()
+        received = reads.live_endpoints_for_requester(q, requester_id, now)
+        local_links = reads.live_local_link_endpoints(q, now)
+        for e in [*received, *local_links]:
+            if e.endpoint_id in seen:
+                continue
+            seen.add(e.endpoint_id)
             ep = controller_pb2.Controller.FederationEndpoint(
                 endpoint_id=e.endpoint_id,
                 name=e.name,
