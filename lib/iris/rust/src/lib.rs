@@ -259,7 +259,7 @@ impl ProxyControl {
         self.rpc_metrics
             .lock()
             .map(|metrics| metrics.snapshot())
-            .map_err(|_| "native proxy RPC metrics lock is poisoned".to_string())
+            .map_err(|_| RPC_METRICS_LOCK_POISONED.to_string())
     }
 
     pub fn pause_registry(&self) {
@@ -935,7 +935,7 @@ fn rpc_metric_key(request: &Request) -> Option<RpcMetricKey> {
     Some(RpcMetricKey {
         service: service.to_string(),
         method: method.to_string(),
-        upstream: if request.uri().path().starts_with("/proxy/") {
+        upstream: if request.uri().path().starts_with(PROXY_PATH_PREFIX) {
             "endpoint"
         } else {
             "controller"

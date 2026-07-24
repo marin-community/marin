@@ -19,6 +19,8 @@ from rigging import telltale
 
 from iris.cluster.controller.native_proxy import NativeProxy
 
+IN_FLIGHT_METRIC_NAME = "iris_rpc_in_flight"
+
 
 class NativeProxyMetricsCollector(Collector):
     """A Telltale bridge that never owns or mutates native metric values."""
@@ -30,7 +32,7 @@ class NativeProxyMetricsCollector(Collector):
         snapshot = json.loads(self._proxy.rpc_metrics_json)
         requests = Metric("iris_rpc_requests", "Iris RPC requests handled by the native proxy", "counter")
         responses = Metric("iris_rpc_responses", "Iris RPC responses returned by the native proxy", "counter")
-        in_flight = Metric("iris_rpc_in_flight", "Iris RPC requests currently handled by the native proxy", "gauge")
+        in_flight = Metric(IN_FLIGHT_METRIC_NAME, "Iris RPC requests currently handled by the native proxy", "gauge")
         duration = Metric("iris_rpc_duration_seconds", "Iris RPC native-proxy latency", "histogram")
         for series in snapshot["series"]:
             labels = {
@@ -39,7 +41,7 @@ class NativeProxyMetricsCollector(Collector):
                 "upstream": series["upstream"],
             }
             requests.add_sample("iris_rpc_requests_total", labels=labels, value=series["requests"])
-            in_flight.add_sample("iris_rpc_in_flight", labels=labels, value=series["in_flight"])
+            in_flight.add_sample(IN_FLIGHT_METRIC_NAME, labels=labels, value=series["in_flight"])
             for status, count in series["responses"].items():
                 responses.add_sample("iris_rpc_responses_total", labels={**labels, "status": status}, value=count)
             for bound, count in series["latency_buckets"]:
