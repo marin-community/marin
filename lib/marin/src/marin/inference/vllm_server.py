@@ -20,8 +20,9 @@ from urllib.parse import urlparse
 import requests
 from rigging.filesystem import marin_prefix
 
-from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
+from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
+from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,10 @@ class VllmLauncher(Protocol):
         """Extra environment variables to overlay on the vLLM subprocess env."""
         ...
 
+    def cache_identity(self) -> str:
+        """Exact launcher inputs that can affect compilation."""
+        ...
+
 
 @dataclass(frozen=True)
 class WorkspaceVllm:
@@ -64,6 +69,9 @@ class WorkspaceVllm:
 
     def env(self) -> dict[str, str]:
         return {}
+
+    def cache_identity(self) -> str:
+        return f"workspace:{vllm_fork_ref()}:{tpu_inference_fork_ref()}:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -124,6 +132,10 @@ class IsolatedCudaVllm:
             environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment
 
+    def cache_identity(self) -> str:
+        source = vllm_fork_ref() if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
+        return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
+
 
 def _write_virtual_hosted_s3_config() -> str:
     path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
@@ -171,6 +183,9 @@ class IsolatedTpuVllm:
         # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
         # inherits this from the launch environment.
         return {"VLLM_TARGET_DEVICE": "tpu"}
+
+    def cache_identity(self) -> str:
+        return f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:{self.python_version}:{self.torch_backend}"
 
 
 # Forwarded lines route to the parent's stderr (finelog tags it ERROR) or stdout (INFO) by their
@@ -267,6 +282,8 @@ class VllmServerHandle:
     log_pump: _LogPump | None = None
     # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
     metrics_forwarder: VllmMetricsForwarder | None = None
+    # Owns compiler cache files that must remain present until the process group exits.
+    compilation_cache: VllmCompilationCache | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
@@ -283,12 +300,23 @@ class VllmServerHandle:
         if self._process_group_exists():
             # The API parent can exit before EngineCore does, so check the group after wait().
             self._signal(signal.SIGKILL)
+            deadline = time.monotonic() + timeout_seconds
+            while self._process_group_exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
 
         # Child and group are gone, so the pipes are at EOF; join the readers (bounded, so a
         # descendant holding a pipe cannot hang teardown) and close the logs.
         if self.log_pump is not None:
             self.log_pump.join(timeout=timeout_seconds)
             self.log_pump.close()
+        if self.compilation_cache is not None:
+            if self._process_group_exists():
+                logger.warning(
+                    "Keeping vLLM compilation cache because process group %s still exists",
+                    self.process_group_id,
+                )
+            else:
+                self.compilation_cache.close()
 
     def _signal(self, sig: signal.Signals) -> None:
         if self.process_group_id is not None:
@@ -465,6 +493,7 @@ class VllmEnvironment:
         timeout_seconds: int = 3600,
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
+        compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
@@ -474,6 +503,7 @@ class VllmEnvironment:
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
         # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
         self.launcher: VllmLauncher = launcher or WorkspaceVllm()
+        self.compilation_cache = compilation_cache
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -496,6 +526,7 @@ class VllmEnvironment:
                     timeout_seconds=self.timeout_seconds,
                     extra_cli_args=self.extra_cli_args,
                     launcher=self.launcher,
+                    compilation_cache=self.compilation_cache,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -514,6 +545,7 @@ class VllmEnvironment:
                             logger.error("%s:\n%s", label, value)
                     except Exception:
                         logger.exception("Failed to collect vLLM diagnostics")
+                    self.close()
                 raise
         return self
 
@@ -551,9 +583,7 @@ class VllmEnvironment:
         return _native_diagnostics(self.vllm_server, max_lines=max_lines)
 
 
-# Cache aggressively for iterative bring-up workflows: every compilation is worth keeping, and
-# a serve of the same model on the same slice should not pay for the compile twice. Both serving
-# backends key off these — vLLM through its subprocess environment, Levanter through jax.config.
+# Levanter's in-process JAX cache remains separate from vLLM's managed local archive.
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = -1
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS = 2
 
@@ -582,13 +612,7 @@ def _vllm_env() -> dict[str, str]:
     Starts from ``os.environ`` and applies the canonical defaults.
     """
     env = dict(os.environ)
-    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", default_jax_compilation_cache_dir())
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
-    env.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
-    # TPU vLLM uses XLA compilation caches; this env var is the one it keys off.
-    env.setdefault("VLLM_XLA_CACHE_PATH", cache_dir)
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", str(JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES))
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", str(JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS))
     for key, default in _VLLM_ENV_DEFAULTS:
         env.setdefault(key, default)
     return env
@@ -602,6 +626,7 @@ def _start_vllm_native_server(
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
     launcher: VllmLauncher | None = None,
+    compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
 ) -> VllmServerHandle:
     """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
@@ -629,22 +654,36 @@ def _start_vllm_native_server(
     # A launcher (e.g. the isolated TPU build) may require extra env, such as the
     # vLLM build target; overlay it after the canonical defaults so it wins.
     native_env.update(launcher.env())
+    cache = VllmCompilationCache.prepare(
+        launcher_identity=launcher.cache_identity(),
+        compile_identity=VllmCompileIdentity(
+            model_name_or_path=model_name_or_path,
+            extra_cli_args=tuple(extra_cli_args or ()),
+        ),
+        environment=native_env,
+        mode=compilation_cache,
+    )
+    native_env = cache.environment()
     logger.info(
         "Starting vLLM native server (output streams to the job log). "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        env=native_env,
-        # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
-        # release the TPU instead of leaving libtpu held by a stale child.
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=native_env,
+            # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
+            # release the TPU instead of leaving libtpu held by a stale child.
+            start_new_session=True,
+        )
+    except Exception:
+        cache.close()
+        raise
     # Pump before readiness polling: vLLM logs heavily during the long weight-load/compile, and an
     # undrained pipe would block the child mid-startup.
     log_pump = _LogPump(process, stdout_path, stderr_path)
@@ -676,6 +715,7 @@ def _start_vllm_native_server(
         process_group_id=process_group_id,
         log_dir=log_dir,
         log_pump=log_pump,
+        compilation_cache=cache,
     )
 
     try:
@@ -687,6 +727,8 @@ def _start_vllm_native_server(
     except Exception:
         handle.stop()
         raise
+
+    cache.publish_after_ready()
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
