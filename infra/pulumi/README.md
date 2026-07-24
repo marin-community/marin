@@ -66,7 +66,11 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   per-machine and per-CI-runner (runners are ephemeral).
 - **GCP credentials**: `gcloud auth application-default login`. Decrypting stack secrets is
   authorized by your own GCP credentials against the shared KMS key — see "Backend" below for
-  getting the IAM role granted.
+  getting the IAM role granted. Also run `gcloud auth application-default set-quota-project
+  hai-gcp-models` once — without it, every `gcp-secret://` resolution (the Cloudflare token
+  below) prints google-auth's ADC quota-project warning on `preview`/`up`. Skip this for CI:
+  its service-account credentials never trigger the warning, and forcing a quota project onto
+  an impersonated credential needs its own IAM grant that isn't provisioned.
 - **Cloudflare credential**: stacks with `provisioning.coreweave.federation_dns` read the
   DNS-only Cloudflare token straight from Secret Manager (`cloudflare-oa-dns-token` in
   `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no

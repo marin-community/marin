@@ -98,6 +98,9 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         kubeconfig=kubeconfig_path,
         context=platform_coreweave.kube_context or None,
         enable_patch_force=True,
+        opts=pulumi.ResourceOptions(
+            ignore_changes=["kubeconfig", "context"]
+        ),  # ignore changes to fields encoding local user state
     )
 
     CoreweaveCluster(
