@@ -1458,7 +1458,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rpc_metrics_include_controller_loopback_counts_statuses_and_latency() {
+    fn rpc_metrics_track_started_and_completed_controller_requests() {
         let control = ProxyControl::default();
         let request = Request::builder()
             .uri("/iris.cluster.ControllerService/ListJobs")

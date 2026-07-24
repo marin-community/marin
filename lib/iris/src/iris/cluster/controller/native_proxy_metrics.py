@@ -34,7 +34,7 @@ class _RpcMetricSeries:
 
 
 class NativeProxyMetricsCollector(Collector):
-    """A Telltale bridge that never owns or mutates native metric values."""
+    """Collect native RPC counters, gauges, and histograms for Telltale."""
 
     def __init__(self, proxy: NativeProxy) -> None:
         self._proxy = proxy
