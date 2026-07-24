@@ -131,6 +131,6 @@ the subsequent start projects that exact cached value.
 
 # Artifacts
 
-- `docs/debug-log-iris-controller-restore.md`
+- Pull request: https://github.com/marin-community/marin/pull/7583
 - `s3://marin-us-east-02a/iris/cw-us-east-02a/state/controller-state/1784862840412`
 - Controller image `ghcr.io/marin-community/iris-controller:70224363d5`
