@@ -37,8 +37,12 @@ _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
 # whole gang. Give cold gang-init more slack; a longer timeout only affects how long a
-# genuinely-stuck init waits.
-_JAX_DIST_INIT_TIMEOUT = 1800
+# genuinely-stuck init waits. Source-building accelerator extensions can require
+# a larger per-job override because setup completes independently on each host.
+_JAX_DIST_INIT_TIMEOUT_ENV = "JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT"
+_JAX_DIST_INIT_TIMEOUT = int(os.environ.get(_JAX_DIST_INIT_TIMEOUT_ENV, "1800"))
+if _JAX_DIST_INIT_TIMEOUT <= 0:
+    raise ValueError(f"{_JAX_DIST_INIT_TIMEOUT_ENV} must be positive, got {_JAX_DIST_INIT_TIMEOUT}")
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -47,6 +51,7 @@ _JAX_ENV_KEYS = (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    _JAX_DIST_INIT_TIMEOUT_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
 )

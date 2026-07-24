@@ -59,6 +59,7 @@ WORKER_DISK="256g"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="${JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT:-7200}"
 DEEPEP_REVISION="7febc6e25660af0f54d95dd781ecdcd62265ecca"
 DEEPEP_DISPATCH_NUM_THREADS="${DEEPEP_DISPATCH_NUM_THREADS:-512}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
@@ -114,6 +115,7 @@ Options:
                             LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS (default: false).
   --conservative-loop-clustering BOOL
                             JAXPP_CONSERVATIVE_LOOP_CLUSTERING (default: true).
+  --jax-init-timeout N      JAX distributed initialization timeout in seconds (default: 7200).
   --xla-memory-fraction N   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.70).
   --remat NAME              recompute_all or save_moe (default: save_moe).
   --steps N                 MAY_STEPS (default: 20).
@@ -160,6 +162,7 @@ while [ "$#" -gt 0 ]; do
         --loss-implementation) LOSS_IMPLEMENTATION="$2"; shift 2 ;;
         --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
         --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
+        --jax-init-timeout) JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="$2"; shift 2 ;;
         --xla-memory-fraction) XLA_MEMORY_FRACTION="$2"; shift 2 ;;
         --remat) REMAT="$2"; shift 2 ;;
         --steps) STEPS="$2"; shift 2 ;;
@@ -335,6 +338,17 @@ case "$RAGGED_DOT_BLOCK_K" in
         ;;
 esac
 
+case "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT" in
+    ""|*[!0-9]*)
+        echo "ERROR: JAX distributed initialization timeout must be a positive integer, got: $JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT" >&2
+        exit 1
+        ;;
+esac
+if [ "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT" -le 0 ]; then
+    echo "ERROR: JAX distributed initialization timeout must be positive, got: $JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT" >&2
+    exit 1
+fi
+
 R2_HELPER="${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh"
 if [ -x "$R2_HELPER" ]; then
     if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
@@ -394,6 +408,7 @@ ENV_ARGS=(
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
     -e PP_MICROBATCHES "$MICROBATCHES"
     -e JAXPP_REVISION "$JAXPP_REVISION"
+    -e JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT"
     -e JAX_COMPILATION_CACHE_DIR "/tmp/jax-compilation-cache"
     -e GRUG_LOG_JAXPRS "${GRUG_LOG_JAXPRS:-false}"
     -e GRUG_LOG_XLA_HLO "${GRUG_LOG_XLA_HLO:-false}"
@@ -502,6 +517,7 @@ ragged_dot_num_warps: ${RAGGED_DOT_NUM_WARPS:-4}
 loss_implementation: ${LOSS_IMPLEMENTATION:-default}
 ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
 conservative_loop_clustering: $JAXPP_CONSERVATIVE_LOOP_CLUSTERING
+jax_init_timeout: $JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT
 xla_memory_fraction: $XLA_MEMORY_FRACTION
 remat: $REMAT
 steps: $STEPS
