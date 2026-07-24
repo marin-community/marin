@@ -4,6 +4,7 @@
 """Persistent local compilation caches for managed vLLM subprocesses."""
 
 import dataclasses
+import fcntl
 import hashlib
 import logging
 import shutil
@@ -15,7 +16,7 @@ import time
 import zipfile
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, BinaryIO, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from rigging.filesystem import StoragePath, marin_temp_bucket
@@ -26,7 +27,7 @@ from marin.profiling.trace_summary import sha256_for_path
 
 logger = logging.getLogger(__name__)
 
-ARCHIVE_SCHEMA_VERSION = 4
+ARCHIVE_SCHEMA_VERSION = 5
 LATEST_FILENAME = "latest.json"
 GENERATIONS_DIR = "generations"
 MANIFEST_FILENAME = "manifest.json"
@@ -48,6 +49,7 @@ _CHAT_TEMPLATE_DIGEST_ARG = "--chat-template-sha256"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _CACHE_ALL_ENTRIES = "-1"
 _TRANSFER_HELPER = "from marin.inference.vllm_cache import _transfer_process_main; " "_transfer_process_main()"
+_LOCAL_CACHE_ROOT = Path(tempfile.gettempdir()) / "marin-vllm-compilation-cache"
 
 _Digest = Annotated[str, Field(pattern=_DIGEST_PATTERN)]
 _ArchiveSize = Annotated[int, Field(strict=True, ge=0, le=_MAX_ARCHIVE_BYTES)]
@@ -95,13 +97,13 @@ class VllmCompileIdentity(_CacheModel):
 
 
 class _CacheIdentity(_CacheModel):
-    schema_version: Literal[4] = ARCHIVE_SCHEMA_VERSION
+    schema_version: Literal[5] = ARCHIVE_SCHEMA_VERSION
     launcher: StrictStr
     compile: VllmCompileIdentity
 
 
 class _Manifest(_CacheModel):
-    schema_version: Literal[4] = ARCHIVE_SCHEMA_VERSION
+    schema_version: Literal[5] = ARCHIVE_SCHEMA_VERSION
     cache_identity: _CacheIdentity
     generation_id: _Digest
     archive_sha256: _Digest
@@ -148,6 +150,7 @@ class _Extraction:
 class _ManagedCache:
     local_temp_dir: Path
     local_cache_dir: Path
+    lock_file: BinaryIO
     remote_cache_dir: str
     cache_key: str
     identity: _CacheIdentity
@@ -178,6 +181,28 @@ def _stable_compile_cli_args(extra_cli_args: tuple[str, ...]) -> tuple[str, ...]
 def _chat_template_cache_key(template: str) -> str:
     path = Path(template)
     return sha256_for_path(path) if path.is_file() else template
+
+
+def _create_local_workspace(cache_key: str) -> tuple[Path, BinaryIO]:
+    version_root = _LOCAL_CACHE_ROOT / f"v{ARCHIVE_SCHEMA_VERSION}"
+    lock_dir = version_root / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = (lock_dir / f"{cache_key}.lock").open("a+b")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        lock_file.close()
+        raise RuntimeError(f"vLLM compilation cache {cache_key} is already active on this host") from error
+
+    local_temp_dir = version_root / "entries" / cache_key
+    try:
+        if local_temp_dir.exists():
+            shutil.rmtree(local_temp_dir)
+        local_temp_dir.mkdir(parents=True)
+    except Exception:
+        lock_file.close()
+        raise
+    return local_temp_dir, lock_file
 
 
 def _is_transient(path: Path) -> bool:
@@ -485,15 +510,15 @@ class VllmCompilationCache:
         if mode is VllmCompilationCacheMode.CALLER_MANAGED:
             return cls(environment=child_environment)
 
-        local_temp_dir = Path(tempfile.mkdtemp(prefix="vllm_compilation_cache_"))
-        local_cache_dir = local_temp_dir / "cache"
-        local_cache_dir.mkdir()
         identity = _CacheIdentity(launcher=launcher_identity, compile=compile_identity)
         identity_json = canonical_json(identity.model_dump(mode="json"))
         cache_key = hashlib.sha256(identity_json.encode()).hexdigest()
         remote_cache_dir = str(
             StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{ARCHIVE_SCHEMA_VERSION}" / cache_key
         )
+        local_temp_dir, lock_file = _create_local_workspace(cache_key)
+        local_cache_dir = local_temp_dir / "cache"
+        local_cache_dir.mkdir()
 
         child_environment.update(
             {
@@ -514,6 +539,7 @@ class VllmCompilationCache:
             managed_cache=_ManagedCache(
                 local_temp_dir=local_temp_dir,
                 local_cache_dir=local_cache_dir,
+                lock_file=lock_file,
                 remote_cache_dir=remote_cache_dir,
                 cache_key=cache_key,
                 identity=identity,
@@ -608,6 +634,8 @@ class VllmCompilationCache:
                 managed.local_temp_dir,
                 exc_info=True,
             )
+        finally:
+            managed.lock_file.close()
 
     def _restore(self) -> None:
         managed = self._managed_cache
