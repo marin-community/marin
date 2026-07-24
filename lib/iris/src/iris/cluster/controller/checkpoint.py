@@ -293,11 +293,13 @@ def upload_checkpoint(
     The live database records the published checkpoint as its restore ancestor.
     """
     prefix = prefix_join(remote_state_dir, "controller-state")
-    checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
+    checkpoint_dir = prefix_join(prefix, str(backup.created_at.epoch_ms()))
 
-    _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
+    main_url = prefix_join(checkpoint_dir, f"{ControllerDB.DB_FILENAME}.zst")
+    _compress_and_upload_db(backup.main_path, main_url, "main")
     if backup.auth_path is not None:
-        _compress_and_upload_db(backup.auth_path, f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst", "auth")
+        auth_url = prefix_join(checkpoint_dir, f"{ControllerDB.AUTH_DB_FILENAME}.zst")
+        _compress_and_upload_db(backup.auth_path, auth_url, "auth")
 
     # The marker proves the live DB contains this successfully-published
     # checkpoint. It is deliberately written after upload: a failed upload must
@@ -484,7 +486,7 @@ def download_checkpoint_to_local(
     Returns True if the sync produced a usable ``controller.sqlite3``.
     """
     if checkpoint_dir:
-        source_dir = checkpoint_dir.rstrip("/")
+        source_dir = checkpoint_dir
     else:
         found = _find_latest_checkpoint_dir(remote_state_dir)
         if found is None:
