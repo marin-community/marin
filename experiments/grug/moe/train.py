@@ -1051,6 +1051,40 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array | None) -> Transform
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _replace_router_biases(
+    model: Transformer,
+    router_biases: tuple[jax.Array | None, ...],
+) -> Transformer:
+    new_blocks = list(model.blocks)
+    router_bias_index = 0
+    for block_index, block in enumerate(model.blocks):
+        if block.mlp is None:
+            continue
+        new_mlp = eqx.tree_at(
+            lambda m: m.router_bias,
+            block.mlp,
+            router_biases[router_bias_index],
+            is_leaf=lambda value: value is None,
+        )
+        new_blocks[block_index] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
+        router_bias_index += 1
+    if router_bias_index != len(router_biases):
+        raise ValueError(f"expected {router_bias_index} router biases, got {len(router_biases)}")
+    return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
+
+
+def _detach_router_biases(model: Transformer) -> tuple[Transformer, tuple[jax.Array, ...]]:
+    router_biases = tuple(block.mlp.router_bias for block in model.blocks if block.mlp is not None)
+    return _replace_router_biases(model, (None,) * len(router_biases)), router_biases
+
+
+def _restore_zero_router_bias_gradients(
+    grads: Transformer,
+    router_biases: tuple[jax.Array, ...],
+) -> Transformer:
+    return _replace_router_biases(grads, tuple(jnp.zeros_like(router_bias) for router_bias in router_biases))
+
+
 def _apply_stage_qb_betas(stage: TransformerPipelineStage, qb_betas: jax.Array) -> TransformerPipelineStage:
     new_blocks = list(stage.blocks)
     for local_index, block in enumerate(stage.blocks):
@@ -2631,13 +2665,19 @@ def _make_train_step(
                 )
                 return this_loss
 
-            microbatch_grad = functools.partial(jax.value_and_grad(microbatch_loss_fn), qb_params)
+            pipeline_params, fixed_router_biases = _detach_router_biases(qb_params)
+
+            def fixed_router_microbatch_loss_fn(params, this_microbatch):
+                return microbatch_loss_fn(_replace_router_biases(params, fixed_router_biases), this_microbatch)
+
+            microbatch_grad = functools.partial(jax.value_and_grad(fixed_router_microbatch_loss_fn), pipeline_params)
             loss_sum, grads_sum = _require_jaxpp().treduce(
                 microbatch_grad,
                 batch,
                 schedule=pipeline_schedule,
                 operation=(_require_jaxpp().Add, _require_jaxpp().Add),
             )
+            grads_sum = _restore_zero_router_bias_gradients(grads_sum, fixed_router_biases)
             scale = jnp.asarray(1.0 / pipeline.microbatches, dtype=loss_sum.dtype)
             loss = loss_sum * scale
             grads = jax.tree.map(lambda grad: grad * scale, grads_sum)

@@ -2861,3 +2861,33 @@ author: dlwh
   - The accepted `0.2%` ceiling for approximate NCCL_EP comparisons was not exercised; exact loss and gradient checks remain required.
 - Next action:
   - Babysit r11g parent `/dlwh/iris-run-job-20260724-195722`, which changes only `XLA_FLAGS` to include `--xla_gpu_shard_autotuning=false`. Require stage compilation to clear, capture the pre-`ep_prepare` fingerprints and padded-EM result, and produce finite training metrics before any L24 comparison.
+
+### 2026-07-24 13:10 PDT - exact deployed XLA source confirms the MPMD autotuning deadlock
+- Hypothesis: The sharded-autotuner behavior observed in r11f is present in the exact OpenXLA revision embedded by deployed JAX/JAXLIB `0.10.1`, rather than only current OpenXLA main.
+- Evidence:
+  - JAX tag `jax-v0.10.1` at `619764c15117fbefc4ba13ab941871cb514c23f6` pins OpenXLA commit [`9b635916ecc6`](https://github.com/openxla/xla/commit/9b635916ecc6df6efee62d8e4b0c7ef87ef84d69).
+  - In that exact OpenXLA revision, `DebugOptions` initializes `xla_gpu_shard_autotuning=true`, and `AutotunerPass::RunImpl` enters the multiprocess overload whenever the flag is enabled and `process_count > 1`.
+  - The multiprocess `Autotuner::Autotune` implementation builds each key from the complete HLO module fingerprint, backend fingerprint, and shard index. It publishes its local key and calls `kv_store.Get(..., absl::Hours(24))` for every other process's key.
+- Result:
+  - The deployed source behavior exactly matches the r11f native stacks and idle counters. Different JaxPP MPMD stages compile different module fingerprints while sharing one compiler process group, so no stage can publish the keys expected by the others.
+  - The r11g control remains narrowly scoped: `--xla_gpu_shard_autotuning=false` bypasses only the multiprocess partition/join overload and preserves local online autotuning.
+- Interpretation:
+  - Confidence is high that r11f is a deterministic OpenXLA/JaxPP MPMD contract mismatch, not merely slow compilation.
+  - No numerical acceptance policy is involved in this fix.
+- Next action:
+  - Require r11g to clear first-stage compilation before attributing any later failure to NCCL_EP routing or transport.
+
+### 2026-07-24 13:10 PDT - conservative automatic clustering exposes disconnected router-bias gradients
+- Hypothesis: Enabling JaxPP's conservative loop clustering on the tiny automatic standard schedule will reject the exact equations that become a free task variable when the fallback appends them to the final task.
+- Commit Hash: `08f169803e` (`[grug] Localize automatic JaxPP inputs`).
+- Command: matched automatic `std_1f1b`, L4/d2560/e8/top-k1/seq128/b32/m4, four H100x8 stages, ring MoE, two steps, with `JAXPP_CONSERVATIVE_LOOP_CLUSTERING=true`. Parent `/dlwh/iris-run-job-20260724-194656`; child `/dlwh/iris-run-job-20260724-194656/grug-train-jaxpp-auto-localinput-std-conservative-l4-e8-b32-s128-r2-20260724-1248`.
+- Results:
+  - All workers completed setup. Rank 0 completed both tracing passes and reached JaxPP loop-body clustering before XLA compilation.
+  - Conservative clustering failed in `jaxpp/core.py:1149` with `AssertionError: Failed on loop body jaxpr`. The complete unclustered tail was four scalar-zero `broadcast_in_dim` equations producing `f32[8]`, followed by four `add` equations from JaxPP's additive tree reduction.
+  - These four leaves are the L4 model's router-bias gradients. `_apply_qb_betas` replaces each trainable router bias with its pending QB-derived value inside the differentiated loss, disconnecting the original leaves and making their gradients exact constant zeros with no pipeline marker ownership.
+  - No loss, duration, throughput, or MFU was produced. Parent and child are terminal failed with no running or pending resources.
+- Interpretation:
+  - With conservative clustering disabled, JaxPP appends the disconnected tail to the last task and later fails on a free variable; with it enabled, the same defect is reported at transformation time. Input placement is no longer the blocker.
+  - The scoped fix removes router-bias leaves from the differentiated pipeline tree, reconstructs the fixed QB biases inside the microbatch loss, and restores exact zero router-bias gradients after `treduce`. It must preserve forward values and every non-router gradient exactly.
+- Next action:
+  - Validate the focused CPU regression test, then launch the smallest matched automatic `std_1f1b` GPU gate. Do not test eager or zero-bubble until standard produces finite training metrics.
