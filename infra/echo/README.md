@@ -37,10 +37,14 @@ reaches `echo-api`. The direct-SQL path does not — Cloud SQL database group au
 is documented for direct members only — so principals that need the CLIs must be direct
 members of `echo@openathena.ai`.
 
-Tables live in `schema.py` and are applied with `migrate.py`, which grants the IAM users;
-run it after `pulumi up` on a fresh database. `migrate.py` connects as `pulumi_db_admin`
-(the pre-existing marin-metadata system role that owns the tables and can create
-extensions), reading its password from Secret Manager via the API.
+Tables live in `schema.py` and are applied by `migrate.py`, which also grants the IAM
+users. `pulumi up` runs it as a final step (a `command.local.Command` that depends on the
+database users and re-runs when a migration file changes), so a normal deploy needs no
+separate migrate step — the machine running `pulumi up` just needs gcloud ADC with
+connector and Secret Manager access. Run `migrate.py` by hand only to apply migrations
+outside a deploy. It connects as `pulumi_db_admin` (the pre-existing marin-metadata system
+role that owns the tables and can create extensions), reading its password from Secret
+Manager via the API.
 
 ## Operations
 

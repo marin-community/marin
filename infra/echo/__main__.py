@@ -14,10 +14,17 @@ token, so no database password exists. Table grants are applied by migrate.py (s
 README.md); this program owns the users and their login IAM roles.
 """
 
+import hashlib
+from pathlib import Path
+
 import pulumi
+import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
+
+ECHO_DIR = Path(__file__).parent
+MIGRATIONS_DIR = ECHO_DIR / "migrations"
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -56,7 +63,7 @@ def main() -> None:
 
     # IAM database users. The group is added once; its members inherit its grants without
     # per-user registration. The sync SA is created by the job component below.
-    gcp.sql.User(
+    agents_group = gcp.sql.User(
         "agents-group",
         name=AGENTS_GROUP,
         instance=INSTANCE,
@@ -138,21 +145,40 @@ def main() -> None:
     )
 
     # The service SAs exist only after their components; register them as IAM database users.
+    db_users = [agents_group]
     for resource_name, db_user, component in (("sync-sa", SYNC_DB_USER, sync), ("api-sa", API_DB_USER, api)):
-        gcp.sql.User(
-            resource_name,
-            name=db_user,
-            instance=INSTANCE,
-            project=PROJECT,
-            type="CLOUD_IAM_SERVICE_ACCOUNT",
-            opts=pulumi.ResourceOptions.merge(
-                child,
-                pulumi.ResourceOptions(
-                    depends_on=[component],
-                    import_=f"{PROJECT}/{INSTANCE}//{db_user}" if adopt else None,
+        db_users.append(
+            gcp.sql.User(
+                resource_name,
+                name=db_user,
+                instance=INSTANCE,
+                project=PROJECT,
+                type="CLOUD_IAM_SERVICE_ACCOUNT",
+                opts=pulumi.ResourceOptions.merge(
+                    child,
+                    pulumi.ResourceOptions(
+                        depends_on=[component],
+                        import_=f"{PROJECT}/{INSTANCE}//{db_user}" if adopt else None,
+                    ),
                 ),
-            ),
+            )
         )
+
+    # Apply pending migrations as the last step of `pulumi up`: migrate.py creates the tables
+    # and grants the IAM users above (so it must follow them). It is idempotent — it skips
+    # migrations recorded in schema_migrations — and re-runs only when a migration file
+    # changes, keyed by their combined hash. Runs on the operator's machine as part of the
+    # deploy, so that host needs gcloud ADC with connector + secret access (same as pulumi).
+    migration_files = sorted(MIGRATIONS_DIR.glob("m[0-9]*.py"))
+    migration_hash = hashlib.sha256(b"".join(f.read_bytes() for f in migration_files)).hexdigest()
+    command.local.Command(
+        "migrate",
+        create=str(ECHO_DIR / "migrate.py"),
+        triggers=[migration_hash],
+        # The ADC default quota project may lack the SQL Admin / Secret Manager APIs; pin it.
+        environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
+        opts=pulumi.ResourceOptions(depends_on=db_users),
+    )
 
     pulumi.export("connection_name", CONNECTION_NAME)
     pulumi.export("database", database.name)
