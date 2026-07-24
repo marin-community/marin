@@ -236,13 +236,7 @@ def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
 
 
 def _probe_transition_patch(live: dict, desired: dict) -> list[dict]:
-    """Replace probes whose handler type changes across a Deployment apply.
-
-    Kubernetes strategic merge combines the old and new probe maps before
-    validation. A TCP-to-HTTP transition can therefore contain both handlers
-    and fail admission. Replacing the complete live probe first makes the
-    subsequent declarative apply unambiguous.
-    """
+    """Return patches that replace probes whose handler type changed."""
     live_containers = live["spec"]["template"]["spec"]["containers"]
     desired_containers = desired["spec"]["template"]["spec"]["containers"]
     desired_by_name = {container["name"]: container for container in desired_containers}
@@ -281,12 +275,12 @@ def _reconcile_probe_handlers(cfg: FinelogConfig, manifest: str) -> None:
         f"deployment/{cfg.name}",
         "-n",
         cfg.deployment.k8s.namespace,
+        "--ignore-not-found",
         "-o",
         "json",
-        check=False,
         capture_output=True,
     )
-    if result.returncode != 0:
+    if not result.stdout.strip():
         return
     patch = _probe_transition_patch(json.loads(result.stdout), desired)
     if not patch:
