@@ -47,6 +47,7 @@ _XLA_CACHE_SUBDIR = "xla"
 _CHAT_TEMPLATE_ARG = "--chat-template"
 _CHAT_TEMPLATE_DIGEST_ARG = "--chat-template-sha256"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+_CACHE_ALL_ENTRIES = "-1"
 
 _Digest = Annotated[str, Field(pattern=_DIGEST_PATTERN)]
 _ArchiveSize = Annotated[int, Field(strict=True, ge=0, le=_MAX_ARCHIVE_BYTES)]
@@ -156,20 +157,20 @@ def _stable_compile_cli_args(extra_cli_args: tuple[str, ...]) -> tuple[str, ...]
     while index < len(extra_cli_args):
         argument = extra_cli_args[index]
         if argument == _CHAT_TEMPLATE_ARG and index + 1 < len(extra_cli_args):
-            stable_args.extend((_CHAT_TEMPLATE_DIGEST_ARG, _stable_chat_template(extra_cli_args[index + 1])))
+            stable_args.extend((_CHAT_TEMPLATE_DIGEST_ARG, _chat_template_cache_key(extra_cli_args[index + 1])))
             index += 2
             continue
         chat_template_prefix = f"{_CHAT_TEMPLATE_ARG}="
         if argument.startswith(chat_template_prefix):
             template = argument.removeprefix(chat_template_prefix)
-            stable_args.append(f"{_CHAT_TEMPLATE_DIGEST_ARG}={_stable_chat_template(template)}")
+            stable_args.append(f"{_CHAT_TEMPLATE_DIGEST_ARG}={_chat_template_cache_key(template)}")
         else:
             stable_args.append(argument)
         index += 1
     return tuple(stable_args)
 
 
-def _stable_chat_template(template: str) -> str:
+def _chat_template_cache_key(template: str) -> str:
     path = Path(template)
     return sha256_for_path(path) if path.is_file() else template
 
@@ -432,7 +433,7 @@ def _validate_manifest(
 
 
 class VllmCompilationCache:
-    """Compilation-cache lifecycle owned by a vLLM server handle."""
+    """Restore, publish, and remove compiler cache files for one vLLM process."""
 
     def __init__(
         self,
@@ -475,8 +476,8 @@ class VllmCompilationCache:
                 "JAX_COMPILATION_CACHE_DIR": str(local_cache_dir / _XLA_CACHE_SUBDIR),
                 "VLLM_XLA_CACHE_PATH": str(local_cache_dir / _XLA_CACHE_SUBDIR),
                 "JAX_ENABLE_COMPILATION_CACHE": "1",
-                "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": "-1",
-                "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "-1",
+                "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": _CACHE_ALL_ENTRIES,
+                "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": _CACHE_ALL_ENTRIES,
                 "VLLM_CACHE_ROOT": str(local_cache_dir / "vllm"),
                 "TORCHINDUCTOR_CACHE_DIR": str(local_cache_dir / "torchinductor"),
                 "TRITON_CACHE_DIR": str(local_cache_dir / "triton"),
@@ -551,7 +552,6 @@ class VllmCompilationCache:
                     result.reason or "unknown transfer failure",
                 )
                 return
-            self._restored_sha256 = archive.sha256
             logger.info(
                 "Published vLLM compilation cache key=%s entries=%d source_bytes=%d " "archive_bytes=%d duration=%.1fs",
                 managed.cache_key,

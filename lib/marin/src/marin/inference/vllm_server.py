@@ -601,7 +601,6 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("MODEL_IMPL_TYPE", "vllm"),
     ("TPU_MIN_LOG_LEVEL", "3"),
     ("TPU_STDERR_LOG_LEVEL", "3"),
-    ("JAX_ENABLE_COMPILATION_CACHE", "1"),
 )
 
 
