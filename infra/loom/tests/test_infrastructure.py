@@ -57,7 +57,7 @@ def deployment_config() -> DeploymentConfig:
         domain="loom.example.com",
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
-        source_path="/tmp/loom-source",
+        build_context="/tmp/loom-source",
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",
@@ -130,7 +130,7 @@ def test_pulumi_config_defaults_to_loom_repository_head(monkeypatch: pytest.Monk
     )
 
     try:
-        assert DeploymentConfig.from_pulumi().source_path == REPOSITORY_URL
+        assert DeploymentConfig.from_pulumi().build_context == REPOSITORY_URL
     finally:
         pulumi.runtime.set_all_config({})
 

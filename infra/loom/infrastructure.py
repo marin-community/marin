@@ -285,7 +285,7 @@ class DeploymentConfig:
     domain: str
     operator_cidr: str
     dns_zone_id: str
-    source_path: str
+    build_context: str
     network: str
     instance_name: str
     vm_service_account_name: str
@@ -369,7 +369,7 @@ class DeploymentConfig:
             domain=config.require("domain"),
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
-            source_path=source,
+            build_context=source,
             network=config.require("network"),
             instance_name=config.require("instanceName"),
             vm_service_account_name=config.require("vmServiceAccountName"),
@@ -555,7 +555,7 @@ def _create_image(
     image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
     image = docker_build.Image(
         "loom-release-image",
-        context=docker_build.BuildContextArgs(location=config.source_path),
+        context=docker_build.BuildContextArgs(location=config.build_context),
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
