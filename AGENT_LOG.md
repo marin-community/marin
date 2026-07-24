@@ -116,3 +116,32 @@ CAVEAT: EP4 tiny model -> backward-scatter is a small step fraction, so +0.25pp 
 operating point; rav's live EP64 signal (~20.6% gather-dispatch -> 25.4% custom, +~4.9pp) is the scale-up.
 Loss 0.04 apart = known independent-run RNG divergence (baseline saw 0.064 gather-vs-scatter); kernel test
 proves grad parity at 1e-5, so this is not a numerics bug.
+
+## Check-in 23:42 UTC — RANKING of candidate pool + tripwire
+Tripwire: rav ACTIVE, not idle — moved off the adjoint to /rav/ep64-batched-expert-gemms-30-v2 (running),
+i.e. he's now on the per-local-expert GEMM/leg batching (the secondary item I was told to leave to a peer).
+No trigger to launch my rack A/B (not idle >=45m; his runs are progressing, not just dying). Defer stands.
+
+RANKING (contribution >=1pp toward LOCKED 25%, preserving fidelity; post-adjoint a2a legs = 26-29% of step):
+1. **1a Lock the adjoint (9/10)** — the win is already demonstrated (rav live 25.4% grad-only; my HLO scatter 544->0,
+   1e-5 grad parity, EP4 smoke +0.25pp e2e). A matched 120-step A/B + drop fractions is the highest-value,
+   most-measurable, lowest-risk action; it converts a strong signal into the locked result the record lacks.
+2. **4 Rotation ppermute overlap (5/10)** — structurally overlaps the now-dominant SendRecv a2a legs (scheduler-
+   independent, the only kind that works here since LHS/PGLE are sealed null); uncovered by rav's own rotation work;
+   CPU parity passing. High ceiling (~+3-4pp if 50% of the 29% comm overlaps) but risky to land under remat+scan.
+3. **2 Transport bake-off (5/10)** — settles fixed+gather vs ragged(one-shot off) vs ring_cute at the real
+   e256/EP64 shape and gates MXFP8(5); post-adjoint the transport IS the bottleneck so the choice is worth pp,
+   but its own delta may return parity and d2 is submission-blocked (coordinator-relayed).
+4. **5 MXFP8 (4/10)** — attacks the ~70% compute majority (measured 1.308x within-EP8, smaller arena eases EP OOM);
+   discounted by the microbench-overstates-e2e lesson, +0.11-0.21% held-out loss (fidelity trade), and #7079 unmerged.
+5. **4b Token-chunk pipelining (4/10)** — the ONLY overlap mechanism with a landed win here (FSDP expert chunk-2
+   21.8->22.7, +0.9pp); lower ceiling than rotation but more proven; fallback if 4 fails.
+6. **6 fa4-lse primal output / #7507 (4/10)** — est +~1pp, independent of the a2a budget so it stacks; unstarted,
+   moderate effort; competes on EV with the comm levers.
+7. **1c Overlap reduce-scatter.10 (3/10)** — REAL but my HLO check shows it needs full FSDP weight sharding to even
+   appear; it's the grad RS whose next-layer overlap is blocked by the layer scan (#7507), needs manual structural
+   overlap (LHS/PGLE null). Belongs to the overlap/#7507 thread, not the adjoint; uncertain standalone pp.
+8. **1b Eliminate stray unstack (1/10)** — my HLO check: all 18 unstack ops are in combine/ and lower to slice+bitcast
+   (views, ~free), from jnp.stack(output_parts) + its backward transpose. Cosmetic; not worth a fix.
+9. **3 TE-at-tip NCCL_EP (1/10)** — d3 trending confident-negative: #3231's collective-stream pin deterministically
+   crashes 64-GPU first exec; stripped, tip==old wheel ~17% vs 18% anchor. Not a path to 25%; value is the NVIDIA report.
