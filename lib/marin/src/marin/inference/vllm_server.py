@@ -278,12 +278,12 @@ class VllmServerHandle:
     process: subprocess.Popen[str]
     process_group_id: int | None
     log_dir: str
+    # Owns compiler cache files that must remain present until the process group exits.
+    compilation_cache: VllmCompilationCache
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
     # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
     metrics_forwarder: VllmMetricsForwarder | None = None
-    # Owns compiler cache files that must remain present until the process group exits.
-    compilation_cache: VllmCompilationCache | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
@@ -309,14 +309,13 @@ class VllmServerHandle:
         if self.log_pump is not None:
             self.log_pump.join(timeout=timeout_seconds)
             self.log_pump.close()
-        if self.compilation_cache is not None:
-            if self._process_group_exists():
-                logger.warning(
-                    "Keeping vLLM compilation cache because process group %s still exists",
-                    self.process_group_id,
-                )
-            else:
-                self.compilation_cache.close()
+        if self._process_group_exists():
+            logger.warning(
+                "Keeping vLLM compilation cache because process group %s still exists",
+                self.process_group_id,
+            )
+        else:
+            self.compilation_cache.close()
 
     def _signal(self, sig: signal.Signals) -> None:
         if self.process_group_id is not None:

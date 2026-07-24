@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
         env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
     compilation_cache = (
-        VllmCompilationCacheMode.DISABLED if args.local_cache_dir is not None else VllmCompilationCacheMode.MANAGED
+        VllmCompilationCacheMode.CALLER_MANAGED if args.local_cache_dir is not None else VllmCompilationCacheMode.MANAGED
     )
 
     if args.local:

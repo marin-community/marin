@@ -84,13 +84,13 @@ def _assert_compiler_cache_entries(cache: VllmCompilationCache, expected: dict[s
         assert entry.read_bytes() == payload
 
 
-def test_disabled_cache_preserves_caller_environment(local_marin_prefix: Path) -> None:
+def test_caller_managed_cache_preserves_environment(local_marin_prefix: Path) -> None:
     existing = {
         "JAX_COMPILATION_CACHE_DIR": "/caller/xla",
         "VLLM_CACHE_ROOT": "/caller/vllm",
     }
 
-    cache = _prepare_cache(environment=existing, mode=VllmCompilationCacheMode.DISABLED)
+    cache = _prepare_cache(environment=existing, mode=VllmCompilationCacheMode.CALLER_MANAGED)
     assert cache.environment() == existing
     cache.publish()
     cache.close()

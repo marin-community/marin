@@ -5,7 +5,6 @@
 
 import dataclasses
 import hashlib
-import json
 import logging
 import multiprocessing
 import shutil
@@ -16,11 +15,12 @@ import zipfile
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from rigging.filesystem import StoragePath, marin_temp_bucket
 
+from marin.execution.fingerprint import canonical_json
 from marin.inference.config import VllmCompilationCacheMode
 from marin.profiling.trace_summary import sha256_for_path
 
@@ -174,10 +174,6 @@ def _stable_chat_template(template: str) -> str:
     return sha256_for_path(path) if path.is_file() else template
 
 
-def _canonical_model_json(model: BaseModel) -> str:
-    return json.dumps(model.model_dump(mode="json", exclude_none=True), sort_keys=True, separators=(",", ":"))
-
-
 def _is_transient(path: Path) -> bool:
     return any(part.endswith(_TRANSIENT_SUFFIXES) for part in path.parts)
 
@@ -325,7 +321,7 @@ def _restore_transfer_worker(remote_cache_dir: str, archive_path: str, result_pa
             )
             return
         latest = _read_metadata(latest_path, _LatestPointer)
-        generation = remote / f"{GENERATIONS_DIR}/{latest.generation_id}"
+        generation = remote / GENERATIONS_DIR / latest.generation_id
         manifest_path = generation / MANIFEST_FILENAME
         remote_archive = generation / ARCHIVE_FILENAME
         if not manifest_path.exists() or not remote_archive.exists():
@@ -359,7 +355,7 @@ def _publish_transfer_worker(
 ) -> None:
     try:
         remote = StoragePath(remote_cache_dir)
-        generation = remote / f"{GENERATIONS_DIR}/{generation_id}"
+        generation = remote / GENERATIONS_DIR / generation_id
         generation.mkdirs()
         (generation / ARCHIVE_FILENAME).upload_from(archive_path)
         (generation / MANIFEST_FILENAME).write_text(manifest_json)
@@ -377,7 +373,7 @@ def _read_transfer_result(path: Path) -> _TransferResult:
 
 def _run_transfer(
     target: Callable[..., None],
-    args: tuple[Any, ...],
+    args: tuple[str, ...],
     result_path: Path,
     remote_cache_dir: str,
     *,
@@ -459,18 +455,19 @@ class VllmCompilationCache:
         environment: dict[str, str],
         mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
     ) -> "VllmCompilationCache":
-        """Create and restore a managed cache, or preserve the caller environment when disabled."""
+        """Create and restore a managed cache, or preserve caller-managed cache paths."""
         child_environment = dict(environment)
-        if mode is VllmCompilationCacheMode.DISABLED:
+        if mode is VllmCompilationCacheMode.CALLER_MANAGED:
             return cls(environment=child_environment)
 
         local_temp_dir = Path(tempfile.mkdtemp(prefix="vllm_compilation_cache_"))
         local_cache_dir = local_temp_dir / "cache"
         local_cache_dir.mkdir()
         identity = _CacheIdentity(launcher=launcher_identity, compile=compile_identity)
-        cache_key = hashlib.sha256(_canonical_model_json(identity).encode()).hexdigest()
+        identity_json = canonical_json(identity.model_dump(mode="json"))
+        cache_key = hashlib.sha256(identity_json.encode()).hexdigest()
         remote_cache_dir = str(
-            StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{ARCHIVE_SCHEMA_VERSION}/{cache_key}"
+            StoragePath(marin_temp_bucket(_CACHE_TTL_DAYS, _CACHE_PREFIX)) / f"v{ARCHIVE_SCHEMA_VERSION}" / cache_key
         )
 
         child_environment.update(

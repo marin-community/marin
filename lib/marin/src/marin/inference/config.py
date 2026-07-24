@@ -35,7 +35,7 @@ class VllmSource(StrEnum):
 
 class VllmCompilationCacheMode(StrEnum):
     MANAGED = "managed"
-    DISABLED = "disabled"
+    CALLER_MANAGED = "caller_managed"
 
 
 @dataclass(frozen=True)
