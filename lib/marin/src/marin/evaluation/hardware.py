@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fray.types import TPU_HBM_BYTES_PER_CHIP, get_tpu_topology, tpu_family
+from fray.types import tpu_family, tpu_hbm_capacity_bytes
 
 from marin.evaluation.model_config import ModelConfig
 
@@ -108,10 +108,9 @@ def default_platform(model: ModelConfig) -> Platform:
 
 def _select_tpu(hbm_gb: int, policy: HardwarePolicy) -> AcceleratorChoice:
     for name in policy.tpu_slices:
-        topology = get_tpu_topology(name)
         family = tpu_family(name)
-        per_chip_gb = TPU_HBM_BYTES_PER_CHIP[family] / _BYTES_PER_GIB
-        if topology.chip_count * per_chip_gb * policy.utilization >= hbm_gb:
+        capacity_gb = tpu_hbm_capacity_bytes(name) / _BYTES_PER_GIB
+        if capacity_gb * policy.utilization >= hbm_gb:
             return AcceleratorChoice(
                 platform=Platform.TPU,
                 tpu_type=name,
@@ -157,7 +156,7 @@ def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
             gpu_count=int(match["count"]),
             target_cluster=profile.cluster,
         )
-    get_tpu_topology(text)
+    tpu_hbm_capacity_bytes(text)
     if text not in policy.tpu_slices:
         raise ValueError(
             f"accelerator override {text!r} is not a servable single-host TPU; choose one of "

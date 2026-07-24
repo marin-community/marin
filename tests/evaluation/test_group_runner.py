@@ -8,8 +8,12 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from marin.evaluation.evalchemy import EvalchemyRunConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.model_config import GenerationConfig, ModelConfig
 from marin.evaluation.records import EvalRef, HardwareRef, ModelRef, Provenance, RunStatus
 from marin.evaluation.runner import (
+    EvalchemyRunner,
     EvalRunner,
     Evaluation,
     EvaluationBatch,
@@ -93,6 +97,36 @@ def _batch(*runners: EvalRunner) -> EvaluationBatch:
         ),
         provenance=Provenance(git_sha="abc", eval_image="image", launch_host="host"),
     )
+
+
+def test_evalchemy_model_generation_overrides_merge_with_suite_settings():
+    runner = EvalchemyRunner(
+        EvalchemyRunConfig(
+            name="eval",
+            tasks=(EvalTaskConfig("task", 0),),
+            max_gen_toks=512,
+            extra_gen_kwargs={"temperature": "0", "repetition_penalty": "1.0"},
+        )
+    )
+    model = ModelConfig(
+        name="model",
+        location="org/model",
+        generation=GenerationConfig(
+            max_gen_toks=1024,
+            extra_gen_kwargs={"repetition_penalty": "1.1", "skip_special_tokens": "false"},
+        ),
+    )
+
+    bound = runner.bind(model, limit=3, region="us-central1")
+
+    assert bound.config.max_gen_toks == 1024
+    assert bound.config.max_eval_instances == 3
+    assert bound.config.runtime.region == "us-central1"
+    assert bound.config.extra_gen_kwargs == {
+        "temperature": "0",
+        "repetition_penalty": "1.1",
+        "skip_special_tokens": "false",
+    }
 
 
 def _patch_runtime(monkeypatch, records: list, session: _Session | None = None):

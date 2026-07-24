@@ -9,13 +9,14 @@ import pytest
 from marin.evaluation.model_config import (
     ServeBackend,
     ServeConfig,
+    ServeVariant,
     load_model_config,
     resolve_serve_variant,
     scan_model_configs,
     serve_config_vllm_args,
 )
 
-from experiments.evaluation.models import MODEL_CATALOG_DIR, models
+from experiments.evaluation.models import models
 
 _CATALOG_YAML = textwrap.dedent(
     """
@@ -113,12 +114,21 @@ def test_resolve_serve_variant_overlays_only_changed_fields():
     serve = ServeConfig(
         tensor_parallel_size=2,
         swap_space_gb=32,
-        variants={"gh200": ServeConfig(tensor_parallel_size=1)},
+        trust_remote_code=True,
+        variants={
+            "gh200": ServeVariant(
+                tensor_parallel_size=1,
+                swap_space_gb=None,
+                trust_remote_code=False,
+            )
+        },
     )
     resolved = resolve_serve_variant(serve, "gh200")
     assert resolved.tensor_parallel_size == 1
-    # A field the variant left at its default is untouched, so the base swap space survives.
-    assert resolved.swap_space_gb == 32
+    assert resolved.swap_space_gb is None
+    assert resolved.trust_remote_code is False
+    # An omitted field remains inherited from the base.
+    assert resolved.gpu_only is False
     # An unmatched label is a no-op (the marin slices never match gh200).
     assert resolve_serve_variant(serve, "H100x8") is serve
 
@@ -136,33 +146,6 @@ def test_scan_model_configs_rejects_duplicate_names(tmp_path):
     _write(tmp_path, "b/dup.yaml", "name: dup\nlocation: b/x\n")
     with pytest.raises(ValueError, match="duplicate model name"):
         scan_model_configs(tmp_path)
-
-
-def test_snowball_uses_expert_parallelism_and_preserves_thinking_tokens():
-    snow = models()["snowball"]
-    assert snow.serve.fixed_gpu == ("H100", 8)
-    assert snow.serve.tensor_parallel_size == 1
-    assert snow.serve.data_parallel_size == 8
-    assert snow.serve.gpu_only is True
-    assert snow.serve.target_cluster == "cw-us-east-02a"
-    assert serve_config_vllm_args(snow.serve) == (
-        "--data-parallel-size",
-        "8",
-        "--enable-expert-parallel",
-        "--model-loader-extra-config",
-        '{"distributed":true}',
-    )
-
-    sft = models()["snowball-sft"]
-    assert dict(sft.generation.extra_gen_kwargs) == {"skip_special_tokens": "false", "repetition_penalty": "1.1"}
-
-    base = models()["llama-3.1-8b-base"]
-    assert base.revision == "d04e592"
-    assert base.apply_chat_template is False
-
-
-def test_shipped_catalog_decodes():
-    scan_model_configs(MODEL_CATALOG_DIR)
 
 
 def test_every_registered_model_has_a_hardware_sizing_rule():

@@ -114,9 +114,16 @@ class EvalchemyRunner:
             config=replace(
                 self.config,
                 apply_chat_template=model.apply_chat_template,
-                max_gen_toks=model.generation.max_gen_toks or self.config.max_gen_toks,
+                max_gen_toks=(
+                    model.generation.max_gen_toks
+                    if model.generation.max_gen_toks is not None
+                    else self.config.max_gen_toks
+                ),
                 max_eval_instances=limit,
-                extra_gen_kwargs=dict(model.generation.extra_gen_kwargs),
+                extra_gen_kwargs={
+                    **self.config.extra_gen_kwargs,
+                    **model.generation.extra_gen_kwargs,
+                },
                 runtime=replace(self.config.runtime, region=region),
             ),
         )
@@ -125,9 +132,7 @@ class EvalchemyRunner:
         return EvalRef(
             name=self.name,
             mechanism=self.mechanism,
-            tasks=tuple(
-                EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks
-            ),
+            tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
         )
 
     def run(
@@ -165,6 +170,7 @@ class HarborRunner:
 
     @property
     def task_names(self) -> tuple[str, ...]:
+        """Return no static tasks because Harbor resolves them from its dataset."""
         return ()
 
     def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "HarborRunner":

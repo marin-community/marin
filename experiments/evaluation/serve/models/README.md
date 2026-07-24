@@ -13,7 +13,7 @@ name: qwen3-32b                 # registry key (must be unique across catalog + 
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path
-apply_chat_template: true       # false selects the NLP (lm-eval) suite instead of the chat benchmarks
+apply_chat_template: true       # whether Evalchemy formats requests with the tokenizer chat template
 
 serve:                          # ServeConfig -> vllm serve
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
@@ -47,6 +47,6 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
 ```
 
-Every explicit `serve` value wins over what `auto_serve_overrides` would derive from the model's
-`config.json`. `variants` carry per-hardware overrides; they apply
-only when the served slice's label matches (the marin H100/GB200/TPU slices do not match `gh200`).
+`auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
+`max_model_len` to the model's native limit. `variants` carry per-hardware overrides; they apply only
+when the served slice's label matches (the Marin H100/GB200/TPU slices do not match `gh200`).

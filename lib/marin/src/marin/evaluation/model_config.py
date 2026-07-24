@@ -22,6 +22,36 @@ class ServeBackend(StrEnum):
     LEVANTER = "levanter"
 
 
+class VariantUnset(StrEnum):
+    """Sentinel distinguishing an omitted variant field from an explicit default value."""
+
+    VALUE = "__unset__"
+
+
+@dataclass(frozen=True)
+class ServeVariant:
+    """Fields a hardware variant overlays onto its model's base serve configuration."""
+
+    backend: ServeBackend | VariantUnset = VariantUnset.VALUE
+    hbm_gb: int | None | VariantUnset = VariantUnset.VALUE
+    fixed_gpu: tuple[str, int] | None | VariantUnset = VariantUnset.VALUE
+    gpu_only: bool | VariantUnset = VariantUnset.VALUE
+    tensor_parallel_size: int | None | VariantUnset = VariantUnset.VALUE
+    data_parallel_size: int | None | VariantUnset = VariantUnset.VALUE
+    max_model_len: int | None | VariantUnset = VariantUnset.VALUE
+    swap_space_gb: int | None | VariantUnset = VariantUnset.VALUE
+    trust_remote_code: bool | VariantUnset = VariantUnset.VALUE
+    hf_overrides: str | None | VariantUnset = VariantUnset.VALUE
+    limit_mm_per_prompt: str | None | VariantUnset = VariantUnset.VALUE
+    tool_call_parser: str | None | VariantUnset = VariantUnset.VALUE
+    reasoning_parser: str | None | VariantUnset = VariantUnset.VALUE
+    vllm_extra_args: tuple[str, ...] | VariantUnset = VariantUnset.VALUE
+    chat_template: str | None | VariantUnset = VariantUnset.VALUE
+    serve_memory: str | None | VariantUnset = VariantUnset.VALUE
+    target_cluster: str | None | VariantUnset = VariantUnset.VALUE
+    auto_overrides: bool | VariantUnset = VariantUnset.VALUE
+
+
 @dataclass(frozen=True)
 class ServeConfig:
     """How a model is served: its slice budget, parallelism, and vLLM serve knobs.
@@ -31,10 +61,11 @@ class ServeConfig:
     the TPU stack cannot serve (a quantized checkpoint, a fork-only architecture). ``target_cluster``
     names the CoreWeave peer a GPU job routes to.
 
-    vLLM knobs map onto ``vllm serve`` flags through :func:`serve_config_vllm_args`; every explicit
-    value here wins over what ``auto_serve_overrides`` would derive from the model's ``config.json``.
-    ``vllm_extra_args`` is the escape hatch for flags without a typed field. ``variants`` carries
-    per-hardware overrides; :func:`resolve_serve_variant` applies one when the slice label matches.
+    vLLM knobs map onto ``vllm serve`` flags through :func:`serve_config_vllm_args`.
+    ``auto_serve_overrides`` fills unset fields from the model's ``config.json`` and may clamp an
+    explicit context length to the model's native limit. ``vllm_extra_args`` is the escape hatch for
+    flags without a typed field. ``variants`` carries per-hardware overrides;
+    :func:`resolve_serve_variant` applies one when the slice label matches.
     """
 
     backend: ServeBackend = ServeBackend.VLLM
@@ -58,7 +89,7 @@ class ServeConfig:
     must cover the full weight volume or the kernel OOM-kills the server."""
     target_cluster: str | None = None
     auto_overrides: bool = True
-    variants: Mapping[str, ServeConfig] = field(default_factory=dict)
+    variants: Mapping[str, ServeVariant] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,8 +113,8 @@ class ModelConfig:
 
     ``location`` is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory;
     an object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
-    ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` selects the
-    chat benchmarks (a base model with no chat template runs the NLP suite instead).
+    ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` controls
+    whether Evalchemy formats requests with the tokenizer's chat template.
     """
 
     name: str
@@ -140,17 +171,16 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
 def resolve_serve_variant(serve: ServeConfig, hardware_label: str | None) -> ServeConfig:
     """Overlay ``serve.variants[hardware_label]`` onto ``serve`` when the served slice matches.
 
-    Only fields that differ from a fresh :class:`ServeConfig` overlay the base, so a partial variant
-    leaves the other serve settings intact. No matching variant returns ``serve`` unchanged.
+    Omitted fields leave the base value intact. Explicit defaults, including ``false`` and ``null``,
+    replace the base value. No matching variant returns ``serve`` unchanged.
     """
     if hardware_label is None or hardware_label not in serve.variants:
         return serve
     variant = serve.variants[hardware_label]
-    defaults = ServeConfig()
     overrides = {
         f.name: getattr(variant, f.name)
-        for f in fields(ServeConfig)
-        if f.name != "variants" and getattr(variant, f.name) != getattr(defaults, f.name)
+        for f in fields(ServeVariant)
+        if getattr(variant, f.name) is not VariantUnset.VALUE
     }
     return dataclasses.replace(serve, **overrides)
 

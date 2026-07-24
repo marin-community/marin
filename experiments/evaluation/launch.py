@@ -91,7 +91,7 @@ def _endpoint_origin(cluster: str) -> str:
 
 
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
-    """Resolve a region-local records prefix unless the caller supplied one."""
+    """Resolve the configured TPU or CoreWeave records store."""
     if spec.records_prefix:
         return spec.records_prefix
     if accel.target_cluster:

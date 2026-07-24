@@ -286,10 +286,7 @@ def _block_until_timeout(session: LocalInferenceSession, timeout_hours: float) -
 def _block_remote_until_timeout(session: RemoteInferenceSession, timeout_hours: float) -> None:
     deadline = time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
-        for job in session.jobs:
-            status = job.status()
-            if JobStatus.finished(status):
-                raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
+        session.check_alive()
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
