@@ -828,6 +828,28 @@ def _tree_named_shardings_on_mesh(mesh: Mesh, tree):
     return jax.tree.map(leaf_sharding, tree)
 
 
+def _localize_automatic_jaxpp_input_shardings(compiled, mpmd_mesh):
+    """Bind automatic JaxPP runtime inputs to this process's pipeline-stage mesh."""
+    if not mpmd_mesh.jax_mesh.is_multi_process:
+        return compiled
+
+    stage_mesh = mpmd_mesh.lowering_mesh()
+
+    def localize(sharding: NamedSharding) -> NamedSharding:
+        localized = NamedSharding(stage_mesh, sharding.spec)
+        if sharding.memory_kind is not None:
+            localized = localized.with_memory_kind(sharding.memory_kind)
+        return localized
+
+    return dataclasses.replace(
+        compiled,
+        in_info=dataclasses.replace(
+            compiled.in_info,
+            in_shardings=tuple(localize(sharding) for sharding in compiled.in_info.in_shardings),
+        ),
+    )
+
+
 def _mpmd_sharding_like(value, mpmd_mesh, stage_index: int):
     if isinstance(value.sharding, NamedSharding):
         return _require_jaxpp().MpmdSharding(
@@ -3061,6 +3083,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     compiled_pipeline_train_step = train_step.compile(
                         state,
                         pipeline_batch,
+                    )
+                    compiled_pipeline_train_step = _localize_automatic_jaxpp_input_shardings(
+                        compiled_pipeline_train_step,
+                        mpmd_mesh,
                     )
                     args_mpmd_shardings, kwargs_mpmd_shardings = compiled_pipeline_train_step.in_shardings
                     if kwargs_mpmd_shardings:
