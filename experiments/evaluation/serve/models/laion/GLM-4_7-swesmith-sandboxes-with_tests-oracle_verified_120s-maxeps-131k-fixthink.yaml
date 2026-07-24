@@ -1,11 +1,10 @@
 name: glm-4_7-swesmith-sandboxes-with_tests-oracle_verified_120s-maxeps-131k-fixthink
 location: laion/GLM-4_7-swesmith-sandboxes-with_tests-oracle_verified_120s-maxeps-131k-fixthink
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 1
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 1
   tensor_parallel_size: 1
   max_model_len: 32768
   swap_space_gb: 32

@@ -1,18 +1,6 @@
 name: qwen3-30b-a3b-thinking-2507
 location: Qwen/Qwen3-30B-A3B-Thinking-2507
 apply_chat_template: true
-serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 1
-  variants:
-    gh200:
-      tensor_parallel_size: 1
-      max_model_len: 32768
-      swap_space_gb: 32
-      trust_remote_code: true
-      vllm_extra_args:
-      - --enable-prefix-caching
-      - --max-num-seqs
-      - '512'
+resource_hint:
+  gpu:
+    H100: 1

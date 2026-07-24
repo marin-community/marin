@@ -1,30 +1,14 @@
 name: tmax-9b
 location: allenai/tmax-9b
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 4
   tensor_parallel_size: 4
   max_model_len: 32768
   swap_space_gb: 32
   limit_mm_per_prompt: '{"image":0,"video":0}'
-  variants:
-    gh200:
-      tensor_parallel_size: 1
-      max_model_len: 32768
-      trust_remote_code: true
-      limit_mm_per_prompt: '{"image":0,"video":0}'
-      vllm_extra_args:
-      - --enable-prefix-caching
-    gh200-65k:
-      tensor_parallel_size: 1
-      max_model_len: 65536
-      trust_remote_code: true
-      limit_mm_per_prompt: '{"image":0,"video":0}'
-      vllm_extra_args:
-      - --enable-prefix-caching
 agent:
   agent_kwargs:
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

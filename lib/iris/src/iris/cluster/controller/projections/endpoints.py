@@ -108,8 +108,18 @@ _INSERT_OR_REPLACE_ENDPOINT = insert(endpoints_table).prefix_with("OR REPLACE")
 
 # Built once so the SELECT cache key is computed at import time; rebuilding it
 # inside ``add()`` paid a ~50µs cache-key tax per call on burst writes.
-_TASK_STATE_FOR_ENDPOINT = select(tasks_table.c.state).where(
+_TASK_STATE_FOR_ENDPOINT = select(tasks_table.c.state, tasks_table.c.current_attempt_id).where(
     tasks_table.c.task_id == bindparam("task_id", type_=tasks_table.c.task_id.type)
+)
+_REPLACED_TASK_ENDPOINTS = select(endpoints_table.c.endpoint_id).where(
+    endpoints_table.c.task_id == bindparam("task_id", type_=endpoints_table.c.task_id.type),
+    endpoints_table.c.name == bindparam("name"),
+    endpoints_table.c.endpoint_id != bindparam("endpoint_id"),
+)
+_DELETE_REPLACED_TASK_ENDPOINTS = delete(endpoints_table).where(
+    endpoints_table.c.task_id == bindparam("task_id", type_=endpoints_table.c.task_id.type),
+    endpoints_table.c.name == bindparam("name"),
+    endpoints_table.c.endpoint_id != bindparam("endpoint_id"),
 )
 
 
@@ -123,6 +133,7 @@ class AddEndpointOutcome(StrEnum):
     OK = "ok"
     NOT_FOUND = "not_found"
     TERMINAL = "terminal"
+    STALE_ATTEMPT = "stale_attempt"
 
 
 class EndpointsProjection(Projection):
@@ -317,8 +328,9 @@ class EndpointsProjection(Projection):
         self,
         cur: db.Tx,
         endpoint: EndpointRow,
+        attempt_id: int | None = None,
     ) -> AddEndpointOutcome:
-        """Insert ``endpoint`` into the DB and schedule the memory update.
+        """Replace this task's same-name endpoint and schedule the memory update.
 
         Task validation runs inside this transaction so the RPC handler does
         not need a separate read snapshot. Returns:
@@ -326,8 +338,13 @@ class EndpointsProjection(Projection):
         - ``NOT_FOUND`` if the task row does not exist.
         - ``TERMINAL`` if the task is in a terminal state; registration is
           refused so an endpoint isn't served for a task that is already gone.
+        - ``STALE_ATTEMPT`` if a past task attempt tries to register or renew.
         - ``OK`` after a successful upsert; the in-memory index is updated
           via a post-commit hook.
+
+        A task can own only one live registration for a given name. Replacing
+        it in this transaction prevents a retried task's dead address from
+        remaining resolvable alongside the new attempt.
         """
         task_id = endpoint.task_id
         job_id, _ = task_id.require_task()
@@ -336,6 +353,17 @@ class EndpointsProjection(Projection):
             return AddEndpointOutcome.NOT_FOUND
         if int(task_row.state) in TERMINAL_TASK_STATES:
             return AddEndpointOutcome.TERMINAL
+        if attempt_id is not None and int(task_row.current_attempt_id) != attempt_id:
+            return AddEndpointOutcome.STALE_ATTEMPT
+
+        replacement_params = {
+            "task_id": task_id,
+            "name": endpoint.name,
+            "endpoint_id": endpoint.endpoint_id,
+        }
+        replaced_ids = tuple(cur.execute(_REPLACED_TASK_ENDPOINTS, replacement_params).scalars())
+        if replaced_ids:
+            cur.execute(_DELETE_REPLACED_TASK_ENDPOINTS, replacement_params)
 
         cur.execute(
             _INSERT_OR_REPLACE_ENDPOINT,
@@ -353,7 +381,10 @@ class EndpointsProjection(Projection):
             },
         )
 
-        self._pending_mutation(cur).upsert(endpoint)
+        pending = self._pending_mutation(cur)
+        for endpoint_id in replaced_ids:
+            pending.delete(endpoint_id)
+        pending.upsert(endpoint)
         return AddEndpointOutcome.OK
 
     def replace_remote_for_peer(self, cur: db.Tx, peer_id: str, rows: Sequence[EndpointRow]) -> None:

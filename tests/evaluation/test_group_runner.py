@@ -8,13 +8,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
-from marin.evaluation.evalchemy import EvalchemyRunConfig
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.model_config import GenerationConfig, ModelConfig
-from marin.evaluation.records import EvalRef, HardwareRef, ModelRef, Provenance, RunStatus
+from fray.types import JobStatus
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ModelConfig, ResourceHint
+from marin.evaluation.records import EvalRef, Provenance, RunStatus
 from marin.evaluation.runner import (
-    EvalchemyRunner,
-    EvalRunner,
     Evaluation,
     EvaluationBatch,
     EvaluationError,
@@ -22,26 +20,18 @@ from marin.evaluation.runner import (
     EvaluationOutcome,
     run_evaluation_batch,
 )
-from marin.evaluation.serving_config import EvaluationServingConfig, ServeSpec
+from marin.inference.iris import RemoteInferenceStartupError
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import prefix_join
 
 
 @dataclass(frozen=True)
-class _Runner:
+class _Executor:
     name: str
     error: EvaluationError | None = None
     mechanism: str = "test"
-    max_eval_instances: int | None = None
-    task_names: tuple[str, ...] = ()
 
-    def bind(self, model, *, limit, region):
-        return self
-
-    def reference(self) -> EvalRef:
-        return EvalRef(name=self.name, mechanism=self.mechanism)
-
-    def run(self, model, output_dir, env_vars) -> EvaluationOutcome:
+    def __call__(self, model, output_dir, env_vars) -> EvaluationOutcome:
         if self.error is not None:
             raise self.error
         return EvaluationOutcome(metrics={"task": {"acc": 0.5}}, jobs={"eval": f"/{self.name}"})
@@ -57,92 +47,51 @@ class _Session:
     def check_alive(self) -> None:
         return None
 
-    def endpoint_generation(self) -> frozenset[str]:
-        return frozenset({"endpoint"})
 
-    def replacement_ready(self, previous: frozenset[str], timeout: float) -> bool:
-        return False
-
-
-def _evaluation(runner: EvalRunner) -> Evaluation:
+def _evaluation(executor: _Executor) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
-            run_id=f"run-{runner.name}",
+            run_id=f"run-{executor.name}",
             created_at="2026-07-24T00:00:00+00:00",
-            output_dir=f"gs://bucket/{runner.name}/results",
-            eval_ref=runner.reference(),
+            output_dir=f"gs://bucket/{executor.name}/results",
+            eval_ref=EvalRef(name=executor.name, mechanism=executor.mechanism),
         ),
-        runner=runner,
+        executor=executor,
     )
 
 
-def _batch(*runners: EvalRunner) -> EvaluationBatch:
+def _batch(*executors: _Executor) -> EvaluationBatch:
     return EvaluationBatch(
         group_id="group",
         user="tester",
         version=None,
         description=None,
         records_prefix="gs://bucket/runs",
-        serving=EvaluationServingConfig(
-            weights="model",
+        model=ModelConfig(
+            name="model",
+            location="model",
             tokenizer="tokenizer",
-            spec=ServeSpec(tpu_type="v6e-4"),
-            endpoint_origin="https://iris.example",
+            resource_hint=ResourceHint(hbm_gb=3),
         ),
-        evaluations=tuple(_evaluation(runner) for runner in runners),
-        model_ref=ModelRef(name="model", location="model", backend="vllm"),
-        hardware_ref=HardwareRef(
-            platform="tpu",
-            accelerator="v6e-4",
-            region_or_cluster="us-central1",
-        ),
+        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+        capability_origin="https://iris.example",
+        api_model="model",
+        evaluations=tuple(_evaluation(executor) for executor in executors),
         provenance=Provenance(git_sha="abc", eval_image="image", launch_host="host"),
     )
-
-
-def test_evalchemy_model_generation_overrides_merge_with_suite_settings():
-    runner = EvalchemyRunner(
-        EvalchemyRunConfig(
-            name="eval",
-            tasks=(EvalTaskConfig("task", 0),),
-            max_gen_toks=512,
-            extra_gen_kwargs={"temperature": "0", "repetition_penalty": "1.0"},
-        )
-    )
-    model = ModelConfig(
-        name="model",
-        location="org/model",
-        generation=GenerationConfig(
-            max_gen_toks=1024,
-            extra_gen_kwargs={"repetition_penalty": "1.1", "skip_special_tokens": "false"},
-        ),
-    )
-
-    bound = runner.bind(model, limit=3, region="us-central1")
-
-    assert bound.config.max_gen_toks == 1024
-    assert bound.config.max_eval_instances == 3
-    assert bound.config.runtime.region == "us-central1"
-    assert bound.config.extra_gen_kwargs == {
-        "temperature": "0",
-        "repetition_penalty": "1.1",
-        "skip_special_tokens": "false",
-    }
 
 
 def _patch_runtime(monkeypatch, records: list, session: _Session | None = None):
     session = session or _Session()
 
     @contextmanager
-    def inference(*args, **kwargs):
-        assert kwargs["endpoint_origin"] == "https://iris.example"
+    def inference(config):
+        assert config is inference_config
         yield session
 
-    monkeypatch.setattr(
-        EvaluationServingConfig,
-        "resolve",
-        lambda config, env_vars: SimpleNamespace(start=lambda: inference(endpoint_origin=config.endpoint_origin)),
-    )
+    inference_config = object()
+    monkeypatch.setattr("marin.evaluation.runner.inference_config_for_model", lambda *args, **kwargs: inference_config)
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", inference)
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
     monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/group"))
 
@@ -165,7 +114,7 @@ def test_evaluation_failure_is_recorded_and_later_evaluations_continue(monkeypat
     )
 
     with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
-        run_evaluation_batch(_batch(_Runner("one", error=failure), _Runner("two")))
+        run_evaluation_batch(_batch(_Executor("one", error=failure), _Executor("two")))
 
     assert [record.status for record in records] == [RunStatus.FAILED, RunStatus.SUCCEEDED]
     assert records[0].jobs["eval"] == "/failed"
@@ -173,41 +122,35 @@ def test_evaluation_failure_is_recorded_and_later_evaluations_continue(monkeypat
     assert records[1].jobs["eval"] == "/two"
 
 
-def test_evaluation_retries_after_the_inference_endpoint_is_replaced(monkeypatch):
+def test_inference_startup_failure_records_job_even_when_logs_are_unavailable(monkeypatch):
+    class _FailedJob:
+        job_id = "/serve-failed"
+
+        def wait(self, timeout=None, *, raise_on_failure=True):
+            return JobStatus.FAILED
+
+        def status(self):
+            return JobStatus.FAILED
+
+        def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+            raise RuntimeError("log service unavailable")
+
+        def terminate(self) -> None:
+            return None
+
     records = []
+    _patch_runtime(monkeypatch, records)
 
-    class _RestartedSession(_Session):
-        def replacement_ready(self, previous: frozenset[str], timeout: float) -> bool:
-            assert previous == frozenset({"endpoint"})
-            assert timeout > 0
-            return True
+    @contextmanager
+    def failed_inference(config):
+        raise RemoteInferenceStartupError("server failed", jobs=(_FailedJob(),))
+        yield
 
-    class _RetryRunner:
-        name = "one"
-        mechanism = "test"
-        max_eval_instances = None
-        task_names = ()
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", failed_inference)
 
-        def __init__(self) -> None:
-            self.calls = 0
+    with pytest.raises(RuntimeError, match="evaluation batch inference failed"):
+        run_evaluation_batch(_batch(_Executor("one")))
 
-        def bind(self, model, *, limit, region):
-            return self
-
-        def reference(self) -> EvalRef:
-            return EvalRef(name=self.name, mechanism=self.mechanism)
-
-        def run(self, model, output_dir, env_vars) -> EvaluationOutcome:
-            self.calls += 1
-            if self.calls == 1:
-                raise EvaluationError("endpoint unavailable", status=RunStatus.FAILED)
-            return EvaluationOutcome(metrics={"task": {"acc": 0.5}})
-
-    session = _RestartedSession()
-    _patch_runtime(monkeypatch, records, session)
-    runner = _RetryRunner()
-
-    run_evaluation_batch(_batch(runner))
-
-    assert runner.calls == 2
-    assert records[0].status is RunStatus.SUCCEEDED
+    assert records[0].status is RunStatus.INFRA_FAILED
+    assert records[0].jobs["serve"] == "/serve-failed"
+    assert records[0].log_tails["serve"] == ()

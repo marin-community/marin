@@ -6,16 +6,18 @@
 import textwrap
 
 import pytest
+from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import (
+    ModelConfig,
+    ResourceHint,
     ServeBackend,
     ServeConfig,
-    ServeVariant,
     load_model_config,
-    resolve_serve_variant,
     scan_model_configs,
     serve_config_vllm_args,
 )
 
+from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
 _CATALOG_YAML = textwrap.dedent(
@@ -23,8 +25,10 @@ _CATALOG_YAML = textwrap.dedent(
     name: qwen3-32b
     location: Qwen/Qwen3-32B
     apply_chat_template: true
+    resource_hint:
+      gpu:
+        H100: 2
     serve:
-      hbm_gb: 84
       tensor_parallel_size: 2
       max_model_len: 32768
       swap_space_gb: 32
@@ -32,10 +36,6 @@ _CATALOG_YAML = textwrap.dedent(
       tool_call_parser: hermes
       reasoning_parser: qwen3
       vllm_extra_args: ["--enable-prefix-caching"]
-      variants:
-        gh200:
-          tensor_parallel_size: 1
-          vllm_extra_args: ["--enable-prefix-caching", "--max-num-seqs", "512"]
     generation:
       extra_gen_kwargs:
         skip_special_tokens: "false"
@@ -60,9 +60,8 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.serve.backend is ServeBackend.VLLM
     assert config.serve.tensor_parallel_size == 2
     assert config.serve.swap_space_gb == 32
-    # YAML lists decode to tuples, and nested variants retain only their explicit overlays.
+    assert config.resource_hint.gpu == {"H100": 2}
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
-    assert config.serve.variants["gh200"].tensor_parallel_size == 1
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
 
@@ -110,29 +109,6 @@ def test_serve_config_vllm_args_explicit_flag_wins_over_typed_knob():
     assert args[args.index("--swap-space") + 1] == "8"
 
 
-def test_resolve_serve_variant_overlays_only_changed_fields():
-    serve = ServeConfig(
-        tensor_parallel_size=2,
-        swap_space_gb=32,
-        trust_remote_code=True,
-        variants={
-            "gh200": ServeVariant(
-                tensor_parallel_size=1,
-                swap_space_gb=None,
-                trust_remote_code=False,
-            )
-        },
-    )
-    resolved = resolve_serve_variant(serve, "gh200")
-    assert resolved.tensor_parallel_size == 1
-    assert resolved.swap_space_gb is None
-    assert resolved.trust_remote_code is False
-    # An omitted field remains inherited from the base.
-    assert resolved.gpu_only is False
-    # An unmatched label is a no-op (the marin slices never match gh200).
-    assert resolve_serve_variant(serve, "H100x8") is serve
-
-
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):
     _write(tmp_path, "Qwen/Qwen3-8B.yaml", "name: qwen3-8b\nlocation: Qwen/Qwen3-8B\n")
     _write(tmp_path, "org/other.yaml", "name: other\nlocation: org/other\n")
@@ -148,9 +124,41 @@ def test_scan_model_configs_rejects_duplicate_names(tmp_path):
         scan_model_configs(tmp_path)
 
 
-def test_every_registered_model_has_a_hardware_sizing_rule():
+def test_every_registered_model_resolves_on_the_marin_fleet():
     for name, config in models().items():
-        assert config.serve.hbm_gb is not None or config.serve.fixed_gpu is not None, name
+        platform = Platform.GPU if config.resource_hint.gpu else Platform.TPU
+        choice = MARIN_EVAL_HARDWARE.select(config, platform, override=None)
+        if config.resource_hint.gpu:
+            gpu_type = choice.gpu_type
+            assert gpu_type is not None and gpu_type in config.resource_hint.gpu, name
+            assert choice.gpu_count == config.resource_hint.gpu[gpu_type], name
+        else:
+            assert choice.platform is Platform.TPU, name
+
+
+def test_gpu_required_model_rejects_tpu_override():
+    model = ModelConfig(name="gpu-model", location="org/model", resource_hint=ResourceHint(gpu={"H100": 2}))
+
+    with pytest.raises(ValueError, match="requires GPU"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="v6e-4")
+
+
+def test_gpu_required_model_rejects_types_absent_from_fleet():
+    model = ModelConfig(name="gpu-model", location="org/model", resource_hint=ResourceHint(gpu={"A100": 2}))
+
+    with pytest.raises(ValueError, match="absent from this fleet"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override=None)
+
+
+def test_explicit_gpu_override_respects_fleet_limits():
+    model = ModelConfig(name="portable", location="org/model", resource_hint=ResourceHint(hbm_gb=20))
+
+    selected = MARIN_EVAL_HARDWARE.select(model, Platform.TPU, override="H100x4")
+    assert selected.label == "H100x4"
+    assert selected.target_cluster == "cw-us-east-02a"
+
+    with pytest.raises(ValueError, match="positive power of two"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x3")
 
 
 def test_nemotron_uses_the_vllm_builtin_reasoning_parser():

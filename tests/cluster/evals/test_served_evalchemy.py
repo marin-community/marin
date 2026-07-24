@@ -24,8 +24,8 @@ from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.evalchemy import EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.model_config import ServeBackend
-from marin.evaluation.serving_config import ServeSpec
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeBackend, ServeConfig
 from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 
 pytestmark = pytest.mark.cluster
@@ -43,10 +43,15 @@ def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> N
     # serve child, eval child, and outputs all colocate -- no cross-region I/O.
     out_path = f"gs://marin-{smoke_region}/tmp/eval7267-serve-and-eval-smoke/qwen3-0p6b"
     config = EvalchemyEvalConfig(
-        model="Qwen/Qwen3-0.6B",
+        model=ModelConfig(
+            name="qwen3-0.6b",
+            location="Qwen/Qwen3-0.6B",
+            resource_hint=ResourceHint(hbm_gb=3),
+            serve=ServeConfig(backend=ServeBackend.VLLM),
+        ),
+        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region=smoke_region),
         run=EvalchemyRunConfig(name="smoke", tasks=SMOKE_TASKS, max_eval_instances=3),
         out_path=out_path,
-        serve=ServeSpec(backend=ServeBackend.VLLM, tpu_type="v6e-4", region=smoke_region),
     )
 
     # The adapter submits its own serve + eval children, so run it as a plain CPU job rather than

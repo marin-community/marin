@@ -25,29 +25,35 @@ from marin.evaluation.evalchemy import (
     EvalchemyRunConfig,
     run_evalchemy,
 )
+from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
-from marin.evaluation.serving_config import InferenceLaunch, ServeSpec, build_inference_launch
+from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.serving_config import inference_config_for_model
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import result_type_name
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
+from marin.inference.config import RemoteInferenceConfig
+from marin.inference.iris import remote_inference
 from marin.training.training import LevanterCheckpoint
 
 logger = logging.getLogger(__name__)
 
-_ORCHESTRATOR_RESOURCES = ResourceConfig.with_cpu(cpu=1)
+
+def _orchestrator_resources(accelerator: AcceleratorChoice) -> ResourceConfig:
+    regions = [accelerator.region] if accelerator.region else None
+    return ResourceConfig.with_cpu(cpu=1, regions=regions)
 
 
 @dataclass(frozen=True)
 class EvalchemyEvalConfig:
     """One self-contained Evalchemy artifact build."""
 
-    model: str
+    model: ModelConfig
+    accelerator: AcceleratorChoice
     run: EvalchemyRunConfig
     out_path: str | None = None
-    serve: ServeSpec = field(default_factory=ServeSpec)
-    tokenizer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +72,7 @@ class _EvalReportConfig:
 
 @dataclass(frozen=True)
 class _LmEvalStepConfig:
-    inference: InferenceLaunch
+    inference: RemoteInferenceConfig
     packages: tuple[str, ...]
     eval_run: LmEvalRun
     results_path: str
@@ -87,21 +93,18 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     if not config.run.tasks:
         raise ValueError("Evalchemy requires at least one task")
     output_dir = _durable_output_dir(config.out_path, uuid.uuid4().hex[:8])
-    tokenizer = config.tokenizer or config.model
-    if config.tokenizer is None and "://" in config.model:
-        raise ValueError(f"model {config.model!r} is an object-store path; set tokenizer to an HF tokenizer id")
+    if config.model.tokenizer is None and "://" in config.model.location:
+        raise ValueError(f"model {config.model.location!r} is an object-store path; set tokenizer to an HF tokenizer id")
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
-    inference = build_inference_launch(
+    inference = inference_config_for_model(
         config.model,
-        tokenizer,
-        config.serve,
+        config.accelerator,
         env_vars=runtime_env,
     )
-    run_config = replace(config.run, runtime=replace(config.run.runtime, region=config.serve.region))
-    with inference.start() as session:
+    with remote_inference(inference) as session:
         outcome = run_evalchemy(
             session.model,
-            run_config,
+            config.run,
             output_dir,
             env_vars=runtime_env,
         )
@@ -115,7 +118,11 @@ class EvalGroup:
     """A reusable group of Evalchemy tasks and its serving policy."""
 
     config: EvalchemyRunConfig
-    serve: ServeSpec = field(default_factory=ServeSpec)
+    serve: ServeConfig = field(default_factory=ServeConfig)
+    resource_hint: ResourceHint = field(default_factory=ResourceHint)
+    accelerator: AcceleratorChoice = field(
+        default_factory=lambda: AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
+    )
     tokenizer: str | None = None
     discover_latest_checkpoint: bool = True
 
@@ -124,7 +131,9 @@ def evaluate_evalchemy(
     model_name: str,
     model: ArtifactStep[LevanterCheckpoint],
     config: EvalchemyRunConfig,
-    serve: ServeSpec,
+    serve: ServeConfig,
+    resource_hint: ResourceHint,
+    accelerator: AcceleratorChoice,
     *,
     tokenizer: str | None = None,
     discover_latest_checkpoint: bool = True,
@@ -139,11 +148,16 @@ def evaluate_evalchemy(
         if discover_latest_checkpoint:
             model_path = discover_hf_checkpoints(model_path)[-1]
         return EvalchemyEvalConfig(
-            model=model_path,
+            model=ModelConfig(
+                name=model_name,
+                location=model_path,
+                tokenizer=tokenizer,
+                resource_hint=resource_hint,
+                serve=serve,
+            ),
+            accelerator=accelerator,
             run=config,
             out_path=ctx.output_path,
-            serve=serve,
-            tokenizer=tokenizer,
         )
 
     return ArtifactStep(
@@ -152,7 +166,7 @@ def evaluate_evalchemy(
         artifact_type=EvalchemyResult,
         run=remote(
             run_served_evalchemy,
-            resources=_ORCHESTRATOR_RESOURCES,
+            resources=_orchestrator_resources(accelerator),
             env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
         ),
         build_config=build_config,
@@ -172,6 +186,8 @@ def eval_step(
         model=model,
         config=group.config,
         serve=group.serve,
+        resource_hint=group.resource_hint,
+        accelerator=group.accelerator,
         tokenizer=group.tokenizer,
         discover_latest_checkpoint=group.discover_latest_checkpoint,
         version=version,
@@ -226,19 +242,19 @@ def eval_report(
 
 
 def run_served_lm_eval(
-    inference: InferenceLaunch,
+    inference: RemoteInferenceConfig,
     eval_run: LmEvalRun,
     output_path: str,
 ) -> None:
     """Serve a model for one lm-eval run and upload its durable result tree."""
     with tempfile.TemporaryDirectory() as local_output:
-        with inference.start() as session:
+        with remote_inference(inference) as session:
             run_lm_eval(session.model, eval_run, local_output)
         StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
 def lm_eval_step(
-    inference: InferenceLaunch,
+    inference: RemoteInferenceConfig,
     eval_run: LmEvalRun,
     *,
     name: str,
@@ -275,7 +291,7 @@ def lm_eval_step(
         remote(
             run_served_lm_eval,
             name=name,
-            resources=_ORCHESTRATOR_RESOURCES,
+            resources=ResourceConfig.with_cpu(cpu=1, regions=inference.iris.worker_resources.regions),
             env_vars=dict(parent_env_vars),
         )(config.inference, config.eval_run, config.results_path)
         return LmEvalResults(results_path=config.results_path)

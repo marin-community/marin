@@ -24,6 +24,7 @@ from marin.inference.config import (
     InferenceProxyConfig,
     InferenceWorkerConfig,
     IrisConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
 )
@@ -116,14 +117,16 @@ def test_remote_inference_yields_an_iris_link_for_its_generated_endpoint(monkeyp
     )
 
     with remote_inference(
-        ServedModelConfig(
-            weights="physical-model",
-            api_model="public-model",
-            tokenizer="Qwen/Qwen3-0.6B",
+        RemoteInferenceConfig(
+            model=ServedModelConfig(
+                weights="physical-model",
+                api_model="public-model",
+                tokenizer="Qwen/Qwen3-0.6B",
+            ),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            capability_origin="https://iris.example",
         ),
-        VllmEngineConfig(),
-        iris,
-        endpoint_origin="https://iris.example",
     ) as session:
         model = session.model
 
@@ -171,9 +174,11 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
 
     with pytest.raises(RemoteInferenceStartupError) as exc_info:
         with remote_inference(
-            ServedModelConfig(weights="gpt2"),
-            VllmEngineConfig(),
-            iris,
+            RemoteInferenceConfig(
+                model=ServedModelConfig(weights="gpt2"),
+                engine=VllmEngineConfig(),
+                iris=iris,
+            )
         ):
             pass
 
@@ -363,14 +368,18 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
         yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model=kwargs["model"]))
 
     client = _FakeClient()
-    registry = SimpleNamespace(
-        register=lambda *args, **kwargs: events.append(("register", args, kwargs)) or "endpoint-id",
-        unregister=lambda endpoint_id: events.append(("unregister", endpoint_id)),
-    )
+
+    @contextmanager
+    def registered(*args, **kwargs):
+        events.append(("register", args, kwargs))
+        try:
+            yield "endpoint-id"
+        finally:
+            events.append(("unregister", "endpoint-id"))
+
+    registry = SimpleNamespace(registered=registered)
     iris_client = SimpleNamespace(
         mint_endpoint_token=lambda name, ttl: minted.append(name) or SimpleNamespace(token="broker-token"),
-        list_endpoints=lambda name, exact: events.append(("list", name, exact))
-        or [SimpleNamespace(endpoint_id="stale-endpoint")],
     )
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
     monkeypatch.setattr(
@@ -393,27 +402,25 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     )
 
     with remote_inference(
-        ServedModelConfig(weights="physical-model", api_model="public-model"),
-        VllmEngineConfig(),
-        iris,
-        instances=2,
-        endpoint_origin="https://iris.example",
+        RemoteInferenceConfig(
+            model=ServedModelConfig(weights="physical-model", api_model="public-model"),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            instances=2,
+            capability_origin="https://iris.example",
+        )
     ) as session:
         assert session.model.endpoint.model == "public-model"
         assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
 
     assert proxy_models == ["public-model"]
-    _, register_args, register_kwargs = events[2]
+    _, register_args, register_kwargs = events[0]
     endpoint_name, address, metadata = register_args
     assert endpoint_name == minted[0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
-    assert events[:3] == [
-        ("list", endpoint_name, True),
-        ("unregister", "stale-endpoint"),
-        ("register", register_args, register_kwargs),
-    ]
+    assert events[0] == ("register", register_args, register_kwargs)
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:

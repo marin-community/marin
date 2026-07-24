@@ -1,11 +1,10 @@
 name: swe-lego-qwen3-8b
 location: SWE-Lego/SWE-Lego-Qwen3-8B
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 1
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 1
   trust_remote_code: true
   vllm_extra_args:
   - --enable-prefix-caching

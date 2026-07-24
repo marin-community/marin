@@ -19,13 +19,13 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from fray.types import ANY_REGION, ResourceConfig, create_environment
-from marin.evaluation.serving_config import InferenceLaunch
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 from marin.inference.config import (
     BrokerConfig,
     InferenceProxyConfig,
     IrisConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
@@ -55,9 +55,9 @@ def qwen3_inference_config(
     worker_resources: ResourceConfig,
     worker_extras: tuple[str, ...],
     worker_env_vars: tuple[tuple[str, str], ...],
-) -> InferenceLaunch:
+) -> RemoteInferenceConfig:
     """Compose Qwen3 model policy with an accelerator-specific serving backend."""
-    return InferenceLaunch(
+    return RemoteInferenceConfig(
         model=ServedModelConfig(weights="Qwen/Qwen3-0.6B-Base", tokenizer="Qwen/Qwen3-0.6B"),
         engine=engine,
         broker=BrokerConfig(
@@ -79,7 +79,7 @@ def qwen3_inference_config(
             ),
         ),
         instances=1,
-        endpoint_origin=None,
+        capability_origin=None,
     )
 
 

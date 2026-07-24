@@ -205,12 +205,6 @@ class IrisJobHandle:
         self._job = job
 
     @property
-    def iris_job(self) -> IrisJob:
-        """Iris-native job handle used for logs and state inspection."""
-
-        return self._job
-
-    @property
     def job_id(self) -> str:
         return str(self._job.job_id)
 
@@ -231,6 +225,10 @@ class IrisJobHandle:
                 raise
             logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
+
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return the most recent Iris log lines across all tasks."""
+        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
         self._job.terminate()

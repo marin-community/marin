@@ -1,11 +1,10 @@
 name: qwen3-coder-30b-a3b-instruct
 location: Qwen/Qwen3-Coder-30B-A3B-Instruct
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 2
   tensor_parallel_size: 2
   max_model_len: 32768
   swap_space_gb: 32

@@ -22,13 +22,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from iris.client import iris_ctx
 from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.launch import LaunchSpec, run_inline
+from experiments.evaluation.launch import LaunchSpec, launch_group
 from experiments.evaluation.models import models
 
 
@@ -53,10 +54,11 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=config.records_prefix,
-        cluster="ambient",
+        cluster="marin",
         version=config.version,
     )
-    run_inline(spec)
+    submitted = launch_group(spec, iris_ctx().client)
+    submitted.job.wait(timeout=float("inf"))
 
 
 def eval_step(

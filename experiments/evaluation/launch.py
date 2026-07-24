@@ -22,8 +22,6 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
-    HardwareRef,
-    ModelRef,
     Provenance,
 )
 from marin.evaluation.runner import (
@@ -31,10 +29,8 @@ from marin.evaluation.runner import (
     EvaluationBatch,
     EvaluationIdentity,
     SubmittedEvaluationBatch,
-    run_evaluation_batch,
     submit_evaluation_batch,
 )
-from marin.evaluation.serving_config import EvaluationServingConfig, serve_spec_for_model
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem import prefix_join
 
@@ -83,7 +79,7 @@ def _group_id(model_key: str) -> str:
     return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
 
 
-def _endpoint_origin(cluster: str) -> str:
+def _capability_origin(cluster: str) -> str:
     config = load_config(resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS))
     if not config.dashboard_url:
         raise ValueError(f"cluster {cluster!r} has no public dashboard URL for inference endpoint routing")
@@ -112,14 +108,11 @@ def build_evaluation_batch(
 
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
-    serve = serve_spec_for_model(model, accelerator)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
     for eval_key in spec.evals:
-        runner = EVALS[eval_key]
-        limit = spec.limit if spec.limit is not None else runner.max_eval_instances
-        runner = runner.bind(model, limit=limit, region=serve.region)
+        definition = EVALS[eval_key]
         run_id = _run_id(spec.model, eval_key)
         output_dir = prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
@@ -128,13 +121,12 @@ def build_evaluation_batch(
                     run_id=run_id,
                     created_at=created_at,
                     output_dir=output_dir,
-                    eval_ref=runner.reference(),
+                    eval_ref=definition.record_ref,
                 ),
-                runner=runner,
+                executor=definition.executor_for(model, spec.limit),
             )
         )
 
-    tokenizer = model.tokenizer or model.location
     endpoint_cluster = accelerator.target_cluster or spec.cluster
     return EvaluationBatch(
         group_id=_group_id(spec.model),
@@ -142,38 +134,13 @@ def build_evaluation_batch(
         version=spec.version,
         description=spec.description,
         records_prefix=records_prefix,
-        serving=EvaluationServingConfig(
-            weights=model.location,
-            tokenizer=tokenizer,
-            spec=serve,
-            endpoint_origin=_endpoint_origin(endpoint_cluster),
-            revision=model.revision,
-            api_model=canonical_served_name(model.name),
-        ),
+        model=model,
+        accelerator=accelerator,
+        capability_origin=_capability_origin(endpoint_cluster),
+        api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
-        model_ref=ModelRef(
-            name=model.name,
-            location=model.location,
-            backend=model.serve.backend.value,
-        ),
-        hardware_ref=HardwareRef(
-            platform=accelerator.platform.value,
-            accelerator=accelerator.label,
-            region_or_cluster=accelerator.target_cluster or accelerator.region or spec.cluster,
-        ),
         provenance=provenance,
-        target_cluster=accelerator.target_cluster,
     )
-
-
-def run_inline(spec: LaunchSpec) -> list[str]:
-    """Run the resolved batch in the current Iris job."""
-    provenance = Provenance(
-        git_sha=_git_sha(),
-        eval_image=EVALCHEMY_IMAGE,
-        launch_host=socket.gethostname(),
-    )
-    return run_evaluation_batch(build_evaluation_batch(spec, provenance, _launch_user()))
 
 
 def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedEvaluationBatch:

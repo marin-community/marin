@@ -15,10 +15,14 @@ revision: null                  # pin an immutable checkpoint (base models); opt
 tokenizer: null                 # required only when location is an object-store path
 apply_chat_template: true       # whether Evalchemy formats requests with the tokenizer chat template
 
-serve:                          # ServeConfig -> vllm serve
+resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
-  fixed_gpu: null               # [gpu_type, count] to pin an exact shape instead of sizing
-  gpu_only: false               # force the GPU path (quantized / fork-only architectures)
+  gpu: {}                       # alternatively, accepted exact GPU shapes, e.g. {H100: 8}
+  cpu: null                     # optional inference-worker host CPU override
+  memory: null                  # optional inference-worker host memory override
+  disk: null                    # optional inference-worker host disk override
+
+serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
   max_model_len: 32768
@@ -30,12 +34,7 @@ serve:                          # ServeConfig -> vllm serve
   reasoning_parser: qwen3
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
-  serve_memory: null            # host-memory request override for the serve child
-  target_cluster: null          # CoreWeave peer a GPU job routes to
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
-  variants:                     # per-hardware overrides, keyed by accelerator label
-    gh200:
-      tensor_parallel_size: 1
 
 generation:                     # GenerationConfig -> evalchemy --gen_kwargs
   max_gen_toks: null            # per-model generation budget override
@@ -48,5 +47,5 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 ```
 
 `auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
-`max_model_len` to the model's native limit. `variants` carry per-hardware overrides; they apply only
-when the served slice's label matches (the Marin H100/GB200/TPU slices do not match `gh200`).
+`max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
+`resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.

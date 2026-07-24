@@ -5,14 +5,86 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+from typing import Protocol
+
 from marin.evaluation.evalchemy import EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor_runner import HarborRunConfig
-from marin.evaluation.runner import EvalchemyRunner, EvalRunner, HarborRunner
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.runner import EvalchemyExecutor, EvalExecutor, HarborExecutor
 
 
-def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyRunner:
-    return EvalchemyRunner(
+class EvaluationDefinition(Protocol):
+    """Experiment-owned record metadata and model adaptation for one evaluation."""
+
+    @property
+    def record_ref(self) -> EvalRef: ...
+
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor: ...
+
+
+@dataclass(frozen=True)
+class EvalchemyDefinition:
+    config: EvalchemyRunConfig
+
+    @property
+    def record_ref(self) -> EvalRef:
+        return EvalRef(
+            name=self.config.name,
+            mechanism="evalchemy",
+            tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
+        )
+
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+        effective_limit = self.config.max_eval_instances if limit is None else limit
+        config = replace(
+            self.config,
+            apply_chat_template=model.apply_chat_template,
+            max_gen_toks=(
+                model.generation.max_gen_toks if model.generation.max_gen_toks is not None else self.config.max_gen_toks
+            ),
+            max_eval_instances=effective_limit,
+            extra_gen_kwargs={
+                **self.config.extra_gen_kwargs,
+                **model.generation.extra_gen_kwargs,
+            },
+        )
+        return EvalchemyExecutor(config)
+
+
+@dataclass(frozen=True)
+class HarborDefinition:
+    name: str
+    config: HarborRunConfig
+    max_eval_instances: int | None = None
+
+    @property
+    def record_ref(self) -> EvalRef:
+        return EvalRef(
+            name=self.name,
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset=self.config.dataset,
+                version=self.config.version,
+                agent=self.config.agent,
+                env=self.config.env,
+            ),
+        )
+
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+        effective_limit = self.max_eval_instances if limit is None else limit
+        config = replace(
+            self.config,
+            task_limit=effective_limit,
+            agent_kwargs={**model.agent.agent_kwargs, **self.config.agent_kwargs},
+        )
+        return HarborExecutor(config=config)
+
+
+def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
         EvalchemyRunConfig(
             name=name,
             tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot"),),
@@ -21,8 +93,8 @@ def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyRunner:
     )
 
 
-def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyRunner:
-    return EvalchemyRunner(
+def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
         EvalchemyRunConfig(
             name=name,
             tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot", generation=True),),
@@ -31,8 +103,8 @@ def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyR
     )
 
 
-def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalchemyRunner:
-    return EvalchemyRunner(
+def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
         EvalchemyRunConfig(
             name=name,
             tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
@@ -48,8 +120,8 @@ def _agentic_eval(
     agent: str = "terminus-2",
     n_concurrent: int = 8,
     max_instances: int | None = None,
-) -> HarborRunner:
-    return HarborRunner(
+) -> HarborDefinition:
+    return HarborDefinition(
         name=name,
         config=HarborRunConfig(
             dataset=f"hf://{hugging_face_dataset}",
@@ -62,7 +134,7 @@ def _agentic_eval(
     )
 
 
-EVALS: dict[str, EvalRunner] = {
+EVALS: dict[str, EvaluationDefinition] = {
     # The core benchmarks, one eval per task so every model x task pair is its own run with its own
     # serve/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
     # conventions so scores line up with public leaderboards.
@@ -74,7 +146,7 @@ EVALS: dict[str, EvalRunner] = {
     "boolq": _mcq_eval("boolq", "boolq", 0),
     "piqa": _mcq_eval("piqa", "piqa", 0),
     "openbookqa": _mcq_eval("openbookqa", "openbookqa", 0),
-    "gsm8k": EvalchemyRunner(
+    "gsm8k": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="gsm8k",
             tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
@@ -84,14 +156,14 @@ EVALS: dict[str, EvalRunner] = {
     # Evalchemy's chat-native MATH500 benchmark (boxed-answer extraction over the HuggingFaceH4
     # MATH-500 split). A messages-based task: it runs through the chat route, so every model needs
     # a server-side chat template (snowball serves one via its vLLM args).
-    "math500": EvalchemyRunner(
+    "math500": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="math500",
             tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
             max_gen_toks=8192,
         )
     ),
-    "humaneval": EvalchemyRunner(
+    "humaneval": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="humaneval",
             tasks=(
@@ -129,7 +201,7 @@ EVALS: dict[str, EvalRunner] = {
     # their import fails on it; kept defined for when the image carries those deps.
     "humanevalplus": _chat_eval("humanevalplus", "HumanEvalPlus", max_gen_toks=1024, unsafe_code=True),
     "mbppplus": _chat_eval("mbppplus", "MBPPPlus", max_gen_toks=1024, unsafe_code=True),
-    "mmlu-smoke": EvalchemyRunner(
+    "mmlu-smoke": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="mmlu-smoke",
             tasks=(EvalTaskConfig("mmlu_abstract_algebra", 0, task_alias="mmlu_abstract_algebra_0shot"),),
@@ -137,7 +209,7 @@ EVALS: dict[str, EvalRunner] = {
             max_eval_instances=64,
         )
     ),
-    "gsm8k-smoke": EvalchemyRunner(
+    "gsm8k-smoke": EvalchemyDefinition(
         EvalchemyRunConfig(
             name="gsm8k-smoke",
             tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
@@ -148,11 +220,11 @@ EVALS: dict[str, EvalRunner] = {
     # --- Harbor (agentic registry benchmarks) ---
     # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
     # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
-    "aime-harbor": HarborRunner(
+    "aime-harbor": HarborDefinition(
         name="aime-harbor",
         config=HarborRunConfig(dataset="aime", version="1.0", agent="terminus-2"),
     ),
-    "aime-smoke": HarborRunner(
+    "aime-smoke": HarborDefinition(
         name="aime-smoke",
         config=HarborRunConfig(dataset="aime", version="1.0", agent="terminus-2", n_concurrent=2),
         max_eval_instances=2,

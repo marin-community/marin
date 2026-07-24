@@ -5,30 +5,28 @@
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from fray.iris_backend import IrisJobHandle
+from fray.client import JobHandle
 from iris.client import IrisClient, Job, iris_ctx
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy import (
     EvalchemyRunConfig,
     EvalPipelineError,
     PipelineStage,
-    job_log_tail,
     run_evalchemy,
 )
 from marin.evaluation.harbor_runner import HarborRunConfig, run_harbor
+from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
-    EvalTaskRef,
-    HarborRef,
     HardwareRef,
     ModelRef,
     Provenance,
@@ -37,8 +35,8 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
-from marin.evaluation.serving_config import ENDPOINT_READY_TIMEOUT_SECONDS, EvaluationServingConfig
-from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
+from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -71,19 +69,10 @@ class EvaluationError(RuntimeError):
         self.log_tails = log_tails or {}
 
 
-class EvalRunner(Protocol):
-    name: str
-    mechanism: str
-    max_eval_instances: int | None
+class EvalExecutor(Protocol):
+    """Execute one evaluation mechanism against an already-running OpenAI endpoint."""
 
-    @property
-    def task_names(self) -> tuple[str, ...]: ...
-
-    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "EvalRunner": ...
-
-    def reference(self) -> EvalRef: ...
-
-    def run(
+    def __call__(
         self,
         model: RunningModel,
         output_dir: str,
@@ -92,50 +81,12 @@ class EvalRunner(Protocol):
 
 
 @dataclass(frozen=True)
-class EvalchemyRunner:
+class EvalchemyExecutor:
+    """Run one resolved Evalchemy configuration."""
+
     config: EvalchemyRunConfig
-    mechanism: str = field(default="evalchemy", init=False)
 
-    @property
-    def name(self) -> str:
-        return self.config.name
-
-    @property
-    def max_eval_instances(self) -> int | None:
-        return self.config.max_eval_instances
-
-    @property
-    def task_names(self) -> tuple[str, ...]:
-        return tuple(task.name for task in self.config.tasks)
-
-    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "EvalchemyRunner":
-        return replace(
-            self,
-            config=replace(
-                self.config,
-                apply_chat_template=model.apply_chat_template,
-                max_gen_toks=(
-                    model.generation.max_gen_toks
-                    if model.generation.max_gen_toks is not None
-                    else self.config.max_gen_toks
-                ),
-                max_eval_instances=limit,
-                extra_gen_kwargs={
-                    **self.config.extra_gen_kwargs,
-                    **model.generation.extra_gen_kwargs,
-                },
-                runtime=replace(self.config.runtime, region=region),
-            ),
-        )
-
-    def reference(self) -> EvalRef:
-        return EvalRef(
-            name=self.name,
-            mechanism=self.mechanism,
-            tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
-        )
-
-    def run(
+    def __call__(
         self,
         model: RunningModel,
         output_dir: str,
@@ -162,40 +113,12 @@ class EvalchemyRunner:
 
 
 @dataclass(frozen=True)
-class HarborRunner:
-    name: str
+class HarborExecutor:
+    """Run one resolved Harbor configuration."""
+
     config: HarborRunConfig
-    max_eval_instances: int | None = None
-    mechanism: str = field(default="harbor", init=False)
 
-    @property
-    def task_names(self) -> tuple[str, ...]:
-        """Return no static tasks because Harbor resolves them from its dataset."""
-        return ()
-
-    def bind(self, model: ModelConfig, *, limit: int | None, region: str | None) -> "HarborRunner":
-        del region
-        config = self.config
-        if model.agent.agent_kwargs:
-            config = replace(
-                config,
-                agent_kwargs={**model.agent.agent_kwargs, **config.agent_kwargs},
-            )
-        return replace(self, config=replace(config, task_limit=limit), max_eval_instances=limit)
-
-    def reference(self) -> EvalRef:
-        return EvalRef(
-            name=self.name,
-            mechanism=self.mechanism,
-            harbor=HarborRef(
-                dataset=self.config.dataset,
-                version=self.config.version,
-                agent=self.config.agent,
-                env=self.config.env,
-            ),
-        )
-
-    def run(
+    def __call__(
         self,
         model: RunningModel,
         output_dir: str,
@@ -229,7 +152,7 @@ class EvaluationIdentity:
 @dataclass(frozen=True)
 class Evaluation:
     identity: EvaluationIdentity
-    runner: EvalRunner
+    executor: EvalExecutor
 
 
 @dataclass(frozen=True)
@@ -239,12 +162,12 @@ class EvaluationBatch:
     version: str | None
     description: str | None
     records_prefix: str
-    serving: EvaluationServingConfig
+    model: ModelConfig
+    accelerator: AcceleratorChoice
+    capability_origin: str
+    api_model: str | None
     evaluations: tuple[Evaluation, ...]
-    model_ref: ModelRef
-    hardware_ref: HardwareRef
     provenance: Provenance
-    target_cluster: str | None = None
 
 
 @dataclass(frozen=True)
@@ -278,9 +201,17 @@ def _record(
         user=batch.user,
         version=batch.version,
         description=batch.description,
-        model=batch.model_ref,
+        model=ModelRef(
+            name=batch.model.name,
+            location=batch.model.location,
+            backend=batch.model.serve.backend.value,
+        ),
         eval=identity.eval_ref,
-        hardware=batch.hardware_ref,
+        hardware=HardwareRef(
+            platform=batch.accelerator.platform.value,
+            accelerator=batch.accelerator.label,
+            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or "unconstrained"),
+        ),
         status=status,
         error=error,
         results_path=identity.output_dir,
@@ -302,23 +233,26 @@ def _serve_jobs(session: RemoteInferenceSession) -> dict[str, str]:
     return {_serve_role(index): str(job.job_id) for index, job in enumerate(session.jobs)}
 
 
+def _job_tail(handle: JobHandle) -> tuple[str, ...]:
+    try:
+        return handle.logs(max_lines=100)
+    except Exception:
+        logger.warning("could not fetch logs for job %s", handle.job_id, exc_info=True)
+        return ()
+
+
 def _startup_diagnostics(exc: RemoteInferenceStartupError) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     jobs: dict[str, str] = {}
     tails: dict[str, tuple[str, ...]] = {}
     for index, handle in enumerate(exc.jobs):
         role = _serve_role(index)
         jobs[role] = str(handle.job_id)
-        if isinstance(handle, IrisJobHandle):
-            tails[role] = job_log_tail(handle.iris_job)
+        tails[role] = _job_tail(handle)
     return jobs, tails
 
 
 def _session_tail(session: RemoteInferenceSession) -> dict[str, tuple[str, ...]]:
-    return {
-        _serve_role(index): job_log_tail(handle.iris_job)
-        for index, handle in enumerate(session.jobs)
-        if isinstance(handle, IrisJobHandle)
-    }
+    return {_serve_role(index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
 def _record_unstarted(
@@ -344,31 +278,6 @@ def _record_unstarted(
         )
 
 
-def _run_with_endpoint_retry(
-    evaluation: Evaluation,
-    session: RemoteInferenceSession,
-    env_vars: Mapping[str, str],
-) -> EvaluationOutcome:
-    session.check_alive()
-    generation = session.endpoint_generation()
-    try:
-        return evaluation.runner.run(session.model, evaluation.identity.output_dir, env_vars)
-    except EvaluationError as exc:
-        try:
-            restarted = session.replacement_ready(generation, ENDPOINT_READY_TIMEOUT_SECONDS)
-        except Exception as restart_exc:
-            raise EvaluationError(
-                f"inference did not recover after evaluation failure: {restart_exc}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=exc.jobs,
-                log_tails=exc.log_tails,
-            ) from restart_exc
-        if not restarted:
-            raise
-        logger.info("retrying %s after inference endpoint restart", evaluation.identity.eval_ref.name)
-        return evaluation.runner.run(session.model, evaluation.identity.output_dir, env_vars)
-
-
 @dataclass(frozen=True)
 class _EvaluationExecution:
     record_path: str
@@ -392,7 +301,8 @@ def _run_one_evaluation(
     error: str | None = None
     inference_failure: Exception | None = None
     try:
-        outcome = _run_with_endpoint_retry(evaluation, session, env_vars)
+        session.check_alive()
+        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, env_vars)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:
@@ -463,9 +373,15 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         raise ValueError("an evaluation batch requires at least one evaluation")
     base_jobs = {"orchestrator": str(iris_ctx().job_id)}
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
-    inference = batch.serving.resolve(runtime_env)
+    inference = inference_config_for_model(
+        batch.model,
+        batch.accelerator,
+        env_vars=runtime_env,
+        capability_origin=batch.capability_origin,
+        api_model=batch.api_model,
+    )
     try:
-        with inference.start() as session:
+        with remote_inference(inference) as session:
             return _run_evaluations(batch, session, base_jobs, runtime_env)
     except RemoteInferenceStartupError as exc:
         jobs, tails = _startup_diagnostics(exc)
@@ -477,14 +393,16 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
 def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
     """Submit a resolved batch to one CPU orchestrator."""
     constraints = None
-    if batch.target_cluster:
+    if batch.accelerator.target_cluster:
         constraints = [
             Constraint.create(
                 key=CLUSTER_CONSTRAINT_KEY,
                 op=ConstraintOp.EQ,
-                value=batch.target_cluster,
+                value=batch.accelerator.target_cluster,
             )
         ]
+    elif batch.accelerator.region:
+        constraints = [region_constraint([batch.accelerator.region])]
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_batch, batch),
         name=f"eval-{batch.group_id}",
@@ -493,7 +411,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
             memory=_ORCHESTRATOR_MEMORY,
             disk=_ORCHESTRATOR_DISK,
         ),
-        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
+        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS)),
         constraints=constraints,
         max_retries_failure=0,
     )
@@ -502,7 +420,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         group_id=batch.group_id,
         job=job,
         records_prefix=batch.records_prefix,
-        model_name=batch.model_ref.name,
+        model_name=batch.model.name,
         evaluations=tuple(
             SubmittedEvaluation(
                 run_id=evaluation.identity.run_id,

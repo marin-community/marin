@@ -113,7 +113,7 @@ class IsolatedCudaVllm:
         # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
         # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
         # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
-        # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
+        # callers pass `--gdn-prefill-backend triton` in vLLM extra arguments.
         # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
         environment = {

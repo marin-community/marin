@@ -20,7 +20,8 @@ Reusable step builders live in `marin.experiment.evaluation`; experiment task me
 `experiments/evals`:
 
 ```python
-from marin.evaluation.serving_config import ServeSpec
+from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.model_config import ServeConfig
 from marin.experiment.evaluation import (
     EvalGroup,
     eval_step,
@@ -50,7 +51,7 @@ or with `StepRunner().run([lower(x) for x in steps])`.
 from marin.execution.lazy import ArtifactStep, run
 from marin.training.training import LevanterCheckpoint
 
-from marin.evaluation.serving_config import ServeSpec
+from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.experiment.evaluation import eval_report, eval_steps
 from experiments.evals.evals import key_evals
 
@@ -63,7 +64,8 @@ model = ArtifactStep.adopt(
     kind=LevanterCheckpoint,
 )
 
-results = eval_steps(model, key_evals(serve=ServeSpec(tpu_type="v6e-8")))
+accelerator = AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
+results = eval_steps(model, key_evals(accelerator=accelerator))
 report = eval_report(results, name=f"{model.name}/key")
 
 if __name__ == "__main__":
@@ -84,14 +86,23 @@ An `EvalGroup` states its tasks, its serving backend, and its id explicitly:
 ```python
 from marin.execution.lazy import run
 
-from marin.evaluation.serving_config import ServeSpec
+from marin.evaluation.evalchemy import EvalchemyRunConfig
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ServeConfig
 from marin.experiment.evaluation import EvalGroup, eval_report, eval_steps
 from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS
 
+accelerator = AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
 groups = [
-    EvalGroup(tasks=CORE_TASKS, id="core", serve=ServeSpec(tpu_type="v4-8")),
-    EvalGroup(tasks=KEY_GENERATION_TASKS, id="generation",
-              serve=ServeSpec(tpu_type="v6e-8"), max_gen_toks=4096),
+    EvalGroup(
+        config=EvalchemyRunConfig(name="core", tasks=CORE_TASKS),
+        accelerator=accelerator,
+    ),
+    EvalGroup(
+        config=EvalchemyRunConfig(name="generation", tasks=KEY_GENERATION_TASKS, max_gen_toks=4096),
+        serve=ServeConfig(),
+        accelerator=accelerator,
+    ),
 ]
 
 report = eval_report(eval_steps(model, groups), name=f"{model.name}/custom")
@@ -100,8 +111,8 @@ if __name__ == "__main__":
     run(report)
 ```
 
-`id` is the task-group segment of the artifact name. Choose a stable id per group; two groups on one
-model must have distinct ids so their outputs do not share an address.
+`EvalchemyRunConfig.name` is the task-group segment of the artifact name. Choose a stable name per
+group.
 
 ## 3. Reading results back
 
@@ -138,10 +149,10 @@ pin a run.
 
 ## Serving on GPU
 
-`ServeSpec` serves on TPU (`tpu_type`) or GPU (`gpu_type`, `gpu_count`). The GPU path runs the Marin
-CUDA vLLM fork in an isolated `uvx` environment (`IsolatedCudaVllm`), which runs without `nvcc` — the
-CoreWeave images ship CUDA libraries but no compiler. Set `vllm_extra_args` for models that would
-otherwise JIT-compile a kernel at warmup.
+`AcceleratorChoice` selects TPU or GPU placement. `ServeConfig` contains server behavior and is
+independent of placement. The GPU path runs the Marin CUDA vLLM fork in an isolated `uvx`
+environment, which runs without `nvcc`. Set `vllm_extra_args` for models that would otherwise
+JIT-compile a kernel at warmup.
 
 Qwen gated-delta-net models (`qwen_gdn_linear_attn`: `Qwen/Qwen3.5-35B-A3B`, `Qwen/Qwen3-Next-80B-A3B`)
 are the current case. Their default FlashInfer GDN prefill kernel is JIT-compiled, so without a compiler
@@ -150,34 +161,33 @@ the serve child dies at warmup (`Could not find nvcc`) and never registers its e
 
 ```python
 EvalGroup(
-    tasks=CORE_TASKS,
-    id="core",
-    serve=ServeSpec(
-        gpu_type="H100",
-        gpu_count=8,
+    config=EvalchemyRunConfig(name="core", tasks=CORE_TASKS),
+    serve=ServeConfig(
         tensor_parallel_size=8,
         vllm_extra_args=("--gdn-prefill-backend", "triton"),
+    ),
+    accelerator=AcceleratorChoice(
+        platform=Platform.GPU,
+        gpu_type="H100",
+        gpu_count=8,
     ),
 )
 ```
 
 Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra flags. See
-`marin.evaluation.serving_config.ServeSpec` for the serving contract.
+`marin.evaluation.model_config.ServeConfig` and
+`marin.evaluation.hardware.AcceleratorChoice` for the two contracts.
 
 ## Parameter reference
 
 ### `EvalGroup`
 
-- `tasks`: the `EvalTaskConfig` entries this group evaluates together against one served model.
-- `id`: the group's identity segment in the artifact name.
-- `serve`: a `ServeSpec` — the serving backend (`vllm` or `levanter`) and slice.
+- `config`: the `EvalchemyRunConfig`, including tasks, generation settings, concurrency, and limits.
+- `serve`: the model-server behavior (`vllm` or `levanter` and its server options).
+- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker.
+- `accelerator`: the exact TPU or GPU slice used for inference.
 - `tokenizer`: HF tokenizer id the eval client loads; defaults to the served checkpoint. Set it to a
   base-model HF id when serving a `gs://` path the eval image cannot load a tokenizer from.
-- `apply_chat_template`: use the chat OpenAI route (`local-chat-completions`) instead of completions.
-- `max_gen_toks`: generation length cap for generation tasks.
-- `max_eval_instances`: optional cap on evaluated examples (a small value gives a fast smoke).
-- `num_concurrent`: parallel in-flight requests the eval client sends the endpoint.
-- `extra_gen_kwargs`: additional Evalchemy generation arguments, such as `repetition_penalty`.
 - `discover_latest_checkpoint`: whether to resolve the latest HF checkpoint under the model path.
 
 ### `eval_report`

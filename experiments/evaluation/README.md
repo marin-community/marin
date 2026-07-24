@@ -77,11 +77,9 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 ## Evals in pipelines
 
 `pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path —
-compose it into any `StepRunner` pipeline (e.g. right after a checkpoint-export step, or fanned out
-over a model sweep) and an identical config re-run is a cache hit. The step process acts as the
-orchestrator, so the pipeline must itself run as an Iris job. The slice override is a runtime arg:
-changing it never forks the artifact's identity.
+version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path.
+The step submits the same CPU orchestrator used by the CLI and waits for it. The slice override is a
+runtime arg, so changing it does not change the artifact identity.
 
 ## Agentic benchmarks (Harbor)
 
@@ -95,19 +93,18 @@ each trial, which normalizes into one agentic `EvalSample` (reward ->
 land in evaldash like every other eval.
 
 ```bash
-# A capped agentic validation run (2 tasks) -- needs DAYTONA_EVAL_API_KEY in the launch env.
+# A capped agentic validation run (2 tasks).
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
 ```
 
-A Harbor launch needs `DAYTONA_EVAL_API_KEY` (the Google Secret Manager secret of that name) loaded
-into the launch environment; the launcher bridges it to the SDK's `DAYTONA_API_KEY` and copies only
-the sandbox-needed credentials into the trial env. Harbor runs as an isolated `uv` subprocess
-outside the Marin lock.
+A Daytona-backed Harbor launch needs `DAYTONA_API_KEY` in the launch environment. Harbor runs as an
+isolated `uv` subprocess outside the Marin lock.
 
 ## Adding a model or eval
 
 A model is a `ModelConfig` (`marin.evaluation.model_config`): its `location` (HF id or `gs://`/`s3://`
-export), a `serve: ServeConfig` (slice sizing + vLLM knobs), a `generation: GenerationConfig`
+export), a `resource_hint: ResourceHint` (placement compatibility), a `serve: ServeConfig` (server
+behavior), a `generation: GenerationConfig`
 (`--gen_kwargs`), and an `agent: AgentConfig` (Harbor agent kwargs). Two population paths feed the one
 cached `models()` registry in `models.py`:
 
@@ -117,18 +114,17 @@ cached `models()` registry in `models.py`:
 - **Python factory** in `models.py` for the parametric entries whose serve options are computed
   (`_snowball`, `_base_hf`) or the curated hand-tuned ones.
 
-Set `serve.hbm_gb` to the estimated serving footprint (bf16 weights are
-`params_billions * 2 GB`, times roughly 1.3 for runtime overhead), or pin `serve.fixed_gpu`
-(`["H100", 8]`) and `serve.target_cluster` for an exact GPU shape. Set `tokenizer` when `location` is
-an object-store export (the eval client loads its tokenizer through HF and cannot read a `gs://` path).
-Set `serve.serve_memory` for large exports: weight streaming stages shards through host buffers, so the
-serve pod's memory limit must cover the full weight volume or the kernel OOM-kills the server mid-load.
+Set `resource_hint.hbm_gb` to a portable serving footprint, or set
+`resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
+that requirement to a cluster. Set `resource_hint.memory` for exports whose shard staging needs more
+host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
+its tokenizer through Hugging Face.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyRunner` or `HarborRunner` to `EVALS` in `evals.py`, then add its key to `SUITES`
-when it belongs in a named group. Task flags that matter for served evals:
+Add an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then add its key to
+`SUITES` when it belongs in a named group. Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.

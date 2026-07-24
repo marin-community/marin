@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -22,56 +21,60 @@ class ServeBackend(StrEnum):
     LEVANTER = "levanter"
 
 
-class VariantUnset(StrEnum):
-    """Sentinel distinguishing an omitted variant field from an explicit default value."""
-
-    VALUE = "__unset__"
-
-
 @dataclass(frozen=True)
-class ServeVariant:
-    """Fields a hardware variant overlays onto its model's base serve configuration."""
+class ResourceHint:
+    """Serving resources required by a model.
 
-    backend: ServeBackend | VariantUnset = VariantUnset.VALUE
-    hbm_gb: int | None | VariantUnset = VariantUnset.VALUE
-    fixed_gpu: tuple[str, int] | None | VariantUnset = VariantUnset.VALUE
-    gpu_only: bool | VariantUnset = VariantUnset.VALUE
-    tensor_parallel_size: int | None | VariantUnset = VariantUnset.VALUE
-    data_parallel_size: int | None | VariantUnset = VariantUnset.VALUE
-    max_model_len: int | None | VariantUnset = VariantUnset.VALUE
-    swap_space_gb: int | None | VariantUnset = VariantUnset.VALUE
-    trust_remote_code: bool | VariantUnset = VariantUnset.VALUE
-    hf_overrides: str | None | VariantUnset = VariantUnset.VALUE
-    limit_mm_per_prompt: str | None | VariantUnset = VariantUnset.VALUE
-    tool_call_parser: str | None | VariantUnset = VariantUnset.VALUE
-    reasoning_parser: str | None | VariantUnset = VariantUnset.VALUE
-    vllm_extra_args: tuple[str, ...] | VariantUnset = VariantUnset.VALUE
-    chat_template: str | None | VariantUnset = VariantUnset.VALUE
-    serve_memory: str | None | VariantUnset = VariantUnset.VALUE
-    target_cluster: str | None | VariantUnset = VariantUnset.VALUE
-    auto_overrides: bool | VariantUnset = VariantUnset.VALUE
+    Set ``hbm_gb`` for a model that can run on either TPU or GPU; the experiment fleet chooses a
+    slice with enough usable HBM. Set ``gpu`` instead for a GPU-required model. Its keys are canonical
+    uppercase GPU types and its values are acceptable exact device counts, for example
+    ``{"H100": 8}``. A CLI accelerator override may change the GPU shape but cannot move a
+    GPU-required model onto TPU.
+
+    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults. They are
+    hints attached to the model because large object-store exports can require substantially more host
+    memory while staging shards.
+    """
+
+    hbm_gb: int | None = None
+    gpu: Mapping[str, int] = field(default_factory=dict)
+    cpu: float | None = None
+    memory: str | None = None
+    disk: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.hbm_gb is not None and self.gpu:
+            raise ValueError("resource_hint requires at most one of hbm_gb or gpu")
+        if self.hbm_gb is not None and self.hbm_gb <= 0:
+            raise ValueError("resource_hint.hbm_gb must be positive")
+        normalized_gpu: dict[str, int] = {}
+        for gpu_type, count in self.gpu.items():
+            canonical_type = gpu_type.upper()
+            if canonical_type in normalized_gpu:
+                raise ValueError(f"duplicate resource_hint.gpu type after normalization: {canonical_type}")
+            if count <= 0 or count & (count - 1):
+                raise ValueError(f"resource_hint.gpu[{gpu_type!r}] must be a positive power of two")
+            normalized_gpu[canonical_type] = count
+        object.__setattr__(self, "gpu", normalized_gpu)
+        if self.cpu is not None and self.cpu <= 0:
+            raise ValueError("resource_hint.cpu must be positive")
 
 
 @dataclass(frozen=True)
 class ServeConfig:
-    """How a model is served: its slice budget, parallelism, and vLLM serve knobs.
+    """Model-server behavior independent of scheduler placement.
 
-    Sizing: ``hbm_gb`` is the serving HBM budget the hardware selector turns into a slice; ``fixed_gpu``
-    pins an exact ``(gpu_type, count)`` shape instead, and ``gpu_only`` forces the GPU path for a model
-    the TPU stack cannot serve (a quantized checkpoint, a fork-only architecture). ``target_cluster``
-    names the CoreWeave peer a GPU job routes to.
+    ``backend`` selects vLLM or Levanter. Parallelism and context fields become first-class inference
+    model settings. The remaining typed fields map onto ``vllm serve`` flags through
+    :func:`serve_config_vllm_args`; ``vllm_extra_args`` is the escape hatch for flags without a typed
+    field and wins when it names the same option.
 
-    vLLM knobs map onto ``vllm serve`` flags through :func:`serve_config_vllm_args`.
-    ``auto_serve_overrides`` fills unset fields from the model's ``config.json`` and may clamp an
-    explicit context length to the model's native limit. ``vllm_extra_args`` is the escape hatch for
-    flags without a typed field. ``variants`` carries per-hardware overrides;
-    :func:`resolve_serve_variant` applies one when the slice label matches.
+    When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
+    fill portable architecture-specific vLLM flags and clamp an explicit context length to the
+    checkpoint's native limit. ``chat_template`` is literal Jinja content passed to the server.
     """
 
     backend: ServeBackend = ServeBackend.VLLM
-    hbm_gb: int | None = None
-    fixed_gpu: tuple[str, int] | None = None
-    gpu_only: bool = False
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     max_model_len: int | None = None
@@ -83,18 +86,12 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_extra_args: tuple[str, ...] = ()
     chat_template: str | None = None
-    serve_memory: str | None = None
-    """Host-memory request for the serve child, overriding the serve default. Large object-store
-    exports need it: weight streaming stages shards through host buffers, so the pod's memory limit
-    must cover the full weight volume or the kernel OOM-kills the server."""
-    target_cluster: str | None = None
     auto_overrides: bool = True
-    variants: Mapping[str, ServeVariant] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """Model-specific generation overrides."""
+    """Generation overrides applied when an experiment resolves an Evalchemy definition."""
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
@@ -102,7 +99,7 @@ class GenerationConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    """Model-specific Harbor agent arguments."""
+    """Harbor agent arguments applied when an experiment resolves an agentic definition."""
 
     agent_kwargs: Mapping[str, str] = field(default_factory=dict)
 
@@ -114,7 +111,9 @@ class ModelConfig:
     ``location`` is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory;
     an object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
     ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` controls
-    whether Evalchemy formats requests with the tokenizer's chat template.
+    whether Evalchemy formats requests with the tokenizer's chat template. ``resource_hint`` states
+    where the model is compatible; ``serve`` states how its inference server behaves. ``generation``
+    and ``agent`` are experiment-definition inputs and never affect inference placement.
     """
 
     name: str
@@ -122,6 +121,7 @@ class ModelConfig:
     revision: str | None = None
     tokenizer: str | None = None
     apply_chat_template: bool = True
+    resource_hint: ResourceHint = field(default_factory=ResourceHint)
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -166,23 +166,6 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         add("--enable-auto-tool-choice")
         add("--tool-call-parser", serve.tool_call_parser)
     return (*derived, *explicit)
-
-
-def resolve_serve_variant(serve: ServeConfig, hardware_label: str | None) -> ServeConfig:
-    """Overlay ``serve.variants[hardware_label]`` onto ``serve`` when the served slice matches.
-
-    Omitted fields leave the base value intact. Explicit defaults, including ``false`` and ``null``,
-    replace the base value. No matching variant returns ``serve`` unchanged.
-    """
-    if hardware_label is None or hardware_label not in serve.variants:
-        return serve
-    variant = serve.variants[hardware_label]
-    overrides = {
-        f.name: getattr(variant, f.name)
-        for f in fields(ServeVariant)
-        if getattr(variant, f.name) is not VariantUnset.VALUE
-    }
-    return dataclasses.replace(serve, **overrides)
 
 
 def load_model_config(path: Path) -> ModelConfig:

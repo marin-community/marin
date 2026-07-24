@@ -78,31 +78,35 @@ class HardwarePolicy:
         platform: Platform,
         override: str | None,
     ) -> AcceleratorChoice:
-        """Resolve one serving slice under this fleet policy."""
+        """Resolve one serving slice from a model's resource compatibility and a CLI choice."""
+        hint = model.resource_hint
         if override:
-            return _parse_override(override, self)
-        serve = model.serve
-        if serve.fixed_gpu is not None:
-            gpu_type, gpu_count = serve.fixed_gpu
-            profile = self.gpu_profiles.get(gpu_type)
-            return AcceleratorChoice(
-                platform=Platform.GPU,
-                gpu_type=gpu_type,
-                gpu_count=gpu_count,
-                target_cluster=serve.target_cluster or (profile.cluster if profile is not None else None),
+            choice = _parse_override(override, self)
+            if hint.gpu and choice.platform is not Platform.GPU:
+                raise ValueError(f"model {model.name!r} requires GPU; accelerator override {override!r} selects TPU")
+            _validate_parallelism(model, choice)
+            return choice
+        if hint.gpu:
+            if platform is not Platform.GPU:
+                raise ValueError(f"model {model.name!r} requires GPU; launch with --platform gpu")
+            choice = _select_required_gpu(model, self)
+            _validate_parallelism(model, choice)
+            return choice
+        if hint.hbm_gb is None:
+            raise ValueError(
+                f"model {model.name!r} sets neither resource_hint.hbm_gb nor resource_hint.gpu; " "cannot size a slice"
             )
-        if serve.hbm_gb is None:
-            raise ValueError(f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice")
         if platform is Platform.GPU:
-            return _select_gpu(serve.hbm_gb, serve.target_cluster, self)
-        if serve.gpu_only:
-            raise ValueError(f"model {model.name!r} is gpu_only; launch with --platform gpu")
-        return _select_tpu(serve.hbm_gb, self)
+            choice = _select_gpu(hint.hbm_gb, self)
+        else:
+            choice = _select_tpu(hint.hbm_gb, self)
+        _validate_parallelism(model, choice)
+        return choice
 
 
 def default_platform(model: ModelConfig) -> Platform:
-    """Choose GPU only when the model requires or pins it."""
-    if model.serve.gpu_only or model.serve.fixed_gpu is not None:
+    """Choose GPU only when the model declares GPU-only compatibility."""
+    if model.resource_hint.gpu:
         return Platform.GPU
     return Platform.TPU
 
@@ -123,11 +127,7 @@ def _select_tpu(hbm_gb: int, policy: HardwarePolicy) -> AcceleratorChoice:
     )
 
 
-def _select_gpu(
-    hbm_gb: int,
-    target_cluster: str | None,
-    policy: HardwarePolicy,
-) -> AcceleratorChoice:
+def _select_gpu(hbm_gb: int, policy: HardwarePolicy) -> AcceleratorChoice:
     for gpu_type in policy.gpu_preference:
         profile = policy.gpu_profiles[gpu_type]
         count = 1
@@ -137,10 +137,47 @@ def _select_gpu(
                     platform=Platform.GPU,
                     gpu_type=gpu_type,
                     gpu_count=count,
-                    target_cluster=target_cluster or profile.cluster,
+                    target_cluster=profile.cluster,
                 )
             count *= 2
     raise ValueError(f"no GPU slice fits {hbm_gb} GB HBM at {policy.utilization:.0%} utilization")
+
+
+def _select_required_gpu(model: ModelConfig, policy: HardwarePolicy) -> AcceleratorChoice:
+    hint = model.resource_hint
+    unknown = set(hint.gpu) - policy.gpu_profiles.keys()
+    if unknown:
+        raise ValueError(f"model {model.name!r} requires GPU types absent from this fleet: {sorted(unknown)}")
+    for gpu_type in policy.gpu_preference:
+        count = hint.gpu.get(gpu_type)
+        if count is None:
+            continue
+        profile = policy.gpu_profiles[gpu_type]
+        if count > profile.max_count:
+            raise ValueError(
+                f"model {model.name!r} requires {gpu_type}x{count}, but this fleet supports at most "
+                f"{gpu_type}x{profile.max_count}"
+            )
+        return AcceleratorChoice(
+            platform=Platform.GPU,
+            gpu_type=gpu_type,
+            gpu_count=count,
+            target_cluster=profile.cluster,
+        )
+    raise ValueError(f"model {model.name!r} has no GPU resource hint compatible with this fleet")
+
+
+def _validate_parallelism(model: ModelConfig, choice: AcceleratorChoice) -> None:
+    serve = model.serve
+    if choice.platform is not Platform.GPU or serve.tensor_parallel_size is None:
+        return
+    ranks = serve.tensor_parallel_size * (serve.data_parallel_size or 1)
+    if ranks != choice.gpu_count:
+        raise ValueError(
+            f"model {model.name!r} configures tensor_parallel_size={serve.tensor_parallel_size} and "
+            f"data_parallel_size={serve.data_parallel_size or 1}, requiring {ranks} GPUs, but selected "
+            f"{choice.label}"
+        )
 
 
 def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
@@ -151,10 +188,16 @@ def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
         if gpu_type not in policy.gpu_profiles:
             raise ValueError(f"unknown GPU type {gpu_type!r} in accelerator override {override!r}")
         profile = policy.gpu_profiles[gpu_type]
+        count = int(match["count"])
+        if count <= 0 or count & (count - 1) or count > profile.max_count:
+            raise ValueError(
+                f"GPU count in accelerator override {override!r} must be a positive power of two no larger "
+                f"than {profile.max_count}"
+            )
         return AcceleratorChoice(
             platform=Platform.GPU,
             gpu_type=gpu_type,
-            gpu_count=int(match["count"]),
+            gpu_count=count,
             target_cluster=profile.cluster,
         )
     tpu_hbm_capacity_bytes(text)

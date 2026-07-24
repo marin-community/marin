@@ -1,11 +1,10 @@
 name: coderforge-preview-v3-316-axolotl__qwen3-8b
 location: laion/CoderForge-Preview-v3-316-axolotl__Qwen3-8B
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 1
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 1
   trust_remote_code: true
   tool_call_parser: hermes
   reasoning_parser: qwen3

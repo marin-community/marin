@@ -213,3 +213,19 @@ class IrisConfig:
             raise ValueError("Inference workers require an accelerator")
         if isinstance(device, TpuConfig) and device.vm_count() != 1:
             raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
+
+
+@dataclass(frozen=True)
+class RemoteInferenceConfig:
+    """Exact model, engine, and Iris inputs for one remote inference context."""
+
+    model: ServedModelConfig
+    engine: InferenceEngineConfig
+    iris: IrisConfig
+    instances: int = 1
+    broker: BrokerConfig | None = None
+    capability_origin: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instances <= 0:
+            raise ValueError("instances must be positive")

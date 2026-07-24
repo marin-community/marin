@@ -4,9 +4,9 @@
 """The lm-eval task suite used by served-model experiments."""
 
 from marin.evaluation.lm_eval import LmEvalResults, LmEvalRun
-from marin.evaluation.serving_config import InferenceLaunch
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.evaluation import lm_eval_step
+from marin.inference.config import RemoteInferenceConfig
 
 LM_EVAL_TASKS = (
     "cruxeval_input",
@@ -16,7 +16,7 @@ LM_EVAL_TASKS = (
 
 
 def lm_eval_suite(
-    inference: InferenceLaunch,
+    inference: RemoteInferenceConfig,
     *,
     model_name: str,
     version: str,

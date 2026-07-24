@@ -48,11 +48,12 @@ def _print_plan(spec: LaunchSpec) -> None:
     )
     click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
     for evaluation in batch.evaluations:
+        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
-            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model_ref.location}  "
-            f"backend={batch.model_ref.backend}  accel={batch.hardware_ref.accelerator}  "
-            f"region_or_cluster={batch.hardware_ref.region_or_cluster}  "
-            f"limit={evaluation.runner.max_eval_instances}  tasks={list(evaluation.runner.task_names)}  "
+            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
+            f"tasks={tasks}  "
             f"records={batch.records_prefix}"
         )
 

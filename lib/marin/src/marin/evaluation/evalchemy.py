@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from iris.client import Job, JobFailedError, iris_ctx
-from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
@@ -59,11 +58,11 @@ class EvalPipelineError(RuntimeError):
 def job_log_tail(job: Job, limit: int = LOG_TAIL_LINES) -> tuple[str, ...]:
     """Fetch the final log lines without masking the original job failure."""
     try:
-        entries = [entry for task in job.tasks() for entry in task.logs()]
+        entries = job.logs(max_lines=limit, tail=True)
     except Exception:
         logger.warning("could not fetch log tail for %s", job, exc_info=True)
         return ()
-    return tuple(entry.data.rstrip("\n") for entry in entries[-limit:])
+    return tuple(entry.data.rstrip("\n") for entry in entries)
 
 
 def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
@@ -80,7 +79,6 @@ class EvalchemyRuntimeConfig:
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
-    region: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +158,6 @@ def _submit_evalchemy_child(
 ) -> str:
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
-    constraints = [region_constraint([config.runtime.region])] if config.runtime.region else None
     command = f'exec {EVALCHEMY_PYTHON} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
@@ -181,7 +178,6 @@ def _submit_evalchemy_child(
             )
         ),
         task_image=config.runtime.image,
-        constraints=constraints,
         max_retries_failure=0,
     )
     eval_path = str(eval_job.job_id)

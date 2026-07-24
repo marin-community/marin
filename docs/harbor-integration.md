@@ -38,8 +38,7 @@ Use `--limit N` to cap the number of trials and `--no-wait` to return after subm
 
 ## Credentials
 
-Daytona runs require `DAYTONA_EVAL_API_KEY` in the launch environment. The launcher passes it to the
-orchestrator as `DAYTONA_API_KEY`, which is the name expected by the Daytona SDK.
+Daytona runs require `DAYTONA_API_KEY` in the launch environment.
 
 The sandbox receives only the credentials needed by the selected agent. Depending on the benchmark
 and agent, this can include:
@@ -58,19 +57,18 @@ Harbor receives a `RunningModel` whose base URL is an Iris link endpoint. The in
 chooses the opaque endpoint name, registers either the direct server or broker proxy with Iris, and
 mints the capability URL. Daytona never receives a worker address.
 
-The capability URL stays stable if Iris retries an inference worker and replaces its backing
-registration. A failed evaluation is retried once only when Iris reports such a replacement.
+Each inference session chooses an opaque endpoint name. Iris endpoint leases remove abandoned
+registrations, and a retried task attempt atomically replaces its own same-name registration.
 
 ## Datasets and presets
 
-A `HarborRunner` contains a `HarborRunConfig`:
+A `HarborExecutor` contains a `HarborRunConfig`:
 
 ```python
 from marin.evaluation.harbor_runner import HarborRunConfig
-from marin.evaluation.runner import HarborRunner
+from marin.evaluation.runner import HarborExecutor
 
-runner = HarborRunner(
-    name="tb2-lite",
+executor = HarborExecutor(
     config=HarborRunConfig(
         dataset="hf://DCAgent2/terminal_bench_2",
         version="main",

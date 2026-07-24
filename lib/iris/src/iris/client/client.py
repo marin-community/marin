@@ -19,7 +19,7 @@ Example:
 
 import logging
 from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,6 +256,15 @@ class Job:
         task_statuses = self._client._cluster_client.list_tasks(self._job_id)
         return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
 
+    def logs(self, *, max_lines: int = 0, tail: bool = False) -> list[TaskLogEntry]:
+        """Fetch globally timestamp-ordered logs across this job's tasks.
+
+        Args:
+            max_lines: Global maximum number of lines to return. Zero uses the server default.
+            tail: Return the most recent lines instead of the earliest lines.
+        """
+        return self._client.fetch_task_logs(self._job_id, max_lines=max_lines, tail=tail)
+
     def wait(
         self,
         timeout: float = 300.0,
@@ -341,6 +350,16 @@ class EndpointRegistry(Protocol):
         """
         ...
 
+    def registered(
+        self,
+        name: str,
+        address: str,
+        metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+    ) -> AbstractContextManager[str]:
+        """Own one renewable endpoint registration for a context lifetime."""
+        ...
+
 
 class NamespacedEndpointRegistry:
     """Endpoint registry that auto-prefixes names with a namespace."""
@@ -393,6 +412,24 @@ class NamespacedEndpointRegistry:
             endpoint_id: Endpoint ID to remove
         """
         self._cluster.unregister_endpoint(endpoint_id)
+
+    @contextmanager
+    def registered(
+        self,
+        name: str,
+        address: str,
+        metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+    ) -> Generator[str, None, None]:
+        """Register and renew an endpoint, then remove it promptly on clean exit."""
+        endpoint_id = self.register(name, address, metadata, access)
+        try:
+            yield endpoint_id
+        finally:
+            try:
+                self.unregister(endpoint_id)
+            except Exception:
+                logger.warning("Failed to unregister endpoint id=%s", endpoint_id, exc_info=True)
 
 
 class NamespacedResolver:

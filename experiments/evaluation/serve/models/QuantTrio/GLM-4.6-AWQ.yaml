@@ -1,11 +1,10 @@
 name: glm-4.6-awq
 location: QuantTrio/GLM-4.6-AWQ
 apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
 serve:
-  gpu_only: true
-  fixed_gpu:
-  - H100
-  - 4
   tensor_parallel_size: 4
   max_model_len: 32768
   swap_space_gb: 8

@@ -5,15 +5,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
-from types import MappingProxyType
 
 from marin.evaluation.model_config import (
     AgentConfig,
     GenerationConfig,
     ModelConfig,
+    ResourceHint,
     ServeConfig,
     scan_model_configs,
 )
@@ -41,14 +40,10 @@ def _snowball(
         location=location,
         tokenizer="marin-community/marin-tokenizer",
         apply_chat_template=True,
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
         serve=ServeConfig(
-            hbm_gb=175,
-            gpu_only=True,
-            fixed_gpu=("H100", 8),
             tensor_parallel_size=1,
             data_parallel_size=8,
-            serve_memory="512g",
-            target_cluster="cw-us-east-02a",
             chat_template=chat_template,
             vllm_extra_args=_SNOWBALL_VLLM_ARGS,
         ),
@@ -68,7 +63,7 @@ def _base_hf(name: str, location: str, revision: str, hbm_gb: int) -> ModelConfi
         location=location,
         revision=revision,
         apply_chat_template=False,
-        serve=ServeConfig(hbm_gb=hbm_gb),
+        resource_hint=ResourceHint(hbm_gb=hbm_gb),
     )
 
 
@@ -82,30 +77,41 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         name="qwen3.5-9b",
         location="Qwen/Qwen3.5-9B",
         apply_chat_template=True,
-        serve=ServeConfig(hbm_gb=24),
+        resource_hint=ResourceHint(hbm_gb=24),
         generation=GenerationConfig(max_gen_toks=32768),
     ),
     ModelConfig(
         name="qwen3-8b",
         location="Qwen/Qwen3-8B",
         apply_chat_template=True,
-        serve=ServeConfig(hbm_gb=21, trust_remote_code=True, tool_call_parser="hermes"),
+        resource_hint=ResourceHint(hbm_gb=21),
+        serve=ServeConfig(trust_remote_code=True, tool_call_parser="hermes"),
         agent=AgentConfig(agent_kwargs={"extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}'}),
     ),
     ModelConfig(
         name="llama3.1-8b-instruct",
         location="meta-llama/Llama-3.1-8B-Instruct",
         apply_chat_template=True,
-        serve=ServeConfig(hbm_gb=21),
+        resource_hint=ResourceHint(hbm_gb=21),
     ),
     ModelConfig(
         name="olmo2-7b-instruct",
         location="allenai/OLMo-2-1124-7B-Instruct",
         apply_chat_template=True,
-        serve=ServeConfig(hbm_gb=18),
+        resource_hint=ResourceHint(hbm_gb=18),
     ),
-    ModelConfig(name="qwen3-0.6b", location="Qwen/Qwen3-0.6B", apply_chat_template=True, serve=ServeConfig(hbm_gb=3)),
-    ModelConfig(name="qwen3-1.7b", location="Qwen/Qwen3-1.7B", apply_chat_template=True, serve=ServeConfig(hbm_gb=5)),
+    ModelConfig(
+        name="qwen3-0.6b",
+        location="Qwen/Qwen3-0.6B",
+        apply_chat_template=True,
+        resource_hint=ResourceHint(hbm_gb=3),
+    ),
+    ModelConfig(
+        name="qwen3-1.7b",
+        location="Qwen/Qwen3-1.7B",
+        apply_chat_template=True,
+        resource_hint=ResourceHint(hbm_gb=5),
+    ),
     # The June pretrain cooldown export (the input to the SFT stages). Its tokenizer ships no chat
     # template and the delphi chat protocol is established by the SFT
     # (experiments/june_tpu_67b_a2b/moe/sft_67b_a2b_2stage.py), so messages-based evals serve the concat
@@ -137,5 +143,6 @@ def _build_registry() -> dict[str, ModelConfig]:
 
 
 @cache
-def models() -> Mapping[str, ModelConfig]:
-    return MappingProxyType(_build_registry())
+def models() -> dict[str, ModelConfig]:
+    """Load the model catalog on first use and reuse the resulting registry."""
+    return _build_registry()

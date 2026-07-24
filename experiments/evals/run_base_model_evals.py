@@ -11,7 +11,7 @@ compiles one ``EvalReport`` per model.
     python -m experiments.evals.run_base_model_evals --version 2026.07.16 --run
 """
 
-from marin.evaluation.serving_config import ServeSpec
+from marin.evaluation.model_config import ServeConfig
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import experiment_main
 from marin.experiment.evaluation import eval_report, eval_steps
@@ -37,8 +37,8 @@ def build():
         (deeper_starling, base_model_evals()),
         (llama_3_1_8b, base_model_evals()),
         (olmo_2_base_8b, base_model_evals()),
-        (amber_base_7b, base_model_evals(serve=ServeSpec(tpu_type="v6e-8", max_model_len=2048))),
-        (map_neo_7b, base_model_evals(serve=ServeSpec(tpu_type="v6e-8", max_model_len=4096))),
+        (amber_base_7b, base_model_evals(serve=ServeConfig(max_model_len=2048))),
+        (map_neo_7b, base_model_evals(serve=ServeConfig(max_model_len=4096))),
     ]
     return [eval_report(eval_steps(model, groups), name=f"{model.name}/base") for model, groups in models]
 
