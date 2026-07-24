@@ -611,3 +611,23 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   NGC arms (launch_ngc.py): a2a_cute, te_moe, and the pure-XLA
   ragged_all_to_all + `--xla_gpu_experimental_use_ragged_dot_fusion` native
   path.
+- **Tip-wheel regression (ea41e08, NCCLEP-010 finding):** both TE
+  integrations (te_moe full block AND the nccl_ep dispatch/combine seam)
+  deterministically die at first execution at 64-GPU data8×expert8 —
+  `ncclCommSplit ... remote process exited` on surviving ranks, gang-wide
+  SIGABRT via the coordination service, no CUBIN signature, 2/2 attempts ×
+  several arms across two allocations. 2-node (data1×expert8) and 4-node
+  (data2×expert8) pass, so the trigger needs the full subgroup-clique
+  structure. Falsified: the #3231 collective-stream pin as sole cause — an
+  import-time shim stripping `compute_on("gpu_stream:collective")` from the
+  EP FFI ops does NOT fix it (gc2-te-moe-shim-base rc=250, same signature).
+  Remaining suspect: the NCCL_EP relocation to `3rdparty/nccl-extensions`
+  (2c6135a, nested NVIDIA/nccl 73cf112) — a different nccl_ep code line than
+  the in-tree b87848fbc the 68493d2 wheel used. Knob readouts proceed on the
+  pinned 68493d2 wheel (per-sha JIT header tarballs added to the stash);
+  upstream report to file with the repro matrix.
+- Tuned-incumbent readout (allocation 1): a2a_cute with XLA-default command
+  buffers + `parallel_collective_overlap_limit=2` = **18.18 %** vs 18.24 %
+  base — the "a2a paid the TE command-buffer tax" and "multi-stream would
+  lift a2a" theories are both ~0 at this config. Allocation-2 a2a anchor:
+  18.05 % (draw variance ~0.2 pp).
