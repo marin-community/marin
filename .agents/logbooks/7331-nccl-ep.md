@@ -465,3 +465,57 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   compile cache absorb it — r5 passed on the first try); (3) numerics are a
   pure token partition (bit-identical pre-remat, 1e-5-band with remat).
 - Decision: NCCLEP-007 complete; promote to #7331.
+
+### 2026-07-24 — NCCLEP-008: fairness audit — what we benchmarked was NOT NVIDIA's recommended path
+- Motivation: in the #oa-nvidia Slack thread (2026-07-22/24), the NCCLEP-006
+  table was cited as "NCCL_EP is less performant than a2a + sonic". NVIDIA
+  (tejash_shah) replied that the recommended solution is the **TE MoE block
+  leveraging NCCL_EP** ("the most performant solution"), with the DevLab 2026
+  deck ("How to Scale Models with JAX on NVIDIA GPUs") describing it. Audit
+  whether our comparison actually tested that path.
+- Finding — it did not. Every `nccl_ep` arm in NCCLEP-005/-006/-007 used TE's
+  `ep_dispatch`/`ep_combine` FFI primitives around **our own QuACK/SonicMoE
+  expert compute** (`ep_nccl.py`: dispatch → shard_map(QuACK `expert_mlp_fn`)
+  → weighted hadamard → combine) and **our own router** (grug QB sigmoid
+  top-k). That is a controlled *transport* swap (a2a_cute legs vs NCCL_EP
+  legs at identical router+FFN), and for that question the ~1 pp gap stands.
+  It is NOT a test of NVIDIA's recommended configuration, which is the whole
+  fused block: fused sigmoid+top-k router kernel, NCCL_EP dispatch, TE
+  grouped-quantize + grouped GEMMs, NCCL_EP combine, all under one
+  `custom_vjp` (`transformer_engine.jax.moe.moe`, TE #2912 + EP integration
+  #3116 merged 2026-07-10).
+- Timing accident worth recording: #3116 merged into TE main **seven days
+  before** our build (NCCLEP-002 wheel @ TE main 68493d2, 2026-07-17), so the
+  stashed wheel already ships the full block — `moe.py` is byte-identical
+  between 68493d2 and today's main tip. We built the recommended path and
+  benchmarked around it. (NCCLEP-001's design read even noted moe.py's
+  dispatch → grouped FFN → combine shape — as the template for our seam.)
+- NVIDIA's recommended stack, per the deck + thread, in decreasing centrality:
+  (1) TE MoEBlock / `moe()` (fused router, EP, grouped quant+GEMM);
+  (2) MXFP8/NVFP4 grouped-quantization recipes inside that block (fp8 wire);
+  (3) XLA-side: multi-stream collectives, activation host offloading (GB
+  900 GB/s C2G), ragged-dot fusion in NGC JAX 26.05; delivered via
+  JAX-Toolbox containers ("early preview"). Their MaxText DeepSeek-v3 GB300
+  numbers compose all three. Items (2)-(3) are separate experiments (#7282,
+  NGC track); item (1) is testable today on our stock-jax stack.
+- TE main moved since our wheel in ways that matter for a rebuild follow-up:
+  #3226 (2026-07-23) lifts the single-outer-axis bootstrap constraint (our
+  NCCLEP-006 upstream ask — replica-DP outside FSDP×EP), #3231 (2026-07-22)
+  schedules EP dispatch/combine on XLA's collective stream, #3237 fixes the
+  aux-loss cotangent. None touch `moe.py` itself; the wheel comparison below
+  stays same-build fair.
+- Router-parity source read for the te_moe arm (TE `fused_topk_with_score_function`
+  kernel): sigmoid path = sigmoid(logits) → +bias (NO gradient through top-k;
+  bias reverted before weights) → top-k → sum-normalize → × scaling_factor.
+  With scaling_factor = our `_ROUTING_RENORM_SUM` (2.5) this is grug's QB
+  router up to ONE residual difference: TE adds the bias in score space
+  (post-sigmoid), grug in logit space — identical selection at bias 0,
+  divergent steering strength once QB updates make biases nonzero. moe() has
+  no chunked-dispatch mode (b1024 stays behind the NCCLEP-006 capacity wall)
+  and derives its recv bound WITH 128-token per-expert alignment padding —
+  bootstrap must be sized with TE's own formula, not bare ep×tokens×top_k.
+- Decision: add a `te_moe` backend to the standalone bench that hands the
+  whole MoE layer to `moe()` (grug routing tensors kept only for stats + the
+  QB beta update), same stashed wheel, and rerun the b512 EP8 64-GPU
+  comparison as a three-arm same-allocation job (NCCLEP-009). Implementation
+  on `mcwitt/moe-standalone-ep-ncclep` @ 9c17b66d6.
