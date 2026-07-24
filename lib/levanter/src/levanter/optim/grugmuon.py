@@ -169,10 +169,13 @@ def _grouped_nonexpert_transform(updates, params, transform_array, steps, eps, c
     groups: dict = {}
     for i, ((path, u), p) in enumerate(zip(upd_paths, par_leaves)):
         if hasattr(u, "ndim") and u.ndim == 3 and os.environ.get("SCALE_MUON_NO_NS") != "1":
-            groups.setdefault(tuple(u.shape), []).append(i)
+            # Group by (shape, sharding): same-shape leaves can be sharded transposed (w_q is
+            # P(None,data,model), w_o is P(None,model,data)), and concatenate rejects mixed shardings.
+            spec = getattr(jax.typeof(u).sharding, "spec", None)
+            groups.setdefault((tuple(u.shape), spec), []).append(i)
         else:
             out[i] = transform_array(path, u, p)
-    for shape, idxs in groups.items():
+    for (shape, _spec), idxs in groups.items():
         layers = shape[0]
         stacked = jnp.concatenate([leaves[i] for i in idxs], axis=0)  # [k*L, m, n]
         ns = _newtonschulz_padded_stack_sharded(stacked, steps, eps, coefficient_type)
