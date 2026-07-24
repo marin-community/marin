@@ -276,8 +276,8 @@ function avgMs(row: MethodRow): number {
     <InfoCard title="RPC Methods">
       <p class="text-xs text-text-muted mb-3">
         Native-proxy counters, statuses, in-flight requests, and latency histograms,
-        queried from Telltale snapshots in the controller log server. Counters reset
-        when the native proxy restarts; rates across a reset discard negative deltas.
+        queried from Telltale snapshots in the controller log server. Counters are
+        lifetime totals for the current native-proxy process and reset when it restarts.
       </p>
 
       <!-- Header -->
