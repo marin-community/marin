@@ -1,8 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pyarrow as pa
+import pytest
+
 from experiments.datakit.scripts import dedup_ab_audit
-from experiments.datakit.scripts.dedup_ab_audit import _cc_distance_entries, _evidence_class, _set_metrics
+from experiments.datakit.scripts.dedup_ab_audit import (
+    _cc_distance_entries,
+    _evidence_class,
+    _graph_distance_records,
+    _set_metrics,
+)
 
 
 def test_set_metrics_preserves_containment_direction() -> None:
@@ -87,3 +95,29 @@ def test_graph_distance_discovers_iterations_beyond_original_run_cap(monkeypatch
     assert len(entries) == 1
     assert len(entries[0]["iteration_paths"]) == iteration_count
     assert entries[0]["iteration_paths"][-1].endswith("/it_57/part-00000.parquet")
+
+
+def test_graph_distance_rejects_a_capped_nonconverged_shard(monkeypatch) -> None:
+    final_table = pa.Table.from_pylist(
+        [
+            {
+                "record_id": "source_000|doc",
+                "id_norm": "1",
+                "adjacency_list": ["2"],
+                "component_id": "1",
+                "changed": True,
+            }
+        ]
+    )
+    monkeypatch.setattr(dedup_ab_audit, "_read_table", lambda path, columns: final_table.select(columns))
+
+    with pytest.raises(AssertionError, match="still has 1 changed nodes"):
+        list(
+            _graph_distance_records(
+                {
+                    "shard_index": 0,
+                    "iteration_paths": ["s3://bucket/dedup/metadata/cc/it_50/part-00000.parquet"],
+                    "source_by_tag": {"source_000": "s3://bucket/source"},
+                }
+            )
+        )

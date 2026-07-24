@@ -215,8 +215,13 @@ def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[di
 def _graph_distance_records(entry: dict[str, Any]) -> Iterator[dict[str, Any]]:
     final_table = _read_table(
         entry["iteration_paths"][-1],
-        ["record_id", "id_norm", "adjacency_list", "component_id"],
+        ["record_id", "id_norm", "adjacency_list", "component_id", "changed"],
     )
+    final_changes = sum(bool(changed) for changed in final_table["changed"].to_pylist())
+    if final_changes:
+        raise AssertionError(
+            f"Final connected-components shard {entry['shard_index']} still has {final_changes} changed nodes"
+        )
     final_nodes: dict[str, str] = {}
     for record_id, id_norm, adjacency, component_id in zip(
         final_table["record_id"].to_pylist(),
