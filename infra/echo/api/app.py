@@ -10,10 +10,11 @@ OpenAPI-documented interface (see `/docs`). See infra/echo/README.md for how it 
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated
 
 import schema
 import sqlalchemy
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field
@@ -22,25 +23,22 @@ EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # must match the corpus's embedding spac
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
 
-state: dict[str, object] = {}
-
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     instance, database, user = os.environ["CLOUDSQL_CONNECTION"], os.environ["PGDATABASE"], os.environ["PGUSER"]
     with Connector() as connector:
-        engine = sqlalchemy.create_engine(
+        app.state.engine = sqlalchemy.create_engine(
             "postgresql+pg8000://",
             creator=lambda: connector.connect(instance, "pg8000", user=user, enable_iam_auth=True, db=database),
             pool_size=5,
             pool_pre_ping=True,
         )
-        state["engine"] = engine
-        state["model"] = TextEmbedding(EMBED_MODEL)
+        app.state.model = TextEmbedding(EMBED_MODEL)
         try:
             yield
         finally:
-            engine.dispose()
+            app.state.engine.dispose()
 
 
 app = FastAPI(
@@ -48,6 +46,18 @@ app = FastAPI(
     description="Search Marin's GitHub+Discord corpus and read/append the shared agent work log.",
     lifespan=lifespan,
 )
+
+
+def get_engine(request: Request) -> sqlalchemy.Engine:
+    return request.app.state.engine
+
+
+def get_model(request: Request) -> TextEmbedding:
+    return request.app.state.model
+
+
+Engine = Annotated[sqlalchemy.Engine, Depends(get_engine)]
+Model = Annotated[TextEmbedding, Depends(get_model)]
 
 
 class Hit(BaseModel):
@@ -86,10 +96,6 @@ class LogCreate(BaseModel):
     body: str | None = Field(None, description="Short markdown; link evidence inline.")
 
 
-def engine() -> sqlalchemy.Engine:
-    return state["engine"]  # type: ignore[return-value]
-
-
 def snippet(row: sqlalchemy.Row) -> str:
     return " ".join((row.text or "").split())[:200]
 
@@ -106,8 +112,11 @@ def escape_like(pattern: str) -> str:
 def iap_caller(header: str | None) -> str:
     """The authenticated identity from IAP's `X-Goog-Authenticated-User-Email` header.
 
-    The header is `accounts.google.com:<email>`; behind IAP it is always present and
-    cannot be spoofed by the client (IAP strips inbound copies).
+    IAP injects this for every authenticated request, browser or programmatic — a CLI or
+    agent calling with an ADC-minted ID token gets its own identity here (a user's email,
+    or a service account's). The value is `accounts.google.com:<email>`; IAP strips any
+    client-supplied copy, so it cannot be spoofed. Falls back to `unknown` only if a
+    request somehow reaches the app without IAP (misconfiguration).
     """
     return (header or "").split(":")[-1] or "unknown"
 
@@ -123,14 +132,16 @@ def filtered(query, source: str | None, kind: str | None, since: datetime | None
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    with engine().connect() as conn:
+def healthz(engine: Engine) -> dict[str, str]:
+    with engine.connect() as conn:
         conn.execute(sqlalchemy.text("SELECT 1"))
     return {"status": "ok"}
 
 
 @app.get("/search", response_model=list[Hit])
 def search(
+    engine: Engine,
+    model: Model,
     q: str = Query(description="Natural-language query."),
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
@@ -138,12 +149,11 @@ def search(
     limit: int = Query(10, ge=1, le=100),
 ) -> list[Hit]:
     """Semantic search over the corpus, ranked by cosine distance (lower is closer)."""
-    model: TextEmbedding = state["model"]  # type: ignore[assignment]
     vector = [float(v) for v in next(iter(model.embed([q])))]
     distance = schema.chunks.c.embedding.cosine_distance(vector)
     query = filtered(sqlalchemy.select(schema.chunks, distance.label("distance")), source, kind, since)
     query = query.order_by(distance).limit(limit)
-    with engine().connect() as conn:
+    with engine.connect() as conn:
         # Without iterative scan a selective filter can empty the HNSW candidate set.
         conn.execute(sqlalchemy.text("SET hnsw.iterative_scan = relaxed_order"))
         return [hit(r) for r in conn.execute(query)]
@@ -151,6 +161,7 @@ def search(
 
 @app.get("/grep", response_model=list[Hit])
 def grep(
+    engine: Engine,
     pattern: str = Query(description="Exact substring (SQL wildcards are escaped)."),
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
@@ -160,13 +171,13 @@ def grep(
     query = filtered(sqlalchemy.select(schema.chunks, sqlalchemy.literal(None).label("distance")), source, kind, None)
     query = query.where(schema.chunks.c.text.ilike(f"%{escape_like(pattern)}%"))
     query = query.order_by(schema.chunks.c.date.desc()).limit(limit)
-    with engine().connect() as conn:
+    with engine.connect() as conn:
         return [hit(r) for r in conn.execute(query)]
 
 
 @app.get("/chunks/{chunk_id}", response_model=Chunk)
-def chunk(chunk_id: int) -> Chunk:
-    with engine().connect() as conn:
+def chunk(chunk_id: int, engine: Engine) -> Chunk:
+    with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.chunks).where(schema.chunks.c.id == chunk_id)).first()
     if row is None:
         raise HTTPException(404, f"no chunk {chunk_id}")
@@ -176,6 +187,7 @@ def chunk(chunk_id: int) -> Chunk:
 
 @app.get("/work_log", response_model=list[LogSummary])
 def work_log(
+    engine: Engine,
     days: int = Query(7, ge=1, description="Look back this many days."),
     project: str | None = Query(None, description="Filter to one project slug."),
     limit: int = Query(30, ge=1, le=200),
@@ -188,13 +200,13 @@ def work_log(
     if project:
         query = query.where(schema.work_log.c.project == project)
     query = query.order_by(schema.work_log.c.at.desc()).limit(limit)
-    with engine().connect() as conn:
+    with engine.connect() as conn:
         return [LogSummary(**r._mapping) for r in conn.execute(query)]
 
 
 @app.get("/work_log/{entry_id}", response_model=LogEntry)
-def work_log_entry(entry_id: int) -> LogEntry:
-    with engine().connect() as conn:
+def work_log_entry(entry_id: int, engine: Engine) -> LogEntry:
+    with engine.connect() as conn:
         row = conn.execute(sqlalchemy.select(schema.work_log).where(schema.work_log.c.id == entry_id)).first()
     if row is None:
         raise HTTPException(404, f"no work_log entry {entry_id}")
@@ -202,7 +214,9 @@ def work_log_entry(entry_id: int) -> LogEntry:
 
 
 @app.post("/work_log", response_model=LogEntry, status_code=201)
-def add_work_log(entry: LogCreate, x_goog_authenticated_user_email: str | None = Header(None)) -> LogEntry:
+def add_work_log(
+    entry: LogCreate, engine: Engine, x_goog_authenticated_user_email: str | None = Header(None)
+) -> LogEntry:
     """Append one entry, attributed to the IAP-authenticated caller."""
     statement = (
         schema.work_log.insert()
@@ -211,6 +225,6 @@ def add_work_log(entry: LogCreate, x_goog_authenticated_user_email: str | None =
         )
         .returning(schema.work_log)
     )
-    with engine().begin() as conn:
+    with engine.begin() as conn:
         row = conn.execute(statement).first()
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})

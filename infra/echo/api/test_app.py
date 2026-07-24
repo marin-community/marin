@@ -70,13 +70,14 @@ def make_row(**values):
 
 
 @pytest.fixture
-def client_with(monkeypatch):
+def client_with():
     def _install(rows):
         engine = FakeEngine(rows)
-        monkeypatch.setitem(echo.state, "engine", engine)
+        echo.app.dependency_overrides[echo.get_engine] = lambda: engine
         return TestClient(echo.app), engine
 
-    return _install
+    yield _install
+    echo.app.dependency_overrides.clear()
 
 
 def test_grep_escapes_like_wildcards():
