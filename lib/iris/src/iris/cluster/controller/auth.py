@@ -21,31 +21,37 @@ edit-config-and-reload (rebuild the map) and takes effect on the next request.
 Per-plane audience discipline (RFC 8725) is the load-bearing security invariant:
 every minted token names exactly one ``aud`` (plane), and the control-plane
 verifier requires its ``aud`` to be one of :data:`CONTROL_PLANE_AUDIENCES`. A
-delegation (``aud="finelog"``) token — or any other foreign-plane audience —
-replayed at this controller's RPC surface is therefore rejected by the verifier
-before any policy runs.
+foreign-plane audience replayed at this controller's RPC surface therefore never
+becomes a control-plane identity. A federation (``aud="federation"``) token from a
+trusted peer does authenticate, via the separate
+:class:`FederationTokenVerifier` — as a ``federation-peer`` identity that
+:func:`~iris.rpc.auth.authorize_method` admits only on the federation RPC subset.
 """
 
 import dataclasses
 import logging
 import secrets
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 
 from rigging.server_auth import (
+    IAP_ISSUER,
+    IAP_PUBLIC_KEYS_URL,
     IapAssertionVerifier,
     RequestAuthPolicy,
     TokenVerifier,
     VerifiedIdentity,
 )
 from rigging.token_authority import (
+    DEFAULT_LEEWAY_SECONDS,
     JwksVerifier,
     JwtSigner,
     generate_ed25519_keypair,
     signing_key_from_private_pem,
 )
 
-from iris.cluster.config import AuthConfig
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.cluster.config import AuthConfig, PeerConfig
+from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +94,9 @@ CONTROL_PLANE_AUDIENCE = "iris"
 # Endpoint/`/proxy` tokens: a FIXED plane value (NOT the endpoint name). The
 # specific endpoint rides in the ``endpoint`` claim the /proxy gate matches.
 PROXY_PLANE_AUDIENCE = "iris-proxy"
-# Delegation tokens the relay presents to a shared finelog.
-FINELOG_AUDIENCE = "finelog"
 # The control-plane verifier's fixed allowed-audience set. Endpoint names are
 # dynamic and cannot be enumerated, so binding to the endpoint name moves to the
-# ``endpoint`` claim; this set still rejects a replayed finelog / peer token.
+# ``endpoint`` claim; this set still rejects a replayed peer token.
 CONTROL_PLANE_AUDIENCES = frozenset({CONTROL_PLANE_AUDIENCE, PROXY_PLANE_AUDIENCE})
 
 # The control-plane issuer every cluster minted under before ``name`` existed.
@@ -113,10 +117,18 @@ ENDPOINT_TOKEN_ROLE = "endpoint"
 # Scope claim marking a token as endpoint-scoped; verify() surfaces its bound
 # endpoint as the identity's audience only when this scope is present.
 ENDPOINT_TOKEN_SCOPE = "proxy"
-# Role carried by a relay→finelog delegation token.
-FINELOG_RELAY_ROLE = "finelog-relay"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
-MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
+# Ceiling on a requested endpoint-token TTL. Set to a week so a long-running
+# agentic datagen/eval job can hold one capability URL for its whole run instead
+# of hitting 401s when a shorter token expires under a still-healthy endpoint. The
+# token stays narrowly scoped — one endpoint, /proxy access only, zero RPC
+# authority (see authorize_method) — so a week-long, non-revocable lifetime widens
+# nothing: a leak exposes only that one endpoint until it ages out. Callers opt
+# into a long TTL explicitly; the default stays short.
+MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400 * 7  # 7 days
+NATIVE_PROXY_JWT_CACHE_CAPACITY = 4096
+NATIVE_PROXY_JWT_CACHE_TTL_SECONDS = 60
+NATIVE_PROXY_JWT_LEEWAY_SECONDS = DEFAULT_LEEWAY_SECONDS
 
 # Federation plane: the token a parent controller presents on RPCs to this cluster,
 # verified against the parent's published key by a dedicated verifier. Kept OUT of
@@ -126,6 +138,36 @@ FEDERATION_AUDIENCE = "federation"
 # Short-lived and unrevocable: a fresh token is minted per outgoing RPC, so replay is
 # bounded by the TTL plus the IP allowlist and the issuer/aud/requester binding.
 FEDERATION_TOKEN_TTL_SECONDS = 300  # 5 minutes
+
+
+class NativeProxyAuthMode(StrEnum):
+    """How the native listener handles missing or invalid credentials."""
+
+    PERMISSIVE = "permissive"
+    OPTIONAL = "optional"
+    ENFORCING = "enforcing"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class NativeProxyAuthConfig:
+    """Public verification policy passed to the native listener."""
+
+    mode: NativeProxyAuthMode
+    issuers: tuple[str, ...]
+    jwks: dict
+    leeway_seconds: int
+    cache_capacity: int
+    cache_ttl_seconds: int
+    trusted_cidrs: tuple[str, ...]
+    control_audience: str = CONTROL_PLANE_AUDIENCE
+    proxy_audience: str = PROXY_PLANE_AUDIENCE
+    proxy_scope: str = ENDPOINT_TOKEN_SCOPE
+    federation_audience: str = FEDERATION_AUDIENCE
+    session_cookie: str = SESSION_COOKIE
+    iap_public_keys_url: str = IAP_PUBLIC_KEYS_URL
+    iap_issuer: str = IAP_ISSUER
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +207,10 @@ class JwtTokenManager:
     def public_jwks(self) -> dict:
         """Public JWKS for ``/.well-known/jwks.json`` (current + retained-previous keys)."""
         return self._signer.public_jwks(also=self._previous_public_keys)
+
+    def native_proxy_verification_material(self) -> tuple[tuple[str, ...], dict]:
+        """Return accepted issuers and public keys for the native listener."""
+        return tuple(sorted({self._signer.issuer, _LEGACY_ISSUER})), self.public_jwks()
 
     def create_token(
         self,
@@ -209,19 +255,6 @@ class JwtTokenManager:
                 "jti": key_id,
             },
             audience=PROXY_PLANE_AUDIENCE,
-            ttl_seconds=ttl_seconds,
-        )
-
-    def create_delegation_token(self, subject: str, key_id: str, ttl_seconds: int) -> str:
-        """Mint a relay→finelog delegation token (``aud="finelog"``, ``role="finelog-relay"``).
-
-        Verified by a federated finelog against this controller's public key; its
-        ``aud="finelog"`` is rejected by this controller's own control-plane
-        verifier, so it can never be replayed at the RPC surface.
-        """
-        return self._signer.mint(
-            {"sub": subject, "role": FINELOG_RELAY_ROLE, "jti": key_id},
-            audience=FINELOG_AUDIENCE,
             ttl_seconds=ttl_seconds,
         )
 
@@ -417,6 +450,8 @@ class ControllerAuth:
     # none (fail closed). The federation token itself only proves the requester; the
     # verifier that checks it is folded into ``verifier``.
     allowed_submitters: tuple[str, ...] = ()
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
@@ -486,31 +521,32 @@ def _build_jwt_token_manager(
     return JwtTokenManager(signer, verifier, previous_public_keys=previous_public_keys)
 
 
-def require_persistent_signing_key(relay_address: str | None, signing_key_pem: str | None) -> None:
-    """Fail fast if a controller that relays logs to a shared finelog has no persistent key.
+def require_persistent_signing_key(peers: Mapping[str, PeerConfig], signing_key_pem: str | None) -> None:
+    """Fail fast if a controller that calls federation peers has no persistent key.
 
-    A finelog-relay delegation token (``aud="finelog"``) is the only token an external
-    verifier pins to this controller's published public key: the shared finelog trusts the
-    controller by that key. An ephemeral key rotates on every restart and breaks that trust
-    anchor, so a controller with ``finelog.relay_address`` set must anchor a persistent
-    ``auth.signing_key``.
+    A federation token (``aud="federation"``) is the only token an external verifier pins
+    to this controller's published public key: each peer's ``federation_peers`` map holds
+    this cluster's public key to verify the bearer on an incoming ``FederationSync``. An
+    ephemeral key rotates on every restart and breaks that trust anchor, so a controller
+    with ``peers`` set must anchor a persistent ``auth.signing_key``. Inbound trust
+    (``federation_peers``) imposes no such requirement: a cluster that only *receives*
+    federated calls verifies with its peers' keys and signs nothing anyone else pins.
 
     The key also signs worker tokens and endpoint-scoped ``/proxy`` tokens, but the issuing
     controller verifies those itself, so an ephemeral key is fine for them — a restart just
-    expires any outstanding proxy share-links early. Only a relay token is pinned by an
-    external verifier, so only relay makes persistence a correctness requirement. IAP
-    authenticates each user request and the controller mints no user tokens; federation
-    peers authenticate as clients. So the ephemeral fallback in
-    :func:`create_controller_auth` is fine for every non-relay cluster, including dev
-    (``LocalCluster``).
+    expires any outstanding proxy share-links early. Only a federation token is pinned by an
+    external verifier, so only outgoing federation makes persistence a correctness
+    requirement. IAP authenticates each user request and the controller mints no user tokens.
+    So the ephemeral fallback in :func:`create_controller_auth` is fine for every cluster
+    that hands off no jobs, including dev (``LocalCluster``).
     """
-    if not relay_address or signing_key_pem is not None:
+    if not peers or signing_key_pem is not None:
         return
     raise ValueError(
-        "finelog.relay_address is set, so this controller forwards logs with delegation tokens the "
-        "shared finelog verifies against this controller's published public key; that requires a "
-        "persistent auth.signing_key. Run 'iris cluster init-keys --gcp-secret … --accessor <controller-sa>' "
-        "and set auth.signing_key to the printed reference."
+        "peers is set, so this controller calls federation peers with tokens they verify against "
+        "this controller's published public key; that requires a persistent auth.signing_key. "
+        "Run 'iris cluster init-keys --gcp-secret … --accessor <controller-sa>' and set "
+        "auth.signing_key to the printed reference."
     )
 
 
@@ -564,6 +600,7 @@ def create_controller_auth(
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
             allowed_submitters=allowed_submitters,
+            federation_keys=federation_peers,
         )
 
     provider = auth_config.provider_kind() or CIDR_PROVIDER
@@ -603,6 +640,8 @@ def create_controller_auth(
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
         allowed_submitters=allowed_submitters,
+        iap_audience=signed_header_audience if provider == "iap" else None,
+        federation_keys=federation_peers,
     )
 
 

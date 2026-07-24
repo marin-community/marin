@@ -348,6 +348,11 @@ tasks_table = Table(
     Column("priority_insertion", Integer, nullable=False),
     Column("priority_band", Integer, nullable=False, server_default="2"),
     Column("container_id", String),
+    # Backend status one-liner for a waiting/building task (the current reason it is
+    # not running yet, e.g. the Kubernetes pod/Kueue admission verdict). NULL/"" when
+    # running or when the backend has nothing to say. Served as TaskStatus.status_message
+    # and mirrored across federation.
+    Column("status_message", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),
@@ -429,6 +434,13 @@ task_attempts_table = Table(
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
     Column("backend_id", String, nullable=False, server_default=""),
+    # Backend object identity, captured when the pod is observed so a past attempt
+    # is describable after its pod is gone. terminal_reason is the bounded failure
+    # cause (init-container or task-container). See migration 0047.
+    Column("pod_name", String, nullable=False, server_default=""),
+    Column("pod_uid", String, nullable=False, server_default=""),
+    Column("node_name", String, nullable=False, server_default=""),
+    Column("terminal_reason", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(
@@ -510,9 +522,15 @@ endpoints_table = Table(
     # existing DB without a backfill; a NULL is read as PRIVATE (today's
     # cluster-identity-required behavior), so pre-migration rows are unchanged.
     Column("access", Integer, nullable=True),
+    # Owning peer cluster id for an endpoint mirrored from a federated child; NULL
+    # for a locally-registered endpoint. The /proxy route forwards a remote row to
+    # this peer's controller instead of dialing `address` directly. Set-replaced by
+    # the federation sync loop, keyed to the mirrored (cluster=peer) job/task rows.
+    Column("peer_id", String, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
+    Index("idx_endpoints_peer_id", "peer_id"),
 )
 
 
@@ -582,6 +600,10 @@ federated_jobs_table = Table(
     Column("owner_principal", String, nullable=False, server_default=""),  # end-user identity
     Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF | HANDOFF_REJECTED
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
+    # One handoff incarnation: minted per SENT handle, carried on the delivered
+    # request, stored on the peer's RECEIVED row. A re-drive repeats it; a
+    # resubmission mints a new one — how the peer tells a replay from a new run.
+    Column("handoff_nonce", String, nullable=False, server_default=""),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 

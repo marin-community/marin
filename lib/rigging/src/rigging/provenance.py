@@ -99,13 +99,9 @@ class Provenance:
         outside a checkout or when the ``git`` binary is absent, so it never raises. Use to
         stamp an artifact built by an arbitrary run.
         """
-        raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
-        if raw:
-            # A malformed value must not break stamping; fall through to the git path.
-            try:
-                return cls.from_json(raw)
-            except (json.JSONDecodeError, KeyError, TypeError):
-                logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+        published = _provenance_from_env()
+        if published is not None:
+            return published
 
         cwd = str(repo_dir) if repo_dir is not None else None
 
@@ -133,12 +129,17 @@ class Provenance:
     @classmethod
     def from_json(cls, raw: str) -> "Provenance":
         d = json.loads(raw)
+        built_by = d.get("built_by")
+        if built_by is not None and not isinstance(built_by, str):
+            # built_by feeds per-user namespacing; a non-string is a malformed payload,
+            # not an identity.
+            raise TypeError(f"built_by must be a string or null, got {type(built_by).__name__}")
         return cls(
             tree_hash=d["tree_hash"],
             base_commit=d["base_commit"],
             dirty=bool(d["dirty"]),
             branch=d.get("branch"),
-            built_by=d.get("built_by"),
+            built_by=built_by,
             git_remote=d.get("git_remote"),
             created_at=d.get("created_at", ""),
             command_line=tuple(d.get("command_line", ())),
@@ -161,6 +162,21 @@ class Provenance:
         if self.dirty:
             return f"{self.tree_hash} (off of {self.base_commit}){suffix}"
         return f"{self.base_commit}{suffix}"
+
+
+def _provenance_from_env() -> Provenance | None:
+    """The provenance published in ``MARIN_PROVENANCE``, or ``None`` when absent or malformed.
+
+    A malformed value must not break stamping or namespacing; callers fall back.
+    """
+    raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
+    if not raw:
+        return None
+    try:
+        return Provenance.from_json(raw)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+        return None
 
 
 @functools.cache
@@ -199,24 +215,40 @@ def _getuser() -> str | None:
 # A path segment is lowercase alphanumerics plus '_' and '-'; collapse anything else.
 _USER_SEGMENT_RE = re.compile(r"[^a-z0-9_-]+")
 
+# Machine/service logins that must never own a per-user namespace: resolving to one of
+# these means the launching human's identity was not threaded to this process.
+_MACHINE_LOGINS = frozenset({"root", "runner", "ubuntu", "exedev"})
+
 
 def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
-    Resolves the same OS login that stamps provenance ``built_by`` and reduces it to a clean
-    segment: an email-like login drops its domain but keeps the whole local name
+    Resolves the same user that stamps provenance ``built_by``: the launch identity carried
+    in ``MARIN_PROVENANCE`` when present — so a remote worker namespaces under the submitting
+    human, not its own OS login — otherwise the local OS login. The raw name is reduced to a
+    clean segment: an email-like login drops its domain but keeps the whole local name
     (``russell.power@host`` → ``russell-power``), and the result is lowercased with any
     remaining character collapsed to ``-``. The full local name is kept so distinct users stay
     distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
     silently fall back to a shared bucket.
     """
-    raw = _getuser()
+    launch = _provenance_from_env()
+    raw = (launch.built_by if launch is not None else None) or _getuser()
     if not raw:
-        raise RuntimeError("cannot resolve a username for per-user namespacing (getpass.getuser found none)")
+        raise RuntimeError(
+            "cannot resolve a username for per-user namespacing "
+            "(no launch provenance built_by, and getpass.getuser found none)"
+        )
     name = raw.strip()
     if "@" in name:
         name = name.split("@", 1)[0]
     segment = _USER_SEGMENT_RE.sub("-", name.lower()).strip("-")
     if not segment:
         raise RuntimeError(f"username {raw!r} did not sanitize to a usable path segment")
+    if segment in _MACHINE_LOGINS:
+        logger.warning(
+            "per-user namespace resolved to machine login %r — the launching human's identity "
+            "was not threaded to this process",
+            segment,
+        )
     return segment

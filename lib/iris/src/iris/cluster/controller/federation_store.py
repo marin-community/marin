@@ -11,28 +11,114 @@ on the ``FederationStore`` protocol.
 """
 
 import logging
+import uuid
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
+from iris.cluster.constraints import (
+    Constraint,
+    peer_availability_gate,
+    routing_constraints,
+    strip_backend_constraints,
+    strip_cluster_constraints,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
+from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
     HandoffSpec,
     HandoffState,
 )
-from iris.cluster.types import JobName
-from iris.time_proto import timestamp_from_proto
+from iris.cluster.types import TERMINAL_JOB_STATES, JobName
+from iris.rpc import job_pb2
+from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+# Cap on a mirrored federated endpoint's local lease. The peer re-reports its full
+# endpoint set every sync (~3s), refreshing this, so the cap only bounds how long a
+# stale mirror keeps forwarding after the peer goes silent — short enough to stop
+# routing to a lost peer, long enough to ride out sync jitter.
+FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
+
+
+def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
+    """Read the queued federated jobs into candidates for the tick's federation pass.
+
+    Each candidate carries its shape (routing constraints) and its
+    ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
+    request. Ordered by priority band ascending (lower band = higher priority, with
+    UNSPECIFIED treated as INTERACTIVE), then oldest submission first — the order the
+    assignment pass consumes them in.
+    """
+    candidates: list[QueuedCandidate] = []
+    for handle in reads.queued_handoff_handles(tx):
+        job = reads.get_job_detail(tx, handle.job_id)
+        # Skip a job the tick already terminalized this pass (scheduling timeout, cancel,
+        # or a parent cascade): its handle still reads QUEUED_HANDOFF but it must not be
+        # promoted — the promotion CAS would reject it anyway.
+        if job is None or job.state in TERMINAL_JOB_STATES:
+            continue
+        # Shape only — this pass reads constraints and resources, never the payload.
+        request = reconstruct_launch_job_request(job, workdir_files={})
+        constraints = [Constraint.from_proto(c) for c in request.constraints]
+        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        band = (
+            job.priority_band
+            if job.priority_band != job_pb2.PRIORITY_BAND_UNSPECIFIED
+            else job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+        candidates.append(
+            QueuedCandidate(
+                job_id=handle.job_id,
+                pinned_peer_id=handle.peer_id,
+                priority_band=band,
+                submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
+                shape_constraints=shape,
+                availability_gate=peer_availability_gate(request.resources.device, request.replicas),
+            )
+        )
+    candidates.sort(key=lambda c: (c.priority_band, c.submitted_at_ms))
+    return candidates
 
 
 def _proto_ms(has: bool, ts) -> int | None:
     """Epoch ms of a proto ``Timestamp`` field, or ``None`` when unset."""
     return timestamp_from_proto(ts).epoch_ms() if has else None
+
+
+def _endpoint_rows_from_protos(peer_id: str, protos, now: Timestamp) -> list[EndpointRow]:
+    """Build mirror ``EndpointRow``s from a peer's reported endpoint snapshot.
+
+    The lease deadline is ``now`` plus the reported remaining time, capped at
+    :data:`FEDERATED_ENDPOINT_MIRROR_TTL` so a mirror never outlives contact with
+    the peer. A snapshot without ``lease_remaining`` still expires under the cap.
+    """
+    rows: list[EndpointRow] = []
+    for ep in protos:
+        remaining = duration_from_proto(ep.lease_remaining) if ep.HasField("lease_remaining") else None
+        remaining_ms = FEDERATED_ENDPOINT_MIRROR_TTL.to_ms() if remaining is None else remaining.to_ms()
+        remaining_ms = min(remaining_ms, FEDERATED_ENDPOINT_MIRROR_TTL.to_ms())
+        rows.append(
+            EndpointRow(
+                endpoint_id=ep.endpoint_id,
+                name=ep.name,
+                address=ep.address,
+                task_id=JobName.from_wire(ep.task_id),
+                metadata=dict(ep.metadata),
+                registered_at=now,
+                lease_deadline=now.add_ms(remaining_ms),
+                access=ep.access,
+                peer_id=peer_id,
+            )
+        )
+    return rows
 
 
 class ControllerFederationStore:
@@ -46,13 +132,17 @@ class ControllerFederationStore:
 
     # -- handoff -------------------------------------------------------------
 
-    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
+    def admit_and_persist_queued(self, spec: HandoffSpec) -> HandoffAdmission:
         now = Timestamp.now()
         with self._db.transaction() as cur:
             if reads.get_job_state(cur, spec.local_job_id) is not None:
-                # A handle already exists — a retried/idempotent resubmit.
                 return HandoffAdmission.ALREADY_EXISTS
 
+            # A pinned candidate names its peer as the cluster coordinate up front (so
+            # status reads surface "queued for peer X"); an unpinned one has no peer yet,
+            # so cluster is "" until the tick's promotion stamps the chosen peer. Both are
+            # is_federated (!= LOCAL_CLUSTER), so a queued job is never folded into local
+            # scheduling — it owns no task rows and waits for a peer.
             ops.job.insert_job_and_config(
                 cur,
                 job_id=spec.local_job_id,
@@ -66,7 +156,9 @@ class ControllerFederationStore:
                 job_id=spec.local_job_id,
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
-                handoff_state=int(HandoffState.PENDING_HANDOFF),
+                handoff_state=int(HandoffState.QUEUED_HANDOFF),
+                # Each admission is a new incarnation; every re-drive repeats its nonce.
+                handoff_nonce=uuid.uuid4().hex,
             )
         return HandoffAdmission.ADMITTED
 
@@ -80,6 +172,12 @@ class ControllerFederationStore:
             writes.mark_federated_job_killed(cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error=reason)
 
     def pending_handoffs(self) -> list[HandoffSpec]:
+        """The handles awaiting delivery, each with the full request the peer will run.
+
+        The peer executes this request, so it carries the job's inline workdir files
+        (the small ones the offload threshold kept out of the blob store, e.g. a
+        ``from_callable`` job's ``_callable_runner.py``) alongside the stored config.
+        """
         with self._db.read_snapshot() as tx:
             handles = reads.pending_handoff_handles(tx)
             pending = []
@@ -93,7 +191,10 @@ class ControllerFederationStore:
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
                         submitting_user=job.submitting_user,
-                        request=reconstruct_launch_job_request(job),
+                        request=reconstruct_launch_job_request(
+                            job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
+                        ),
+                        handoff_nonce=handle.handoff_nonce,
                     )
                 )
         return pending
@@ -114,10 +215,20 @@ class ControllerFederationStore:
             if handle is None:
                 return None
             writes.bump_cancel_intent(cur, local_job_id)
-            if handle.handoff_state == int(HandoffState.PENDING_HANDOFF):
+            # A handle the peer has not yet accepted — QUEUED_HANDOFF (before the tick
+            # promotes it) or PENDING_HANDOFF (before the peer acks) — owns no peer-side
+            # job, so it is terminated locally; the bumped intent makes the promotion CAS
+            # / re-drive skip it, so no sync ever mirrors it terminal.
+            not_yet_delivered = (int(HandoffState.QUEUED_HANDOFF), int(HandoffState.PENDING_HANDOFF))
+            if handle.handoff_state in not_yet_delivered:
                 writes.mark_federated_job_killed(
                     cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
                 )
+            # A QUEUED handle has no peer yet (peer_id may be ""), so there is nothing to
+            # route a TerminateJob to. A PENDING or delivered handle names its peer, so a
+            # routed cancel drives it terminal on the peer as a best effort against a race.
+            if handle.handoff_state == int(HandoffState.QUEUED_HANDOFF):
+                return None
             return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id)
 
     def pending_cancels(self) -> list[CancelTarget]:
@@ -147,6 +258,7 @@ class ControllerFederationStore:
         *,
         next_cursor: str,
         cursor_stale: bool,
+        endpoints=(),
     ) -> None:
         with self._db.transaction() as cur:
             for delta in deltas:
@@ -161,12 +273,22 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
+                    # Drop the job's mirrored endpoints through the projection first;
+                    # delete_job CASCADEs the rows in SQL but would leave the in-memory
+                    # endpoint cache serving them (mirrors the pruner's ordering).
+                    cur.caches[EndpointsProjection].remove_by_job_ids(cur, [local_job_id])
                     writes.delete_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)
 
             if cursor_stale:
                 self._set_replace(cur, peer_id, deltas)
+
+            # Set-replace this peer's mirrored endpoints from its full reported set
+            # (applied after the job/task deltas above create the FK targets).
+            cur.caches[EndpointsProjection].replace_remote_for_peer(
+                cur, peer_id, _endpoint_rows_from_protos(peer_id, endpoints, Timestamp.now())
+            )
 
             writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 
@@ -210,6 +332,7 @@ class ControllerFederationStore:
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
+                status_message=task.status_message or None,
             )
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
             # The parent derives the federated task's counts from these mirrored
@@ -217,7 +340,7 @@ class ControllerFederationStore:
             cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
 
     def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
-        """Create the local mirror row for a child a peer spawned under a received root.
+        """Create the local mirror rows for a child a peer spawned under a received root.
 
         The whole federated subtree shares the root's submitter and root submit time,
         read from the (already-present) parent; the row is stamped with the peer
@@ -225,6 +348,11 @@ class ControllerFederationStore:
         ``False`` (and skips) if the parent is not mirrored yet — deltas arrive in
         changelog order, so the parent's creation precedes the child's and this is
         only a defensive guard; the child is re-created on its next delta.
+
+        Writes the ``job_config`` companion the dashboard reads join against, so the
+        child renders like any other job. Only the peer-reported resources are known
+        here — the parent never authored a request for this job and never runs it —
+        so the rest of the config keeps its column defaults.
         """
         parent = local_job_id.parent
         if parent is None:
@@ -243,7 +371,7 @@ class ControllerFederationStore:
             root_job_id=local_job_id.root_job.to_wire(),
             depth=local_job_id.depth,
             state=summary.state,
-            submitted_at_ms=root_submitted_ms,
+            submitted_at_ms=_proto_ms(summary.HasField("submitted_at"), summary.submitted_at) or root_submitted_ms,
             root_submitted_at_ms=root_submitted_ms,
             started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
             finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
@@ -254,6 +382,15 @@ class ControllerFederationStore:
             name=local_job_id.name,
             cluster=peer_id,
         )
+        writes.insert_mirrored_job_config(
+            cur,
+            job_id=local_job_id,
+            name=local_job_id.name,
+            resources=summary.resources,
+        )
+        # job_config backs RunTemplatesProjection; invalidate post-commit per its
+        # watch contract, as ops.job.submit does for a locally-submitted job.
+        cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         return True
 
     def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:

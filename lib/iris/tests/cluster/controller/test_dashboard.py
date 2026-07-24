@@ -23,7 +23,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime
+from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -1264,19 +1264,6 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 
 
-def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """The endpoint proxy forwards FetchLogs to the registered log server."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/proxy/system.log-server/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -1684,6 +1671,9 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     backend.name = name
     backend.autoscaler = autoscaler
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
+    # Default: this backend supplies no federation availability metric (UNSET). Tests
+    # exercising the metric override the return value explicitly.
+    backend.resource_capacity.return_value = None
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
@@ -1925,7 +1915,8 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))
+    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
+    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
     controller_mock.backend_id_for_scale_group = lambda sg: controller_mock.scale_group_to_backend.get(
@@ -1953,6 +1944,12 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     assert summaries["eu-k8s"].get("scaleGroups", []) == []
     # Advertised attributes round-trip through the proto map<string, StringList>.
     assert summaries["gcp"]["advertisedAttributes"]["device-variant"]["values"] == ["v5e-4", "v6e-16"]
+    # The federation availability metric is populated for a supplying backend and left
+    # UNSET (absent) for one that returns None.
+    assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
+    assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
+    assert summaries["gcp"]["availability"]["version"] == 1
+    assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
     assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"

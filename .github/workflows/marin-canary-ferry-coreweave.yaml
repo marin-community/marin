@@ -72,7 +72,7 @@ jobs:
       CANARY_MAX_LOSS: "8.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/config/ci-coreweave.yaml
+      IRIS_CONFIG: lib/iris/config/cw-us-west-04a.yaml
       IRIS_NAMESPACE: iris-ci
       IRIS_MANAGED_LABEL: iris-iris-ci-managed
 
@@ -109,6 +109,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # cw-us-west-04a.yaml's auth.signing_key falls through to a gcp-secret:// reference
+      # (no IRIS_SIGNING_KEY is exported here) — `cluster start` resolves it via Secret
+      # Manager in this shell before projecting it into the controller's env Secret.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
       # Clear leftover task pods from the previous run (canary or PR CI) so the
       # autoscaler recreates them with the images we're about to push.
       # NodePools survive — the H100 node is warm.
@@ -121,8 +129,8 @@ jobs:
       - name: Start shared iris-ci controller
         env:
           BUILDKIT_PROGRESS: plain
-          CW_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          CW_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
 
       - name: Submit canary ferry
@@ -283,7 +291,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: ./.github/actions/notify-slack
+        uses: marin-community/marin-style/actions/notify-slack@main
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

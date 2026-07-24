@@ -1,0 +1,15 @@
+config:
+  xprof:cluster: marin
+  xprof:user: ops
+  xprof:region: us-east5
+  xprof:cpu: "2"
+  xprof:memory: 12GB
+  xprof:disk: 80GB
+  xprof:deploy_generation: "0"
+  xprof:env:
+    XPROF_GRPC_PORT: "50051"
+  xprof:secret_env:
+    CW_KEY_ID: env:CW_KEY_ID
+    CW_KEY_SECRET: env:CW_KEY_SECRET
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6beMpm82uHwo+Di76JAAwlZTLGUboYm5hM9ckFNJ9rcSSQCdtF6iy1EcbXSOEEM2mrOprB29c1Q+51fMV8tW8sUU7dznEhzROYOrXxPXiWEm48ah4sXZgKHymtVquS3Bht0tvUdp3cocDwo=

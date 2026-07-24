@@ -22,13 +22,21 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
-    ProfileTrigger,
     build_profile_row,
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_STATS_NAMESPACE,
+    WORKER_STATS_NAMESPACE,
+    IrisProfile,
+    IrisTaskStat,
+    IrisWorkerStat,
+    ProfileTrigger,
+    WorkerStatus,
+    build_worker_stat,
+)
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -43,16 +51,8 @@ from iris.cluster.worker.env_probe import (
     probe_disk_writable,
     probe_hardware,
 )
-from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE, PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import (
-    TASK_STATS_NAMESPACE,
-    WORKER_STATS_NAMESPACE,
-    IrisTaskStat,
-    IrisWorkerStat,
-    WorkerStatus,
-    build_worker_stat,
-)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -71,7 +71,7 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    port_range: tuple[int, int] = (30000, 40000)
+    port_range: tuple[int, int] = DEFAULT_TASK_PORT_RANGE
     controller_address: str | None = None
     worker_id: str | None = None
     slice_id: str | None = None
@@ -99,7 +99,7 @@ def worker_config_from_wire(
     Translates the parsed config model into the internal dataclass, applying
     defaults where fields are unset.
     """
-    port_start, port_end = 30000, 40000
+    port_start, port_end = DEFAULT_TASK_PORT_RANGE
     if wire.port_range:
         port_start, port_end = map(int, wire.port_range.split("-"))
 

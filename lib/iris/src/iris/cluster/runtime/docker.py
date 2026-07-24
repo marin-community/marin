@@ -31,7 +31,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -81,6 +81,23 @@ def _is_docker_infra_error(stderr: str) -> bool:
     """Return True if *stderr* matches a known infrastructure failure pattern."""
     stderr_lower = stderr.lower()
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
+
+
+def _run_docker(cmd: list[str], *, operation: str) -> str:
+    """Run a docker CLI command and return its stripped stdout.
+
+    On non-zero exit, raises ``ContainerInfraError`` when the stderr matches a
+    known transient infrastructure failure (see ``_is_docker_infra_error``) and
+    ``RuntimeError`` otherwise. ``operation`` names the action for the error
+    message (e.g. ``"create container"`` -> ``"Failed to create container"``).
+    """
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr
+        if _is_docker_infra_error(stderr):
+            raise ContainerInfraError(f"Failed to {operation} (infra): {stderr}")
+        raise RuntimeError(f"Failed to {operation}: {stderr}")
+    return result.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -147,21 +164,29 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
 
 # Widened ephemeral port range for high-connection workloads: the controller and
 # workers fan out to thousands of peers and would otherwise exhaust the default
-# ~28k-port pool. The floor is deliberately above every fixed port the cluster's
-# own services bind — the TPU/JAX runtime (8081, 8431, 8470-8482) and iris'
-# controller/worker RPC (10000/10001). An earlier floor of 1024 pulled those into
-# the kernel's random ephemeral pool, so a co-tenant's outbound connection could
-# be handed e.g. 8431 and block the TPU trainer from binding it, crash-looping
-# with "[::]:8431 ... Address already in use". 11000-65535 still leaves ~54k
-# ephemeral ports.
-EPHEMERAL_PORT_RANGE = "11000 65535"
+# ~28k-port pool. The floor is deliberately above every port the cluster
+# statically allocates — the TPU/JAX runtime (8081, 8431, 8470-8482), iris'
+# controller/worker RPC (10000/10001), and the task named-port range (default
+# 12000-13999, `WorkerConfig.port_range`). An earlier floor of 1024 pulled the
+# fixed service ports into the kernel's random ephemeral pool, so a co-tenant's
+# outbound connection could be handed e.g. 8431 and block the TPU trainer from
+# binding it, crash-looping with "[::]:8431 ... Address already in use". Task
+# named ports had the same failure while they lived at 30000-40000, inside both
+# this range and the kernel *default* range (32768-60999): a task binds its
+# allocated port only after container setup, and an outbound socket handed that
+# exact port in the window killed the bind with EADDRINUSE (#7392). Keeping the
+# task range below both floors makes allocated ports safe even on hosts where
+# these sysctls never ran. 14000-65535 still leaves ~51k ephemeral ports.
+EPHEMERAL_PORT_RANGE = "14000 65535"
 
-# Belt-and-suspenders for the fixed TPU/JAX ports that sit just below the floor:
-# reserve them so they stay out of automatic ephemeral assignment even if the
-# floor is ever lowered again. An explicit bind() by the TPU runtime is
-# unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
-# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
-# 8476); 8081 is levanter megascale.
+# Belt-and-suspenders for the statically allocated ports that sit below the
+# floor: reserve them so they stay out of automatic ephemeral assignment even
+# if the floor is ever lowered again. An explicit bind() is unaffected.
+# libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
+# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's
+# default 8476); 8081 is levanter megascale. The worker bootstrap appends the
+# worker's configured task named-port range, which also covers clusters that
+# override `port_range` back into the ephemeral span.
 RESERVED_HOST_PORTS = "8081,8431,8470-8482"
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
@@ -230,6 +255,16 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     so on TPU even RESTRICTED/DEFAULT run privileged.
     """
     resolved = resolve_container_profile(profile)
+
+    # gVisor runs the whole container under the runsc runtime: the host worker's
+    # dockerd (root) builds the sandbox, and the intercepted guest kernel gives
+    # in-container root the docker default capability set (so setuid/apt work)
+    # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
+    # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
+    # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
+    if resolved == job_pb2.CONTAINER_PROFILE_GVISOR and not is_tpu_run:
+        return ["--runtime", "runsc"]
+
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
 
     flags: list[str] = []
@@ -726,33 +761,11 @@ exec {quoted_cmd}
         logger.info("Creating container: %s", " ".join(cmd[:20]))
         logger.debug("Full docker create command: %s", cmd)
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
-            raise RuntimeError(f"Failed to create container: {stderr}")
-
-        return result.stdout.strip()
+        return _run_docker(cmd, operation="create container")
 
     def _docker_start(self, container_id: str) -> None:
         """Start a Docker container."""
-        result = subprocess.run(
-            ["docker", "start", container_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
-            raise RuntimeError(f"Failed to start container: {stderr}")
+        _run_docker(["docker", "start", container_id], operation="start container")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -920,17 +933,7 @@ class DockerRuntime:
                 return
 
             logger.info("Pulling image %s", image)
-            result = subprocess.run(
-                ["docker", "pull", image],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr
-                if _is_docker_infra_error(stderr):
-                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
-                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+            _run_docker(["docker", "pull", image], operation=f"pull image {image}")
 
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
@@ -953,7 +956,7 @@ class DockerRuntime:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.CACHE:
-                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
         return result

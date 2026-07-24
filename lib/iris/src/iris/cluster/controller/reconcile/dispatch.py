@@ -63,6 +63,7 @@ def build_run_request(
     run_req = build_run_request_fields(
         num_tasks=row.num_tasks,
         entrypoint_json=row.entrypoint_json,
+        workdir_files=reads.get_workdir_files(cur, row.job_id),
         environment_json=row.environment_json,
         bundle_id=row.bundle_id,
         resources=row.resources,
@@ -75,15 +76,19 @@ def build_run_request(
         priority=row.priority_band,
         container_profile=row.container_profile,
     )
-    # Load inline workdir files from the job_workdir_files table.
-    for filename, data in reads.get_workdir_files(cur, row.job_id).items():
-        run_req.entrypoint.workdir_files[filename] = data
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:
         run_req.timeout.milliseconds = row.timeout_ms
     # Coscheduling drives Kueue gang admission on the direct path.
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
+    # Stamp the attempt's uid so the K8s backend can label the pod with it and
+    # tell this attempt's own pod apart from a stale pod a previous job left at
+    # the same (task_hash, attempt_id) name. Visible in this tx for both paths:
+    # promote inserted the attempt row above, redrive reads the current one.
+    uid = reads.attempt_uid_for(cur, row.task_id, attempt_id)
+    if uid is not None:
+        run_req.attempt_uid = uid
     return run_req
 
 
@@ -230,11 +235,15 @@ def drain_for_dispatch(
         order_by_task_id=True,
         backend_id=backend_id,
     )
+    # The K8s provider rebuilds each pod name from (task_id, attempt_id, uid), so
+    # poll must carry the current attempt's uid to target the right incarnation.
+    uids = reads.attempt_uids_for(cur, [(row.task_id, row.current_attempt_id) for row in running_rows])
     running_tasks = [
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
             coscheduled=row.has_coscheduling,
+            attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows
     ]

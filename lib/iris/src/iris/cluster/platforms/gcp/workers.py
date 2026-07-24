@@ -49,8 +49,8 @@ from iris.cluster.platforms.gcp.service import (
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
 from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
-    rewrite_ghcr_to_ar_remote,
-    zone_to_multi_region,
+    rewrite_image_to_mirror,
+    upstream_registry,
 )
 from iris.cluster.platforms.remote_exec import GceRemoteExec
 from iris.cluster.platforms.types import (
@@ -262,6 +262,7 @@ class GcpWorkerProvider:
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
+        self._registry_mirrors = gcp_config.registry_mirrors
         self._label_prefix = label_prefix
         self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
@@ -290,18 +291,19 @@ class GcpWorkerProvider:
         return self._ssh_config
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
-        """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
+        """Rewrite public-registry images to the pull-through mirror for *zone*'s continent.
 
-        Non-GHCR images pass through unchanged.
+        Routing comes from ``platform.gcp.registry_mirrors`` (upstream registry →
+        zone prefix → mirror repo prefix); mirrored pulls stay on-continent and
+        dodge upstream rate limits. Images whose registry has no mirror entry —
+        gcr.io, Artifact Registry, a private host, or any upstream the cluster
+        config leaves unlisted — pass through unchanged.
         """
-        if not image.startswith("ghcr.io/"):
+        if upstream_registry(image) not in self._registry_mirrors:
             return image
         if not zone:
-            raise ValueError("zone is required for GHCR→AR image rewriting on GCP")
-        multi_region = zone_to_multi_region(zone)
-        if not multi_region:
-            return image
-        return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+            raise ValueError("zone is required to rewrite public images to a registry mirror on GCP")
+        return rewrite_image_to_mirror(image, zone, self._registry_mirrors)
 
     def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
         """Try to delete a GCE VM that may have been partially created."""
@@ -404,6 +406,19 @@ class GcpWorkerProvider:
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
         return self._gcp.create_local_slice(slice_id, config, worker_config)
 
+    def _tpu_bootstrap_metadata(self, worker_config: WorkerConfig | None, slice_id: str, zone: str) -> dict[str, str]:
+        """Build TPU instance metadata, injecting the bootstrap startup-script when bootstrapping.
+
+        When ``worker_config`` is set this resolves the worker image and records the slice id on
+        the config (both consumed by the generated startup-script).
+        """
+        metadata = _gcp_instance_metadata()
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=zone)
+            worker_config.slice_id = slice_id
+            metadata["startup-script"] = build_worker_bootstrap_script(worker_config)
+        return metadata
+
     def _create_tpu_slice(
         self,
         config: SliceConfig,
@@ -427,12 +442,7 @@ class GcpWorkerProvider:
         gcp = config.gcp
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
-        metadata = _gcp_instance_metadata()
-        if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
-            worker_config.slice_id = slice_id
-            startup_script = build_worker_bootstrap_script(worker_config)
-            metadata["startup-script"] = startup_script
+        metadata = self._tpu_bootstrap_metadata(worker_config, slice_id, gcp.zone)
 
         request = TpuCreateRequest(
             name=slice_id,
@@ -491,12 +501,7 @@ class GcpWorkerProvider:
         labels = dict(config.labels)
         labels[CAPACITY_TYPE_LABEL] = CAPACITY_TYPE_RESERVED_VALUE
 
-        metadata = _gcp_instance_metadata()
-        if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
-            worker_config.slice_id = slice_id
-            startup_script = build_worker_bootstrap_script(worker_config)
-            metadata["startup-script"] = startup_script
+        metadata = self._tpu_bootstrap_metadata(worker_config, slice_id, gcp.zone)
 
         request = TpuCreateRequest(
             name=slice_id,

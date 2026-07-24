@@ -160,7 +160,7 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 
 ```bash
 # All unit tests
-uv run pytest lib/iris/tests/ -m "not requires_cluster" -o "addopts="
+uv run --package marin-iris --group test pytest lib/iris/tests/
 
 # E2E smoke tests (shared cluster, fast)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="

@@ -245,10 +245,10 @@ def run_controller_serve(
         cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
     )
 
-    # Only a controller that forwards logs to a shared finelog (finelog.relay_address)
-    # needs a persistent signing key: the shared finelog pins this controller's public
-    # key to verify its delegation tokens. Everything else runs on the ephemeral fallback.
-    require_persistent_signing_key(cluster_config.finelog.relay_address, signing_key_pem)
+    # Only a controller that calls federation peers needs a persistent signing key: each
+    # peer pins this controller's public key to verify its federation tokens. Everything
+    # else runs on the ephemeral fallback.
+    require_persistent_signing_key(cluster_config.peers, signing_key_pem)
 
     auth = create_controller_auth(
         cluster_config.auth,
@@ -279,7 +279,6 @@ def run_controller_serve(
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
         peers=cluster_config.peers,
-        finelog=cluster_config.finelog,
     )
 
     # Each worker-daemon backend constructs and owns its liveness tracker, sized by
@@ -357,6 +356,53 @@ def run_controller_serve(
 # ---------------------------------------------------------------------------
 
 
+def controller_serve_options(command):
+    """Apply the click options shared by both ``controller serve`` entrypoints.
+
+    The standalone ``python -m iris.cluster.controller.main serve`` and the
+    ``iris cluster controller serve`` subcommand expose the same runtime knobs.
+    Defining them once here keeps the two entrypoints from drifting apart.
+    """
+    options = [
+        click.option("--host", default="0.0.0.0", help="Bind host"),
+        click.option("--port", default=10000, type=int, help="Bind port"),
+        click.option(
+            "--checkpoint-path",
+            default=None,
+            help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+        ),
+        click.option(
+            "--checkpoint-interval",
+            default=None,
+            type=float,
+            help="Periodic checkpoint interval in seconds (default: hourly)",
+        ),
+        click.option(
+            "--dry-run",
+            is_flag=True,
+            default=False,
+            help="Start in dry-run mode: compute scheduling but suppress all side effects",
+        ),
+        click.option(
+            "--fresh",
+            is_flag=True,
+            default=False,
+            help="Start with an empty database, ignoring any remote checkpoint",
+        ),
+        click.option(
+            "--state-dir",
+            default=None,
+            type=click.Path(path_type=Path),
+            help=(
+                "Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
+            ),
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
 @click.group()
 def cli():
     """Iris Controller - Cluster control plane."""
@@ -364,39 +410,9 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
 @click.option("--config", "config_file", type=click.Path(exists=True), required=True, help="Cluster config YAML")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: 3600s (hourly))",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Start in dry-run mode: compute scheduling but suppress all side effects",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start with an empty database, ignoring any remote checkpoint",
-)
-@click.option(
-    "--state-dir",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
-)
+@controller_serve_options
 def serve(
     host: str,
     port: int,

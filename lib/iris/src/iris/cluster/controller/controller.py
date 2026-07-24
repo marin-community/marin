@@ -6,28 +6,43 @@
 import asyncio
 import atexit
 import enum
+import json
 import logging
+import secrets
 import socket
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
 from rigging.filesystem import prefix_join
-from rigging.server_auth import TokenVerifier
+from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
+from iris.cluster.controller.auth import (
+    CONTROL_PLANE_AUDIENCE,
+    ENDPOINT_TOKEN_SCOPE,
+    FEDERATION_AUDIENCE,
+    NATIVE_PROXY_JWT_CACHE_CAPACITY,
+    NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+    NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+    PROXY_PLANE_AUDIENCE,
+    ControllerAuth,
+    FederationTokenProvider,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
+    request_auth_policy,
+)
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -50,10 +65,11 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.finelog_relay import build_log_forwarder
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
+from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
 from iris.cluster.controller.ops.task import (
     Assignment,
     finalize,
@@ -83,8 +99,14 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
+from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.federation.manager import DEFAULT_HEARTBEAT_INTERVAL, FederationManager
+from iris.cluster.federation.availability import Promotion, QueuedCandidate
+from iris.cluster.federation.manager import (
+    DEFAULT_HEARTBEAT_INTERVAL,
+    DEFAULT_MAX_HANDOFFS_PER_CYCLE,
+    FederationManager,
+)
 from iris.cluster.federation.peer import build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
@@ -97,6 +119,7 @@ from iris.cluster.types import (
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -109,23 +132,21 @@ logger = logging.getLogger(__name__)
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
 _RPC_HANDLER_THREADS = 64
+_CONTROLLER_KEEPALIVE = 120
+_PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
     def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
-        try:
-            loop.run_until_complete(server.serve())
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
+        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
+        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
+            runner.get_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
+            )
+            runner.run(server.serve(sockets=sockets))
 
     server.run = run_with_executor
 
@@ -157,6 +178,13 @@ class _TickInputs:
     routing: RoutingInputs | None = None
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
+    # Federated jobs queued on this parent awaiting a peer with free capacity, in
+    # priority-then-age order. The tick's federation pass assigns them to peers.
+    queued_federation: list[QueuedCandidate] = field(default_factory=list)
+    # Queued federated jobs whose scheduling deadline has elapsed while waiting for a
+    # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
+    # timeout scan never sees them).
+    expired_queued_federation: list[JobName] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -263,21 +291,20 @@ class ControllerConfig:
     cluster_id: str = ""
     """This cluster's real federation identity (from the cluster config ``name``).
 
-    Sent as the ``requester_id`` on each ``FederationSync`` and stamped on relayed
-    finelog batches so a shared hub namespaces this cluster's logs. Distinct from the
-    ``'local'`` sentinel the ``cluster`` column uses for this controller's own rows.
-    Required once this cluster hands jobs off; unused otherwise."""
+    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
+    hands jobs off; unused otherwise."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
 
-    finelog: ClusterFinelogConfig = field(default_factory=ClusterFinelogConfig)
-    """This cluster's finelog config. An empty ``relay_address`` leaves the log plane
-    single-cluster: no relay, local reads. Set it to forward logs to a shared store."""
-
     federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
     """How often the federation capability heartbeat probes each peer."""
+
+    max_federation_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE
+    """Cap on federation queue promotions to any one peer per control tick. Bounds a
+    burst of over-assignment against a single (possibly stale) availability
+    observation, on top of the reservation ledger."""
 
 
 class Controller:
@@ -407,6 +434,7 @@ class Controller:
             bundles=self._bundle_store,
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
+            max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
 
         # The log client and its tables are built before the backend and autoscaler
@@ -421,22 +449,12 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
-        # Finelog relay: when a relay target is configured, durably forwards this cluster's
-        # local finelog to the shared global store. The forwarding mechanism lives in
-        # finelog; this only supplies the local client, the cluster credential, and a state
-        # path. An empty relay_address leaves the log plane single-cluster — no forwarder
-        # thread, no egress, byte-identical behavior.
-        self._log_forwarder = (
-            build_log_forwarder(
-                config=config.finelog,
-                cluster_id=config.cluster_id,
-                source_client=self._log_client,
-                state_dir=self._db.db_dir,
-                jwt_manager=config.auth.jwt_manager if config.auth else None,
-            )
-            if config.finelog.relay_address
-            else None
-        )
+        # Periodic iris.task_state emitter: per-root-job task counts + wait ages
+        # aggregated from the controller DB. Only cluster-view (k8s) controllers
+        # emit it — their rows must ride finelog federation, while a GCP
+        # controller's DB is directly queryable via ExecuteRawQuery. Construction
+        # starts the emitter thread, so it is built in start(), closed in stop().
+        self._task_state_collector: TaskStateCollector | None = None
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
@@ -468,14 +486,29 @@ class Controller:
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
         )
+        # Forwards a /proxy request for an endpoint that lives on a federated child
+        # to that peer's controller, presenting this cluster's federation bearer.
+        # Present only when this controller has peers and a signing key to mint with.
+        federated_handoff = (
+            FederatedEndpointHandoff(self._federation.peer_controller_address, federation_token_provider.get_token)
+            if federation_token_provider is not None
+            else None
+        )
+
+        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
+            with self._db.read_snapshot() as q:
+                return reads.has_received_job_from_peer(q, peer_id, root_job)
+
+        self._auth_policy = request_auth_policy(config.auth)
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
-            host=config.host,
-            port=config.port,
             auth_provider=config.auth_provider,
-            auth_policy=request_auth_policy(config.auth),
+            auth_policy=self._auth_policy,
             jwt_manager=config.auth.jwt_manager if config.auth else None,
+            federated_handoff=federated_handoff,
+            federation_owner_check=_federation_owner_check,
+            proxy_decision_secret=secrets.token_urlsafe(32),
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -494,6 +527,8 @@ class Controller:
         self._pending_kicks: list[PendingKick] = []
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
+        self._native_proxy = None
+        self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
@@ -626,27 +661,24 @@ class Controller:
 
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
+            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
+                self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
-        # proxy_headers / forwarded_allow_ips: production traffic arrives via
-        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
-        # headers, ``scope["server"]`` is the controller's bind address, so
-        # any absolute URL built by Starlette (notably the trailing-slash
-        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
-        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
-        # outside the VPC. Trusting all upstream IPs is safe because the
-        # controller's only ingress is the LB.
+        # The native listener is Uvicorn's only ingress and preserves the load
+        # balancer's forwarded headers. Trust its loopback connection so
+        # Starlette builds externally reachable absolute URLs.
         server_config = uvicorn.Config(
             self._dashboard.app,
-            host=self._config.host,
-            port=self._config.port,
+            host=_PRIVATE_CONTROLLER_HOST,
+            port=0,
             log_level="warning",
             log_config=None,
-            timeout_keep_alive=120,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
             proxy_headers=True,
             forwarded_allow_ips="*",
         )
@@ -678,10 +710,6 @@ class Controller:
         # Start the federation capability heartbeat (a no-op with no peers).
         self._federation.start()
 
-        # Start the global-finelog log forwarder (only when a relay target is configured).
-        if self._log_forwarder is not None:
-            self._log_forwarder.start()
-
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
         self._atexit_registered = True
@@ -691,6 +719,80 @@ class Controller:
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
+        )
+        assert self._server is not None
+        assert self._server.servers
+        private_port = self._server.servers[0].sockets[0].getsockname()[1]
+        self._native_proxy = NativeProxy(
+            self._config.host,
+            self._config.port,
+            f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
+            self._dashboard.proxy_decision_secret,
+            json.dumps(asdict(self._native_proxy_auth_config())),
+        )
+        self._replace_native_proxy_registry()
+
+    def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
+        if self._native_proxy is None:
+            return
+        if isinstance(update, ProxyRegistryReset):
+            self._recover_native_proxy_registry()
+            return
+        payload = json.dumps(asdict(update))
+        try:
+            self._native_proxy.update_mappings(payload)
+        except ValueError:
+            logger.exception(
+                "Native proxy rejected endpoint mapping generation %d -> %d; replacing registry",
+                update.base_generation,
+                update.next_generation,
+            )
+            self._recover_native_proxy_registry()
+
+    def _recover_native_proxy_registry(self) -> None:
+        assert self._native_proxy is not None
+        try:
+            self._replace_native_proxy_registry()
+        except ValueError:
+            logger.exception("Native proxy registry replacement failed; pausing native routing")
+            self._native_proxy.pause_registry()
+
+    def _replace_native_proxy_registry(self) -> None:
+        if self._native_proxy is None:
+            return
+        self._native_proxy.pause_registry()
+        snapshot = self._endpoint_service.proxy_registry_snapshot()
+        self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
+
+    def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
+        auth = self._config.auth
+        if auth is None or auth.provider is None:
+            mode = NativeProxyAuthMode.PERMISSIVE
+        elif self._auth_policy.allows_anonymous:
+            mode = NativeProxyAuthMode.OPTIONAL
+        else:
+            mode = NativeProxyAuthMode.ENFORCING
+        if auth is not None and auth.jwt_manager is not None:
+            issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        else:
+            issuers, jwks = (), {"keys": []}
+        return NativeProxyAuthConfig(
+            mode=mode,
+            issuers=issuers,
+            jwks=jwks,
+            leeway_seconds=NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+            cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
+            cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+            trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
+            control_audience=CONTROL_PLANE_AUDIENCE,
+            proxy_audience=PROXY_PLANE_AUDIENCE,
+            proxy_scope=ENDPOINT_TOKEN_SCOPE,
+            federation_audience=FEDERATION_AUDIENCE,
+            session_cookie=SESSION_COOKIE,
+            iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
+            iap_issuer=IAP_ISSUER,
+            iap_audience=auth.iap_audience if auth is not None else None,
+            federation_keys=auth.federation_keys if auth is not None else {},
         )
 
     def stop(self) -> None:
@@ -720,13 +822,12 @@ class Controller:
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
+        if self._task_state_collector is not None:
+            self._task_state_collector.close()
         self._federation.stop()
 
-        # Stop the forwarder (joins its thread, closes its egress client) before
-        # log_stack.close() below tears down the local client it reads from.
-        if self._log_forwarder is not None:
-            self._log_forwarder.stop()
-
+        if self._native_proxy is not None:
+            self._native_proxy.stop()
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
         # stops the platform) and releases the backend's own resources.
@@ -871,6 +972,7 @@ class Controller:
         scan_timeouts = run_reconcile and self._timeout_rate_limiter.should_run()
 
         inputs = self._build_tick_inputs(
+            now=now,
             run_schedule=run_schedule,
             run_reconcile=run_reconcile,
             run_autoscale=run_autoscale,
@@ -883,6 +985,15 @@ class Controller:
         if run_schedule:
             sched = self._schedule_phase(inputs)
             sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
+
+        # Federation pass: assign queued federated jobs to peers that have room. A pure
+        # decision over the tick's snapshot + the manager's reservation ledger; the
+        # promotions commit (conditionally) in the same end-of-tick transaction. Runs in
+        # the single scheduling thread right after local scheduling, so every scheduling
+        # decision — local placement and peer selection — flows through one place.
+        federation_promotions: list[Promotion] = []
+        if run_schedule and inputs.queued_federation:
+            federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
         recon_results: dict[str, ReconcileResult] = {}
         timeout_decisions: list[TerminalDecision] = []
@@ -904,7 +1015,7 @@ class Controller:
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
 
-        self._commit_tick(
+        confirmed_promotions = self._commit_tick(
             sched_result=merged_sched,
             sched_results=sched_results,
             backend_pins=backend_pins,
@@ -913,8 +1024,21 @@ class Controller:
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
             auto_results=auto_results,
+            federation_promotions=federation_promotions,
+            expired_queued_federation=inputs.expired_queued_federation,
             now=now,
         )
+
+        # Charge the reservation ledger only for promotions whose CAS committed, so a
+        # promotion raced by a cancel does not hold phantom peer capacity. The sync
+        # loop delivers each newly-PENDING handle on its next pass.
+        if confirmed_promotions:
+            self._federation.confirm_promotions(confirmed_promotions)
+            logger.info(
+                "Federation: promoted %d queued job(s): %s",
+                len(confirmed_promotions),
+                ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
+            )
 
         # Force the next reconcile so workers are told to stop the kicked attempts
         # promptly instead of waiting a full reconcile interval.
@@ -942,6 +1066,7 @@ class Controller:
     def _build_tick_inputs(
         self,
         *,
+        now: Timestamp,
         run_schedule: bool,
         run_reconcile: bool,
         run_autoscale: bool,
@@ -956,7 +1081,6 @@ class Controller:
         each backend reads its own workers, so nothing here is partitioned.
         """
         inputs = _TickInputs()
-        worker_daemon_backends = [bid for bid in self._backend_ids if bid not in self._dispatch_backends]
 
         # Placement-owning backends each drain their own pending dispatch first.
         if run_reconcile:
@@ -972,9 +1096,13 @@ class Controller:
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
-            # Execution-timeout finalization is controller-owned and global; it
-            # runs alongside the worker-daemon reconcile.
-            if run_reconcile and scan_timeouts and worker_daemon_backends:
+                if self._config.peers:
+                    inputs.queued_federation = build_queued_candidates(snap)
+                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
+            # Execution-timeout finalization is global across worker-daemon and
+            # K8s backends. K8s gangs rely on it because they omit
+            # activeDeadlineSeconds.
+            if run_reconcile and scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
 
@@ -1176,15 +1304,22 @@ class Controller:
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
+        federation_promotions: list[Promotion],
+        expired_queued_federation: list[JobName],
         now: Timestamp,
-    ) -> None:
+    ) -> list[Promotion]:
         """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), each backend's reconcile effects, execution-timeout
-        finalizations, administrative kicks, per-backend autoscaler state. Each
-        backend already authored its own ``effects`` during reconcile; the
-        controller just commits them uniformly. A no-op tick opens no transaction.
+        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
+        promotions, each backend's reconcile effects, execution-timeout finalizations,
+        administrative kicks, per-backend autoscaler state. Each backend already authored
+        its own ``effects`` during reconcile; the controller just commits them uniformly.
+        A no-op tick opens no transaction.
+
+        Returns the federation promotions whose conditional CAS actually committed (a
+        concurrent cancel/terminalize between the tick's read and this write drops the
+        rest); the caller charges the reservation ledger for those.
         """
         states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
 
@@ -1196,14 +1331,35 @@ class Controller:
             or routing_unschedulable
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
-        if not (has_sched or has_recon or timeout_decisions or pending_kicks or states):
-            return
+        if not (
+            has_sched
+            or has_recon
+            or timeout_decisions
+            or pending_kicks
+            or states
+            or federation_promotions
+            or expired_queued_federation
+        ):
+            return []
 
+        confirmed: list[Promotion] = []
         with self._db.transaction() as cur:
             if sched_result is not None:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
                 )
+            # Fail queued handoffs past their scheduling deadline before promoting, so a
+            # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
+            for job_id in expired_queued_federation:
+                writes.mark_federated_job_unschedulable(
+                    cur,
+                    job_id,
+                    now_ms=now.epoch_ms(),
+                    error="Scheduling timeout exceeded while queued for a federation peer",
+                )
+            for promotion in federation_promotions:
+                if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
+                    confirmed.append(promotion)
             for backend_id in self._backend_ids:
                 result = recon_results.get(backend_id)
                 if result is not None and not result.effects.is_empty:
@@ -1219,6 +1375,7 @@ class Controller:
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
+        return confirmed
 
     def _commit_schedule_decisions(
         self,
@@ -1625,10 +1782,14 @@ class Controller:
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        if self._server and self._server.started:
-            if self._server.servers and self._server.servers[0].sockets:
-                return self._server.servers[0].sockets[0].getsockname()[1]
-        return self._config.port
+        return self._native_proxy.port if self._native_proxy is not None else self._config.port
+
+    @property
+    def native_proxy_stats(self) -> NativeProxyStats | None:
+        """Return native registry and JWT-cache counters, or ``None`` before startup."""
+        if self._native_proxy is None:
+            return None
+        return NativeProxyStats.from_json(self._native_proxy.stats_json)
 
     @property
     def external_host(self) -> str:

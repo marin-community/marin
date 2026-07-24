@@ -26,6 +26,22 @@ class EvalTaskConfig:
     task_kwargs: dict | None = None
     """Additional keyword arguments specifically for this task."""
 
+    generation: bool = False
+    """Whether the task scores generated text (gsm8k, humaneval) rather than loglikelihoods (MCQ).
+    Loglikelihood tasks must use a completions-style API -- chat endpoints cannot echo prompt
+    logprobs -- so a served eval only applies a model's chat template to generation tasks."""
+
+    unsafe_code: bool = False
+    """Whether the task executes model-generated code to score it (humaneval-style code_eval).
+    lm-eval refuses such tasks unless the runner passes ``--confirm_run_unsafe_code``."""
+
+    completion_only: bool = False
+    """Whether this generation task must use the completions API even for chat-template models.
+    Code-infilling tasks (humaneval) score a raw continuation of the prompt; under a chat template
+    the model instead replies with prose and markdown fences and the scored program does not parse.
+    (The instruct task variants do not help here: their extraction filters rely on an assistant
+    prefill that OpenAI-style chat APIs cannot express.)"""
+
 
 @dataclass(frozen=True)
 class EvaluationConfig:

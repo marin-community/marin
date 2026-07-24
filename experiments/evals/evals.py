@@ -1,29 +1,57 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Canonical set of evals.
+"""Composable eval artifacts.
+
+An eval is a lazy ``ArtifactStep``: one :class:`EvalGroup` of tasks, run against a served model,
+produces one typed :class:`~marin.evaluation.eval_result.EvalchemyResult`, addressed by
+``evaluation/evalchemy/{model}/{group}``. Because each group carries its own identity, a user
+*combines the groups they want* instead of calling a fixed ``default_*`` bundle, and any group is
+cached and reused across experiments. :func:`eval_report` aggregates a suite's results into one
+:class:`~marin.evaluation.eval_result.EvalReport` a downstream step can pick up.
+
+Every group runs through the evalchemy path (:mod:`experiments.evals.evalchemy.serve_and_eval`): the
+model is served once as an OpenAI-compatible endpoint (marin-serve: vLLM or Levanter), the evalchemy
+fork evaluates the tasks against that URL, and the server is torn down. The eval is decoupled from the
+model backend by the URL (issue #4827), so multiple-choice and generation tasks run the same way — no
+separate JAX-logprob backend.
+
+The task menus (``core_evals`` / ``key_evals`` / ``base_model_evals``) are data — lists of
+``EvalGroup`` — drawn from :mod:`experiments.evals.task_configs`, the same task menu the in-loop
+``EvalSuite`` on ``train_lm`` uses. This module is the *post-hoc* path: evals on any existing
+checkpoint. :func:`evaluate_harbor` is a separate backend for Harbor registry datasets.
 """
 
 import logging
-import re
 from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import cast
 
 from fray.cluster import ResourceConfig
-from marin.evaluation.eval_result import LevanterEvalResult
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_result import (
+    EvalchemyResult,
+    EvalReport,
+    EvalResult,
+    ReportEntry,
+    compile_eval_report,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
-from marin.execution.artifact import Artifact
+from marin.evaluation.utils import discover_hf_checkpoints
+from marin.execution.artifact import Artifact, result_type_name
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.execution.step_runner import StepRunner
 from marin.inference.vllm_server import validate_vllm_mode_env
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.evalchemy_results_compiler import CompiledEvalResult, compile_evalchemy_results_fn
-from experiments.evals.evalchemy_task_configs import EVALCHEMY_CORE_TASKS
+from experiments.evals.evalchemy.serve_and_eval import (
+    DEFAULT_NUM_CONCURRENT,
+    EvalchemyEvalConfig,
+    ServeSpec,
+    serve_and_eval,
+)
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -33,359 +61,243 @@ from experiments.evals.task_configs import (
     MMLU_0_SHOT,
     MMLU_5_SHOT,
     MMLU_PRO_5_SHOT,
-    OPEN_LM_LEADERBOARD_GEN,
-    OPEN_LM_LEADERBOARD_MCQ,
 )
-
-EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
-EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
 
+# Eval steps defer their version to the ambient BuildContext (see marin.experiment.cli): a driver
+# supplies it via --version, so nothing here hardcodes a calendar version.
 
-def _model_deps(model: ArtifactStep[LevanterCheckpoint] | str) -> tuple[ArtifactStep, ...]:
-    """A LevanterCheckpoint handle becomes a dependency; a path string carries no dep."""
-    return (model,) if isinstance(model, ArtifactStep) else ()
+# lm-eval's ``code_eval`` metric (humaneval) executes model-generated code; the eval client sets
+# HF_ALLOW_CODE_EVAL on its worker (serve_and_eval), so no per-group env is needed for it.
+
+# The orchestrator step is a lightweight CPU job: it submits the serve + eval child jobs and waits.
+# The serving slice rides on the group's ServeSpec, not on this resource.
+_ORCHESTRATOR_RESOURCES = ResourceConfig.with_cpu(cpu=1)
 
 
-def _model_path(ctx: StepContext, model: ArtifactStep[LevanterCheckpoint] | str) -> str:
-    """Resolve a LevanterCheckpoint handle to its output path; pass a path string through."""
-    return ctx.artifact_path(model) if isinstance(model, ArtifactStep) else model
+@dataclass(frozen=True)
+class EvalGroup:
+    """A set of tasks evaluated together against one served model -> one ``EvalchemyResult`` artifact.
+
+    The composable unit. Granularity is the *group*: a group is served once (one model boot) and its
+    tasks are evaluated against that endpoint, so a suite of groups does not pay per-task startup.
+    Users compose groups; each group is addressed and cached on its own.
+
+    ``id`` is the task-group segment of the artifact name (``evaluation/evalchemy/{model}/{id}``) — the
+    author's explicit statement of the group's identity. Changing the *tasks* under a fixed ``id``
+    trips the advisory drift check (bump ``id`` or the step version to fork identity).
+
+    ``serve`` picks the serving backend (vLLM or Levanter) and slice; ``apply_chat_template`` selects
+    the chat vs completion OpenAI route. ``tokenizer`` overrides the HF tokenizer the eval client loads
+    (defaults to the served checkpoint; set it to a base-model HF id when serving a ``gs://`` path).
+    """
+
+    tasks: tuple[EvalTaskConfig, ...]
+    id: str
+    serve: ServeSpec = field(default_factory=ServeSpec)
+    tokenizer: str | None = None
+    apply_chat_template: bool = False
+    max_gen_toks: int = 2048
+    max_eval_instances: int | None = None
+    num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    discover_latest_checkpoint: bool = True
 
 
-def evaluate_lm_evaluation_harness(
+def evaluate_evalchemy(
     model_name: str,
     model: ArtifactStep[LevanterCheckpoint],
-    evals: list[EvalTaskConfig],
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = None,
-    resource_config: ResourceConfig | None = None,
+    evals: Sequence[EvalTaskConfig],
+    task_group_id: str,
+    serve: ServeSpec,
+    *,
+    tokenizer: str | None = None,
+    max_gen_toks: int = 2048,
     apply_chat_template: bool = False,
-    wandb_tags: list[str] | None = None,
+    max_eval_instances: int | None = None,
+    num_concurrent: int = DEFAULT_NUM_CONCURRENT,
     discover_latest_checkpoint: bool = True,
-    env_vars: dict[str, str] | None = None,
-) -> ArtifactStep[Artifact]:
-    """
-    Create an eval artifact for the model using LM Evaluation Harness.
+    version: str | None = None,
+) -> ArtifactStep[EvalchemyResult]:
+    """An evalchemy eval of one task group against a served model -> :class:`EvalchemyResult`.
 
-    Args:
-        model_name: Name of the model.
-        model: LevanterCheckpoint handle to evaluate. Wrap a pre-existing checkpoint path with
-            ``ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)`` to pass one in.
-        evals: List of evaluations to run with LM Evaluation Harness.
-        env_vars: Extra env vars to set on the child iris worker.
-            Needed for vLLM-on-TPU bring-up (e.g. ``VLLM_ENABLE_V1_MULTIPROCESSING=0``)
-            and code-eval-dependent tasks like humaneval (``HF_ALLOW_CODE_EVAL=1``).
-            The coordinator's own ``os.environ`` does NOT propagate to iris-spawned
-            children — these vars must be threaded through ``remote()``.
+    A CPU orchestrator step serves ``model`` (marin-serve), evaluates ``evals`` against its OpenAI URL
+    with the evalchemy fork, and tears the server down. ``task_group_id`` is the stable identity
+    segment so two groups on one model get distinct ``name@version`` addresses. ``tokenizer`` is the HF
+    tokenizer the eval client loads (defaults to the served checkpoint, which the eval image cannot
+    load from a ``gs://`` path -- set it to the base model's HF id in that case). ``version`` is
+    explicit, or None to defer to the ambient BuildContext.
     """
     deps = (model,)
+    name = f"evaluation/evalchemy/{model_name}/{task_group_id}"
 
-    def build_config(ctx: StepContext) -> EvaluationConfig:
+    def build_config(ctx: StepContext) -> EvalchemyEvalConfig:
         model_path = ctx.artifact_path(model)
-        return EvaluationConfig(
-            evaluator="lm_evaluation_harness",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=ctx.output_path,
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
+        if discover_latest_checkpoint:
+            model_path = discover_hf_checkpoints(model_path)[-1]
+        return EvalchemyEvalConfig(
+            model=model_path,
+            tasks=tuple(evals),
+            out_path=ctx.output_path,
+            serve=serve,
+            tokenizer=tokenizer,
+            max_gen_toks=max_gen_toks,
             apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
+            max_eval_instances=max_eval_instances,
+            num_concurrent=num_concurrent,
         )
 
     return ArtifactStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}",
-        version="2026.06.28",
-        artifact_type=Artifact,
+        name=name,
+        version=resolve_version(name, version),
+        artifact_type=EvalchemyResult,
         run=remote(
-            evaluate,
-            resources=resource_config,
-            pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
-            env_vars=env_vars,
+            serve_and_eval,
+            resources=_ORCHESTRATOR_RESOURCES,
+            env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
         ),
         build_config=build_config,
         deps=deps,
     )
 
 
-def _infer_model_name_for_path(model_path: str) -> str:
+def eval_step(
+    model: ArtifactStep[LevanterCheckpoint], group: EvalGroup, *, version: str | None = None
+) -> ArtifactStep[EvalResult]:
+    """One eval group -> one typed ``EvalResult`` artifact, addressed by model + group id.
+
+    ``version`` is explicit, or None to defer to the ambient BuildContext.
     """
-    Infer model name from model path.
+    step = evaluate_evalchemy(
+        model_name=model.name,
+        model=model,
+        evals=list(group.tasks),
+        task_group_id=group.id,
+        serve=group.serve,
+        tokenizer=group.tokenizer,
+        max_gen_toks=group.max_gen_toks,
+        apply_chat_template=group.apply_chat_template,
+        max_eval_instances=group.max_eval_instances,
+        num_concurrent=group.num_concurrent,
+        discover_latest_checkpoint=group.discover_latest_checkpoint,
+        version=version,
+    )
+    # ArtifactStep is invariant in its artifact type, so widen the concrete result to the base.
+    return cast("ArtifactStep[EvalResult]", step)
+
+
+def eval_steps(
+    model: ArtifactStep[LevanterCheckpoint], groups: Sequence[EvalGroup], *, version: str | None = None
+) -> list[ArtifactStep[EvalResult]]:
+    """Build one ``eval_step`` per group. A convenience over a list comprehension, not an abstraction."""
+    return [eval_step(model, group, version=version) for group in groups]
+
+
+def eval_report(
+    results: Sequence[ArtifactStep[EvalResult]],
+    *,
+    name: str,
+    version: str | None = None,
+) -> ArtifactStep[EvalReport]:
+    """Aggregate a suite's ``EvalResult`` artifacts into one :class:`EvalReport`.
+
+    A CPU step depending on every result. It reads each result's metrics through the typed accessor
+    (one code path across groups) and writes the merged per-task metrics + averages. ``name`` is the
+    report's identity segment (``evaluation/report/{name}``), e.g. ``f"{model.name}/key"``. ``version``
+    is explicit, or None to defer to the ambient BuildContext.
     """
-    # path names are like gs://marin-us-central2/checkpoints/dclm_7b2x/hf/dclm_7b0828/dclm_7b0828/step-479999/
-    # we want something like: dclm_7b0828_step-479999
-    if model_path.endswith("/"):
-        model_path = model_path[:-1]
+    deps = tuple(results)
+    step_name = f"evaluation/report/{name}"
 
-    return "_".join(model_path.split("/")[-2:])
+    def build_config(ctx: StepContext) -> dict:
+        return {
+            "entries": [
+                ReportEntry(
+                    path=ctx.artifact_path(result),
+                    result_type=result_type_name(result.artifact_type),
+                    label=result.name,
+                )
+                for result in results
+            ],
+            "out": ctx.output_path,
+        }
 
-
-def extract_model_name_and_path(
-    step: ArtifactStep[LevanterCheckpoint] | str,
-) -> tuple[str, ArtifactStep[LevanterCheckpoint] | str]:
-    """
-    Extract the model name and path from a step or string.
-
-    Returns the model name and the original step (ArtifactStep[LevanterCheckpoint] or str) for use in deps.
-    """
-    if isinstance(step, ArtifactStep):
-        return step.name, step
-    return _infer_model_name_for_path(step), step
-
-
-def evaluate_levanter_lm_evaluation_harness(
-    model_name: str,
-    model: ArtifactStep[LevanterCheckpoint],
-    evals: list[EvalTaskConfig],
-    resource_config: ResourceConfig,
-    max_eval_instances: int | None = None,
-    apply_chat_template: bool = False,
-    discover_latest_checkpoint: bool = True,
-) -> ArtifactStep[LevanterEvalResult]:
-    """
-    Create an eval artifact for the model using Levanter LM Evaluation Harness.
-
-    The Levanter evaluator writes a single top-level ``results.json``, so the result is a typed
-    :class:`~marin.evaluation.eval_result.LevanterEvalResult` — ``resolve(...).averages()`` reads
-    the cross-task scores without touching the directory layout.
-    """
-    logger.info(f"Running evals on the following tasks: {evals}")
-    deps = (model,)
-
-    def build_config(ctx: StepContext) -> EvaluationConfig:
-        model_path = ctx.artifact_path(model)
-        return EvaluationConfig(
-            evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
-            model_path=model_path,
-            evaluation_path=ctx.output_path,
-            evals=evals,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            max_eval_instances=max_eval_instances,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-        )
+    def run(config: dict) -> EvalReport:
+        return compile_eval_report(config["entries"], config["out"])
 
     return ArtifactStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        version="2026.06.28",
-        artifact_type=LevanterEvalResult,
-        run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        name=step_name,
+        version=resolve_version(step_name, version),
+        artifact_type=EvalReport,
+        run=run,
         build_config=build_config,
         deps=deps,
     )
 
 
-def default_eval(
-    step: ArtifactStep[LevanterCheckpoint],
-    resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
-    evals: list[EvalTaskConfig] | None = None,
-    max_eval_instances: int | None = None,
-    apply_chat_template: bool = False,
-    discover_latest_checkpoint: bool = True,
-) -> ArtifactStep[LevanterEvalResult]:
+# --------------------------------------------------------------------------------------------------
+# Task menus: lists of EvalGroup drawn from task_configs, the same menu in-loop EvalSuite uses.
+# --------------------------------------------------------------------------------------------------
+
+
+def core_evals(serve: ServeSpec | None = None) -> list[EvalGroup]:
+    """CORE_TASKS as one served group — the default multiple-choice suite (logprobs over the OpenAI API)."""
+    serve = serve or ServeSpec(tpu_type="v6e-8")
+    return [EvalGroup(tasks=CORE_TASKS, id="core", serve=serve)]
+
+
+def key_evals(serve: ServeSpec | None = None, max_eval_instances: int | None = None) -> list[EvalGroup]:
+    """The key-evals bundle: generation tasks + multiple-choice tasks, each as its own served group.
+
+    ``max_eval_instances`` caps examples per task — pass a small value for a fast cluster smoke.
     """
-    Create an eval artifact for the model using LM Evaluation Harness on a step.
-
-    Args:
-        step: LevanterCheckpoint handle to evaluate. Wrap a pre-existing checkpoint path with
-            ``ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)``.
-        evals: List of evals to run. Defaults to CORE_TASKS.
-        max_eval_instances: Maximum number of evaluation instances to run.
-    """
-    name, model = step.name, step
-
-    logger.info(f"Creating default evaluation step for {name}")
-
-    if evals is None:
-        evals = CORE_TASKS
-
-    logger.info(f"Running evals on the following tasks: {evals}")
-
-    return evaluate_levanter_lm_evaluation_harness(
-        name,
-        model,
-        evals,
-        resource_config,
-        max_eval_instances=max_eval_instances,
-        apply_chat_template=apply_chat_template,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-
-
-def default_base_eval(
-    step: ArtifactStep[LevanterCheckpoint],
-    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-    run_generation_evals: bool = True,
-    discover_latest_checkpoint: bool = True,
-) -> list[ArtifactStep]:
-    eval_jobs = []
-    core_grouped = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=CORE_TASKS_PLUS_LEADERBOARD,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-    eval_jobs.append(core_grouped)
-
-    mmlu_0shot = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=(MMLU_0_SHOT,),
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-    eval_jobs.append(mmlu_0shot)
-
-    mmlu_5shot = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=(MMLU_5_SHOT,),
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-    eval_jobs.append(mmlu_5shot)
-
-    mmlu_pro_5shot = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=(MMLU_PRO_5_SHOT,),
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-    eval_jobs.append(mmlu_pro_5shot)
-
-    name, model = step.name, step
-    if run_generation_evals:
-        generation = evaluate_lm_evaluation_harness(
-            name,
-            model,
-            BASE_GENERATION_TASKS,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        )
-        eval_jobs.append(generation)
-    return eval_jobs
-
-
-def default_sft_eval(
-    step: ArtifactStep[LevanterCheckpoint],
-    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-    run_generation_evals: bool = True,
-    apply_chat_template: bool = True,
-    use_levanter_inference: bool = False,
-) -> list[ArtifactStep]:
-    eval_jobs = []
-    leaderboard_grouped = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=OPEN_LM_LEADERBOARD_MCQ,
-        apply_chat_template=apply_chat_template,
-    )
-    eval_jobs.append(leaderboard_grouped)
-
-    mmlu_5shot = default_eval(
-        step=step, resource_config=resource_config, evals=(MMLU_5_SHOT,), apply_chat_template=apply_chat_template
-    )
-    eval_jobs.append(mmlu_5shot)
-
-    mmlu_pro_5shot = default_eval(
-        step=step, resource_config=resource_config, evals=(MMLU_PRO_5_SHOT,), apply_chat_template=apply_chat_template
-    )
-    eval_jobs.append(mmlu_pro_5shot)
-
-    name, model = step.name, step
-    if run_generation_evals:
-        if use_levanter_inference:
-            leaderboard_generation = evaluate_levanter_lm_evaluation_harness(
-                name,
-                model,
-                KEY_GENERATION_TASKS,
-                resource_config,
-                max_eval_instances=max_eval_instances,
-                apply_chat_template=apply_chat_template,
-            )
-            eval_jobs.append(leaderboard_generation)
-
-            olmo_generation = evaluate_levanter_lm_evaluation_harness(
-                name,
-                model,
-                OPEN_LM_LEADERBOARD_GEN,
-                resource_config,
-                max_eval_instances=max_eval_instances,
-                apply_chat_template=apply_chat_template,
-            )
-            eval_jobs.append(olmo_generation)
-        else:
-            leaderboard_generation = evaluate_lm_evaluation_harness(
-                name,
-                model,
-                KEY_GENERATION_TASKS,
-                max_eval_instances=max_eval_instances,
-                engine_kwargs=engine_kwargs,
-                resource_config=resource_config,
-                apply_chat_template=apply_chat_template,
-            )
-            eval_jobs.append(leaderboard_generation)
-
-            olmo_generation = evaluate_lm_evaluation_harness(
-                name,
-                model,
-                OPEN_LM_LEADERBOARD_GEN,
-                max_eval_instances=max_eval_instances,
-                engine_kwargs=engine_kwargs,
-                resource_config=resource_config,
-                apply_chat_template=apply_chat_template,
-            )
-            eval_jobs.append(olmo_generation)
-    return eval_jobs
-
-
-def default_key_evals(
-    step: ArtifactStep[LevanterCheckpoint],
-    resource_config: ResourceConfig,
-    model_name: str | None = None,
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-) -> list[ArtifactStep]:
-    """
-    Create a list of eval artifacts for the model using LM Evaluation Harness.
-    """
-    name, model = step.name, step
-
-    if model_name is None:
-        model_name = name
-
-    stop_token_ids = []
-    if "llama3" in model_name:
-        stop_token_ids.append(128009)
-    elif "olmo" in model_name:
-        stop_token_ids.append(100257)
-
+    serve = serve or ServeSpec(tpu_type="v6e-8")
     return [
-        evaluate_lm_evaluation_harness(
-            model_name,
-            model,
-            KEY_GENERATION_TASKS,
+        EvalGroup(
+            tasks=KEY_GENERATION_TASKS,
+            id="key_generation",
+            serve=serve,
+            max_gen_toks=4096,
             max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
         ),
-        evaluate_levanter_lm_evaluation_harness(
-            model_name,
-            model,
-            KEY_MULTIPLE_CHOICE_TASKS,
-            resource_config,
+        EvalGroup(
+            tasks=KEY_MULTIPLE_CHOICE_TASKS,
+            id="key_multiple_choice",
+            serve=serve,
             max_eval_instances=max_eval_instances,
         ),
     ]
+
+
+def base_model_evals(
+    serve: ServeSpec | None = None,
+    run_generation_evals: bool = True,
+    discover_latest_checkpoint: bool = True,
+) -> list[EvalGroup]:
+    """Base-model suite: CORE+leaderboard and each MMLU cut as distinct served groups, plus generation.
+
+    Each MMLU cut is its own group with its own ``id``, so all four run (unlike the old bundle, whose
+    identical step names collided and silently dropped three of them).
+    """
+    serve = serve or ServeSpec(tpu_type="v6e-8")
+    discover = discover_latest_checkpoint
+    groups = [
+        EvalGroup(CORE_TASKS_PLUS_LEADERBOARD, "core_leaderboard", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_0_SHOT,), "mmlu_0shot", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_5_SHOT,), "mmlu_5shot", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_PRO_5_SHOT,), "mmlu_pro_5shot", serve=serve, discover_latest_checkpoint=discover),
+    ]
+    if run_generation_evals:
+        groups.append(
+            EvalGroup(
+                BASE_GENERATION_TASKS,
+                "base_generation",
+                serve=serve,
+                max_gen_toks=4096,
+                discover_latest_checkpoint=discover,
+            )
+        )
+    return groups
 
 
 def evaluate_harbor(
@@ -402,9 +314,13 @@ def evaluate_harbor(
     n_concurrent: int = 4,
     env: str = "local",
     agent_kwargs: dict | None = None,
+    artifact_version: str | None = None,
 ) -> ArtifactStep[Artifact]:
     """
     Evaluate on ANY Harbor dataset from the registry.
+
+    ``version`` is the Harbor dataset version (part of the artifact name); ``artifact_version`` is the
+    eval step's own version (explicit, or None to defer to the ambient BuildContext).
 
     No custom adapters needed! Harbor's registry handles all datasets generically.
 
@@ -471,298 +387,16 @@ def evaluate_harbor(
             generation_params=generation_params,
         )
 
+    harbor_name = f"evaluation/harbor/{model_name}-{dataset}-{version}"
     return ArtifactStep(
-        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        version="2026.06.28",
+        name=harbor_name,
+        version=resolve_version(harbor_name, artifact_version),
         artifact_type=Artifact,
         run=remote(
             evaluate,
             resources=dispatch_resources,
-            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
             pip_dependency_groups=["harbor"],
         ),
         build_config=build_config,
     )
-
-
-def evaluate_evalchemy(
-    model_name: str,
-    model: ArtifactStep[LevanterCheckpoint] | str,
-    evals: Sequence[EvalTaskConfig],
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = None,
-    generation_params: dict | None = None,
-    resource_config: ResourceConfig | None = None,
-    apply_chat_template: bool = False,
-    wandb_tags: list[str] | None = None,
-    discover_latest_checkpoint: bool = True,
-    base_eval_run_name: str | None = None,
-) -> ArtifactStep[Artifact]:
-    """
-    Create an eval artifact for the model using Evalchemy.
-
-    Args:
-        model_name: Name of the model.
-        model: LevanterCheckpoint handle or path string to the model.
-        evals: Evaluations to run with Evalchemy.
-        max_eval_instances: Maximum number of evaluation instances to run.
-        engine_kwargs: Additional engine kwargs for vLLM.
-        generation_params: Generation parameters including:
-            - temperature: float (e.g., 0.7)
-            - top_p: float (e.g., 1.0)
-            - max_gen_toks: int (e.g., 32768)
-            - seeds: list[int] for multiple runs with different seeds
-        resource_config: Resource configuration for the job.
-        apply_chat_template: Whether to apply chat template.
-        wandb_tags: Tags to add to the WandB run.
-        discover_latest_checkpoint: Whether to discover the latest checkpoint.
-    """
-    task_names = "_".join(sorted(e.name for e in evals))
-    seed = generation_params.get("seed") if generation_params else None
-    seed_suffix = f"_seed{seed}" if seed is not None else ""
-    step_name = f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}"
-    deps = _model_deps(model)
-
-    def build_config(ctx: StepContext) -> EvaluationConfig:
-        model_path = _model_path(ctx, model)
-        return EvaluationConfig(
-            evaluator="evalchemy",
-            model_name=model_name,
-            model_path=model_path,
-            evaluation_path=ctx.output_path,
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            generation_params=generation_params,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
-            base_eval_run_name=base_eval_run_name,
-        )
-
-    return ArtifactStep(
-        name=step_name,
-        version="2026.06.28",
-        artifact_type=Artifact,
-        run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVALCHEMY_DEPENDENCY_GROUPS),
-        build_config=build_config,
-        deps=deps,
-    )
-
-
-def default_evalchemy_eval(
-    step: ArtifactStep[LevanterCheckpoint] | str,
-    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
-    evals: Sequence[EvalTaskConfig] | None = None,
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = None,
-    generation_params: dict | None = None,
-    apply_chat_template: bool = False,
-    discover_latest_checkpoint: bool = True,
-    base_eval_run_name: str | None = None,
-) -> ArtifactStep[Artifact]:
-    """
-    Create an eval artifact for the model using Evalchemy reasoning benchmarks.
-
-    Args:
-        step: LevanterCheckpoint handle or path string to evaluate.
-        resource_config: Resource configuration (defaults to v5p-8 TPU).
-        evals: List of evals to run. Defaults to EVALCHEMY_CORE_TASKS.
-        max_eval_instances: Maximum number of evaluation instances to run.
-        engine_kwargs: Additional vLLM engine kwargs (optional for evalchemy).
-        generation_params: Generation parameters including:
-            - temperature: float (e.g., 0.7)
-            - top_p: float (e.g., 1.0)
-            - max_gen_toks: int (e.g., 32768)
-            - seed: int for reproducibility
-        apply_chat_template: Whether to apply chat template.
-        discover_latest_checkpoint: Whether to discover the latest checkpoint.
-    """
-    name, model = extract_model_name_and_path(step)
-
-    if base_eval_run_name:
-        path_str = step if isinstance(step, str) else name
-        step_match = re.search(r"step-(\d+)", path_str)
-        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
-        name = f"{base_eval_run_name}{step_suffix}"
-
-    logger.info(f"Creating Evalchemy evaluation step for {name}")
-
-    if evals is None:
-        evals = EVALCHEMY_CORE_TASKS
-
-    logger.info(f"Running Evalchemy evals on the following tasks: {evals}")
-
-    return evaluate_evalchemy(
-        name,
-        model,
-        evals,
-        max_eval_instances=max_eval_instances,
-        engine_kwargs=engine_kwargs or {},
-        generation_params=generation_params,
-        resource_config=resource_config,
-        apply_chat_template=apply_chat_template,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-        base_eval_run_name=base_eval_run_name,
-    )
-
-
-def compile_evalchemy_results(
-    steps: list[ArtifactStep[Artifact]],
-    seeds: list[int] | None = None,
-    base_eval_run_name: str | None = None,
-    model_path: str | None = None,
-    task_name: str | None = None,
-) -> ArtifactStep[CompiledEvalResult]:
-    """
-    Compile results from multiple Evalchemy evaluation artifacts into aggregated metrics.
-
-    Takes a list of Artifacts from evalchemy evaluations and compiles the results into a
-    single DataFrame, then logs averaged results to wandb. The result is a typed
-    :class:`~experiments.evals.evalchemy_results_compiler.CompiledEvalResult` — ``.compiled()`` reads
-    the per-example records and ``.averaged()`` the cross-seed averages.
-
-    Args:
-        steps: List of Artifacts from evalchemy evaluations (one per seed).
-        seeds: List of seeds used for the evaluations (for wandb config).
-    """
-    if base_eval_run_name:
-        step_match = re.search(r"step-(\d+)", model_path or "")
-        step_suffix = f"-step{step_match.group(1)}" if step_match else ""
-        model_id = f"{base_eval_run_name}{step_suffix}"
-    elif model_path:
-        model_id = _infer_model_name_for_path(model_path)
-    else:
-        model_id = "unknown"
-
-    num_seeds = len(seeds) if seeds else len(steps)
-    task_suffix = f"_{task_name}" if task_name else ""
-    compile_step_name = f"evaluation/evalchemy/{model_id}/compile{task_suffix}_avg{num_seeds}seeds"
-
-    def build_config(ctx: StepContext) -> dict:
-        input_paths = [ctx.artifact_path(step) + "/results.json" for step in steps]
-        return {
-            "input_paths": input_paths,
-            "output_path": ctx.output_path,
-            "seeds": seeds or [],
-            "base_eval_run_name": base_eval_run_name,
-            "model_path": model_path,
-            "task_name": task_name,
-        }
-
-    return ArtifactStep(
-        name=compile_step_name,
-        version="2026.06.28",
-        artifact_type=CompiledEvalResult,
-        run=compile_evalchemy_results_fn,
-        build_config=build_config,
-        deps=tuple(steps),
-    )
-
-
-def build_evalchemy_eval_steps(
-    checkpoints: dict[str | None, list[str]],
-    task_seed_groups: list[tuple[list[EvalTaskConfig], list[int]]],
-    base_generation_params: dict,
-    resource_config: ResourceConfig,
-    engine_kwargs: dict | None = None,
-    apply_chat_template: bool = True,
-    discover_latest_checkpoint: bool = False,
-) -> tuple[list[ArtifactStep[Artifact]], list[ArtifactStep[CompiledEvalResult]]]:
-    """Build evaluation and compilation artifacts for an evalchemy experiment.
-
-    Creates one evaluation artifact per (checkpoint, task, seed) combination, plus
-    compilation artifacts that aggregate results across seeds for each (checkpoint, task).
-
-    Args:
-        checkpoints: Mapping from base_eval_run_name to list of checkpoint paths.
-            Use None as key to auto-generate names from paths.
-        task_seed_groups: List of (tasks, seeds) tuples. Each task in a group
-            is evaluated with all seeds in that group.
-        base_generation_params: Generation parameters (temperature, top_p, max_gen_toks)
-            shared across all runs. Per-seed params are generated by adding "seed": N.
-        resource_config: TPU/GPU resource configuration for each eval job.
-        engine_kwargs: vLLM engine kwargs (tensor_parallel_size, max_num_seqs, etc.).
-        apply_chat_template: Whether to apply chat template.
-        discover_latest_checkpoint: Whether to auto-discover latest checkpoint.
-
-    Returns:
-        Tuple of (eval_artifacts, compile_artifacts).
-    """
-    eval_steps: list[ArtifactStep[Artifact]] = []
-    compile_steps: list[ArtifactStep[CompiledEvalResult]] = []
-
-    for base_eval_run_name, checkpoint_paths in checkpoints.items():
-        for checkpoint in checkpoint_paths:
-            task_seed_pairs: list[tuple[EvalTaskConfig, list[int]]] = []
-            for tasks, seeds in task_seed_groups:
-                task_seed_pairs += [(t, seeds) for t in tasks]
-
-            for task, seeds in task_seed_pairs:
-                task_steps: list[ArtifactStep[Artifact]] = []
-                for seed in seeds:
-                    generation_params = {**base_generation_params, "seed": seed}
-                    step = default_evalchemy_eval(
-                        step=checkpoint,
-                        resource_config=resource_config,
-                        evals=[task],
-                        engine_kwargs=engine_kwargs,
-                        generation_params=generation_params,
-                        apply_chat_template=apply_chat_template,
-                        discover_latest_checkpoint=discover_latest_checkpoint,
-                        base_eval_run_name=base_eval_run_name,
-                    )
-                    task_steps.append(step)
-                    eval_steps.append(step)
-
-                if len(seeds) > 1:
-                    compile_step = compile_evalchemy_results(
-                        task_steps,
-                        seeds=seeds,
-                        base_eval_run_name=base_eval_run_name,
-                        model_path=checkpoint,
-                        task_name=task.name,
-                    )
-                    compile_steps.append(compile_step)
-
-    return eval_steps, compile_steps
-
-
-def run_evalchemy_experiment(
-    checkpoints: dict[str | None, list[str]],
-    task_seed_groups: list[tuple[list[EvalTaskConfig], list[int]]],
-    base_generation_params: dict,
-    resource_config: ResourceConfig,
-    engine_kwargs: dict | None = None,
-    apply_chat_template: bool = True,
-    discover_latest_checkpoint: bool = False,
-    max_parallel_jobs: int | None = None,
-) -> None:
-    """Run a complete evalchemy evaluation experiment.
-
-    Builds eval and compile artifacts, then executes them via StepRunner
-    with optional job concurrency limit.
-
-    Args:
-        checkpoints: Mapping from base_eval_run_name to list of checkpoint paths.
-        task_seed_groups: List of (tasks, seeds) tuples.
-        base_generation_params: Shared generation parameters.
-        resource_config: TPU/GPU resource configuration.
-        engine_kwargs: vLLM engine kwargs.
-        apply_chat_template: Whether to apply chat template.
-        discover_latest_checkpoint: Whether to auto-discover latest checkpoint.
-        max_parallel_jobs: Maximum eval jobs to run concurrently. None for no limit.
-    """
-    eval_steps, compile_steps = build_evalchemy_eval_steps(
-        checkpoints=checkpoints,
-        task_seed_groups=task_seed_groups,
-        base_generation_params=base_generation_params,
-        resource_config=resource_config,
-        engine_kwargs=engine_kwargs,
-        apply_chat_template=apply_chat_template,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
-
-    all_artifacts = eval_steps + compile_steps
-    StepRunner().run([x.lower() for x in all_artifacts], max_concurrent=max_parallel_jobs)

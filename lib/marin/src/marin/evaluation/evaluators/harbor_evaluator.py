@@ -46,23 +46,6 @@ _DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
     "output_cost_per_token": 0.0,
 }
 
-HARBOR_EVAL_ENV_KEYS = (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
-    "WANDB_PROJECT",
-    "HF_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "DAYTONA_API_KEY",
-    "E2B_API_KEY",
-    "MODAL_API_KEY",
-    "TPU_CI",
-    "MARIN_PREFIX",
-    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-    "VLLM_TPU_SKIP_PRECOMPILE",
-)
-
 
 def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     """Return a Harbor-safe canonical name for `hosted_vllm/<canonical>`.
@@ -84,15 +67,6 @@ def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
         candidate = f"model_{digest}"
 
     return candidate
-
-
-def env_vars_from_keys(keys: list[str] | tuple[str, ...]) -> dict[str, str]:
-    env_vars: dict[str, str] = {}
-    for key in keys:
-        value = os.environ.get(key)
-        if value:
-            env_vars[key] = value
-    return env_vars
 
 
 def _generate_stable_job_name(dataset: str, version: str, model_name: str, agent: str, task_limit: int | None) -> str:
@@ -346,13 +320,7 @@ class HarborEvaluator(Evaluator):
         """
         from harbor.job import Job  # noqa: PLC0415  # optional dep: harbor
         from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415  # optional dep: harbor
-        from harbor.models.job.config import (  # noqa: PLC0415  # optional dep: harbor
-            JobConfig,
-            LocalDatasetConfig,
-            RegistryDatasetConfig,
-        )
-        from harbor.models.orchestrator_type import OrchestratorType  # noqa: PLC0415  # optional dep: harbor
-        from harbor.models.registry import RemoteRegistryInfo  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.job.config import DatasetConfig, JobConfig  # noqa: PLC0415  # optional dep: harbor
         from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415  # optional dep: harbor
 
         # Generate deterministic job name for resume capability
@@ -381,7 +349,7 @@ class HarborEvaluator(Evaluator):
             except ValueError:
                 logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
-        dataset_config: LocalDatasetConfig | RegistryDatasetConfig
+        dataset_config: DatasetConfig
         dataset_path = Path(dataset).expanduser()
         if (
             dataset.startswith("hf://")
@@ -410,20 +378,20 @@ class HarborEvaluator(Evaluator):
             if gitattributes_path.exists():
                 gitattributes_path.unlink()
 
-            dataset_config = LocalDatasetConfig(
+            dataset_config = DatasetConfig(
                 path=Path(dataset_root),
                 n_tasks=task_limit,
             )
         elif dataset_path.exists():
             if not dataset_path.is_dir():
                 raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
-            dataset_config = LocalDatasetConfig(
+            dataset_config = DatasetConfig(
                 path=dataset_path,
                 n_tasks=task_limit,
             )
         else:
-            dataset_config = RegistryDatasetConfig(
-                registry=RemoteRegistryInfo(),
+            # No registry_url/registry_path means the default remote registry.
+            dataset_config = DatasetConfig(
                 name=dataset,
                 version=version,
                 n_tasks=task_limit,
@@ -441,10 +409,7 @@ class HarborEvaluator(Evaluator):
                     kwargs=agent_kwargs or {},
                 )
             ],
-            orchestrator=dict(
-                type=OrchestratorType.LOCAL,
-                n_concurrent_trials=n_concurrent,
-            ),
+            n_concurrent_trials=n_concurrent,
             environment=EnvironmentConfig(
                 type=harbor_env_type,
             ),

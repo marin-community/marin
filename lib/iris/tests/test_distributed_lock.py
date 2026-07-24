@@ -7,7 +7,7 @@ import time
 from unittest.mock import patch
 
 import pytest
-from rigging.distributed_lock import (
+from rigging.filesystem.distributed_lock import (
     HEARTBEAT_TIMEOUT,
     GcsLease,
     Lease,
@@ -189,7 +189,7 @@ def _make_gcs_lease(lock_path: str = "gs://bucket/test.lock", worker_id: str = "
     return GcsLease(lock_path, worker_id)
 
 
-@patch("rigging.distributed_lock.GcsLease._read_with_generation")
+@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
 def test_gcs_refresh_raises_lease_lost_on_different_holder(mock_read):
     """GcsLease.refresh raises LeaseLostError when another worker holds the lock."""
     lease = _make_gcs_lease(worker_id="worker-A")
@@ -199,7 +199,7 @@ def test_gcs_refresh_raises_lease_lost_on_different_holder(mock_read):
         lease.refresh()
 
 
-@patch("rigging.distributed_lock.GcsLease._read_with_generation")
+@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
 def test_gcs_refresh_raises_lease_lost_when_lock_gone(mock_read):
     """GcsLease.refresh raises LeaseLostError when the lock blob is absent.
 
@@ -213,7 +213,7 @@ def test_gcs_refresh_raises_lease_lost_when_lock_gone(mock_read):
         lease.refresh()
 
 
-@patch("rigging.distributed_lock.GcsLease._read_with_generation")
+@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
 def test_gcs_try_acquire_returns_false_on_precondition_failed(mock_read):
     """try_acquire returns False on PreconditionFailed (GCS generation race)."""
     lease = _make_gcs_lease(worker_id="worker-A")
@@ -228,8 +228,8 @@ def test_gcs_try_acquire_returns_false_on_precondition_failed(mock_read):
         assert not lease.try_acquire()
 
 
-@patch("rigging.distributed_lock.GcsLease._delete")
-@patch("rigging.distributed_lock.GcsLease._read_with_generation")
+@patch("rigging.filesystem.distributed_lock.GcsLease._delete")
+@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
 def test_gcs_release_noop_when_lock_gone(mock_read, mock_delete):
     """release() is a no-op when the lock blob is already absent."""
     lease = _make_gcs_lease(worker_id="worker-A")

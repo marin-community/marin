@@ -113,14 +113,16 @@ class Controller(_message.Message):
         federation: Controller.FederationHandoff
         def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
     class FederationHandoff(_message.Message):
-        __slots__ = ("requester_id", "owner_principal", "submitting_user")
+        __slots__ = ("requester_id", "owner_principal", "submitting_user", "handoff_nonce")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
         OWNER_PRINCIPAL_FIELD_NUMBER: _ClassVar[int]
         SUBMITTING_USER_FIELD_NUMBER: _ClassVar[int]
+        HANDOFF_NONCE_FIELD_NUMBER: _ClassVar[int]
         requester_id: str
         owner_principal: str
         submitting_user: str
-        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ..., submitting_user: _Optional[str] = ...) -> None: ...
+        handoff_nonce: str
+        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ..., submitting_user: _Optional[str] = ..., handoff_nonce: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -352,7 +354,7 @@ class Controller(_message.Message):
         accepted: bool
         def __init__(self, worker_id: _Optional[str] = ..., accepted: _Optional[bool] = ...) -> None: ...
     class Endpoint(_message.Message):
-        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access")
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access", "peer_id")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -366,13 +368,15 @@ class Controller(_message.Message):
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         ACCESS_FIELD_NUMBER: _ClassVar[int]
+        PEER_ID_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         name: str
         address: str
         task_id: str
         metadata: _containers.ScalarMap[str, str]
         access: Controller.EndpointAccess
-        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ...) -> None: ...
+        peer_id: str
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., peer_id: _Optional[str] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
         __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id", "lease_duration", "access")
         class MetadataEntry(_message.Message):
@@ -574,8 +578,63 @@ class Controller(_message.Message):
         capacity: str
         quota: str
         def __init__(self, name: _Optional[str] = ..., instance_type: _Optional[str] = ..., scale_group: _Optional[str] = ..., target_nodes: _Optional[int] = ..., current_nodes: _Optional[int] = ..., queued_nodes: _Optional[int] = ..., in_progress_nodes: _Optional[int] = ..., autoscaling: _Optional[bool] = ..., min_nodes: _Optional[int] = ..., max_nodes: _Optional[int] = ..., capacity: _Optional[str] = ..., quota: _Optional[str] = ...) -> None: ...
+    class NodeStatus(_message.Message):
+        __slots__ = ("name", "ready", "schedulable", "status_summary", "instance_type", "region", "gpu_count", "gpu_model", "cpu_millicores", "memory_bytes", "disk_bytes", "running_pods", "created", "metrics_ts", "cpu_pct", "mem_used_bytes", "mem_total_bytes", "disk_used_bytes", "disk_total_bytes", "net_recv_bytes", "net_sent_bytes", "hbm_used_bytes", "hbm_total_bytes", "gpu_util_pct", "gpu_temp_c", "gpu_power_w")
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        READY_FIELD_NUMBER: _ClassVar[int]
+        SCHEDULABLE_FIELD_NUMBER: _ClassVar[int]
+        STATUS_SUMMARY_FIELD_NUMBER: _ClassVar[int]
+        INSTANCE_TYPE_FIELD_NUMBER: _ClassVar[int]
+        REGION_FIELD_NUMBER: _ClassVar[int]
+        GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+        GPU_MODEL_FIELD_NUMBER: _ClassVar[int]
+        CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
+        MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+        DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_PODS_FIELD_NUMBER: _ClassVar[int]
+        CREATED_FIELD_NUMBER: _ClassVar[int]
+        METRICS_TS_FIELD_NUMBER: _ClassVar[int]
+        CPU_PCT_FIELD_NUMBER: _ClassVar[int]
+        MEM_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
+        MEM_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+        DISK_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
+        DISK_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+        NET_RECV_BYTES_FIELD_NUMBER: _ClassVar[int]
+        NET_SENT_BYTES_FIELD_NUMBER: _ClassVar[int]
+        HBM_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
+        HBM_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+        GPU_UTIL_PCT_FIELD_NUMBER: _ClassVar[int]
+        GPU_TEMP_C_FIELD_NUMBER: _ClassVar[int]
+        GPU_POWER_W_FIELD_NUMBER: _ClassVar[int]
+        name: str
+        ready: bool
+        schedulable: bool
+        status_summary: str
+        instance_type: str
+        region: str
+        gpu_count: int
+        gpu_model: str
+        cpu_millicores: int
+        memory_bytes: int
+        disk_bytes: int
+        running_pods: int
+        created: str
+        metrics_ts: int
+        cpu_pct: float
+        mem_used_bytes: int
+        mem_total_bytes: int
+        disk_used_bytes: int
+        disk_total_bytes: int
+        net_recv_bytes: int
+        net_sent_bytes: int
+        hbm_used_bytes: int
+        hbm_total_bytes: int
+        gpu_util_pct: float
+        gpu_temp_c: float
+        gpu_power_w: float
+        def __init__(self, name: _Optional[str] = ..., ready: _Optional[bool] = ..., schedulable: _Optional[bool] = ..., status_summary: _Optional[str] = ..., instance_type: _Optional[str] = ..., region: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_model: _Optional[str] = ..., cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., running_pods: _Optional[int] = ..., created: _Optional[str] = ..., metrics_ts: _Optional[int] = ..., cpu_pct: _Optional[float] = ..., mem_used_bytes: _Optional[int] = ..., mem_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., net_recv_bytes: _Optional[int] = ..., net_sent_bytes: _Optional[int] = ..., hbm_used_bytes: _Optional[int] = ..., hbm_total_bytes: _Optional[int] = ..., gpu_util_pct: _Optional[float] = ..., gpu_temp_c: _Optional[float] = ..., gpu_power_w: _Optional[float] = ...) -> None: ...
     class GetKubernetesClusterStatusResponse(_message.Message):
-        __slots__ = ("namespace", "total_nodes", "schedulable_nodes", "allocatable_cpu", "allocatable_memory", "pod_statuses", "provider_version", "node_pools")
+        __slots__ = ("namespace", "total_nodes", "schedulable_nodes", "allocatable_cpu", "allocatable_memory", "pod_statuses", "provider_version", "node_pools", "nodes")
         NAMESPACE_FIELD_NUMBER: _ClassVar[int]
         TOTAL_NODES_FIELD_NUMBER: _ClassVar[int]
         SCHEDULABLE_NODES_FIELD_NUMBER: _ClassVar[int]
@@ -584,6 +643,7 @@ class Controller(_message.Message):
         POD_STATUSES_FIELD_NUMBER: _ClassVar[int]
         PROVIDER_VERSION_FIELD_NUMBER: _ClassVar[int]
         NODE_POOLS_FIELD_NUMBER: _ClassVar[int]
+        NODES_FIELD_NUMBER: _ClassVar[int]
         namespace: str
         total_nodes: int
         schedulable_nodes: int
@@ -592,7 +652,8 @@ class Controller(_message.Message):
         pod_statuses: _containers.RepeatedCompositeFieldContainer[Controller.KubernetesPodStatus]
         provider_version: str
         node_pools: _containers.RepeatedCompositeFieldContainer[Controller.NodePoolStatus]
-        def __init__(self, namespace: _Optional[str] = ..., total_nodes: _Optional[int] = ..., schedulable_nodes: _Optional[int] = ..., allocatable_cpu: _Optional[str] = ..., allocatable_memory: _Optional[str] = ..., pod_statuses: _Optional[_Iterable[_Union[Controller.KubernetesPodStatus, _Mapping]]] = ..., provider_version: _Optional[str] = ..., node_pools: _Optional[_Iterable[_Union[Controller.NodePoolStatus, _Mapping]]] = ...) -> None: ...
+        nodes: _containers.RepeatedCompositeFieldContainer[Controller.NodeStatus]
+        def __init__(self, namespace: _Optional[str] = ..., total_nodes: _Optional[int] = ..., schedulable_nodes: _Optional[int] = ..., allocatable_cpu: _Optional[str] = ..., allocatable_memory: _Optional[str] = ..., pod_statuses: _Optional[_Iterable[_Union[Controller.KubernetesPodStatus, _Mapping]]] = ..., provider_version: _Optional[str] = ..., node_pools: _Optional[_Iterable[_Union[Controller.NodePoolStatus, _Mapping]]] = ..., nodes: _Optional[_Iterable[_Union[Controller.NodeStatus, _Mapping]]] = ...) -> None: ...
     class SetUserBudgetRequest(_message.Message):
         __slots__ = ("user_id", "budget_limit", "max_band")
         USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -707,8 +768,33 @@ class Controller(_message.Message):
         kubernetes: Controller.GetKubernetesClusterStatusResponse
         worker: Controller.WorkerFleetDetail
         def __init__(self, kubernetes: _Optional[_Union[Controller.GetKubernetesClusterStatusResponse, _Mapping]] = ..., worker: _Optional[_Union[Controller.WorkerFleetDetail, _Mapping]] = ...) -> None: ...
+    class ResourceAvailability(_message.Message):
+        __slots__ = ("version", "observation_epoch_ms", "amounts", "total_amounts")
+        class AmountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        class TotalAmountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        VERSION_FIELD_NUMBER: _ClassVar[int]
+        OBSERVATION_EPOCH_MS_FIELD_NUMBER: _ClassVar[int]
+        AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        version: int
+        observation_epoch_ms: int
+        amounts: _containers.ScalarMap[str, int]
+        total_amounts: _containers.ScalarMap[str, int]
+        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class BackendSummary(_message.Message):
-        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail")
+        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail", "availability")
         class AdvertisedAttributesEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -735,6 +821,7 @@ class Controller(_message.Message):
         HAS_AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
         CAPACITY_HEALTH_FIELD_NUMBER: _ClassVar[int]
         DETAIL_FIELD_NUMBER: _ClassVar[int]
+        AVAILABILITY_FIELD_NUMBER: _ClassVar[int]
         backend_id: str
         name: str
         kind: str
@@ -747,7 +834,8 @@ class Controller(_message.Message):
         has_autoscaler: bool
         capacity_health: _containers.ScalarMap[str, int]
         detail: Controller.BackendStatus
-        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ..., detail: _Optional[_Union[Controller.BackendStatus, _Mapping]] = ...) -> None: ...
+        availability: Controller.ResourceAvailability
+        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ..., detail: _Optional[_Union[Controller.BackendStatus, _Mapping]] = ..., availability: _Optional[_Union[Controller.ResourceAvailability, _Mapping]] = ...) -> None: ...
     class UnroutableJob(_message.Message):
         __slots__ = ("job_id", "reason")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -807,15 +895,41 @@ class Controller(_message.Message):
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
         def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+    class FederationEndpoint(_message.Message):
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "access", "metadata", "lease_remaining")
+        class MetadataEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: str
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ACCESS_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
+        LEASE_REMAINING_FIELD_NUMBER: _ClassVar[int]
+        endpoint_id: str
+        name: str
+        address: str
+        task_id: str
+        access: Controller.EndpointAccess
+        metadata: _containers.ScalarMap[str, str]
+        lease_remaining: _time_pb2.Duration
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., lease_remaining: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
-        __slots__ = ("deltas", "next_cursor", "cursor_stale")
+        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints")
         DELTAS_FIELD_NUMBER: _ClassVar[int]
         NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
         CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
+        ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
         deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
         next_cursor: str
         cursor_stale: bool
-        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ...) -> None: ...
+        endpoints: _containers.RepeatedCompositeFieldContainer[Controller.FederationEndpoint]
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

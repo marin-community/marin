@@ -1,10 +1,10 @@
 //! DataFusion read engine.
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
-//! shape (Utf8 strings, DuckDB parsing dialect) with the compat UDFs registered.
+//! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
 //! `run_query_over()` registers every live namespace as a `TableProvider`, runs
-//! the user SQL verbatim, collects the result, and deregisters — the body of the
-//! `StatsService::Query` handler.
+//! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
+//! the result, and deregisters — the body of the `StatsService::Query` handler.
 //!
 //! Query visibility = sealed parquet segments ONLY (see `provider.rs`). The
 //! durability contract makes written rows visible because they are sealed before
@@ -26,7 +26,7 @@ use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
 
@@ -135,11 +135,12 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
 ///   DuckDB's late materialization reads zero blobs for a non-matching key. This
 ///   is the dominant cost in the dashboard's profile-history query.
 ///
-/// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
-/// corpus and FetchLogs resolve them, and the [`PrefixRangeRewrite`] analyzer
-/// rule rewrites starts-with predicates to expose a prunable key range to the
-/// planner (so both FetchLogs and the generic Query API prune row groups on the
-/// `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
+/// The scalar UDFs (`prefix`/`regexp_matches`/`contains` and the `json_*`
+/// extraction family — see [`crate::query::udf`]) are registered so the corpus,
+/// FetchLogs, and JSON-label queries resolve them, and the [`PrefixRangeRewrite`]
+/// analyzer rule rewrites starts-with predicates to expose a prunable key range
+/// to the planner (so both FetchLogs and the generic Query API prune row groups
+/// on the `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
 ///
 /// The context runs on a shared, memory-bounded `RuntimeEnv` (see
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
@@ -152,7 +153,7 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().execution.parquet.reorder_filters = true;
     let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
-    udf::register_compat_udfs(&ctx);
+    udf::register_scalar_udfs(&ctx);
     ctx
 }
 
@@ -212,10 +213,41 @@ fn slow_query_log_ms() -> u128 {
     })
 }
 
+/// Default server-side wall-clock deadline for a single Query RPC. A query
+/// still running when this elapses is aborted (its execution future is dropped,
+/// cancelling the scan) and the caller gets `deadline_exceeded` — so one
+/// pathological query can no longer run unbounded and crash-loop the hub on
+/// memory. This bounds the SERVER independently of any client deadline, which
+/// a caller may set huge or omit entirely.
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
+/// `0` to disable the deadline entirely (ops escape hatch for a known-heavy
+/// backfill), or absent/unparseable → [`DEFAULT_QUERY_TIMEOUT`].
+fn parse_query_timeout(raw: Option<&str>) -> Option<Duration> {
+    match raw {
+        None => Some(DEFAULT_QUERY_TIMEOUT),
+        Some(v) => match v.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(ms) => Some(Duration::from_millis(ms)),
+            Err(_) => Some(DEFAULT_QUERY_TIMEOUT),
+        },
+    }
+}
+
+/// The server-side Query deadline, resolved once from `FINELOG_QUERY_TIMEOUT_MS`
+/// (see [`parse_query_timeout`]). `None` disables it.
+pub(crate) fn query_timeout() -> Option<Duration> {
+    static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
+    })
+}
+
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
 /// a char boundary — never mid-codepoint — so non-ASCII SQL can't panic the
 /// logger, in a single pass over at most `MAX_CHARS + 1` chars.
-fn truncate_sql_for_log(sql: &str) -> String {
+pub(crate) fn truncate_sql_for_log(sql: &str) -> String {
     const MAX_CHARS: usize = 4000;
     let mut chars = sql.chars();
     let head: String = chars.by_ref().take(MAX_CHARS).collect();
@@ -246,8 +278,29 @@ fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>)
     );
 }
 
-/// Register every namespace in `providers`, run `sql` verbatim, collect, and
-/// deregister. Returns the result schema + batches.
+/// The SQL surface the generic Query RPC exposes: `SELECT` only.
+///
+/// DDL (`CREATE`/`DROP`), DML (`INSERT` and `COPY … TO`), and statements
+/// (`SET`/`BEGIN`) are denied at plan-verification time (`verify_plan` inside
+/// [`SessionContext::sql_with_options`]) — a denied plan surfaces as
+/// `DataFusionError::Plan`, which the handler maps to `invalid_argument`.
+///
+/// DML is the load-bearing denial. DataFusion's default object-store registry
+/// registers a `LocalFileSystem` rooted at `/` for `file://`, so an admitted
+/// caller could otherwise `COPY <table> TO 'file:///…'` and write the finelog
+/// VM's own filesystem (the registered GCS/S3 stores live only in the store's
+/// remote-sync layer, not on this query context, so those stay out of reach).
+/// Denying DML closes both the store-mutation and the host-write paths.
+fn read_only_sql_options() -> SQLOptions {
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
+/// Register every namespace in `providers`, run `sql` (SELECT-only, see
+/// [`read_only_sql_options`]), collect, and deregister. Returns the result
+/// schema + batches.
 ///
 /// Registration is per-call (a fresh `ctx`): names are used exactly as the
 /// catalog records them, so `FROM "iris.worker"` resolves. An unknown namespace
@@ -269,7 +322,7 @@ pub async fn run_query_over(
     }
     let started = Instant::now();
     let result = async {
-        let df = ctx.sql(sql).await?;
+        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
@@ -398,6 +451,7 @@ pub async fn fetch_log_rows(
 mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
+    use crate::test_support::unique_dir;
     use datafusion::arrow::array::Int64Array;
 
     #[test]
@@ -412,6 +466,87 @@ mod tests {
         let out = truncate_sql_for_log(&long);
         assert!(out.ends_with("…[truncated]"));
         assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
+
+    #[test]
+    fn parse_query_timeout_variants() {
+        // Absent, unparseable, and negative-ish garbage all fall back to the default.
+        assert_eq!(parse_query_timeout(None), Some(DEFAULT_QUERY_TIMEOUT));
+        assert_eq!(
+            parse_query_timeout(Some("nonsense")),
+            Some(DEFAULT_QUERY_TIMEOUT)
+        );
+        assert_eq!(parse_query_timeout(Some("-5")), Some(DEFAULT_QUERY_TIMEOUT));
+        // An explicit millisecond budget (whitespace tolerated).
+        assert_eq!(
+            parse_query_timeout(Some("5000")),
+            Some(Duration::from_millis(5000))
+        );
+        assert_eq!(
+            parse_query_timeout(Some("  250 ")),
+            Some(Duration::from_millis(250))
+        );
+        // Zero is the explicit disable escape hatch.
+        assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[tokio::test]
+    async fn read_only_options_reject_mutations() {
+        // The generic Query RPC exposes SELECT only. Each mutating statement is
+        // rejected at plan verification as a `Plan` error (which the handler maps
+        // to invalid_argument) — never executed, so nothing is created or written.
+        // These plan without any registered table, so the rejection is the gate,
+        // not a missing-table error.
+        let ctx = make_ctx();
+        let copy_target = std::env::temp_dir().join(format!(
+            "finelog_copy_gate_{}.parquet",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let copy_sql = format!("COPY (SELECT 1 AS n) TO 'file://{}'", copy_target.display());
+        let cases = [
+            ("CREATE TABLE t (x INT)", "DDL not supported"),
+            (copy_sql.as_str(), "DML not supported"),
+            (
+                "SET datafusion.execution.batch_size = 1",
+                "Statement not supported",
+            ),
+        ];
+        for (sql, expected) in cases {
+            let err = match run_query_over(&ctx, Vec::new(), sql).await {
+                Ok(_) => panic!("{sql} should have been rejected, but ran"),
+                Err(e) => e,
+            };
+            assert!(
+                matches!(err.find_root(), datafusion::error::DataFusionError::Plan(_)),
+                "{sql} should be rejected as a Plan error, got: {err}"
+            );
+            assert!(
+                err.to_string().contains(expected),
+                "{sql} error should mention {expected:?}, got: {err}"
+            );
+        }
+        // The rejected COPY must not have touched the VM filesystem.
+        assert!(
+            !copy_target.exists(),
+            "COPY was rejected but still wrote {}",
+            copy_target.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_options_allow_select() {
+        // The positive control: a plain SELECT still runs through the gated path.
+        let ctx = make_ctx();
+        let result = run_query_over(&ctx, Vec::new(), "SELECT 1 AS n")
+            .await
+            .unwrap();
+        assert_eq!(
+            result.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -545,18 +680,6 @@ mod tests {
         assert_eq!(got, vec!["/a/1".to_string(), "/a/2".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    fn unique_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "finelog_{tag}_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     /// The real store-form `log` arrow schema (single source of truth), so these

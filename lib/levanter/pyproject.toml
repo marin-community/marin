@@ -48,6 +48,7 @@ dependencies = [
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
+    "gitpython>=3.1.50",
     "draccus>=0.11.6",
     "pyarrow>=23.0.0",
     "zstandard>=0.18.0",
@@ -202,13 +203,6 @@ ignore = [
 [tool.black]
 line-length = 119
 target-version = ["py312"]
-
-[tool.mypy]
-python_version = "3.12"
-mypy_path = ["src"]
-
-[tool.mypy-haliax.core]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"

@@ -13,7 +13,6 @@ from fray.types import Entrypoint, JobRequest, create_environment
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
-    setup_is_quiet,
     wants_gpu_extra,
 )
 from marin.training.run_environment import extras_for_resources
@@ -68,7 +67,7 @@ def dispatch_grug_training_run(
     setup_scripts = None
     if post_setup_scripts:
         setup_scripts = [
-            default_setup_script(extras=extras, quiet=setup_is_quiet(env_vars)),
+            default_setup_script(extras=extras),
         ]
         if wants_gpu_extra(extras):
             setup_scripts.append(cuda_toolchain_setup_script())
@@ -79,6 +78,7 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(env_vars=env_vars, extras=extras, setup_scripts=setup_scripts),
         max_retries_failure=max_retries_failure,
+        max_task_failures=10,
         processes_per_task=processes_per_task,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)

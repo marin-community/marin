@@ -4,17 +4,27 @@
 """Tests for writers module."""
 
 import tempfile
+import uuid
 from pathlib import Path
 
+import fsspec
+import fsspec.config
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import vortex
+from pyarrow import fs as pa_fs
 from zephyr.writers import (
+    _pyarrow_filesystem,
+    _s3_filesystem_kwargs,
     infer_arrow_schema,
+    write_jsonl_file,
     write_parquet_file,
     write_vortex_file,
 )
+
+# zstandard frame magic number: the first four bytes of any zstd-compressed stream.
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def test_write_vortex_file_basic():
@@ -77,6 +87,23 @@ def test_write_vortex_file_single_record():
         table = reader.read_all()
         assert len(table) == 1
         assert table.column("name").to_pylist() == ["Alice"]
+
+
+@pytest.mark.parametrize("ext", [".jsonl.zst", ".jsonl.zstd"])
+def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
+    """Both ``.zst`` and ``.zstd`` must produce a genuinely zstd-compressed file.
+
+    Asserting the on-disk magic bytes (rather than only a round-trip) catches the
+    silent case where the extension is unrecognized and records are written raw.
+    """
+    output_path = str(Path(tmp_path) / f"data{ext}")
+    records = [{"id": i, "name": f"row{i}"} for i in range(5)]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result["count"] == 5
+    with open(output_path, "rb") as f:
+        assert f.read(4) == _ZSTD_MAGIC
 
 
 def test_write_parquet_file_basic():
@@ -161,6 +188,63 @@ def test_write_parquet_file_empty():
 
         table = pq.read_table(output_path)
         assert len(table) == 0
+
+
+def test_write_parquet_file_unaddressable_protocol_falls_back_to_fsspec():
+    """Protocols pyarrow cannot address still round-trip via the fsspec handle."""
+    bucket = f"zephyr-writers-{uuid.uuid4().hex}"
+    output_path = f"memory://{bucket}/out.parquet"
+    records = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    result = write_parquet_file(iter(records), output_path)
+
+    assert result["count"] == 2
+    with fsspec.filesystem("memory").open(f"/{bucket}/out.parquet", "rb") as f:
+        table = pq.read_table(f)
+    assert table.to_pylist() == records
+
+
+def test_pyarrow_filesystem_selection():
+    """Local paths get a native LocalFileSystem; unknown protocols return None."""
+    fs, path = _pyarrow_filesystem("/tmp/out.parquet")
+    assert isinstance(fs, pa_fs.LocalFileSystem)
+    assert path == "/tmp/out.parquet"
+
+    fs, path = _pyarrow_filesystem("file:///tmp/out.parquet")
+    assert isinstance(fs, pa_fs.LocalFileSystem)
+    assert path == "/tmp/out.parquet"
+
+    assert _pyarrow_filesystem("memory://bucket/out.parquet") is None
+
+
+def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
+    """The iris-exported FSSPEC_S3 block maps onto native S3FileSystem kwargs.
+
+    CoreWeave object storage rejects path-style requests with HTTP 400, so
+    the virtual addressing style configured for s3fs must translate to
+    ``force_virtual_addressing`` on the native filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {
+            "endpoint_url": "https://object.example.coreweave.com",
+            "client_kwargs": {"region_name": "auto"},
+            "config_kwargs": {"s3": {"addressing_style": "virtual"}},
+        },
+    )
+    kwargs = _s3_filesystem_kwargs()
+    assert kwargs["endpoint_override"] == "https://object.example.coreweave.com"
+    assert kwargs["region"] == "auto"
+    assert kwargs["force_virtual_addressing"] is True
+    assert kwargs["connect_timeout"] > 0
+    assert kwargs["request_timeout"] > 0
+
+    monkeypatch.setitem(fsspec.config.conf, "s3", {})
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    assert "endpoint_override" not in _s3_filesystem_kwargs()
+    assert "force_virtual_addressing" not in _s3_filesystem_kwargs()
 
 
 def test_infer_arrow_schema_basic():

@@ -37,18 +37,25 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
         },
     )
 
-    with patch("iris.cli.cluster._build_and_push_image") as build_and_push_image:
+    with patch("iris.cli.cluster.build_image") as build_image:
 
-        built = _build_cluster_images(config, git_sha="abc")
+        built = _build_cluster_images(
+            config,
+            git_sha="abc",
+            platform="linux/amd64",
+            cargo_profile="fast",
+        )
 
     assert built == {
         "worker": "ghcr.io/marin-community/iris-worker:v1",
         "controller": "ghcr.io/marin-community/iris-controller:v1",
         "task": "ghcr.io/marin-community/iris-task:v1",
     }
-    assert build_and_push_image.call_count == 3
-    image_types = [call.args[1] for call in build_and_push_image.call_args_list]
+    assert build_image.call_count == 3
+    image_types = [call.kwargs["image_type"] for call in build_image.call_args_list]
     assert sorted(image_types) == ["controller", "task", "worker"]
-    for call in build_and_push_image.call_args_list:
-        assert call.args[0].startswith("ghcr.io/")
-        assert call.args[2] == "abc"
+    for call in build_image.call_args_list:
+        assert call.kwargs["tag"].endswith(":v1")
+        assert call.kwargs["git_sha"] == "abc"
+        assert call.kwargs["platform"] == "linux/amd64"
+        assert call.kwargs["cargo_profile"] == "fast"

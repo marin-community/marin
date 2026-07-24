@@ -2,26 +2,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build (and let CI publish) marin-dupekit wheels.
+"""Build (and let CI publish) the marin-dupekit dists.
 
-Driven by .github/workflows/dupekit-release-wheels.yaml. Mirrors the
-nightly/stable/manual mode split used by scripts/python_libs_package.py for the
-marin-libs wheels - same trigger shape (schedule + tag + workflow_dispatch +
-PR-smoke), no `push: branches: [main]` recursion.
+Driven by .github/workflows/dupekit-release-wheels.yaml. Mirrors
+lib/finelog/build_package.py: same nightly/stable/manual mode split and the
+same zig-cross-compiled manylinux + native macOS wheel matrix.
+
+Builds both dists of the pair in lockstep at one resolved version (see
+lib/dupekit/pyproject.toml for how the pure and native packages relate):
+  - marin-dupekit-native: platform wheels from the maturin project in rust/,
+    one per target across the CI matrix.
+  - marin-dupekit: one pure py3-none-any wheel, built on the linux leg only so
+    artifacts never collide across legs.
 
 Modes:
     nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where
-                `<bumped_patch>` is one patch above max(Cargo.toml, latest
-                stable on PyPI). Sorting above the current stable is what
-                lets `marin-dupekit >= 0.1.0.dev0` in root pyproject.toml
-                resolve to the latest dev. Cargo.toml never needs to be
-                re-bumped after a stable cut.
+                `<bumped_patch>` is one patch above max(pyproject version,
+                latest marin-dupekit stable on PyPI; the native dist follows the
+                same value). Sorting above the current stable is what lets
+                `marin-dupekit-native >= 0.1.2.dev0`-style floors resolve to the
+                latest dev. pyproject never needs to be re-bumped after a stable
+                cut.
     stable   -- version supplied via --version (extracted from the tag in CI).
-                Cargo.toml is rewritten on disk so maturin builds with that
-                version; the change is not committed.
-    manual   -- `<Cargo.toml>+<sha>` (PEP 440 local version). Build-only
-                smoke for PRs and ad-hoc dev; PyPI rejects local-version
-                identifiers, so the publish job declines to run in this mode.
+                Both the pure pyproject and rust/Cargo.toml are rewritten on
+                disk so the builds carry that version; the change is not
+                committed. A stable tag therefore cuts a stable PAIR.
+    manual   -- `<pyproject>+<sha>` (PEP 440 local version). Build-only smoke
+                for PRs and ad-hoc dev; PyPI rejects local-version identifiers,
+                so the publish job declines to run in this mode.
 
 Usage:
     python lib/dupekit/build_package.py --mode nightly --build linux
@@ -45,19 +53,34 @@ import urllib.request
 from pathlib import Path
 
 DUPEKIT_DIR = Path(__file__).resolve().parent
+NATIVE_DIR = DUPEKIT_DIR / "rust"
 REPO_ROOT = DUPEKIT_DIR.parent.parent
-# maturin reads the wheel version from `[package] version` in this Cargo.toml;
-# the crate lives in the package's own rust/ subtree.
-MANIFEST_PATH = DUPEKIT_DIR / "rust" / "Cargo.toml"
+# The pure dist's pyproject is the canonical version source; the resolved
+# version is stamped into it and into rust/Cargo.toml (which maturin reads for
+# the native dist's dynamic version) so the wheels agree.
+PYPROJECT_PATH = DUPEKIT_DIR / "pyproject.toml"
+CARGO_PATH = NATIVE_DIR / "Cargo.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
 
 PYPI_JSON_URL = "https://pypi.org/pypi/marin-dupekit/json"
 
 ZIG_VERSION = "0.15.2"
-# ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
-# from https://ziglang.org/download/community-mirrors.txt instead.
-ZIG_DOWNLOAD_BASE = "https://pkg.earth/zig"
+# Zig tarballs are large and ziglang.org's own server is slow and rate-limited
+# (<0.1 MB/s), so prefer the community mirrors from
+# https://ziglang.org/download/community-mirrors.txt and fall back to the
+# official server only if every mirror fails. Mirrors intermittently 500 or
+# drop the connection (a single hard-coded mirror is a CI flake waiting to
+# happen), so we rotate through several with retries. Each mirror serves the
+# tarball at `<base>/<filename>`; the official server nests it under
+# `/download/<version>/`.
+ZIG_MIRRORS = (
+    "https://pkg.earth/zig",
+    "https://pkg.hexops.org/zig",
+    "https://zig.linus.dev/zig",
+)
+ZIG_OFFICIAL_BASE = "https://ziglang.org/download"
+ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE = 2
 
 # (rust-triple, manylinux-tag) — manylinux is None for native macOS builds.
 LINUX_TARGETS: list[tuple[str, str | None]] = [
@@ -92,8 +115,31 @@ def _zig_platform_key() -> str:
     return f"{arch_map[machine]}-{os_map[system]}"
 
 
+def _download_zig_archive(filename: str, dest: Path, reporthook) -> None:
+    """Fetch the zig tarball into ``dest``, trying mirrors then ziglang.org.
+
+    Tries each community mirror (a couple of attempts apiece, since they
+    intermittently 500 or drop the connection) before falling back to the slow,
+    rate-limited official server. Raises if every source fails.
+    """
+    sources = [f"{base}/{filename}" for base in ZIG_MIRRORS]
+    sources.append(f"{ZIG_OFFICIAL_BASE}/{ZIG_VERSION}/{filename}")
+    last_error: Exception | None = None
+    for url in sources:
+        for attempt in range(1, ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE + 1):
+            print(f"Downloading zig {ZIG_VERSION} from {url} (attempt {attempt})...")
+            try:
+                urllib.request.urlretrieve(url, dest, reporthook=reporthook)
+                return
+            except (urllib.error.URLError, OSError) as e:
+                last_error = e
+                print(f"  download failed: {e}")
+                dest.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not download zig {ZIG_VERSION} from any mirror or ziglang.org") from last_error
+
+
 def _ensure_zig() -> str:
-    """Return path to zig binary, downloading from a community mirror if absent."""
+    """Return path to zig binary, downloading it if absent (see _download_zig_archive)."""
     existing = shutil.which("zig")
     if existing:
         return existing
@@ -105,9 +151,6 @@ def _ensure_zig() -> str:
         return str(zig_bin)
 
     filename = f"zig-{plat}-{ZIG_VERSION}.tar.xz"
-    url = f"{ZIG_DOWNLOAD_BASE}/{filename}"
-    print(f"Downloading zig {ZIG_VERSION} for {plat} from {ZIG_DOWNLOAD_BASE}...")
-
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = TOOLS_DIR / filename
 
@@ -126,7 +169,7 @@ def _ensure_zig() -> str:
         else:
             print(f"  zig download: {downloaded / 1e6:.1f} MB")
 
-    urllib.request.urlretrieve(url, archive_path, reporthook=_report)
+    _download_zig_archive(filename, archive_path, _report)
     with tarfile.open(archive_path, "r:xz") as tar:
         tar.extractall(TOOLS_DIR, filter="data")
     archive_path.unlink()
@@ -158,35 +201,41 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from lib/dupekit so it reads this package's pyproject.toml.
+    """Run maturin from lib/dupekit/rust so it reads the native pyproject.toml.
 
-    The `[tool.maturin] manifest-path` in lib/dupekit/pyproject.toml selects the
-    crate under rust/; we deliberately do NOT pass --manifest-path (that would
+    The `[tool.maturin] manifest-path` in lib/dupekit/rust/pyproject.toml selects
+    the cdylib crate; we deliberately do NOT pass --manifest-path (that would
     make maturin look for a sibling pyproject next to the crate).
     """
     cmd = [_ensure_maturin(), *args]
-    subprocess.run(cmd, check=True, cwd=DUPEKIT_DIR, env=env)
+    subprocess.run(cmd, check=True, cwd=NATIVE_DIR, env=env)
 
 
+# Match the `[project]`/`[package]` table's `version = "..."` — the first
+# line-anchored version key in each file (build-system/table headers above it
+# have none, and dependency strings are indented so the anchor skips them).
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
 
 
-def _read_cargo_version() -> str:
-    text = MANIFEST_PATH.read_text()
+def _read_project_version() -> str:
+    text = PYPROJECT_PATH.read_text()
     m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     if not m:
-        print("ERROR: Could not parse version from Cargo.toml", file=sys.stderr)
+        print("ERROR: Could not parse [project] version from pyproject.toml", file=sys.stderr)
         sys.exit(1)
     return m.group(1)
 
 
-def _write_cargo_version(new_version: str) -> None:
-    text = MANIFEST_PATH.read_text()
-    new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
-    if n != 1:
-        print(f"ERROR: Failed to rewrite version in {MANIFEST_PATH}", file=sys.stderr)
-        sys.exit(1)
-    MANIFEST_PATH.write_text(new_text)
+def _write_project_version(new_version: str) -> None:
+    # The pure pyproject carries [project] version; rust/Cargo.toml carries the
+    # native dist's [package] version (maturin reads it via dynamic version).
+    for path in (PYPROJECT_PATH, CARGO_PATH):
+        text = path.read_text()
+        new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
+        if n != 1:
+            print(f"ERROR: Failed to rewrite version in {path}", file=sys.stderr)
+            sys.exit(1)
+        path.write_text(new_text)
 
 
 def _parse_semver(version: str) -> tuple[int, int, int]:
@@ -225,20 +274,19 @@ def _resolve_nightly_version() -> str:
     """Build a nightly version that uv/pip will prefer over the current stable.
 
     Format: `<bumped_patch_above_stable>-dev.<YYYYMMDDhhmm>`.
-      - The bump base is `max(Cargo.toml, latest stable on PyPI)`, so the
-        resulting `<bumped>` always sits one patch *above* whatever is
-        currently stable. PEP 440 then orders the dev release *above* the
-        stable (`0.1.2.dev* > 0.1.1`), which is the property that lets root
-        pyproject.toml's `marin-dupekit >= 0.1.0.dev0` pin resolve to the
-        latest dev rather than the older stable.
-      - Querying PyPI also means Cargo.toml never has to be re-bumped after a
-        stable cut - the script always anticipates the next patch correctly.
+      - The bump base is `max(pyproject version, latest stable on PyPI)`, so the
+        resulting `<bumped>` always sits one patch *above* whatever is currently
+        stable. PEP 440 then orders the dev release *above* the stable
+        (`0.1.3.dev* > 0.1.2`), which is what lets the
+        `marin-dupekit-native >= 0.1.2.dev0` floor resolve to the latest dev.
+      - Querying PyPI also means pyproject.toml never has to be re-bumped after
+        a stable cut — the script always anticipates the next patch correctly.
       - `<YYYYMMDDhhmm>` (UTC) keeps each dev release unique per minute and
         readable at a glance.
     """
-    cargo = _read_cargo_version()
+    declared = _read_project_version()
     pypi_stable = _query_pypi_latest_stable()
-    base = _max_version(cargo, pypi_stable) if pypi_stable else cargo
+    base = _max_version(declared, pypi_stable) if pypi_stable else declared
     bumped = _bump_patch(base)
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M")
     return f"{bumped}-dev.{stamp}"
@@ -249,7 +297,7 @@ def _resolve_manual_version() -> str:
     # `+<segment>` is semver build metadata and PEP 440 local-version - both
     # ecosystems treat it as "same release, different build", which is what we
     # want for ad-hoc smoke builds.
-    return f"{_read_cargo_version()}+{sha}"
+    return f"{_read_project_version()}+{sha}"
 
 
 def resolve_version(mode: str, override: str | None) -> str:
@@ -295,11 +343,26 @@ def _build_wheels(targets: list[tuple[str, str | None]], use_zig: bool) -> None:
             args.append("--zig")
         _maturin(*args, env=env)
 
-    _list_dist_artifacts("wheel(s)")
+
+def _uv_build(*args: str) -> None:
+    """Build the pure dist with uv, dropping the .gitignore uv writes into the
+    output dir — pypi-publish rejects non-distribution files in packages-dir,
+    and both the artifact upload and the publish step glob all of dist/."""
+    subprocess.run(["uv", "build", *args, "--out-dir", str(DIST_DIR)], check=True, cwd=DUPEKIT_DIR)
+    (DIST_DIR / ".gitignore").unlink(missing_ok=True)
+
+
+def _build_pure_wheel() -> None:
+    print("\n--- Building marin-dupekit (pure) wheel ---")
+    _uv_build("--wheel")
 
 
 def build_linux_wheels() -> None:
     _build_wheels(LINUX_TARGETS, use_zig=True)
+    # The pure wheel is platform-independent; build it on this leg only so the
+    # merged artifacts never contain two copies of the same filename.
+    _build_pure_wheel()
+    _list_dist_artifacts("wheel(s)")
 
 
 def build_macos_wheels() -> None:
@@ -307,22 +370,25 @@ def build_macos_wheels() -> None:
         print("ERROR: macOS wheels require a macOS host (zig can't cross-compile to macOS)", file=sys.stderr)
         sys.exit(1)
     _build_wheels(MAC_TARGETS, use_zig=False)
+    _list_dist_artifacts("wheel(s)")
 
 
-def build_sdist() -> None:
+def build_sdists() -> None:
     # Adds to dist/ rather than resetting it: the release job downloads wheels
     # via download-artifact before invoking us, and we want them in the same
     # directory so `pypa/gh-action-pypi-publish` uploads everything together.
     DIST_DIR.mkdir(exist_ok=True)
-    print("\n--- Building sdist ---")
+    print("\n--- Building marin-dupekit-native sdist ---")
     _maturin("sdist", "--out", str(DIST_DIR))
+    print("\n--- Building marin-dupekit sdist ---")
+    _uv_build("--sdist")
     _list_dist_artifacts("sdist(s)")
 
 
 _BUILDERS = {
     "linux": build_linux_wheels,
     "macos": build_macos_wheels,
-    "sdist": build_sdist,
+    "sdist": build_sdists,
 }
 
 
@@ -335,7 +401,7 @@ def main() -> None:
             "Stable: required, taken verbatim. "
             "Nightly: optional precomputed value (CI computes it once in the resolve "
             "job and passes it to every matrix leg, so all wheels and the sdist agree). "
-            "Manual: optional override; otherwise derived from Cargo.toml + GITHUB_SHA."
+            "Manual: optional override; otherwise derived from pyproject.toml + GITHUB_SHA."
         ),
     )
     parser.add_argument(
@@ -354,15 +420,16 @@ def main() -> None:
         parser.error("--build is required unless --resolve-only is set")
 
     version = args.version if args.version else resolve_version(args.mode, args.version)
-    print(f"marin-dupekit version: {version} (mode={args.mode})")
+    print(f"marin-dupekit / marin-dupekit-native version: {version} (mode={args.mode})")
     _emit_github_output("version", version)
 
     if args.resolve_only:
         return
 
-    # maturin reads version from Cargo.toml. Stamp it for the duration of this
-    # build; we never commit the change back.
-    _write_cargo_version(version)
+    # The pure wheel reads [project] version from pyproject.toml; the native
+    # wheel reads [package] version from rust/Cargo.toml. Stamp the resolved
+    # version into both for the duration of this build; we never commit it back.
+    _write_project_version(version)
     _BUILDERS[args.build]()
 
 

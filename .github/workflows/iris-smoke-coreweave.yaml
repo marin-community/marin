@@ -75,6 +75,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # cw-us-west-04a.yaml's auth.signing_key falls through to a gcp-secret:// reference
+      # (no IRIS_SIGNING_KEY is exported here) — `cluster start` resolves it via Secret
+      # Manager in this shell before projecting it into the controller's env Secret.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
       # Delete stale worker pods so the autoscaler recreates them with fresh images.
       # Nodepools (and their underlying nodes) survive — this is the "warm start".
       - name: Reset worker pods
@@ -86,13 +94,17 @@ jobs:
       # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
       # and triggers a rollout restart, so both cold starts and warm restarts
       # work without needing to tunnel to an existing controller first.
+      #
+      # --extra controller: resolving the gcp-secret:// signing key above needs
+      # marin-rigging[secrets] (Secret Manager client), which only the `controller`
+      # extra pulls in — `--group dev` alone does not.
       - name: Start controller
         env:
-          CW_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          CW_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=config/ci-coreweave.yaml \
+          cd lib/iris && uv run --group dev --extra controller iris -v \
+            --config=config/cw-us-west-04a.yaml \
             cluster start --fresh
 
       - name: Connect to iris-ci controller

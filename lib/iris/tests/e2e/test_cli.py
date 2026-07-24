@@ -3,94 +3,29 @@
 
 """E2E test for local cluster mode via the CLI.
 
-Uses ``iris cluster start --local`` through Click's test runner, then submits
-a job through the IrisClient to verify the full stack works.
+Uses ``iris cluster start --local`` through Click's test runner with the
+canonical ``config/examples/local.yaml``, then submits a job through the
+IrisClient to verify the full stack works.
 """
 
 import threading
-import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import yaml
 from click.testing import CliRunner
 from iris.cli import iris
 from iris.client import IrisClient
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.requires_cluster
 
-
-@pytest.fixture(scope="module")
-def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    tmp_path = tmp_path_factory.mktemp("cli_cluster")
-    config_path = tmp_path / "cluster.yaml"
-    config_path.write_text(
-        yaml.dump(
-            {
-                "platform": {
-                    "gcp": {
-                        "project_id": "test-project",
-                    }
-                },
-                "defaults": {
-                    "worker": {
-                        "docker_image": "test-image:latest",
-                        "port": 10001,
-                        "controller_address": "127.0.0.1:10000",
-                    },
-                },
-                "controller": {
-                    "gcp": {
-                        "port": 10000,
-                    }
-                },
-                "scale_groups": {
-                    "local-cpu": {
-                        "buffer_slices": 1,
-                        "max_slices": 1,
-                        "num_vms": 1,
-                        "resources": {
-                            "cpu": 1,
-                            "ram": "1GB",
-                            "disk": 0,
-                            "device_type": "cpu",
-                            "device_count": 0,
-                            "capacity_type": "on_demand",
-                        },
-                        "slice_template": {
-                            "accelerator_type": "ACCELERATOR_TYPE_CPU",
-                            "num_vms": 1,
-                            "local": {},
-                        },
-                    },
-                },
-            }
-        )
-    )
-    return config_path
+LOCAL_CONFIG = Path(__file__).resolve().parents[2] / "config" / "examples" / "local.yaml"
 
 
-def _wait_for_workers(address: str, timeout: float = 30.0) -> None:
-    """Poll until at least one worker registers (healthy or not)."""
-    client = ControllerServiceClientSync(address=address, timeout_ms=5000)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-            if resp.workers:
-                return
-        except Exception:
-            pass
-        time.sleep(0.5)
-    raise TimeoutError(f"No workers registered within {timeout}s")
-
-
-def test_cli_local_cluster_e2e(cluster_config_file: Path):
+def test_cli_local_cluster_e2e():
     """Start a local cluster via CLI, submit a job via IrisClient, verify completion."""
     runner = CliRunner()
 
@@ -114,14 +49,20 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
             invoke_result.append(
                 runner.invoke(
                     iris,
-                    ["--config", str(cluster_config_file), "cluster", "start", "--local"],
+                    ["--config", str(LOCAL_CONFIG), "cluster", "start", "--local"],
                 )
             )
 
     cli_thread = threading.Thread(target=run_cli, daemon=True)
     cli_thread.start()
 
-    assert controller_ready.wait(timeout=10), "Controller didn't start in time"
+    if not controller_ready.wait(timeout=30):
+        cli_thread.join(timeout=1)
+        if invoke_result and invoke_result[0].exception:
+            raise AssertionError(
+                f"CLI exited before the controller started: {invoke_result[0].output}"
+            ) from invoke_result[0].exception
+        raise AssertionError("Controller didn't start in time")
     assert len(captured_controller) == 1
 
     controller = captured_controller[0]
@@ -129,9 +70,8 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         address = controller.discover()
         assert address is not None
 
-        _wait_for_workers(address)
-
-        # Submit a job through IrisClient
+        # Submit a job through IrisClient; the autoscaler provisions a local
+        # worker on demand, so the wait covers provisioning too.
         client = IrisClient.remote(address, workspace=Path.cwd())
 
         def hello():
@@ -143,7 +83,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
             resources=ResourceSpec(cpu=1),
         )
 
-        status = job.wait(timeout=30, raise_on_failure=True)
+        status = job.wait(timeout=90, raise_on_failure=True)
         assert status.state == job_pb2.JOB_STATE_SUCCEEDED
     finally:
         controller.close()

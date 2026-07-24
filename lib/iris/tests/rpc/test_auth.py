@@ -16,6 +16,7 @@ from iris.rpc.auth import (
     DASHBOARD_ROLE,
     FEDERATION_PEER_ROLE,
     FEDERATION_RPCS,
+    FEDERATION_SCOPED_RPCS,
     AuthzAction,
     authorize,
     authorize_method,
@@ -78,11 +79,20 @@ def test_authorize_method_allows_federation_rpcs_for_a_peer(method):
     authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
 
 
-@pytest.mark.parametrize("method", ["ProfileTask", "ExecInContainer", "SetUserBudget", "ListJobs", "GetJobStatus"])
+@pytest.mark.parametrize("method", sorted(FEDERATION_SCOPED_RPCS))
+def test_authorize_method_allows_scoped_debug_rpcs_for_a_peer(method):
+    # The on-demand debug proxies are admitted at the method gate; the handler then
+    # scopes each to a job the peer federated here (see the controller service's
+    # _authorize_federated_debug_target). Without this, a proxied stack/exec/status
+    # for a federated task is rejected before the peer can route it.
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+
+
+@pytest.mark.parametrize("method", ["SetUserBudget", "ListJobs", "GetJobStatus", "ExecuteRawQuery"])
 def test_authorize_method_denies_non_federation_rpcs_for_a_peer(method):
     # A federation bearer accepted by the composite verifier cannot reach any RPC
-    # outside the federation subset — including the exec/profile proxies deferred
-    # from v1 and every read the dashboard role would be allowed.
+    # outside the federation subset and the scoped debug proxies — including every
+    # read the dashboard role would be allowed.
     with pytest.raises(ConnectError) as exc:
         authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
     assert exc.value.code == Code.PERMISSION_DENIED

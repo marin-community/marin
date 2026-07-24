@@ -68,7 +68,7 @@ def _default_launcher_region(monkeypatch):
     # marin_region() checks GCE instance metadata before MARIN_PREFIX; on a real
     # GCP host that resolves a real region and silently overrides the prefix
     # these tests set, so pin it to "not on GCP" for hermetic region resolution.
-    monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     # Bind a fixed DataConfig instead of resolving the ambient cluster config, so
     # these tests are independent of the host's config search path (a per-user
     # ~/.config/marin/clusters override, cwd, missing config/ dir, etc).
@@ -219,7 +219,6 @@ def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(
     config = dataclasses.replace(
         _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
         n_generations_per_prompt=16,
-        train_decoding_top_k=4096,
     )
     job_config = _build_rl_job_config(
         name="rl-test",

@@ -1,12 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import hashlib
 import json
 import logging
 import os
 import subprocess
 import tempfile
+import threading
 import typing
 import warnings
 from dataclasses import dataclass
@@ -35,6 +37,45 @@ WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+
+
+def _teardown_wandb_service_bounded(timeout: float) -> None:
+    """Tear down the wandb-core service without letting it block the JAX shutdown barrier.
+
+    wandb starts a wandb-core service subprocess and registers its own atexit hook to
+    join it, but every wait on that service is hard-coded unbounded: ``run.finish()``
+    -> ``_atexit_cleanup`` uses ``wait_or(timeout=None)`` and the service-teardown hook
+    ends in a bare ``subprocess.wait()`` (wandb 0.26.0 exposes no timeout for either).
+    When the service wedges on a stuck upload those joins never return, which on a
+    multi-slice run holds the primary slice past the JAX distributed shutdown-barrier
+    deadline and SIGABRTs the whole job.
+
+    We run the public ``wandb.teardown()`` on a daemon watchdog thread and wait up to
+    ``timeout``. ``teardown()`` unregisters wandb's own atexit hook before it blocks, so
+    once it has started the main thread will not get stuck on wandb at interpreter exit
+    even if the upload is wedged. On timeout we abandon the watchdog thread — the same
+    thing :meth:`BackgroundTracker.finish` already does with its worker — and let the
+    process teardown reap the orphaned service. Metrics are mirrored to finelog, so
+    dropping the wandb upload tail is acceptable.
+    """
+    done = threading.Event()
+
+    def _run() -> None:
+        try:
+            wandb.teardown()
+        except Exception:
+            logger.exception("wandb.teardown() raised during bounded service teardown.")
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name="wandb-service-teardown", daemon=True).start()
+
+    if not done.wait(timeout):
+        logger.warning(
+            "wandb-core service did not tear down within %.1fs; abandoning it so the JAX shutdown "
+            "barrier is not blocked (wandb upload tail dropped; metrics are mirrored to finelog).",
+            timeout,
+        )
 
 
 class WandbTracker(Tracker):
@@ -329,6 +370,12 @@ class WandbConfig(TrackerConfig):
     background_finish_timeout: float = 120.0
     """Maximum seconds to wait for the background thread to drain on finish()."""
 
+    service_teardown_timeout: float = 60.0
+    """Maximum seconds to wait for the wandb-core service to tear down at interpreter exit
+    before abandoning it. wandb's own service-teardown atexit hook is unbounded, which can
+    hold a slice past the JAX distributed shutdown-barrier deadline and SIGABRT a
+    multi-slice job. Kept well under that deadline."""
+
     def init(self, run_id: Optional[str]) -> Tracker:
         if run_id is not None and self.id is not None and run_id != self.id:
             warnings.warn(
@@ -411,6 +458,11 @@ class WandbConfig(TrackerConfig):
             wandb.summary["num_devices"] = jax.device_count()  # type: ignore
             wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
             wandb.summary["backend"] = jax.default_backend()  # type: ignore
+
+            # Only the primary process owns a wandb-core service subprocess whose teardown
+            # can wedge. Register the bounded teardown after wandb.init() so it runs before
+            # wandb's own (unbounded) teardown hook at exit — atexit is LIFO.
+            atexit.register(_teardown_wandb_service_bounded, self.service_teardown_timeout)
 
         return maybe_wrap_background(
             WandbTracker(

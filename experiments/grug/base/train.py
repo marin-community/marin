@@ -525,11 +525,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                callbacks.profile(
+                profiler_cfg.build(
                     str(trainer.log_dir / run_id / "profiler"),
-                    profiler_cfg.start_step,
-                    profiler_num_steps,
-                    profiler_cfg.perfetto_link,
+                    run_id=run_id,
+                    num_steps=profiler_num_steps,
                 ),
                 every=1,
             )

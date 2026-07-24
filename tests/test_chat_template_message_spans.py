@@ -12,29 +12,23 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
-from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
-from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
-_MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
+# Assistant masks are derived from `{% generation %}` blocks, which no upstream template ships,
+# so only the templates Marin publishes can exercise the mask-dependent paths.
+_GENERATION_TAGGED_CASES = [
     (
         "marin",
         "marin-community/marin-tokenizer",
         MARIN_CHAT_TEMPLATE,
         {},
     ),
-    (
-        "llama3.1",
-        "meta-llama/Llama-3.1-8B",
-        LLAMA_3_1_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
-    (
-        "qwen3",
-        "Qwen/Qwen3-8B",
-        QWEN_3_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
+]
+
+# Message spans are recovered from the rendered `messages` loop and need no generation tags,
+# so stock upstream templates are covered here as well.
+_MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
+    *_GENERATION_TAGGED_CASES,
     (
         "gemma3",
         "google/gemma-3-4b-it",
@@ -48,6 +42,10 @@ _MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
         {"tools": None, "builtin_tools": None},
     ),
 ]
+
+# Stock upstream templates ship no generation block, so mask-consuming processors must reject them
+# up front rather than silently emit all-zero assistant labels.
+_NO_GENERATION_TEMPLATE_CASES = _MESSAGE_SPAN_REAL_TEMPLATE_CASES[len(_GENERATION_TAGGED_CASES) :]
 
 
 def _load_optional_tokenizer(name: str) -> MarinTokenizer:
@@ -91,8 +89,8 @@ def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_n
 
 @pytest.mark.parametrize(
     "case_name,tokenizer_name,chat_template,template_kwargs",
-    _MESSAGE_SPAN_REAL_TEMPLATE_CASES[:3],
-    ids=[case[0] for case in _MESSAGE_SPAN_REAL_TEMPLATE_CASES[:3]],
+    _GENERATION_TAGGED_CASES,
+    ids=[case[0] for case in _GENERATION_TAGGED_CASES],
 )
 def test_trace_chat_processor_labels_real_templates(case_name, tokenizer_name, chat_template, template_kwargs):
     tokenizer = _load_optional_tokenizer(tokenizer_name)
@@ -137,3 +135,20 @@ def test_trace_chat_processor_labels_real_templates(case_name, tokenizer_name, c
     assert "result" in observation_text
     assert "3" in observation_text
     assert f"{case_name} final answer is done." in final_text
+
+
+@pytest.mark.parametrize(
+    "case_name,tokenizer_name,chat_template,template_kwargs",
+    _NO_GENERATION_TEMPLATE_CASES,
+    ids=[case[0] for case in _NO_GENERATION_TEMPLATE_CASES],
+)
+def test_trace_chat_processor_rejects_stock_templates_without_generation_block(
+    case_name, tokenizer_name, chat_template, template_kwargs
+):
+    tokenizer = _load_optional_tokenizer(tokenizer_name)
+    with pytest.raises(ValueError, match="generation"):
+        TraceChatProcessor(
+            tokenizer,
+            chat_template=chat_template,
+            loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+        )

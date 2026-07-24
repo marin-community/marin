@@ -337,7 +337,7 @@ iris --config cluster.yaml job logs /my-job --since-seconds 300
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop /my-job --no-include-children
+iris --config cluster.yaml job stop --prefix /my-job-prefix
 ```
 
 ## Smoke Test
@@ -437,3 +437,4 @@ scale_groups:
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
 - [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
 - [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
+- [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it

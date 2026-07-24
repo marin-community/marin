@@ -1,0 +1,63 @@
+{
+  "type": "table",
+  "title": "Crash-looping pods",
+  "description": "Containers sitting in CrashLoopBackOff or ImagePullBackOff, across every namespace except CoreWeave-managed ones (cw-*, kube-*). scope=control-plane means the pod belongs to a watched component; workload backoffs are informational.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/crashloops",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "namespace",
+          "text": "namespace",
+          "type": "string"
+        },
+        {
+          "selector": "pod",
+          "text": "pod",
+          "type": "string"
+        },
+        {
+          "selector": "container",
+          "text": "container",
+          "type": "string"
+        },
+        {
+          "selector": "reason",
+          "text": "reason",
+          "type": "string"
+        },
+        {
+          "selector": "restarts",
+          "text": "restarts",
+          "type": "number"
+        },
+        {
+          "selector": "scope",
+          "text": "scope",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

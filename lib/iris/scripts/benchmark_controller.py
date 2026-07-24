@@ -24,6 +24,7 @@ Usage:
     # (independent of the checkpoint-driven groups above).
     uv run python lib/iris/scripts/benchmark_controller.py reconcile \\
         --num-tasks 5000 --tasks-per-worker 64 --payload-bytes 100000
+
 """
 
 import asyncio
@@ -73,6 +74,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
+    _CONTROLLER_KEEPALIVE,
     Controller,
     ControllerConfig,
 )
@@ -120,7 +122,7 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
-from rigging.timing import Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import CursorTransitionReader
@@ -465,15 +467,15 @@ class ScenarioRunner:
                     "max": 0.0,
                 }
             else:
-                p50, p95, p99, _p999, mx = _percentiles_ms(all_latencies)
+                percentiles = _percentiles_ms(all_latencies)
                 results[load.name] = {
                     "n": n,
                     "errors": len(all_errors),
                     "actual_rps": n / elapsed,
-                    "p50": p50,
-                    "p95": p95,
-                    "p99": p99,
-                    "max": mx,
+                    "p50": percentiles.p50,
+                    "p95": percentiles.p95,
+                    "p99": percentiles.p99,
+                    "max": percentiles.maximum,
                 }
         return results
 
@@ -2050,15 +2052,24 @@ def benchmark_control_isolation(db: ControllerDB) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float, float]:
+@dataclasses.dataclass(frozen=True)
+class LatencyPercentiles:
+    p50: float
+    p95: float
+    p99: float
+    p999: float
+    maximum: float
+
+
+def _percentiles_ms(latencies: list[float]) -> LatencyPercentiles:
     latencies.sort()
     n = len(latencies)
-    return (
-        latencies[n // 2],
-        latencies[int(n * 0.95)],
-        latencies[int(n * 0.99)],
-        latencies[min(int(n * 0.999), n - 1)],
-        latencies[-1],
+    return LatencyPercentiles(
+        p50=latencies[n // 2],
+        p95=latencies[int(n * 0.95)],
+        p99=latencies[int(n * 0.99)],
+        p999=latencies[min(int(n * 0.999), n - 1)],
+        maximum=latencies[-1],
     )
 
 
@@ -2298,6 +2309,17 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     db.close()
 
 
+_SERVER_START_TIMEOUT = Duration.from_seconds(10)
+
+
+def _wait_for_server_start(condition: Callable[[], bool], error_message: str) -> None:
+    ExponentialBackoff(initial=0.01, maximum=0.1).wait_until_or_raise(
+        condition,
+        timeout=_SERVER_START_TIMEOUT,
+        error_message=error_message,
+    )
+
+
 @main.command("serve")
 @click.option(
     "--db-path",
@@ -2347,14 +2369,14 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         threads=threads,
     )
     controller.start()
-    deadline = time.time() + 10.0
-    while time.time() < deadline:
-        if controller._server is not None and controller._server.started:
-            break
-        time.sleep(0.02)
-    else:
+    try:
+        _wait_for_server_start(
+            lambda: controller._server is not None and controller._server.started,
+            "Controller server did not start within 10s",
+        )
+    except TimeoutError as exc:
         controller.stop()
-        raise click.ClickException("Controller server did not start within 10s")
+        raise click.ClickException(str(exc)) from exc
 
     print(f"READY port={controller.port}", flush=True)
 
@@ -2589,7 +2611,14 @@ def _serve_fake_worker():
         cast(WorkerService, _EchoWorker()),
         compressions=IRIS_RPC_COMPRESSIONS,
     )
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="error",
+        log_config=None,
+        timeout_keep_alive=_CONTROLLER_KEEPALIVE,
+    )
     server = uvicorn.Server(config)
 
     def _run():
@@ -2605,13 +2634,7 @@ def _serve_fake_worker():
     thread = threading.Thread(target=_run, name="fake-worker", daemon=True)
     thread.start()
 
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if server.started:
-            break
-        time.sleep(0.02)
-    else:
-        raise RuntimeError("fake worker did not start in 10s")
+    _wait_for_server_start(lambda: server.started, "fake worker did not start within 10s")
 
     port = None
     for sock in server.servers or []:

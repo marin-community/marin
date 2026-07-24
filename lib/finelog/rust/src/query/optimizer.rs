@@ -272,7 +272,7 @@ mod tests {
 
     fn scalar_call(name: &str, args: Vec<Expr>) -> Expr {
         let ctx = SessionContext::new();
-        crate::query::udf::register_compat_udfs(&ctx);
+        crate::query::udf::register_scalar_udfs(&ctx);
         Expr::ScalarFunction(ScalarFunction::new_udf(ctx.udf(name).unwrap(), args))
     }
 

@@ -22,18 +22,22 @@ from iris.cluster.backends.k8s.tasks import (
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    PeriodicProfiler,
     ResourceCollector,
+    _lookup_pod,
     _pod_name,
+    _ProfileTarget,
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.controller.backend import TaskTarget
+from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
+from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
 from iris.cluster.types import JobName
-from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
-from iris.test_util import wait_for_condition
+from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration
 
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
@@ -84,6 +88,27 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
+def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
+    """An unbuildable manifest -> terminal FAILED, not retryable WORKER_FAILED.
+
+    A programmatic client can stamp a required nvlink.domain gang larger than a rack's
+    guaranteed-schedulable slice (the CLI routes those to the sliced level, direct
+    RunTaskRequests do not). The manifest can never be built, so retrying would rebuild the
+    same broken request every tick and wedge the reconcile loop. sync must fail the task
+    terminally and keep going.
+    """
+    req = make_run_req("/test-job/0", num_tasks=RACK_SIZE + 1, coscheduling_group_by="nvlink.domain")
+    batch = make_batch(tasks_to_run=[req])
+
+    result = provider.sync(batch)
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert "guaranteed-schedulable rack slice" in result[0].error
+    # Nothing was created, and the tick was not aborted by the escaping error.
+    assert k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true"}) == []
+
+
 def test_redrive_does_not_recreate_running_pod(provider, k8s):
     """Re-applying a still-ASSIGNED task's RunTaskRequest never recreates its pod.
 
@@ -109,6 +134,55 @@ def test_redrive_does_not_recreate_running_pod(provider, k8s):
     assert pod_after is not None
     assert pod_after["status"]["phase"] == "Running"  # not reset by a recreate
     assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
+
+
+def test_resubmit_gets_fresh_pod_not_prior_incarnation(provider, k8s):
+    """A resubmit gets its own pod instead of adopting the prior run's verdict.
+
+    A resubmit reuses (task_id, attempt_id) but mints a new attempt_uid, and the
+    uid is part of the pod name, so the two incarnations have distinct names. The
+    fresh attempt's create just succeeds; the previous run's Failed pod is left
+    untouched under its own name (reaped later by terminal GC), never adopted.
+    """
+    task = JobName.from_wire("/test-job/0")
+    old = make_run_req("/test-job/0", attempt_uid="olduid0000000000")
+    new = make_run_req("/test-job/0", attempt_uid="newuid1111111111")
+    old_pod = _pod_name(task, 0, "olduid0000000000")
+    new_pod = _pod_name(task, 0, "newuid1111111111")
+    assert old_pod != new_pod
+
+    provider.sync(make_batch(tasks_to_run=[old]))
+    k8s.transition_pod(old_pod, "Failed", exit_code=137, reason="OOMKilled")
+
+    # Resubmit: no collision, no WORKER_FAILED — a fresh pod is created.
+    result = provider.sync(make_batch(tasks_to_run=[new]))
+    assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
+    fresh = k8s.get_json(K8sResource.PODS, new_pod)
+    assert fresh is not None
+    assert fresh.get("status", {}).get("phase") != "Failed"
+    # The stale pod is not touched by apply; terminal GC reaps it by age.
+    assert k8s.get_json(K8sResource.PODS, old_pod) is not None
+
+
+def test_redrive_keeps_own_fast_finished_pod(provider, k8s):
+    """A redrive over the same attempt's just-finished pod keeps the verdict.
+
+    A task stays ASSIGNED (redriven in tasks_to_run) until poll observes it, so an
+    attempt that finishes before the next scan is re-applied under its OWN name
+    (same uid). Create-if-absent leaves that terminal pod in place so poll reads
+    its verdict, instead of resetting it.
+    """
+    req = make_run_req("/test-job/0", attempt_uid="sameuid000000000")
+    pod_name = _pod_name(JobName.from_wire("/test-job/0"), 0, "sameuid000000000")
+
+    provider.sync(make_batch(tasks_to_run=[req]))
+    k8s.transition_pod(pod_name, "Failed", exit_code=1, reason="Error")
+
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result)
+    pod_after = k8s.get_json(K8sResource.PODS, pod_name)
+    assert pod_after is not None
+    assert pod_after["status"]["phase"] == "Failed"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +289,69 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+
+
+def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
+    """An in-flight attempt whose pod predates uid-embedded names stays RUNNING.
+
+    Pod names gained the attempt_uid while these pods were already running, and
+    attempt_uid is populated for every attempt, so recomputing only the current
+    name misses them. Reading that miss as a vanished pod fails live tasks on the
+    first controller restart after the upgrade.
+    """
+    task_id = JobName.from_wire("/job/preexisting")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="a1b2c3d4e5f60718")
+
+    populate_pod(k8s, _pod_name(task_id, 0), "Running")
+
+    batch = make_batch(running_tasks=[entry])
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES + 1):
+        result = provider.sync(batch)
+        assert len(result) == 1
+        assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+
+def test_lookup_pod_prefers_uid_name_when_both_are_present(provider, k8s):
+    """With both names in the pod set, the uid-named pod wins.
+
+    Both can be present at once while pre-upgrade pods drain, and only the
+    uid-named one belongs to this attempt.
+    """
+    task_id = JobName.from_wire("/job/resubmitted")
+    uid = "0f1e2d3c4b5a6978"
+    legacy_name = _pod_name(task_id, 0)
+    uid_name = _pod_name(task_id, 0, uid)
+    pods = {legacy_name: {"metadata": {"name": legacy_name}}, uid_name: {"metadata": {"name": uid_name}}}
+
+    name, pod = _lookup_pod(pods, task_id, 0, uid, allow_legacy=True)
+
+    assert name == uid_name
+    assert pod is pods[uid_name]
+
+
+def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider, k8s):
+    """A resubmit does not fall back onto the previous incarnation's uid-less pod.
+
+    A resubmit reuses (task_id, attempt_id) with a fresh uid, so a leftover
+    uid-less pod shares those and outlives the label-based stray reaper. Once
+    this process has dispatched the attempt its pod carries the uid, and treating
+    the leftover as this attempt's pod is the collision #7518 removed.
+    """
+    task_id = JobName.from_wire("/job/resubmitted-after-upgrade")
+    uid = "1122334455667788"
+    populate_pod(k8s, _pod_name(task_id, 0), "Running")  # previous incarnation, still up
+
+    provider.sync(make_batch(tasks_to_run=[make_run_req(task_id.to_wire(), attempt_id=0, attempt_uid=uid)]))
+    k8s.delete(K8sResource.PODS, _pod_name(task_id, 0, uid))  # this attempt's pod goes away
+
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=uid)
+    batch = make_batch(running_tasks=[entry])
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+    result = provider.sync(batch)
+    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert result[0].error == "Pod not found"
 
 
 def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
@@ -460,18 +597,6 @@ def test_resource_collector_skips_pod_without_metrics_sample(k8s, task_stats_tab
     assert task_stats_table.writes == []
 
 
-def test_resource_collector_swallows_metrics_query_failure(k8s, task_stats_table):
-    """A raising bulk metrics query is swallowed; no row is written."""
-    k8s.inject_persistent_failure("top_pods", RuntimeError("metrics-server unavailable"))
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    collector.close()
-    collector.set_pods({("/job/0", 0): "pod-a"})
-    collector.collect_once()
-
-    assert task_stats_table.writes == []
-
-
 # ---------------------------------------------------------------------------
 # Profiling via kubectl exec
 # ---------------------------------------------------------------------------
@@ -504,6 +629,43 @@ def test_profile_threads_via_kubectl_exec(provider, k8s):
 
     assert not resp.error
     assert b"Thread 0x7f00" in resp.profile_data
+
+
+def test_get_process_status_reads_pod_proc_via_kubectl_exec(provider, k8s):
+    """get_process_status execs the /proc reader into the task pod and parses vitals."""
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    stdout = (
+        "@@hostname\ntask-0\n@@uptime1\n500.0 0\n"
+        "@@stat1\n1 (python) S 0 1 1 0 -1 0 0 0 0 0 100 50 0 0 20 0 5 0 1000 0\n"
+        "@@uptime2\n500.5 0\n"
+        "@@stat2\n1 (python) S 0 1 1 0 -1 0 0 0 0 0 100 50 0 0 20 0 5 0 1000 0\n"
+        "@@statm\n0 0\n@@threads\nThreads:\t5\n@@fds\n9\n"
+        "@@memtotal\nMemTotal: 0 kB\n@@nproc\n4\n@@clktck\n100\n@@pagesize\n4096\n"
+    )
+    k8s.set_exec_response(pod_name, _success_cp(stdout=stdout))
+
+    resp = provider.get_process_status(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        job_pb2.GetProcessStatusRequest(target="/job/0"),
+    )
+
+    assert resp.process_info.thread_count == 5
+    assert resp.process_info.open_fd_count == 9
+    assert resp.process_info.cpu_count == 4
+
+
+def test_get_process_status_raises_on_exec_failure(provider, k8s):
+    """A failed kubectl exec surfaces as ProviderError (mapped to UNAVAILABLE upstream)."""
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _failure_cp(stderr="container not running"))
+
+    with pytest.raises(ProviderError, match="process status exec"):
+        provider.get_process_status(
+            TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+            job_pb2.GetProcessStatusRequest(target="/job/0"),
+        )
 
 
 def test_profile_threads_with_locals(provider, k8s):
@@ -632,6 +794,125 @@ def test_profile_kubectl_exec_failure_returns_error(provider, k8s):
 
     assert resp.error
     assert "container not running" in resp.error
+
+
+# ---------------------------------------------------------------------------
+# Periodic thread-dump profiling (k8s has no worker daemon to run the GCE loop)
+# ---------------------------------------------------------------------------
+
+
+def _stopped_profiler(k8s, profile_table) -> PeriodicProfiler:
+    """A PeriodicProfiler with its background loop stopped, so tests can drive
+    collect_once() synchronously (the ResourceCollector unit-test pattern)."""
+    profiler = PeriodicProfiler(k8s, profile_table, poll_interval=60.0)
+    profiler.close()
+    return profiler
+
+
+def test_periodic_profiler_writes_thread_dump_rows(k8s):
+    """A tracked running pod is dumped and recorded as a periodic thread profile."""
+    profile_table = FakeStatsTable()
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x1 (active+gil)\n  train.py:99 all_to_all"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({("/job/0", 0): _ProfileTarget("/job/0", 0, pod_name, "node-a")})
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.source == "/job/0"
+    assert row.attempt_id == 0
+    assert row.trigger == ProfileTrigger.PERIODIC.value
+    assert row.type == "thread"
+    assert row.vm_id == "k8s/node-a"
+    assert b"all_to_all" in row.profile_data
+
+
+def test_periodic_profiler_vm_id_falls_back_to_pod_name(k8s):
+    """An unscheduled pod (no nodeName) still gets a k8s/ vm_id from its pod name."""
+    profile_table = FakeStatsTable()
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x1\n  main.py:1"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({("/job/0", 0): _ProfileTarget("/job/0", 0, pod_name, "")})
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert rows[0].vm_id == f"k8s/{pod_name}"
+
+
+def test_periodic_profiler_skips_pods_whose_dump_fails(k8s):
+    """A pod whose py-spy dump fails is skipped, not written, and does not abort
+    the cycle for its siblings."""
+    profile_table = FakeStatsTable()
+    good_pod = _pod_name(JobName.from_wire("/job/0"), 0)
+    bad_pod = _pod_name(JobName.from_wire("/job/1"), 0)
+    populate_pod(k8s, good_pod, "Running")
+    populate_pod(k8s, bad_pod, "Running")
+    k8s.set_exec_response(good_pod, _success_cp(stdout="Thread 0x1\n  main.py:1"))
+    k8s.set_exec_response(bad_pod, _failure_cp(stderr="py-spy: No such process (os error 3)"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods(
+        {
+            ("/job/0", 0): _ProfileTarget("/job/0", 0, good_pod, "node-a"),
+            ("/job/1", 0): _ProfileTarget("/job/1", 0, bad_pod, "node-b"),
+        }
+    )
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert {row.source for row in rows} == {"/job/0"}, "only the pod that dumped cleanly is recorded"
+
+
+def test_periodic_profiler_no_targets_writes_nothing(k8s):
+    """With no running pods declared, a cycle is a no-op."""
+    profile_table = FakeStatsTable()
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({})
+    profiler.collect_once()
+
+    assert profile_table.writes == []
+
+
+def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
+    """After reconcile registers the running set, the background profiler loop
+    dumps only the running pod (not the terminal one) into iris.profile."""
+    profile_table = FakeStatsTable()
+    provider = K8sTaskProvider(
+        kubectl=k8s,
+        namespace="iris",
+        default_image="myrepo/iris:latest",
+        cache_dir="/cache",
+        local_queue="iris-lq",
+        profile_table=profile_table,
+        profile_poll_interval=0.05,
+        cluster_scan_interval=0.0,
+    )
+    try:
+        running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
+        terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+        running_pod = _pod_name(running.task_id, running.attempt_id)
+        terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
+        populate_pod(k8s, running_pod, "Running")
+        populate_pod(k8s, terminal_pod, "Succeeded")
+        k8s.set_exec_response(running_pod, _success_cp(stdout="Thread 0x1\n  train.py:1"))
+
+        provider.sync(make_batch(running_tasks=[running, terminal]))
+        # The loop samples every registered pod each cycle, so once a row lands a
+        # full cycle has run — the terminal pod's absence is real, not a race.
+        wait_for_condition(lambda: bool(profile_table.writes), timeout=Duration.from_seconds(5.0))
+
+        rows = [row for batch in list(profile_table.writes) for row in batch]
+        assert {row.source for row in rows} == {"/job/run"}, "only the running pod should be dumped"
+        assert all(row.trigger == ProfileTrigger.PERIODIC.value for row in rows)
+    finally:
+        provider.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1213,10 +1494,13 @@ def _seed_blocker_pod(
 
 
 def _gang_reqs(num_tasks: int = 2) -> list[job_pb2.RunTaskRequest]:
-    return [
-        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
-        for i in range(num_tasks)
-    ]
+    reqs = []
+    for i in range(num_tasks):
+        req = make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
+        # Gangs are GPU workloads; the GPU request is what makes blocker eviction fire.
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+        reqs.append(req)
+    return reqs
 
 
 def test_gang_submit_evicts_preemptible_gpu_blocker(preempt_provider, k8s):
@@ -1246,14 +1530,25 @@ def test_gang_submit_spares_non_blocker_pods(preempt_provider, k8s):
     assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace("other-ns")] == ["unconfigured-ns"]
 
 
-def test_non_gang_submit_does_not_evict(preempt_provider, k8s):
-    """Plain (non-coscheduled) submissions never reach the kube-scheduler gated;
-    they trigger no eviction."""
+def test_cpu_submit_does_not_evict(preempt_provider, k8s):
+    """A CPU-only submission needs no GPU capacity, so it triggers no blocker eviction."""
     _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
 
     preempt_provider.sync(make_batch(tasks_to_run=[make_run_req("/plain-job/0")]))
 
     assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
+
+
+def test_single_pod_gpu_submit_evicts_blocker(preempt_provider, k8s):
+    """A non-coscheduled GPU job now routes through Kueue and is gated too, so it also
+    frees the GPU capacity blockers hold — eviction is not gated on coscheduling."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "nhc-verify-0")
+
+    req = make_run_req("/gpu-job/0", num_tasks=1)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    preempt_provider.sync(make_batch(tasks_to_run=[req]))
+
+    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
 
 
 def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):

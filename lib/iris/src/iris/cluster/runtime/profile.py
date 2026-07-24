@@ -23,71 +23,16 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import Protocol
 
+from iris.cluster.stats.tables import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
-
-# finelog namespace for ``IrisProfile`` rows.
-PROFILE_NAMESPACE = "iris.profile"
-
-
-class ProfileType(StrEnum):
-    CPU = "cpu"
-    MEMORY = "memory"
-    THREAD = "thread"
-
-
-class ProfileFormat(StrEnum):
-    # CPU
-    RAW = "raw"
-    FLAMEGRAPH = "flamegraph"
-    SPEEDSCOPE = "speedscope"
-    # Memory
-    HTML = "html"
-    TABLE = "table"
-    STATS = "stats"
-
-
-class ProfileTrigger(StrEnum):
-    PERIODIC = "periodic"
-    ON_DEMAND = "on_demand"
-
-
-@dataclass
-class IrisProfile:
-    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
-
-    # The dashboard lists captures per source (a task, a worker, or every task
-    # under a job via a source prefix) ordered by captured_at. Clustering segments
-    # by source lets parquet row-group min/max prune to the few segments holding
-    # that source instead of scanning the whole namespace.
-    key_column: ClassVar[str] = "source"
-
-    source: str
-    attempt_id: int | None
-    vm_id: str
-    captured_at: datetime
-    duration_seconds: int
-    type: str
-    format: str
-    trigger: str
-    rate_hz: int | None = None
-    native: bool | None = None
-    leaks: bool | None = None
-    locals_dump: bool | None = None
-    profile_data: bytes = b""
-
-    def __post_init__(self) -> None:
-        ProfileType(self.type)
-        ProfileFormat(self.format)
-        ProfileTrigger(self.trigger)
 
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {

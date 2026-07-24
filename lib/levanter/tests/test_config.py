@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import io
 import os
 
+import draccus
 import pytest
+from jax.sharding import PartitionSpec
 from rigging.filesystem import StoragePath
 
 import levanter.config
@@ -113,6 +116,36 @@ def test_lm_mixture_dataset_config():
         # TODO: assert more things
 
     main()
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        PartitionSpec(("replica_dcn", "data")),  # Grug's batch spec
+        PartitionSpec("model", ("replica_dcn", "data")),
+        PartitionSpec(None, "model"),
+        PartitionSpec(),
+        PartitionSpec("data", PartitionSpec.UNCONSTRAINED),
+    ],
+)
+def test_partition_spec_codec_roundtrips(spec):
+    assert draccus.decode(PartitionSpec, draccus.encode(spec)) == spec
+
+
+def test_config_with_partition_spec_dumps_and_reloads():
+    """log_configuration dumps configs to YAML via draccus; a PartitionSpec field
+    used to raise "No parser for object P(...)" and drop the whole config artifact.
+    The registered codec makes it dump and round-trip cleanly."""
+
+    @dataclasses.dataclass
+    class Config:
+        spec: PartitionSpec = dataclasses.field(default_factory=lambda: PartitionSpec(("replica_dcn", "data")))
+        other: PartitionSpec = dataclasses.field(default_factory=lambda: PartitionSpec("model", None))
+
+    cfg = Config()
+    reloaded = draccus.load(Config, io.StringIO(draccus.dump(cfg)))
+    assert reloaded.spec == cfg.spec
+    assert reloaded.other == cfg.other
 
 
 def _write_yaml_to_memory(yaml: str, path: str = "memory://test.yaml"):

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
 
@@ -26,7 +26,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, with_implicit_seq, AlignedBatch, Column, Schema,
+    merge_schemas, resolve_key_column, with_implicit_cluster, with_implicit_seq, AlignedBatch,
+    Column, Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -67,6 +68,16 @@ pub(crate) fn log_registered_schema() -> Schema {
     )
 }
 
+/// One consistent view of a namespace's sealed local segments: the arrow schema to
+/// read them with, their paths, and the lowest `seq` they hold (`None` when there is
+/// no local segment). Captured under a single hold of the engine's insertion lock, so
+/// `min_seq` always describes exactly the segments in `paths`.
+pub struct NamespaceSnapshot {
+    pub schema: SchemaRef,
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
+}
+
 /// Store backed by the Rust catalog plus per-namespace durability engines.
 ///
 /// The catalog owns the persistent registry + segments table; the `engines`
@@ -105,12 +116,15 @@ impl Store {
     /// `remote_log_dir` configures the per-namespace offload target (empty
     /// disables sync). Pass it through to each `Namespace`.
     pub fn new(data_dir: Option<PathBuf>, remote_log_dir: String) -> Result<Store, StatsError> {
+        let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
                 StatsError::Internal(format!("create data_dir {}: {e}", dir.display()))
             })?;
         }
+        let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
+        let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
         // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
         // earlier server populated, the sqlite sidecar is empty, so the disk
         // parquet layout + footers are the only record of the namespaces +
@@ -120,7 +134,9 @@ impl Store {
         // sentinel (subsequent boots). REMOTE adoption is the engines'
         // `boot_reconcile`, run in the background by each namespace's
         // maintenance task (spawned by `bootstrap_maintenance`), not before bind.
+        let catalog_adoption_started = Instant::now();
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
+        let catalog_adoption_ms = catalog_adoption_started.elapsed().as_millis() as u64;
         let store = Store {
             data_dir,
             remote_log_dir,
@@ -135,8 +151,22 @@ impl Store {
         // evolving after rehydrate would instead require rebuilding a live engine,
         // whose stop-and-join uses a runtime `block_on` that is illegal here (this
         // runs directly on the async `main` task, not a `spawn_blocking` worker).
+        let log_schema_started = Instant::now();
         store.ensure_log_namespace_schema()?;
+        let log_schema_ms = log_schema_started.elapsed().as_millis() as u64;
+        let rehydrate_started = Instant::now();
         store.rehydrate_from_catalog()?;
+        let rehydrate_ms = rehydrate_started.elapsed().as_millis() as u64;
+        let namespaces = store.engines.lock().unwrap().len();
+        tracing::info!(
+            namespaces,
+            catalog_open_ms,
+            catalog_adoption_ms,
+            log_schema_ms,
+            rehydrate_ms,
+            total_ms = startup_started.elapsed().as_millis() as u64,
+            "finelog store startup complete"
+        );
         Ok(store)
     }
 
@@ -307,7 +337,13 @@ impl Store {
     }
 
     /// Register or evolve `name` to `schema`; return the EFFECTIVE store-form
-    /// schema (WITH implicit `seq`). On re-register an empty policy is kept.
+    /// schema (WITH implicit `seq` and `cluster`). On re-register an empty policy
+    /// is kept.
+    ///
+    /// Every registered table gains the implicit `cluster` origin column when it
+    /// does not declare one, so a table's rows become attributable to their origin
+    /// cluster on a hub finelog uniformly — the forwarder stamps that column, and a
+    /// producer need not know the column exists.
     pub fn register_table(
         &self,
         name: &str,
@@ -317,7 +353,7 @@ impl Store {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(schema);
+        let stored = with_implicit_seq(with_implicit_cluster(schema));
 
         // `merge_schemas` (pure) raises SchemaConflict on a non-additive change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -440,7 +476,7 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
-            let paths = engine.query_snapshot();
+            let paths = engine.query_snapshot().paths;
             let provider = NamespaceProvider::build(arrow_schema, &paths)
                 .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?;
             out.push(RegisteredProvider {
@@ -451,11 +487,39 @@ impl Store {
         Ok(out)
     }
 
-    /// Snapshot the reserved `log` namespace's arrow schema + sealed-segment
-    /// paths for a FetchLogs read.
-    pub fn log_query_snapshot(&self) -> Result<(SchemaRef, Vec<String>), StatsError> {
-        let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok((Arc::clone(engine.arrow_schema()), engine.query_snapshot()))
+    /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
+    /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
+    /// describe the same segment set, so a reader can tell a `seq` it simply has not
+    /// reached from one that eviction put out of reach.
+    pub fn query_snapshot(&self, name: &str) -> Result<NamespaceSnapshot, StatsError> {
+        let engine = self.require_engine(name)?;
+        let segments = engine.query_snapshot();
+        Ok(NamespaceSnapshot {
+            schema: Arc::clone(engine.arrow_schema()),
+            paths: segments.paths,
+            min_seq: segments.min_seq,
+        })
+    }
+
+    /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
+    /// into a segment, so it is visible to a scan unless it has since been evicted.
+    pub fn namespace_persisted_seq(&self, name: &str) -> Result<i64, StatsError> {
+        Ok(*self.require_engine(name)?.watch_persisted_seq().borrow())
+    }
+
+    /// The seq in `namespace` below which this store will never send to `target` again.
+    pub fn forward_cursor(&self, target: &str, namespace: &str) -> Result<Option<i64>, StatsError> {
+        self.catalog.forward_cursor(target, namespace)
+    }
+
+    /// Record `cursor` as settled for `(target, namespace)`.
+    pub fn set_forward_cursor(
+        &self,
+        target: &str,
+        namespace: &str,
+        cursor: i64,
+    ) -> Result<(), StatsError> {
+        self.catalog.set_forward_cursor(target, namespace, cursor)
     }
 
     /// Return `(name, schema, stats, policy)` for every live namespace in
@@ -633,13 +697,23 @@ mod tests {
     }
 
     #[test]
-    fn register_returns_store_form_with_seq() {
+    fn register_returns_store_form_with_seq_and_cluster() {
         let store = mem_store();
         let effective = store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        assert_eq!(effective, with_implicit_seq(worker_schema()));
+        // The store form prepends the implicit `seq` and appends the implicit
+        // origin `cluster` column, so a producer's plain schema becomes
+        // cluster-attributable without declaring the column.
+        assert_eq!(
+            effective,
+            with_implicit_seq(with_implicit_cluster(worker_schema()))
+        );
         assert_eq!(effective.columns[0].name, "seq");
+        let cluster = effective
+            .column("cluster")
+            .expect("implicit cluster column");
+        assert!(cluster.nullable);
     }
 
     #[test]
@@ -735,7 +809,7 @@ mod tests {
         let eff = store
             .register_table("iris.worker", subset, StoragePolicy::default())
             .unwrap();
-        assert_eq!(eff, with_implicit_seq(full));
+        assert_eq!(eff, with_implicit_seq(with_implicit_cluster(full)));
     }
 
     #[test]
@@ -753,9 +827,18 @@ mod tests {
                 StoragePolicy::default(),
             )
             .unwrap();
+        // `cluster` was added implicitly at the first registration, so it precedes
+        // `note`, which this re-register adds as the new additive column.
         assert_eq!(
             eff.column_names(),
-            vec!["seq", "worker_id", "mem_bytes", "timestamp_ms", "note"]
+            vec![
+                "seq",
+                "worker_id",
+                "mem_bytes",
+                "timestamp_ms",
+                "cluster",
+                "note"
+            ]
         );
     }
 

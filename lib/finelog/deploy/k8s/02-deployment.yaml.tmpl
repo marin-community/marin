@@ -49,48 +49,61 @@ spec:
             - name: rpc
               containerPort: {{ port }}
               protocol: TCP
-          # S3 credentials for an s3:// remote_log_dir. `finelog deploy up` mints
-          # the `{{ name }}-env` Secret (R2 AWS_* creds + AWS_ENDPOINT_URL) from
-          # the operator's env and projects it here. optional=true keeps the pod
-          # schedulable when no Secret exists (gs:// or local archives, where GCS
-          # uses workload identity). The explicit env below wins on key collision.
+          # The pod's secret environment: S3 credentials for an s3:// remote_log_dir
+          # (R2 AWS_* creds + AWS_ENDPOINT_URL) and FINELOG_SIGNING_KEY, the private
+          # key the forwarder signs its bearer with. `finelog deploy up` mints the
+          # `{{ name }}-env` Secret from the operator's env and the config's secret
+          # references. optional=true keeps the pod schedulable when no Secret exists
+          # (a gs:// archive with no forwarding needs none — GCS uses workload
+          # identity). The explicit env below wins on key collision.
           envFrom:
             - secretRef:
                 name: {{ name }}-env
                 optional: true
-          # FINELOG_AUTH_POLICY is injected inline below for a
-          # cidr-only policy (no secrets). A policy carrying jwt keys must instead
-          # be supplied through the `{{ name }}-env` Secret so key material never
-          # lands in a plaintext manifest (the deploy path rejects inline jwt).
+          # FINELOG_AUTH_POLICY (public keys, network prefixes) and FINELOG_FORWARDING
+          # (a url and a cluster name) carry no secrets, so `finelog deploy up` splices
+          # them in below. Key material only ever arrives through the Secret above.
           env:
             - name: FINELOG_PORT
               value: "{{ port }}"
             - name: FINELOG_REMOTE_DIR
               value: "{{ remote_log_dir }}"
-{{ auth_env_block }}
+{{ inline_env_block }}
           volumeMounts:
             - name: cache
               mountPath: /var/cache/finelog
           resources:
             requests:
-              cpu: "500m"
-              memory: "4Gi"
+              cpu: "{{ cpu_request }}"
+              memory: "{{ memory_request }}"
             limits:
-              cpu: "2"
-              memory: "32Gi"
+              cpu: "{{ cpu_limit }}"
+              memory: "{{ memory_limit }}"
+          # Opening an existing store can take over a minute on a network-backed
+          # PVC. Gate liveness and readiness until startup succeeds so recovery
+          # work cannot trigger a self-sustaining liveness restart loop.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 30
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 15
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
       volumes:
         - name: cache

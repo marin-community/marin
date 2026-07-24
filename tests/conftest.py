@@ -12,10 +12,20 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(autouse=True)
-def fray_client():
-    """Set up a v2 LocalClient for all tests."""
-    with set_current_client(LocalClient()) as client:
+def fray_client(_configure_marin_prefix):
+    """Set up a v2 LocalClient for all tests.
+
+    Depends on ``_configure_marin_prefix`` so it tears down first: shutting
+    down the client joins every local-backend worker thread before that
+    fixture removes the MARIN_PREFIX temp directory. Without this ordering, a
+    straggler task can still be writing under MARIN_PREFIX when the temp
+    directory is removed, raising ``OSError: Directory not empty`` at
+    teardown.
+    """
+    client = LocalClient()
+    with set_current_client(client):
         yield client
+    client.shutdown()
 
 
 @pytest.fixture(autouse=True)

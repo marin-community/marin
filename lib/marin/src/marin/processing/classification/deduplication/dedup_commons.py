@@ -4,6 +4,7 @@
 import logging
 import os
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from enum import StrEnum, auto
 
 import pyarrow as pa
@@ -133,6 +134,38 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     return base_path
 
 
+@dataclass
+class _DupTally:
+    """Streams dedup-annotated records while emitting per-record dup/unique counters.
+
+    Wrap the record iterator with :meth:`tally` inside a group_by reducer; the running
+    ``total``/``dups``/``unique`` counts are available on the instance once the wrapped
+    iterator is exhausted (i.e. after the downstream writer has consumed it).
+    """
+
+    counter_prefix: str
+    total: int = 0
+    dups: int = 0
+
+    @property
+    def unique(self) -> int:
+        return self.total - self.dups
+
+    def tally(self, records: Iterator[dict]) -> Iterator[dict]:
+        for record in records:
+            self.total += 1
+            counters.pipeline.update_counter(f"{self.counter_prefix}/total", 1)
+            if record["is_dup"]:
+                self.dups += 1
+                counters.pipeline.update_counter(f"{self.counter_prefix}/dups", 1)
+            else:
+                counters.pipeline.update_counter(f"{self.counter_prefix}/unique", 1)
+            yield record
+
+    def as_result(self, base: dict) -> dict:
+        return {**base, "total": self.total, "dups": self.dups, "unique": self.unique}
+
+
 def make_document_dedup_aggregator(
     *,
     idx_to_path: dict[int, str],
@@ -158,29 +191,15 @@ def make_document_dedup_aggregator(
             new_extension=".parquet",
         )
 
-        total = 0
-        dups = 0
-
-        def counting_iter():
-            nonlocal total, dups
-            for record in records:
-                is_dup: bool = record["is_dup"]
-                total += 1
-                counters.pipeline.update_counter(f"{counter_prefix}/total", 1)
-                if is_dup:
-                    dups += 1
-                    counters.pipeline.update_counter(f"{counter_prefix}/dups", 1)
-                else:
-                    counters.pipeline.update_counter(f"{counter_prefix}/unique", 1)
-                yield record
+        tally = _DupTally(counter_prefix)
 
         def only_dups(records: Iterator[dict]) -> Iterator[dict]:
             for record in records:
                 if record["is_dup"]:
                     yield {"id": record["id"], "attributes": {"dup_doc": True}}
 
-        result = write_parquet_file(only_dups(counting_iter()), output_file)
-        return {**result, "total": total, "dups": dups, "unique": total - dups}
+        result = write_parquet_file(only_dups(tally.tally(records)), output_file)
+        return tally.as_result(result)
 
     return aggregate
 

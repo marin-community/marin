@@ -27,6 +27,8 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
 from iris.cli.build import (
+    CARGO_PROFILES,
+    DEFAULT_CARGO_PROFILE,
     build_image,
     find_marin_root,
     get_git_sha,
@@ -40,7 +42,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
-from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
     RolloutPhase,
@@ -58,6 +60,8 @@ from iris.cluster.provenance import provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
+
+DEFAULT_IMAGE_PLATFORM = "linux/amd64,linux/arm64"
 
 
 @dataclass(frozen=True)
@@ -156,7 +160,14 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose: bool = False) -> None:
+def _build_and_push_image(
+    image_tag: str,
+    image_type: str,
+    git_sha: str,
+    verbose: bool = False,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Build and push a single image to GHCR, parsing org/name/version from the tag.
 
     The task image uses the ``task`` target in the unified Dockerfile and needs the
@@ -177,25 +188,46 @@ def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose
         tag=local_tag,
         push=True,
         context=context,
-        platform="linux/amd64,linux/arm64",
+        platform=platform,
         git_sha=git_sha,
         ghcr_org=org,
         verbose=verbose,
+        cargo_profile=cargo_profile,
     )
     click.echo()
 
 
-def _build_cluster_images(config, git_sha: str, verbose: bool = False) -> dict[str, str]:
+def _build_cluster_images(
+    config,
+    git_sha: str,
+    verbose: bool = False,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> dict[str, str]:
     built: dict[str, str] = {}
 
     for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
-            _build_and_push_image(tag, typ, git_sha, verbose=verbose)
+            _build_and_push_image(
+                tag,
+                typ,
+                git_sha,
+                verbose=verbose,
+                platform=platform,
+                cargo_profile=cargo_profile,
+            )
             built[typ] = tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
-        _build_and_push_image(task_tag, "task", git_sha, verbose=verbose)
+        _build_and_push_image(
+            task_tag,
+            "task",
+            git_sha,
+            verbose=verbose,
+            platform=platform,
+            cargo_profile=cargo_profile,
+        )
         built["task"] = task_tag
 
     return built
@@ -237,12 +269,24 @@ def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     return {k: v for k, v in pinned.items() if v}
 
 
-def _build_and_pin_deploy_images(ctx, config) -> None:
+def _build_and_pin_deploy_images(
+    ctx,
+    config,
+    *,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
     git_sha = get_git_sha()
     _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, git_sha, verbose=verbose)
+    built = _build_cluster_images(
+        config,
+        git_sha,
+        verbose=verbose,
+        platform=platform,
+        cargo_profile=cargo_profile,
+    )
     if built:
         click.echo("Built image tags:")
         for name, tag in built.items():
@@ -354,12 +398,6 @@ def _create_secret_if_absent(client, project: str, name: str) -> None:
         click.echo(f"No permission to create {name}; adding a version to the existing secret.")
 
 
-def _add_signing_key_version(client, resource: str, private_pem: str) -> str:
-    """Add `private_pem` as a new version of `resource`; return that version's name."""
-    version = client.add_secret_version(request={"parent": resource, "payload": {"data": private_pem.encode("utf-8")}})
-    return version.name
-
-
 def _grant_secret_accessor(client, resource: str, name: str, accessor: str) -> None:
     """Grant `accessor` roles/secretmanager.secretAccessor on `resource`."""
     from google.api_core.exceptions import PermissionDenied  # noqa: PLC0415  # optional dep
@@ -454,7 +492,9 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
         project, name = _split_secret_resource(gcp_secret)
         if reference is None:
             _create_secret_if_absent(client, project, name)
-            reference = f"gcp-secret://{_add_signing_key_version(client, gcp_secret, key.private_pem)}"
+            payload = {"data": key.private_pem.encode("utf-8")}
+            version = client.add_secret_version(request={"parent": gcp_secret, "payload": payload})
+            reference = f"gcp-secret://{version.name}"
             click.echo(f"Stored PRIVATE key in Secret Manager ({gcp_secret}).")
         if accessor is not None:
             _grant_secret_accessor(client, gcp_secret, name, accessor)
@@ -666,7 +706,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
         )
     return cfg.finelog.config
 
@@ -1025,37 +1065,7 @@ def controller(ctx):
 
 
 @controller.command("serve")
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: hourly)",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Start in dry-run mode: compute scheduling but suppress all side effects",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start with an empty database, ignoring any remote checkpoint",
-)
-@click.option(
-    "--state-dir",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
-)
+@controller_serve_options
 @click.pass_context
 def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
     """Start a local controller process.
@@ -1147,12 +1157,27 @@ def controller_checkpoint(ctx, stop: bool):
         "once a prior restart has recorded a deploy."
     ),
 )
+@click.option(
+    "--image-platform",
+    default=DEFAULT_IMAGE_PLATFORM,
+    show_default=True,
+    help="Docker platform(s) to build and push for this rollout.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
+)
 @click.pass_context
 def controller_restart(
     ctx,
     skip_checkpoint: bool,
     checkpoint_timeout: int,
     rollback: bool,
+    image_platform: str,
+    cargo_profile: str,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
@@ -1188,7 +1213,12 @@ def controller_restart(
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        new_image = _build_forward_image(ctx, config)
+        new_image = _build_forward_image(
+            ctx,
+            config,
+            platform=image_platform,
+            cargo_profile=cargo_profile,
+        )
         try:
             address = bundle.controller.start_controller(config)
         except Exception as e:
@@ -1213,7 +1243,12 @@ def controller_restart(
     else:
         pre_deploy_checkpoint = _take_pre_deploy_checkpoint(ctx, controller_url, checkpoint_timeout)
 
-    new_image = _build_forward_image(ctx, config)
+    new_image = _build_forward_image(
+        ctx,
+        config,
+        platform=image_platform,
+        cargo_profile=cargo_profile,
+    )
     previous_image = prior_record.image if prior_record else None
 
     # Record the in-flight deploy before restarting: a crash mid-restart leaves a
@@ -1268,9 +1303,20 @@ def _rollback_last_deploy(ctx, bundle, config, remote_state_dir: str | None, pri
     _rollback_controller(bundle, config, remote_state_dir, prior_record.previous_image, prior_record.rollback_checkpoint)
 
 
-def _build_forward_image(ctx, config) -> str:
+def _build_forward_image(
+    ctx,
+    config,
+    *,
+    platform: str = DEFAULT_IMAGE_PLATFORM,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
+) -> str:
     """Build deploy images from the working tree and return the controller image tag."""
-    _build_and_pin_deploy_images(ctx, config)
+    _build_and_pin_deploy_images(
+        ctx,
+        config,
+        platform=platform,
+        cargo_profile=cargo_profile,
+    )
     return config.controller.image
 
 
@@ -1645,6 +1691,5 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
 
 def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
     click.echo(
-        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
-        f"(aborted at worker {offset + 1})"
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
     )

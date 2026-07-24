@@ -63,6 +63,7 @@ nav:
       - Installation: tutorials/installation.md
       - First Experiment: tutorials/first-experiment.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
+      - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md

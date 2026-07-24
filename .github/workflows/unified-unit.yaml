@@ -58,7 +58,8 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.select.outputs.matrix) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Source-build legs (setup: rust) carry a larger timeout than the wheel default.
+    timeout-minutes: ${{ matrix.timeout || 15 }}
     steps:
       - uses: actions/checkout@v5
 
@@ -67,15 +68,44 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      # Rust source build (legs the selector tagged `setup: rust`): the tested code
+      # depends on a native crate whose Rust this PR changed, so build the extension
+      # from source rather than install the prebuilt wheel.
+      - name: Install Rust toolchain
+        if: matrix.setup == 'rust'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - name: Cache cargo build
+        if: matrix.setup == 'rust'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: |
+            lib/dupekit/rust
+            lib/finelog/rust
+            lib/iris/rust
+      # rust_mode.py dev repoints the native packages at their local rust/ trees; the
+      # leg's `uv run` (no --frozen) then re-resolves and builds them from source.
+      - name: Switch native packages to source build
+        if: matrix.setup == 'rust'
+        run: python3 scripts/rust_mode.py dev
+
       - env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: >-
-          uv run
-          --package ${{ matrix.package }}
-          ${{ matrix.extras }}
-          --group test
-          pytest --durations=5 -n auto --dist=worksteal --tb=short
-          ${{ matrix.test_paths }}
+        # pytest exits 5 when it collects no tests. The diff-based selector can hand a lane
+        # only tests that its default marker filter deselects (integration, slow,
+        # requires_cluster, ...) — e.g. a PR that touches just an integration test file —
+        # which is not a failure. Those tests run in their own dedicated workflow. Treat
+        # exit 5 as success; every other non-zero status still fails the lane.
+        run: |
+          status=0
+          uv run \
+            --python 3.12 \
+            --package ${{ matrix.package }} \
+            ${{ matrix.extras }} \
+            --group test \
+            pytest --durations=5 -n auto --dist=worksteal --tb=short \
+            ${{ matrix.test_paths }} || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
 
   levanter_torch:
     name: levanter-torch
@@ -259,7 +289,7 @@ jobs:
         if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
         run: |
           npm install -g @anthropic-ai/claude-code
-          python lib/iris/scripts/verify_screenshots.py \
+          python -m lib.iris.scripts.verify_screenshots \
             --screenshot-dir ${{ github.workspace }}/iris-screenshots
 
       - name: Upload screenshots
