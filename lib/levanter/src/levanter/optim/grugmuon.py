@@ -167,8 +167,13 @@ def _grouped_nonexpert_transform(updates, params, transform_array, steps, eps, c
     _, treedef = jax.tree_util.tree_flatten(updates)
     out: list = [None] * len(leaves)
     groups: dict = {}
+    shared_only = os.environ.get("SCALE_MUON_GROUP_SHARED_ONLY") == "1"
     for i, ((path, u), p) in enumerate(zip(upd_paths, par_leaves)):
-        if hasattr(u, "ndim") and u.ndim == 3 and os.environ.get("SCALE_MUON_NO_NS") != "1":
+        groupable = hasattr(u, "ndim") and u.ndim == 3 and os.environ.get("SCALE_MUON_NO_NS") != "1"
+        if groupable and shared_only:
+            # Restrict grouping to the shared-expert leaves (.shared.w_*); leave attention per-leaf.
+            groupable = "shared" in jax.tree_util.keystr(path).lower()
+        if groupable:
             # Group by (shape, sharding): same-shape leaves can be sharded transposed (w_q is
             # P(None,data,model), w_o is P(None,model,data)), and concatenate rejects mixed shardings.
             spec = getattr(jax.typeof(u).sharding, "spec", None)
