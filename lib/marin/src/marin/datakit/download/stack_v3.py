@@ -199,6 +199,7 @@ def stack_v3_normalize_steps() -> tuple[StepSpec, ...]:
             name="normalized/stack-v3",
             download=processed,
             id_field="repo_id",
+            worker_resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
             output_schema=NORMALIZED_OUTPUT_SCHEMA,
         ),
     )
