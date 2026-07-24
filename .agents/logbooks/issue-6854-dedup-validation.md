@@ -321,3 +321,23 @@ statistics for performance comparisons.
   wave, not convergence. Iteration 25 is running; the baseline must reach a
   true zero-change round before its drop set is used for false-positive
   adjudication.
+
+### 2026-07-24T14:23:00Z — baseline rounds 25–28 and audit hard gates
+
+- Baseline changes continued downward after the propagation peak: 15,708;
+  12,690; 9,673; 7,196 in iterations 25–28. Iteration 29 is queued. Every
+  completed CC stage remains successful with no failed stage attempt.
+- Added and tested a cap-preserving continuation path on the pinned baseline
+  branch. It copies every marker shard to a self-contained cap-50 artifact,
+  verifies each server-side copy by byte size, and then resumes the existing
+  `metadata/cc` state. MinHash does not need to run again if the 50-round cap is
+  reached.
+- The full audit now discovers all contiguous CC iterations instead of stopping
+  at 50. It rejects a final shard containing any `changed=True` node, so a
+  nonconverged artifact cannot enter the primary false-positive comparison.
+- Score coverage must equal each arm's exact `cluster_members` and
+  `cluster_members - canonicals` counters. Comparison categories must partition
+  every drop in both arms. Eighteen audit, materialization, and semantic-label
+  coverage tests pass.
+- The acceptance gates and reproducible commands now live in
+  `.agents/projects/issue-6854-dedup-validation.md`.
