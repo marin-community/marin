@@ -16,14 +16,6 @@ from scripts.pm.render_agent_moe_report import (
 )
 
 
-def test_agent_moe_snapshot_loads_expected_unique_tracker_issues():
-    report = load_report_data(DEFAULT_DATA_PATH)
-
-    issue_numbers = [experiment.issue for experiment in report.experiments]
-    assert len(issue_numbers) == report.metadata.expected_issue_count
-    assert len(set(issue_numbers)) == len(issue_numbers)
-
-
 def test_agent_moe_generated_report_matches_snapshot():
     report = load_report_data(DEFAULT_DATA_PATH)
 

@@ -7,7 +7,7 @@ This page includes only experiments that have at least one run or report.
 
 ## Curated experiment series
 
-- [Agent MoE experiment digest](./agent-moe-experiments.md) — outcomes from 77 small-scale modeling, optimizer, routing, systems, and data tests.
+- [Agent MoE experiment digest](./agent-moe-experiments.md) — outcomes from small-scale modeling, optimizer, routing, systems, and data tests.
 
 ## Published analysis sites
 
