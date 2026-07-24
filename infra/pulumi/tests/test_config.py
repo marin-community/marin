@@ -20,8 +20,10 @@ def test_kueue_default_reserves_two_gibibytes_for_manager():
 
 
 def test_kueue_rejects_manager_memory_below_two_gibibytes():
-    with pytest.raises(ValidationError, match="at least 2Gi"):
+    with pytest.raises(ValidationError) as exc_info:
         KueueProvisioningSpec(manager_memory_limit="1Gi")
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("manager_memory_limit",)]
 
 
 def test_kueue_allows_larger_manager_memory_override():

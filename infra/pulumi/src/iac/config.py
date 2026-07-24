@@ -79,7 +79,7 @@ class KueueProvisioningSpec(BaseModel):
 
     @field_validator("manager_memory_limit")
     @classmethod
-    def validate_manager_memory_limit(cls, value: str) -> str:
+    def validate_manager_memory_limit(_cls, value: str) -> str:
         if parse_k8s_quantity(value) < parse_k8s_quantity(MIN_KUEUE_MANAGER_MEMORY):
             raise ValueError(f"manager_memory_limit must be at least {MIN_KUEUE_MANAGER_MEMORY}")
         return value
