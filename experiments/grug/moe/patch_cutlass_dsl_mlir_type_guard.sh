@@ -28,10 +28,10 @@ if [[ ! -e "$private_marker" ]]; then
 fi
 
 arith="$cutlass_package/_mlir/dialects/arith.py"
-if rg -Fq "return isinstance(obj, cls)" "$arith"; then
+if grep -Fq "return isinstance(obj, cls)" "$arith"; then
   exit 0
 fi
 
 patch --batch --forward -p0 -d "$(dirname "$cutlass_package")" \
   < "$(dirname "$0")/cutlass_dsl_mlir_type_guard.patch"
-rg -Fq "return isinstance(obj, cls)" "$arith"
+grep -Fq "return isinstance(obj, cls)" "$arith"
