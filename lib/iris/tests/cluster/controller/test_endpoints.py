@@ -26,7 +26,7 @@ from iris.cluster.controller.endpoint_service import (
     EndpointServiceImpl,
     ProxyRegistryReset,
 )
-from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, TaskAttempt
@@ -57,11 +57,17 @@ def _row(endpoint_id: str, name: str, task_id: JobName, *, lease_deadline: Times
 
 
 def _register_request(
-    name: str, task_id: JobName, *, attempt_id: int, endpoint_id: str = "", lease: Duration | None = None
+    name: str,
+    task_id: JobName,
+    *,
+    attempt_id: int,
+    endpoint_id: str = "",
+    address: str = "h:1",
+    lease: Duration | None = None,
 ) -> controller_pb2.Controller.RegisterEndpointRequest:
     return controller_pb2.Controller.RegisterEndpointRequest(
         name=name,
-        address="h:1",
+        address=address,
         task_id=task_id.to_wire(),
         attempt_id=attempt_id,
         endpoint_id=endpoint_id,
@@ -249,6 +255,39 @@ def test_reregister_renews_expired_endpoint(state):
     renewed = live.register_endpoint(_register_request("svc", task, attempt_id=attempt, endpoint_id=endpoint_id), None)
     assert renewed.endpoint_id == endpoint_id
     assert [r.endpoint_id for r in state._endpoints.query()] == [endpoint_id]  # single row, renewed
+
+
+def test_new_attempt_atomically_replaces_same_name_endpoint(state):
+    task, attempt = _live_task(state)
+    service = _service(state)
+    updates = []
+    service.subscribe_proxy_updates(updates.append)
+    service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
+        None,
+    )
+    updates.clear()
+
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task).values(current_attempt_id=attempt + 1))
+    service.register_endpoint(
+        _register_request("svc", task, attempt_id=attempt + 1, endpoint_id="new", address="new:1"),
+        None,
+    )
+
+    [row] = state._endpoints.query(EndpointQuery(exact_name="svc"))
+    assert (row.endpoint_id, row.address) == ("new", "new:1")
+    [delta] = updates
+    assert [mapping.endpoint_id for mapping in delta.upserts] == ["new"]
+    assert delta.deletes == ("old",)
+
+    with pytest.raises(ConnectError) as excinfo:
+        service.register_endpoint(
+            _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
+            None,
+        )
+    assert excinfo.value.code is Code.FAILED_PRECONDITION
+    assert state._endpoints.resolve("svc").endpoint_id == "new"
 
 
 def test_register_terminal_task_raises(state):

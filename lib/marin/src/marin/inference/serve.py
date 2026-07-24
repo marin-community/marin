@@ -37,13 +37,14 @@ def local_inference(
     """Start one inference server in this process and yield its OpenAI endpoint."""
 
     spec = ModelSpec(
-        model=model.model,
-        model_path=model.model_path or model.model,
+        weights=model.weights,
+        api_model=model.model_id,
         num_chips=num_chips,
         tensor_parallel_size=model.tensor_parallel_size,
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        revision=model.revision,
     )
     if isinstance(engine, VllmEngineConfig):
         # Import only the selected implementation; Levanter pulls in JAX and Transformers.

@@ -19,6 +19,7 @@ use crate::proto::finelog::stats::{
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -49,6 +50,25 @@ where
         Err(join) => Err(ConnectError::internal(format!(
             "store task panicked: {join}"
         ))),
+    }
+}
+
+/// The origin cluster to stamp on a WriteRows batch, bound to the credential
+/// that carried it — the stats-plane analogue of the log plane's
+/// `authorized_cluster`. A forwarding JWT names exactly one cluster, so its rows
+/// are attributed to it regardless of what the batch carried; this is what makes
+/// cross-cluster attribution independent of whether the sender's local schema
+/// held the implicit origin column (the federation gap where forwarded `iris.*`
+/// stats from a finelog whose namespace predates that column arrive unstamped).
+/// A trusted-network writer carries no per-writer identity and names its own
+/// origin (empty for a local write), so its batch is left as supplied.
+fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectError> {
+    match request_identity(ctx) {
+        Some(AuthIdentity::Jwt { cluster }) => Ok(Some(cluster.clone())),
+        Some(AuthIdentity::Network) => Ok(None),
+        None => Err(ConnectError::internal(
+            "finelog: request reached a handler with no auth identity",
+        )),
     }
 }
 
@@ -120,13 +140,17 @@ impl StatsService for StatsServiceImpl {
         // Copy the IPC bytes out of the borrowed request so the blocking decode
         // owns them across the spawn_blocking boundary.
         let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
+        // Resolve the origin cluster from the credential before the blocking
+        // hop so a forwarding writer's rows are stamped with its cluster.
+        let origin_cluster = write_origin_cluster(&ctx)?;
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let (rows_written, last_seq) =
-            run_blocking(move || store.write_rows(&ns, &arrow_ipc)).await?;
+            run_blocking(move || store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref()))
+                .await?;
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling

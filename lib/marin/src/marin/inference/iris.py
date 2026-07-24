@@ -7,26 +7,28 @@ import contextlib
 import logging
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import cast
 
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.iris_backend import IrisJobHandle
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
-from iris.client import Job, iris_ctx
+from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
-from rigging.connect import proxy_path
+from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
+from rigging.timing import Duration
 
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
     LevanterEngineConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
 )
@@ -46,8 +48,14 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+_METADATA_MODEL = "model"
+_METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
+_METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
+_METADATA_STREAMING = "streaming"
+_MARIN_SERVE_KIND = "marin-serve"
+_CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
 class RemoteInferenceStartupError(RuntimeError):
@@ -62,25 +70,16 @@ class RemoteInferenceStartupError(RuntimeError):
 class RemoteInferenceSession:
     model: RunningModel
     jobs: tuple[JobHandle, ...]
-    endpoint_name: str | None
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
-    iris_job: Job | None = None
 
-    def resolve_model(self) -> RunningModel:
-        """Resolve the current address after a direct worker restart."""
-
-        if self.endpoint_name is None:
-            return self.model
-        endpoints = iris_ctx().client._cluster_client.list_endpoints(self.endpoint_name, exact=True)
-        if not endpoints:
-            raise RuntimeError(f"Inference endpoint {self.endpoint_name!r} is not registered")
-        endpoint = replace(
-            self.model.endpoint,
-            base_url=f"{endpoints[0].address.rstrip('/')}/v1",
-        )
-        return replace(self.model, endpoint=endpoint)
+    def check_alive(self) -> None:
+        """Raise when any inference worker has reached a terminal state."""
+        for job in self.jobs:
+            status = job.status()
+            if JobStatus.finished(status):
+                raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
 
 
 @dataclass(frozen=True)
@@ -91,9 +90,8 @@ class IrisServiceConfig:
     endpoint_name: str
     instances: int = 1
     broker: BrokerConfig | None = None
-    access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     timeout_hours: float = 24.0
-    controller_proxy_timeout_seconds: float = 600.0
+    controller_proxy_timeout_seconds: float = 2100.0
     port_name: str | None = "http"
 
     def __post_init__(self) -> None:
@@ -128,13 +126,14 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
         select_tensor_parallel_size,
     )
 
-    model_path = model.model_path or resolve_model_path(model.model, iris.cache_ttl_days)
+    weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
+    revision = model.revision if weights == model.weights else None
     if tensor_parallel_size is None:
-        num_attention_heads, num_key_value_heads = read_attention_heads(model_path)
+        num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
-    return replace(model, model_path=model_path, tensor_parallel_size=tensor_parallel_size), num_chips
+    return replace(model, weights=weights, revision=revision, tensor_parallel_size=tensor_parallel_size), num_chips
 
 
 @contextlib.contextmanager
@@ -149,7 +148,41 @@ def _prepared_local_inference(
 
 
 def _server_root(model: RunningModel) -> str:
-    return model.endpoint.base_url.removesuffix("/v1")
+    return model.endpoint.base_url.removesuffix(OPENAI_API_SUFFIX)
+
+
+def _endpoint_metadata(
+    *,
+    model: str,
+    backend: str,
+    accelerator: str,
+    tensor_parallel_size: int,
+    streaming: bool,
+    proxy_timeout_seconds: float,
+) -> dict[str, str]:
+    return {
+        _METADATA_MODEL: model,
+        _METADATA_KIND: _MARIN_SERVE_KIND,
+        _METADATA_BACKEND: backend,
+        _METADATA_ACCELERATOR: accelerator,
+        _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
+        _METADATA_STREAMING: str(streaming).lower(),
+        PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
+    }
+
+
+def _new_endpoint_identity() -> tuple[str, str]:
+    run_id = uuid.uuid4().hex
+    return run_id, f"/serve/inference-{run_id}"
+
+
+def _capability_model(model: RunningModel, endpoint_name: str, capability_origin: str) -> RunningModel:
+    response = iris_ctx().client.mint_endpoint_token(endpoint_name, ttl=_CAPABILITY_TTL)
+    endpoint = replace(
+        model.endpoint,
+        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{OPENAI_API_SUFFIX}",
+    )
+    return replace(model, endpoint=endpoint)
 
 
 def _detect_chat_support(model: RunningModel) -> bool:
@@ -201,46 +234,33 @@ def _register_dashboard(
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
-        metadata = {
-            "model": model.endpoint.model,
-            "kind": "marin-serve",
-            _METADATA_BACKEND: backend_name,
-            "accelerator": _accelerator_label(service.iris),
-            _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
-            "streaming": str(streaming).lower(),
-            PROXY_TIMEOUT_METADATA_KEY: str(service.controller_proxy_timeout_seconds),
-        }
-        endpoint_id = ctx.registry.register(service.endpoint_name, address, metadata, access=service.access)
-        logger.info(
-            "Registered inference endpoint name=%s address=%s id=%s proxy_path=%s",
+        metadata = _endpoint_metadata(
+            model=model.endpoint.model,
+            backend=backend_name,
+            accelerator=_accelerator_label(service.iris),
+            tensor_parallel_size=tensor_parallel_size,
+            streaming=streaming,
+            proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
+        )
+        with ctx.registry.registered(
             service.endpoint_name,
             address,
-            endpoint_id,
-            proxy_path(service.endpoint_name),
-        )
-        try:
+            metadata,
+            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ):
+            logger.info(
+                "Registered inference endpoint name=%s address=%s proxy_path=%s",
+                service.endpoint_name,
+                address,
+                proxy_path(service.endpoint_name),
+            )
             yield
-        finally:
-            try:
-                ctx.registry.unregister(endpoint_id)
-            except Exception:
-                logger.warning("Failed to unregister inference endpoint id=%s", endpoint_id, exc_info=True)
 
 
-def _block_until_timeout(session: LocalInferenceSession, timeout_hours: float) -> None:
+def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) -> None:
     deadline = time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
-        session.check_alive()
-        time.sleep(_TIMEOUT_POLL_SECONDS)
-
-
-def _block_remote_until_timeout(session: RemoteInferenceSession, timeout_hours: float) -> None:
-    deadline = time.monotonic() + timeout_hours * 3600
-    while time.monotonic() < deadline:
-        for job in session.jobs:
-            status = job.status()
-            if JobStatus.finished(status):
-                raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
+        check_alive()
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
@@ -259,15 +279,17 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 backend_name=local_session.backend_name,
                 streaming=True,
             ):
-                _block_until_timeout(local_session, service.timeout_hours)
+                _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
 
     with remote_inference(
-        service.model,
-        service.engine,
-        service.iris,
-        instances=service.instances,
-        broker=broker,
+        RemoteInferenceConfig(
+            model=service.model,
+            engine=service.engine,
+            iris=service.iris,
+            instances=service.instances,
+            broker=broker,
+        )
     ) as session:
         with _register_dashboard(
             service,
@@ -276,14 +298,14 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             backend_name=session.backend_name,
             streaming=session.streaming,
         ):
-            _block_remote_until_timeout(session, service.timeout_hours)
+            _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
     ctx = iris_ctx()
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        endpoints = ctx.client._cluster_client.list_endpoints(endpoint_name, exact=True)
+        endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
@@ -294,37 +316,31 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
 
 @contextlib.contextmanager
 def remote_inference(
-    model: ServedModelConfig,
-    engine: VllmEngineConfig | LevanterEngineConfig,
-    iris: IrisConfig,
-    *,
-    instances: int = 1,
-    broker: BrokerConfig | None = None,
+    config: RemoteInferenceConfig,
 ) -> Iterator[RemoteInferenceSession]:
-    """Start inference on Iris, adding broker transport when requested or required."""
+    """Start inference on Iris and optionally expose its link URL."""
 
     if get_job_info() is None:
         raise RuntimeError("remote_inference must run inside an Iris job")
-    resolved_broker = _broker_config(instances, broker)
+    resolved_broker = _broker_config(config.instances, config.broker)
     if resolved_broker is None:
-        with _start_direct_inference(model, engine, iris) as session:
+        with _start_direct_inference(config) as session:
             yield session
         return
-    with _start_brokered_inference(model, engine, iris, instances, resolved_broker) as session:
+    with _start_brokered_inference(config, resolved_broker) as session:
         yield session
 
 
 @contextlib.contextmanager
 def _start_direct_inference(
-    model: ServedModelConfig,
-    engine: VllmEngineConfig | LevanterEngineConfig,
-    iris: IrisConfig,
+    config: RemoteInferenceConfig,
 ) -> Iterator[RemoteInferenceSession]:
-    run_id = uuid.uuid4().hex[:8]
-    endpoint_name = f"/serve/inference-{run_id}"
+    model = config.model
+    iris = config.iris
+    run_id, endpoint_name = _new_endpoint_identity()
     service = IrisServiceConfig(
         model=model,
-        engine=engine,
+        engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
         timeout_hours=24 * 365,
@@ -355,17 +371,20 @@ def _start_direct_inference(
                 f"Inference job {job.job_id} failed to register a usable endpoint: {exc}",
                 jobs=(job,),
             ) from exc
+        running_model = RunningModel(
+            endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}{OPENAI_API_SUFFIX}", model=model.model_id),
+            tokenizer=model.tokenizer,
+        )
         yield RemoteInferenceSession(
-            model=RunningModel(
-                endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.model),
-                tokenizer=model.tokenizer,
+            model=(
+                _capability_model(running_model, endpoint_name, config.capability_origin)
+                if config.capability_origin is not None
+                else running_model
             ),
             jobs=(job,),
-            endpoint_name=endpoint_name,
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
-            iris_job=cast(IrisJobHandle, job).iris_job,
         )
     finally:
         _terminate_job(job)
@@ -400,18 +419,109 @@ def _run_broker_worker(
                 time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
+def _submit_broker_workers(
+    run_id: str,
+    config: RemoteInferenceConfig,
+    broker: BrokerConfig,
+    request_provider: InferenceRequestProvider,
+) -> list[JobHandle]:
+    iris = config.iris
+    client = current_client()
+    jobs: list[JobHandle] = []
+    for worker_index in range(config.instances):
+        worker_id = f"inference-worker-{run_id}-{worker_index}"
+        jobs.append(
+            client.submit(
+                JobRequest(
+                    name=worker_id,
+                    entrypoint=Entrypoint.from_callable(
+                        _run_broker_worker,
+                        args=(worker_id, config.model, config.engine, iris, broker, request_provider),
+                    ),
+                    resources=iris.worker_resources,
+                    environment=iris.worker_environment,
+                    max_retries_failure=broker.max_retries_failure,
+                    max_retries_preemption=broker.max_retries_preemption,
+                    priority=iris.priority,
+                )
+            )
+        )
+    return jobs
+
+
+def _registered_worker_metadata(request_provider: InferenceRequestProvider) -> InferenceWorkerMetadata:
+    metadata_by_worker = request_provider.worker_metadata()
+    if not metadata_by_worker:
+        raise RuntimeError("Brokered inference became ready before a worker registered metadata")
+    return next(iter(metadata_by_worker.values()))
+
+
+@contextlib.contextmanager
+def _expose_brokered_inference(
+    config: RemoteInferenceConfig,
+    broker: BrokerConfig,
+    endpoint_name: str,
+    request_provider: InferenceRequestProvider,
+    response_provider: InferenceResponseProvider,
+    worker_jobs: list[JobHandle],
+    advertise_host: str,
+) -> Iterator[RemoteInferenceSession]:
+    model = config.model
+    iris = config.iris
+    proxy = broker.proxy
+    with serve_inference_proxy(
+        broker=response_provider,
+        model=model.model_id,
+        host=advertise_host,
+        port=proxy.port,
+        request_timeout_seconds=proxy.request_timeout_seconds,
+        readiness_timeout_seconds=proxy.readiness_timeout_seconds,
+        max_pending_requests=proxy.max_pending_requests,
+        response_fetch_batch_size=proxy.response_fetch_batch_size,
+        server_start_timeout_seconds=proxy.server_start_timeout_seconds,
+        ignored_request_fields=proxy.ignored_request_fields,
+    ) as running_model:
+        response = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
+        response.raise_for_status()
+        worker_metadata = _registered_worker_metadata(request_provider)
+        with iris_ctx().registry.registered(
+            endpoint_name,
+            _server_root(running_model),
+            _endpoint_metadata(
+                model=model.model_id,
+                backend=worker_metadata.backend_name,
+                accelerator=_accelerator_label(iris),
+                tensor_parallel_size=worker_metadata.tensor_parallel_size,
+                streaming=False,
+                proxy_timeout_seconds=proxy.request_timeout_seconds,
+            ),
+            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ):
+            internal_model = replace(running_model, tokenizer=model.tokenizer)
+            exposed_model = (
+                _capability_model(internal_model, endpoint_name, config.capability_origin)
+                if config.capability_origin is not None
+                else internal_model
+            )
+            yield RemoteInferenceSession(
+                model=exposed_model,
+                jobs=tuple(worker_jobs),
+                streaming=False,
+                tensor_parallel_size=worker_metadata.tensor_parallel_size,
+                backend_name=worker_metadata.backend_name,
+            )
+
+
 @contextlib.contextmanager
 def _start_brokered_inference(
-    model: ServedModelConfig,
-    engine: VllmEngineConfig | LevanterEngineConfig,
-    iris: IrisConfig,
-    instances: int,
+    config: RemoteInferenceConfig,
     broker: BrokerConfig,
 ) -> Iterator[RemoteInferenceSession]:
+    iris = config.iris
     client = current_client()
     job_info = get_job_info()
     assert job_info is not None
-    run_id = uuid.uuid4().hex[:8]
+    run_id, endpoint_name = _new_endpoint_identity()
     broker_group = None
     worker_jobs: list[JobHandle] = []
     started = False
@@ -427,51 +537,18 @@ def _start_brokered_inference(
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
-        for worker_index in range(instances):
-            worker_id = f"inference-worker-{run_id}-{worker_index}"
-            job = client.submit(
-                JobRequest(
-                    name=worker_id,
-                    entrypoint=Entrypoint.from_callable(
-                        _run_broker_worker,
-                        args=(worker_id, model, engine, iris, broker, request_provider),
-                    ),
-                    resources=iris.worker_resources,
-                    environment=iris.worker_environment,
-                    max_retries_failure=broker.max_retries_failure,
-                    max_retries_preemption=broker.max_retries_preemption,
-                    priority=iris.priority,
-                )
-            )
-            worker_jobs.append(job)
-        proxy = broker.proxy
-        with serve_inference_proxy(
-            broker=response_provider,
-            model=model.model,
-            host=job_info.advertise_host,
-            port=proxy.port,
-            request_timeout_seconds=proxy.request_timeout_seconds,
-            readiness_timeout_seconds=proxy.readiness_timeout_seconds,
-            max_pending_requests=proxy.max_pending_requests,
-            response_fetch_batch_size=proxy.response_fetch_batch_size,
-            server_start_timeout_seconds=proxy.server_start_timeout_seconds,
-            ignored_request_fields=proxy.ignored_request_fields,
-        ) as running_model:
-            response = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
-            response.raise_for_status()
-            metadata_by_worker = request_provider.worker_metadata()
-            if not metadata_by_worker:
-                raise RuntimeError("Brokered inference became ready before a worker registered metadata")
-            worker_metadata = next(iter(metadata_by_worker.values()))
+        worker_jobs = _submit_broker_workers(run_id, config, broker, request_provider)
+        with _expose_brokered_inference(
+            config,
+            broker,
+            endpoint_name,
+            request_provider,
+            response_provider,
+            worker_jobs,
+            job_info.advertise_host,
+        ) as session:
             started = True
-            yield RemoteInferenceSession(
-                model=replace(running_model, tokenizer=model.tokenizer),
-                jobs=tuple(worker_jobs),
-                endpoint_name=None,
-                streaming=False,
-                tensor_parallel_size=worker_metadata.tensor_parallel_size,
-                backend_name=worker_metadata.backend_name,
-            )
+            yield session
     except Exception as exc:
         if not started:
             raise RemoteInferenceStartupError(

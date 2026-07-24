@@ -4,7 +4,7 @@
 """Shared inference serving types."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 # Keep logs readable when a poll returns many request IDs.
@@ -23,9 +23,9 @@ def format_request_ids(ids: list[str]) -> str:
 class OpenAIEndpoint:
     """OpenAI-compatible HTTP endpoint for a served model."""
 
-    base_url: str
+    base_url: str = field(repr=False)
     model: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
 
     def url(self, path: str) -> str:
         """Return an endpoint URL under the API root."""

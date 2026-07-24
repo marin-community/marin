@@ -154,12 +154,28 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 
 Dashboards: `home.json` (the landing page — see below), `infra.json` (the compact
 cockpit — nightlies, CI and ferries, Iris capacity, provisioning, control-plane
-health, Kubernetes workload state, and hero training), `fleet.json` (canary +
+health, Kubernetes workload state, and hero training), `jobs.json` (fleet job
+state — see below), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
 grouped by run), `k8s.json` (current CW control-plane state from the k8s source), and
 `finelog.json` (fleet readiness plus mirror pod, probe, resource, and PVC details).
+
+`jobs.json` is the at-a-glance job view. Its fleet panels read the `iris.task_state`
+finelog namespace on the marin hub — one row per active root job every 30s per
+cluster-view (CoreWeave) controller, carrying waiting/running task counts and the
+oldest PENDING and stuck-in-BUILDING wait ages, plus a `root_job_id=''` per-cluster
+rollup — grouped by the forwarded origin `cluster`. It leads with fleet tasks in
+flight and a stuck-jobs count (both shared as `panelRef` fragments with `home.json`),
+then a worst-first active-jobs table and a per-cluster queue-depth trend. The active
+panels pin a fixed two-minute window (`timeFrom: 2m`) so a finished job — which stops
+emitting with no final zero row — ages out rather than lingering as active. GCE
+controllers (marin, marin-dev) emit no `iris.task_state` (their DB is directly
+`ExecuteRawQuery`-able), so their job-state counts come from the live `/iris/{cluster}/jobs`
+endpoint in a separate row. Grouping by CoreWeave cluster depends on the forwarder
+stamping the origin `cluster` column; until that fix reaches the CoreWeave finelog
+servers those rows read as `cluster=unknown`.
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
@@ -212,13 +228,15 @@ points or their credentials, send a test notification to all receivers (Alerting
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group, the bridge asks the Cloud Run metadata
 server for a Google-signed identity token for `https://loom.oa.dev`, exchanges it
-for a short-lived `grafana_alert` Loom token, and creates an idempotent run for
-`marin-community/marin`. Resolved notifications do not create sessions. Repeated
-notifications for the same alert fingerprint and start time reuse the same Loom
-run. The Loom Pulumi stack binds the exact `marin-grafana` service-account email
-and numeric subject to this profile. The Grafana stack reads the Loom URL and
-profile from that stack's `workloadClients` output, so the caller and verifier
-cannot drift through duplicated configuration.
+for a short-lived `ops` Loom token, and creates an idempotent run for
+`marin-community/marin` on the `operator` channel. Distinct firing groups feed
+one live `Grafana operator` session; the operator can delegate independent
+incidents to child Loom sessions. Resolved notifications do not create runs.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run. The Loom Pulumi stack binds the exact `marin-grafana`
+service-account email and numeric subject to this profile. The Grafana stack
+reads the Loom URL and profile from that stack's `workloadClients` output, so
+the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation
 

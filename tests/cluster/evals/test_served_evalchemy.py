@@ -1,0 +1,75 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""TPU smoke for the serve->eval orchestration, on the standing Marin cluster.
+
+Validates the two-job evalchemy path end-to-end (issue #7267): a parent orchestrator job serves
+Qwen3-0.6B with marin-serve (vLLM on a TPU slice), the evalchemy child evaluates a generation task
+(gsm8k) and a multiple-choice task (arc_easy) against the served OpenAI URL, and the server is torn
+down. It exercises the same shared-inference entrypoint the composable ``eval_step`` runs through.
+
+It drives live Iris TPU jobs, so it is marked ``cluster`` and deselected by default (see
+``pyproject.toml`` addopts); the ``marin-cluster-smoke`` workflow runs it. Run it on demand once you
+have cluster credentials and HF_TOKEN set:
+
+    uv run pytest tests/cluster/evals/test_served_evalchemy.py \
+      -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
+"""
+
+from __future__ import annotations
+
+import pytest
+from iris.client import IrisClient
+from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
+from marin.evaluation.evalchemy.result import EvalchemyResult
+from marin.evaluation.evalchemy.runner import EvalchemyRunConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeBackend, ServeConfig
+from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
+
+pytestmark = pytest.mark.cluster
+
+# One generation task and one multiple-choice task, both capped to a few instances: the minimal check
+# that logprob (arc_easy) and free-generation (gsm8k) both flow through the served OpenAI endpoint.
+SMOKE_TASKS = (EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5))
+
+# Serve boot (model fetch + vLLM compile) dominates; the eval itself is a few instances per task.
+_SERVE_AND_EVAL_TIMEOUT_SECONDS = 3000.0
+
+
+def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> None:
+    # smoke_region pins the slice and binds the storage root to the same gs://marin-<region>, so the
+    # serve child, eval child, and outputs all colocate -- no cross-region I/O.
+    out_path = f"gs://marin-{smoke_region}/tmp/eval7267-serve-and-eval-smoke/qwen3-0p6b"
+    config = EvalchemyEvalConfig(
+        model=ModelConfig(
+            name="qwen3-0.6b",
+            location="Qwen/Qwen3-0.6B",
+            resource_hint=ResourceHint(hbm_gb=3),
+            serve=ServeConfig(backend=ServeBackend.VLLM),
+        ),
+        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region=smoke_region),
+        run=EvalchemyRunConfig(name="smoke", tasks=SMOKE_TASKS, max_eval_instances=3),
+        out_path=out_path,
+    )
+
+    # The adapter submits its own serve + eval children, so run it as a plain CPU job rather than
+    # through StepRunner. wait(raise_on_failure default) raises if the parent (or either child) fails.
+    job = iris_client.submit(
+        entrypoint=Entrypoint.from_callable(run_served_evalchemy, config),
+        name="eval7267-serve-and-eval-smoke",
+        resources=ResourceSpec(cpu=1, memory="4g", disk="16g"),
+        max_retries_failure=0,
+    )
+    try:
+        job.wait(timeout=_SERVE_AND_EVAL_TIMEOUT_SECONDS, stream_logs=True)
+    finally:
+        if not is_job_finished(job.state):
+            job.terminate()
+
+    # Metrics are keyed by each task's upload dir (name_Nshot when un-aliased), not the bare task name.
+    metrics = EvalchemyResult.raw_load(out_path).task_metrics()
+    assert set(metrics) >= {"arc_easy_0shot", "gsm8k_5shot"}, metrics
+    assert metrics["arc_easy_0shot"], "arc_easy produced no numeric metrics"
+    assert metrics["gsm8k_5shot"], "gsm8k produced no numeric metrics"

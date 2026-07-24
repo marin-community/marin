@@ -1,0 +1,13 @@
+name: qwen3-30b-a3b-instruct-2507
+location: Qwen/Qwen3-30B-A3B-Instruct-2507
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  trust_remote_code: true
+  vllm_extra_args:
+  - --enable-prefix-caching
