@@ -2909,3 +2909,22 @@ author: dlwh
   - Explicit GPipe and interleaved GPipe are already measured negatives. NCCL_EP remains the only active mechanism with enough direct routed-MLP gain to plausibly move the `18.2583` target baseline past 20 MFU.
 - Next action:
   - Keep automatic schedules blocked and finish the reduced NCCL_EP r11g diagnostic. Scale NCCL_EP to L24 only after a finite reduced training step with bounded route fingerprints and strict loss/gradient checks.
+
+### 2026-07-24 13:38 PDT - r11g localizes NCCL_EP corruption to TE's outer partitioning boundary
+- Hypothesis: Disabling XLA's cross-process sharded autotuner will clear the MPMD compilation deadlock and expose whether NCCL_EP receives rank-local routes and token buffers.
+- Commit Hash: `249ed44fa4` (`[docs] Record automatic JaxPP activation blocker`).
+- Command: `XLA_FLAGS='--xla_gpu_nccl_termination_timeout_seconds=600 --xla_gpu_shard_autotuning=false' experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --run-id jaxpp-rno2a-ncclep-routefp-r11g-noshardat-l8-e64k4-b512-s4096-p4m16-20260724-1258 --schedule std_1f1b --implementation explicit_mpmd --physical-stages 4 --logical-stages 4 --stage-layer-counts 2,2,2,2 --microbatches 16 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 8 --experts 64 --top-k 4 --batch 512 --seq-len 4096 --moe-implementation nccl_ep --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --xla-memory-fraction 0.65 --remat save_moe --steps 3 --tracker wandb --jax-init-timeout 7200 --jaxpp-client-timeout-ms 7200000`.
+- Results:
+  - Parent `/dlwh/iris-run-job-20260724-195722`; child `/dlwh/iris-run-job-20260724-195722/grug-train-jaxpp-rno2a-ncclep-routefp-r11g-noshardat-l8-e64k4-b512-s4096-p4m16-20260724-1258`.
+  - All 32 ranks initialized, all four stages compiled, and the r11f sharded-autotuner KV-store deadlock did not recur.
+  - Every rank's last pre-`ep_prepare` fingerprint reported routes with local shape `(16384, 4)`, expert IDs spanning `0..63`, destination counts of roughly `7,800..8,600` assignments, and exactly `41,943,040/41,943,040` finite BF16 token values. Each destination-count vector summed to `65,536`, the expected local token count times top-k four.
+  - Both Iris attempts failed at the same first causal assertion on task 0 rank 0: `scan_impl_flat(em): padded EM slots 524288 > max_recv_tokens_per_rank 81920`. The later `CUDA error 719: Failed to gpuMemcpyAsync` and coordination socket closures were cascading failures.
+  - `524,288` is exactly the global microbatch assignment count: `131,072` global tokens times top-k four. It is not a plausible local destination load. Transformer Engine's outer custom-partitioning primitive retained the global static token extent while its FFI received a physical 16,384-row local buffer, so the scan read beyond the local route buffer.
+  - No loss, duration, throughput, MFU, or gradient metric was produced. W&B has no training history: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-routefp-r11g-noshardat-l8-e64k4-b512-s4096-p4m16-20260724-1258>.
+  - Iris began a third automatic attempt after the repeated failure. The babysitter stopped only the parent. Parent, child, and all tasks are terminal killed; no matching pods remain.
+- Interpretation:
+  - The route generator and JaxPP input sharding are exonerated at the immediate transport boundary. Raising receive capacity to `524,288` would allocate the global assignment count on every rank and mask the out-of-bounds read.
+  - Commit `35f766630c` binds Transformer Engine's registered inner prepare, dispatch, combine, and backward FFI primitives inside an explicit expert-axis `shard_map`. Forward and backward abstract-shape probes map global `(131072, ...)` inputs to local `(16384, ...)` FFI operands and reconstruct global outputs. Focused tests and changed-file precommit pass.
+  - This fix preserves Transformer Engine's NCCL kernels, 81,920-row receive capacity, and custom gradients. It changes only the custom-partitioning boundary that supplied the wrong static extent.
+- Next action:
+  - Babysit r11h parent `/dlwh/iris-run-job-20260724-203827`, which runs the unchanged reduced configuration from `35f766630c`. Require finite loss and gradients before launching the L24 target.
