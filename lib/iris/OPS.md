@@ -393,6 +393,15 @@ iris cluster controller checkpoint
 
 Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
 
+The controller dashboard's RPC panel reads `iris_rpc_*` Telltale rows from the
+`telltale` namespace. The native Rust listener owns these per-service/method
+counters, response-status counters, in-flight gauges, and latency histograms;
+the `upstream="controller"` label identifies its loopback forwarding hop to the
+private Python controller. Telltale writes periodic snapshots rather than event
+rows. Counters reset when the native proxy restarts, so rate/window queries must
+compare adjacent samples and discard negative deltas; gauges and histograms are
+the latest snapshot.
+
 Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.

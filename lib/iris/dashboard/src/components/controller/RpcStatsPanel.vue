@@ -1,16 +1,57 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useStatsRpc } from '@/composables/useRpc'
+import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { formatRelativeTime, timestampMs } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
-import type { GetRpcStatsResponse, RpcCallSample, RpcMethodStats } from '@/types/rpc'
 
-const { data, loading, error, refresh } = useStatsRpc<GetRpcStatsResponse>('GetRpcStats')
+interface TelltaleRow {
+  name?: string
+  value?: number
+  ts?: string
+  service?: string
+  method?: string
+  upstream?: string
+  status?: string
+  le?: string
+}
+
+function statsSql(): string {
+  return `
+SELECT name, value, ts,
+       json_get(labels, 'service') AS service,
+       json_get(labels, 'method') AS method,
+       json_get(labels, 'upstream') AS upstream,
+       json_get(labels, 'status') AS status,
+       json_get(labels, 'le') AS le
+FROM telltale
+WHERE source = 'iris' AND name IN (
+  'iris_rpc_requests_total', 'iris_rpc_responses_total', 'iris_rpc_in_flight',
+  'iris_rpc_duration_seconds_bucket', 'iris_rpc_duration_seconds_sum', 'iris_rpc_duration_seconds_count'
+)
+QUALIFY row_number() OVER (
+  PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
+               json_get(labels, 'upstream'), json_get(labels, 'status'), json_get(labels, 'le')
+  ORDER BY ts DESC
+) = 1`.trim()
+}
+
+const { data, loading, error, refresh } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: statsSql() }))
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
 type SortKey = 'method' | 'count' | 'errorCount' | 'p50' | 'p95' | 'p99' | 'max' | 'last'
+interface RpcCallSample {
+  durationMs?: number
+  errorCode?: string
+  timestamp?: unknown
+  caller?: string
+  peer?: string
+  errorMessage?: string
+  requestPreview?: string
+  userAgent?: string
+}
 const sortKey = ref<SortKey>('p95')
 const sortDir = ref<'asc' | 'desc'>('desc')
 const expanded = ref<Set<string>>(new Set())
@@ -36,24 +77,29 @@ interface MethodRow {
   totalDurationMs: number
 }
 
-function toRow(m: RpcMethodStats): MethodRow {
-  return {
-    method: m.method,
-    count: toNum(m.count),
-    errorCount: toNum(m.errorCount),
-    p50: m.p50Ms ?? 0,
-    p95: m.p95Ms ?? 0,
-    p99: m.p99Ms ?? 0,
-    max: m.maxDurationMs ?? 0,
-    last: timestampMs(m.lastCall),
-    buckets: (m.bucketCounts ?? []).map(toNum),
-    bounds: (m.bucketUpperBoundsMs ?? []).map(toNum),
-    totalDurationMs: m.totalDurationMs ?? 0,
-  }
-}
-
 const rows = computed<MethodRow[]>(() => {
-  const list = (data.value?.methods ?? []).map(toRow)
+  const metrics = decodeArrowIpc(data.value?.arrowIpc).rows as TelltaleRow[]
+  const byMethod = new Map<string, MethodRow>()
+  for (const metric of metrics) {
+    if (!metric.service || !metric.method || !metric.upstream) continue
+    const method = `${metric.service}/${metric.method} (${metric.upstream})`
+    const row = byMethod.get(method) ?? {
+      method, count: 0, errorCount: 0, p50: 0, p95: 0, p99: 0, max: 0, last: 0,
+      buckets: [], bounds: [], totalDurationMs: 0,
+    }
+    row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
+    const value = Number(metric.value ?? 0)
+    if (metric.name === 'iris_rpc_requests_total') row.count = value
+    if (metric.name === 'iris_rpc_responses_total' && metric.status !== '200') row.errorCount += value
+    if (metric.name === 'iris_rpc_duration_seconds_sum') row.totalDurationMs = value * 1000
+    if (metric.name === 'iris_rpc_duration_seconds_bucket') {
+      const upper = metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000
+      row.bounds.push(upper)
+      row.buckets.push(value)
+    }
+    byMethod.set(method, row)
+  }
+  const list = [...byMethod.values()]
   const dir = sortDir.value === 'asc' ? 1 : -1
   const key = sortKey.value
   return [...list].sort((a, b) => {
@@ -62,27 +108,12 @@ const rows = computed<MethodRow[]>(() => {
   })
 })
 
-const slowByMethod = computed<Record<string, RpcCallSample[]>>(() => {
-  const out: Record<string, RpcCallSample[]> = {}
-  for (const s of data.value?.slowSamples ?? []) {
-    (out[s.method] ||= []).push(s)
-  }
-  for (const k of Object.keys(out)) out[k].reverse()
-  return out
-})
-
-const discoveryByMethod = computed<Record<string, RpcCallSample[]>>(() => {
-  const out: Record<string, RpcCallSample[]> = {}
-  for (const s of data.value?.discoverySamples ?? []) {
-    (out[s.method] ||= []).push(s)
-  }
-  for (const k of Object.keys(out)) out[k].reverse()
-  return out
-})
+const slowByMethod = computed<Record<string, never[]>>(() => ({}))
+const discoveryByMethod = computed<Record<string, never[]>>(() => ({}))
 
 const totalCount = computed(() => rows.value.reduce((a, r) => a + r.count, 0))
 const totalErrors = computed(() => rows.value.reduce((a, r) => a + r.errorCount, 0))
-const collectorStartedAt = computed(() => timestampMs(data.value?.collectorStartedAt))
+const collectorStartedAt = computed(() => rows.value.reduce((oldest, row) => !oldest || row.last < oldest ? row.last : oldest, 0))
 
 function toggleExpand(method: string) {
   const next = new Set(expanded.value)
@@ -120,13 +151,9 @@ function fmtSince(epochMs: number): string {
 }
 
 function prettyPreview(raw: string | undefined): string {
-  if (!raw) return ''
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
+  return raw ?? ''
 }
+
 
 function methodLabel(method: string): string {
   const slash = method.lastIndexOf('/')
@@ -234,12 +261,9 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
 
     <InfoCard title="RPC Methods">
       <p class="text-xs text-text-muted mb-3">
-        Per-method counters, latency percentiles, and an inline histogram on a log scale
-        (3 buckets per octave, ≈1 ms → 60 s). Click a row to expand samples.
-        Request previews are redacted server-side for keys naming a secret, such as
-        <code class="font-mono">API_KEY</code>, <code class="font-mono">TOKEN</code>,
-        <code class="font-mono">SECRET</code>, <code class="font-mono">PASSWORD</code> or
-        <code class="font-mono">CREDENTIAL</code>.
+        Native-proxy counters, statuses, in-flight requests, and latency histograms,
+        queried from Telltale snapshots in the controller log server. Counters reset
+        when the native proxy restarts; rates across a reset discard negative deltas.
       </p>
 
       <!-- Header -->

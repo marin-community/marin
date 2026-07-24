@@ -31,3 +31,8 @@ class NativeProxyStats:
     @classmethod
     def from_json(cls, payload: str) -> "NativeProxyStats":
         return cls(**json.loads(payload))
+
+
+def rpc_metrics_from_json(payload: str) -> dict:
+    """Decode the native proxy's Prometheus-compatible RPC metric snapshot."""
+    return json.loads(payload)
