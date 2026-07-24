@@ -475,6 +475,7 @@ def jaxpp_setup_scripts(*, revision: str = "7091a9b5ce02cd1a6bdc905f6a36e89370a5
                 'git -C /tmp/jax-tvm-ffi apply "$IRIS_WORKDIR/experiments/grug/moe/jax_tvm_ffi_multidevice.patch"',
                 "uv pip install --link-mode symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi",
                 "uv pip install --link-mode symlink --no-deps " + repr(package),
+                'bash experiments/grug/moe/patch_cutlass_dsl_mlir_type_guard.sh "$IRIS_VENV/bin/python"',
             ]
         )
         + "\n",
