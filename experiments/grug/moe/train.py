@@ -146,12 +146,43 @@ def build_train_loader(
     )
 
 
+def _tagged_eval_loss_fn(
+    model: Transformer,
+    batch: LmExample | GrugLmExample,
+    *,
+    mp: jmp.Policy,
+    per_pos_sharding: NamedSharding,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Per-position tagged-eval loss, run in the trainer compute dtype.
+
+    Evaluation reuses the training mixed-precision cast (`mp.cast_to_compute`) so
+    the forward runs in the same dtype as training instead of the stored
+    parameter dtype; otherwise float32 weights reach the bfloat16-only attention
+    kernel and evaluation fails.
+    """
+    if isinstance(batch, LmExample):
+        batch = grug_lm_example_from_named(batch)
+    compute_model = mp.cast_to_compute(model)
+    per_pos_loss = compute_model.next_token_loss(
+        batch.tokens,
+        batch.loss_weight,
+        mask=batch.attn_mask,
+        reduction="none",
+        logsumexp_weight=None,
+    )
+    per_pos_loss = jax.sharding.reshard(per_pos_loss, per_pos_sharding)
+    per_pos_weight = jax.sharding.reshard(batch.loss_weight, per_pos_sharding)
+    per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+    return per_pos_loss, per_pos_weight, per_pos_token_id
+
+
 def build_tagged_evaluator(
     *,
     data_config: LmDataConfig,
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -168,22 +199,10 @@ def build_tagged_evaluator(
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    per_pos_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        if isinstance(batch, LmExample):
-            batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.next_token_loss(
-            batch.tokens,
-            batch.loss_weight,
-            mask=batch.attn_mask,
-            reduction="none",
-            logsumexp_weight=None,
-        )
-        per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
-        per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
-        return per_pos_loss, per_pos_weight, per_pos_token_id
+        return _tagged_eval_loss_fn(model, batch, mp=mp, per_pos_sharding=per_pos_sharding)
 
     return TaggedEvaluator(
         EvalBatch=eval_batch,
@@ -459,6 +478,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
