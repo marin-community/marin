@@ -577,3 +577,37 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   (2) fp8/MXFP8 dispatch wire + grouped quant when moe.py grows quantizer
   support (ties #7282); (3) NGC JAX container arm (deck stack, JAX-Toolbox
   task-image work); (4) upstream ask: chunked-dispatch mode in moe().
+
+### 2026-07-24 — NCCLEP-010 (in flight): gap-closure matrix — every non-quantization NVIDIA recommendation
+- Motivation: the channel-wide audit (NCCLEP-008 + #oa-nvidia read) left four
+  plausible gaps on our side short of quantization: (a) wheel predates TE
+  #3231 (EP dispatch/combine on XLA's collective stream) and #3226; (b)
+  command buffers globally off in every arm (a TE-EP constraint paid by the
+  a2a control too); (c) multi-stream collectives + max_num_sms never tried;
+  (d) never ran under the NGC 26.06 stack ("solution 1"). Close all four in
+  bf16, one same-allocation matrix per stack.
+- TE tip rebuild (ea41e0837, 2026-07-24): tip moved NCCL_EP into a new
+  `3rdparty/nccl-extensions` submodule; first build attempt died SIGKILL
+  (cgroup OOM ~44 s into the parallel kickoff at 200 GiB/MAX_JOBS=64) —
+  retry at 384 GiB / MAX_JOBS=32. NB #3231 is automatic (stream annotation),
+  no flag.
+- Knobs (bench branch @ 3df308c84): `NCCLEP_CMD_BUFFER` scoping in the
+  launcher (off | default | explicit list; scoped list = XLA defaults minus
+  CUSTOM_CALL so EP FFI + cutlass_call stay eager),
+  `--xla_gpu_experimental_parallel_collective_overlap_limit=2` (verified
+  present at jax 0.10.1's XLA pin, default 1), `--ep-max-num-sms` →
+  `ep_bootstrap(max_num_sms=)`.
+- NGC arm machinery ported from research/codex/7421-ngc-7331 (validated at
+  16×4 GB200 L48/B512 during the CUBIN work): guarded overlay preserves
+  /opt jax 0.10.1.dev + jaxlib, overlays marin + cutlass-dsl-cu13 + our TE
+  wheel + NCCL 2.30.7 + EP JIT toolchain; strict per-process
+  CUDA_VISIBLE_DEVICES isolation; **must** overlay the 4c1b005-patched CUDA
+  PJRT plugin (stock 26.06 carries the kernel-reuse cache collision) —
+  artifact `s3://marin-us-east-02a/tmp/ttl=30d/cubin7421-ngc-xla-plugin-probe-07/fix/xla_cuda_plugin.so`
+  sha256 e420223a7a3c….
+- Matrix: stock-stack arms (run_arms_gapclose.sh, one allocation): a2a base +
+  a2a tuned (default capture + overlap), te_moe base (tip wheel isolates
+  #3231) + scoped-cb + overlap + sms {16,32}, best-tuned nccl_ep seam. Then
+  NGC arms (launch_ngc.py): a2a_cute, te_moe, and the pure-XLA
+  ragged_all_to_all + `--xla_gpu_experimental_use_ragged_dot_fusion` native
+  path.
