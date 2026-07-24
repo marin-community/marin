@@ -221,3 +221,25 @@ statistics for performance comparisons.
   classified all eight baseline and both treatment drops as ambiguous,
   matching the need for the existing full-text labels and eliminating the
   prior false automatic duplicate label.
+- `/rav/datakit-6854-dedup-audit-smoke-v5-20260724` completed successfully
+  after Iris retried a comparison coordinator whose first attempt wrote all
+  15 records but timed out during log-service shutdown. The successful retry
+  reproduced the exact comparison counters.
+- The treatment per-source smoke and exact layout verifier also completed.
+  Combined and per-source treatment artifacts match record-for-record across
+  115 sources and 115 shards: four marker rows and two canonical rows.
+  Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-layout-verification-20260724-v1/treatment.json`.
+
+### 2026-07-24T09:49:00Z — full connected-components convergence
+
+- The full graph requires more convergence rounds than the smoke, so p4 and
+  later `zephyr-fuzzy-dups` executions are still connected-components
+  iterations, not report aggregation. Both arms are running iteration 6.
+- Exact change counts through iteration 5:
+  - baseline: 922,366; 249,346; 206,516; 142,637; 114,607;
+  - treatment: 182,128; 18,892; 14,942; 7,342; 6,503.
+- This is already a material structural difference in the candidate graphs,
+  but it is not yet a final runtime claim. Continue both arms to actual
+  convergence, include every executed iteration in matched finelog totals,
+  and do not confuse stage number with report work.
