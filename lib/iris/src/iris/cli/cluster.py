@@ -1200,9 +1200,14 @@ def controller_restart(
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
+    bundle = provider_bundle(config)
+    try:
+        bundle.controller.preflight_controller(config)
+    except Exception as e:
+        raise click.ClickException(f"Controller restart preflight failed: {e}") from e
+
     remote_state_dir = config.storage.remote_state_dir
     prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
-    bundle = provider_bundle(config)
 
     if rollback:
         _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)

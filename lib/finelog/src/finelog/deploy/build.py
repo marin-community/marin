@@ -19,6 +19,7 @@ from pathlib import Path
 import click
 
 DEFAULT_IMAGE = "ghcr.io/marin-community/finelog:latest"
+DEFAULT_PLATFORMS = "linux/amd64,linux/arm64"
 
 
 def find_marin_root() -> Path:
@@ -48,7 +49,7 @@ def build_image(
     *,
     image: str = DEFAULT_IMAGE,
     push: bool = True,
-    platform: str = "linux/amd64",
+    platform: str = DEFAULT_PLATFORMS,
     cargo_profile: str = "release",
 ) -> None:
     """Build the finelog Docker image and (by default) push it to the registry.
@@ -57,19 +58,24 @@ def build_image(
     cluster will keep pulling the old digest. ``push=False`` is useful for
     smoke-testing the Dockerfile locally without registry access.
 
+    Pushed images cover both architectures used by CoreWeave control nodes.
+    Docker cannot load a multi-platform image into the local engine, so
+    ``push=False`` builds the first requested platform only.
+
     ``cargo_profile`` selects the Rust build profile baked into the image.
     ``release`` (default) is the optimized fat-LTO production build; ``fast``
     skips LTO for a much quicker final link, suited to dev/test deploys.
     """
     marin_root = find_marin_root()
     dockerfile = marin_root / "lib" / "finelog" / "deploy" / "Dockerfile"
+    effective_platform = platform if push else platform.split(",", maxsplit=1)[0]
 
     cmd = [
         "docker",
         "buildx",
         "build",
         "--platform",
-        platform,
+        effective_platform,
         "--file",
         str(dockerfile),
         "--build-arg",
@@ -87,6 +93,7 @@ def build_image(
     click.echo(f"Building finelog image: {image}")
     click.echo(f"Context: {marin_root}")
     click.echo(f"Cargo profile: {cargo_profile}")
+    click.echo(f"Platform: {effective_platform}")
     click.echo(f"Push: {'enabled' if push else 'disabled (local only)'}")
     result = subprocess.run(cmd)
     if result.returncode != 0:

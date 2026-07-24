@@ -156,6 +156,7 @@ jobs:
       - name: Build and push finelog
         run: |
           docker buildx build --file lib/finelog/deploy/Dockerfile \
+            --platform linux/amd64,linux/arm64 \
             --cache-from type=registry,ref=ghcr.io/marin-community/finelog-cache:latest \
             --cache-to type=registry,ref=ghcr.io/marin-community/finelog-cache:latest,mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
             --output type=image,compression=zstd,compression-level=3,push=true \

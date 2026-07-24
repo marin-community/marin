@@ -64,6 +64,9 @@ class GcpControllerProvider:
             )
         return f"{vms[0].internal_address}:{port}"
 
+    def preflight_controller(self, config: IrisClusterConfig) -> None:
+        """GCP controller inputs are resolved on the controller VM."""
+
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,

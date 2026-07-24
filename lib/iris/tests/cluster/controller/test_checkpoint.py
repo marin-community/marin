@@ -4,8 +4,10 @@
 """Tests for controller checkpoint: remote-only write and download-before-create restore."""
 
 from iris.cluster.controller.checkpoint import (
+    checkpoint_epoch_ms,
     download_checkpoint_to_local,
     latest_checkpoint_epoch_ms,
+    probe_database_dir,
     prune_old_checkpoints,
     write_checkpoint,
 )
@@ -31,6 +33,7 @@ def test_write_checkpoint_uploads_compressed(tmp_path, make_controller):
     assert result.job_count == 0
     assert result.task_count == 0
     assert result.worker_count == 0
+    assert probe_database_dir(controller._db.db_path.parent).checkpoint_epoch_ms == checkpoint_epoch_ms(path)
 
 
 def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
@@ -68,6 +71,45 @@ def test_download_checkpoint_to_local(tmp_path):
     result = download_checkpoint_to_local(remote_dir, local_db_dir)
     assert result is True
     assert (local_db_dir / "controller.sqlite3").exists()
+    assert probe_database_dir(local_db_dir).checkpoint_epoch_ms == latest_checkpoint_epoch_ms(remote_dir)
+
+
+def test_download_checkpoint_to_local_removes_stale_sqlite_sidecars(tmp_path):
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    local_db_dir.mkdir()
+    sidecars = [
+        local_db_dir / "controller.sqlite3-wal",
+        local_db_dir / "controller.sqlite3-shm",
+        local_db_dir / "auth.sqlite3-wal",
+        local_db_dir / "auth.sqlite3-shm",
+    ]
+    for sidecar in sidecars:
+        sidecar.write_bytes(b"stale sidecar from a different database")
+
+    assert download_checkpoint_to_local(remote_dir, local_db_dir)
+    assert all(not sidecar.exists() for sidecar in sidecars)
+
+    restored_db = ControllerDB(db_dir=local_db_dir)
+    restored_db.close()
+
+
+def test_probe_database_dir_rejects_corrupt_sqlite(tmp_path):
+    db_dir = tmp_path / "db"
+    db = ControllerDB(db_dir=db_dir)
+    db.close()
+    (db_dir / ControllerDB.DB_FILENAME).write_bytes(b"not a sqlite database")
+
+    probe = probe_database_dir(db_dir)
+
+    assert probe.exists
+    assert not probe.healthy
+    assert probe.checkpoint_epoch_ms is None
+    assert ControllerDB.DB_FILENAME in probe.detail
 
 
 def test_download_checkpoint_returns_false_when_missing(tmp_path):

@@ -43,6 +43,7 @@ from rigging.server_auth import (
     extract_bearer_token,
     public,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
@@ -409,7 +410,18 @@ class ControllerDashboard:
     @public
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        return JSONResponse({"status": "ok"})
+        try:
+            checkpoint_epoch_ms = self._service.probe_database()
+        except SQLAlchemyError:
+            logger.exception("Controller database health probe failed")
+            return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)
+        return JSONResponse(
+            {
+                "status": "ok",
+                "database": "ok",
+                "checkpoint_epoch_ms": checkpoint_epoch_ms,
+            }
+        )
 
     @public
     def _bundle_download(self, request: Request) -> Response:

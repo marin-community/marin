@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller import main as controller_main
+from iris.cluster.controller.checkpoint import DatabaseProbe
 from iris.cluster.controller.rollout import RolloutPhase, RolloutRecord
 
 
@@ -23,6 +24,15 @@ def _seed_db(db_dir: Path, marker: str) -> None:
 
 def _no_rollout_record(monkeypatch) -> None:
     monkeypatch.setattr(controller_main, "read_rollout_record", lambda remote: None)
+
+
+def _probe(*, exists: bool = True, healthy: bool = True, checkpoint_epoch_ms: int | None = None) -> DatabaseProbe:
+    return DatabaseProbe(
+        exists=exists,
+        healthy=healthy,
+        checkpoint_epoch_ms=checkpoint_epoch_ms,
+        detail="ok" if healthy else "database disk image is malformed",
+    )
 
 
 def test_fresh_wipes_local_and_skips_restore(tmp_path, monkeypatch):
@@ -61,10 +71,10 @@ def test_rollback_requested_restores_checkpoint_and_marks_rolled_back(tmp_path, 
     )
     written = []
     monkeypatch.setattr(controller_main, "write_rollout_record", lambda remote, record: written.append(record))
-    # The freshness heuristic must not run on the rollback path, or the migrated
-    # local DB could win and defeat the rollback.
+    # Local reuse checks must not run on the rollback path, or the migrated DB
+    # could win and defeat the rollback.
     monkeypatch.setattr(
-        controller_main, "_local_db_epoch_ms", lambda d: pytest.fail("freshness checked on the rollback path")
+        controller_main, "probe_database_dir", lambda d: pytest.fail("local DB probed on the rollback path")
     )
 
     controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
@@ -84,7 +94,11 @@ def test_rollback_requested_missing_checkpoint_falls_through(tmp_path, monkeypat
         "read_rollout_record",
         lambda remote: RolloutRecord(phase=RolloutPhase.ROLLBACK_REQUESTED, image="img:old", rollback_checkpoint=None),
     )
-    monkeypatch.setattr(controller_main, "_local_db_epoch_ms", lambda d: 200)
+    monkeypatch.setattr(
+        controller_main,
+        "probe_database_dir",
+        lambda d: _probe(checkpoint_epoch_ms=100),
+    )
     monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 100)
     written = []
     monkeypatch.setattr(controller_main, "write_rollout_record", lambda remote, record: written.append(record))
@@ -98,11 +112,15 @@ def test_rollback_requested_missing_checkpoint_falls_through(tmp_path, monkeypat
     assert written == []
 
 
-def test_local_db_reused_when_at_least_as_fresh_as_remote(tmp_path, monkeypatch):
+def test_local_db_reused_when_healthy_and_checkpoint_matches_remote(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()
     _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(controller_main, "_local_db_epoch_ms", lambda d: 200)
+    monkeypatch.setattr(
+        controller_main,
+        "probe_database_dir",
+        lambda d: _probe(checkpoint_epoch_ms=100),
+    )
     monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 100)
     restores = []
     monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: restores.append(1) or True)
@@ -112,11 +130,15 @@ def test_local_db_reused_when_at_least_as_fresh_as_remote(tmp_path, monkeypatch)
     assert restores == []
 
 
-def test_stale_local_db_restores_latest_remote(tmp_path, monkeypatch):
+def test_local_db_with_different_checkpoint_restores_latest_remote(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()
     _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(controller_main, "_local_db_epoch_ms", lambda d: 100)
+    monkeypatch.setattr(
+        controller_main,
+        "probe_database_dir",
+        lambda d: _probe(checkpoint_epoch_ms=100),
+    )
     monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 200)
     captured = {}
     monkeypatch.setattr(
@@ -131,9 +153,9 @@ def test_stale_local_db_restores_latest_remote(tmp_path, monkeypatch):
 
 
 def test_checkpoint_path_restores_when_local_absent(tmp_path, monkeypatch):
-    db_dir = tmp_path / "db"  # absent -> _local_db_epoch_ms returns None -> restore
+    db_dir = tmp_path / "db"
     _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 200)
+    monkeypatch.setattr(controller_main, "probe_database_dir", lambda d: _probe(exists=False, healthy=False))
     captured = {}
     monkeypatch.setattr(
         controller_main,
@@ -150,10 +172,36 @@ def test_checkpoint_path_restores_when_local_absent(tmp_path, monkeypatch):
 def test_checkpoint_path_not_found_raises(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     _no_rollout_record(monkeypatch)
-    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 200)
+    monkeypatch.setattr(controller_main, "probe_database_dir", lambda d: _probe(exists=False, healthy=False))
     monkeypatch.setattr(controller_main, "download_checkpoint_to_local", lambda *a, **k: False)
 
     with pytest.raises(ValueError, match="Checkpoint not found"):
         controller_main._prepare_local_db_dir(
             db_dir, "gs://b/state", fresh=False, checkpoint_path="gs://b/state/controller-state/999"
         )
+
+
+def test_corrupt_local_db_is_preserved_before_remote_restore(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    _seed_db(db_dir, "corrupt")
+    _no_rollout_record(monkeypatch)
+    monkeypatch.setattr(
+        controller_main,
+        "probe_database_dir",
+        lambda d: _probe(healthy=False),
+    )
+    monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda r: 200)
+
+    def restore(_remote, target, checkpoint_dir=None):
+        target.mkdir()
+        (target / "controller.sqlite3").write_text("restored")
+        return True
+
+    monkeypatch.setattr(controller_main, "download_checkpoint_to_local", restore)
+
+    controller_main._prepare_local_db_dir(db_dir, "gs://b/state", fresh=False, checkpoint_path=None)
+
+    assert (db_dir / "controller.sqlite3").read_text() == "restored"
+    quarantined = list(tmp_path.glob("db.corrupt-*"))
+    assert len(quarantined) == 1
+    assert (quarantined[0] / "controller.sqlite3").read_text() == "corrupt"
