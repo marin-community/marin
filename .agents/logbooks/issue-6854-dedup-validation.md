@@ -57,3 +57,19 @@ statistics for performance comparisons.
 - The fix PR worktree remains separate and dirty only with pre-existing shared
   CI-selector review refinements. No validation harness is being added to PR
   #7591.
+
+### 2026-07-24T07:03:10Z — exact 100B input inventory
+
+- `/rav/datakit-6854-100b-inventory-v2-20260724` succeeded.
+- Exact input size: 115 sources, 768 parquet shards, 103,716,988 documents,
+  and 256,440,051,494 compressed parquet bytes.
+- Inventory artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-100b-20260724-v1/inventory.json`.
+- The launcher is pinned in treatment commit `97e1c719a` and baseline commit
+  `e463145bd`. Its artifact-version guard rejects a treatment invocation on
+  v2 code or a baseline invocation on v3 code.
+- The treatment requires DupeKit source-build mode because the published
+  native wheel does not yet export `NgramKind`. The canonical
+  `scripts/rust_mode.py dev` edits remain uncommitted and will be bundled only
+  into treatment jobs. The local host lacks `cc`; the CoreWeave task image
+  built the same source successfully in the earlier smoke.
