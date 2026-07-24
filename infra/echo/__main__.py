@@ -7,7 +7,7 @@ Declares the `context` database on the shared `marin-metadata` Cloud SQL instanc
 (infra/cloudsql owns the instance), its Cloud SQL IAM database users, and the `echo-sync`
 scheduled Cloud Run job that keeps the corpus mirror current (sync/main.py).
 
-Access is IAM, not passwords: the `eng-all@openathena.ai` group reads the corpus and
+Access is IAM, not passwords: the `echo@openathena.ai` group reads the corpus and
 appends to the logbook, and the sync job's service account writes `chunks`/`sync_state`.
 Every principal authenticates through the Cloud SQL connector with a short-lived OAuth
 token, so no database password exists. Table grants are applied by migrate.py (see
@@ -25,7 +25,7 @@ INSTANCE = "marin-metadata"
 CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "context"
 # Google group whose members read the corpus and append to work_log, via IAM group auth.
-AGENTS_GROUP = "eng-all@openathena.ai"
+AGENTS_GROUP = "echo@openathena.ai"
 # The Cloud Run runtime service accounts (created by their components as <name>@<project>).
 SYNC_SA = f"echo-sync@{PROJECT}.iam.gserviceaccount.com"
 API_SA = f"echo-api@{PROJECT}.iam.gserviceaccount.com"

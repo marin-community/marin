@@ -19,17 +19,23 @@ Two ways in:
   OpenAPI-documented HTTP interface (`/search`, `/grep`, `/chunks/{id}`, `/work_log`,
   `POST /work_log`; see `/docs`). It holds the single database identity and the query
   embedding model — kept warm on one always-on instance — so callers reach the corpus over
-  HTTP through IAP without their own database grants. Admitted to the `eng-all@openathena.ai`
+  HTTP through IAP without their own database grants. Admitted to the `echo@openathena.ai`
   group.
 - **Direct SQL** — the `context-search` and `work-log` skills (`.agents/skills/`) wrap
   `scripts/context_search.py` and `scripts/work_log.py`, which connect to the database
   directly via IAM for callers who prefer a CLI over the service.
 
-Access is Cloud SQL IAM, not passwords. The `eng-all@openathena.ai` group is registered
+Access is Cloud SQL IAM, not passwords. The `echo@openathena.ai` group is registered
 as an IAM database user and granted corpus read + logbook append; members connect as their
 own ADC identity through the connector with a short-lived token — no per-user setup, no
 secret. The `echo-sync` job writes as its own service account the same way. `__main__.py`
 owns the IAM users and their login roles (`roles/cloudsql.instanceUser` + `.client`).
+
+Nested groups: the API path resolves them (IAP is IAM, which is transitive, and the
+service uses its own database identity), so a group nested inside `echo@openathena.ai`
+reaches `echo-api`. The direct-SQL path does not — Cloud SQL database group authentication
+is documented for direct members only — so principals that need the CLIs must be direct
+members of `echo@openathena.ai`.
 
 Tables live in `schema.py` and are applied with `migrate.py`, which grants the IAM users;
 run it after `pulumi up` on a fresh database. `migrate.py` connects as `pulumi_db_admin`
