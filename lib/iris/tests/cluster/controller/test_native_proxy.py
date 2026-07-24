@@ -175,6 +175,38 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
         threads.stop()
 
 
+def test_native_listener_preserves_direct_controller_auth_without_trusting_forwarded_request(
+    make_controller,
+) -> None:
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
+        cluster_name="native-controller-auth-test",
+    )
+    controller = make_controller(
+        host="127.0.0.1",
+        port=0,
+        auth=auth,
+    )
+    controller.start()
+
+    direct = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={"content-type": "application/json"},
+    )
+    forwarded = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
+
+    assert direct.status_code == 200
+    assert forwarded.status_code == 401
+
+
 def test_native_listener_owns_endpoint_access_policy() -> None:
     threads = ThreadContainer()
     try:

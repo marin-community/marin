@@ -182,6 +182,14 @@ impl NativeVerifier {
         })
     }
 
+    pub(crate) fn trusts_direct_peer(&self, peer_ip: IpAddr) -> bool {
+        peer_ip.is_loopback()
+            || self
+                .trusted_networks
+                .iter()
+                .any(|network| network.contains(&peer_ip))
+    }
+
     pub async fn verify_request(
         &self,
         headers: &HeaderMap,
@@ -211,13 +219,7 @@ impl NativeVerifier {
             };
             return self.cache_result(key, verified);
         }
-        if direct_connection
-            && (peer_ip.is_loopback()
-                || self
-                    .trusted_networks
-                    .iter()
-                    .any(|network| network.contains(&peer_ip)))
-        {
+        if direct_connection && self.trusts_direct_peer(peer_ip) {
             return VerifyOutcome::Anonymous;
         }
         if matches!(

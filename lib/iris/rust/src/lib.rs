@@ -476,8 +476,15 @@ fn remove_internal_headers(headers: &mut HeaderMap) {
     }
 }
 
-fn prepare_public_headers(headers: &mut HeaderMap, peer: SocketAddr) {
+fn prepare_public_headers(
+    headers: &mut HeaderMap,
+    peer: SocketAddr,
+    preserve_direct_connection: bool,
+) {
     remove_internal_headers(headers);
+    if preserve_direct_connection {
+        return;
+    }
     if !headers.contains_key(&X_FORWARDED_FOR) {
         headers.insert(
             X_FORWARDED_FOR,
@@ -1084,13 +1091,21 @@ async fn ingress(
     mut request: Request,
 ) -> Response<Body> {
     let direct_connection = !request.headers().contains_key(&X_FORWARDED_FOR);
-    prepare_public_headers(request.headers_mut(), peer);
+    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
+        || proxy_subdomain(request.headers()).is_some();
+    // Python must distinguish a direct trusted caller from an untrusted public
+    // caller that merely reaches it through this listener's loopback socket.
+    // Preserve directness only after Rust independently checks the original
+    // transport peer against the same loopback/CIDR policy. Every other request
+    // carries X-Forwarded-For, so Python refuses network-location auth and falls
+    // through to its token/IAP layers.
+    let preserve_direct_connection =
+        !proxy_request && direct_connection && state.verifier.trusts_direct_peer(peer.ip());
+    prepare_public_headers(request.headers_mut(), peer, preserve_direct_connection);
     if request.uri().path() == DECISION_PATH {
         return error_response(StatusCode::NOT_FOUND, "route not found");
     }
 
-    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
-        || proxy_subdomain(request.headers()).is_some();
     if proxy_request {
         match native_decision(
             &state,
