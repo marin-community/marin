@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -566,6 +569,83 @@ def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pyte
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(dropped) == 0
+
+
+def test_fixed_a2a_rotation_and_gather_dispatch_match_monolithic():
+    """Rotation (SCALE_A2A_ROTATE) and gather dispatch must match the monolithic fixed a2a.
+
+    Checks forward outputs, all four gradients at rtol=atol=1e-5, and identical dropped-token
+    counts (capacity forces nonzero drops) on an EP8 mesh. Runs in a fresh 8-CPU-device
+    interpreter because the XLA device count is process-global.
+    """
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["SCALE_A2A_NO_BARRIER"] = "1"
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core
+
+        EP, NUM_EXPERTS, TOKENS, TOPK, HIDDEN, INTER = 8, 16, 128, 2, 16, 12
+        mesh = Mesh(np.array(jax.devices()).reshape(EP), ("expert",), axis_types=(AxisType.Explicit,))
+        kx, ksel, kcw, kw13, kw2 = jax.random.split(jax.random.key(7), 5)
+        x = jax.random.normal(kx, (TOKENS, HIDDEN), dtype=jnp.float32)
+        logits = jax.random.normal(ksel, (TOKENS, NUM_EXPERTS)) + jnp.linspace(0, 2.0, NUM_EXPERTS)
+        _, selected = jax.lax.top_k(logits, TOPK)  # skew forces bucket overflow
+        selected = selected.astype(jnp.int32)
+        combine_w = jax.nn.softmax(jax.random.normal(kcw, (TOKENS, TOPK)), axis=-1)
+        w13 = jax.random.normal(kw13, (NUM_EXPERTS, HIDDEN, 2 * INTER)) * 0.05
+        w2 = jax.random.normal(kw2, (NUM_EXPERTS, INTER, HIDDEN)) * 0.05
+
+        def kernel(x, sel, cw, w13, w2):
+            return _fixed_a2a_core(
+                x, sel, cw, w13, w2, activation_fn=jax.nn.silu, num_experts=NUM_EXPERTS, capacity_factor=1.0
+            )
+
+        sharded = jax.shard_map(
+            kernel,
+            mesh=mesh,
+            in_specs=(P("expert"),) * 5,
+            out_specs=(P("expert"), P()),
+            check_vma=False,
+        )
+
+        def loss_fn(x, cw, w13, w2, sel):
+            out, dropped = sharded(x, sel, cw, w13, w2)
+            probe = jnp.cos(jnp.arange(out.size, dtype=out.dtype)).reshape(out.shape)
+            return jnp.sum(out * probe), (out, dropped)
+
+        def run():
+            with jax.set_mesh(mesh):
+                args = [
+                    jax.device_put(a, NamedSharding(mesh, P("expert")))
+                    for a in (x, combine_w, w13, w2, selected)
+                ]
+                out = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3), has_aux=True)(*args)
+            return jax.device_get(out)
+
+        (_, (ref_out, ref_dropped)), ref_grads = run()
+        assert int(ref_dropped) > 0, "want nonzero drops to exercise overflow parity"
+        for gather, rotate in (("0", "2"), ("0", "8"), ("1", "0"), ("1", "8")):
+            os.environ["SCALE_A2A_GATHER_DISPATCH"] = gather
+            os.environ["SCALE_A2A_ROTATE"] = rotate
+            jax.clear_caches()
+            (_, (out, dropped)), grads = run()
+            tag = f"gather={gather} rotate={rotate}"
+            np.testing.assert_allclose(out, ref_out, rtol=1e-5, atol=1e-5, err_msg=tag)
+            assert int(dropped) == int(ref_dropped), tag
+            for name, g, rg in zip(("dx", "dcw", "dw13", "dw2"), grads, ref_grads):
+                np.testing.assert_allclose(g, rg, rtol=1e-5, atol=1e-5, err_msg=f"{tag} grad {name}")
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
