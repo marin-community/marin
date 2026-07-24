@@ -350,7 +350,12 @@ class HarborEvaluator(Evaluator):
             except ValueError:
                 logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
-        dataset_path = materialize_harbor_dataset(dataset, version, workdir)
+        dataset_path = materialize_harbor_dataset(
+            dataset,
+            version,
+            workdir,
+            hf_token=os.environ.get("HF_TOKEN"),
+        )
         if dataset_path is None:
             # No registry_url/registry_path means the default remote registry.
             dataset_config = DatasetConfig(

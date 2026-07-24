@@ -64,22 +64,26 @@ def test_suite_level_agent_kwargs_override_model_level():
     # A model-level agent kwarg is the default; a suite that sets the same key wins.
     spec = LaunchSpec(
         model="qwen3-8b",
-        evals=("tb2-override",),
+        evals=("tb2-lite",),
         platform=Platform.TPU,
         accelerator=None,
         limit=None,
         records_prefix="gs://bucket/runs",
         cluster="marin",
     )
-    EVALS["tb2-override"] = replace(
-        EVALS["tb2-lite"],
-        name="tb2-override",
-        config=replace(EVALS["tb2-lite"].config, agent_kwargs={"extra_body": "SUITE"}),
+    (plan,) = plan_runs(spec)
+    definition = plan.suite
+    assert isinstance(definition, HarborDefinition)
+    override_plan = replace(
+        plan,
+        eval_key="tb2-override",
+        suite=replace(
+            definition,
+            name="tb2-override",
+            config=replace(definition.config, agent_kwargs={"extra_body": "SUITE"}),
+        ),
     )
-    try:
-        params = _group_params(plan_runs(spec), spec, _provenance(), "tester")
-        (run,) = params.runs
-        assert isinstance(run, ResolvedHarborRun)
-        assert run.config.agent_kwargs["extra_body"] == "SUITE"
-    finally:
-        del EVALS["tb2-override"]
+    params = _group_params([override_plan], spec, _provenance(), "tester")
+    (run,) = params.runs
+    assert isinstance(run, ResolvedHarborRun)
+    assert run.config.agent_kwargs["extra_body"] == "SUITE"

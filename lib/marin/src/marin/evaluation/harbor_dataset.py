@@ -3,13 +3,22 @@
 
 """Resolve Harbor datasets that are stored as local or Hugging Face task directories."""
 
-import os
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
+_HF_URL_PREFIX = "hf://"
+_HF_PREFIX = "hf:"
+_HF_DEFAULT_REVISION = "hf"
 
-def materialize_harbor_dataset(dataset: str, revision: str, workdir: Path) -> Path | None:
+
+def materialize_harbor_dataset(
+    dataset: str,
+    revision: str,
+    workdir: Path,
+    *,
+    hf_token: str | None,
+) -> Path | None:
     """Return a local Harbor task directory, or ``None`` for a registry-backed dataset.
 
     ``hf://org/repo`` and ``hf:org/repo`` identify Hugging Face dataset repositories whose root
@@ -19,15 +28,15 @@ def materialize_harbor_dataset(dataset: str, revision: str, workdir: Path) -> Pa
     """
     dataset_path = Path(dataset).expanduser()
     is_hugging_face = (
-        dataset.startswith("hf://")
-        or dataset.startswith("hf:")
-        or (revision == "hf" and "/" in dataset and not dataset_path.exists())
+        dataset.startswith(_HF_URL_PREFIX)
+        or dataset.startswith(_HF_PREFIX)
+        or (revision == _HF_DEFAULT_REVISION and "/" in dataset and not dataset_path.exists())
     )
     if is_hugging_face:
-        if dataset.startswith("hf://"):
-            repo_id = dataset.removeprefix("hf://")
-        elif dataset.startswith("hf:"):
-            repo_id = dataset.removeprefix("hf:")
+        if dataset.startswith(_HF_URL_PREFIX):
+            repo_id = dataset.removeprefix(_HF_URL_PREFIX)
+        elif dataset.startswith(_HF_PREFIX):
+            repo_id = dataset.removeprefix(_HF_PREFIX)
         else:
             repo_id = dataset
         local_dir = workdir / "hf_dataset"
@@ -36,10 +45,10 @@ def materialize_harbor_dataset(dataset: str, revision: str, workdir: Path) -> Pa
             snapshot_download(
                 repo_id=repo_id,
                 repo_type="dataset",
-                revision=None if revision == "hf" else revision,
+                revision=None if revision == _HF_DEFAULT_REVISION else revision,
                 local_dir=str(local_dir),
                 cache_dir=str(workdir / "hf_cache"),
-                token=os.environ.get("HF_TOKEN", False),
+                token=hf_token or False,
             )
         )
         gitattributes = root / ".gitattributes"

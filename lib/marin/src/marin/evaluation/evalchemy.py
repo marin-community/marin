@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.evalchemy_client import CONFIG_ENV_KEY
@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
 _CHILD_WAIT_SLICE_SECONDS = 60.0
-_PROPAGATED_ENV_KEYS = ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT")
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy_client.py"
 
 
@@ -72,8 +71,8 @@ def job_log_tail(job: Job, limit: int = LOG_TAIL_LINES) -> tuple[str, ...]:
     return tuple(entry.data.rstrip("\n") for entry in entries[-limit:])
 
 
-def _propagated_env(**extra: str) -> dict[str, str]:
-    env = {key: os.environ[key] for key in _PROPAGATED_ENV_KEYS if os.environ.get(key)}
+def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
+    env = dict(env_vars)
     env.update(extra)
     return env
 
@@ -148,17 +147,10 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
 
 
 def _verify_durable_artifacts(output_dir: str) -> None:
-    fs, path = url_to_fs(output_dir)
-    objects = fs.find(path)
-    results = [
-        item
-        for item in objects
-        if item.rsplit("/", 1)[-1].startswith("results_") and item.endswith(".json")
-    ]
+    results = StoragePath(prefix_join(output_dir, "**/results_*.json")).glob()
     logger.info(
-        "Durable Evalchemy artifacts under %s: %d object(s), %d result file(s)",
+        "Durable Evalchemy artifacts under %s: %d result file(s)",
         output_dir,
-        len(objects),
         len(results),
     )
     if not results:
@@ -170,6 +162,7 @@ def _submit_evalchemy_child(
     config: EvalchemyRunConfig,
     output_dir: str,
     observer: InferenceObserver | None,
+    env_vars: Mapping[str, str],
 ) -> str:
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
@@ -184,7 +177,8 @@ def _submit_evalchemy_child(
             disk=config.runtime.disk,
         ),
         environment=EnvironmentSpec(
-            env_vars=_propagated_env(
+            env_vars=_child_env(
+                env_vars,
                 JAX_PLATFORMS="cpu",
                 HF_ALLOW_CODE_EVAL="1",
                 OPENAI_API_KEY="local-endpoint",
@@ -234,13 +228,14 @@ def run_evalchemy(
     output_dir: str,
     *,
     observer: InferenceObserver | None = None,
+    env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
     """Run Evalchemy against ``model`` and validate its durable result tree."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _submit_evalchemy_child(model, config, output_dir, observer)
+    eval_job = _submit_evalchemy_child(model, config, output_dir, observer, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
         parquets = export_lm_eval_samples(output_dir)

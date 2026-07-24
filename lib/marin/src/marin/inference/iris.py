@@ -179,11 +179,12 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
         select_tensor_parallel_size,
     )
 
-    model_path = model.model_path or resolve_model_path(model.model, iris.cache_ttl_days)
+    model_path = model.model_path or resolve_model_path(model.model, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
     if tensor_parallel_size is None:
-        num_attention_heads, num_key_value_heads = read_attention_heads(model_path)
+        config_revision = model.revision if model_path == model.model else None
+        num_attention_heads, num_key_value_heads = read_attention_heads(model_path, config_revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
     return replace(model, model_path=model_path, tensor_parallel_size=tensor_parallel_size), num_chips
 

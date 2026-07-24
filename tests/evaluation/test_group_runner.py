@@ -104,7 +104,7 @@ def _patch_runtime(monkeypatch, session: _Session, records: list):
     monkeypatch.setattr("marin.evaluation.group_runner.remote_inference", inference)
     monkeypatch.setattr(
         "marin.evaluation.group_runner.resolve_inference_launch",
-        lambda config: SimpleNamespace(
+        lambda config, env_vars: SimpleNamespace(
             model=None,
             engine=None,
             iris=None,
@@ -133,7 +133,7 @@ def test_endpoint_move_retries_once_and_records_success(monkeypatch):
     _patch_runtime(monkeypatch, session, records)
     calls = 0
 
-    def evalchemy(model, config, output_dir, observer):
+    def evalchemy(model, config, output_dir, observer, env_vars):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -159,7 +159,7 @@ def test_eval_failure_is_recorded_and_later_runs_continue(monkeypatch):
     records = []
     _patch_runtime(monkeypatch, _Session(), records)
 
-    def evalchemy(model, config, output_dir, observer):
+    def evalchemy(model, config, output_dir, observer, env_vars):
         if config.name == "one":
             raise EvalPipelineError(
                 "bad answer",

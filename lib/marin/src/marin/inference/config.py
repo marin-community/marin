@@ -36,6 +36,7 @@ class VllmSource(StrEnum):
 @dataclass(frozen=True)
 class ServedModelConfig:
     model: str
+    revision: str | None = None
     served_model_name: str | None = None
     model_path: str | None = None
     tokenizer: str | None = None

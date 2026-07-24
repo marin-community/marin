@@ -27,6 +27,7 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
         "hf://DCAgent2/terminal_bench_2",
         "main",
         tmp_path / "workdir",
+        hf_token=None,
     )
 
     assert path == Path(snapshot)
@@ -69,7 +70,7 @@ def test_run_harbor_derives_url_and_served_name_from_running_model(tmp_path, mon
         )
 
     monkeypatch.setattr("marin.evaluation.harbor_runner._run_driver", run_driver)
-    monkeypatch.setattr("marin.evaluation.harbor_runner.materialize_harbor_dataset", lambda *args: None)
+    monkeypatch.setattr("marin.evaluation.harbor_runner.materialize_harbor_dataset", lambda *args, **kwargs: None)
     model = RunningModel(
         endpoint=OpenAIEndpoint(
             base_url="https://iris.example/proxy/t/token/serve.model/v1",
@@ -81,6 +82,7 @@ def test_run_harbor_derives_url_and_served_name_from_running_model(tmp_path, mon
         model,
         HarborRunConfig(dataset=f"toy-{tmp_path.name}", version="1.0", agent="terminus-2"),
         str(tmp_path),
+        hf_token=None,
     )
 
     assert captured["model_name"] == "hosted_vllm/qwen3-0.6b"

@@ -98,9 +98,7 @@ def _select_gpu(
                     target_cluster=target_cluster or policy.gpu_clusters[gpu_type],
                 )
             count *= 2
-    raise ValueError(
-        f"no GPU slice fits {hbm_gb} GB HBM at {policy.utilization:.0%} utilization"
-    )
+    raise ValueError(f"no GPU slice fits {hbm_gb} GB HBM at {policy.utilization:.0%} utilization")
 
 
 def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
@@ -148,9 +146,7 @@ def select_accelerator(
             target_cluster=serve.target_cluster or policy.gpu_clusters.get(gpu_type),
         )
     if serve.hbm_gb is None:
-        raise ValueError(
-            f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice"
-        )
+        raise ValueError(f"model {model.name!r} sets neither serve.hbm_gb nor serve.fixed_gpu; cannot size a slice")
     if platform is Platform.GPU:
         return _select_gpu(serve.hbm_gb, serve.target_cluster, policy)
     if serve.gpu_only:

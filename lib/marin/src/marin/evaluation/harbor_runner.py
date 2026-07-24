@@ -240,7 +240,13 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
             upload_to_gcs(str(trial_dir), prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
 
 
-def run_harbor(model: RunningModel, config: HarborRunConfig, output_dir: str) -> HarborRunResult:
+def run_harbor(
+    model: RunningModel,
+    config: HarborRunConfig,
+    output_dir: str,
+    *,
+    hf_token: str | None,
+) -> HarborRunResult:
     """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
 
     Serving is the caller's job. Harbor derives both the OpenAI URL and served-model identity from
@@ -252,7 +258,12 @@ def run_harbor(model: RunningModel, config: HarborRunConfig, output_dir: str) ->
     results_dir = workdir / "harbor_results"
     results_dir.mkdir(parents=True, exist_ok=True)
     job_dir = results_dir / job_name
-    dataset_path = materialize_harbor_dataset(config.dataset, config.version, workdir)
+    dataset_path = materialize_harbor_dataset(
+        config.dataset,
+        config.version,
+        workdir,
+        hf_token=hf_token,
+    )
 
     if is_remote_path(output_dir):
         restored = _restore_completed_trials(output_dir, job_dir)

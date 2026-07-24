@@ -100,6 +100,19 @@ def test_resolve_model_path_passthrough(model, ttl_days):
     assert resolve_model_path(model, ttl_days) == model
 
 
+def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
+    observed: list[str] = []
+
+    def resolve(model: str, **kwargs) -> str:
+        observed.append(model)
+        return "gs://cache/pinned-model"
+
+    monkeypatch.setattr("marin.inference.model_preparation.resolve_cached_model_path", resolve)
+
+    assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
+    assert observed == ["Qwen/Qwen3-0.6B@abc123"]
+
+
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
     # The worker install folds the requested extras and the launching CLI's exact version
     # (for cloudpickle compat) into the pip spec; vLLM stays out — it comes from uvx.

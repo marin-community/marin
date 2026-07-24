@@ -4,6 +4,7 @@
 """Run a resolved evaluation group against one shared inference session."""
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from fray.iris_backend import IrisJobHandle
@@ -17,6 +18,7 @@ from marin.evaluation.definitions import (
     ResolvedEvalRun,
     ResolvedHarborRun,
 )
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy import (
     EndpointMovedError,
     EvalPipelineError,
@@ -40,6 +42,7 @@ from marin.inference.types import EndpointRoute, RunningModel
 logger = logging.getLogger(__name__)
 
 _ENDPOINT_RESTART_TIMEOUT = 2400.0
+_SERVE_ROLE = "serve"
 
 
 @dataclass(frozen=True)
@@ -103,16 +106,20 @@ def _record(
 def _serve_jobs(session: RemoteInferenceSession) -> dict[str, str]:
     jobs: dict[str, str] = {}
     for index, job in enumerate(session.jobs):
-        role = "serve" if index == 0 else f"serve-{index}"
+        role = _serve_role(index)
         jobs[role] = str(job.job_id)
     return jobs
+
+
+def _serve_role(index: int) -> str:
+    return _SERVE_ROLE if index == 0 else f"{_SERVE_ROLE}-{index}"
 
 
 def _startup_diagnostics(exc: RemoteInferenceStartupError) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     jobs: dict[str, str] = {}
     tails: dict[str, tuple[str, ...]] = {}
     for index, handle in enumerate(exc.jobs):
-        role = "serve" if index == 0 else f"serve-{index}"
+        role = _serve_role(index)
         jobs[role] = str(handle.job_id)
         if isinstance(handle, IrisJobHandle):
             tails[role] = job_log_tail(handle.iris_job)
@@ -124,7 +131,7 @@ def _session_tail(session: RemoteInferenceSession) -> dict[str, tuple[str, ...]]
     for index, handle in enumerate(session.jobs):
         if not isinstance(handle, IrisJobHandle):
             continue
-        role = "serve" if index == 0 else f"serve-{index}"
+        role = _serve_role(index)
         tails[role] = job_log_tail(handle.iris_job)
     return tails
 
@@ -143,23 +150,29 @@ def _run_evalchemy_once(
     session: RemoteInferenceSession,
     model: RunningModel,
     run: ResolvedEvalchemyRun,
+    env_vars: Mapping[str, str],
 ):
     return run_evalchemy(
         model,
         run.config,
         run.identity.output_dir,
         observer=session,
+        env_vars=env_vars,
     )
 
 
-def _run_evalchemy_with_restart(session: RemoteInferenceSession, run: ResolvedEvalchemyRun):
+def _run_evalchemy_with_restart(
+    session: RemoteInferenceSession,
+    run: ResolvedEvalchemyRun,
+    env_vars: Mapping[str, str],
+):
     model = session.resolve_model()
     try:
-        return _run_evalchemy_once(session, model, run)
+        return _run_evalchemy_once(session, model, run, env_vars)
     except EndpointMovedError:
         logger.info("eval %s: inference moved mid-run; retrying once", run.identity.eval_ref.name)
         model = session.wait_model(_ENDPOINT_RESTART_TIMEOUT)
-        return _run_evalchemy_once(session, model, run)
+        return _run_evalchemy_once(session, model, run, env_vars)
 
 
 def _record_unstarted(
@@ -184,32 +197,65 @@ def _record_unstarted(
         )
 
 
+def _capability_model(
+    group: EvalGroupParams,
+    session: RemoteInferenceSession,
+) -> RunningModel | None:
+    if not any(isinstance(run, ResolvedHarborRun) for run in group.runs):
+        return None
+    assert group.capability_origin is not None
+    return session.resolve_model(
+        EndpointRoute.CAPABILITY,
+        public_origin=group.capability_origin,
+    )
+
+
+def _run_mechanism(
+    session: RemoteInferenceSession,
+    run: ResolvedEvalRun,
+    capability_model: RunningModel | None,
+    env_vars: Mapping[str, str],
+) -> tuple[dict[str, dict[str, float]], dict[str, str]]:
+    if isinstance(run, ResolvedEvalchemyRun):
+        outcome = _run_evalchemy_with_restart(session, run, env_vars)
+        metrics = outcome.result.task_metrics()
+        if not metrics:
+            raise RuntimeError(f"eval finished but no task metrics were readable under {run.identity.output_dir!r}")
+        return metrics, outcome.jobs
+
+    assert capability_model is not None
+    result = run_harbor(
+        capability_model,
+        run.config,
+        run.identity.output_dir,
+        hf_token=env_vars.get("HF_TOKEN"),
+    )
+    if not result.total_trials:
+        raise RuntimeError(f"Harbor eval finished with no trials under {run.identity.output_dir!r}")
+    return result.task_metrics(), {}
+
+
 def _run_ready_group(
     group: EvalGroupParams,
     session: RemoteInferenceSession,
     base_jobs: dict[str, str],
+    env_vars: Mapping[str, str],
 ) -> list[str]:
     paths: list[str] = []
     failed: list[str] = []
     serve_jobs = _serve_jobs(session)
-    capability_model: RunningModel | None = None
-    if any(isinstance(run, ResolvedHarborRun) for run in group.runs):
-        assert group.capability_origin is not None
-        try:
-            capability_model = session.resolve_model(
-                EndpointRoute.CAPABILITY,
-                public_origin=group.capability_origin,
-            )
-        except Exception as exc:
-            _record_unstarted(
-                group,
-                group.runs,
-                exc,
-                base_jobs | serve_jobs,
-                _session_tail(session),
-                paths,
-            )
-            raise RuntimeError("failed to create the Harbor capability route") from exc
+    try:
+        capability_model = _capability_model(group, session)
+    except Exception as exc:
+        _record_unstarted(
+            group,
+            group.runs,
+            exc,
+            base_jobs | serve_jobs,
+            _session_tail(session),
+            paths,
+        )
+        raise RuntimeError("failed to create the Harbor capability route") from exc
 
     for index, run in enumerate(group.runs):
         jobs = base_jobs | serve_jobs
@@ -219,20 +265,8 @@ def _run_ready_group(
         error: str | None = None
         try:
             session.check_alive()
-            if isinstance(run, ResolvedEvalchemyRun):
-                outcome = _run_evalchemy_with_restart(session, run)
-                jobs |= outcome.jobs
-                metrics = outcome.result.task_metrics()
-                if not metrics:
-                    raise RuntimeError(
-                        f"eval finished but no task metrics were readable under {run.identity.output_dir!r}"
-                    )
-            else:
-                assert capability_model is not None
-                result = run_harbor(capability_model, run.config, run.identity.output_dir)
-                metrics = result.task_metrics()
-                if not result.total_trials:
-                    raise RuntimeError(f"Harbor eval finished with no trials under {run.identity.output_dir!r}")
+            metrics, mechanism_jobs = _run_mechanism(session, run, capability_model, env_vars)
+            jobs |= mechanism_jobs
         except Exception as exc:
             status = _pipeline_status(exc) if isinstance(run, ResolvedEvalchemyRun) else RunStatus.FAILED
             error = _error_text(exc)
@@ -256,8 +290,7 @@ def _run_ready_group(
                     paths,
                 )
                 failed.extend(
-                    f"{rest.identity.eval_ref.name} ({RunStatus.INFRA_FAILED.value})"
-                    for rest in group.runs[index + 1 :]
+                    f"{rest.identity.eval_ref.name} ({RunStatus.INFRA_FAILED.value})" for rest in group.runs[index + 1 :]
                 )
                 break
 
@@ -276,7 +309,8 @@ def run_eval_group(group: EvalGroupParams) -> list[str]:
     if not group.runs:
         raise ValueError("an evaluation group requires at least one run")
     base_jobs = {"orchestrator": str(iris_ctx().job_id)}
-    inference = resolve_inference_launch(group.serving)
+    runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    inference = resolve_inference_launch(group.serving, runtime_env)
     try:
         with remote_inference(
             inference.model,
@@ -286,7 +320,7 @@ def run_eval_group(group: EvalGroupParams) -> list[str]:
             broker=inference.broker,
             endpoint_access=inference.endpoint_access,
         ) as session:
-            return _run_ready_group(group, session, base_jobs)
+            return _run_ready_group(group, session, base_jobs, runtime_env)
     except RemoteInferenceStartupError as exc:
         jobs, tails = _startup_diagnostics(exc)
         paths: list[str] = []

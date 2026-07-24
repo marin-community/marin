@@ -5,7 +5,7 @@
 
 import json
 import logging
-import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from fray.types import ResourceConfig, create_environment
@@ -17,6 +17,7 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
     ModelConfig,
     ServeBackend,
+    has_vllm_option,
     resolve_serve_variant,
     serve_config_vllm_args,
 )
@@ -35,7 +36,6 @@ logger = logging.getLogger(__name__)
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
-_PROPAGATED_ENV_KEYS = ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT")
 
 
 @dataclass(frozen=True)
@@ -91,15 +91,8 @@ class EvaluationServingConfig:
     model: str
     tokenizer: str
     spec: ServeSpec
+    revision: str | None = None
     served_model_name: str | None = None
-
-
-def _propagated_env() -> dict[str, str]:
-    return {key: os.environ[key] for key in _PROPAGATED_ENV_KEYS if os.environ.get(key)}
-
-
-def _has_vllm_option(args: tuple[str, ...], option: str) -> bool:
-    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
 
 def _auto_serve_overrides_from_config(
@@ -134,7 +127,7 @@ def _auto_serve_overrides_from_config(
 
     merged = list(existing_extra_args)
     for option, value in derived:
-        if not _has_vllm_option(existing_extra_args, option):
+        if not has_vllm_option(existing_extra_args, option):
             merged.extend((option, value))
 
     native_max_model_len = text_config.get("max_position_embeddings") or config.get("max_position_embeddings")
@@ -147,10 +140,12 @@ def auto_serve_overrides(
     model: str,
     max_model_len: int | None,
     existing_extra_args: tuple[str, ...] = (),
+    *,
+    revision: str | None = None,
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect an HF config and fill portable vLLM defaults."""
     try:
-        with open(hf_hub_download(model, "config.json")) as handle:
+        with open(hf_hub_download(model, "config.json", revision=revision)) as handle:
             config = json.load(handle)
     except (OSError, ValueError) as exc:
         logger.warning("Could not inspect config.json for %s; using explicit serving options: %s", model, exc)
@@ -163,6 +158,8 @@ def build_inference_launch(
     tokenizer: str,
     spec: ServeSpec,
     *,
+    env_vars: Mapping[str, str],
+    revision: str | None = None,
     served_model_name: str | None = None,
 ) -> InferenceLaunch:
     """Resolve ``spec`` into the shared inference layer's model, engine, and Iris configs."""
@@ -173,6 +170,7 @@ def build_inference_launch(
             model,
             spec.max_model_len,
             spec.vllm_extra_args,
+            revision=revision,
         )
 
     if spec.gpu_count is not None:
@@ -194,11 +192,11 @@ def build_inference_launch(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=_propagated_env(),
+                env_vars=dict(env_vars),
             )
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["gpu"], env_vars=_propagated_env())
+            environment = create_environment(extras=["gpu"], env_vars=dict(env_vars))
     else:
         assert spec.tpu_type is not None
         resources = ResourceConfig.with_tpu(
@@ -214,14 +212,15 @@ def build_inference_launch(
                 max_num_batched_tokens=spec.max_num_batched_tokens,
                 extra_args=(*vllm_extra_args, *_QUIET_VLLM_ARGS),
             )
-            environment = create_environment(extras=["tpu", "vllm"], env_vars=_propagated_env())
+            environment = create_environment(extras=["tpu", "vllm"], env_vars=dict(env_vars))
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["tpu"], env_vars=_propagated_env())
+            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
 
     return InferenceLaunch(
         model=ServedModelConfig(
             model=model,
+            revision=revision,
             served_model_name=served_model_name,
             tokenizer=tokenizer,
             dtype=spec.dtype,
@@ -241,12 +240,17 @@ def build_inference_launch(
     )
 
 
-def resolve_inference_launch(config: EvaluationServingConfig) -> InferenceLaunch:
+def resolve_inference_launch(
+    config: EvaluationServingConfig,
+    env_vars: Mapping[str, str],
+) -> InferenceLaunch:
     """Resolve a worker payload into shared inference-layer inputs."""
     return build_inference_launch(
         config.model,
         config.tokenizer,
         config.spec,
+        env_vars=env_vars,
+        revision=config.revision,
         served_model_name=config.served_model_name,
     )
 

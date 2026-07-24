@@ -51,3 +51,20 @@ def test_harbor_group_preserves_public_served_identity(monkeypatch):
     assert run.identity.eval_ref.name == "tb2-lite"
     assert run.config.dataset == "hf://DCAgent2/terminal_bench_2"
     assert run.config.task_limit == 1
+
+
+def test_group_threads_model_revision_into_serving():
+    spec = LaunchSpec(
+        model="llama-3.1-8b-base",
+        evals=("mmlu-smoke",),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="gs://bucket/runs",
+        cluster="marin",
+    )
+    provenance = Provenance(git_sha="abc", eval_image="img", launch_host="host")
+
+    params = _group_params(plan_runs(spec), spec, provenance, "tester")
+
+    assert params.serving.revision == "d04e592"

@@ -56,6 +56,7 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import EvaluationServingConfig
 from rigging.config_discovery import resolve_cluster_config
+from rigging.filesystem import prefix_join
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS
@@ -226,7 +227,7 @@ def _group_params(
     runs: list[ResolvedEvalRun] = []
     for plan in plans:
         run_id = _run_id(plan.model_key, plan.eval_key)
-        output_dir = f"{records_prefix.rstrip('/')}/{run_id}/results"
+        output_dir = prefix_join(records_prefix, f"{run_id}/results")
         identity = EvalRunIdentity(
             run_id=run_id,
             created_at=created_at,
@@ -257,6 +258,7 @@ def _group_params(
             model=first.model.location,
             tokenizer=tokenizer,
             spec=serve,
+            revision=first.model.revision,
             served_model_name=served_model_name,
         ),
         runs=tuple(runs),

@@ -33,6 +33,14 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "VLLM_TPU_SKIP_PRECOMPILE",
 )
 
+# Credentials and W&B metadata propagated from an eval orchestrator into its serve and mechanism children.
+EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
+    "HF_TOKEN",
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_PROJECT",
+)
+
 # The Google Secret Manager / launch-env name for the Daytona eval key.
 DAYTONA_EVAL_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 # The name the Daytona SDK itself reads.

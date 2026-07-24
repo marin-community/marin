@@ -11,9 +11,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from fray.cluster import ResourceConfig
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join
 
-from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_result import (
     EvalchemyResult,
     EvalReport,
@@ -41,7 +41,6 @@ from marin.execution.remote import remote
 from marin.inference.iris import remote_inference
 from marin.inference.vllm_server import validate_vllm_mode_env
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class ServedEvalchemyRun:
 
 def _durable_output_dir(output_dir: str | None, run_id: str) -> str:
     if output_dir and "://" in output_dir:
-        return output_dir.rstrip("/")
+        return str(StoragePath(output_dir))
 
     durable = prefix_join(marin_prefix(), f"eval/evalchemy/{run_id}")
     if output_dir:
@@ -94,10 +93,14 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     output_dir = _durable_output_dir(config.out_path, uuid.uuid4().hex[:8])
     tokenizer = config.tokenizer or config.model
     if config.tokenizer is None and "://" in config.model:
-        raise ValueError(
-            f"model {config.model!r} is an object-store path; set tokenizer to an HF tokenizer id"
-        )
-    inference = build_inference_launch(config.model, tokenizer, config.serve)
+        raise ValueError(f"model {config.model!r} is an object-store path; set tokenizer to an HF tokenizer id")
+    runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    inference = build_inference_launch(
+        config.model,
+        tokenizer,
+        config.serve,
+        env_vars=runtime_env,
+    )
     run_config = EvalchemyRunConfig(
         name="eval",
         tasks=config.tasks,
@@ -124,10 +127,22 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
     ) as session:
         model = session.resolve_model()
         try:
-            outcome = run_evalchemy(model, run_config, output_dir, observer=session)
+            outcome = run_evalchemy(
+                model,
+                run_config,
+                output_dir,
+                observer=session,
+                env_vars=runtime_env,
+            )
         except EndpointMovedError:
             model = session.wait_model(_ENDPOINT_RESTART_TIMEOUT)
-            outcome = run_evalchemy(model, run_config, output_dir, observer=session)
+            outcome = run_evalchemy(
+                model,
+                run_config,
+                output_dir,
+                observer=session,
+                env_vars=runtime_env,
+            )
         jobs = {f"serve-{index}" if index else "serve": str(job.job_id) for index, job in enumerate(session.jobs)}
         jobs |= outcome.jobs
     return ServedEvalchemyRun(out_path=output_dir, jobs=jobs)

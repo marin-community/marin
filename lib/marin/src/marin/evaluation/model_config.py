@@ -128,7 +128,7 @@ class ModelConfig:
     agent: AgentConfig = field(default_factory=AgentConfig)
 
 
-def _has_vllm_option(args: tuple[str, ...], option: str) -> bool:
+def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
     """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
     return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
@@ -147,7 +147,7 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     derived: list[str] = []
 
     def add(option: str, *values: str) -> None:
-        if not _has_vllm_option(explicit, option):
+        if not has_vllm_option(explicit, option):
             derived.extend((option, *values))
 
     if serve.trust_remote_code:
@@ -190,7 +190,7 @@ def resolve_serve_variant(serve: ServeConfig, hardware_label: str | None) -> Ser
     return dataclasses.replace(serve, **overrides)
 
 
-def load_model_config(path: str | Path) -> ModelConfig:
+def load_model_config(path: Path) -> ModelConfig:
     """Decode one ``serve/models/<org>/<model>.yaml`` into a :class:`ModelConfig`.
 
     draccus validates the YAML against the dataclass schema, so an unknown field or a mistyped value
@@ -200,14 +200,13 @@ def load_model_config(path: str | Path) -> ModelConfig:
         return draccus.load(ModelConfig, handle)
 
 
-def scan_model_configs(root: str | Path) -> dict[str, ModelConfig]:
+def scan_model_configs(root: Path) -> dict[str, ModelConfig]:
     """Load every ``*.yaml`` under ``root`` into a ``{name: ModelConfig}`` registry.
 
     Files and directories whose names start with ``_`` or ``.`` are skipped (``_patterns.yaml``,
     ``README``-adjacent scratch). A ``name`` collision across two files is an error: the catalog keys
     by ``ModelConfig.name``, so a duplicate would silently shadow one entry.
     """
-    root = Path(root)
     configs: dict[str, ModelConfig] = {}
     for path in sorted(root.rglob("*.yaml")):
         if any(part.startswith(("_", ".")) for part in path.relative_to(root).parts):
