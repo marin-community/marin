@@ -12,6 +12,7 @@ reopened against the full text without copying the corpus.
 
 import argparse
 import bisect
+import hashlib
 import json
 import logging
 import re
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 class DedupAuditData(BaseModel):
     """Paths and exact counters produced by one exhaustive A/B audit."""
 
-    version: str = "v1"
+    version: str = "v2"
     baseline_dedup: str
     treatment_dedup: str
     baseline_minhash: str
@@ -302,6 +303,7 @@ def _variant_record(
         "cluster_id": marker["dup_cluster_id"],
         "is_canonical": bool(marker["is_cluster_canonical"]),
         "raw_chars": len(text),
+        "raw_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "clean_text": clean_text,
         "text_prefix": text[:PREVIEW_CHARS],
         "text_suffix": text[-PREVIEW_CHARS:],
@@ -380,28 +382,25 @@ def _shingles(text: str, kind: Literal["char", "word"]) -> set[str]:
     return {" ".join(words[index : index + NGRAM_SIZE]) for index in range(len(words) - NGRAM_SIZE + 1)}
 
 
-def _set_metrics(left: set[str], right: set[str]) -> tuple[float, float]:
+def _set_metrics(left: set[str], right: set[str]) -> tuple[float, float, float]:
     intersection = len(left & right)
     union = len(left) + len(right) - intersection
     jaccard = intersection / union if union else 1.0
-    shorter_containment = intersection / min(len(left), len(right)) if left and right else 1.0
-    return jaccard, shorter_containment
+    left_containment = intersection / len(left) if left else 1.0
+    right_containment = intersection / len(right) if right else 1.0
+    return jaccard, left_containment, right_containment
 
 
 def _evidence_class(
     *,
-    exact_clean_text: bool,
+    exact_raw_text: bool,
     word_jaccard: float,
-    word_shorter_containment: float,
-    length_ratio: float,
+    canonical_word_containment: float,
+    member_word_containment: float,
 ) -> str:
-    if exact_clean_text:
+    if exact_raw_text:
         return "strong_duplicate"
-    if word_jaccard >= 0.8 and length_ratio >= 0.5:
-        return "strong_duplicate"
-    if word_shorter_containment >= 0.9 and length_ratio >= 0.5:
-        return "strong_duplicate"
-    if word_jaccard <= 0.05 and word_shorter_containment <= 0.15:
+    if word_jaccard <= 0.05 and max(canonical_word_containment, member_word_containment) <= 0.15:
         return "strong_false_positive"
     return "ambiguous"
 
@@ -422,23 +421,39 @@ def _score_cluster(pair_key: str, records: Iterator[dict[str, Any]]) -> Iterator
 
         member_char = _shingles(record["clean_text"], "char")
         member_word = _shingles(record["clean_text"], "word")
-        char_jaccard, char_containment = _set_metrics(canonical_char, member_char)
-        word_jaccard, word_containment = _set_metrics(canonical_word, member_word)
+        char_jaccard, canonical_char_containment, member_char_containment = _set_metrics(
+            canonical_char,
+            member_char,
+        )
+        word_jaccard, canonical_word_containment, member_word_containment = _set_metrics(
+            canonical_word,
+            member_word,
+        )
         max_chars = max(len(canonical["clean_text"]), len(record["clean_text"]))
         length_ratio = min(len(canonical["clean_text"]), len(record["clean_text"])) / max_chars if max_chars else 1.0
+        member_clean_text_contained = record["clean_text"] in canonical["clean_text"]
+        exact_raw_text = record["raw_sha256"] == canonical["raw_sha256"]
         evidence_class = (
             "canonical"
             if record["is_canonical"]
             else _evidence_class(
-                exact_clean_text=canonical["clean_text"] == record["clean_text"],
+                exact_raw_text=exact_raw_text,
                 word_jaccard=word_jaccard,
-                word_shorter_containment=word_containment,
-                length_ratio=length_ratio,
+                canonical_word_containment=canonical_word_containment,
+                member_word_containment=member_word_containment,
             )
         )
         if not record["is_canonical"]:
             counters.pipeline.update_counter(f"audit/drops/{record['variant']}", 1)
             counters.pipeline.update_counter(f"audit/evidence/{record['variant']}/{evidence_class}", 1)
+            if record["source_main_dir"] != canonical["source_main_dir"]:
+                counters.pipeline.update_counter(f"audit/drops/{record['variant']}/cross_source", 1)
+            if record["raw_chars"] > canonical["raw_chars"]:
+                counters.pipeline.update_counter(f"audit/drops/{record['variant']}/member_is_longer", 1)
+            if record["raw_chars"] > TEXT_CAP_CHARS:
+                counters.pipeline.update_counter(f"audit/drops/{record['variant']}/member_text_truncated", 1)
+            if canonical["raw_chars"] > TEXT_CAP_CHARS:
+                counters.pipeline.update_counter(f"audit/drops/{record['variant']}/canonical_text_truncated", 1)
 
         baseline_shared = len(set(canonical["baseline_buckets"]) & set(record["baseline_buckets"]))
         treatment_shared = len(set(canonical["treatment_buckets"]) & set(record["treatment_buckets"]))
@@ -455,16 +470,26 @@ def _score_cluster(pair_key: str, records: Iterator[dict[str, Any]]) -> Iterator
             "canonical_source_main_dir": canonical["source_main_dir"],
             "canonical_basename": canonical["basename"],
             "canonical_id": canonical["id"],
+            "cross_source": record["source_main_dir"] != canonical["source_main_dir"],
             "raw_chars": record["raw_chars"],
             "canonical_raw_chars": canonical["raw_chars"],
+            "member_is_longer": record["raw_chars"] > canonical["raw_chars"],
+            "member_text_truncated_for_minhash": record["raw_chars"] > TEXT_CAP_CHARS,
+            "canonical_text_truncated_for_minhash": canonical["raw_chars"] > TEXT_CAP_CHARS,
             "clean_chars": len(record["clean_text"]),
             "canonical_clean_chars": len(canonical["clean_text"]),
             "length_ratio": length_ratio,
+            "exact_raw_text": exact_raw_text,
             "exact_clean_text": canonical["clean_text"] == record["clean_text"],
+            "member_clean_text_contained": member_clean_text_contained,
             "char_5gram_jaccard": char_jaccard,
-            "char_5gram_shorter_containment": char_containment,
+            "char_5gram_canonical_containment": canonical_char_containment,
+            "char_5gram_member_containment": member_char_containment,
+            "char_5gram_shorter_containment": max(canonical_char_containment, member_char_containment),
             "word_5gram_jaccard": word_jaccard,
-            "word_5gram_shorter_containment": word_containment,
+            "word_5gram_canonical_containment": canonical_word_containment,
+            "word_5gram_member_containment": member_word_containment,
+            "word_5gram_shorter_containment": max(canonical_word_containment, member_word_containment),
             "baseline_shared_buckets": baseline_shared,
             "treatment_shared_buckets": treatment_shared,
             "text_prefix": record["text_prefix"],

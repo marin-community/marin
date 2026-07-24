@@ -201,3 +201,23 @@ statistics for performance comparisons.
   successfully with all 15 distinct occurrences accounted for and the same
   seven baseline-only drops, one treatment-only drop, one shared drop, and six
   canonical-only occurrences.
+
+### 2026-07-24T09:18:00Z — directional audit correction
+
+- Rechecked the machine adjudication against every manual smoke label before
+  scaling it to the full corpus. Shorter-side containment was unsound for a
+  dropped member longer than its canonical: it would have called the
+  1,876-line StarCoder member redundant even though it has 938 unique exact
+  lines.
+- The audit now records raw-text SHA-256 identity, canonical and member
+  containment separately, which side is longer, cross-source pairs, and
+  MinHash truncation on either side. Only byte-identical raw text is
+  machine-confirmed as a duplicate. Very low bidirectional overlap is
+  machine-confirmed as a false positive; all intermediate and normalized-only
+  matches remain ambiguous for full-text semantic review.
+- Six focused tests cover directionality, longer dropped members,
+  normalized-text containment, raw identity, conservative false positives,
+  and low-Jaccard one-sided containment. The corrected smoke score pass
+  classified all eight baseline and both treatment drops as ambiguous,
+  matching the need for the existing full-text labels and eliminating the
+  prior false automatic duplicate label.

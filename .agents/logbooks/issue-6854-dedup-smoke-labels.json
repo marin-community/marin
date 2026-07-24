@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "audit_artifact": "s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-audit-smoke-0.1b-20260724-v2/audit.json",
+  "audit_artifact": "s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-audit-smoke-0.1b-20260724-v5/audit.json",
   "method": "Full normalized text read for every dropped occurrence and its canonical; labels judge whether dropping the complete member document loses a distinct training example or substantive unique content.",
   "labels": [
     {
