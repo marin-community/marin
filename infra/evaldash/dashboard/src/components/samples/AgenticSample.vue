@@ -18,29 +18,40 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const unavailableReason = ref<string | null>(null)
 const trajectory = ref<Trajectory | null>(null)
+let generation = 0
 
-async function load(uri: string | null) {
+async function load(runId: string, uri: string | null) {
+  const currentGeneration = ++generation
   trajectory.value = null
   error.value = null
   unavailableReason.value = null
-  if (!uri) return
+  if (!uri) {
+    loading.value = false
+    return
+  }
   loading.value = true
   try {
     const params = new URLSearchParams({ uri })
-    const artifact = await apiGet<ArtifactResponse>(`api/runs/${props.runId}/samples/artifact?${params.toString()}`)
+    const artifact = await apiGet<ArtifactResponse>(`api/runs/${runId}/samples/artifact?${params.toString()}`)
+    if (currentGeneration !== generation) return
     if (!artifact.available || artifact.text === null) {
       unavailableReason.value = artifact.reason ?? 'Trajectory is unavailable.'
       return
     }
     trajectory.value = JSON.parse(artifact.text) as Trajectory
   } catch (e) {
+    if (currentGeneration !== generation) return
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (currentGeneration === generation) loading.value = false
   }
 }
 
-watch(() => props.sample.trajectory_uri, load, { immediate: true })
+watch(
+  () => [props.runId, props.sample.trajectory_uri] as const,
+  ([runId, uri]) => load(runId, uri),
+  { immediate: true },
+)
 </script>
 
 <template>
