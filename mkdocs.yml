@@ -76,6 +76,7 @@ nav:
   - Experiments:
       - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
+      - Agent MoE Experiment Digest: reports/agent-moe-experiments.md
       - Marin 8B Retro: reports/marin-8b-retro.md
       - Marin 32B Retro: reports/marin-32b-retro.md
       - Markdownified Datasets: reports/markdownified-datasets.md
