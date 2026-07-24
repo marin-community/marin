@@ -612,6 +612,8 @@ def _start_vllm_native_server(
         *launcher.command(),
         "serve",
         model_name_or_path,
+        # Forced on for every evaluated model so arbitrary HF architectures load; the catalog does not
+        # carry a per-model trust-remote-code knob, and duplicating this flag makes vLLM warn.
         "--trust-remote-code",
         "--host",
         host,

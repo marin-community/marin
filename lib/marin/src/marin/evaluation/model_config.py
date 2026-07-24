@@ -78,8 +78,6 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     max_model_len: int | None = None
-    swap_space_gb: int | None = None
-    trust_remote_code: bool = False
     hf_overrides: str | None = None
     limit_mm_per_prompt: str | None = None
     tool_call_parser: str | None = None
@@ -135,12 +133,13 @@ def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
 def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     """Render a :class:`ServeConfig`'s typed serve knobs into ``vllm serve`` flags.
 
-    The typed knobs (``swap_space_gb``, ``trust_remote_code``, ``hf_overrides``, ``limit_mm_per_prompt``,
-    ``tool_call_parser``, ``reasoning_parser``, ``data_parallel_size``) come first, then the explicit
-    ``vllm_extra_args`` escape hatch. An explicit ``vllm_extra_args`` entry wins: a typed knob is
-    skipped when its flag is already present there, so a hand-tuned value is never duplicated.
-    ``tensor_parallel_size``, ``max_model_len``, and ``chat_template`` are omitted -- they are
-    first-class serve fields the launcher passes through the served-model config, not extra flags.
+    The typed knobs (``hf_overrides``, ``limit_mm_per_prompt``, ``tool_call_parser``,
+    ``reasoning_parser``, ``data_parallel_size``) come first, then the explicit ``vllm_extra_args``
+    escape hatch. An explicit ``vllm_extra_args`` entry wins: a typed knob is skipped when its flag is
+    already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
+    ``max_model_len``, and ``chat_template`` are omitted -- they are first-class serve fields the
+    launcher passes through the served-model config, not extra flags. ``--trust-remote-code`` is not
+    rendered here: the native server forces it on for every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []
@@ -149,10 +148,6 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         if not has_vllm_option(explicit, option):
             derived.extend((option, *values))
 
-    if serve.trust_remote_code:
-        add("--trust-remote-code")
-    if serve.swap_space_gb is not None:
-        add("--swap-space", str(serve.swap_space_gb))
     if serve.data_parallel_size is not None:
         add("--data-parallel-size", str(serve.data_parallel_size))
     if serve.hf_overrides is not None:

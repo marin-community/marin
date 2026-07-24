@@ -7,7 +7,6 @@ resource_hint:
 serve:
   tensor_parallel_size: 2
   max_model_len: 32768
-  swap_space_gb: 32
   tool_call_parser: mistral
   vllm_extra_args:
   - --tokenizer-mode

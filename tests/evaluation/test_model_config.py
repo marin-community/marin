@@ -6,7 +6,7 @@
 import textwrap
 
 import pytest
-from marin.evaluation.hardware import Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
     ModelConfig,
     ResourceHint,
@@ -16,6 +16,7 @@ from marin.evaluation.model_config import (
     scan_model_configs,
     serve_config_vllm_args,
 )
+from marin.evaluation.serving_config import inference_config_for_model
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -31,8 +32,6 @@ _CATALOG_YAML = textwrap.dedent(
     serve:
       tensor_parallel_size: 2
       max_model_len: 32768
-      swap_space_gb: 32
-      trust_remote_code: true
       tool_call_parser: hermes
       reasoning_parser: qwen3
       vllm_extra_args: ["--enable-prefix-caching"]
@@ -59,7 +58,6 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.name == "qwen3-32b"
     assert config.serve.backend is ServeBackend.VLLM
     assert config.serve.tensor_parallel_size == 2
-    assert config.serve.swap_space_gb == 32
     assert config.resource_hint.gpu == {"H100": 2}
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
@@ -77,10 +75,24 @@ def test_load_rejects_unknown_field_at_load_time(tmp_path):
     assert "swp_space" in chain
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("swap_space_gb", "32"), ("trust_remote_code", "true")],
+)
+def test_load_rejects_removed_serve_knob(tmp_path, field, value):
+    # swap_space_gb and trust_remote_code were removed from the schema: the CUDA vLLM fork rejects
+    # --swap-space, and the native server already forces --trust-remote-code on for every model, so a
+    # per-model knob only duplicated the flag. A catalog file that still carries either must fail at
+    # load rather than lower into a flag the server rejects or warns on.
+    body = f"name: x\nlocation: org/x\nserve:\n  {field}: {value}\n"
+    with pytest.raises(Exception) as excinfo:
+        load_model_config(_write(tmp_path, "removed.yaml", body))
+    chain = " ".join(str(exc) for exc in (excinfo.value, excinfo.value.__cause__, excinfo.value.__context__) if exc)
+    assert field in chain
+
+
 def test_serve_config_vllm_args_renders_typed_knobs():
     serve = ServeConfig(
-        trust_remote_code=True,
-        swap_space_gb=32,
         data_parallel_size=2,
         limit_mm_per_prompt='{"image":0,"video":0}',
         reasoning_parser="qwen3",
@@ -89,22 +101,47 @@ def test_serve_config_vllm_args_renders_typed_knobs():
     )
     args = serve_config_vllm_args(serve)
 
-    assert "--trust-remote-code" in args
-    assert args[args.index("--swap-space") + 1] == "32"
     assert args[args.index("--data-parallel-size") + 1] == "2"
+    assert args[args.index("--limit-mm-per-prompt") + 1] == '{"image":0,"video":0}'
     assert args[args.index("--reasoning-parser") + 1] == "qwen3"
     assert "--enable-auto-tool-choice" in args
     assert args[args.index("--tool-call-parser") + 1] == "hermes"
     assert "--enable-prefix-caching" in args
+    # The removed knobs are never reintroduced by rendering.
+    assert "--swap-space" not in args
+    assert "--trust-remote-code" not in args
 
 
 def test_serve_config_vllm_args_explicit_flag_wins_over_typed_knob():
-    # An operator who hand-wrote --swap-space in the escape hatch must not get a second one from the
-    # typed knob; the typed knob fills a gap, it does not duplicate.
-    serve = ServeConfig(swap_space_gb=32, vllm_extra_args=("--swap-space", "8"))
+    # An operator who hand-wrote --data-parallel-size in the escape hatch must not get a second one
+    # from the typed knob; the typed knob fills a gap, it does not duplicate.
+    serve = ServeConfig(data_parallel_size=2, vllm_extra_args=("--data-parallel-size", "4"))
     args = serve_config_vllm_args(serve)
-    assert args.count("--swap-space") == 1
-    assert args[args.index("--swap-space") + 1] == "8"
+    assert args.count("--data-parallel-size") == 1
+    assert args[args.index("--data-parallel-size") + 1] == "4"
+
+
+def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
+    # Regression for the Qwen3-32B catalog failure: the lowering path rendered --swap-space (which the
+    # CUDA vLLM fork rejects) and a second --trust-remote-code (the native server already passes one).
+    # A catalog-shaped GPU model must lower to engine args carrying neither.
+    model = ModelConfig(
+        name="qwen3-32b",
+        location="Qwen/Qwen3-32B",
+        resource_hint=ResourceHint(gpu={"H100": 2}),
+        serve=ServeConfig(
+            tensor_parallel_size=2,
+            max_model_len=32768,
+            tool_call_parser="hermes",
+            reasoning_parser="qwen3",
+            vllm_extra_args=("--enable-prefix-caching",),
+            auto_overrides=False,  # skip the config.json fetch; this test covers flag rendering
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
+    engine_args = inference_config_for_model(model, choice, env_vars={}).engine.extra_args
+    assert "--swap-space" not in engine_args
+    assert "--trust-remote-code" not in engine_args
 
 
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):
