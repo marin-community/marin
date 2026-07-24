@@ -16,6 +16,7 @@ from pathlib import Path
 import click
 from harbor_config import load_config_path
 from iris.cli.connect import open_iris_client
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
@@ -111,6 +112,21 @@ def cli() -> None:
     help="Object-store prefix for run records; defaults to GCS, or CW S3 for CoreWeave-routed runs.",
 )
 @click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    default="interactive",
+    show_default=True,
+    help="Iris scheduling band applied to the orchestrator and serving child.",
+)
+@click.option(
+    "--max-retries",
+    "max_retries_failure",
+    type=click.IntRange(min=0),
+    default=6,
+    show_default=True,
+    help="Iris failure retries for the orchestrator and serving child.",
+)
 def launch(
     model: str,
     evals_arg: str,
@@ -125,6 +141,8 @@ def launch(
     dry_run: bool,
     records_prefix: str | None,
     cluster: str,
+    priority: str,
+    max_retries_failure: int,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
     if model not in MODELS:
@@ -139,6 +157,8 @@ def launch(
         limit=limit,
         records_prefix=records_prefix,
         cluster=cluster,
+        priority=priority_band_value(priority),
+        max_retries_failure=max_retries_failure,
         version=version,
         description=description,
         harbor_config_document=_load_harbor_document(harbor_config),

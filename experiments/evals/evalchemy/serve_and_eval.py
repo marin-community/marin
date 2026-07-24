@@ -157,6 +157,11 @@ class ServeSpec:
     serve_cpu: float = 8.0
     serve_memory: str = "64g"
     serve_disk: str = "100g"
+    priority: int = 0
+    """Iris priority band for the serving child. ``0`` preserves Iris's normal default for direct
+    callers; the canonical evaluation launcher resolves this explicitly from its launch policy."""
+    max_retries_failure: int = 1
+    """How many Iris worker failures the serving child retries before the eval group gives up."""
     max_num_batched_tokens: int = EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
     """vLLM prefill budget per engine step. The 512 default is conservative: 2048 boots on the current
     TPU stack but prompt-logprobs traffic then kills the engine within minutes."""
@@ -369,6 +374,8 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
             worker_resources=resources,
             worker_environment=environment,
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+            priority=spec.priority,
+            max_retries_failure=spec.max_retries_failure,
         ),
         instances=spec.instances,
         broker=spec.broker,

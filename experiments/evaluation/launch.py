@@ -29,6 +29,7 @@ from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.harbor_config import HarborPolicyDefaults, ResolvedHarborPolicy, resolve_harbor_policy
@@ -318,6 +319,11 @@ class LaunchSpec:
     limit: int | None
     records_prefix: str | None
     cluster: str
+    priority: int = priority_band_value("interactive")
+    """Iris priority band for the orchestrator and its serving child. Explicitly interactive by
+    default, rather than relying on Iris's controller-side default."""
+    max_retries_failure: int = 6
+    """Iris retry budget for both the orchestrator and serving child."""
     version: str | None = None
     description: str | None = None
     harbor_config_document: dict | None = None
@@ -356,7 +362,9 @@ class SubmittedGroup:
     runs: tuple[GroupRunRef, ...]
 
 
-def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
+def _serve_spec(
+    model: EvalModelConfig, accel: AcceleratorChoice, *, priority: int, max_retries_failure: int
+) -> ServeSpec:
     if accel.platform == Platform.GPU:
         spec = ServeSpec(
             backend=model.backend,
@@ -367,6 +375,8 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
             chat_template_content=model.chat_template,
+            priority=priority,
+            max_retries_failure=max_retries_failure,
         )
     else:
         spec = ServeSpec(
@@ -378,6 +388,8 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
             chat_template_content=model.chat_template,
+            priority=priority,
+            max_retries_failure=max_retries_failure,
         )
     if model.serve_memory is not None:
         spec = replace(spec, serve_memory=model.serve_memory)
@@ -410,7 +422,12 @@ def plan_runs(spec: LaunchSpec) -> list[RunPlan]:
                 model=model,
                 suite=suite,
                 accel=accel,
-                serve=_serve_spec(model, accel),
+                serve=_serve_spec(
+                    model,
+                    accel,
+                    priority=spec.priority,
+                    max_retries_failure=spec.max_retries_failure,
+                ),
                 limit=limit,
             )
         )
@@ -592,7 +609,8 @@ def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedGroup:
         ),
         environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS) | daytona_sdk_env()),
         constraints=constraints,
-        max_retries_failure=0,
+        max_retries_failure=spec.max_retries_failure,
+        priority_band=spec.priority,
     )
     logger.info("submitted eval group %s (%d evals) as job %s", params.group_id, len(params.runs), job)
     return SubmittedGroup(
