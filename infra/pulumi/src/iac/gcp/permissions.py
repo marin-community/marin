@@ -26,6 +26,13 @@ SECRET_IAM_PERMISSIONS = (
     "secretmanager.secrets.setIamPolicy",
 )
 ARTIFACT_REGISTRY_WRITER = "roles/artifactregistry.writer"
+GCP_RESOURCE_PREVIEWER_ROLE_ID = "marinGcpResourcePreviewer"
+GCP_RESOURCE_PREVIEWER_PERMISSIONS = (
+    "artifactregistry.locations.get",
+    "artifactregistry.repositories.get",
+    "compute.addresses.get",
+    "compute.regions.get",
+)
 IAP_IAM_ROLE_ID = "marinIapIamManager"
 IAP_IAM_PERMISSIONS = (
     "iap.webServices.getIamPolicy",
@@ -47,12 +54,6 @@ class GcpStateAccess(StrEnum):
     PREVIEW = "preview"  # `pulumi preview` — read state, write only the per-stack lock prefix.
 
 
-_KMS_ROLES = {
-    GcpKmsAccess.ENCRYPT_DECRYPT: KMS_ENCRYPTER_DECRYPTER,
-    GcpKmsAccess.DECRYPT_ONLY: KMS_DECRYPTER,
-}
-
-
 @dataclass(frozen=True)
 class GcpArtifactRegistryGrant:
     location: str
@@ -60,7 +61,7 @@ class GcpArtifactRegistryGrant:
 
 
 @dataclass(frozen=True)
-class GcpDeployAccount:
+class GcpAutomationAccount:
     service_account: str
     # One GitHub OIDC subject per trigger this account must authenticate from (e.g. a
     # `pull_request` subject for preview plus a main-branch `ref:refs/heads/main` subject for
@@ -73,6 +74,7 @@ class GcpDeployAccount:
     secret_access_secrets: tuple[str, ...] = ()
     secret_iam_secrets: tuple[str, ...] = ()
     artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
+    gcp_resource_previewer: bool = False
     iap_iam_manager: bool = False
     # True for accounts this stack owns end-to-end (net-new, deploy-only identities). False
     # (default) for accounts that predate this stack and were created out-of-band — this
@@ -90,7 +92,7 @@ class GcpDeployPermissionsArgs:
     kms_location: str
     kms_key_ring: str
     kms_key: str
-    accounts: tuple[GcpDeployAccount, ...]
+    accounts: tuple[GcpAutomationAccount, ...]
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,12 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
         )
         for account in args.accounts
     )
+
+
+def _kms_role(access: GcpKmsAccess) -> str:
+    if access is GcpKmsAccess.DECRYPT_ONLY:
+        return KMS_DECRYPTER
+    return KMS_ENCRYPTER_DECRYPTER
 
 
 def _create_service_accounts(
@@ -234,7 +242,7 @@ def _grant_kms_access(permission_set: GcpDeployPermissionSet, opts: pulumi.Resou
     gcp.kms.CryptoKeyIAMMember(
         f"{permission_set.account_id}-pulumi-kms",
         crypto_key_id=permission_set.crypto_key_id,
-        role=_KMS_ROLES[permission_set.kms_access],
+        role=_kms_role(permission_set.kms_access),
         member=permission_set.service_account_member,
         opts=opts,
     )
@@ -314,6 +322,30 @@ def _create_artifact_registry_permissions(args: GcpDeployPermissionsArgs, opts: 
                 )
 
 
+def _create_gcp_resource_preview_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
+    preview_accounts = tuple(account for account in args.accounts if account.gcp_resource_previewer)
+    if not preview_accounts:
+        return
+
+    preview_role = gcp.projects.IAMCustomRole(
+        "gcp-resource-previewer",
+        project=args.project,
+        role_id=GCP_RESOURCE_PREVIEWER_ROLE_ID,
+        title="Marin GCP Resource Previewer",
+        description="Read the GCP resources declared by the marin-iac preview stack.",
+        permissions=list(GCP_RESOURCE_PREVIEWER_PERMISSIONS),
+        opts=opts,
+    )
+    for account in preview_accounts:
+        gcp.projects.IAMMember(
+            f"{_account_id(args.project, account.service_account)}-gcp-resource-previewer",
+            project=args.project,
+            role=preview_role.name,
+            member=_service_account_member(account.service_account),
+            opts=opts,
+        )
+
+
 def _create_iap_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
     iap_iam_accounts = tuple(account for account in args.accounts if account.iap_iam_manager)
     if not iap_iam_accounts:
@@ -369,6 +401,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
         _create_base_permissions(deploy_permission_sets(args), grant_opts)
         _create_secret_permissions(args, grant_opts)
         _create_artifact_registry_permissions(args, grant_opts)
+        _create_gcp_resource_preview_permissions(args, grant_opts)
         _create_iap_permissions(args, grant_opts)
 
         self.register_outputs({})

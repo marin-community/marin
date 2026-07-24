@@ -26,6 +26,9 @@ inputs:
   comment-on-pr:
     description: "Post/update the preview as a PR comment. Set false for non-PR triggers (e.g. workflow_dispatch), which have no PR to comment on."
     default: "true"
+  config-map:
+    description: "Optional pulumi/actions config-map JSON applied before preview."
+    default: ""
 
 runs:
   using: composite
@@ -36,11 +39,6 @@ runs:
         project_id: ${{ inputs.gcp-project-id }}
         workload_identity_provider: ${{ inputs.workload-identity-provider }}
         service_account: ${{ inputs.service-account }}
-
-    - name: Set up Google Cloud SDK
-      uses: google-github-actions/setup-gcloud@v3
-      with:
-        project_id: ${{ inputs.gcp-project-id }}
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7
@@ -63,5 +61,6 @@ runs:
         work-dir: ${{ inputs.work-dir }}
         cloud-url: gs://marin-iac-state
         diff: true
+        config-map: ${{ inputs.config-map }}
         comment-on-pr: ${{ inputs.comment-on-pr }}
         github-token: ${{ inputs.github-token }}

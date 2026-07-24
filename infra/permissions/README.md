@@ -24,9 +24,11 @@ is created by this stack (`create_account: true`) rather than pre-existing. It b
 `workflow_dispatch` — whose OIDC subject follows the dispatching ref, not the event name, so a
 manual run only authenticates when dispatched from `main`. Its grants are preview-only:
 `kms_access: decrypt_only` (never encrypt/write secrets) and `state_access: preview` (read
-state, write only the `.pulumi/locks/` prefix — never state content). Every other account
-defaults to `kms_access: encrypt_decrypt` / `state_access: apply`, matching `pulumi up`, and
-`github_subjects` normally holds just the one main-branch subject.
+state, write only the `.pulumi/locks/` prefix — never state content). Its custom
+`marinGcpResourcePreviewer` role can read only the Artifact Registry repositories and reserved
+addresses declared by the GCP stack, including the location metadata those reads require. Every
+other account defaults to `kms_access: encrypt_decrypt` / `state_access: apply`, matching
+`pulumi up`, and `github_subjects` normally holds just the one main-branch subject.
 
 The Grafana deploy account can list Secret Manager metadata for its optional-secret probe. A
 custom role lets it manage IAM policies on the four secrets wired into Cloud Run without

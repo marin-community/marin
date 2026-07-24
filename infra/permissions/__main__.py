@@ -7,7 +7,7 @@ import pulumi
 import pulumi_gcp as gcp
 from iac.gcp.permissions import (
     GcpArtifactRegistryGrant,
-    GcpDeployAccount,
+    GcpAutomationAccount,
     GcpDeployPermissions,
     GcpDeployPermissionsArgs,
     GcpKmsAccess,
@@ -31,7 +31,7 @@ def main() -> None:
             kms_key_ring=config.require("kms_key_ring"),
             kms_key=config.require("kms_key"),
             accounts=tuple(
-                GcpDeployAccount(
+                GcpAutomationAccount(
                     service_account=account["service_account"],
                     github_subjects=tuple(account["github_subjects"]),
                     mint_id_tokens=account.get("mint_id_tokens", False),
@@ -47,6 +47,7 @@ def main() -> None:
                         )
                         for grant in account.get("artifact_registry_grants", [])
                     ),
+                    gcp_resource_previewer=account.get("gcp_resource_previewer", False),
                     iap_iam_manager=account.get("iap_iam_manager", False),
                     create_account=account.get("create_account", False),
                     display_name=account.get("display_name", ""),

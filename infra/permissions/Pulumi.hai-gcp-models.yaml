@@ -36,6 +36,7 @@ config:
         - *main_subject
       kms_access: decrypt_only
       state_access: preview
+      gcp_resource_previewer: true
       create_account: true
       display_name: "Pulumi CI preview (read-only)"
       # CoreWeave stacks with provisioning.coreweave.federation_dns read this at preview time

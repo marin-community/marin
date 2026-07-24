@@ -92,3 +92,7 @@ jobs:
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-on-pr: ${{ github.event_name == 'pull_request' }}
+          # The live GCP resources predate this empty stack. Show their adoption diff instead
+          # of reporting creates that would fail because the names already exist. Remove this
+          # after the first successful `pulumi up` adopts the six resources into the marin stack.
+          config-map: '{"marin-iac:import": {"value": "true"}}'

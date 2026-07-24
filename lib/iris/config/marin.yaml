@@ -39,14 +39,13 @@ provisioning:
       - name: docker-mirror
         docker_upstream: DOCKER_HUB
         locations: [us, europe]
-        description: "Pull-through cache for Docker Hub (harbor sandbox base images)"
         # Base-image packages hold a handful of mutable tags, so the default keep-16 floor
-        # would protect every version indefinitely. Plain 7-day TTL instead: an evicted image
-        # is re-cached on its next pull, and a mutable tag is never more than a week stale.
+        # would protect every version indefinitely. Match the live repositories' plain
+        # 30-day TTL; an evicted image is re-cached on its next pull.
         cleanup_policies:
-          - id: delete-older-than-7d
+          - id: delete-old
             action: DELETE
-            older_than: 604800s
+            older_than: 2592000s
 
 platform:
   label_prefix: marin
