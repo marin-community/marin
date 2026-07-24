@@ -3006,3 +3006,19 @@ author: dlwh
   - r11m parent `/dlwh/iris-run-job-20260724-223512` changes only XLA preallocation to `0.70`. This gives XLA roughly 56 GiB while leaving roughly 24 GiB for NCCL_EP and other non-XLA allocations.
 - Next action:
   - Require r11m to load all executables and produce at least two finite post-compilation steps. If non-XLA NCCL_EP allocation then fails, tune the pool between `0.55` and `0.70` or reduce the mask's backward materialization before considering an approximate overflow policy.
+
+### 2026-07-24 15:58 PDT - r11m validates the tail mask and exposes padded expert compute
+- Hypothesis: Raising XLA preallocation from `0.55` to `0.70` will load the tail-masked executables and produce finite steady-state training steps.
+- Commit Hash: `f35a6414c2` (`[levanter] Mask unused NCCL EP receive rows`), documented through `9652dd5b9a`.
+- Command: r11l's exact L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` configuration with four steps and XLA preallocation `0.70`. Parent `/dlwh/iris-run-job-20260724-223512`; child `/dlwh/iris-run-job-20260724-223512/grug-train-jaxpp-rno2a-ncclep-tailmask-r11m-xla070-l8-e64k4-b512-s4096-p4m16-20260724-1535`.
+- Results:
+  - Parent and child succeeded with exit `0`; all four tasks succeeded, and no Running or Pending worker pod remains.
+  - Two steady executions remained finite: step 2 had loss `11.379294395446777`, duration `22.1068141s`, `94,864.5060 tokens/s`, and `1.9797378%` MFU; step 3 had loss `11.25849723815918`, duration `22.0929596s`, `94,923.9958 tokens/s`, and `1.9809793%` MFU.
+  - Mean steady-state MFU was `1.9805654%`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-tailmask-r11m-xla070-l8-e64k4-b512-s4096-p4m16-20260724-1535>.
+  - Correction to the append-only r11k entry above: W&B's MFU field is already expressed in percentage points. Its recorded numeric value was `0.1584357`, or `0.1584357%` MFU, not `15.8435726%`.
+- Interpretation:
+  - The receive-tail primal/transpose mask fixes r11k's post-step NaN. Exact flat-layout capacity is numerically viable for multiple updates at the reduced shape.
+  - `_local_expert_ffn` extended the final expert's group size across every unused receive row. Both expert GEMMs therefore computed the full `524,288`-row worst-case buffer rather than the approximately `65,536` live rows, explaining the unusable throughput and extra memory.
+  - Commit `0486695991` removes that artificial group extension while preserving exact NCCL_EP receive capacity and the existing tail masks. Focused tests pass `7/7`; changed-file precommit including Pyrefly passes.
+- Next action:
+  - Babysit matched sparse-tail r11n parent `/dlwh/iris-run-job-20260724-225848`. Require finite forward and backward execution plus a material steady-state speedup before considering L24. If the static worst-case buffer still dominates Triton launch overhead, evaluate a bounded `NCCL_EP_OVERFLOW_DROP` variant under the user's explicit `0.2%` relative-error ceiling with separate loss and gradient measurements.
