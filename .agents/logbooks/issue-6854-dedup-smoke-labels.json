@@ -1,0 +1,87 @@
+{
+  "version": "v1",
+  "audit_artifact": "s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-audit-smoke-0.1b-20260724-v2/audit.json",
+  "method": "Full normalized text read for every dropped occurrence and its canonical; labels judge whether dropping the complete member document loses a distinct training example or substantive unique content.",
+  "labels": [
+    {
+      "variant": "baseline",
+      "source": "massive_function_calling",
+      "canonical_id": "0006051e11a93b3a6ca101ce911599aa",
+      "member_id": "00015ae08485669d30a541ddd79e20cd",
+      "label": "false_positive",
+      "basis": "Distinct Welsh email-query example with a different tool subset, request, function, arguments, locale, and call ID; shared function schemas are boilerplate."
+    },
+    {
+      "variant": "baseline",
+      "source": "massive_function_calling",
+      "canonical_id": "0006051e11a93b3a6ca101ce911599aa",
+      "member_id": "00021db8186c35e84ec5fc82915f7ea5",
+      "label": "false_positive",
+      "basis": "Distinct Malayalam list-query example with a different tool subset, request, function, arguments, locale, and call ID; shared function schemas are boilerplate."
+    },
+    {
+      "variant": "baseline",
+      "source": "massive_function_calling",
+      "canonical_id": "0006051e11a93b3a6ca101ce911599aa",
+      "member_id": "0003280e80b2ed5f0e2684086d19a7e0",
+      "label": "false_positive",
+      "basis": "Distinct Tagalog calendar-query example with a different tool subset, request, function, arguments, locale, and call ID; it is also only a distance-2 transitive graph member."
+    },
+    {
+      "variant": "baseline",
+      "source": "massive_function_calling",
+      "canonical_id": "0006051e11a93b3a6ca101ce911599aa",
+      "member_id": "000533183c22710b00a2462dd456bb52",
+      "label": "false_positive",
+      "basis": "Distinct Spanish calendar-set example with a different tool subset, request, function, arguments, locale, and call ID; shared function schemas are boilerplate."
+    },
+    {
+      "variant": "baseline",
+      "source": "nemotron_cc_code_v1/all",
+      "canonical_id": "00a9774a33c37a46199ea90b5552497d",
+      "member_id": "00b0e59e7e429e4e115c7a28d3111de1",
+      "label": "false_positive",
+      "basis": "Different PHP build and runtime environments, versions, paths, extensions, configuration values, and host metadata; word-5-gram Jaccard is 0.120."
+    },
+    {
+      "variant": "baseline",
+      "source": "nemotron_cc_code_v1/all",
+      "canonical_id": "002df8a4bda52b30aa1d65d08b9b1e45",
+      "member_id": "02243b13926a7123f0dc54edc6ced68b",
+      "label": "false_positive",
+      "basis": "Different PHP manual pages (MongoDB CommandFailedEvent getServer versus UI Controls Entry isReadOnly); the shared manual navigation is boilerplate."
+    },
+    {
+      "variant": "baseline",
+      "source": "nemotron_cc_v2/high_quality",
+      "canonical_id": "03989ef13f4e80c5800e3a76b7978e94",
+      "member_id": "002cc2c15d854250ae218225af1fcf38",
+      "label": "true_duplicate",
+      "basis": "The member is a literal truncated prefix of the same NumPy exercise in the canonical and contains no substantive content absent from it."
+    },
+    {
+      "variant": "baseline",
+      "source": "starcoder2/ir_cpp",
+      "canonical_id": "00021298c9c0632792945c858c038937",
+      "member_id": "0001bdd81268b0744191854dedd14e4f",
+      "label": "false_positive",
+      "basis": "Different C++ solutions and LLVM modules: the member has 1,876 lines versus 929, with 938 unique exact lines and different source logic."
+    },
+    {
+      "variant": "treatment",
+      "source": "massive_function_calling",
+      "canonical_id": "0006051e11a93b3a6ca101ce911599aa",
+      "member_id": "000533183c22710b00a2462dd456bb52",
+      "label": "false_positive",
+      "basis": "Distinct Spanish calendar-set example grouped with a Latvian weather-query example because their large function-schema catalogs dominate the document."
+    },
+    {
+      "variant": "treatment",
+      "source": "nemotron_cc_v2/medium_quality",
+      "canonical_id": "104f5107c1c7f5a003db65ca5aa3a749",
+      "member_id": "001e1f985264337e1f771b377930a547",
+      "label": "true_duplicate",
+      "basis": "Both are the same low-quality college/career spam template with entity slots substituted; the substantive boilerplate and meaning are duplicated."
+    }
+  ]
+}
