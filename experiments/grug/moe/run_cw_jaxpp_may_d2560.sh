@@ -60,6 +60,7 @@ REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="${JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT:-7200}"
+JAXPP_CLIENT_TIMEOUT="${JAXPP_CLIENT_TIMEOUT:-7200000}"
 DEEPEP_REVISION="7febc6e25660af0f54d95dd781ecdcd62265ecca"
 DEEPEP_DISPATCH_NUM_THREADS="${DEEPEP_DISPATCH_NUM_THREADS:-512}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.70}"
@@ -116,6 +117,8 @@ Options:
   --conservative-loop-clustering BOOL
                             JAXPP_CONSERVATIVE_LOOP_CLUSTERING (default: true).
   --jax-init-timeout N      JAX distributed initialization timeout in seconds (default: 7200).
+  --jaxpp-client-timeout-ms N
+                            JaxPP coordination-client timeout in milliseconds (default: 7200000).
   --xla-memory-fraction N   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.70).
   --remat NAME              recompute_all or save_moe (default: save_moe).
   --steps N                 MAY_STEPS (default: 20).
@@ -163,6 +166,7 @@ while [ "$#" -gt 0 ]; do
         --ce-autotune-on-miss) CE_AUTOTUNE_ON_MISS="$2"; shift 2 ;;
         --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
         --jax-init-timeout) JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="$2"; shift 2 ;;
+        --jaxpp-client-timeout-ms) JAXPP_CLIENT_TIMEOUT="$2"; shift 2 ;;
         --xla-memory-fraction) XLA_MEMORY_FRACTION="$2"; shift 2 ;;
         --remat) REMAT="$2"; shift 2 ;;
         --steps) STEPS="$2"; shift 2 ;;
@@ -349,6 +353,17 @@ if [ "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT" -le 0 ]; then
     exit 1
 fi
 
+case "$JAXPP_CLIENT_TIMEOUT" in
+    ""|*[!0-9]*)
+        echo "ERROR: JaxPP client timeout must be a positive integer, got: $JAXPP_CLIENT_TIMEOUT" >&2
+        exit 1
+        ;;
+esac
+if [ "$JAXPP_CLIENT_TIMEOUT" -le 0 ]; then
+    echo "ERROR: JaxPP client timeout must be positive, got: $JAXPP_CLIENT_TIMEOUT" >&2
+    exit 1
+fi
+
 R2_HELPER="${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh"
 if [ -x "$R2_HELPER" ]; then
     if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
@@ -409,6 +424,7 @@ ENV_ARGS=(
     -e PP_MICROBATCHES "$MICROBATCHES"
     -e JAXPP_REVISION "$JAXPP_REVISION"
     -e JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT"
+    -e JAXPP_CLIENT_TIMEOUT "$JAXPP_CLIENT_TIMEOUT"
     -e JAX_COMPILATION_CACHE_DIR "/tmp/jax-compilation-cache"
     -e GRUG_LOG_JAXPRS "${GRUG_LOG_JAXPRS:-false}"
     -e GRUG_LOG_XLA_HLO "${GRUG_LOG_XLA_HLO:-false}"
@@ -518,6 +534,7 @@ loss_implementation: ${LOSS_IMPLEMENTATION:-default}
 ce_autotune_on_miss: $CE_AUTOTUNE_ON_MISS
 conservative_loop_clustering: $JAXPP_CONSERVATIVE_LOOP_CLUSTERING
 jax_init_timeout: $JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT
+jaxpp_client_timeout_ms: $JAXPP_CLIENT_TIMEOUT
 xla_memory_fraction: $XLA_MEMORY_FRACTION
 remat: $REMAT
 steps: $STEPS
