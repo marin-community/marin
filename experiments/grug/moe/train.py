@@ -59,6 +59,8 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    checkpoint_enabled: bool = True
+    """Whether to create and run the checkpointer, including the forced final save."""
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -256,24 +258,6 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
-    if model.stacked_blocks_local is not None:
-        # Heterogeneous-KV: layers live in two stacks. ``qb_betas`` is [num_layers, E] in interleaved
-        # group order (period-1 local blocks then 1 global block per group); reshape to
-        # [groups, period, E] and route the local/global slices back to their respective stacks.
-        cfg = model.config
-        num_groups = cfg.num_layers // cfg.global_layer_period
-        num_experts = qb_betas.shape[-1]
-        grouped = qb_betas.reshape(num_groups, cfg.global_layer_period, num_experts)
-
-        def _centered_bias(betas: jax.Array) -> jax.Array:
-            bias = -betas
-            return bias - jnp.mean(bias, axis=-1, keepdims=True)
-
-        local_bias = _centered_bias(grouped[:, : cfg.global_layer_period - 1, :].reshape(-1, num_experts))
-        global_bias = _centered_bias(grouped[:, cfg.global_layer_period - 1, :])
-        model = eqx.tree_at(lambda t: t.stacked_blocks_local.stacked.mlp.router_bias, model, local_bias)
-        model = eqx.tree_at(lambda t: t.stacked_blocks_global.stacked.mlp.router_bias, model, global_bias)
-        return model
     if model.blocks is None:
         # Scan mode: stacked_blocks.mlp.router_bias is [num_layers, num_experts]; set it in one
         # vectorized assignment (per-layer mean over experts, matching the unrolled path).
@@ -459,7 +443,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.checkpoint_enabled else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

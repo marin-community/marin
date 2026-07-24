@@ -40,6 +40,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_DISABLE_CHECKPOINT
+                        set to 1 to skip checkpoint creation and final saving
     SCALE_DATA          slimpajama (default) | datakit. slimpajama is the fast MFU/
                         throughput dataset; datakit uses the two-phase datakit store
                         mixture (marin_prefix-rooted, phase 1 at 80% of steps).
@@ -218,6 +220,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        checkpoint_enabled=os.environ.get("SCALE_DISABLE_CHECKPOINT") != "1",
         **SCALE_TRAINER_DEFAULTS,
     )
 

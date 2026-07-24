@@ -162,9 +162,11 @@ class GrugModelConfig:
     global_kv_heads: int | None = None
     """Heterogeneous GQA: when both are set, sliding-window (local) layers use
     ``local_kv_heads`` and full-causal (global) layers use ``global_kv_heads``, instead of
-    the uniform ``num_kv_heads``. Requires ``use_array_stacked_blocks`` and
-    ``num_layers % global_layer_period == 0``; the two layer types live in separate 3D
-    block stacks (see ``Transformer``). Both must divide ``num_heads``. None -> uniform."""
+    the uniform ``num_kv_heads``. The stacked weights use the larger KV width; the
+    narrower layer type slices projected K/V and repeats each logical head back to the
+    stored width so every layer uses one static FA4 shape.
+    Requires ``use_array_stacked_blocks`` and ``num_layers % global_layer_period == 0``.
+    Both must divide ``num_heads``. None -> uniform."""
     disable_pko: bool = True
     """When True (default), the every-4th + last 'long' layers skip Partial
     Key Offset (no shift of the second half of K, no doc-start zeroing). Short
@@ -191,6 +193,24 @@ class GrugModelConfig:
         _ = self.inferred_head_dim
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
+        if (self.local_kv_heads is None) != (self.global_kv_heads is None):
+            raise ValueError("local_kv_heads and global_kv_heads must be set together")
+        if self.local_kv_heads is not None and self.global_kv_heads is not None:
+            if not self.use_array_stacked_blocks:
+                raise ValueError("heterogeneous KV heads require use_array_stacked_blocks=True")
+            if self.num_layers % self.global_layer_period != 0:
+                raise ValueError(
+                    f"heterogeneous KV heads require num_layers ({self.num_layers}) divisible by "
+                    f"global_layer_period ({self.global_layer_period})"
+                )
+            for name, num_kv_heads in (
+                ("local_kv_heads", self.local_kv_heads),
+                ("global_kv_heads", self.global_kv_heads),
+            ):
+                if num_kv_heads <= 0 or self.num_heads % num_kv_heads != 0:
+                    raise ValueError(f"{name} must be positive and divide num_heads")
+                if max(self.local_kv_heads, self.global_kv_heads) % num_kv_heads != 0:
+                    raise ValueError(f"{name} must divide the larger heterogeneous KV-head count")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -204,6 +224,12 @@ class GrugModelConfig:
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def stored_kv_heads(self) -> int:
+        if self.local_kv_heads is None or self.global_kv_heads is None:
+            return self.num_kv_heads
+        return max(self.local_kv_heads, self.global_kv_heads)
 
     @property
     def Embed(self) -> Axis:
@@ -325,7 +351,7 @@ class CausalSelfAttention(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -342,6 +368,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        is_global: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -355,7 +382,7 @@ class CausalSelfAttention(eqx.Module):
         # query at position i sees K[i] on head_dim[:half] but K[i-1] on
         # head_dim[half:]. Zero the shifted half at document starts so the
         # cross-half look-back does not leak across docs. Runs before the
-        # rms_norm on Q/K below.
+        # rms_norm on K below.
         if use_pko:
             half = head_dim // 2
             k_stationary = k[..., half:]
@@ -407,16 +434,38 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+
+        local_kv_heads = self.cfg.local_kv_heads
+        global_kv_heads = self.cfg.global_kv_heads
+        if local_kv_heads is not None and global_kv_heads is not None:
+            stored_kv_heads = self.cfg.stored_kv_heads
+
+            def _logical_kv_heads(projected: jax.Array, num_kv_heads: int) -> jax.Array:
+                logical = projected[:, :, :num_kv_heads, :]
+                expanded = align_kv_heads(logical, num_q_heads=stored_kv_heads)
+                return reshard(expanded, P(_BATCH_AXES, None, "model", None))
+
+            local_k = _logical_kv_heads(k, local_kv_heads)
+            local_v = _logical_kv_heads(v, local_kv_heads)
+            global_k = _logical_kv_heads(k, global_kv_heads)
+            global_v = _logical_kv_heads(v, global_kv_heads)
+            if isinstance(is_global, bool):
+                k, v = (global_k, global_v) if is_global else (local_k, local_v)
+            else:
+                use_global = jnp.asarray(is_global, dtype=jnp.bool_)
+                k = jnp.where(use_global, global_k, local_k)
+                v = jnp.where(use_global, global_v, local_v)
+
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
+        # XSA consumes V in the backend's Q-head output layout.
+        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, "model", None))
+        # Exclusive Self Attention subtracts the component of each output
+        # parallel to its aligned value vector.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
@@ -726,9 +775,16 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        x = x + self.attn(
+            attn_in,
+            mask,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            is_global=is_global,
+        )
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -755,11 +811,6 @@ class Transformer(eqx.Module):
     # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
     blocks: tuple[Block, ...] | None
     stacked_blocks: ArrayStacked[Block] | None
-    # Populated instead of ``stacked_blocks`` when cfg has heterogeneous KV heads: the
-    # sliding-window (local) and full-causal (global) layers have different w_k/w_v shapes
-    # and so cannot share one homogeneous scan. Each is a plain 3D block stack.
-    stacked_blocks_local: ArrayStacked[Block] | None
-    stacked_blocks_global: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -798,25 +849,7 @@ class Transformer(eqx.Module):
 
         blocks: tuple[Block, ...] | None = None
         stacked_blocks: ArrayStacked[Block] | None = None
-        stacked_blocks_local: ArrayStacked[Block] | None = None
-        stacked_blocks_global: ArrayStacked[Block] | None = None
-        if cfg.local_kv_heads is not None and cfg.global_kv_heads is not None:
-            if not cfg.use_array_stacked_blocks:
-                raise ValueError("heterogeneous KV heads require use_array_stacked_blocks=True")
-            if cfg.num_layers % cfg.global_layer_period != 0:
-                raise ValueError(
-                    f"heterogeneous KV heads require num_layers ({cfg.num_layers}) divisible by "
-                    f"global_layer_period ({cfg.global_layer_period})"
-                )
-            num_global = cfg.num_layers // cfg.global_layer_period
-            num_local = cfg.num_layers - num_global
-            local_cfg = dataclasses.replace(cfg, num_kv_heads=cfg.local_kv_heads)
-            global_cfg = dataclasses.replace(cfg, num_kv_heads=cfg.global_kv_heads)
-            stacked_blocks_local = ArrayStacked.init(num_local, Block)(local_cfg, key=jnp.stack(block_keys[:num_local]))
-            stacked_blocks_global = ArrayStacked.init(num_global, Block)(
-                global_cfg, key=jnp.stack(block_keys[num_local:])
-            )
-        elif cfg.use_array_stacked_blocks:
+        if cfg.use_array_stacked_blocks:
             stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
         else:
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
@@ -828,8 +861,6 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
-            stacked_blocks_local=stacked_blocks_local,
-            stacked_blocks_global=stacked_blocks_global,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -868,67 +899,7 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        if self.stacked_blocks_local is not None:
-            # Heterogeneous KV: local (sliding-window, local_kv_heads) and global (full-causal,
-            # global_kv_heads) layers have different w_k/w_v shapes, so they live in two separate 3D
-            # stacks and cannot share one homogeneous scan. Process in groups of `global_layer_period`,
-            # preserving interleaved order: an OUTER scan over groups (serializing expert gathers, one
-            # layer live) whose body runs the group's local layers via an INNER scan, then the single
-            # global layer. No lax.cond around the FA4 callback (it would pin to device 0).
-            assert self.stacked_blocks_global is not None
-            period = cfg.global_layer_period
-            num_groups = cfg.num_layers // period
-            locals_per_group = period - 1
-            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
-            long_lower_bounds, valid = fa4_cute_segment_bounds(
-                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
-            )
-            short_lower_bounds, _ = fa4_cute_segment_bounds(
-                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
-            )
-            long_lower_bounds = _batch_reshard(long_lower_bounds)
-            short_lower_bounds = _batch_reshard(short_lower_bounds)
-            valid = _batch_reshard(valid)
-            local_mask = long_mask.with_fa4_bounds(short_lower_bounds, valid)
-            global_mask = long_mask.with_fa4_bounds(long_lower_bounds, valid)
-            global_disable_rope = cfg.disable_long_rope
-
-            def _local_body(carry_hidden, layer):
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, local_mask, False, False)
-
-            local_grouped = jax.tree.map(
-                lambda a: a.reshape(num_groups, locals_per_group, *a.shape[1:]),
-                self.stacked_blocks_local.stacked,
-            )
-
-            def _group_body(carry_hidden, group_inputs):
-                local_group, global_layer = group_inputs
-                carry_hidden, local_stats = jax.lax.scan(_local_body, carry_hidden, xs=local_group)
-                carry_hidden, global_stats = eqx.filter_checkpoint(global_layer, policy=remat_policy)(
-                    carry_hidden, global_mask, False, global_disable_rope
-                )
-                return carry_hidden, (local_stats, global_stats)
-
-            hidden, (local_stats, global_stats) = jax.lax.scan(
-                _group_body, hidden, xs=(local_grouped, self.stacked_blocks_global.stacked)
-            )
-
-            def _interleave(key: str) -> jax.Array:
-                merged = jnp.concatenate([local_stats[key], global_stats[key][:, None]], axis=1)
-                return merged.reshape(cfg.num_layers, *merged.shape[2:])
-
-            router_metrics = {
-                f"{k}_per_layer": _interleave(k)
-                for k in (
-                    "routing_entropy",
-                    "routing_counts",
-                    "load_balancing_loss",
-                    "router_z_loss",
-                    "qb_beta",
-                    "capacity_overflow",
-                )
-            }
-        elif self.blocks is not None:
+        if self.blocks is not None:
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
@@ -938,7 +909,7 @@ class Transformer(eqx.Module):
                 use_pko = is_long and not cfg.disable_pko
                 disable_rope = is_long and cfg.disable_long_rope
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, layer_mask, use_pko, disable_rope
+                    hidden, layer_mask, use_pko, disable_rope, is_long
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -982,7 +953,9 @@ class Transformer(eqx.Module):
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.disable_long_rope else False
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, layer_mask, False, disable_rope, use_long
+                )
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
