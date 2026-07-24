@@ -30,6 +30,24 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 
+# NCCLEP_DISABLE_COLLECTIVE_STREAM=1 neutralizes TE #3231's
+# compute_on("gpu_stream:collective") pin on the EP FFI ops. The pin is
+# applied at TE import time (decorator over jax.experimental.compute_on), so
+# the shim must be installed BEFORE transformer_engine imports. Suspected
+# cause of the deterministic 64-GPU first-execution ncclCommSplit crash on
+# the ea41e08 wheel (NCCLEP-010); harmless no-op elsewhere.
+if os.environ.get("NCCLEP_DISABLE_COLLECTIVE_STREAM") == "1":
+    import jax.experimental.compute_on as _compute_on_module
+
+    _original_compute_on = _compute_on_module.compute_on
+
+    def _compute_on_without_collective_stream(spec):
+        if spec == "gpu_stream:collective":
+            return lambda func: func
+        return _original_compute_on(spec)
+
+    _compute_on_module.compute_on = _compute_on_without_collective_stream
+
 # TE must be imported before the JAX CUDA client exists so the NCCL_EP FFI
 # handlers register (required for --moe-implementation nccl_ep / te_moe).
 try:
