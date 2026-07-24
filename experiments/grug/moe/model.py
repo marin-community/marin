@@ -263,11 +263,19 @@ class ShortConv(eqx.Module):
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
-    def __call__(self, x: Float[Array, "B S C"]) -> Float[Array, "B S C"]:
+    def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
+        # Depthwise causal shift-and-sum. When segment_ids are given (packed documents), a tap that
+        # reaches back into a previous document is zeroed, so the conv never mixes across a document
+        # boundary -- matching the segment-masked attention. The lag-0 (current-token) tap is always kept.
         seq_len = x.shape[1]
         out = self.weight[0] * x
         for lag in range(1, self.kernel_size):
             shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
+            if segment_ids is not None:
+                # -1 sentinel in the pad never equals a real (>=0) segment id, so leading positions
+                # with no in-document history are zeroed too.
+                seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
+                shifted = jnp.where((seg_shifted == segment_ids)[..., None], shifted, 0.0)
             out = out + self.weight[lag] * shifted
         return out
 
@@ -314,11 +322,13 @@ class CausalSelfAttention(eqx.Module):
             k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
             v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K and V projections (before head-split/RMS).
-        # Guard each site independently -- K-only leaves sconv_v None.
+        # Guard each site independently -- K-only leaves sconv_v None. Segment ids (packed-doc
+        # boundaries) come from the mask so the conv never mixes across a document boundary.
+        sconv_segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         if self.sconv_k is not None:
-            k_flat = self.sconv_k(k_flat)
+            k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         if self.sconv_v is not None:
-            v_flat = self.sconv_v(v_flat)
+            v_flat = self.sconv_v(v_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
@@ -613,12 +623,15 @@ class Block(eqx.Module):
             w13_pre0 = reshard(w_up_gate[:per], P(None, None, None))
             w2_pre0 = reshard(em.w_down[:per], P(None, None, None))
 
+        # Segment ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
+        sconv_segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
         attn_out = self.attn(attn_in, mask)
         if self.sconv_attn is not None:
-            attn_out = self.sconv_attn(attn_out)
+            attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
@@ -632,7 +645,7 @@ class Block(eqx.Module):
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
-            mlp_out = self.sconv_mlp(mlp_out)
+            mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         return x + mlp_out, qb_beta
 
 
