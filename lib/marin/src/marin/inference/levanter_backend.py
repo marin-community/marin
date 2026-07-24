@@ -195,7 +195,7 @@ class LevanterBackend:
                 InferenceServerConfig(
                     trainer=loaded.trainer,
                     tokenizer=spec.model_path,
-                    model_name=spec.model,
+                    model_name=spec.served_model_name,
                     service=InferenceEngineConfig(
                         max_seq_len=loaded.max_seq_len,
                         max_seqs=self.config.max_seqs,
@@ -215,7 +215,11 @@ class LevanterBackend:
         port = sock.getsockname()[1]
         try:
             with serve_app_background(server.app, sock, name="levanter-inference") as background:
-                yield LevanterServedModel(base_url=f"http://{self.host}:{port}", model_id=spec.model, uvicorn=background)
+                yield LevanterServedModel(
+                    base_url=f"http://{self.host}:{port}",
+                    model_id=spec.served_model_name,
+                    uvicorn=background,
+                )
         finally:
             server.shutdown()
 

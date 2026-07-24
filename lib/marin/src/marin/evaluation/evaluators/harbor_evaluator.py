@@ -29,9 +29,10 @@ import wandb
 from rigging.filesystem import StoragePath, is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.harbor_dataset import materialize_harbor_dataset
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
+from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
@@ -179,7 +180,7 @@ class HarborEvaluator(Evaluator):
 
     def evaluate(
         self,
-        model: ModelConfig,
+        model: InferenceModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,

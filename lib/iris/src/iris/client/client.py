@@ -895,6 +895,19 @@ class IrisClient:
         """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
         return self._cluster_client.resolve_endpoint(url)
 
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
+        """List registered endpoints without exposing the low-level cluster client."""
+        return self._cluster_client.list_endpoints(prefix, exact=exact)
+
+    def mint_endpoint_token(
+        self,
+        endpoint_name: str,
+        *,
+        ttl: Duration | None = None,
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
+        """Mint a scoped token for a link-accessible endpoint."""
+        return self._cluster_client.mint_endpoint_token(endpoint_name, ttl=ttl)
+
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the eval child's config; the child turns each task into an ``eval.eval`` argv.
+"""The parent builds the Evalchemy child's config; the child turns each task into an ``eval.eval`` argv.
 
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
@@ -12,57 +12,49 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
-from typing import cast
 
-from iris.client import Job
+from marin.evaluation.evalchemy import (
+    _EVAL_CLIENT_SCRIPT,
+    EvalchemyRunConfig,
+    _run_config_json,
+)
+from marin.evaluation.evalchemy_client import build_command, build_model_args, scored_results
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.serving_config import _auto_serve_overrides_from_config
+from marin.inference.types import OpenAIEndpoint, RunningModel
 
-from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
-from experiments.evals.evalchemy.serve_and_eval import (
-    EvalSession,
-    EvalUnit,
-    ServedEndpoint,
-    _auto_serve_overrides_from_config,
-    _client_config_json,
-)
-
-# Only the address fields matter for config-building; the serve-child job handle is never touched.
-_ENDPOINT = ServedEndpoint(
-    base_url="http://10.0.0.1:30000/v1",
-    model_id="Qwen/Qwen3-0.6B",
+_MODEL = RunningModel(
+    endpoint=OpenAIEndpoint(
+        base_url="http://10.0.0.1:30000/v1",
+        model="Qwen/Qwen3-0.6B",
+    ),
     tokenizer="Qwen/Qwen3-0.6B",
-    job="/test/serve",
-    handle=cast(Job, None),
-    name="eval-serve-test",
 )
 
 
-def _session(**overrides) -> EvalSession:
-    base = dict(model="Qwen/Qwen3-0.6B")
-    base.update(overrides)
-    return EvalSession(**base)
-
-
-def _unit(**overrides) -> EvalUnit:
+def _config(**overrides) -> EvalchemyRunConfig:
     base = dict(
         name="core",
         tasks=(EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_cot", generation=True)),
-        out_path="gs://bucket/evals/qwen3/core",
     )
     base.update(overrides)
-    return EvalUnit(**base)
+    return EvalchemyRunConfig(**base)
 
 
-def _payload(session: EvalSession | None = None, unit: EvalUnit | None = None) -> dict:
-    return json.loads(_client_config_json(session or _session(), unit or _unit(), _ENDPOINT))
+def _payload(config: EvalchemyRunConfig | None = None) -> dict:
+    return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
+
+
+def test_eval_client_uses_workspace_relative_script():
+    assert _EVAL_CLIENT_SCRIPT == "lib/marin/src/marin/evaluation/evalchemy_client.py"
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
     payload = _payload()
 
-    assert payload["base_url"] == _ENDPOINT.base_url
-    assert payload["model_id"] == _ENDPOINT.model_id
-    assert payload["tokenizer"] == _ENDPOINT.tokenizer
+    assert payload["base_url"] == _MODEL.endpoint.base_url
+    assert payload["model_id"] == _MODEL.endpoint.model
+    assert payload["tokenizer"] == _MODEL.tokenizer
     # Each task carries the bare lm-eval name (what --tasks runs) plus its own upload dir: an alias is
     # used verbatim, an un-aliased task falls back to name_Nshot. The dir is what keeps results apart;
     # the flags drive the child's completions-vs-chat route and unsafe-code opt-in per task.
@@ -89,20 +81,20 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
 def test_task_dirs_distinguish_shot_variants_of_one_task():
     # One task at two shot counts: the bare name repeats, so the distinct aliases -> distinct dirs are
     # the only thing keeping the two results from overwriting each other.
-    unit = _unit(
+    config = _config(
         tasks=(
             EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
             EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),
         )
     )
-    tasks = _payload(unit=unit)["tasks"]
+    tasks = _payload(config)["tasks"]
 
     assert [t["name"] for t in tasks] == ["hellaswag", "hellaswag"]
     assert [t["dir"] for t in tasks] == ["hellaswag_0shot", "hellaswag_10shot"]
 
 
 def test_build_command_completion_route_with_fewshot_and_limit():
-    config = _payload(unit=_unit(max_eval_instances=7))
+    config = _payload(_config(max_eval_instances=7))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
 
     assert cmd[:5] == ["/opt/py", "-m", "eval.eval", "--model", "local-completions"]
@@ -124,8 +116,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
 def test_extra_gen_kwargs_ride_on_gen_kwargs():
     # A thinking model (snowball-sft) needs skip_special_tokens=false so its delimiters survive scoring
     # plus a light repetition penalty; both ride on --gen_kwargs alongside the budget, on every task.
-    session = _session(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"})
-    config = _payload(session=session)
+    config = _payload(_config(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"}))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
     gen_kwargs = cmd[cmd.index("--gen_kwargs") + 1]
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
@@ -137,7 +128,7 @@ def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
 
 
 def test_build_command_chat_route_needs_template_and_generation():
-    config = _payload(session=_session(apply_chat_template=True))
+    config = _payload(_config(apply_chat_template=True))
     generative, mcq = config["tasks"][1], config["tasks"][0]
 
     # A generation task of a chat-template model runs through the chat API...
@@ -156,14 +147,15 @@ def test_build_command_chat_route_needs_template_and_generation():
 def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
     # humaneval-style code infill: chat formatting breaks the raw-continuation scoring, so the task
     # pins the completions route even for a chat-template model, and code execution needs the opt-in.
-    unit = _unit(
+    config = _config(
+        apply_chat_template=True,
         tasks=(
             EvalTaskConfig(
                 "humaneval", 0, task_alias="humaneval_0shot", generation=True, unsafe_code=True, completion_only=True
             ),
-        )
+        ),
     )
-    config = _payload(session=_session(apply_chat_template=True), unit=unit)
+    config = _payload(config)
     cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
 
     assert cmd[cmd.index("--model") + 1] == "local-completions"

@@ -18,10 +18,11 @@ import draccus
 from rigging.filesystem import StoragePath
 
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.evaluation.utils import discover_hf_checkpoints
+from marin.inference.config import InferenceModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def evaluate(config: EvaluationConfig) -> None:
     logger.info(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
 
-    model: ModelConfig = _impute_model_config(config)
+    model: InferenceModelConfig = _impute_model_config(config)
     logger.info(f"Evaluating {model.name} with {config.evals}")
 
     start_time: float = time.time()
@@ -111,7 +112,7 @@ def _impute_model_config(config):
     else:
         engine_kwargs = config.engine_kwargs
 
-    return ModelConfig(
+    return InferenceModelConfig(
         name=model_name,
         path=model_path,
         engine_kwargs=engine_kwargs,

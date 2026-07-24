@@ -38,6 +38,7 @@ def local_inference(
 
     spec = ModelSpec(
         model=model.model,
+        served_model_name=model.endpoint_model,
         model_path=model.model_path or model.model,
         num_chips=num_chips,
         tensor_parallel_size=model.tensor_parallel_size,

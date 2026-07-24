@@ -9,6 +9,7 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
 
@@ -35,6 +36,7 @@ class VllmSource(StrEnum):
 @dataclass(frozen=True)
 class ServedModelConfig:
     model: str
+    served_model_name: str | None = None
     model_path: str | None = None
     tokenizer: str | None = None
     dtype: str = "bfloat16"
@@ -45,10 +47,29 @@ class ServedModelConfig:
     def __post_init__(self) -> None:
         if not self.model:
             raise ValueError("model must not be empty")
+        if self.served_model_name == "":
+            raise ValueError("served_model_name must not be empty")
         if self.max_model_len is not None and self.max_model_len <= 0:
             raise ValueError("max_model_len must be positive")
         if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
             raise ValueError("tensor_parallel_size must be positive")
+
+    @property
+    def endpoint_model(self) -> str:
+        """Model identifier accepted by the served OpenAI endpoint."""
+        return self.served_model_name or self.model
+
+
+@dataclass
+class InferenceModelConfig:
+    """Legacy in-process vLLM model inputs used by evaluator and server code."""
+
+    name: str
+    path: str | None
+    engine_kwargs: dict[str, Any]
+    generation_params: dict | None = None
+    apply_chat_template: bool = False
+    base_eval_run_name: str | None = None
 
 
 @dataclass(frozen=True)

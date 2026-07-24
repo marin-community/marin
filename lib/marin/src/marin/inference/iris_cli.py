@@ -248,7 +248,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = client._cluster_client.list_endpoints(endpoint_name, exact=True)
+        endpoints = client.list_endpoints(endpoint_name, exact=True)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -269,7 +269,7 @@ def _mint_and_print_capability_url(
     authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
     controller's maximum).
     """
-    resp = client._cluster_client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
+    resp = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
     hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
     click.echo("  Shared capability URL (token in the path — anyone with the URL can call it):")
     if dashboard_url:

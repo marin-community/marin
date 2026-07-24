@@ -30,6 +30,7 @@ from marin.inference.config import (
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
+    EndpointRoute,
     InferenceRequest,
     InferenceResponse,
     InferenceWorkerMetadata,
@@ -82,14 +83,14 @@ def test_remote_topology_selection() -> None:
 
 def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
     endpoint = SimpleNamespace(address="http://10.0.0.2:9000")
-    cluster_client = SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [endpoint])
+    client = SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [endpoint])
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(client=SimpleNamespace(_cluster_client=cluster_client)),
+        lambda: SimpleNamespace(client=client),
     )
     session = RemoteInferenceSession(
-        model=RunningModel(endpoint=OpenAIEndpoint(base_url="http://10.0.0.1:8000/v1", model="gpt2")),
+        _initial_model=RunningModel(endpoint=OpenAIEndpoint(base_url="http://10.0.0.1:8000/v1", model="gpt2")),
         jobs=(),
         endpoint_name="/serve/gpt2",
         streaming=True,
@@ -98,6 +99,32 @@ def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
     )
 
     assert session.resolve_model().endpoint.base_url == "http://10.0.0.2:9000/v1"
+
+
+def test_remote_session_mints_capability_model_without_changing_identity(monkeypatch) -> None:
+    minted: list[tuple[str, object]] = []
+    client = SimpleNamespace(
+        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl)) or SimpleNamespace(token="secret-token"),
+    )
+    monkeypatch.setattr(iris_module, "iris_ctx", lambda: SimpleNamespace(client=client))
+    session = RemoteInferenceSession(
+        _initial_model=RunningModel(
+            endpoint=OpenAIEndpoint(base_url="http://10.0.0.1:8000/v1", model="qwen3-0.6b"),
+            tokenizer="Qwen/Qwen3-0.6B",
+        ),
+        jobs=(),
+        endpoint_name="/serve/qwen",
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+    model = session.resolve_model(EndpointRoute.CAPABILITY, public_origin="https://iris.example")
+
+    assert model.endpoint.base_url == "https://iris.example/proxy/t/secret-token/serve.qwen/v1"
+    assert model.endpoint.model == "qwen3-0.6b"
+    assert model.tokenizer == "Qwen/Qwen3-0.6B"
+    assert minted[0][0] == "/serve/qwen"
 
 
 def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
@@ -122,9 +149,7 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(_cluster_client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: []))
-        ),
+        lambda: SimpleNamespace(client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [])),
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
@@ -289,6 +314,7 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) -> None:
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
+    proxy_models: list[str] = []
 
     class _FakeJob:
         job_id = "worker-0"
@@ -320,8 +346,9 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
             return _FakeJob()
 
     @contextmanager
-    def _fake_start_proxy(**_kwargs):
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model="gpt2"))
+    def _fake_start_proxy(**kwargs):
+        proxy_models.append(kwargs["model"])
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model=kwargs["model"]))
 
     client = _FakeClient()
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
@@ -340,13 +367,14 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     )
 
     with remote_inference(
-        ServedModelConfig(model="gpt2"),
+        ServedModelConfig(model="physical-model", served_model_name="public-model"),
         VllmEngineConfig(),
         iris,
         instances=2,
-    ):
-        pass
+    ) as session:
+        assert session.resolve_model().endpoint.model == "public-model"
 
+    assert proxy_models == ["public-model"]
     assert len(client.submissions) == 2
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu", "vllm"]

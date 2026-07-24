@@ -29,6 +29,7 @@ from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 from marin.evaluation.harbor_dataset import materialize_harbor_dataset
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
+from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,6 @@ class HarborRunConfig:
     dataset: str
     version: str
     agent: str
-    served_model_name: str
-    """The name the model is served under (slash-free); the agent calls ``hosted_vllm/<name>``."""
-    api_base: str
-    """OpenAI base URL the Harbor agent calls (the in-cluster endpoint, or a minted capability URL)."""
     env: str = "daytona"
     n_concurrent: int = 4
     max_output_tokens: int = 8192
@@ -114,9 +111,9 @@ def canonical_served_name(name: str) -> str:
     return candidate
 
 
-def _job_name(config: HarborRunConfig) -> str:
+def _job_name(model: RunningModel, config: HarborRunConfig) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
-    key = f"{config.dataset}|{config.version}|{config.served_model_name}|{config.agent}|{config.task_limit}"
+    key = f"{config.dataset}|{config.version}|{model.endpoint.model}|{config.agent}|{config.task_limit}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
     return f"harbor_{safe}_{digest}"
@@ -243,38 +240,37 @@ def _upload_trials(job_dir: Path, out_path: str) -> None:
             upload_to_gcs(str(trial_dir), prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
 
 
-def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
+def run_harbor(model: RunningModel, config: HarborRunConfig, output_dir: str) -> HarborRunResult:
     """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
 
-    Serving is the caller's job: ``config.api_base`` already points at a live endpoint. Harbor runs as
-    an isolated subprocess (see :mod:`marin.evaluation.harbor_trial_driver`); this resumes any
-    completed trials it finds under ``out_path`` first, then reads Harbor's native trial files back and
-    writes the per-sample parquet plus the aggregate for the record.
+    Serving is the caller's job. Harbor derives both the OpenAI URL and served-model identity from
+    ``model``. It resumes completed trials under ``output_dir``, then writes normalized samples and
+    aggregate metrics there.
     """
-    job_name = _job_name(config)
+    job_name = _job_name(model, config)
     workdir = Path("/tmp/harbor_workdir") / job_name
-    output_dir = workdir / "harbor_results"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    job_dir = output_dir / job_name
+    results_dir = workdir / "harbor_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    job_dir = results_dir / job_name
     dataset_path = materialize_harbor_dataset(config.dataset, config.version, workdir)
 
-    if is_remote_path(out_path):
-        restored = _restore_completed_trials(out_path, job_dir)
+    if is_remote_path(output_dir):
+        restored = _restore_completed_trials(output_dir, job_dir)
         if restored:
-            logger.info("restored %d completed Harbor trial(s) from %s", restored, out_path)
+            logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
 
     agent_kwargs = dict(config.agent_kwargs)
-    agent_kwargs.setdefault("api_base", config.api_base)
+    agent_kwargs.setdefault("api_base", model.endpoint.base_url)
     agent_kwargs.setdefault("model_info", {**_DEFAULT_MODEL_INFO, "max_output_tokens": config.max_output_tokens})
     driver_config = {
         "job_name": job_name,
-        "jobs_dir": str(output_dir),
+        "jobs_dir": str(results_dir),
         "dataset": config.dataset,
         "version": config.version,
         "dataset_path": str(dataset_path) if dataset_path is not None else None,
         "n_tasks": config.task_limit,
         "agent": config.agent,
-        "model_name": f"hosted_vllm/{config.served_model_name}",
+        "model_name": f"hosted_vllm/{model.endpoint.model}",
         "agent_kwargs": agent_kwargs,
         "n_concurrent": config.n_concurrent,
         "env": config.env,
@@ -286,11 +282,11 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
     _run_driver(config_file)
 
     trials = _read_trials(job_dir)
-    if is_remote_path(out_path):
-        _upload_trials(job_dir, out_path)
-    samples_path = _write_samples(trials, config.dataset, out_path)
+    if is_remote_path(output_dir):
+        _upload_trials(job_dir, output_dir)
+    samples_path = _write_samples(trials, config.dataset, output_dir)
     result = _aggregate(trials, config.dataset, samples_path)
-    StoragePath(prefix_join(out_path, "harbor_result.json")).write_text(
+    StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {
                 "dataset": result.dataset,

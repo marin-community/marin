@@ -11,12 +11,13 @@ compiles one ``EvalReport`` per model.
     python -m experiments.evals.run_base_model_evals --version 2026.07.16 --run
 """
 
+from marin.evaluation.serving_config import ServeSpec
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import experiment_main
+from marin.experiment.evaluation import eval_report, eval_steps
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import base_model_evals, eval_report, eval_steps
+from experiments.evals.evals import base_model_evals
 from experiments.models import amber_base_7b, llama_3_1_8b, map_neo_7b, olmo_2_base_8b
 
 

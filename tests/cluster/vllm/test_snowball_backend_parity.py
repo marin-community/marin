@@ -96,6 +96,7 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
 
     spec = ModelSpec(
         model=SNOWBALL.model_name,
+        served_model_name=SNOWBALL.model_name,
         model_path=SNOWBALL.export_uri,
         num_chips=num_chips,
         tensor_parallel_size=tensor_parallel_size,
@@ -179,6 +180,7 @@ def score_vllm_against_goldens(
 
     spec = ModelSpec(
         model=SNOWBALL.model_name,
+        served_model_name=SNOWBALL.model_name,
         model_path=SNOWBALL.export_uri,
         num_chips=GPU_COUNT,
         tensor_parallel_size=1,

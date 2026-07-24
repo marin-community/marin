@@ -6,13 +6,13 @@
 Validates the two-job evalchemy path end-to-end (issue #7267): a parent orchestrator job serves
 Qwen3-0.6B with marin-serve (vLLM on a TPU slice), the evalchemy child evaluates a generation task
 (gsm8k) and a multiple-choice task (arc_easy) against the served OpenAI URL, and the server is torn
-down. It exercises the same ``serve_and_eval`` entrypoint the composable ``eval_step`` runs through.
+down. It exercises the same shared-inference entrypoint the composable ``eval_step`` runs through.
 
 It drives live Iris TPU jobs, so it is marked ``cluster`` and deselected by default (see
 ``pyproject.toml`` addopts); the ``marin-cluster-smoke`` workflow runs it. Run it on demand once you
 have cluster credentials and HF_TOKEN set:
 
-    uv run pytest tests/cluster/evals/test_serve_and_eval.py \
+    uv run pytest tests/cluster/evals/test_served_evalchemy.py \
       -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
 """
 
@@ -23,8 +23,9 @@ from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.evaluation_config import EvalTaskConfig
-
-from experiments.evals.evalchemy.serve_and_eval import EvalchemyEvalConfig, ServeBackend, ServeSpec, serve_and_eval
+from marin.evaluation.model_config import ServeBackend
+from marin.evaluation.serving_config import ServeSpec
+from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 
 pytestmark = pytest.mark.cluster
 
@@ -36,7 +37,7 @@ SMOKE_TASKS = (EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5))
 _SERVE_AND_EVAL_TIMEOUT_SECONDS = 3000.0
 
 
-def test_serve_and_eval_smoke(iris_client: IrisClient, smoke_region: str) -> None:
+def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> None:
     # smoke_region pins the slice and binds the storage root to the same gs://marin-<region>, so the
     # serve child, eval child, and outputs all colocate -- no cross-region I/O.
     out_path = f"gs://marin-{smoke_region}/tmp/eval7267-serve-and-eval-smoke/qwen3-0p6b"
@@ -48,10 +49,10 @@ def test_serve_and_eval_smoke(iris_client: IrisClient, smoke_region: str) -> Non
         max_eval_instances=3,
     )
 
-    # serve_and_eval submits its own serve + eval children, so run it as a plain CPU job rather than
+    # The adapter submits its own serve + eval children, so run it as a plain CPU job rather than
     # through StepRunner. wait(raise_on_failure default) raises if the parent (or either child) fails.
     job = iris_client.submit(
-        entrypoint=Entrypoint.from_callable(serve_and_eval, config),
+        entrypoint=Entrypoint.from_callable(run_served_evalchemy, config),
         name="eval7267-serve-and-eval-smoke",
         resources=ResourceSpec(cpu=1, memory="4g", disk="16g"),
         max_retries_failure=0,

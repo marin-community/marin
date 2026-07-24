@@ -17,13 +17,29 @@ Marin supports three evaluation paths:
 ## Post-hoc evaluation (evalchemy over a served endpoint)
 
 A post-hoc eval is decoupled from the model backend by an OpenAI-compatible URL. Each `EvalGroup` is
-run by serving the model once as an OpenAI endpoint (marin-serve: vLLM or Levanter), evaluating its
-tasks with the [evalchemy](https://github.com/marin-community/evalchemy) fork
-(`eval.eval --model local-completions`), and tearing the server down. Multiple-choice tasks use the
-served backend's logprob API, so they run the same way as generation — no separate JAX-logprob
-backend. See [`serve_and_eval.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evalchemy/serve_and_eval.py).
+run inside one [`remote_inference`][marin.inference.iris.remote_inference] context. The generic group
+runner resolves a [`RunningModel`][marin.inference.types.RunningModel] and passes it to
+[`run_evalchemy`][marin.evaluation.evalchemy.run_evalchemy], then inference is torn down.
+Multiple-choice tasks use the served backend's logprob API, so they run the same way as generation —
+no separate JAX-logprob backend.
 
-- [`eval_step`][experiments.evals.evals.eval_step] builds one post-hoc eval artifact from an `EvalGroup`; combine groups and aggregate them with [`eval_report`][experiments.evals.evals.eval_report]. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
+The lifecycle and the evaluator are separate APIs:
+
+```python
+with remote_inference(model, engine, iris) as session:
+    running_model = session.resolve_model()
+    run_evalchemy(running_model, eval_config, output_path)
+```
+
+`remote_inference` owns startup, liveness, endpoint changes, and teardown. Endpoint-oriented
+mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor` own only their native task and
+result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
+or outcomes behind a universal `do_eval` interface.
+
+- [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
+  `EvalGroup`; combine groups and aggregate them with
+  [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in
+  `experiments/evals/evals.py`. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
 
 One `EvalGroup` (a task set) becomes one `EvalchemyResult` artifact addressed by
 `evaluation/evalchemy/{model}/{group_id}`, so a pipeline picks up exactly the evals it needs and each
@@ -59,7 +75,9 @@ them.
 
 ## Harbor-based evaluation
 
-Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py) and the Harbor evaluator integration to run registry datasets in containerized environments.
+Agentic launcher runs pass the same `RunningModel` boundary to
+[`run_harbor`][marin.evaluation.harbor_runner.run_harbor]. Off-cluster sandboxes receive a scoped
+capability route resolved by the inference session.
 
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.

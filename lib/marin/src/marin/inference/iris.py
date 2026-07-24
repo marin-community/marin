@@ -19,8 +19,9 @@ from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
 from iris.client import Job, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
-from rigging.connect import proxy_path
+from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
+from rigging.timing import Duration
 
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -34,6 +35,7 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
+    EndpointRoute,
     InferenceRequestProvider,
     InferenceResponseProvider,
     InferenceWorkerMetadata,
@@ -48,6 +50,7 @@ _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
 _METADATA_BACKEND = "backend"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
+_CAPABILITY_TTL = Duration.from_hours(96)
 
 
 class RemoteInferenceStartupError(RuntimeError):
@@ -60,7 +63,7 @@ class RemoteInferenceStartupError(RuntimeError):
 
 @dataclass(frozen=True)
 class RemoteInferenceSession:
-    model: RunningModel
+    _initial_model: RunningModel
     jobs: tuple[JobHandle, ...]
     endpoint_name: str | None
     streaming: bool
@@ -68,19 +71,67 @@ class RemoteInferenceSession:
     backend_name: str
     iris_job: Job | None = None
 
-    def resolve_model(self) -> RunningModel:
-        """Resolve the current address after a direct worker restart."""
+    def resolve_model(
+        self,
+        route: EndpointRoute = EndpointRoute.INTERNAL,
+        *,
+        public_origin: str | None = None,
+    ) -> RunningModel:
+        """Resolve the current direct-worker address, optionally through a scoped capability route."""
 
+        if route is EndpointRoute.CAPABILITY:
+            if self.endpoint_name is None:
+                raise ValueError("capability routing requires a direct registered endpoint")
+            if public_origin is None:
+                raise ValueError("capability routing requires a public origin")
+            response = iris_ctx().client.mint_endpoint_token(self.endpoint_name, ttl=_CAPABILITY_TTL)
+            endpoint = replace(
+                self._initial_model.endpoint,
+                base_url=f"{public_origin.rstrip('/')}{capability_path(self.endpoint_name, response.token)}/v1",
+            )
+            return replace(self._initial_model, endpoint=endpoint)
         if self.endpoint_name is None:
-            return self.model
-        endpoints = iris_ctx().client._cluster_client.list_endpoints(self.endpoint_name, exact=True)
+            return self._initial_model
+        endpoints = iris_ctx().client.list_endpoints(self.endpoint_name, exact=True)
         if not endpoints:
             raise RuntimeError(f"Inference endpoint {self.endpoint_name!r} is not registered")
         endpoint = replace(
-            self.model.endpoint,
+            self._initial_model.endpoint,
             base_url=f"{endpoints[0].address.rstrip('/')}/v1",
         )
-        return replace(self.model, endpoint=endpoint)
+        return replace(self._initial_model, endpoint=endpoint)
+
+    def wait_model(self, timeout: float) -> RunningModel:
+        """Wait for a direct endpoint to be registered after a worker restart."""
+        deadline = time.monotonic() + timeout
+        while True:
+            self.check_alive()
+            try:
+                return self.resolve_model()
+            except RuntimeError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for inference endpoint {self.endpoint_name!r}") from None
+                time.sleep(_ENDPOINT_READY_POLL_SECONDS)
+
+    def endpoint_departed(self, model: RunningModel) -> bool:
+        """Whether the session has definitively left ``model``'s concrete address."""
+        try:
+            self.check_alive()
+        except RuntimeError:
+            return True
+        if self.endpoint_name is None:
+            return False
+        try:
+            return self.resolve_model().endpoint.base_url != model.endpoint.base_url
+        except RuntimeError:
+            return False
+
+    def check_alive(self) -> None:
+        """Raise when any inference worker has reached a terminal state."""
+        for job in self.jobs:
+            status = job.status()
+            if JobStatus.finished(status):
+                raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
 
 
 @dataclass(frozen=True)
@@ -271,7 +322,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     ) as session:
         with _register_dashboard(
             service,
-            session.model,
+            session.resolve_model(),
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
             streaming=session.streaming,
@@ -283,7 +334,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
     ctx = iris_ctx()
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        endpoints = ctx.client._cluster_client.list_endpoints(endpoint_name, exact=True)
+        endpoints = ctx.client.list_endpoints(endpoint_name, exact=True)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
@@ -361,8 +412,8 @@ def _start_direct_inference(
                 jobs=(job,),
             ) from exc
         yield RemoteInferenceSession(
-            model=RunningModel(
-                endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.model),
+            _initial_model=RunningModel(
+                endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.endpoint_model),
                 tokenizer=model.tokenizer,
             ),
             jobs=(job,),
@@ -452,7 +503,7 @@ def _start_brokered_inference(
         proxy = broker.proxy
         with serve_inference_proxy(
             broker=response_provider,
-            model=model.model,
+            model=model.endpoint_model,
             host=job_info.advertise_host,
             port=proxy.port,
             request_timeout_seconds=proxy.request_timeout_seconds,
@@ -470,7 +521,7 @@ def _start_brokered_inference(
             worker_metadata = next(iter(metadata_by_worker.values()))
             started = True
             yield RemoteInferenceSession(
-                model=replace(running_model, tokenizer=model.tokenizer),
+                _initial_model=replace(running_model, tokenizer=model.tokenizer),
                 jobs=tuple(worker_jobs),
                 endpoint_name=None,
                 streaming=False,

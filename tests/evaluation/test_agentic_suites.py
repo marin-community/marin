@@ -12,27 +12,28 @@ the Harbor run -- the pure planning pieces that need no cluster.
 from dataclasses import replace
 
 from iris.cluster.types import EndpointAccess
+from marin.evaluation.definitions import HarborDefinition, ResolvedHarborRun
+from marin.evaluation.hardware import Platform
 from marin.evaluation.records import Provenance
 
-from experiments.evaluation.evals import EVALS, SUITES, EvalMechanism
-from experiments.evaluation.hardware import Platform
+from experiments.evaluation.evals import EVALS, SUITES
 from experiments.evaluation.launch import LaunchSpec, _group_params, plan_runs
 
 
 def test_agentic_suites_are_harbor_datasets():
     for key in SUITES["agentic"]:
         suite = EVALS[key]
-        assert suite.mechanism is EvalMechanism.HARBOR
-        assert suite.harbor is not None
+        assert isinstance(suite, HarborDefinition)
         # Every agentic benchmark runs its trials in a Daytona sandbox against the served endpoint.
-        assert suite.harbor.env == "daytona"
-        assert suite.harbor.dataset.startswith("hf://")
-        assert suite.harbor.version == "main"
+        assert suite.config.env == "daytona"
+        assert suite.config.dataset.startswith("hf://")
+        assert suite.config.version == "main"
 
 
 def test_tb2_lite_caps_instances_for_validation():
     lite = EVALS["tb2-lite"]
-    assert lite.harbor.dataset == "hf://DCAgent2/terminal_bench_2"
+    assert isinstance(lite, HarborDefinition)
+    assert lite.config.dataset == "hf://DCAgent2/terminal_bench_2"
     assert lite.max_eval_instances == 2
 
 
@@ -54,9 +55,9 @@ def test_model_agent_kwargs_flow_into_the_harbor_run():
     )
     params = _group_params(plan_runs(spec), spec, _provenance(), "tester")
     (run,) = params.runs
-    assert run.harbor is not None
-    assert "enable_thinking" in run.harbor.agent_kwargs["extra_body"]
-    assert params.session.serve.endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK
+    assert isinstance(run, ResolvedHarborRun)
+    assert "enable_thinking" in run.config.agent_kwargs["extra_body"]
+    assert params.serving.spec.endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
 def test_suite_level_agent_kwargs_override_model_level():
@@ -73,11 +74,12 @@ def test_suite_level_agent_kwargs_override_model_level():
     EVALS["tb2-override"] = replace(
         EVALS["tb2-lite"],
         name="tb2-override",
-        harbor=replace(EVALS["tb2-lite"].harbor, agent_kwargs={"extra_body": "SUITE"}),
+        config=replace(EVALS["tb2-lite"].config, agent_kwargs={"extra_body": "SUITE"}),
     )
     try:
         params = _group_params(plan_runs(spec), spec, _provenance(), "tester")
         (run,) = params.runs
-        assert run.harbor.agent_kwargs["extra_body"] == "SUITE"
+        assert isinstance(run, ResolvedHarborRun)
+        assert run.config.agent_kwargs["extra_body"] == "SUITE"
     finally:
         del EVALS["tb2-override"]

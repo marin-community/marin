@@ -5,6 +5,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 # Keep logs readable when a poll returns many request IDs.
@@ -38,6 +39,21 @@ class RunningModel:
 
     endpoint: OpenAIEndpoint
     tokenizer: str | None = None
+
+
+class EndpointRoute(StrEnum):
+    """How a remote inference endpoint is addressed by its caller."""
+
+    INTERNAL = "internal"
+    CAPABILITY = "capability"
+
+
+class InferenceObserver(Protocol):
+    """Liveness operations needed while an evaluator is using a concrete endpoint."""
+
+    def endpoint_departed(self, model: RunningModel) -> bool: ...
+
+    def check_alive(self) -> None: ...
 
 
 @dataclass(frozen=True)

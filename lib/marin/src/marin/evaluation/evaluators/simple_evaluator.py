@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
+from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 
 
@@ -122,7 +123,7 @@ class SimpleEvaluator(Evaluator):
 
     def evaluate(
         self,
-        model: ModelConfig,
+        model: InferenceModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,

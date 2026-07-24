@@ -4,7 +4,7 @@
 """Run one Harbor job in an isolated environment; invoked as a subprocess, never imported.
 
 Harbor (and its Daytona SDK) carry pre-release transitive pins that do not fit the marin lock, so
-Harbor is treated as an external tool: :func:`marin.evaluation.harbor_runner.run_harbor_eval` runs
+Harbor is treated as an external tool: :func:`marin.evaluation.harbor_runner.run_harbor` runs
 this script under ``uv run --no-project --with harbor --with daytona --prerelease=allow``, which
 builds an ephemeral environment with just Harbor and Daytona. This file therefore imports **only**
 Harbor and the standard library -- never marin -- so it loads cleanly in that project-less env.

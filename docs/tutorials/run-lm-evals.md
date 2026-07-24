@@ -16,15 +16,18 @@ Multiple-choice and generation tasks run the same way (see [Evaluation Overview]
 
 ## Core APIs
 
-The composable helpers live in `experiments/evals/evals.py`:
+Reusable step builders live in `marin.experiment.evaluation`; experiment task menus remain under
+`experiments/evals`:
 
 ```python
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import (
+from marin.evaluation.serving_config import ServeSpec
+from marin.experiment.evaluation import (
     EvalGroup,
     eval_step,
     eval_steps,
     eval_report,
+)
+from experiments.evals.evals import (
     core_evals,
     key_evals,
     base_model_evals,
@@ -47,8 +50,9 @@ or with `StepRunner().run([lower(x) for x in steps])`.
 from marin.execution.lazy import ArtifactStep, run
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import eval_report, eval_steps, key_evals
+from marin.evaluation.serving_config import ServeSpec
+from marin.experiment.evaluation import eval_report, eval_steps
+from experiments.evals.evals import key_evals
 
 # Adopt a pre-existing checkpoint as a typed handle (no copy, no recompute). A relative source
 # resolves against the local bucket (MARIN_PREFIX, set by iris); pass an absolute gs:// path to pin.
@@ -80,8 +84,8 @@ An `EvalGroup` states its tasks, its serving backend, and its id explicitly:
 ```python
 from marin.execution.lazy import run
 
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import EvalGroup, eval_report, eval_steps
+from marin.evaluation.serving_config import ServeSpec
+from marin.experiment.evaluation import EvalGroup, eval_report, eval_steps
 from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS
 
 groups = [
@@ -158,7 +162,7 @@ EvalGroup(
 ```
 
 Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra flags. See
-`ServeSpec.vllm_extra_args` in `serve_and_eval.py` for the full list of recipes.
+`marin.evaluation.serving_config.ServeSpec` for the serving contract.
 
 ## Parameter reference
 
@@ -173,6 +177,7 @@ Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra fla
 - `max_gen_toks`: generation length cap for generation tasks.
 - `max_eval_instances`: optional cap on evaluated examples (a small value gives a fast smoke).
 - `num_concurrent`: parallel in-flight requests the eval client sends the endpoint.
+- `extra_gen_kwargs`: additional Evalchemy generation arguments, such as `repetition_penalty`.
 - `discover_latest_checkpoint`: whether to resolve the latest HF checkpoint under the model path.
 
 ### `eval_report`

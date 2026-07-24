@@ -304,7 +304,7 @@ def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.Mi
 def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     """LINK serve prints the OpenAI base_url with the scoped token in the URL path."""
     client = MagicMock()
-    client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
+    client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
 
     _mint_and_print_capability_url(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 

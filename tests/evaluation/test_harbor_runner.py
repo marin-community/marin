@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from pathlib import Path
 
 from marin.evaluation.harbor_dataset import materialize_harbor_dataset
-from marin.evaluation.harbor_runner import HarborTrial, _write_samples
+from marin.evaluation.harbor_runner import HarborRunConfig, HarborTrial, _write_samples, run_harbor
+from marin.inference.types import OpenAIEndpoint, RunningModel
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
@@ -48,3 +50,40 @@ def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
 
     assert path == str(tmp_path / "samples_harbor.parquet")
     assert Path(path).exists()
+
+
+def test_run_harbor_derives_url_and_served_name_from_running_model(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def run_driver(config_file: Path) -> None:
+        captured.update(json.loads(config_file.read_text()))
+        trial_dir = Path(captured["jobs_dir"]) / captured["job_name"] / "trial-one"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "task_name": "trial-one",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor_runner._run_driver", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor_runner.materialize_harbor_dataset", lambda *args: None)
+    model = RunningModel(
+        endpoint=OpenAIEndpoint(
+            base_url="https://iris.example/proxy/t/token/serve.model/v1",
+            model="qwen3-0.6b",
+        )
+    )
+
+    result = run_harbor(
+        model,
+        HarborRunConfig(dataset=f"toy-{tmp_path.name}", version="1.0", agent="terminus-2"),
+        str(tmp_path),
+    )
+
+    assert captured["model_name"] == "hosted_vllm/qwen3-0.6b"
+    assert captured["agent_kwargs"]["api_base"] == model.endpoint.base_url
+    assert result.total_trials == 1
+    assert result.accuracy == 1.0

@@ -22,12 +22,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.hardware import default_platform
 from experiments.evaluation.launch import LaunchSpec, run_inline
 from experiments.evaluation.models import MODELS
 

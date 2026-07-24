@@ -16,6 +16,7 @@ class ModelSpec:
     """Resolved model inputs required by every local backend."""
 
     model: str
+    served_model_name: str
     model_path: str
     num_chips: int | None
     tensor_parallel_size: int | None

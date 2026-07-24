@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import click
 from iris.cli.connect import open_iris_client
+from marin.evaluation.definitions import EvalchemyDefinition
+from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS, SUITES
-from experiments.evaluation.hardware import Platform, default_platform
 from experiments.evaluation.launch import LaunchSpec, launch_group, plan_runs, records_prefix_for, wait_and_report
 from experiments.evaluation.models import MODELS
 
@@ -37,10 +38,11 @@ def _print_plan(spec: LaunchSpec) -> None:
     click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
     for plan in plan_runs(spec):
         target = plan.accel.target_cluster or plan.accel.region or spec.cluster
+        tasks = [task.name for task in plan.suite.tasks] if isinstance(plan.suite, EvalchemyDefinition) else []
         click.echo(
             f"  eval={plan.eval_key}  location={plan.model.location}  backend={plan.model.serve.backend.value}  "
             f"accel={plan.accel.label}  region_or_cluster={target}  limit={plan.limit}  "
-            f"chat_template={plan.model.apply_chat_template}  tasks={[t.name for t in plan.suite.tasks]}  "
+            f"chat_template={plan.model.apply_chat_template}  tasks={tasks}  "
             f"records={records_prefix_for(plan.accel, spec)}"
         )
 

@@ -45,10 +45,12 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.evaluation.serving_config import ServeSpec
 from marin.execution.artifact import read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.execution.step_runner import StepRunner
+from marin.experiment.evaluation import eval_report, eval_steps
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 from rigging.log_setup import configure_logging
@@ -63,8 +65,7 @@ from experiments.datakit.reference_pipeline import (
     sample_sources,
 )
 from experiments.datakit.store.datakit_store import ClusteredStoreData
-from experiments.evals.evalchemy.serve_and_eval import ServeSpec
-from experiments.evals.evals import core_evals, eval_report, eval_steps
+from experiments.evals.evals import core_evals
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 

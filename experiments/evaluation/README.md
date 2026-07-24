@@ -7,10 +7,11 @@ endpoint in order, and writes one durable `record.json` per eval as it finishes 
 in progressively, each eval independently inspectable (own record, own eval-child job and logs, own
 parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
 
-The engine is `experiments/evals/evalchemy/serve_and_eval.py` (`run_eval_units`): one marin-serve
-child exposes an OpenAI-compatible endpoint (vLLM on TPU or GPU), and one evalchemy child per eval
-hits it. One eval failing doesn't stop the rest; if the served endpoint itself dies, the remaining
-evals are recorded as serve failures without running.
+The reusable engine is `marin.evaluation.group_runner`: it opens one `remote_inference` session and
+passes each resolved `RunningModel` to the selected mechanism (`marin.evaluation.evalchemy` or
+`marin.evaluation.harbor_runner`). One eval failing doesn't stop the rest; if inference itself dies,
+the remaining evals are recorded as infrastructure failures without running. This directory contains
+the concrete catalogs, suite aliases, Marin fleet policy, CLI, and submission policy.
 
 ## Commands
 
@@ -127,10 +128,9 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an eval by adding an `EvalSuiteConfig` to `EVALS` in `evals.py` -- lm-eval `tasks` for the
-evalchemy mechanism, or a `HarborSpec` for an agentic dataset. Add it to a group in `SUITES` to make it
-selectable by name. Task flags that matter for served evals: `generation` routes the task through the
-chat API for chat-template models (MCQ tasks always use completions, which alone can echo prompt
-logprobs); `unsafe_code` passes lm-eval's `--confirm_run_unsafe_code` for code-execution scoring; and
-`completion_only` pins a generation task to the completions API for every model (humaneval's infill
-prompt breaks under chat formatting -- chat models reply with prose and markdown fences).
+Add an eval by adding an `EvalchemyDefinition` or `HarborDefinition` to `EVALS` in `evals.py`, then
+add its key to `SUITES` when it belongs in a named group. The discriminated types prevent a definition
+from mixing Evalchemy tasks with Harbor configuration. Task flags that matter for served evals:
+`generation` routes the task through the chat API for chat-template models (MCQ tasks always use
+completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
+`--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.

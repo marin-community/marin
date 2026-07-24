@@ -11,7 +11,7 @@ python with no cloudpickle, so a cloudpickled callable cannot be deserialized th
 Keeping this script to the standard library plus ``fsspec`` lets that interpreter run it directly.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
-:mod:`experiments.evals.evalchemy.serve_and_eval`), so nothing marin-side needs to import here.
+:mod:`marin.evaluation.evalchemy`), so nothing else in Marin needs to import here.
 Each task runs through the evalchemy fork's ``eval.eval`` once (one invocation per task so each
 carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
 API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``

@@ -20,8 +20,7 @@ from urllib.parse import urlparse
 import requests
 from rigging.filesystem import marin_prefix
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.config import WORKER_PYTHON_VERSION
+from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
@@ -317,7 +316,7 @@ class VllmServerHandle:
             return False
 
 
-def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+def resolve_model_name_or_path(model: InferenceModelConfig) -> tuple[str, InferenceModelConfig]:
     """Resolve the `model` argument to pass to vLLM."""
     model = _maybe_enable_streaming(model)
     model_name_or_path = model.path if model.path is not None else model.name
@@ -365,7 +364,7 @@ def _is_object_store_path(path: str) -> bool:
     return parsed.scheme in {"gs", "s3"}
 
 
-def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
+def _maybe_enable_streaming(model: InferenceModelConfig) -> InferenceModelConfig:
     if model.path is None:
         return model
     if not _is_object_store_path(model.path):
@@ -459,7 +458,7 @@ class VllmEnvironment:
 
     def __init__(
         self,
-        model: ModelConfig,
+        model: InferenceModelConfig,
         *,
         host: str = "127.0.0.1",
         port: int | None = None,
