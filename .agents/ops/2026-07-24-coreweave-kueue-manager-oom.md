@@ -3,7 +3,7 @@ date: 2026-07-24
 system: coreweave
 severity: outage
 resolution: fixed
-pr: none
+pr: https://github.com/marin-community/marin/pull/7602
 issue: none
 ---
 
