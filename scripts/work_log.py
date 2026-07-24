@@ -20,7 +20,7 @@ The work_log is a team-wide, agent-written logbook: one row per distilled milest
     scripts/work_log.py add --project P --title T [--body -|TEXT] [--author A]
 
 Auth: Cloud SQL IAM. The caller connects as their own ADC identity — a member of the
-`eng-all@openathena.ai` group, which is granted read+append — so they need
+`echo@openathena.ai` group, which is granted read+append — so they need
 roles/cloudsql.instanceUser and roles/cloudsql.client (held by the group), no password.
 """
 
