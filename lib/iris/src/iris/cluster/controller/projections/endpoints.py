@@ -330,10 +330,7 @@ class EndpointsProjection(Projection):
         endpoint: EndpointRow,
         attempt_id: int | None = None,
     ) -> AddEndpointOutcome:
-        """Replace this task's same-name endpoint and schedule the memory update.
-
-        Task validation runs inside this transaction so the RPC handler does
-        not need a separate read snapshot. Returns:
+        """Register or renew a task's named endpoint when its attempt is active.
 
         - ``NOT_FOUND`` if the task row does not exist.
         - ``TERMINAL`` if the task is in a terminal state; registration is
@@ -342,9 +339,7 @@ class EndpointsProjection(Projection):
         - ``OK`` after a successful upsert; the in-memory index is updated
           via a post-commit hook.
 
-        A task can own only one live registration for a given name. Replacing
-        it in this transaction prevents a retried task's dead address from
-        remaining resolvable alongside the new attempt.
+        A task owns at most one live registration for a given name.
         """
         task_id = endpoint.task_id
         job_id, _ = task_id.require_task()

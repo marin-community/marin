@@ -100,7 +100,7 @@ def build_evaluation_batch(
     provenance: Provenance,
     user: str,
 ) -> EvaluationBatch:
-    """Resolve experiment names into a registry-free worker payload."""
+    """Resolve experiment names into one model-serving evaluation batch."""
     if not spec.evals:
         raise ValueError("at least one evaluation is required")
     if len(set(spec.evals)) != len(spec.evals):

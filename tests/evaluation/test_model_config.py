@@ -93,10 +93,8 @@ def test_serve_config_vllm_args_renders_typed_knobs():
     assert args[args.index("--swap-space") + 1] == "32"
     assert args[args.index("--data-parallel-size") + 1] == "2"
     assert args[args.index("--reasoning-parser") + 1] == "qwen3"
-    # A tool-call parser is inert in vLLM without auto tool choice, so both flags are emitted.
     assert "--enable-auto-tool-choice" in args
     assert args[args.index("--tool-call-parser") + 1] == "hermes"
-    # The explicit escape-hatch flag rides through unchanged.
     assert "--enable-prefix-caching" in args
 
 

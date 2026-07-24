@@ -458,7 +458,7 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
+        matches = self._cluster.list_endpoint_instances(prefixed_name)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
@@ -932,9 +932,13 @@ class IrisClient:
         """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
         return self._cluster_client.resolve_endpoint(url)
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
         """List registered endpoints matching a name prefix."""
-        return self._cluster_client.list_endpoints(prefix, exact=exact)
+        return self._cluster_client.list_endpoints(prefix)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List registered instances with the exact endpoint name."""
+        return self._cluster_client.list_endpoint_instances(name)
 
     def mint_endpoint_token(
         self,

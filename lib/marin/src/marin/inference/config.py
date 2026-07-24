@@ -62,14 +62,11 @@ class ServedModelConfig:
 
 @dataclass
 class InferenceModelConfig:
-    """Model inputs shared by in-process vLLM and inference smoke tests."""
+    """Model and engine arguments consumed by an in-process vLLM server."""
 
     name: str
     path: str | None
     engine_kwargs: dict[str, Any]
-    generation_params: dict | None = None
-    apply_chat_template: bool = False
-    base_eval_run_name: str | None = None
 
 
 @dataclass(frozen=True)

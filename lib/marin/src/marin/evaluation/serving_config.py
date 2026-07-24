@@ -28,6 +28,7 @@ from marin.inference.config import (
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
+_HF_CONFIG_FILENAME = "config.json"
 DEFAULT_SERVE_MEMORY = "64g"
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
@@ -83,11 +84,11 @@ def auto_serve_overrides(
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect a model's config.json and fill portable vLLM defaults."""
     if "://" in model:
-        config_path = StoragePath(model) / "config.json"
+        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
     elif Path(model).is_dir():
-        config_path = StoragePath(str(Path(model) / "config.json"))
+        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
     else:
-        config_path = StoragePath(hf_hub_download(model, "config.json", revision=revision))
+        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
     config = json.loads(config_path.read_text())
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 

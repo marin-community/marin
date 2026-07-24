@@ -151,7 +151,7 @@ def _verify_durable_artifacts(output_dir: str) -> None:
         raise RuntimeError(f"no Evalchemy results_*.json landed under {output_dir!r}")
 
 
-def _submit_evalchemy_child(
+def _run_evalchemy_child(
     model: RunningModel,
     config: EvalchemyRunConfig,
     output_dir: str,
@@ -212,7 +212,7 @@ def run_evalchemy(
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _submit_evalchemy_child(model, config, output_dir, env_vars)
+    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
         parquets = export_lm_eval_samples(output_dir)

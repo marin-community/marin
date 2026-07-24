@@ -11,7 +11,8 @@ same orchestration as the CLI (serve the model once, run evalchemy against the s
 artifact path: an identical (model, evals, limit, version) config is a cache hit, and downstream
 steps can depend on the records like any other artifact.
 
-The step process acts as the orchestrator, so the pipeline must run as an Iris job::
+The step submits an Iris orchestrator job and waits for its records, so the pipeline itself must run
+where it can reach Iris::
 
     uv run iris --cluster marin job run -- python -m experiments.evaluation.pipeline
 

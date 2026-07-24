@@ -38,7 +38,6 @@ def test_local_llm_inference():
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
-        generation_params={"max_tokens": 16},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)
     generated_texts = run_vllm_inference(model_name_or_path, **config.engine_kwargs)

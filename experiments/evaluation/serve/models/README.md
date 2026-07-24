@@ -26,7 +26,7 @@ serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
   max_model_len: 32768
-  swap_space_gb: 32             # CPU KV offload (GPU-only; the TPU serve path strips it)
+  swap_space_gb: 32             # CPU KV offload passed to vLLM as --swap-space
   trust_remote_code: true
   hf_overrides: null            # JSON string, e.g. rope-scaling overrides
   limit_mm_per_prompt: null     # JSON string, e.g. '{"image":0,"video":0}' for text-only eval

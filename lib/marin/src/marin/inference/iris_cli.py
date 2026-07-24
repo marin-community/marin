@@ -247,7 +247,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = client.list_endpoints(endpoint_name, exact=True)
+        endpoints = client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)

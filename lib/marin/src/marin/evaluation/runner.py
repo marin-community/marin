@@ -35,6 +35,7 @@ from marin.inference.types import RunningModel
 logger = logging.getLogger(__name__)
 
 _INFERENCE_ROLE = "inference"
+_ORCHESTRATOR_ROLE = "orchestrator"
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
@@ -226,7 +227,7 @@ def _run_one_evaluation(
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
 ) -> _EvaluationExecution:
-    jobs = {"orchestrator": orchestrator_job_id}
+    jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
     jobs.update(_inference_job_ids(session))
     tails: dict[str, tuple[str, ...]] = {}
     metrics: dict[str, dict[str, float]] = {}
@@ -325,7 +326,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
             )
     except RemoteInferenceStartupError as exc:
         inference_jobs, tails = _startup_diagnostics(exc)
-        jobs = {"orchestrator": orchestrator_job_id}
+        jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
         jobs.update(inference_jobs)
         paths: list[str] = []
         _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)

@@ -47,8 +47,14 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+_OPENAI_API_SUFFIX = "/v1"
+_METADATA_MODEL = "model"
+_METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
+_METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
+_METADATA_STREAMING = "streaming"
+_MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 
 
@@ -142,7 +148,27 @@ def _prepared_local_inference(
 
 
 def _server_root(model: RunningModel) -> str:
-    return model.endpoint.base_url.removesuffix("/v1")
+    return model.endpoint.base_url.removesuffix(_OPENAI_API_SUFFIX)
+
+
+def _endpoint_metadata(
+    *,
+    model: str,
+    backend: str,
+    accelerator: str,
+    tensor_parallel_size: int,
+    streaming: bool,
+    proxy_timeout_seconds: float,
+) -> dict[str, str]:
+    return {
+        _METADATA_MODEL: model,
+        _METADATA_KIND: _MARIN_SERVE_KIND,
+        _METADATA_BACKEND: backend,
+        _METADATA_ACCELERATOR: accelerator,
+        _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
+        _METADATA_STREAMING: str(streaming).lower(),
+        PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
+    }
 
 
 def _new_endpoint_identity() -> tuple[str, str]:
@@ -154,7 +180,7 @@ def _capability_model(model: RunningModel, endpoint_name: str, capability_origin
     response = iris_ctx().client.mint_endpoint_token(endpoint_name, ttl=_CAPABILITY_TTL)
     endpoint = replace(
         model.endpoint,
-        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}/v1",
+        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{_OPENAI_API_SUFFIX}",
     )
     return replace(model, endpoint=endpoint)
 
@@ -208,15 +234,14 @@ def _register_dashboard(
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
-        metadata = {
-            "model": model.endpoint.model,
-            "kind": "marin-serve",
-            _METADATA_BACKEND: backend_name,
-            "accelerator": _accelerator_label(service.iris),
-            _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
-            "streaming": str(streaming).lower(),
-            PROXY_TIMEOUT_METADATA_KEY: str(service.controller_proxy_timeout_seconds),
-        }
+        metadata = _endpoint_metadata(
+            model=model.endpoint.model,
+            backend=backend_name,
+            accelerator=_accelerator_label(service.iris),
+            tensor_parallel_size=tensor_parallel_size,
+            streaming=streaming,
+            proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
+        )
         with ctx.registry.registered(
             service.endpoint_name,
             address,
@@ -280,7 +305,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
     ctx = iris_ctx()
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        endpoints = ctx.client.list_endpoints(endpoint_name, exact=True)
+        endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
@@ -347,7 +372,7 @@ def _start_direct_inference(
                 jobs=(job,),
             ) from exc
         running_model = RunningModel(
-            endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}/v1", model=model.model_id),
+            endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}{_OPENAI_API_SUFFIX}", model=model.model_id),
             tokenizer=model.tokenizer,
         )
         yield RemoteInferenceSession(
@@ -459,15 +484,14 @@ def _start_brokered_inference(
             with iris_ctx().registry.registered(
                 endpoint_name,
                 _server_root(running_model),
-                {
-                    "model": model.model_id,
-                    "kind": "marin-serve",
-                    _METADATA_BACKEND: worker_metadata.backend_name,
-                    "accelerator": _accelerator_label(iris),
-                    _METADATA_TENSOR_PARALLEL_SIZE: str(worker_metadata.tensor_parallel_size),
-                    "streaming": "false",
-                    PROXY_TIMEOUT_METADATA_KEY: str(proxy.request_timeout_seconds),
-                },
+                _endpoint_metadata(
+                    model=model.model_id,
+                    backend=worker_metadata.backend_name,
+                    accelerator=_accelerator_label(iris),
+                    tensor_parallel_size=worker_metadata.tensor_parallel_size,
+                    streaming=False,
+                    proxy_timeout_seconds=proxy.request_timeout_seconds,
+                ),
                 access=EndpointAccess.ENDPOINT_ACCESS_LINK,
             ):
                 internal_model = replace(running_model, tokenizer=model.tokenizer)
