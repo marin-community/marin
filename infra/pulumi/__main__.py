@@ -15,6 +15,7 @@ README.md's "Future work".
 
 import os
 import sys
+from pathlib import Path
 
 # Make the `iac` package importable without a separate install step: Pulumi runs this file
 # from infra/pulumi/, so add its src/ to the path. Deps (pulumi, pulumi-kubernetes) and
@@ -29,7 +30,7 @@ from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
-from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
+from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
@@ -86,21 +87,20 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
             "the minimal IaC cut needs an out-of-cluster kubeconfig to target"
         )
     kubeconfig_path = os.path.expanduser(platform_coreweave.kubeconfig_path)
+    kubeconfig = pulumi.Output.secret(Path(kubeconfig_path).read_text())
     # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
     # otherwise a stack silently targets whatever `kubectl` was last pointed at.
     #
     # enable_patch_force=True: declared here until the "cede" ships (spec.md §4). Iris's
     # controller still re-applies RBAC/NodePools under its own field manager on every restart, so
     # a plain SSA dry-run reports a field conflict without forced ownership (README §Adoption
-    # check).
+    # check). Keep kubeconfig and context as ordinary provider inputs: ignoring either makes
+    # Pulumi reuse stale local credentials or even a previously stored path string.
     k8s_provider = k8s.Provider(
         "cw-k8s",
-        kubeconfig=kubeconfig_path,
+        kubeconfig=kubeconfig,
         context=platform_coreweave.kube_context or None,
         enable_patch_force=True,
-        opts=pulumi.ResourceOptions(
-            ignore_changes=["kubeconfig", "context"]
-        ),  # ignore changes to fields encoding local user state
     )
 
     CoreweaveCluster(
@@ -117,6 +117,12 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac, adopt=adopt),
         k8s_provider=k8s_provider,
     )
+    if grafana_observer := coreweave_provisioning.grafana_observer_rbac:
+        GrafanaObserverRbac(
+            "grafana-observer-rbac",
+            GrafanaObserverRbacArgs(username=grafana_observer.username, adopt=adopt),
+            k8s_provider=k8s_provider,
+        )
 
     kueue_config = kubernetes_provider.kueue if kubernetes_provider else None
     if kueue_config is None or not kueue_config.cluster_queue:

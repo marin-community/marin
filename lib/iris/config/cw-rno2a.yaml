@@ -49,6 +49,8 @@ provisioning:
       hostname: iris-cw-rno2a.oa.dev
       target: iris-cw-rno2a.208261-marin-rn02a.coreweave.app
     rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      username: cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token
 
 platform:
   label_prefix: cw-rno2a

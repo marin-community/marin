@@ -39,6 +39,9 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `provisioning:` as an opaque dict;
   `iac.config` owns the typed schema. (The package is `infra/pulumi/src/iac/`, imported as
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
+- Grafana's CoreWeave Managed Auth username from
+  `provisioning.coreweave.grafana_observer_rbac`. The stack binds that exact username to
+  `get`, `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes.
 - Kueue's controller-manager memory request and limit default to `2Gi`.
   `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
 
@@ -134,6 +137,22 @@ pulumi up $targets
 pulumi config rm marin-iac:import
 pulumi up       # normal run, adopt=false now — creates the remaining components fresh
 ```
+
+The Grafana observer RBAC was created live before Pulumi ownership. Adopt only that component
+on each configured Grafana cluster:
+
+```bash
+pulumi stack select <cluster>
+pulumi config set marin-iac:import true
+target="urn:pulumi:<cluster>::marin-iac::marin:coreweave:GrafanaObserverRbac::grafana-observer-rbac"
+pulumi preview --target "$target"
+pulumi up --target "$target"
+pulumi config rm marin-iac:import
+```
+
+Do not leave `marin-iac:import` set. A CoreWeave token rotation changes the Managed Auth
+username (`cwtoken-…`), so update `grafana_observer_rbac.username` in all three cluster configs
+and run a normal preview/up for each stack before switching Grafana to the new token.
 
 ### Backend
 

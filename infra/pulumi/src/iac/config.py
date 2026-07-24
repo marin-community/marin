@@ -128,12 +128,19 @@ class RbacSpec(BaseModel):
     service_account: str = "iris-controller"
 
 
+class GrafanaObserverRbacSpec(BaseModel):
+    """CoreWeave Managed Auth username used by Grafana's cluster observer."""
+
+    username: str
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
     ingress: IngressSpec
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
+    grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):

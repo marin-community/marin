@@ -226,7 +226,7 @@ class BridgeConfig:
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
             http_timeout=http_timeout,
             github_app_credentials=_github_app_credentials(),
-            cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
+            cw_read_token=(os.environ.get("CW_READ_TOKEN") or "").strip() or None,
             loom_alerts=loom_alerts,
         )
 

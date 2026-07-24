@@ -60,6 +60,8 @@ provisioning:
       hostname: iris-cw-us-east-08a.oa.dev
       target: iris-cw-us-east-08a.208261-marin-us-east-08a.coreweave.app
     rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      username: cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token
 
 platform:
   label_prefix: cw-use08a

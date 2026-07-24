@@ -245,9 +245,11 @@ class K8sSource:
             try:
                 response = self._client.get(path, params=params)
             except httpx.TimeoutException as err:
-                raise K8sError(K8sErrorClass.TIMEOUT, f"{path}: {err}") from err
+                raise K8sError(K8sErrorClass.TIMEOUT, f"{path}: {type(err).__name__}") from err
             except httpx.TransportError as err:
-                raise K8sError(K8sErrorClass.NETWORK, f"{path}: {err}") from err
+                # httpcore may include the rejected Authorization header in protocol
+                # errors, so never copy a transport exception's text into logs.
+                raise K8sError(K8sErrorClass.NETWORK, f"{path}: {type(err).__name__}") from err
             if response.status_code == 429 and attempt == 1:
                 time.sleep(_retry_after(response))
                 continue

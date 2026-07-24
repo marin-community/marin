@@ -249,10 +249,26 @@ unauthenticated and the build panel shows no data.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
-cluster in the org, no Secrets, no writes. Rotation is overlap-safe: mint a second
-read-role token in the CW console, `gcloud secrets versions add` it, redeploy, then
-revoke the old token. The same applies to the Slack webhook and SMTP password — add a
-version, redeploy, retire the old credential.
+cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
+CoreWeave Pulumi stacks bind the token's exact Managed Auth username to the
+nodes-only `marin-grafana-node-reader` role. The username lives under
+`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config.
+
+Rotation is overlap-safe:
+
+1. Mint a second read-role token in the CoreWeave console. Save it as a single
+   line with no CR/LF; Secret Manager preserves trailing newlines.
+2. Use the token against one cluster's `SelfSubjectReview` to get its
+   `cwtoken-…` username. Update `grafana_observer_rbac.username` in
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`.
+3. Preview and update the three CoreWeave Pulumi stacks. Verify `list nodes=yes`,
+   while pod creation, Secret reads, and impersonation remain denied.
+4. Add the token as a new `marin-grafana-cw-read-token` version, deploy a fresh
+   Grafana revision, and verify every k8s bridge route before disabling the old
+   secret version and revoking the old CoreWeave token.
+
+The same Secret Manager overlap pattern applies to the Slack webhook and SMTP
+password: add a version, redeploy, then retire the old credential.
 
 Creating the secrets:
 
