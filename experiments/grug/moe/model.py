@@ -324,7 +324,10 @@ class CausalSelfAttention(eqx.Module):
         # SConv: depthwise causal conv after the K and V projections (before head-split/RMS).
         # Guard each site independently -- K-only leaves sconv_v None. Segment ids (packed-doc
         # boundaries) come from the mask so the conv never mixes across a document boundary.
-        sconv_segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        # AttentionMask.segment_ids is a (q, kv) tuple; use the q (per-position) ids -- for
+        # self-attention q == kv, and the conv indexes positions within the one sequence.
+        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = _seg[0] if _seg is not None else None
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         if self.sconv_v is not None:
@@ -624,7 +627,9 @@ class Block(eqx.Module):
             w2_pre0 = reshard(em.w_down[:per], P(None, None, None))
 
         # Segment ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
-        sconv_segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        # AttentionMask.segment_ids is a (q, kv) tuple; the q (per-position) ids are what the conv needs.
+        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = _seg[0] if _seg is not None else None
 
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
