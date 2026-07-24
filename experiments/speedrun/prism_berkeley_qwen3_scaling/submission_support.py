@@ -24,12 +24,17 @@ from rigging.filesystem import open_url, prefix_join
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.prebuilt_caches import fineweb_edu_10B_dataset, fineweb_edu_10M_dataset
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
 
-_C4_EN_BPB_KEYS = ("eval/paloma/c4_en/bpb", "eval/paloma/c4_en-llama3/bpb")
+_C4_EN_BPB_KEYS = (
+    "eval/paloma/c4_en/bpb",
+    "eval/paloma/c4_en-llama3/bpb",
+    "eval/paloma/c4_en-marin/bpb",
+)
 
 
 @dataclass(frozen=True)
@@ -203,8 +208,8 @@ def default_speedrun(
 
     tokenized_dataset = _resolve_tokenized_dataset(config.tokenized_dataset)
     validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+        *paloma_datasets(tokenizer=marin_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
     ]
     train_step = train_lm(
         name=f"checkpoints/speedrun/{name}",

@@ -46,7 +46,34 @@ The focused optimizer and speedrun-submission tests pass (24 tests). Llama 3
 and Marin validation handles now produce distinct artifact identities, and the
 new Llama 3 Paloma and Uncheatable cache prefixes do not yet exist in GCS.
 
+The 2026.07.23.3 recovery launch constructed the fresh Llama 3 validation
+caches successfully, then failed all 40 training steps before TPU allocation.
+The persisted FineWeb record at
+tokenized/subcache/fineweb-edu-10B-ac65f6/.executor_info identifies its
+tokenizer as marin-community/marin-tokenizer; the fresh validation record
+identifies meta-llama/Meta-Llama-3.1-8B.
+
+## Hypothesis 3
+
+The archived training cache, rather than the validation cache, is the Marin
+tokenizer component in the mismatch. The speedrun validation must adopt that
+actual persisted tokenizer record.
+
+## Changes to make
+
+- Build the default speedrun validation with the Marin tokenizer and retain the
+  tokenizer-specific -marin artifact identity.
+- Recognize the resulting c4_en-marin W&B metric when collecting results.
+
+## Results
+
+The focused optimizer and speedrun-submission tests pass (24 tests). Local
+materialization now resolves both the archived FineWeb train cache and
+Paloma's new c4_en-marin cache to marin-community/marin-tokenizer. The new
+Marin cache prefixes are empty, so the next launch cannot reuse an
+incompatible record.
+
 ## Future work
 
-- [ ] Verify the fresh validation caches materialize with the Llama 3 tokenizer,
-  then launch a new 300M sweep version.
+- [ ] Verify the fresh Marin validation caches materialize, then launch a new
+  300M sweep version.

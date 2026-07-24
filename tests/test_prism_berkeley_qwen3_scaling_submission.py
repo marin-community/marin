@@ -113,11 +113,14 @@ def test_default_speedrun_accepts_archived_tokenized_dataset(monkeypatch):
 def test_default_speedrun_matches_validation_tokenizer_to_archived_train_cache():
     _, config = build_config("130m")
     train_step, _ = default_speedrun("prism-berkeley-qwen3-130m-test", config, version="2026.07.11")
+    train_dataset = next(step for step in train_step.deps if step.name == "fineweb-edu-10B")
     validation_steps = [step for step in train_step.deps if step.name.startswith(("paloma/", "uncheatable_eval/"))]
+    train_tokenizer = materialized_config(train_dataset, "gs://test-prefix").tokenizer
 
     assert len(validation_steps) == 23
     assert {step.version for step in validation_steps} != {"2026.06.28"}
-    assert {materialized_config(step, "gs://test-prefix").tokenizer for step in validation_steps} == {llama3_tokenizer}
+    assert train_tokenizer == marin_tokenizer
+    assert {materialized_config(step, "gs://test-prefix").tokenizer for step in validation_steps} == {train_tokenizer}
 
 
 def test_validation_cache_identity_distinguishes_tokenizers():
