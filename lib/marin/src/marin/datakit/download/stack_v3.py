@@ -85,6 +85,27 @@ class StackV3File(TypedDict):
     size_bytes: int
 
 
+class StackV3Repository(TypedDict):
+    repo_path: str
+    repo_id: int
+    commit_id: str
+    github_metadata: dict[str, object]
+    num_files: int
+    files: list[StackV3File]
+
+
+class StackV3Document(TypedDict):
+    text: str
+    source: str
+    repo_path: str
+    repo_id: int
+    commit_id: str
+    github_metadata: dict[str, object]
+    num_files: int
+    file_metadata: list[dict[str, object]]
+    serialization_format: str
+
+
 def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     files_by_directory: dict[tuple[str, ...], list[StackV3File]] = {}
     child_directories: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
@@ -106,7 +127,7 @@ def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     return ordered_files
 
 
-def row_to_doc(row: dict) -> dict:
+def row_to_doc(row: StackV3Repository) -> StackV3Document:
     files = _directory_block_dfs(row["files"])
     sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
     sections.extend(f"{FILE_HEADER} {file['file_path'] or UNKNOWN_FILE_PATH}\n{file['content']}" for file in files)
