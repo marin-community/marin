@@ -239,12 +239,15 @@ def test_start_controller_creates_controller_resources():
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
 
-    # Verify Deployment nodeSelector targets the configured scale group
+    # Verify the controller targets the configured scale group's amd64 nodes.
     iris_labels = Labels("iris")
     dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     deploy_spec = dep["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
-    assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
+    assert node_selector == {
+        "kubernetes.io/arch": "amd64",
+        iris_labels.iris_scale_group: "cpu-erapids",
+    }
 
     # Controller is stamped with the control-plane PriorityClass, and that class
     # is provisioned so the reference resolves at admission.

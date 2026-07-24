@@ -167,6 +167,12 @@ def test_k8s_deployment_reserves_burst_capacity_by_default() -> None:
     }
 
 
+def test_k8s_deployment_requires_amd64_node() -> None:
+    deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+
+    assert deployment["spec"]["template"]["spec"]["nodeSelector"] == {"kubernetes.io/arch": "amd64"}
+
+
 def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """A forwarding server with an s3:// archive needs both, in the one Secret."""
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")

@@ -70,6 +70,8 @@ _KUBECTL_TIMEOUT = 1800.0
 # cores during reconcile spikes. Memory is capped to protect the node.
 _CONTROLLER_CPU_REQUEST = "16"
 _CONTROLLER_MEMORY_REQUEST = "64Gi"
+_KUBERNETES_ARCH_LABEL = "kubernetes.io/arch"
+_CONTROLLER_ARCH = "amd64"
 # Relax the liveness/readiness deadline off the k8s defaults (1s / 3): a
 # busy-but-alive controller must not be SIGKILLed just because a /health request
 # queued behind a reconcile tick under heavy load.
@@ -457,7 +459,10 @@ class K8sControllerProvider:
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
-            node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
+            node_selector={
+                _KUBERNETES_ARCH_LABEL: _CONTROLLER_ARCH,
+                self._iris_labels.iris_scale_group: cw.scale_group,
+            },
             env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
