@@ -54,6 +54,8 @@ def build_marin_serve_command(args) -> list[str]:
         "1024g",
         "--disk",
         "512g",
+        "--priority",
+        args.priority,
         "--idle-timeout-hours",
         str(args.external_serve_idle_timeout_hours),
         "--no-wait",

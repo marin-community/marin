@@ -18,7 +18,7 @@ import pytest
 import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -367,6 +367,14 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_not_called()
     assert "Submitted" in result.output
+
+
+def test_iris_serve_forwards_interactive_priority_to_the_federated_root(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--priority", "interactive", "--no-wait")
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
+    assert services[0].iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 @pytest.mark.parametrize(

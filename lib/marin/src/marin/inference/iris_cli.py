@@ -48,6 +48,7 @@ from click.core import ParameterSource
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import parse_gpu_spec
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from iris.client import IrisClient, Job
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -369,6 +370,13 @@ def _mint_and_print_capability_url(
 @click.option("--memory", default="64g")
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    default="batch",
+    show_default=True,
+    help="Iris scheduling priority band for the serving job.",
+)
 @click.option("--instances", type=click.IntRange(min=1), default=1, help="Number of Iris inference instances.")
 @click.option(
     "--broker",
@@ -441,6 +449,7 @@ def main(
     memory: str,
     disk: str,
     max_retries_preemption: int,
+    priority: str,
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
@@ -552,6 +561,7 @@ def main(
         worker_environment=worker_environment,
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         endpoint_ready_timeout_seconds=wait_timeout,
+        priority=priority_band_value(priority),
         max_retries_preemption=max_retries_preemption,
     )
     service = IrisServiceConfig(
@@ -605,6 +615,7 @@ def main(
                 constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
+                priority_band=priority_band_value(priority),
                 task_image=None if brokered else task_image,
             )
             proxy_url = client.resolve_endpoint(endpoint)
