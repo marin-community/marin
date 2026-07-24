@@ -8,7 +8,8 @@ writer batches.
 The CoreWeave repository transform failed after its download completed. PyArrow
 inferred `github_metadata.forked_from` as `null` in one batch and `string` in a
 later batch, then rejected the later table because the Parquet file schema was
-already fixed.
+already fixed. After the transform fix, normalization failed for the same
+reason because its final writers inferred the schema again.
 
 ## Nullable metadata schema
 
@@ -18,13 +19,15 @@ define a stable output schema.
 
 ## Changes to make
 
-Pass an explicit PyArrow schema to the Stack v3 Parquet writer. Keep nullable
-values as nulls while fixing their logical types across every batch.
+Pass explicit PyArrow schemas to the Stack v3 transform and normalization
+writers. Keep nullable values as nulls while fixing their logical types across
+every batch.
 
 ## Results
 
-A local transform containing a null `github_metadata.forked_from` now writes
-that field as nullable string and reads the null value back unchanged.
+A local transform and normalization containing a null
+`github_metadata.forked_from` now write that field as nullable string and read
+the null value back unchanged.
 
 ## Production validation
 

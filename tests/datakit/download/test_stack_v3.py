@@ -7,10 +7,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.download.stack_v3 import (
     HF_DATASET_ID,
+    NORMALIZED_OUTPUT_SCHEMA,
     SERIALIZATION_FORMAT,
     row_to_doc,
     transform,
 )
+from marin.datakit.normalize import normalize_to_parquet
 
 
 def _file(path: str, content: str, content_id: str) -> dict:
@@ -121,3 +123,17 @@ def test_transform_writes_nullable_metadata_with_stable_schema(tmp_path: Path):
     github_metadata = output_schema.field("github_metadata").type
     assert github_metadata.field("forked_from").type == pa.string()
     assert pq.read_table(output_path).to_pylist()[0]["github_metadata"]["forked_from"] is None
+
+    normalized_dir = tmp_path / "normalized"
+    normalize_to_parquet(
+        input_path=str(output_dir),
+        output_path=str(normalized_dir),
+        id_field="repo_id",
+        output_schema=NORMALIZED_OUTPUT_SCHEMA,
+    )
+
+    [normalized_path] = (normalized_dir / "outputs" / "main").glob("*.parquet")
+    normalized_schema = pq.read_schema(normalized_path)
+    normalized_github_metadata = normalized_schema.field("github_metadata").type
+    assert normalized_github_metadata.field("forked_from").type == pa.string()
+    assert pq.read_table(normalized_path).to_pylist()[0]["github_metadata"]["forked_from"] is None

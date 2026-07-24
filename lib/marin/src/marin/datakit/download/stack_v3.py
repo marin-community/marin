@@ -71,6 +71,13 @@ OUTPUT_SCHEMA = pa.schema(
         pa.field("serialization_format", pa.string()),
     ]
 )
+NORMALIZED_OUTPUT_SCHEMA = pa.schema(
+    [field for field in OUTPUT_SCHEMA if field.name != "repo_id"]
+    + [
+        pa.field("id", pa.string()),
+        pa.field("source_id", pa.int64()),
+    ]
+)
 
 
 class StackV3File(TypedDict):
@@ -188,5 +195,10 @@ def stack_v3_normalize_steps() -> tuple[StepSpec, ...]:
     processed = processed_stack_v3_step()
     return (
         processed,
-        normalize_step(name="normalized/stack-v3", download=processed, id_field="repo_id"),
+        normalize_step(
+            name="normalized/stack-v3",
+            download=processed,
+            id_field="repo_id",
+            output_schema=NORMALIZED_OUTPUT_SCHEMA,
+        ),
     )

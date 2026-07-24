@@ -23,6 +23,7 @@ from enum import StrEnum
 from typing import Any
 
 import dupekit
+import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
@@ -262,6 +263,7 @@ class ExactDupSideOutput:
 
 def _make_split_writer(
     output_dir: str,
+    output_schema: pa.Schema | None = None,
 ) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
     """Return a ``map_shard`` function that fans records out to main and dup Parquet files.
 
@@ -287,7 +289,7 @@ def _make_split_writer(
 
         def write_to(path: str, key: str) -> Callable[[Iterable[dict[str, Any]]], None]:
             def _fn(items: Iterable[dict[str, Any]]) -> None:
-                results[key] = write_parquet_file(items, output_path=path)
+                results[key] = write_parquet_file(items, output_path=path, schema=output_schema)
 
             return _fn
 
@@ -317,6 +319,7 @@ def _build_pipeline(
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
     bare: bool = False,
+    output_schema: pa.Schema | None = None,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
     normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
@@ -357,7 +360,7 @@ def _build_pipeline(
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
-        .map_shard(_make_split_writer(output_dir))
+        .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
     )
 
 
@@ -374,6 +377,7 @@ def normalize_to_parquet(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    output_schema: pa.Schema | None = None,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -414,6 +418,7 @@ def normalize_to_parquet(
             ``EXACT`` (the default) drops records with duplicate ``id`` values
             (i.e. byte-identical text).  ``NONE`` skips dedup and preserves
             all input records.
+        output_schema: Optional schema for normalized output records.
 
     Returns:
         A :class:`NormalizedData` describing the output directories and
@@ -446,6 +451,7 @@ def normalize_to_parquet(
         dedup_mode,
         max_whitespace_run_chars,
         bare=bare,
+        output_schema=output_schema,
     )
     ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
     outcome = ctx.execute(pipeline)
@@ -483,6 +489,7 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
+    output_schema: pa.Schema | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -505,6 +512,7 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
+        output_schema: Optional schema for normalized output records.
     """
     if relative_input_path:
         # ``prefix_join`` yields exactly one separator even when ``download.output_path``
@@ -527,6 +535,8 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
+    if output_schema is not None:
+        hash_attrs["output_schema"] = str(output_schema)
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(
@@ -541,6 +551,7 @@ def normalize_step(
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             bare=bare,
+            output_schema=output_schema,
         ),
         deps=[download],
         hash_attrs=hash_attrs,
