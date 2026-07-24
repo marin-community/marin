@@ -13,8 +13,17 @@ The shared context store for Marin's agents: the `context` database on the
   decision, blocker, handoff), written by agents, read by anyone asking "what is the team
   doing". Append-only for agents.
 
-Agents use these through the `context-search` and `work-log` skills
-(`.agents/skills/`), which wrap `scripts/context_search.py` and `scripts/work_log.py`.
+Two ways in:
+
+- **`echo-api`** — an IAP-gated Cloud Run service (`api/`) exposing a well-defined,
+  OpenAPI-documented HTTP interface (`/search`, `/grep`, `/chunks/{id}`, `/work_log`,
+  `POST /work_log`; see `/docs`). It holds the single database identity and the query
+  embedding model — kept warm on one always-on instance — so callers reach the corpus over
+  HTTP through IAP without their own database grants. Admitted to the `eng-all@openathena.ai`
+  group.
+- **Direct SQL** — the `context-search` and `work-log` skills (`.agents/skills/`) wrap
+  `scripts/context_search.py` and `scripts/work_log.py`, which connect to the database
+  directly via IAM for callers who prefer a CLI over the service.
 
 Access is Cloud SQL IAM, not passwords. The `eng-all@openathena.ai` group is registered
 as an IAM database user and granted corpus read + logbook append; members connect as their
@@ -30,6 +39,9 @@ extensions), reading its password from Secret Manager via the API.
 ## Operations
 
 ```bash
+# the API's interactive OpenAPI docs (through IAP in a browser):
+#   https://<echo-api uri>/docs   (uri is the api_uri stack output)
+
 # run a sync now instead of waiting for the schedule:
 gcloud run jobs execute echo-sync --region=us-central1 --project=hai-gcp-models
 

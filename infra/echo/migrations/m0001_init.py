@@ -7,8 +7,9 @@ The DDL is frozen at the time this migration was written (compiled from schema.p
 then) — it must not track later schema.py changes, or a fresh database would receive the
 newest schema here and re-apply it in later migrations. Grants target the Cloud SQL IAM
 database users that Pulumi creates before migrate.py runs: the `eng-all@openathena.ai`
-group reads the corpus and appends to the logbook (no UPDATE/DELETE — the log is
-append-only), and the sync job's service account keeps `chunks`/`sync_state` current.
+group and the API service account read the corpus and append to the logbook (no
+UPDATE/DELETE — the log is append-only), and the sync job's service account keeps
+`chunks`/`sync_state` current.
 """
 
 import sqlalchemy
@@ -63,6 +64,8 @@ GRANT SELECT ON chunks TO "eng-all@openathena.ai";
 GRANT SELECT, INSERT ON work_log TO "eng-all@openathena.ai";
 GRANT SELECT, INSERT, UPDATE, DELETE ON chunks TO "echo-sync@hai-gcp-models.iam";
 GRANT SELECT, INSERT, UPDATE ON sync_state TO "echo-sync@hai-gcp-models.iam";
+GRANT SELECT ON chunks TO "echo-api@hai-gcp-models.iam";
+GRANT SELECT, INSERT ON work_log TO "echo-api@hai-gcp-models.iam";
 """
 
 

@@ -16,7 +16,7 @@ README.md); this program owns the users and their login IAM roles.
 
 import pulumi
 import pulumi_gcp as gcp
-from iac.gcp.cloud_run import SecretEnv
+from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 
 PROJECT = "hai-gcp-models"
@@ -26,10 +26,12 @@ CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "context"
 # Google group whose members read the corpus and append to work_log, via IAM group auth.
 AGENTS_GROUP = "eng-all@openathena.ai"
-# The sync job's runtime service account (created by ScheduledCloudRunJob as <job>@<project>).
+# The Cloud Run runtime service accounts (created by their components as <name>@<project>).
 SYNC_SA = f"echo-sync@{PROJECT}.iam.gserviceaccount.com"
+API_SA = f"echo-api@{PROJECT}.iam.gserviceaccount.com"
 # A Cloud SQL IAM database user's Postgres name is its principal minus the SA suffix.
 SYNC_DB_USER = SYNC_SA.removesuffix(".gserviceaccount.com")
+API_DB_USER = API_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 
@@ -68,6 +70,7 @@ def main() -> None:
     for member, roles in (
         (f"group:{AGENTS_GROUP}", LOGIN_ROLES),
         (f"serviceAccount:{SYNC_SA}", ("roles/cloudsql.instanceUser",)),
+        (f"serviceAccount:{API_SA}", ("roles/cloudsql.instanceUser",)),
     ):
         for role in roles:
             gcp.projects.IAMMember(
@@ -110,25 +113,53 @@ def main() -> None:
         gcp_provider=gcp_provider,
     )
 
-    # The sync SA exists only after the job component; register it as an IAM database user.
-    gcp.sql.User(
-        "sync-sa",
-        name=SYNC_DB_USER,
-        instance=INSTANCE,
-        project=PROJECT,
-        type="CLOUD_IAM_SERVICE_ACCOUNT",
-        opts=pulumi.ResourceOptions.merge(
-            child,
-            pulumi.ResourceOptions(
-                depends_on=[sync],
-                import_=f"{PROJECT}/{INSTANCE}//{SYNC_DB_USER}" if adopt else None,
-            ),
+    # The echo HTTP API: one IAP-gated service holding the DB identity and the query model,
+    # so agents reach the corpus over HTTP without their own database grants.
+    api = CloudRunService(
+        "api",
+        CloudRunServiceArgs(
+            project=PROJECT,
+            region=REGION,
+            service_name="echo-api",
+            build_context=".",
+            dockerfile="api/Dockerfile",
+            env={
+                "CLOUDSQL_CONNECTION": CONNECTION_NAME,
+                "PGDATABASE": DATABASE,
+                "PGUSER": API_DB_USER,
+            },
+            # Keep one instance warm: it holds the ~130 MB embedding model and the DB pool.
+            min_instances=1,
+            max_instances=1,
+            cpu_always_allocated=True,
+            memory="2Gi",
+            iap_members=(f"group:{AGENTS_GROUP}",),
+            cloudsql_instances=(CONNECTION_NAME,),
         ),
+        gcp_provider=gcp_provider,
     )
+
+    # The service SAs exist only after their components; register them as IAM database users.
+    for resource_name, db_user, component in (("sync-sa", SYNC_DB_USER, sync), ("api-sa", API_DB_USER, api)):
+        gcp.sql.User(
+            resource_name,
+            name=db_user,
+            instance=INSTANCE,
+            project=PROJECT,
+            type="CLOUD_IAM_SERVICE_ACCOUNT",
+            opts=pulumi.ResourceOptions.merge(
+                child,
+                pulumi.ResourceOptions(
+                    depends_on=[component],
+                    import_=f"{PROJECT}/{INSTANCE}//{db_user}" if adopt else None,
+                ),
+            ),
+        )
 
     pulumi.export("connection_name", CONNECTION_NAME)
     pulumi.export("database", database.name)
     pulumi.export("sync_job", sync.job_name)
+    pulumi.export("api_uri", api.uri)
 
 
 main()
