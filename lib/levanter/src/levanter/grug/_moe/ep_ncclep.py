@@ -28,6 +28,42 @@ _NCCLEP_DISPATCH_ALIGNMENT = 16
 _EXPERT_AXIS = "expert"
 
 
+def _debug_local_route_fingerprint(
+    routes: jax.Array,
+    *,
+    num_experts: int,
+    ep_size: int,
+) -> jax.Array:
+    num_local_experts = num_experts // ep_size
+    process_index = jax.process_index()
+
+    def print_local(local_routes: jax.Array) -> jax.Array:
+        flat_routes = local_routes.reshape(-1)
+        destination_counts = jnp.bincount(
+            flat_routes // num_local_experts,
+            length=ep_size,
+        )
+        jax.debug.print(
+            "NCCL_EP route fingerprint process={process}: shape={shape} min={minimum} max={maximum} "
+            "first={first} destination_counts={counts}",
+            process=process_index,
+            shape=local_routes.shape,
+            minimum=jnp.min(flat_routes),
+            maximum=jnp.max(flat_routes),
+            first=local_routes[0],
+            counts=destination_counts,
+        )
+        return local_routes
+
+    return jax.shard_map(
+        print_local,
+        mesh=jax.sharding.get_abstract_mesh(),
+        in_specs=P(_EXPERT_AXIS, None),
+        out_specs=P(_EXPERT_AXIS, None),
+        check_vma=False,
+    )(routes)
+
+
 def ncclep_receive_capacity(
     global_tokens: int,
     top_k: int,
@@ -235,6 +271,11 @@ def moe_mlp_ep_ncclep(
         tokens = jax.lax.with_sharding_constraint(tokens, input_spec)
         routes = jax.lax.with_sharding_constraint(routes, input_spec)
         weights = jax.lax.with_sharding_constraint(weights, input_spec)
+        routes = _debug_local_route_fingerprint(
+            routes,
+            num_experts=num_experts,
+            ep_size=ep_size,
+        )
         recv_tokens, recv_weights, handle_memory, token_counts = _ep_dispatch(
             layer_config,
             routes.astype(jnp.int32),
