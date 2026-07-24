@@ -30,6 +30,7 @@ _EXPERT_AXIS = "expert"
 
 def _debug_local_route_fingerprint(
     routes: jax.Array,
+    tokens: jax.Array,
     *,
     num_experts: int,
     ep_size: int,
@@ -37,31 +38,38 @@ def _debug_local_route_fingerprint(
     num_local_experts = num_experts // ep_size
     process_index = jax.process_index()
 
-    def print_local(local_routes: jax.Array) -> jax.Array:
+    def print_local(local_routes: jax.Array, local_tokens: jax.Array) -> jax.Array:
         flat_routes = local_routes.reshape(-1)
+        tokens_f32 = local_tokens.astype(jnp.float32)
         destination_counts = jnp.bincount(
             flat_routes // num_local_experts,
             length=ep_size,
         )
         jax.debug.print(
             "NCCL_EP route fingerprint process={process}: shape={shape} min={minimum} max={maximum} "
-            "first={first} destination_counts={counts}",
+            "first={first} destination_counts={counts} token_finite={finite}/{size} "
+            "token_nonzero={nonzero} token_min={token_min} token_max={token_max}",
             process=process_index,
             shape=local_routes.shape,
             minimum=jnp.min(flat_routes),
             maximum=jnp.max(flat_routes),
             first=local_routes[0],
             counts=destination_counts,
+            finite=jnp.sum(jnp.isfinite(tokens_f32)),
+            size=tokens_f32.size,
+            nonzero=jnp.sum(tokens_f32 != 0),
+            token_min=jnp.nanmin(tokens_f32),
+            token_max=jnp.nanmax(tokens_f32),
         )
         return local_routes
 
     return jax.shard_map(
         print_local,
         mesh=jax.sharding.get_abstract_mesh(),
-        in_specs=P(_EXPERT_AXIS, None),
+        in_specs=(P(_EXPERT_AXIS, None), P(_EXPERT_AXIS, None)),
         out_specs=P(_EXPERT_AXIS, None),
         check_vma=False,
-    )(routes)
+    )(routes, tokens)
 
 
 def ncclep_receive_capacity(
@@ -273,6 +281,7 @@ def moe_mlp_ep_ncclep(
         weights = jax.lax.with_sharding_constraint(weights, input_spec)
         routes = _debug_local_route_fingerprint(
             routes,
+            tokens,
             num_experts=num_experts,
             ep_size=ep_size,
         )
