@@ -4,7 +4,6 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from marin.processing.classification.deduplication.fuzzy_dups import (
     FuzzyDupsAttrData,
     FuzzyDupsPerSource,
