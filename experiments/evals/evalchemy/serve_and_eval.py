@@ -171,6 +171,8 @@ class ServeSpec:
       ``Qwen/Qwen3-Next-80B-A3B``): ``--gdn-prefill-backend triton``. The GPU serve env runs without
       ``nvcc``, so the default FlashInfer GDN prefill kernel — JIT-compiled at warmup — fails; triton
       needs no compiler."""
+    max_num_seqs: int | None = None
+    """Maximum live sequences per vLLM shard. ``None`` leaves the engine default intact."""
     chat_template_content: str | None = None
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
@@ -242,6 +244,15 @@ def _has_vllm_option(args: tuple[str, ...], option: str) -> bool:
     return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
 
+def _resolved_vllm_extra_args(spec: ServeSpec, args: tuple[str, ...]) -> tuple[str, ...]:
+    """Add typed serving limits without allowing a conflicting raw vLLM option."""
+    if spec.max_num_seqs is None:
+        return args
+    if _has_vllm_option(args, "--max-num-seqs"):
+        raise ValueError("ServeSpec.max_num_seqs conflicts with vllm_extra_args --max-num-seqs")
+    return (*args, "--max-num-seqs", str(spec.max_num_seqs))
+
+
 def _auto_serve_overrides_from_config(
     model: str,
     config: dict,
@@ -311,6 +322,7 @@ def _shared_inference_config(model: str, tokenizer: str, spec: ServeSpec) -> _In
     max_model_len = spec.max_model_len
     if spec.backend == ServeBackend.VLLM and spec.auto_overrides:
         vllm_extra_args, max_model_len = auto_serve_overrides(model, spec.max_model_len, spec.vllm_extra_args)
+    vllm_extra_args = _resolved_vllm_extra_args(spec, vllm_extra_args)
     if spec.gpu_count is not None:
         resources = ResourceConfig.with_gpu(
             spec.gpu_type or "H100",

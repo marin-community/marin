@@ -54,6 +54,7 @@ from rigging.timing import Duration
 
 from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE
 from experiments.evals.evalchemy.serve_and_eval import (
+    EVAL_SERVE_MAX_NUM_BATCHED_TOKENS,
     EvalPipelineError,
     EvalSession,
     EvalUnit,
@@ -368,9 +369,15 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tpu_type=None,
             gpu_type=accel.gpu_type,
             gpu_count=accel.gpu_count,
+            max_model_len=model.max_model_len,
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
+            serve_cpu=model.serve_cpu or 8.0,
+            serve_memory=model.serve_memory or "64g",
+            serve_disk=model.serve_disk or "100g",
+            max_num_batched_tokens=model.max_num_batched_tokens or EVAL_SERVE_MAX_NUM_BATCHED_TOKENS,
             vllm_extra_args=model.vllm_extra_args,
+            max_num_seqs=model.max_num_seqs,
             chat_template_content=model.chat_template,
         )
     else:
@@ -379,13 +386,17 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tpu_type=accel.tpu_type,
             gpu_type=None,
             gpu_count=None,
+            max_model_len=model.max_model_len,
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
+            serve_cpu=model.serve_cpu or 8.0,
+            serve_memory=model.serve_memory or "64g",
+            serve_disk=model.serve_disk or "100g",
+            max_num_batched_tokens=model.max_num_batched_tokens or EVAL_SERVE_MAX_NUM_BATCHED_TOKENS,
             vllm_extra_args=model.vllm_extra_args,
+            max_num_seqs=model.max_num_seqs,
             chat_template_content=model.chat_template,
         )
-    if model.serve_memory is not None:
-        spec = replace(spec, serve_memory=model.serve_memory)
     return spec
 
 
@@ -402,6 +413,8 @@ def plan_runs(spec: LaunchSpec) -> list[RunPlan]:
     plans: list[RunPlan] = []
     for eval_key in spec.evals:
         suite = EVALS[eval_key]
+        if suite.harbor is not None and model.agentic_n_concurrent is not None:
+            suite = replace(suite, harbor=replace(suite.harbor, n_concurrent=model.agentic_n_concurrent))
         accel = select_accelerator(model, spec.platform, spec.accelerator)
         limit = spec.limit if spec.limit is not None else suite.max_eval_instances
         plans.append(

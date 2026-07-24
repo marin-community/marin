@@ -38,6 +38,14 @@ class EvalModelConfig:
     gpu_only: bool = False
     vllm_extra_args: tuple[str, ...] = ()
     tensor_parallel_size: int | None = None
+    max_model_len: int | None = None
+    """Explicit vLLM context limit. ``None`` lets the server use the checkpoint default."""
+    max_num_batched_tokens: int | None = None
+    """Explicit vLLM prefill-token budget. ``None`` retains the portable server default."""
+    max_num_seqs: int | None = None
+    """Maximum concurrent sequences per vLLM data-parallel shard."""
+    agentic_n_concurrent: int | None = None
+    """Harbor trial concurrency this model's serving topology is provisioned to sustain."""
     max_gen_toks: int | None = None
     """Per-model override of a suite's generation budget. A verbose reasoning model needs a longer
     budget than the suite default or its chain truncates before the final answer (scoring it wrong)."""
@@ -51,6 +59,10 @@ class EvalModelConfig:
     chat_template: str | None = None
     """A jinja chat template served in place of the tokenizer's own (``ServeSpec.chat_template_content``),
     for models whose tokenizer ships none."""
+    serve_cpu: float | None = None
+    """CPU request for the serving child. ``None`` retains the portable server default."""
+    serve_disk: str | None = None
+    """Disk request for the serving child. ``None`` retains the portable server default."""
 
 
 def _snowball(name: str, location: str, chat_template: str | None = None) -> EvalModelConfig:
@@ -80,6 +92,43 @@ def _snowball(name: str, location: str, chat_template: str | None = None) -> Eva
         target_cluster="cw-us-east-02a",
         serve_memory="512g",
         chat_template=chat_template,
+    )
+
+
+def _grug_agentic_s3_step1903() -> EvalModelConfig:
+    """The 65k OpenCode SFT checkpoint and its validated H100x8 serving contract.
+
+    Eight data-parallel shards each admit 32 sequences, so a Harbor agentic suite may schedule 256
+    trials concurrently. These are measured capacity values, not generic GPU defaults: the 7168-token
+    prefill budget is the largest setting that leaves 32 full-65k KV slots per shard.
+    """
+    return EvalModelConfig(
+        name="grug-agentic-s3-step1903",
+        location=("s3://marin-us-east-02a/marin/exports/grug/" "june-67b-a2b-sft-s3-agentic/step-1903/hf-bf16-vllm/"),
+        hbm_gb=175,
+        apply_chat_template=True,
+        gpu_only=True,
+        vllm_extra_args=(
+            "--data-parallel-size",
+            "8",
+            "--enable-expert-parallel",
+            "--model-loader-extra-config",
+            '{"distributed":true}',
+            "--enable-auto-tool-choice",
+            "--tool-call-parser",
+            "hermes",
+        ),
+        tensor_parallel_size=1,
+        max_model_len=65536,
+        max_num_batched_tokens=7168,
+        max_num_seqs=32,
+        agentic_n_concurrent=256,
+        tokenizer="penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
+        fixed_gpu=("H100", 8),
+        target_cluster="cw-rno2a",
+        serve_cpu=48.0,
+        serve_memory="1024g",
+        serve_disk="512g",
     )
 
 
@@ -151,4 +200,5 @@ MODELS: dict[str, EvalModelConfig] = {
         "snowball-sft",
         "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/",
     ),
+    "grug-agentic-s3-step1903": _grug_agentic_s3_step1903(),
 }
