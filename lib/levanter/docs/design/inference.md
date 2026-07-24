@@ -1,6 +1,7 @@
 # Draft Design Document for Inference
 
-> **Note**: This document contains the technical design and architecture for the inference server. For project implementation tasks and progress tracking, see [`.agents/projects/inference.md`](/.agents/projects/inference.md).
+> **Note**: This document contains the technical design and architecture for
+> the inference server.
 
 ## References
 

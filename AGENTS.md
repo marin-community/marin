@@ -135,6 +135,16 @@ uv run pytest
 - Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
 - Write docs that stand alone without conversational context.
 
+## Agent Artifacts
+
+- Record infrastructure incidents and durable debugging investigations in
+  `.agents/ops/YYYY-MM-DD-<slug>.md`. Do not create `docs/debug-log-*` files or
+  ad hoc debug-log directories. Extend the existing incident record when it
+  covers the same event.
+- Keep user-facing and reusable product documentation in `docs/`; keep research
+  progress in the relevant task logbook or project artifact. These are distinct
+  from incident records.
+
 ## Deprecation
 
 **NO BACKWARD COMPATIBILITY**: Update all call sites instead. Only add compatibility shims if the user explicitly requests it.
