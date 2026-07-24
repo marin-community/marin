@@ -1,27 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp 146: contacts-v1 model-size / optimizer / batch-size / epoch sweep.
+"""Single-point trainer for the exp146 contacts-v1 3B adaptive sweep.
 
-Runs exactly one explicit ``(model_size, epochs, lr, wd, batch_size, tpu, region)``
-point per invocation. External adaptive-sweep tooling owns point selection and dispatch.
-``SMOKE=yes`` launches a tiny identity-isolated run through the same data, model,
-batch-fitting, checkpointing, and eval path.
-
-The data recipe and token caches are identical to exp117. The production grid is exactly
-MarinFold issue #146: models ``{1.5B, 3B, 6B}``, batch sizes ``{64, 128, 256}``,
-learning rates ``{3.1623e-4, 1e-3, 3.1623e-3}``, weight decays
-``{0.1, 0.2, 0.4, 0.8, 1.6}``, and epochs ``{2, 4, 8}``. The optimized metric is
-final-step ``eval/tokenized/contacts-v1-val/loss``.
-
-6B checkpointing note: 6B may need more TPU-worker host RAM during checkpoint
-serialization than the default resource request provides. We do not know yet whether
-this is always required; set ``TPU_RAM`` (for example ``448g``) to pass a
-resource-only RAM override through ``ResourceConfig.with_tpu``.
+Each invocation trains one ``(epochs, lr, wd, batch_size)`` point on an explicit
+TPU slice and region. ``SMOKE=yes`` runs the same path under an isolated identity.
 
 Preview a point (builds and submits nothing)::
 
-    MODEL_SIZE=1_5b EPOCHS=8 LR=1e-3 WD=0.1 BATCH_SIZE=128 \
+    EPOCHS=8 LR=1e-3 WD=0.1 BATCH_SIZE=128 \
         TPU=v6e-128 REGION=us-east5 PREVIEW=yes \
         uv run python -m experiments.protein.exp146_sweep
 
@@ -32,20 +19,19 @@ Launch one run (secrets come from the iris command, never the config)::
         -e WANDB_API_KEY "$WANDB_API_KEY" \
         -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \
-        -e MODEL_SIZE 1_5b -e EPOCHS 8 -e LR 1e-3 -e WD 0.1 -e BATCH_SIZE 128 \
+        -e EPOCHS 8 -e LR 1e-3 -e WD 0.1 -e BATCH_SIZE 128 \
         -e TPU v6e-128 -e REGION us-east5 \
         -- python -m experiments.protein.exp146_sweep
 
-Smoke-test one model/slice/region under an isolated identity. Point coordinates are
-optional in smoke mode but honored when supplied; ``SMOKE_STEPS`` overrides the step
-budget::
+Smoke-test one slice/region under an isolated identity. Point coordinates are optional
+in smoke mode but honored when supplied; ``SMOKE_STEPS`` overrides the step budget::
 
     source ~/marin.env && uv run iris --cluster marin job run \
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \
         -e WANDB_API_KEY "$WANDB_API_KEY" \
         -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \
-        -e SMOKE yes -e MODEL_SIZE 1_5b -e TPU v6e-4 -e REGION us-east5 \
+        -e SMOKE yes -e TPU v6e-16 -e REGION us-east5 \
         -- python -m experiments.protein.exp146_sweep
 """
 
@@ -90,11 +76,10 @@ _T = TypeVar("_T")
 VERSION_DATE: str = "2026.07.23"
 SWEEP_SUBVERSION: str = "01"
 SWEEP_VERSION: str = f"{VERSION_DATE}.{SWEEP_SUBVERSION}"
-# Preserve exp117's cache handles exactly; this date intentionally does not follow VERSION_DATE.
 CACHE_VERSION: str = "2026.07.13.1"
 DATA_SUBVERSION: str = "1"
 RUN_PREFIX: str = "prot-exp146"
-WANDB_GROUP: str = "exp146-contacts-v1-model-size-tune"
+WANDB_GROUP: str = "exp146-contacts-v1-3b-tune"
 
 # Smoke mode: a throwaway end-to-end validation run under an isolated identity (distinct prefix,
 # W&B group, "smoke" tag, tiny cadence) so it never resumes or shares a run with a real point.
@@ -107,12 +92,7 @@ SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
 # values override it.
-SMOKE_MODEL_SIZE_DEFAULT: str = "1_5b"
 SMOKE_POINT_DEFAULTS: tuple[int, float, float, int] = (1, 1e-3, 0.1, 128)
-
-# Optional resource-only host RAM override passed through ResourceConfig.with_tpu. This is
-# intentionally not part of run identity.
-TPU_RAM_ENV: str = "TPU_RAM"
 
 
 # --- Data (contacts-v1 documents, tokenized in-pipeline) ---------------------
@@ -142,72 +122,31 @@ COMPONENT_VAL: str = "tokenized/contacts-v1-val"
 TRAIN_TOKENS: int = 4_676_753_425
 
 
-# --- Models (exactly MarinFold issue #146) -----------------------------------
+# --- Model -------------------------------------------------------------------
 
+MODEL_SIZE: str = "3b"
+MODEL_CONFIG = Qwen3Config(
+    max_seq_len=8192,
+    hidden_dim=2560,
+    intermediate_dim=10240,
+    num_layers=30,
+    num_heads=48,
+    num_kv_heads=16,
+    head_dim=64,
+    rope=Llama3RotaryEmbeddingsConfig(),
+)
 
-MODEL_CONFIGS: dict[str, Qwen3Config] = {
-    "1_5b": Qwen3Config(
-        max_seq_len=8192,
-        hidden_dim=2048,
-        intermediate_dim=8192,
-        num_layers=24,
-        num_heads=32,
-        num_kv_heads=8,
-        head_dim=64,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    ),
-    "3b": Qwen3Config(
-        max_seq_len=8192,
-        hidden_dim=2560,
-        intermediate_dim=10240,
-        num_layers=30,
-        num_heads=48,
-        num_kv_heads=16,
-        head_dim=64,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    ),
-    "6b": Qwen3Config(
-        max_seq_len=8192,
-        hidden_dim=3200,
-        intermediate_dim=12800,
-        num_layers=37,
-        num_heads=64,
-        num_kv_heads=32,
-        head_dim=64,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    ),
-}
-MODEL_SIZE_ALIASES: dict[str, str] = {"1.5b": "1_5b", "1-5b": "1_5b", "1500m": "1_5b"}
-
-# Production coordinates from issue #146. Smoke runs deliberately use a tiny point
-# outside this grid.
-SWEEP_BATCH_SIZES: frozenset[int] = frozenset({64, 128, 256})
-SWEEP_LEARNING_RATES: frozenset[float] = frozenset({3.1623e-4, 1e-3, 3.1623e-3})
-SWEEP_WEIGHT_DECAYS: frozenset[float] = frozenset({0.1, 0.2, 0.4, 0.8, 1.6})
-SWEEP_EPOCHS: frozenset[int] = frozenset({2, 4, 8})
-
-# --- Fixed training recipe (mirrors #70/#75) ---------------------------------
+# --- Training recipe ---------------------------------------------------------
 
 SEQ_LEN: int = 8192
 DATA_SEED: int = 0
 SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel")
-WARMUP: float = 0.1  # 10% warmup
-LR_SCHEDULE: str = "cosine"  # AdamW + cosine decay
+WARMUP: float = 0.1
+LR_SCHEDULE: str = "cosine"
 NUM_EVALS_PER_EPOCH: int = 2
 WANDB_WATCH_CONFIG = WatchConfig(watch_targets=[], interval=0)
 
-# Batch-fit correction factors. The 1.5B row comes from exp117 calibration; the
-# 3B row was confirmed with representative calibration smoke runs. 6B/v6e reached
-# the representative milestones (training, permanent checkpoint, full eval) at 0.70,
-# though Iris did not terminal-succeed after container cleanup. The 6B/v5p value is
-# an extrapolated guess from 3B/v5p and 6B/v6e because v5p capacity did not become
-# available for a full run. The 6B/v5e (v5litepod) value is not a viable calibrated
-# result: 6B still OOMed at TP=1 once per-device batch reached 1.
-CORRECTION_FACTORS: dict[str, dict[str, float]] = {
-    "1_5b": {"v5e": 0.50, "v6e": 0.30, "v5p": 0.45},
-    "3b": {"v5e": 1.20, "v6e": 0.30, "v5p": 0.30},
-    "6b": {"v5e": 0.80, "v6e": 0.70, "v5p": 0.70},
-}
+CORRECTION_FACTORS: dict[str, float] = {"v5e": 1.20, "v6e": 0.30, "v5p": 0.30}
 
 
 # --- A single trial point ----------------------------------------------------
@@ -215,17 +154,12 @@ CORRECTION_FACTORS: dict[str, dict[str, float]] = {
 
 @dataclass(frozen=True)
 class Point:
-    """One explicit model and optimizer trial."""
+    """One sweep point."""
 
-    model_size: str
     epochs: int
     learning_rate: float
     weight_decay: float
     batch_size: int
-
-    @property
-    def model_config(self) -> Qwen3Config:
-        return MODEL_CONFIGS[self.model_size]
 
     @property
     def tokens_per_step(self) -> int:
@@ -245,10 +179,7 @@ class Point:
 
     @property
     def point_id(self) -> str:
-        return (
-            f"{self.model_size}-e{self.epochs}-lr{_fmt_lr(self.learning_rate)}-"
-            f"wd{_fmt_wd(self.weight_decay)}-bs{self.batch_size}"
-        )
+        return f"e{self.epochs}-lr{_fmt_lr(self.learning_rate)}-wd{_fmt_wd(self.weight_decay)}-bs{self.batch_size}"
 
 
 def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
@@ -259,7 +190,7 @@ def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
     selects the identity namespace (``SMOKE_RUN_PREFIX`` isolates smoke runs from real ones).
     Run outputs (checkpoints, W&B mirror) land at ``gs://marin-<region>/{run_id}/{SWEEP_VERSION}/``.
     """
-    return f"{prefix}-cv1-s{SWEEP_SUBVERSION}-{point.point_id}-{region}"
+    return f"{prefix}-cv1-s{SWEEP_SUBVERSION}-{MODEL_SIZE}-{point.point_id}-{region}"
 
 
 # --- Env inputs (one point per launch) ---------------------------------------
@@ -271,19 +202,12 @@ def _env_value(name: str, cast: Callable[[str], _T], default: _T | None) -> _T:
     if raw is not None:
         return cast(raw)
     if default is None:
-        raise SystemExit(f"missing required env var '{name}'; set MODEL_SIZE, EPOCHS, LR, WD, BATCH_SIZE, TPU, REGION")
+        raise SystemExit(f"missing required env var '{name}'; set EPOCHS, LR, WD, BATCH_SIZE, TPU, REGION")
     return default
 
 
 def parse_point(defaults: Point | None = None) -> Point:
-    """Read and validate one model/hyperparameter point from the environment."""
-    raw_model_size = _env_value("MODEL_SIZE", str, defaults.model_size if defaults else None)
-    model_size = raw_model_size.strip().lower()
-    model_size = MODEL_SIZE_ALIASES.get(model_size, model_size)
-    if model_size not in MODEL_CONFIGS:
-        valid = ", ".join(MODEL_CONFIGS)
-        raise SystemExit(f"unknown MODEL_SIZE {raw_model_size!r}; choose one of: {valid}")
-
+    """Read and validate one hyperparameter point from the environment."""
     epochs = _env_value("EPOCHS", int, defaults.epochs if defaults else None)
     learning_rate = _env_value("LR", float, defaults.learning_rate if defaults else None)
     weight_decay = _env_value("WD", float, defaults.weight_decay if defaults else None)
@@ -296,22 +220,13 @@ def parse_point(defaults: Point | None = None) -> Point:
         raise SystemExit(f"WD must be >= 0, got {weight_decay}")
     if batch_size < 1:
         raise SystemExit(f"BATCH_SIZE must be >= 1, got {batch_size}")
-    point = Point(
-        model_size=model_size,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        batch_size=batch_size,
-    )
-    if defaults is None:
-        validate_sweep_point(point)
-    return point
+    return Point(epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay, batch_size=batch_size)
 
 
 def parse_tpu() -> str:
     tpu = os.environ.get("TPU")
     if not tpu:
-        raise SystemExit("missing required env var TPU (e.g. v5p-8, v6e-16)")
+        raise SystemExit("missing required env var TPU (e.g. v5p-32, v6e-16)")
     return tpu
 
 
@@ -320,21 +235,6 @@ def parse_region() -> str:
     if not region:
         raise SystemExit("missing required env var REGION (e.g. us-east5)")
     return region.lower()
-
-
-def validate_sweep_point(point: Point) -> None:
-    """Reject production coordinates outside the grid in MarinFold issue #146."""
-    invalid = []
-    if point.batch_size not in SWEEP_BATCH_SIZES:
-        invalid.append(f"BATCH_SIZE={point.batch_size}")
-    if point.learning_rate not in SWEEP_LEARNING_RATES:
-        invalid.append(f"LR={point.learning_rate:g}")
-    if point.weight_decay not in SWEEP_WEIGHT_DECAYS:
-        invalid.append(f"WD={point.weight_decay:g}")
-    if point.epochs not in SWEEP_EPOCHS:
-        invalid.append(f"EPOCHS={point.epochs}")
-    if invalid:
-        raise SystemExit(f"point is outside the MarinFold issue #146 grid: {', '.join(invalid)}")
 
 
 def validate_sweep_target(point: Point, tpu: str) -> None:
@@ -350,15 +250,6 @@ def smoke() -> bool:
     return os.environ.get("SMOKE", "").strip().lower() in {"yes", "true", "1"}
 
 
-def resource_ram() -> str | None:
-    """Optional TPU-worker host RAM override, e.g. ``448g``."""
-    ram = os.environ.get(TPU_RAM_ENV)
-    if ram is None:
-        return None
-    ram = ram.strip()
-    return ram or None
-
-
 def smoke_steps() -> int:
     steps = _env_value("SMOKE_STEPS", int, SMOKE_STEPS_DEFAULT)
     if steps < 1:
@@ -366,13 +257,12 @@ def smoke_steps() -> int:
     return steps
 
 
-def correction_factor_for(model_size: str, tpu: str) -> float:
-    """Resolve this model-size/TPU-family batch-fit estimate."""
+def correction_factor_for(tpu: str) -> float:
+    """Resolve the batch-fit correction factor for a TPU family."""
     family = tpu_family(tpu)
-    factors = CORRECTION_FACTORS[model_size]
-    if family not in factors:
-        raise SystemExit(f"no correction factor for MODEL_SIZE={model_size!r}, TPU family={family!r}")
-    return factors[family]
+    if family not in CORRECTION_FACTORS:
+        raise SystemExit(f"no 3B correction factor for TPU family {family!r}")
+    return CORRECTION_FACTORS[family]
 
 
 # --- Helpers -----------------------------------------------------------------
@@ -397,15 +287,14 @@ def _fmt_correction(correction_factor: float) -> str:
 
 def _batch_bytes(point: Point, correction_factor: float) -> int:
     """Estimate full-global-batch HBM with the model from PR #7380."""
-    model = point.model_config
-    params = model.total_trainable_params(VOCAB_SIZE)
+    params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     parameter_bytes, activation_bytes = dense_transformer_bytes(
         parameter_count=params,
         batch_size=point.batch_size,
         seq_len=SEQ_LEN,
-        hidden_dim=model.hidden_dim,
-        intermediate_dim=model.intermediate_dim,
-        num_layers=model.num_layers,
+        hidden_dim=MODEL_CONFIG.hidden_dim,
+        intermediate_dim=MODEL_CONFIG.intermediate_dim,
+        num_layers=MODEL_CONFIG.num_layers,
     )
     return batch_memory_bytes(
         parameter_bytes=parameter_bytes,
@@ -417,7 +306,7 @@ def _batch_bytes(point: Point, correction_factor: float) -> int:
 
 def batch_fit(point: Point, tpu: str) -> TpuBatchConfig:
     """Derive DP, TP, per-device parallelism, and accumulation using PR #7380."""
-    factor = correction_factor_for(point.model_size, tpu)
+    factor = correction_factor_for(tpu)
     return tpu_batch_config(tpu, point.batch_size, _batch_bytes(point, factor))
 
 
@@ -454,14 +343,14 @@ def _tags(point: Point, region: str, *, num_train_steps: int) -> list[str]:
     # Stable, identity-bearing facts only. TPU / per-device parallelism are deliberately
     # omitted: a run may migrate slices over its life, so they are neither stable tags nor
     # part of run identity -- keeping them out also leaves the fingerprint TPU-independent.
-    params = point.model_config.total_trainable_params(VOCAB_SIZE)
+    params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = point.batch_size * SEQ_LEN * num_train_steps
     return [
         "protein",
         "exp146",
         "contacts-v1",
         "qwen3",
-        f"model_size={point.model_size}",
+        f"model_size={MODEL_SIZE}",
         f"global_batch={point.batch_size}",
         f"params={params}",
         f"epochs={point.epochs}",
@@ -535,7 +424,7 @@ def smoke_shape(point: Point, region: str, steps: int, tpu: str) -> RunShape:
     """
     every = max(1, steps // SMOKE_NUM_EVALS)
     base = run_id(point, region, SMOKE_RUN_PREFIX)
-    cf = correction_factor_for(point.model_size, tpu)
+    cf = correction_factor_for(tpu)
     identity = f"{base}-{tpu}-cf{_fmt_correction(cf)}-{SMOKE_VERSION}"
     tags = [
         *_tags(point, region, num_train_steps=steps),
@@ -583,8 +472,7 @@ def _apply_recipe_overrides(
             pod.train_config.data,
             shuffle=SHUFFLE,
             components={
-                key: replace(component, pack=True)
-                for key, component in pod.train_config.data.components.items()
+                key: replace(component, pack=True) for key, component in pod.train_config.data.components.items()
             },
         )
         if not ctx.is_fingerprint:
@@ -606,12 +494,9 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     batch_config = batch_fit(point, tpu)
-    resource_kwargs = {"regions": singleton_region_list(region)}
-    if ram := resource_ram():
-        resource_kwargs["ram"] = ram
     step = train_lm(
         name=name,
-        model=point.model_config,
+        model=MODEL_CONFIG,
         optimizer=AdamConfig(
             learning_rate=point.learning_rate,
             weight_decay=point.weight_decay,
@@ -626,7 +511,7 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
         evals=None,
-        resources=ResourceConfig.with_tpu(tpu, **resource_kwargs),
+        resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
         version=SWEEP_VERSION,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
@@ -643,23 +528,22 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
 
 def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str) -> None:
     config = batch_fit(point, tpu)
-    params = point.model_config.total_trainable_params(VOCAB_SIZE)
+    params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = point.batch_size * SEQ_LEN * shape.num_train_steps
     print(
         f"PREVIEW exp146 [{mode}] -- no submit\n"
         f"  run_id={shape.run_id} wandb_group={shape.wandb_group}\n"
-        f"  model_size={point.model_size} epochs={point.epochs} lr={point.learning_rate:g} "
+        f"  model_size={MODEL_SIZE} epochs={point.epochs} lr={point.learning_rate:g} "
         f"wd={point.weight_decay:g} batch_size={point.batch_size}\n"
         f"  steps={shape.num_train_steps} (steps/eval={shape.steps_per_eval}, "
         f"permanent ckpts={shape.checkpoint_policy})\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B "
         f"schedule={LR_SCHEDULE} warmup={WARMUP}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
-        f"  correction_factor={correction_factor_for(point.model_size, tpu):g} "
+        f"  correction_factor={correction_factor_for(tpu):g} "
         f"data_parallelism={config.data_parallelism} tensor_parallelism={config.tensor_parallelism}\n"
         f"  per_device_parallelism={config.per_device_parallelism} "
         f"gradient_accumulation={config.gradient_accumulation}\n"
-        f"  resource_ram={resource_ram() or '<default>'}\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
@@ -668,7 +552,7 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
 def _resolve_run(region: str, tpu: str) -> tuple[Point, RunShape, str]:
     """Resolve the point and mode for this invocation."""
     if smoke():
-        point = parse_point(defaults=Point(SMOKE_MODEL_SIZE_DEFAULT, *SMOKE_POINT_DEFAULTS))
+        point = parse_point(defaults=Point(*SMOKE_POINT_DEFAULTS))
         return point, smoke_shape(point, region, smoke_steps(), tpu), "smoke"
     point = parse_point()
     validate_sweep_target(point, tpu)

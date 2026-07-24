@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Adaptive Sweep"
+  short_description: "Orchestrate an approved adaptive sweep"
+  default_prompt: "Use $run-adaptive-sweep to execute this approved policy with the bundled evidence tools and one Dispatcher subagent."
