@@ -373,10 +373,13 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
 
-        # Partial Key Offset (global/long layers): shift K's second head_dim half back one position so
-        # query i sees K[i] on the first half, K[i-1] on the second; zero the shifted half at doc starts
-        # so the look-back does not cross documents. Scan-safe: always computed, selected by ``use_pko``.
-        half = head_dim // 2
+        # Partial Key Offset (global/long layers): shift the rope-STATIONARY tail of K's head_dim back
+        # one position so query i sees K[i] on the rotated dims, K[i-1] on the stationary dims; zero the
+        # shifted part at doc starts so the look-back does not cross documents. The split is the rope
+        # boundary (``rope_dim``), so PKO acts on exactly the dims RoPE leaves unrotated for any
+        # rope_fraction (they coincide with head_dim/2 at 50% RoPE). Scan-safe: always computed here,
+        # selected per-layer by ``use_pko``.
+        half = self.cfg.rope_dim
         k_stationary = k[..., half:]
         k_shifted = jnp.concatenate([k_stationary[:, :1], k_stationary[:, :-1]], axis=1)
         if sconv_segment_ids is not None:
