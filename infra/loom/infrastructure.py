@@ -18,10 +18,14 @@ import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
+import pulumi_github as github
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DISK_TYPE = "pd-balanced"
 REPOSITORY_URL = "https://github.com/marin-community/loom.git"
+REPOSITORY_OWNER = "marin-community"
+REPOSITORY_NAME = "loom"
+REPOSITORY_BRANCH = "main"
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
@@ -32,6 +36,7 @@ LOG_WRITER_ROLE = "roles/logging.logWriter"
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
+GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
@@ -52,6 +57,12 @@ def _validated_image_reference(value: str, project: str, region: str) -> str:
     if not re.fullmatch(rf"{image_path}(?::[^@]+)?@sha256:[0-9a-f]{{64}}", value):
         raise ValueError("Docker did not produce the expected Loom image digest")
     return value
+
+
+def _git_context_at_revision(revision: str) -> str:
+    if not GIT_COMMIT.fullmatch(revision):
+        raise ValueError(f"GitHub returned an invalid Loom revision: {revision!r}")
+    return f"{REPOSITORY_URL}#{revision}"
 
 
 SECRET_REF = re.compile(
@@ -529,6 +540,19 @@ class ImageResources:
     vm_reader: gcp.artifactregistry.RepositoryIamMember
 
 
+def _resolved_build_context(config: DeploymentConfig) -> str:
+    if config.build_context != REPOSITORY_URL:
+        return config.build_context
+
+    source_provider = github.Provider("loom-source", owner=REPOSITORY_OWNER)
+    branch = github.get_branch(
+        repository=REPOSITORY_NAME,
+        branch=REPOSITORY_BRANCH,
+        opts=pulumi.InvokeOptions(provider=source_provider),
+    )
+    return _git_context_at_revision(branch.sha)
+
+
 def _create_image(
     config: DeploymentConfig,
     apis: list[gcp.projects.Service],
@@ -554,7 +578,7 @@ def _create_image(
     image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
     image = docker_build.Image(
         "loom-release-image",
-        context=docker_build.BuildContextArgs(location=config.build_context),
+        context=docker_build.BuildContextArgs(location=_resolved_build_context(config)),
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
