@@ -12,7 +12,7 @@ import requests
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.config import InferenceModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 from marin.training.run_environment import env_vars_for_dependency_groups
 
@@ -35,9 +35,9 @@ def run_one_query(
         engine_kwargs["max_model_len"] = max_model_len
 
     if is_object_store:
-        model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
     else:
-        model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
 
     env = VllmEnvironment(
         model=model,

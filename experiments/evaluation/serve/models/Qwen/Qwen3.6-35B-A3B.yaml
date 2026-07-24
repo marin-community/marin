@@ -1,0 +1,18 @@
+name: qwen3.6-35b-a3b
+location: Qwen/Qwen3.6-35B-A3B
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  trust_remote_code: true
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

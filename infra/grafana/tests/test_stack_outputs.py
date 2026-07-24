@@ -11,14 +11,14 @@ def test_workload_client_selects_the_pulumi_owned_binding():
         {
             "name": "grafana-alerts",
             "loomUrl": "https://loom.example.com",
-            "profile": "grafana_alert",
+            "profile": "ops",
             "serviceAccount": "marin-grafana@example.iam.gserviceaccount.com",
         },
     ]
 
     assert workload_client(clients, "grafana-alerts") == {
         "loomUrl": "https://loom.example.com",
-        "profile": "grafana_alert",
+        "profile": "ops",
     }
 
 
