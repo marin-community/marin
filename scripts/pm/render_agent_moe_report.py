@@ -263,7 +263,7 @@ def render_report(data: ReportData) -> str:
     lines.extend(
         [
             "",
-            "The repository contains additional `Agent MoE Experiment:` issues outside",
+            f"The repository contains additional `{metadata.title_prefix}` issues outside",
             f"#{metadata.parent_issue}. They are not included here so the digest has one explicit, reproducible",
             "scope.",
             "",
@@ -294,7 +294,7 @@ def audit_snapshot(data: ReportData, remote_issues: tuple[RemoteIssue, ...]) -> 
 
 
 def fetch_tracker_issues(metadata: Metadata) -> tuple[RemoteIssue, ...]:
-    """Fetch all sub-issues from the configured GitHub tracker with `gh`."""
+    """Fetch all sub-issues from the configured tracker."""
     owner, name = metadata.repository.split("/", maxsplit=1)
     query = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
