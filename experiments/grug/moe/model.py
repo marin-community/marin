@@ -67,6 +67,14 @@ def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
+def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    """Bool[num_layers] marking the 'long'/global (full-causal) layers: every ``global_every``-th
+    layer plus the last. Rides into the layer scan as a per-layer input so the body picks the
+    sliding-window vs full mask (and NoPE vs RoPE) at runtime."""
+    idx = jnp.arange(num_layers)
+    return ((idx % global_every) == (global_every - 1)) | (idx == num_layers - 1)
+
+
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
@@ -142,6 +150,16 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     # Which of the 4 SConv sites are active (subset of "k","v","attn","mlp"); default all four.
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
+    # Local/global layer split. 0 = every layer identical (uses ``sliding_window``). >0 makes every
+    # ``global_every``-th layer (plus the last) a "long"/global full-causal layer; the rest are
+    # "short"/local sliding-window layers.
+    global_every: int = 0
+    # No positional encoding on the global (long) layers when True (they attend the full context, so
+    # RoPE is dropped there). Only meaningful with global_every > 0.
+    nope_global: bool = False
+    # Fraction of head_dim that RoPE rotates on the rope'd (local) layers; the remaining dims pass
+    # through unrotated (partial / "half" RoPE). 1.0 = full RoPE (default). 0.5 = rotate half.
+    rope_fraction: float = 1.0
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -192,6 +210,12 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def rope_dim(self) -> int:
+        """Even number of head-dim components RoPE rotates (partial RoPE); the rest pass through."""
+        d = int(self.inferred_head_dim * self.rope_fraction)
+        return min(self.inferred_head_dim, d - (d % 2))  # even, <= head_dim
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
@@ -311,6 +335,7 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        disable_rope: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -338,7 +363,20 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        # Partial RoPE: rotate only the first ``rope_dim`` head components, pass the rest through.
+        # ``disable_rope`` (per-layer scalar; global/NoPE layers) selects the un-rotated q/k -- a
+        # jnp.where rather than Python branch so it composes with the traced scan schedule.
+        rope_dim = self.cfg.rope_dim
+        if rope_dim >= head_dim:
+            q_rot, k_rot = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        else:
+            qa, qb = q[..., :rope_dim], q[..., rope_dim:]
+            ka, kb = k[..., :rope_dim], k[..., rope_dim:]
+            qa, ka = apply_rotary_embedding(qa, ka, seq_len=seq_len, head_dim=rope_dim, rope=self.cfg.rope)
+            q_rot = jnp.concatenate([qa, qb], axis=-1)
+            k_rot = jnp.concatenate([ka, kb], axis=-1)
+        q = jnp.where(disable_rope, q, q_rot)
+        k = jnp.where(disable_rope, k, k_rot)
         q = q * self.cfg.qk_mult
 
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
@@ -608,7 +646,10 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        disable_rope: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
@@ -634,7 +675,7 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        attn_out = self.attn(attn_in, mask)
+        attn_out = self.attn(attn_in, mask, disable_rope)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -715,7 +756,6 @@ class Transformer(eqx.Module):
         hidden = _embedding_gather(self.token_embed, token_ids)
         hidden = self.embed_norm(hidden)
 
-        # Every layer is identical full-causal MoE, so the mask is a scan constant.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         if segment_ids is not None:
             # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer scan.
@@ -723,31 +763,67 @@ class Transformer(eqx.Module):
             # to an involuntary full-remat scatter to [num_devices, 1], which serializes through
             # device 0 and can wedge the MoE all-to-all (collective rendezvous timeout at scale).
             segment_ids = _batch_reshard(segment_ids)
-        sliding_window = cfg.sliding_window or None
-        causal_mask = AttentionMask(is_causal=True, sliding_window=sliding_window, segment_ids=segment_ids)
-
-        # Precompute the FA4 per-token metadata for the (single) mask OUTSIDE the scan and attach it
-        # via ``with_fa4_bounds``, keeping the FA4 pure_callback's device-0-pinned metadata out of the
-        # scan body (an in-body callback forces an involuntary full rematerialization that serializes
-        # through device 0 and wedges the MoE all-to-all at 8+ racks).
-        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
-        lower_bounds, valid = fa4_cute_segment_bounds(
-            causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window
-        )
-        layer_mask = causal_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
 
-        def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], jax.Array]:
-            # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
+        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+
+        if cfg.global_every > 0:
+            # Local/global split. Precompute FA4 bounds for BOTH the long (full-causal) and short
+            # (sliding-window) masks OUTSIDE the scan, then select per layer with jnp.where inside the
+            # body -- a conditional feeding the FA4 callback pins it to device 0 and wedges the MoE
+            # all-to-all at scale. ``valid`` is window-independent so it is shared. ``disable_rope``
+            # rides in as a per-layer scalar (NoPE on the global layers when cfg.nope_global).
+            short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+            long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+            )
+            long_lower_bounds = _batch_reshard(long_lower_bounds)
+            short_lower_bounds = _batch_reshard(short_lower_bounds)
+            valid = _batch_reshard(valid)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
+
+            def _scan_layer(
+                carry_hidden: Float[Array, "B S D"], scan_inputs: tuple[Block, jax.Array]
+            ) -> tuple[Float[Array, "B S D"], jax.Array]:
+                layer, use_long = scan_inputs
+                use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                disable_rope = use_long if cfg.nope_global else jnp.asarray(False)
+                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, layer_mask, disable_rope
+                )
+                return new_hidden, qb_beta
+
+            hidden, qb_beta_per_layer = jax.lax.scan(
+                _scan_layer, hidden, xs=(self.stacked_blocks.stacked, mask_schedule), unroll=cfg.scan_unroll
+            )
+            return self.final_norm(hidden), qb_beta_per_layer
+
+        # Every layer identical: one mask is a scan constant (partial/full RoPE per rope_fraction).
+        sliding_window = cfg.sliding_window or None
+        causal_mask = AttentionMask(is_causal=True, sliding_window=sliding_window, segment_ids=segment_ids)
+        lower_bounds, valid = fa4_cute_segment_bounds(
+            causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window
+        )
+        layer_mask = causal_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
+
+        def _scan_layer_uniform(
+            carry_hidden: Float[Array, "B S D"], layer: Block
+        ) -> tuple[Float[Array, "B S D"], jax.Array]:
             new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
             return new_hidden, qb_beta
 
         hidden, qb_beta_per_layer = jax.lax.scan(
-            _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
+            _scan_layer_uniform, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
         )
         return self.final_norm(hidden), qb_beta_per_layer
 

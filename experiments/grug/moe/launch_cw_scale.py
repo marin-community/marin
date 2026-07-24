@@ -152,6 +152,9 @@ def build_scale_model() -> GrugModelConfig:
         sconv_sites=tuple(
             s.strip() for s in os.environ.get("SCALE_SCONV_SITES", "k,v,attn,mlp").split(",") if s.strip()
         ),
+        global_every=env_int("SCALE_GLOBAL_EVERY", 0),
+        nope_global=os.environ.get("SCALE_NOPE_GLOBAL") == "1",
+        rope_fraction=float(os.environ.get("SCALE_ROPE_FRACTION", "1.0")),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
