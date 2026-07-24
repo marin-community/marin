@@ -41,6 +41,16 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Iris",
       "type": "link",
       "url": "/d/marin-iris"
@@ -204,6 +214,26 @@
         "w": 24,
         "x": 0,
         "y": 19
+      }
+    },
+    {
+      "id": 10,
+      "panelRef": "fleet_tasks_inflight",
+      "gridPos": {
+        "h": 4,
+        "w": 16,
+        "x": 0,
+        "y": 28
+      }
+    },
+    {
+      "id": 11,
+      "panelRef": "fleet_jobs_stuck",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 28
       }
     }
   ]
