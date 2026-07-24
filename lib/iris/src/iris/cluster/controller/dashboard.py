@@ -76,10 +76,7 @@ from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
-from iris.rpc.stats import RpcStatsCollector
-from iris.rpc.stats_connect import StatsServiceASGIApplication
-from iris.rpc.stats_service import RpcStatsService
+from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -199,10 +196,6 @@ class ControllerDashboard:
         # cluster that receives federation, None otherwise.
         self._federation_owner_check = federation_owner_check
         self._proxy_decision_secret = proxy_decision_secret
-        # In-process RPC statistics. Fed by RequestTimingInterceptor on the
-        # ControllerService chain only; LogService's chatty FetchLogs traffic
-        # would dominate the numbers if included.
-        self._stats_collector = RpcStatsCollector(slow_threshold_ms=SLOW_RPC_THRESHOLD_MS)
         self._app = self._create_app()
 
     @property
@@ -217,10 +210,8 @@ class ControllerDashboard:
         return self._proxy_decision_secret
 
     def _create_app(self) -> ASGIApp:
-        # Only the controller RPC chain feeds the stats collector. Finelog RPCs
-        # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
-        controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
+        controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
         auth_interceptor = PolicyAuthInterceptor(
             self._auth_policy,
             cookie_name=SESSION_COOKIE,
@@ -243,15 +234,6 @@ class ControllerDashboard:
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
-            compressions=IRIS_RPC_COMPRESSIONS,
-        )
-
-        # StatsService: reuses the auth interceptor (so non-admins can't read
-        # sampled request previews) but skips RequestTimingInterceptor so the
-        # stats endpoint itself doesn't pollute the numbers it reports.
-        stats_app = StatsServiceASGIApplication(
-            service=AsyncServiceAdapter(RpcStatsService(self._stats_collector)),
-            interceptors=[auth_interceptor],
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
@@ -313,7 +295,6 @@ class ControllerDashboard:
             Route(PROXY_DECISION_PATH, _federation_decision, methods=["POST"]),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
-            Mount(stats_app.path, app=stats_app),
         ]
         routes.append(static_files_mount())
 

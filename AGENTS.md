@@ -44,8 +44,10 @@ uv run pytest
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Always run this before opening a PR, and always fix or respond to every
-  finding it reports (see the `commit` skill).
+- Run this once before opening or updating a PR, and fix or respond to every
+  finding it reports (see the `commit` skill). Do not rerun it after small,
+  targeted touch-ups made in response to its findings. Rerun only when the
+  follow-up materially changes the design or scope.
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
