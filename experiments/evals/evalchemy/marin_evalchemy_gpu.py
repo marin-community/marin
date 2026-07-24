@@ -60,7 +60,10 @@ CLUSTER = os.environ.get("EVAL_CLUSTER", "cw-us-east-02a")
 # :evalchemy-gpu (built via evalchemy infra/docker/build_evalchemy_gpu_kaniko.sh, PR #18) — CPU-only eval
 # client; python at /opt/eval/evalchemy/.venv. Pinned to evalchemy main HEAD 676fb85f which carries #28
 # (per-sample records now persist for lm-eval-native tasks under --log_samples → offline rescore, e.g. drop).
-EVAL_IMAGE = os.environ.get("EVAL_IMAGE", "ghcr.io/open-thoughts/openthoughts-agent:evalchemy-gpu-676fb85f")
+EVAL_IMAGE = os.environ.get(
+    "EVAL_IMAGE",
+    "ghcr.io/open-thoughts/openthoughts-agent@sha256:5da405afbc9341f9c813e8a8df9e2cc5a371ab47d055dba2d9735573eb87783b",
+)
 EVAL_PYTHON = os.environ.get("EVAL_PYTHON", "/opt/eval/evalchemy/.venv/bin/python")
 
 # --- Tier 1: 14 lm-eval-harness tasks (POLICY §3; per-task shots). 1 run, seed 42. ---
