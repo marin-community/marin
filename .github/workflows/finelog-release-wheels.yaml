@@ -7,8 +7,8 @@ name: "Finelog - Release Wheels"
 #
 # finelog ships as TWO dists, published in lockstep at one resolved version:
 #   - marin-finelog-server: the native in-process server ext (importable as
-#     `finelog_server`), built by maturin from lib/finelog/rust (manifest-path
-#     -> pyext). Platform wheels come from the build matrix below.
+#     `finelog_server`), built by maturin from rust/finelog-pyext (a cdylib over
+#     the sibling finelog component crate). Platform wheels come from the build matrix below.
 #   - marin-finelog: the pure-Python client/deploy/proto (hatchling). Its single
 #     py3-none-any wheel is built on the linux matrix leg only, so merged
 #     artifacts never collide. It does NOT depend on marin-finelog-server;
@@ -42,7 +42,11 @@ on:
     # Only the wheel-build inputs gate this expensive (4-target, zig-cross)
     # smoke. See the header comment for why src/** is intentionally excluded.
     paths:
-      - "lib/finelog/rust/**"
+      - "rust/finelog/**"
+      - "rust/finelog-pyext/**"
+      - "rust/crates/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
       - "lib/finelog/pyproject.toml"
       - "lib/finelog/build_package.py"
       - ".github/workflows/finelog-release-wheels.yaml"
@@ -77,8 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           # 25h not 24h: small buffer so a cron that drifts a few minutes late
-          # still sees yesterday's commits.
-          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ .github/workflows/finelog-release-wheels.yaml)
+          # still sees yesterday's commits. Watches both the pure package
+          # (lib/finelog) and the native crates in the rust/ workspace that the
+          # wheels are built from.
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ rust/finelog rust/finelog-pyext rust/crates rust/Cargo.toml rust/Cargo.lock .github/workflows/finelog-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no finelog changes in the last 25h, skipping nightly"

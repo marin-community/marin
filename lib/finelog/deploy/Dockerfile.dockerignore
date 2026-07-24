@@ -12,12 +12,14 @@
 !lib/finelog/dashboard/env.d.ts
 !lib/finelog/dashboard/src/
 
-# Rust workspace (built by the `rustbuild` stage). Only finelog's own workspace
-# is needed now; compiled artifacts (target/) are excluded below.
-!lib/finelog/rust/
+# Rust workspace (built by the `rustbuild` stage). The whole rust/ tree is
+# re-included: cargo loads every workspace member manifest before honoring
+# `-p finelog`, so a partial copy fails at workspace load. Compiled artifacts
+# (target/) are excluded below.
+!rust/
 
 # Exclude build artifacts within included paths.
-lib/finelog/rust/**/target/
+rust/**/target/
 **/__pycache__
 **/*.pyc
 **/*.pyo

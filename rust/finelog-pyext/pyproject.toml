@@ -1,0 +1,40 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "marin-finelog-server"
+version = "0.2.0"
+description = "Native finelog server: in-process (PyO3) embedding of the Rust log store + log service."
+requires-python = ">=3.12"
+
+[tool.maturin]
+# This crate (finelog-pyext) IS the cdylib: a thin PyO3 shim over the sibling
+# `finelog` server lib in the top-level rust/ workspace. The module is TOP-LEVEL
+# `finelog_server`, not nested under `finelog.`: marin-finelog is pure Python and
+# often installed editable, and an editable src/finelog on sys.path would shadow
+# a nested `finelog/_native.so` in site-packages.
+manifest-path = "Cargo.toml"
+module-name = "finelog_server"
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# Rebuild the extension when the Rust sources change, not just pyproject.toml —
+# this is what makes the rust_mode.py dev path source track live edits. Because
+# this pyext depends on the sibling `finelog` component crate (and, once
+# extracted, the shared `crates/marin-jwt`), the keys reach across the workspace:
+# an edit under ../finelog must invalidate this wheel or dev mode serves a stale
+# build. (Verify at rollout that uv honors parent-relative globs; if not, key on
+# ../Cargo.lock plus `uv sync --reinstall-package marin-finelog-server`.)
+cache-keys = [
+    "pyproject.toml",
+    "Cargo.toml",
+    "src/**/*.rs",
+    "finelog_server.pyi",
+    "../Cargo.toml",
+    "../Cargo.lock",
+    "../finelog/Cargo.toml",
+    "../finelog/build.rs",
+    "../finelog/src/**/*.rs",
+    "../finelog/proto/**",
+]

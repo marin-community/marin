@@ -54,9 +54,9 @@ packages = ["src/finelog"]
 "config" = "config"
 
 [tool.uv.sources]
-# `scripts/rust_mode.py dev` points marin-finelog-server at ./rust here (and at
-# lib/finelog/rust in the root pyproject) so the extension builds from source;
-# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# `scripts/rust_mode.py dev` points marin-finelog-server at the workspace crate
+# rust/finelog-pyext (here and in the root pyproject) so the extension builds from
+# source; `user` mode clears the block and the pre-built wheel comes from PyPI.
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

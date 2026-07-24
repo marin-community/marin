@@ -141,7 +141,7 @@ pub fn process_arrow_batch(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowT
 }
 
 // Rust Structs
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct Document {
     #[pyo3(get, set)]

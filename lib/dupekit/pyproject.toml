@@ -52,9 +52,9 @@ only-include = ["src/dupekit", "tests", "README.md"]
 packages = ["src/dupekit"]
 
 [tool.uv.sources]
-# `scripts/rust_mode.py dev` points marin-dupekit-native at ./rust here (and at
-# lib/dupekit/rust in the root pyproject) so the extension builds from source;
-# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# `scripts/rust_mode.py dev` points marin-dupekit-native at the workspace crate
+# rust/dupekit-pyext (here and in the root pyproject) so the extension builds from
+# source; `user` mode clears the block and the pre-built wheel comes from PyPI.
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

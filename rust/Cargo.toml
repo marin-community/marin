@@ -1,0 +1,41 @@
+# Marin's native code. One Cargo workspace for every internal crate and PyO3
+# extension. Each `*-pyext` member is the maturin build target for exactly one
+# Python wheel; internal libraries under `crates/` are `publish = false` and
+# compiled from source into whichever wheels depend on them. See
+# .agents/projects/2026-07-23_rust_workspace_consolidation.md.
+[workspace]
+resolver = "2"
+members = [
+    "finelog",         # finelog server lib + `finelog-server` binary
+    "finelog-pyext",   # cdylib -> finelog_server -> marin-finelog-server
+    "dupekit-pyext",   # cdylib -> dupekit_native -> marin-dupekit-native
+    # crates/marin-jwt (shared EdDSA/JWT verify) is added when it is extracted.
+]
+
+# Dependencies shared across members are declared once here and inherited with
+# `<dep>.workspace = true`. pyo3 MUST be a single version: it carries
+# `links = "python"`, so a workspace-wide `cargo build`/`cargo test` cannot
+# contain two pyo3 versions. The version is coupled to arrow: dupekit's `pyarrow`
+# feature pulls `arrow-pyarrow`, which pins pyo3 (arrow 58 -> pyo3 0.28), so
+# unifying pyo3 also fixes dupekit's arrow at 58 — the version finelog already
+# uses. jsonwebtoken is shared by finelog and the marin-jwt crate it delegates to.
+[workspace.dependencies]
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+serde = { version = "1", features = ["derive"] }
+
+# Thin LTO + parallel codegen: within ~1% of fat-LTO runtime at a fraction of the
+# link time. Profiles are only honored at the workspace root, so they live here
+# and apply to every member (the finelog-server binary and every cdylib).
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
+# and opt-level to 2 on top of release's parallel codegen. The finelog deploy
+# Dockerfile passes `--build-arg CARGO_PROFILE=fast`.
+[profile.fast]
+inherits = "release"
+lto = false
+opt-level = 2

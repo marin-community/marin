@@ -12,7 +12,7 @@ concurrency:
 permissions:
   contents: read
 
-# cargo fmt/clippy/test for the dupekit and finelog native crates, plus a guard that
+# cargo fmt/clippy/test over the single top-level rust/ workspace, plus a guard that
 # no rust dev-mode source leaked into a committed pyproject. The `changes` job always
 # runs so the downstream jobs report a status on every PR (a workflow-level `paths:`
 # filter would leave a required check pending forever on non-matching PRs).
@@ -23,8 +23,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      dupekit: ${{ steps.filter.outputs.dupekit }}
-      finelog: ${{ steps.filter.outputs.finelog }}
+      rust: ${{ steps.filter.outputs.rust }}
       user_mode: ${{ steps.filter.outputs.user_mode }}
     steps:
       - uses: actions/checkout@v5
@@ -32,11 +31,8 @@ jobs:
         id: filter
         with:
           filters: |
-            dupekit:
-              - 'lib/dupekit/rust/**'
-              - '.github/workflows/rust-checks.yaml'
-            finelog:
-              - 'lib/finelog/rust/**'
+            rust:
+              - 'rust/**'
               - '.github/workflows/rust-checks.yaml'
             # The dev-mode guard inspects the pyprojects a leaked rust path source
             # lands in, plus the script that writes it.
@@ -48,7 +44,7 @@ jobs:
 
   check-user-mode:
     needs: changes
-    if: needs.changes.outputs.dupekit == 'true' || needs.changes.outputs.finelog == 'true' || needs.changes.outputs.user_mode == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.user_mode == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -63,29 +59,9 @@ jobs:
             exit 1
           fi
 
-  dupekit-rust:
+  rust:
     needs: changes
-    if: needs.changes.outputs.dupekit == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-        with:
-          workspaces: lib/dupekit/rust
-      - name: cargo fmt
-        run: cargo fmt --manifest-path lib/dupekit/rust/Cargo.toml --all -- --check
-      - name: cargo clippy
-        run: cargo clippy --manifest-path lib/dupekit/rust/Cargo.toml --workspace --all-targets -- -D warnings
-      - name: cargo test
-        run: cargo test --manifest-path lib/dupekit/rust/Cargo.toml --workspace
-
-  finelog-rust:
-    needs: changes
-    if: needs.changes.outputs.finelog == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -95,17 +71,17 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          workspaces: lib/finelog/rust
+          workspaces: rust
       - name: cargo fmt
-        run: cargo fmt --manifest-path lib/finelog/rust/Cargo.toml --all -- --check
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
       - name: cargo clippy
-        run: cargo clippy --manifest-path lib/finelog/rust/Cargo.toml --workspace --all-targets -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - name: cargo test
-        run: cargo test --manifest-path lib/finelog/rust/Cargo.toml --workspace
+        run: cargo test --manifest-path rust/Cargo.toml --workspace --locked
 
   rust-checks:
     name: rust-checks
-    needs: [changes, check-user-mode, dupekit-rust, finelog-rust]
+    needs: [changes, check-user-mode, rust]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -113,8 +89,7 @@ jobs:
           [ "${{ needs.changes.result }}" = "success" ] || exit 1
           for result in \
             "${{ needs.check-user-mode.result }}" \
-            "${{ needs.dupekit-rust.result }}" \
-            "${{ needs.finelog-rust.result }}"
+            "${{ needs.rust.result }}"
           do
             case "$result" in
               success|skipped) ;;

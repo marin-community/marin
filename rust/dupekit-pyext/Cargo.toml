@@ -1,0 +1,24 @@
+[package]
+name = "dupekit-native"
+version = "0.1.2"
+edition = "2021"
+
+# Keep in sync with `module-name` in the sibling pyproject.toml. See
+# src/dupekit/__init__.py for why the extension is a top-level module.
+[lib]
+name = "dupekit_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# arrow/parquet 58 (was 57.1): the workspace-unified pyo3 0.28 requires
+# arrow-pyarrow 58, which is also the version finelog uses — so arrow is unified.
+arrow = { version = "58", default-features = false, features = ["pyarrow"] }
+blake2 = "0.10"
+blake3 = "1.8"
+hex = "0.4"
+parquet = { version = "58", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
+pyo3.workspace = true  # unified workspace version (abi3-py312, extension-module)
+rand = "0.8"
+rand_pcg = "0.3"
+regex = "1.10"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

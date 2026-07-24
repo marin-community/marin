@@ -1007,8 +1007,9 @@ mod tests {
     /// (finelog's `admits` returns a bare bool).
     #[test]
     fn conformance_vectors_match_rigging() {
+        // CARGO_MANIFEST_DIR is rust/finelog, so ../../ is the repo root.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../rigging/src/rigging/auth_vectors.json");
+            .join("../../lib/rigging/src/rigging/auth_vectors.json");
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read shared auth vectors at {}: {e}", path.display()));
         let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();

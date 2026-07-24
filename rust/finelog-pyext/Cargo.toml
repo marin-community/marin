@@ -20,7 +20,7 @@ name = "finelog_server"
 crate-type = ["cdylib"]
 
 [dependencies]
-finelog = { path = ".." }
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
+finelog = { path = "../finelog" }
+pyo3.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 axum = "0.7"

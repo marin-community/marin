@@ -141,38 +141,26 @@ Physical co-location under `lib/<pkg>/` is replaced by explicit ownership:
 
 ## Dependency boundaries
 
-The Python dependency direction is `{iris, haliax} → {levanter, zephyr} → marin`;
-native code must not create reverse edges. Rules:
+The Python dependency direction is preserved trivially, because the edge only
+runs one way: native Rust code never depends on Python. Rust crates cannot import
+Python packages, and PyO3 is a Python-to-native surface, not the reverse. A shared
+Rust crate is statically compiled into each wheel that links it, so sharing
+`marin-jwt` between the finelog and iris extensions adds no Python-level
+dependency between `marin-finelog` and `marin-iris`. The wheels themselves follow
+the usual Python dependency path (`marin-iris` depends on `marin-iris-native`,
+and so on), unchanged by the move. There is no way for the workspace to introduce
+a Python reverse edge.
 
-1. The crate dependency graph is a DAG. Extension crates are sinks: no crate
-   depends on a `*-pyext`. No `*-pyext` depends on another `*-pyext`.
-2. Internal crates (`rust/crates/**`) depend only on third-party crates and
-   other internal crates. They never depend on a component library or an
-   extension crate. This keeps them leaves (or near-leaves) that any package can
-   consume without importing that package's world.
-3. A shared internal crate must not encode one consumer's identity. `marin-jwt`
-   verifies tokens against a supplied key set and audience; it does not know
-   "finelog" or "iris." Consumer-specific policy (which audiences are trusted,
-   which CIDRs bypass) stays in the component library.
-4. Because internal crates carry no Python-level dependency, sharing `marin-jwt`
-   between `finelog-pyext` and `iris-pyext` creates no Python edge between
-   `marin-finelog` and `marin-iris`. Dependency direction is preserved as long as
-   the rules above hold — but they are not self-enforcing (see below).
-5. Internal crates stay layer-neutral: no PyO3, no Python-driven build scripts,
-   no consumer-specific types. A crate that pulls in `pyo3` or a component's
-   domain types is no longer a leaf and cannot be shared freely.
-
-Cargo does not enforce most of this. It rejects dependency cycles, and PyO3's
-`links = "python"` constraint forces one pyo3 version across any single
-`cargo build`, but Cargo will happily let an internal crate depend on a
-component, or `iris-proxy` depend on `finelog`, if a manifest says so. The
-boundary rules therefore need a CI architecture check: a small script over
-`cargo metadata` that asserts an explicit allowed-edge matrix — each crate is
-tagged with its role (internal / component / pyext) and Python layer, and any
-edge outside the permitted set fails the build. `cargo-deny` covers dependency
-bans and duplicate-version policy but does not express this graph, so the
-allowed-edge check is its own step. Cargo gives us cycle-freedom and pyo3
-singleness for free; everything else is the CI check's job.
+That leaves a lighter, Rust-internal concern: keeping shared crates reusable. The
+convention is that internal crates under `rust/crates/**` stay leaves — they
+depend only on third-party and other internal crates, carry no PyO3 and no
+consumer-specific types, and encode no consumer's identity (`marin-jwt` verifies a
+token against a supplied key set and audience; the trusted-audience and CIDR
+policy lives in the component library). Cargo enforces the parts that matter for
+building: it rejects dependency cycles, and PyO3's `links = "python"` forces one
+pyo3 version across the workspace (the migration hit exactly this — see below). The
+leaf convention is a code-review norm; a `cargo metadata` lint could assert it if
+it ever starts slipping, but it is not load-bearing for dependency direction.
 
 ## Versioning model
 
@@ -432,6 +420,27 @@ each real package, on the pinned maturin version (manifest pruning is maturin
 behavior, so the maturin pin is load-bearing).
 
 ## Migration plan
+
+Status: this PR executes the finelog and dupekit move as one change (Phases 1a
+and 1b combined, at the issue owner's direction — "do the full migration in this
+PR and see how it feels"). iris follows when `lib/iris/rust` lands. `marin-jwt`
+(Phase 2) is deferred to its own PR because it is security-critical and needs the
+regression suite below.
+
+Finding from doing it: pyo3 and arrow are coupled and cannot be unified
+independently. dupekit's `pyarrow` feature pulls `arrow-pyarrow`, which pins the
+pyo3 version (arrow-pyarrow 57.x → pyo3 0.26, 58.x → pyo3 0.28, 59.1 → pyo3 0.29).
+Unifying pyo3 therefore also fixes dupekit's arrow version. The workspace settled
+on pyo3 0.28 + arrow 58 — 58 is the version finelog already uses, so both pyo3 and
+arrow unified in one step (dupekit moved 0.26→0.28 and arrow 57.1→58; finelog-pyext
+moved 0.29→0.28). The dupekit bump surfaced two pyo3-0.28 deprecations (`downcast`
+→ `cast`; the `#[pyclass]` Clone auto-`FromPyObject` becoming opt-in via
+`from_py_object`), both mechanical. So the design's "arrow unification is a
+separate, deferrable change" is wrong when a crate uses `pyarrow`: the pyo3
+`links` constraint drags arrow along with it.
+
+The phased plan below is the general recipe; the notes above record where this PR
+diverged.
 
 Phased so each PR lands green on its own. The version unifications are separated
 from the move, and the move retargets every build consumer in one atomic PR — a
