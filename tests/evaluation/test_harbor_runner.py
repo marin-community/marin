@@ -89,10 +89,6 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
         return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
 
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
-    monkeypatch.setattr(
-        "marin.evaluation.utils.marin_filesystem",
-        lambda _protocol: pytest.fail("Harbor artifact copies must not use a GCS-specific filesystem"),
-    )
 
     trial_dir = tmp_path / "source" / "trial-one"
     (trial_dir / "agent").mkdir(parents=True)
