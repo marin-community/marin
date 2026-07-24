@@ -24,8 +24,8 @@ features = ["pyo3/extension-module"]
 # this pyext depends on the sibling `finelog` component crate (and, once
 # extracted, the shared `crates/marin-jwt`), the keys reach across the workspace:
 # an edit under ../finelog must invalidate this wheel or dev mode serves a stale
-# build. (Verify at rollout that uv honors parent-relative globs; if not, key on
-# ../Cargo.lock plus `uv sync --reinstall-package marin-finelog-server`.)
+# build. If a uv version does not honor these parent-relative globs, force a
+# rebuild with `uv sync --reinstall-package marin-finelog-server`.
 cache-keys = [
     "pyproject.toml",
     "Cargo.toml",

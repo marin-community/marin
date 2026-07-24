@@ -352,8 +352,8 @@ def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
 
 
 def test_shared_crate_change_source_builds_every_consumer(tmp_path: Path, monkeypatch) -> None:
-    """A change to a shared internal crate force-selects every scope that links it. No shared
-    crate is extracted yet (design Phase 2), so register one to exercise the mechanism."""
+    """A change to a shared internal crate force-selects every scope that links it. None is
+    extracted yet, so register one to exercise the mechanism."""
     monkeypatch.setitem(st.SHARED_CRATE_SCOPES, "rust/crates/marin-jwt", ["finelog"])
     assert classify(["rust/crates/marin-jwt/src/lib.rs"], tmp_path).native_changed == {"finelog"}
 

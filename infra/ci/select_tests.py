@@ -114,8 +114,8 @@ NATIVE_CRATE_DIRS: dict[str, list[str]] = {
     "finelog": ["rust/finelog", "rust/finelog-pyext"],
 }
 # Shared internal crates under rust/crates/ → the scopes that must source-build on a
-# change. Empty until the first shared crate is extracted (design Phase 2); e.g.
-# extracting marin-jwt adds {"rust/crates/marin-jwt": ["finelog", "iris"]}.
+# change. Empty until the first shared crate is extracted; e.g. extracting marin-jwt
+# adds {"rust/crates/marin-jwt": ["finelog", "iris"]}.
 SHARED_CRATE_SCOPES: dict[str, list[str]] = {}
 # Workspace-global inputs affect every wheel's build, so they select all native scopes.
 NATIVE_GLOBAL_INPUTS: tuple[str, ...] = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml")
