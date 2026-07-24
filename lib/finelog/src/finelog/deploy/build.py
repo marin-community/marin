@@ -22,6 +22,7 @@ import click
 
 DEFAULT_IMAGE = "ghcr.io/marin-community/finelog:latest"
 DEFAULT_PLATFORMS = "linux/amd64,linux/arm64"
+REGISTRY_COMPRESSION = "compression=zstd,compression-level=3"
 
 
 def _verify_published_platforms(image: str, expected: set[str]) -> None:
@@ -117,11 +118,11 @@ def build_image(
                     "--cache-from",
                     f"type=registry,ref={cache_image}",
                     "--cache-to",
-                    f"type=registry,ref={cache_image},mode=max,compression=zstd,"
-                    "compression-level=3,oci-mediatypes=true,image-manifest=true",
+                    f"type=registry,ref={cache_image},mode=max,{REGISTRY_COMPRESSION},"
+                    "oci-mediatypes=true,image-manifest=true",
                 ]
             )
-        cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
+        cmd.extend(["--output", f"type=image,{REGISTRY_COMPRESSION},push=true"])
     else:
         cmd.extend(["--output", f"type=docker,name={image}"])
     cmd.append(str(marin_root))

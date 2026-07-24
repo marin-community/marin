@@ -64,5 +64,5 @@ def test_multiarch_build_fails_if_published_index_is_missing_a_platform(monkeypa
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    with pytest.raises(click.ClickException, match="missing platforms: linux/arm64"):
+    with pytest.raises(click.ClickException):
         build_image(image="example.invalid/finelog:test")

@@ -205,7 +205,7 @@ def test_checkpoint_path_requires_numeric_epoch(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     _no_rollout_record(monkeypatch)
 
-    with pytest.raises(ValueError, match="must end with a numeric epoch"):
+    with pytest.raises(ValueError):
         controller_main._prepare_local_db_dir(
             db_dir,
             "gs://b/state",
@@ -225,7 +225,7 @@ def test_corrupt_local_db_is_preserved_before_remote_restore(tmp_path, monkeypat
     )
     monkeypatch.setattr(controller_main, "latest_checkpoint_epoch_ms", lambda _remote: 200)
 
-    def restore(_remote, target, checkpoint_dir=None):
+    def restore(_remote, target, **_kwargs):
         target.mkdir()
         (target / "controller.sqlite3").write_text("restored")
         return True

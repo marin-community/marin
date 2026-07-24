@@ -510,7 +510,7 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
-            auth_optional=self._external_auth_allows_anonymous,
+            reported_auth_policy=external_auth_policy,
             jwt_manager=config.auth.jwt_manager if config.auth else None,
             federated_handoff=federated_handoff,
             federation_owner_check=_federation_owner_check,
