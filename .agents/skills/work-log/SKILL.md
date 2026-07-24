@@ -56,7 +56,9 @@ EOF
 
 ## Access
 
-The script needs gcloud ADC with `roles/cloudsql.client` and accessor on the
-`cloudsql-agents-password` secret in `hai-gcp-models`. The `agents` SQL user can only
-read `chunks` and read/append `work_log` — the log is append-only; correct a wrong
-entry by adding a new one that references it, not by rewriting history.
+Auth is Cloud SQL IAM — no password. You connect as your own ADC identity, which must be
+a member of the `eng-all@openathena.ai` group (granted `roles/cloudsql.instanceUser` +
+`roles/cloudsql.client`). The group can read `chunks` and read/append `work_log` — the log
+is append-only; correct a wrong entry by adding a new one that references it, not by
+rewriting history. If your ADC is a service-account key rather than your user identity,
+that principal needs its own grants (or set `MARIN_DB_USER`).
