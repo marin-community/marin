@@ -160,6 +160,11 @@ class GrugModelConfig:
     # No positional encoding on the global (long) layers when True (they attend the full context, so
     # RoPE is dropped there). Only meaningful with global_every > 0.
     nope_global: bool = False
+    # Partial Key Offset on the global (long) layers: shift the second half of K's head_dim back one
+    # position (query i sees K[i] on the first half, K[i-1] on the second), zeroed at doc starts.
+    # Only meaningful with global_every > 0. Designed to pair with 50% RoPE (rope rotates the first
+    # half; PKO shifts the rope-free second half).
+    pko_global: bool = False
     # Fraction of head_dim that RoPE rotates on the rope'd (local) layers; the remaining dims pass
     # through unrotated (partial / "half" RoPE). 1.0 = full RoPE (default). 0.5 = rotate half.
     rope_fraction: float = 1.0
@@ -340,6 +345,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         sconv_active: bool | jax.Array = True,
+        use_pko: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -366,6 +372,26 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
+
+        # Partial Key Offset (global/long layers): shift K's second head_dim half back one position so
+        # query i sees K[i] on the first half, K[i-1] on the second; zero the shifted half at doc starts
+        # so the look-back does not cross documents. Scan-safe: always computed, selected by ``use_pko``.
+        half = head_dim // 2
+        k_stationary = k[..., half:]
+        k_shifted = jnp.concatenate([k_stationary[:, :1], k_stationary[:, :-1]], axis=1)
+        if sconv_segment_ids is not None:
+            starts = jnp.concatenate(
+                [
+                    jnp.ones_like(sconv_segment_ids[:, :1], dtype=bool),
+                    sconv_segment_ids[:, 1:] != sconv_segment_ids[:, :-1],
+                ],
+                axis=1,
+            )
+        else:
+            starts = jnp.zeros((1, seq_len), dtype=bool).at[:, 0].set(True)
+        k_shifted = jnp.where(starts[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+        k_pko = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
+        k = jnp.where(use_pko, k_pko, k)
 
         q = rms_norm(q)
         k = rms_norm(k)
@@ -657,6 +683,7 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         sconv_active: bool | jax.Array = True,
+        use_pko: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
@@ -682,7 +709,7 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        attn_out = self.attn(attn_in, mask, disable_rope, sconv_active)
+        attn_out = self.attn(attn_in, mask, disable_rope, sconv_active, use_pko)
         if self.sconv_attn is not None:
             attn_out = jnp.where(sconv_active, self.sconv_attn(attn_out, sconv_segment_ids), attn_out)
         x = x + attn_out
@@ -806,8 +833,9 @@ class Transformer(eqx.Module):
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.nope_global else jnp.asarray(False)
                 sconv_active = use_long if cfg.sconv_global_only else jnp.asarray(True)
+                use_pko = use_long if cfg.pko_global else jnp.asarray(False)
                 new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, layer_mask, disable_rope, sconv_active
+                    carry_hidden, layer_mask, disable_rope, sconv_active, use_pko
                 )
                 return new_hidden, qb_beta
 

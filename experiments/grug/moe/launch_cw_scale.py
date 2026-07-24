@@ -158,6 +158,7 @@ def build_scale_model() -> GrugModelConfig:
         sconv_global_only=os.environ.get("SCALE_SCONV_GLOBAL_ONLY") == "1",
         global_every=env_int("SCALE_GLOBAL_EVERY", 0),
         nope_global=os.environ.get("SCALE_NOPE_GLOBAL") == "1",
+        pko_global=os.environ.get("SCALE_PKO_GLOBAL") == "1",
         rope_fraction=float(os.environ.get("SCALE_ROPE_FRACTION", "1.0")),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
