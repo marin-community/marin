@@ -519,3 +519,27 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   QB beta update), same stashed wheel, and rerun the b512 EP8 64-GPU
   comparison as a three-arm same-allocation job (NCCLEP-009). Implementation
   on `mcwitt/moe-standalone-ep-ncclep` @ 9c17b66d6.
+
+### 2026-07-24 — NCCLEP-009 (in flight): full TE MoE block (`te_moe`) vs the dispatch/combine seam
+- Backend `te_moe` on `mcwitt/moe-standalone-ep-ncclep` @ 81fcd979a:
+  `MoEMLP.__call__` hands the whole layer to `transformer_engine.jax.moe.moe`
+  (fused sigmoid+top-k router with the QB bias as TE `expert_bias`,
+  `scaling_factor=2.5`, NCCL_EP dispatch, TE grouped-quantize + grouped GEMMs,
+  NCCL_EP combine, one custom_vjp) under the same `auto_axes` move as
+  `ep_nccl.py`; grug's routing tensors are kept only for the observational
+  stats and the QB beta update. Bootstrap sized with TE's 128-token-aligned
+  recv bound (`te_moe_recv_capacity`); `record_ep_bootstrap_signature_for_moe`
+  satisfies moe()'s per-call compatibility assert. Same 68493d2 wheel as
+  every NCCLEP arm — same-build comparison.
+- Single-node EP4 smoke (`/mwittmann/temoe-smoke1`, d2560 L4 e64 top4 b16
+  seq4096, 6 steps): **step-0 loss 11.805191040039062 — bit-identical** to the
+  nccl_ep and chunked smokes (router parity exact at zero QB bias). Final
+  11.558767 vs 11.558435 (nccl_ep): Δ3.3e-4, consistent with the score-space
+  vs logit-space bias placement diverging marginal-token selection once QB
+  betas are nonzero (plus remat reordering). Tiny-config MFU 10.1 % vs 8.9 %
+  (nccl_ep seam) / 11.2 % (ring_cute control) — the full block is already the
+  fastest TE arm at toy size despite per-call overheads.
+- 64-GPU three-arm gang in flight (`/mwittmann/ncclep-b512-arms`,
+  `run_arms_b512.sh`): te_moe → nccl_ep → a2a_cute, d5120 L48 e64 top4
+  seq4096 **b512** EP8 data8×expert8 (largest config that fits te_moe's
+  unchunked no-drop capacity), one allocation, 3 in-job attempts per arm.
