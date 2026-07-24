@@ -1,10 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 from marin.datakit.download.stack_v3 import (
     HF_DATASET_ID,
     SERIALIZATION_FORMAT,
     row_to_doc,
+    transform,
 )
 
 
@@ -66,3 +71,37 @@ def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
         "x-id",
     ]
     assert all("content" not in metadata for metadata in doc["file_metadata"])
+
+
+def test_transform_writes_nullable_metadata_with_stable_schema(tmp_path: Path):
+    raw_dir = tmp_path / "raw" / "data"
+    raw_dir.mkdir(parents=True)
+    row = {
+        "repo_path": "marin-community/marin",
+        "repo_id": 123,
+        "commit_id": "abc123",
+        "github_metadata": {
+            "branch": "main",
+            "commit_count": 1,
+            "forked_from": None,
+            "forks": 2,
+            "is_fork": False,
+            "is_org_owned": True,
+            "issues": 3,
+            "pull_requests": 4,
+            "repo_created_at": "2025-01-01T00:00:00Z",
+            "stars": 42,
+        },
+        "num_files": 1,
+        "files": [_file("src/main.py", "print('hello')", "main-id")],
+    }
+    pq.write_table(pa.Table.from_pylist([row]), raw_dir / "data.parquet")
+
+    output_dir = tmp_path / "processed"
+    transform(str(tmp_path / "raw"), str(output_dir))
+
+    [output_path] = output_dir.glob("*.parquet")
+    output_schema = pq.read_schema(output_path)
+    github_metadata = output_schema.field("github_metadata").type
+    assert github_metadata.field("forked_from").type == pa.string()
+    assert pq.read_table(output_path).to_pylist()[0]["github_metadata"]["forked_from"] is None

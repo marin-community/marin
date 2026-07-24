@@ -5,6 +5,7 @@
 
 from pathlib import PurePosixPath
 
+import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem import prefix_join
 from zephyr.dataset import Dataset
@@ -22,6 +23,52 @@ TRAIN_PARQUET_GLOB = "data/*.parquet"
 REPOSITORY_HEADER = "Repository:"
 FILE_HEADER = "File:"
 SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v1"
+
+OUTPUT_SCHEMA = pa.schema(
+    [
+        pa.field("text", pa.string()),
+        pa.field("source", pa.string()),
+        pa.field("repo_path", pa.string()),
+        pa.field("repo_id", pa.int64()),
+        pa.field("commit_id", pa.string()),
+        pa.field(
+            "github_metadata",
+            pa.struct(
+                [
+                    pa.field("branch", pa.string()),
+                    pa.field("commit_count", pa.int64()),
+                    pa.field("forked_from", pa.string()),
+                    pa.field("forks", pa.int64()),
+                    pa.field("is_fork", pa.bool_()),
+                    pa.field("is_org_owned", pa.bool_()),
+                    pa.field("issues", pa.int64()),
+                    pa.field("pull_requests", pa.int64()),
+                    pa.field("repo_created_at", pa.string()),
+                    pa.field("stars", pa.int64()),
+                ]
+            ),
+        ),
+        pa.field("num_files", pa.int64()),
+        pa.field(
+            "file_metadata",
+            pa.list_(
+                pa.struct(
+                    [
+                        pa.field("content_id", pa.string()),
+                        pa.field("detected_licenses", pa.list_(pa.string())),
+                        pa.field("file_path", pa.string()),
+                        pa.field("file_timestamp", pa.int64()),
+                        pa.field("is_vendor", pa.bool_()),
+                        pa.field("language", pa.string()),
+                        pa.field("license_type", pa.string()),
+                        pa.field("size_bytes", pa.int64()),
+                    ]
+                )
+            ),
+        ),
+        pa.field("serialization_format", pa.string()),
+    ]
+)
 
 
 def _directory_block_dfs(files: list[dict]) -> list[dict]:
@@ -74,6 +121,7 @@ def transform(input_path: str, output_path: str) -> None:
         .flat_map(row_to_doc)
         .write_parquet(
             prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=OUTPUT_SCHEMA,
             skip_existing=True,
         )
     )
@@ -97,6 +145,7 @@ def processed_stack_v3_step() -> StepSpec:
             "serialization_format": SERIALIZATION_FORMAT,
             "repository_header": REPOSITORY_HEADER,
             "file_header": FILE_HEADER,
+            "output_schema": str(OUTPUT_SCHEMA),
         },
     )
 
