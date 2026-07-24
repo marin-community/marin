@@ -629,7 +629,7 @@ def _prepare_vllm_compilation_cache(
     native_env.update(launcher.env())
     cache = VllmCompilationCache.prepare(
         launcher_identity=launcher.cache_identity(),
-        compile_identity=VllmCompileIdentity(
+        compile_identity=VllmCompileIdentity.from_vllm_args(
             model_name_or_path=model_name_or_path,
             extra_cli_args=tuple(extra_cli_args or ()),
         ),

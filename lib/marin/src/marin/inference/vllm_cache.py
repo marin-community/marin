@@ -45,6 +45,8 @@ _GENERATIONS_DIR = "generations"
 _MANIFEST_FILENAME = "manifest.json"
 _ARCHIVE_FILENAME = "cache.tar.gz"
 _XLA_CACHE_SUBDIR = "xla"
+_CHAT_TEMPLATE_ARG = "--chat-template"
+_CHAT_TEMPLATE_DIGEST_ARG = "--chat-template-sha256"
 
 
 class _CacheMiss(Exception):
@@ -63,6 +65,19 @@ class VllmCompileIdentity:
 
     model_name_or_path: str
     extra_cli_args: tuple[str, ...]
+
+    @classmethod
+    def from_vllm_args(
+        cls,
+        *,
+        model_name_or_path: str,
+        extra_cli_args: tuple[str, ...],
+    ) -> "VllmCompileIdentity":
+        """Build an identity without run-specific chat-template file paths."""
+        return cls(
+            model_name_or_path=model_name_or_path,
+            extra_cli_args=_stable_compile_cli_args(extra_cli_args),
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -516,6 +531,30 @@ class _ManagedVllmCompilationCache(VllmCompilationCache):
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _stable_compile_cli_args(extra_cli_args: tuple[str, ...]) -> tuple[str, ...]:
+    stable_args: list[str] = []
+    index = 0
+    while index < len(extra_cli_args):
+        argument = extra_cli_args[index]
+        if argument == _CHAT_TEMPLATE_ARG and index + 1 < len(extra_cli_args):
+            stable_args.extend((_CHAT_TEMPLATE_DIGEST_ARG, _stable_chat_template(extra_cli_args[index + 1])))
+            index += 2
+            continue
+        chat_template_prefix = f"{_CHAT_TEMPLATE_ARG}="
+        if argument.startswith(chat_template_prefix):
+            template = argument.removeprefix(chat_template_prefix)
+            stable_args.append(f"{_CHAT_TEMPLATE_DIGEST_ARG}={_stable_chat_template(template)}")
+        else:
+            stable_args.append(argument)
+        index += 1
+    return tuple(stable_args)
+
+
+def _stable_chat_template(template: str) -> str:
+    path = Path(template)
+    return sha256_for_path(path) if path.is_file() else template
 
 
 def _is_transient(path: Path) -> bool:

@@ -209,6 +209,39 @@ def test_namespace_tracks_launcher_and_compile_identity(local_marin_prefix: Path
         other_args.close()
 
 
+def test_chat_template_cache_identity_uses_content(
+    local_marin_prefix: Path,
+    tmp_path: Path,
+) -> None:
+    first_template = tmp_path / "first-template.jinja"
+    second_template = tmp_path / "second-template.jinja"
+    changed_template = tmp_path / "changed-template.jinja"
+    first_template.write_text("{{ messages }}")
+    second_template.write_text("{{ messages }}")
+    changed_template.write_text("{{ messages[-1] }}")
+
+    def prepare(template: Path) -> VllmCompilationCache:
+        return VllmCompilationCache.prepare(
+            launcher_identity="workspace",
+            compile_identity=VllmCompileIdentity.from_vllm_args(
+                model_name_or_path="test/model",
+                extra_cli_args=("--chat-template", str(template)),
+            ),
+            environment={},
+        )
+
+    first = prepare(first_template)
+    same_content = prepare(second_template)
+    changed_content = prepare(changed_template)
+    try:
+        assert first.namespace == same_content.namespace
+        assert first.namespace != changed_content.namespace
+    finally:
+        first.close()
+        same_content.close()
+        changed_content.close()
+
+
 def test_invalid_cache_entry_skips_publication(
     local_marin_prefix: Path,
 ) -> None:
