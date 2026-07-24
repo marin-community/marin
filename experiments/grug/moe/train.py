@@ -52,7 +52,6 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import (
-    GRUG_MOE_NCCL_EP_CAPACITY_FACTOR,
     GrugModelConfig,
     Transformer,
     TransformerPipelineStage,
@@ -2767,7 +2766,6 @@ def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
         global_tokens=global_microbatch_tokens,
         top_k=config.model.num_experts_per_token,
         ep_size=expert_size,
-        capacity_factor=GRUG_MOE_NCCL_EP_CAPACITY_FACTOR,
     )
     ep.ep_bootstrap(
         world_size=jax.process_count(),

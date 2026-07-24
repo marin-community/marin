@@ -2959,3 +2959,20 @@ author: dlwh
   - Commit `c1b3087add` removes `auto_axes` from this backend and places the complete NCCL_EP MoE body, including custom VJPs and all inner TE primitives, inside one outer `shard_map`. A public-backend regression test verifies that global EP8 forward and backward inputs reach a fake TE boundary with rank-local shapes and reassemble global gradients. Focused tests pass `7/7`; Pyrefly and changed-file precommit pass.
 - Next action:
   - Babysit r11j parent `/dlwh/iris-run-job-20260724-211906`. Require the prepare scan to remain within 65,536 local assignments and produce finite training metrics before L24.
+
+### 2026-07-24 14:43 PDT - r11j and pinned NCCL_EP source correct the receive-capacity diagnosis
+- Hypothesis: Placing the complete NCCL_EP MoE body inside one outer expert-axis `shard_map` will make the prepare scan count only rank-local assignments and fit the existing 81,920-row receive buffer.
+- Commit Hash: `c1b3087add` (`[levanter] Localize the full NCCL EP MoE body`), documented through `826865c31e`.
+- Command: matched L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` gate with run ID `jaxpp-rno2a-ncclep-outershard-r11j-l8-e64k4-b512-s4096-p4m16-20260724-1419`. Parent `/dlwh/iris-run-job-20260724-211906`; child `/dlwh/iris-run-job-20260724-211906/grug-train-jaxpp-rno2a-ncclep-outershard-r11j-l8-e64k4-b512-s4096-p4m16-20260724-1419`.
+- Results:
+  - All ranks lowered and compiled. Stage 0 entered forward execution and generated TE JIT variants with rank-local `maxt16384`.
+  - The earliest runtime failure remained `scan_impl_flat(em): padded EM slots 524288 > max_recv_tokens_per_rank 81920`, from `EpPreparePrimitive`'s `ht_scan_flat` variant. The later XLA `loop_gather_fusion` grid-81,920 launch failure and CUDA unload errors were secondary.
+  - No loss, gradient, duration, throughput, or MFU metric was produced. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-outershard-r11j-l8-e64k4-b512-s4096-p4m16-20260724-1419>.
+  - The babysitter stopped only the parent. Parent, child, and all four tasks are terminal; no retry is live.
+- Interpretation:
+  - The r11g-r11j claim that 524,288 proved a global-buffer leak was wrong. Transformer Engine/NCCL_EP commit `4adad4c218c115cd9af235fb3d4e13ef4cec55a8` documents that `recv_capacity_per_rank` must be at least `ep_size * max_tokens_per_rank * top_k` to avoid drops. Its own EP test configures `max_recv_tokens_per_rank = num_tokens * n_ranks`.
+  - The scan kernel computes the true padded expert-major receive extent, traps when it exceeds the configured maximum, and explicitly directs callers to increase `max_recv_tokens_per_rank` or enable `NCCL_EP_OVERFLOW_DROP`. For this exact geometry the documented bound is `8 * 16,384 * 4 = 524,288`.
+  - The branch's capacity-factor formula modeled balanced receive load and underprovisioned the exact flat-layout contract. The scoped fix sizes bootstrap and dispatch to `global_microbatch_tokens * top_k`; focused tests pass `6/6`, and changed-file precommit including Pyrefly passes.
+  - The user accepts at most `0.2%` relative error for explicitly approximate QuACK/NCCL_EP/FP8 comparisons. Loss and gradient validation remain strict, exact XLA transport remains bitwise, and no overflow-drop policy is enabled by this fix.
+- Next action:
+  - Commit and push the exact-capacity correction, then run the unchanged reduced L8 gate with lower XLA preallocation. If it executes finite steps, compare strict loss/gradient behavior before scaling to L24. If the exact 524,288-row flat layout OOMs, investigate an explicitly approximate overflow-drop variant under the accepted `0.2%` ceiling rather than silently changing semantics.

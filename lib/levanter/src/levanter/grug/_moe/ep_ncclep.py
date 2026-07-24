@@ -31,13 +31,12 @@ def ncclep_receive_capacity(
     global_tokens: int,
     top_k: int,
     ep_size: int,
-    capacity_factor: float,
 ) -> int:
     """Return the fixed receive rows allocated on each NCCL_EP rank.
 
-    ``global_tokens`` is the token count in one expert-parallel group. Each
-    destination rank receives one ``ep_size``-th share of the group's routed
-    assignments at perfect balance, with ``capacity_factor`` headroom.
+    ``global_tokens`` is the token count in one expert-parallel group. NCCL_EP's
+    exact flat layout requires enough rows for every assignment in the group to
+    target one rank.
     """
     if global_tokens <= 0:
         raise ValueError(f"global_tokens must be positive, got {global_tokens}")
@@ -47,17 +46,7 @@ def ncclep_receive_capacity(
         raise ValueError(f"ep_size must be positive, got {ep_size}")
     if global_tokens % ep_size != 0:
         raise ValueError(f"global_tokens={global_tokens} must be divisible by ep_size={ep_size}")
-    if not math.isfinite(capacity_factor) or capacity_factor <= 0:
-        raise ValueError(f"capacity_factor must be positive and finite, got {capacity_factor}")
-
-    capacity = math.ceil(capacity_factor * (global_tokens // ep_size) * top_k)
-    if capacity <= 0:
-        raise ValueError(
-            "capacity_factor produced an empty NCCL_EP receive buffer: "
-            f"global_tokens={global_tokens}, top_k={top_k}, ep_size={ep_size}, "
-            f"capacity_factor={capacity_factor}"
-        )
-    return capacity
+    return global_tokens * top_k
 
 
 def _batch_leading_axes(batch_spec: P) -> tuple[str, ...]:
@@ -231,8 +220,12 @@ def moe_mlp_ep_ncclep(
 
     Transformer Engine is imported lazily because it is an optional GPU
     dependency. The process must register its FFI handlers and bootstrap the
-    NCCL_EP communicator before tracing this function.
+    NCCL_EP communicator before tracing this function. ``capacity_factor`` is
+    part of the common MoE interface; exact NCCL_EP transport always provisions
+    the backend's worst-case receive extent.
     """
+    del capacity_factor
+
     if x.ndim != 2:
         raise ValueError(f"x must be rank-2 [T, H], got shape={x.shape}")
     if selected_experts.ndim != 2 or selected_experts.shape != combine_weights.shape:
@@ -278,7 +271,6 @@ def moe_mlp_ep_ncclep(
         global_tokens=int(x.shape[0]),
         top_k=top_k,
         ep_size=ep_size,
-        capacity_factor=capacity_factor,
     )
 
     te_ep = importlib.import_module("transformer_engine.jax.ep")
