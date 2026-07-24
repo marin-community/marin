@@ -24,6 +24,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from zephyr.readers import load_jsonl
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_PATH = REPO_ROOT / "docs/reports/data/agent-moe-experiments.jsonl"
 DEFAULT_REPORT_PATH = REPO_ROOT / "docs/reports/agent-moe-experiments.md"
@@ -56,7 +58,6 @@ class Metadata:
     repository: str
     parent_issue: int
     title_prefix: str
-    expected_issue_count: int
     headline_summary: str
 
 
@@ -116,7 +117,7 @@ def _required(record: dict[str, Any], key: str) -> Any:
 
 def load_report_data(path: Path) -> ReportData:
     """Load and validate the report's JSON Lines source."""
-    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    records = list(load_jsonl(str(path)))
     metadata_records = [record for record in records if record.get("record_type") == "metadata"]
     if len(metadata_records) != 1:
         raise ValueError(f"expected one metadata record, found {len(metadata_records)}")
@@ -128,7 +129,6 @@ def load_report_data(path: Path) -> ReportData:
         repository=str(_required(raw_metadata, "repository")),
         parent_issue=int(_required(raw_metadata, "parent_issue")),
         title_prefix=str(_required(raw_metadata, "title_prefix")),
-        expected_issue_count=int(_required(raw_metadata, "expected_issue_count")),
         headline_summary=str(_required(raw_metadata, "headline_summary")),
     )
     if metadata.schema_version != 1:
@@ -164,8 +164,6 @@ def load_report_data(path: Path) -> ReportData:
     duplicates = sorted(issue for issue, count in issue_counts.items() if count > 1)
     if duplicates:
         raise ValueError(f"duplicate experiment issue numbers: {duplicates}")
-    if len(experiments) != metadata.expected_issue_count:
-        raise ValueError(f"expected {metadata.expected_issue_count} experiments, found {len(experiments)}")
     return ReportData(metadata=metadata, experiments=experiments, foundations=foundations)
 
 
@@ -203,7 +201,7 @@ def render_report(data: ReportData) -> str:
         "effective wall-clock speedup. Variants that survive the small-scale gate can be",
         "tested at larger scales and projected with a scaling-law fit.",
         "",
-        f"This page summarizes the {metadata.expected_issue_count} `{metadata.title_prefix}` sub-issues attached to",
+        f"This page summarizes the {len(data.experiments)} `{metadata.title_prefix}` sub-issues attached to",
         f"[the April MoE tracker](https://github.com/{metadata.repository}/issues/{metadata.parent_issue})",
         f"as of {metadata.snapshot_date}. The",
         f"[Agent MoE playbook](https://github.com/{metadata.repository}/blob/main/experiments/grug/moe/agent.md)",

@@ -29,7 +29,6 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
         repository="marin-community/marin",
         parent_issue=4281,
         title_prefix="Agent MoE Experiment:",
-        expected_issue_count=2,
         headline_summary="Summary.",
     )
     report = ReportData(

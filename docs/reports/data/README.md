@@ -10,7 +10,7 @@ Agents recreating or refreshing the report should first read
 ## Record types
 
 - `metadata` defines the GitHub repository, tracker issue, title prefix,
-  snapshot date, schema version, expected issue count, and page-level summary.
+  snapshot date, schema version, and page-level summary.
 - `experiment` records one tracker sub-issue. `outcome` and `summary` are
   editorial fields. `model_flops_speedup` holds the loss-only
   equivalent-compute gain. `wall_clock_speedup` includes the measured
