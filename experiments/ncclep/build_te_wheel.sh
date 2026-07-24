@@ -66,8 +66,26 @@ ls -la wheelhouse/
 sha256sum wheelhouse/*.whl
 
 echo "=== PHASE 4b: bundle NCCL_EP JIT headers ==="
-JIT_INC="$WORK/te/3rdparty/nccl/build/include"
-[ -d "$JIT_INC/nccl_ep" ] || { echo "FATAL: JIT headers missing at $JIT_INC"; exit 1; }
+# TE ea41e08 moved NCCL_EP out of the 3rdparty/nccl submodule into
+# 3rdparty/nccl-extensions (nccl_ep sources + a nested third_party/nccl).
+# Locate the generated build-include tree wherever the submodule build put
+# it rather than hard-coding the old path.
+JIT_INC=""
+for candidate in \
+  "$WORK/te/3rdparty/nccl/build/include" \
+  "$WORK/te/3rdparty/nccl-extensions/third_party/nccl/build/include" \
+  "$WORK/te/3rdparty/nccl-extensions/build/include" \
+  "$WORK/te/3rdparty/nccl-extensions/nccl_ep/build/include"; do
+  [ -d "$candidate/nccl_ep" ] && { JIT_INC="$candidate"; break; }
+done
+if [ -z "$JIT_INC" ]; then
+  echo "candidate trees containing nccl_ep dirs:"
+  find "$WORK/te/3rdparty" -type d -name nccl_ep | head -20
+  found=$(find "$WORK/te/3rdparty" -type d -path "*include/nccl_ep" | head -1)
+  [ -n "$found" ] || { echo "FATAL: no generated include/nccl_ep tree found"; exit 1; }
+  JIT_INC=$(dirname "$found")
+fi
+echo "JIT include tree: $JIT_INC"
 tar -C "$JIT_INC" -czf "$WORK/nccl-ep-jit-headers.tgz" .
 ls -la "$WORK/nccl-ep-jit-headers.tgz"
 
