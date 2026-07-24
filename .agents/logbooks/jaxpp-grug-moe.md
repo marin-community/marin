@@ -2829,3 +2829,35 @@ author: dlwh
   - The user accepts approximately `0.2%` numerical error for the explicitly approximate QuACK, NCCL_EP, and FP8 research comparisons under discussion. This does not relax loss or gradient checks, and this exact XLA transport gate remains bitwise because it already passes at zero error.
 - Next action:
   - Wait for a public JAX nightly whose pinned XLA includes `acb5aaffe4c0`, then run the identical benchmark with the required symmetric/device-kernel flags. Require `gin=0` LSA evidence, successful symmetric registration, and about 10% speedup before pipeline integration.
+
+### 2026-07-24 12:46 PDT - automatic standard schedule clears input placement and exposes a free task variable
+- Hypothesis: Localizing automatic JaxPP's compiled input shardings to the stage-local lowering mesh will clear the non-addressable global-mesh `device_put` failure and execute the tiny standard schedule.
+- Commit Hash: `08f169803e` (`[grug] Localize automatic JaxPP inputs`).
+- Command: automatic `std_1f1b`, L4/d2560/e8/top-k1/seq128/b32/m4, four H100x8 stages, ring MoE, two steps, and `GRUG_JAXPP_AUTO_EXPLICIT_IN_SHARDINGS=1`, `GRUG_JAXPP_PATCH_CONST_SHARDINGS=1`, `JAXPP_CONSERVATIVE_LOOP_CLUSTERING=false`. Parent `/dlwh/iris-run-job-20260724-193847`; child `/dlwh/iris-run-job-20260724-193847/grug-train-jaxpp-auto-localinput-std-l4-e8-b32-s128-r1-20260724-1245`.
+- Results:
+  - The new focused regression test passes both the non-addressable global-mesh case and the single-process no-op case. The patch preserves each input's `PartitionSpec` and memory kind while replacing only its device mesh with `mpmd_mesh.lowering_mesh()`.
+  - All four ranks initialized and compiled their `before_loop_0_<rank>` tasks. The run did not reproduce the prior non-addressable input-sharding `device_put` failure.
+  - Rank 0 then failed while compiling `fwd_0` in `jaxpp/jax_primitives.py:task_impl` with `KeyError: Var(...):bfloat16[1024@(replica_dcn,data,expert),2560]`; downstream ranks waited in DIME communicator creation.
+  - No finite loss, duration, throughput, or MFU was produced. Parent, child, and all tasks are terminal with no live resources.
+- Interpretation:
+  - Input localization is validated and is no longer the automatic-schedule blocker.
+  - Pinned JaxPP appends all unclustered loop equations to the last task when conservative clustering is disabled. The resulting stage task contains a free variable that is absent from its task environment; task-Jaxpr checking is disabled by default, so the defect appears later as a compile-time `KeyError`.
+- Next action:
+  - Run the matched tiny standard schedule with `JAXPP_CONSERVATIVE_LOOP_CLUSTERING=true` to capture the earlier transformation-time assertion and exact unclustered equation/Jaxpr. Do not test eager or zero-bubble schedules until standard executes.
+
+### 2026-07-24 12:57 PDT - r11f localizes explicit MPMD compilation to XLA's sharded autotuner
+- Hypothesis: Extending JaxPP's DIME client timeout to two hours will let the unchanged reduced NCCL_EP fingerprint diagnostic complete first-stage compilation.
+- Commit Hash: `db66b180ab` (`[docs] Record JaxPP DIME timeout and XLA transport state`), with runtime fixes through `827062a3a5`.
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` NCCL_EP diagnostic with four stages, 16 microbatches, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, preallocation `0.65`, three steps, `JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT=7200`, and `JAXPP_CLIENT_TIMEOUT=7200000`. Parent `/dlwh/iris-run-job-20260724-192145`; child `/dlwh/iris-run-job-20260724-192145/grug-train-jaxpp-rno2a-ncclep-routefp-r11f-l8-e64k4-b512-s4096-p4m16-20260724-1221`.
+- Results:
+  - All 32 ranks registered unique telltales, initialized JAX, and bootstrapped four NCCL_EP groups. Stage 0 entered `grug_1f1b_mb0_stage0_forward` compilation at `19:32:13 UTC`; stages 1-3 entered DIME rendezvous one second later.
+  - Native `py-spy` stacks on all eight stage-0 processes converged on `xla::Autotuner::Autotune -> DistributedKeyValueStore::Get -> CoordinationServiceAgent::GetKeyValue -> BlockingKeyValueGet`. Downstream rank 8 was independently blocked in `jaxpp.dime2.get_nccl_id -> BlockingKeyValueGet`. CPU counters were effectively idle.
+  - OpenXLA's `xla_gpu_shard_autotuning` defaults to true. Its `ConfigAssigner` fingerprints the complete HLO module, partitions candidates across all participating compiler processes, publishes one result key per process, then waits up to 24 hours for every other process's module-fingerprint key. JaxPP MPMD stages compile different HLO modules, so those keys cannot match.
+  - No route fingerprint, `ep_prepare`, padded-EM result, finite loss, duration, throughput, or MFU was reached. The W&B run has no training history: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-routefp-r11f-l8-e64k4-b512-s4096-p4m16-20260724-1221>.
+  - The parent and child are terminal killed, all four child tasks exited `0`, and no matching pods remain.
+- Interpretation:
+  - r11f was not slow compilation. It was a deterministic contract mismatch between XLA's cross-process sharded autotuner and JaxPP's MPMD compilation model.
+  - `--xla_gpu_shard_autotuning=false` is the narrow control: it preserves normal local online autotuning and disables only the cross-process partition/join layer. Disabling all autotuning with `--xla_gpu_autotune_level=0` is unnecessary for this diagnosis and would confound performance.
+  - The accepted `0.2%` ceiling for approximate NCCL_EP comparisons was not exercised; exact loss and gradient checks remain required.
+- Next action:
+  - Babysit r11g parent `/dlwh/iris-run-job-20260724-195722`, which changes only `XLA_FLAGS` to include `--xla_gpu_shard_autotuning=false`. Require stage compilation to clear, capture the pre-`ep_prepare` fingerprints and padded-EM result, and produce finite training metrics before any L24 comparison.
