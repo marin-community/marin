@@ -69,13 +69,14 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugTrainerConfig
-from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
@@ -274,6 +275,22 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # SCALE_DATA=datakit uses the two-phase datakit store mixture; default is SlimPajama.
     use_datakit = os.environ.get("SCALE_DATA", "slimpajama").lower() == "datakit"
     slim = None if use_datakit else slimpajama_6b_dataset()
+    # SCALE_EVAL=1 adds the Paloma perplexity suite as validation (weight 0) + periodic bpb evals.
+    # Off by default (throughput runs); on for quality ablations that need held-out loss.
+    use_eval = os.environ.get("SCALE_EVAL") == "1"
+    eval_validation = list(paloma_datasets(tokenizer=llama3_tokenizer).values()) if use_eval else []
+    eval_config = (
+        GrugEvalConfig(
+            eval_batch_size=env_int("SCALE_EVAL_BATCH", 256),
+            steps_per_eval=env_int("SCALE_STEPS_PER_EVAL", 1000),
+            max_eval_batches=env_int("SCALE_MAX_EVAL_BATCHES", 8),
+            eval_current=True,
+            eval_ema=False,
+            compute_bpb=True,
+        )
+        if use_eval
+        else None
+    )
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
@@ -299,7 +316,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
                 val_components={},
             )
         else:
-            data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
+            data = mixture(ctx, {slim: 1.0}, validation=eval_validation, shuffle=_SLIMPAJAMA_SHUFFLE)
         return GrugMoeLaunchConfig(
             model=model,
             data=data,
@@ -314,7 +331,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
-            eval=None,
+            eval=eval_config,
             profiler=profiler,
             checkpointer=checkpointer,
         )
@@ -325,7 +342,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=() if use_datakit else (slim,),
+        deps=(*eval_validation,) if use_datakit else (slim, *eval_validation),
         runtime_args={"train_resources": resources},
     )
 
