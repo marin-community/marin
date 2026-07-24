@@ -46,3 +46,11 @@ def test_snapshot_dedup_outputs_copies_every_marker_and_rewrites_paths(tmp_path)
     assert (snapshot_path / "outputs" / "source_000" / "part-00000.parquet").read_bytes() == b"first"
     assert (snapshot_path / "outputs" / "source_000" / "part-00001.parquet").read_bytes() == b"second"
     assert snapshot.counters == {"dedup/fuzzy/document/cluster_members": 2}
+
+    reused = snapshot_dedup_outputs(
+        dedup_path=str(dedup_path),
+        snapshot_path=str(snapshot_path),
+        copy_workers=2,
+    )
+
+    assert reused == snapshot

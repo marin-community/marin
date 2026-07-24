@@ -61,7 +61,16 @@ def snapshot_dedup_outputs(
 ) -> FuzzyDupsAttrData:
     """Copy every marker shard and write a self-contained snapshot artifact."""
     if read_record(snapshot_path) is not None:
-        raise FileExistsError(f"Snapshot artifact already exists: {snapshot_path}")
+        snapshot = read_artifact(snapshot_path, FuzzyDupsAttrData)
+        shard_counts = {
+            source_main_dir: len((StoragePath(source.attr_dir) / "*.parquet").glob())
+            for source_main_dir, source in snapshot.sources.items()
+        }
+        missing = sorted(source for source, count in shard_counts.items() if count == 0)
+        if missing:
+            raise FileNotFoundError(f"Existing snapshot has no marker shards for {missing[:5]}")
+        logger.info("Reusing existing snapshot with %d marker shards at %s", sum(shard_counts.values()), snapshot_path)
+        return snapshot
 
     dedup = read_artifact(dedup_path, FuzzyDupsAttrData)
     output_root = StoragePath(f"{dedup_path.rstrip('/')}/outputs")
