@@ -3,12 +3,14 @@
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 from levanter.optim.grugmuon import (
     GrugMuonConfig,
     STACK_BATCH_SHARDED,
     VMAP_REPLICATED,
     _grug_scale_with_muon,
+    _newtonschulz_4d_distributed,
     _zeropower_via_newtonschulz_batched_stack_sharded,
     _zeropower_via_newtonschulz_replicated,
 )
@@ -87,3 +89,29 @@ def test_grug_scale_with_muon_stack_batch_sharded_handles_stacked_expert_tensor(
 
     assert new_updates["moe_tensor"].shape == updates["moe_tensor"].shape
     assert not jnp.array_equal(new_updates["moe_tensor"], updates["moe_tensor"])
+
+
+def test_distributed_4d_ns_preserves_expert_sharding_through_layer_expert_merge():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 64, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    input_sharding = NamedSharding(mesh, P(None, "expert", None, None))
+    x = jax.ShapeDtypeStruct((48, 256, 8, 4), jnp.float32, sharding=input_sharding)
+
+    def apply_ns(y):
+        path = (jax.tree_util.GetAttrKey("w_gate"),)
+        return _newtonschulz_4d_distributed(path, y, steps=0, eps=1e-8, coefficient_type="quintic")
+
+    with use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(apply_ns)(x)
+        output = jax.eval_shape(apply_ns, x)
+
+    reshape_specs = [
+        eqn.params["sharding"].spec
+        for eqn in closed_jaxpr.jaxpr.eqns
+        if eqn.primitive.name == "reshape" and eqn.params.get("sharding") is not None
+    ]
+    assert reshape_specs == [P("expert", None, None), P("expert", None, None, None)]
+    assert output.sharding == input_sharding

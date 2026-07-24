@@ -463,8 +463,20 @@ def _newtonschulz_4d_distributed(
     )
 
     x_bf16 = x.astype(jnp.bfloat16)
-    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
-    x_distributed = reshard(x_flat, target_3d_spec)
+    # At EP>1 the stacked expert leaf is sharded only on its expert dimension. Reshaping
+    # directly through intermediate_3d_spec would omit that axis and materialize the full
+    # [L*E, D, I] stack on every device before the following reshard. Move E ahead of L so
+    # the merged dimension preserves expert sharding throughout the redistribution.
+    expert_axis_size = int(mesh.shape.get("expert", 1))
+    expert_spec_3d = PartitionSpec("expert", None, None)
+    use_expert_merge = expert_axis_size > 1 and "expert" in best_axes and merged % expert_axis_size == 0
+    if use_expert_merge:
+        x_swapped = jnp.swapaxes(x_bf16, 0, 1)
+        x_expert = jax.lax.reshape(x_swapped, (merged, d, last), out_sharding=expert_spec_3d)
+        x_distributed = x_expert if target_3d_spec == expert_spec_3d else reshard(x_expert, target_3d_spec)
+    else:
+        x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+        x_distributed = reshard(x_flat, target_3d_spec)
     if os.environ.get("SCALE_MUON_SYRK") == "1":
         # Run the batched NS with QuACK's in-kernel-mirror symmetric GEMM per device shard.
         updated_distributed = jax.shard_map(
@@ -477,8 +489,18 @@ def _newtonschulz_4d_distributed(
     else:
         local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
         updated_distributed = jax.vmap(local_ns)(x_distributed)
-    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
-    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    if use_expert_merge:
+        swapped_4d_spec = PartitionSpec("expert", None, None, None)
+        updated_expert = (
+            updated_distributed if target_3d_spec == expert_spec_3d else reshard(updated_distributed, expert_spec_3d)
+        )
+        updated_swapped = jax.lax.reshape(
+            updated_expert, (expert_count, layers, d, last), out_sharding=swapped_4d_spec
+        )
+        updated_bf16 = jnp.swapaxes(updated_swapped, 0, 1)
+    else:
+        updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+        updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
     return updated_bf16.astype(x.dtype)
 
 

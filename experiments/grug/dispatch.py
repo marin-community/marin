@@ -25,9 +25,9 @@ ConfigT = TypeVar("ConfigT")
 # CE_ forwards CE_IMPL / CE_LIGER_CHUNK / CE_LIGER_UNROLL (read via os.environ at trace time in
 # levanter.grug.loss) so the chunked CE reaches the nested training tasks.
 # XLA_ covers XLA_FLAGS and XLA_PYTHON_CLIENT_ALLOCATOR (cuda_async anti-fragmentation pool).
-# SCALE_MUON_ forwards the distributed Newton-Schulz layout knobs read at trace time in
-# levanter.optim.grugmuon.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
+# SCALE_ forwards experiment knobs read at trace time, including distributed
+# Newton-Schulz layout and fixed-capacity expert all-to-all settings.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 

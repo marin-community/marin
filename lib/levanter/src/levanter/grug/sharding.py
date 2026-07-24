@@ -15,10 +15,10 @@ Pbatch = P(("replica_dcn", "data"))
 # vector across all devices -- an all-to-all spanning racks whose NCCL first-call rendezvous wedges
 # at 8+ racks. The replicated table's gradient is a normal DDP all-reduce.
 Pembed_vocab = P(None, None)
-# Shard the lm_head hidden dim over "data" only (replicated over "replica_dcn") so the weight
-# all-gather in the loss matmul stays intra-rack instead of spanning racks. Its gradient is a
-# normal DDP all-reduce over replica_dcn.
-Plm_head = P("data", "model")
+# Both axes are intra-rack in the compact Grug mesh. Including "expert" keeps
+# non-expert weights sharded when EP consumes the entire rack and "data" has size 1.
+Pfsdp = ("data", "expert")
+Plm_head = P(Pfsdp, "model")
 Plogits = P(Pbatch[0], None, "model")
 
 

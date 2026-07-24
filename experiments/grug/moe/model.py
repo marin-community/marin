@@ -42,7 +42,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, Pfsdp, Plm_head, unshard
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
@@ -192,8 +192,8 @@ class GrugModelConfig:
 
 # Attention-projection shardings. The FSDP variant shards the contraction ("data") axis, so XLA
 # inserts a per-layer weight all-gather before the attention matmuls.
-_QKV_SPEC = P("data", "model")
-_O_SPEC = P("model", "data")
+_QKV_SPEC = P(Pfsdp, "model")
+_O_SPEC = P("model", Pfsdp)
 
 
 def _qkv_projection_pipelined(
@@ -358,9 +358,9 @@ class DenseMLP(eqx.Module):
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P(Pfsdp, "model")),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(Pfsdp, "model")),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", Pfsdp)),
         )
 
     @named_call
