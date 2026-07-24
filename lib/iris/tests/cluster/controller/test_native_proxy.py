@@ -17,6 +17,7 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.managed_thread import ThreadContainer
+from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -154,6 +155,45 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         assert received_bodies == [payload]
     finally:
         threads.stop()
+
+
+def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path) -> None:
+    controllers = [
+        make_controller(
+            host="127.0.0.1",
+            port=0,
+            local_state_dir=tmp_path / name,
+            remote_state_dir=f"file://{tmp_path}/{name}-remote",
+        )
+        for name in ("first", "second")
+    ]
+    for controller in controllers:
+        controller.start()
+        response = httpx.post(
+            f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+            json={},
+        )
+        assert response.status_code == 200
+
+    labels = {
+        "service": "iris.cluster.ControllerService",
+        "method": "ListJobs",
+        "upstream": "controller",
+    }
+
+    def sample_value(name: str, **extra_labels: str) -> float:
+        matching = [
+            family_sample.sample.value
+            for family_sample in telltale.samples()
+            if family_sample.sample.name == name and family_sample.sample.labels == {**labels, **extra_labels}
+        ]
+        assert len(matching) == 1
+        return matching[0]
+
+    assert sample_value("iris_rpc_requests_total") == 2
+    assert sample_value("iris_rpc_responses_total", status="200") == 2
+    assert sample_value("iris_rpc_in_flight") == 0
+    assert sample_value("iris_rpc_duration_seconds_count") == 2
 
 
 def test_native_listener_caches_verified_jwt(make_controller) -> None:
