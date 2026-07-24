@@ -135,10 +135,12 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
                     "cookie": "session=browser-secret",
                 },
             )
+            controller_rpc = client.post("/iris.cluster.ControllerService/ListJobs", json={})
 
         assert redirect.status_code == 307
         assert redirect.headers["location"] == f"/proxy/{_ENCODED_NAME}/"
         assert response.status_code == 200
+        assert controller_rpc.status_code == 200
         assert response.headers["x-native-upstream"] == "reached"
         assert response.json() == {
             "body_bytes": len(payload),
