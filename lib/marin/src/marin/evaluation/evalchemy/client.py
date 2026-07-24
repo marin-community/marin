@@ -11,11 +11,11 @@ python with no cloudpickle, so a cloudpickled callable cannot be deserialized th
 Keeping this script to the standard library plus ``fsspec`` lets that interpreter run it directly.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
-:mod:`marin.evaluation.evalchemy`), so nothing else in Marin needs to import here.
+:mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
 Each task runs through the evalchemy fork's ``eval.eval`` once (one invocation per task so each
 carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
 API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``
-for :class:`~marin.evaluation.eval_result.EvalchemyResult` to read back. ``out_path`` is an
+for :class:`~marin.evaluation.evalchemy.result.EvalchemyResult` to read back. ``out_path`` is an
 object-store URL the parent resolved under ``marin_prefix()``; for an ``s3://`` destination the pod's
 injected ``FSSPEC_S3`` (endpoint + virtual-host addressing) is applied by fsspec automatically.
 """

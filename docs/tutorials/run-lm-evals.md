@@ -86,7 +86,7 @@ An `EvalGroup` states its tasks, its serving backend, and its id explicitly:
 ```python
 from marin.execution.lazy import run
 
-from marin.evaluation.evalchemy import EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyRunConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ServeConfig
 from marin.experiment.evaluation import EvalGroup, eval_report, eval_steps

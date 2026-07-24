@@ -15,13 +15,6 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.evalchemy import (
-    EvalchemyRunConfig,
-    EvalPipelineError,
-    PipelineStage,
-    run_evalchemy,
-)
-from marin.evaluation.harbor_runner import HarborRunConfig, run_harbor
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -41,7 +34,7 @@ from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-_SERVE_ROLE = "serve"
+_INFERENCE_ROLE = "inference"
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
@@ -78,67 +71,6 @@ class EvalExecutor(Protocol):
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome: ...
-
-
-@dataclass(frozen=True)
-class EvalchemyExecutor:
-    """Run one resolved Evalchemy configuration."""
-
-    config: EvalchemyRunConfig
-
-    def __call__(
-        self,
-        model: RunningModel,
-        output_dir: str,
-        env_vars: Mapping[str, str],
-    ) -> EvaluationOutcome:
-        try:
-            outcome = run_evalchemy(model, self.config, output_dir, env_vars=env_vars)
-        except EvalPipelineError as exc:
-            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
-            raise EvaluationError(
-                str(exc),
-                status=status,
-                jobs=exc.jobs,
-                log_tails=exc.log_tails,
-            ) from exc
-        metrics = outcome.result.task_metrics()
-        if not metrics:
-            raise EvaluationError(
-                f"eval finished but no task metrics were readable under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-            )
-        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)
-
-
-@dataclass(frozen=True)
-class HarborExecutor:
-    """Run one resolved Harbor configuration."""
-
-    config: HarborRunConfig
-
-    def __call__(
-        self,
-        model: RunningModel,
-        output_dir: str,
-        env_vars: Mapping[str, str],
-    ) -> EvaluationOutcome:
-        try:
-            result = run_harbor(
-                model,
-                self.config,
-                output_dir,
-                hf_token=env_vars.get("HF_TOKEN"),
-            )
-        except Exception as exc:
-            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
-        if not result.total_trials:
-            raise EvaluationError(
-                f"Harbor eval finished with no trials under {output_dir!r}",
-                status=RunStatus.FAILED,
-            )
-        return EvaluationOutcome(metrics=result.task_metrics())
 
 
 @dataclass(frozen=True)
@@ -225,12 +157,12 @@ def _record(
     return path
 
 
-def _serve_role(index: int) -> str:
-    return _SERVE_ROLE if index == 0 else f"{_SERVE_ROLE}-{index}"
+def _inference_role(index: int) -> str:
+    return _INFERENCE_ROLE if index == 0 else f"{_INFERENCE_ROLE}-{index}"
 
 
-def _serve_jobs(session: RemoteInferenceSession) -> dict[str, str]:
-    return {_serve_role(index): str(job.job_id) for index, job in enumerate(session.jobs)}
+def _inference_job_ids(session: RemoteInferenceSession) -> dict[str, str]:
+    return {_inference_role(index): str(job.job_id) for index, job in enumerate(session.jobs)}
 
 
 def _job_tail(handle: JobHandle) -> tuple[str, ...]:
@@ -245,14 +177,14 @@ def _startup_diagnostics(exc: RemoteInferenceStartupError) -> tuple[dict[str, st
     jobs: dict[str, str] = {}
     tails: dict[str, tuple[str, ...]] = {}
     for index, handle in enumerate(exc.jobs):
-        role = _serve_role(index)
+        role = _inference_role(index)
         jobs[role] = str(handle.job_id)
         tails[role] = _job_tail(handle)
     return jobs, tails
 
 
 def _session_tail(session: RemoteInferenceSession) -> dict[str, tuple[str, ...]]:
-    return {_serve_role(index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
+    return {_inference_role(index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
 def _record_unstarted(
@@ -291,10 +223,11 @@ def _run_one_evaluation(
     batch: EvaluationBatch,
     evaluation: Evaluation,
     session: RemoteInferenceSession,
-    base_jobs: dict[str, str],
+    orchestrator_job_id: str,
     env_vars: Mapping[str, str],
 ) -> _EvaluationExecution:
-    jobs = base_jobs | _serve_jobs(session)
+    jobs = {"orchestrator": orchestrator_job_id}
+    jobs.update(_inference_job_ids(session))
     tails: dict[str, tuple[str, ...]] = {}
     metrics: dict[str, dict[str, float]] = {}
     status = RunStatus.SUCCEEDED
@@ -333,17 +266,19 @@ def _run_one_evaluation(
     )
 
 
-def _run_evaluations(
+def evaluate_batch(
     batch: EvaluationBatch,
     session: RemoteInferenceSession,
-    base_jobs: dict[str, str],
+    *,
+    orchestrator_job_id: str,
     env_vars: Mapping[str, str],
 ) -> list[str]:
+    """Run a batch against one inference context and persist a record per evaluation."""
     paths: list[str] = []
     failed: list[str] = []
 
     for index, evaluation in enumerate(batch.evaluations):
-        execution = _run_one_evaluation(batch, evaluation, session, base_jobs, env_vars)
+        execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars)
         paths.append(execution.record_path)
         if execution.failure is not None:
             failed.append(execution.failure)
@@ -371,7 +306,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
-    base_jobs = {"orchestrator": str(iris_ctx().job_id)}
+    orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     inference = inference_config_for_model(
         batch.model,
@@ -382,11 +317,18 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     )
     try:
         with remote_inference(inference) as session:
-            return _run_evaluations(batch, session, base_jobs, runtime_env)
+            return evaluate_batch(
+                batch,
+                session,
+                orchestrator_job_id=orchestrator_job_id,
+                env_vars=runtime_env,
+            )
     except RemoteInferenceStartupError as exc:
-        jobs, tails = _startup_diagnostics(exc)
+        inference_jobs, tails = _startup_diagnostics(exc)
+        jobs = {"orchestrator": orchestrator_job_id}
+        jobs.update(inference_jobs)
         paths: list[str] = []
-        _record_unstarted(batch, batch.evaluations, exc, base_jobs | jobs, tails, paths)
+        _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
         raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
 
 

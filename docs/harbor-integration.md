@@ -65,8 +65,7 @@ registrations, and a retried task attempt atomically replaces its own same-name 
 A `HarborExecutor` contains a `HarborRunConfig`:
 
 ```python
-from marin.evaluation.harbor_runner import HarborRunConfig
-from marin.evaluation.runner import HarborExecutor
+from marin.evaluation.harbor.runner import HarborExecutor, HarborRunConfig
 
 executor = HarborExecutor(
     config=HarborRunConfig(
@@ -84,7 +83,7 @@ executor = HarborExecutor(
 directories. A registry dataset uses its Harbor name, such as `aime` with version `1.0`.
 
 Add project-specific presets to `experiments/evaluation/evals.py`; keep Harbor execution and result
-normalization in `lib/marin/src/marin/evaluation`.
+normalization in `lib/marin/src/marin/evaluation/harbor`.
 
 ## Results
 

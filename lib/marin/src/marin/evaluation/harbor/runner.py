@@ -20,13 +20,16 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
-from marin.evaluation.harbor_dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.records import RunStatus
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.types import RunningModel
@@ -37,7 +40,7 @@ logger = logging.getLogger(__name__)
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
 _HARBOR_SPEC = "harbor>=0.8.0"
 _DAYTONA_SPEC = "daytona>=0.200.1"
-_DRIVER = str(Path(__file__).with_name("harbor_trial_driver.py"))
+_DRIVER = str(Path(__file__).with_name("trial_driver.py"))
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -318,3 +321,32 @@ def run_harbor(
         result.mean_reward,
     )
     return result
+
+
+@dataclass(frozen=True)
+class HarborExecutor:
+    """Run one resolved Harbor configuration."""
+
+    config: HarborRunConfig
+
+    def __call__(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        try:
+            result = run_harbor(
+                model,
+                self.config,
+                output_dir,
+                hf_token=env_vars.get("HF_TOKEN"),
+            )
+        except Exception as exc:
+            raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+        if not result.total_trials:
+            raise EvaluationError(
+                f"Harbor eval finished with no trials under {output_dir!r}",
+                status=RunStatus.FAILED,
+            )
+        return EvaluationOutcome(metrics=result.task_metrics())

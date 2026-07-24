@@ -67,7 +67,7 @@ class EvalchemyResult(EvalResult):
 
     The evalchemy fork runs each task-config through lm-eval's ``EvaluationTracker`` and writes one
     ``results_<ts>.json``, uploaded whole under a ``<task_dir>`` the producer makes unique per config
-    (see :func:`~marin.evaluation.evalchemy._task_dir`). The accessor keys each file's
+    (see :func:`~marin.evaluation.evalchemy.runner._task_dir`). The accessor keys each file's
     metrics by that dir, not by the task name lm-eval writes inside the JSON: two shot variants of one
     task (``hellaswag`` at 0- and 10-shot) share that inner name but land in different dirs, so keying
     by the dir keeps them distinct instead of silently overwriting. A group task (e.g. ``mmlu``) writes

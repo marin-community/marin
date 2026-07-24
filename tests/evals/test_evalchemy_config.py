@@ -13,11 +13,11 @@ serving, the eval itself) is exercised by the cluster smoke.
 import json
 import os
 
-from marin.evaluation.evalchemy import (
+from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
 )
-from marin.evaluation.evalchemy_client import build_command, build_model_args, scored_results
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.types import OpenAIEndpoint, RunningModel

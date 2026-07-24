@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The pinned evalchemy eval-client container image.
+"""Pinned Evalchemy client runtime.
 
 The ``marin-community/evalchemy`` fork is only installable editable from a git clone (its graders
 live in the source tree and its declared deps fight the base image's pins), so it ships as a

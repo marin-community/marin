@@ -217,7 +217,7 @@ class IrisConfig:
 
 @dataclass(frozen=True)
 class RemoteInferenceConfig:
-    """Exact model, engine, and Iris inputs for one remote inference context."""
+    """Model, engine, and Iris inputs for one remote inference context."""
 
     model: ServedModelConfig
     engine: InferenceEngineConfig

@@ -3,7 +3,7 @@
 
 """Post-hoc evaluation definitions composed from the shared evaluation framework."""
 
-from marin.evaluation.evalchemy import EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyRunConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ServeConfig
 from marin.experiment.evaluation import EvalGroup

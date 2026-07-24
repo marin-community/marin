@@ -4,8 +4,8 @@
 import json
 from pathlib import Path
 
-from marin.evaluation.harbor_dataset import materialize_harbor_dataset
-from marin.evaluation.harbor_runner import HarborRunConfig, HarborTrial, _write_samples, run_harbor
+from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.runner import HarborRunConfig, HarborTrial, _write_samples, run_harbor
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 
@@ -21,7 +21,7 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
         calls.append(kwargs)
         return str(snapshot)
 
-    monkeypatch.setattr("marin.evaluation.harbor_dataset.snapshot_download", download)
+    monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
 
     path = materialize_harbor_dataset(
         "hf://DCAgent2/terminal_bench_2",
@@ -69,8 +69,8 @@ def test_run_harbor_derives_url_and_served_name_from_running_model(tmp_path, mon
             )
         )
 
-    monkeypatch.setattr("marin.evaluation.harbor_runner._run_driver", run_driver)
-    monkeypatch.setattr("marin.evaluation.harbor_runner.materialize_harbor_dataset", lambda *args, **kwargs: None)
+    monkeypatch.setattr("marin.evaluation.harbor.runner._run_driver", run_driver)
+    monkeypatch.setattr("marin.evaluation.harbor.runner.materialize_harbor_dataset", lambda *args, **kwargs: None)
     model = RunningModel(
         endpoint=OpenAIEndpoint(
             base_url="https://iris.example/proxy/t/token/serve.model/v1",

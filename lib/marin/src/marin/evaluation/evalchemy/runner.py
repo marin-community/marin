@@ -16,10 +16,12 @@ from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
-from marin.evaluation.eval_result import EvalchemyResult
-from marin.evaluation.evalchemy_client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy_runtime import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
+from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
+from marin.evaluation.evalchemy.result import EvalchemyResult
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.records import RunStatus
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import export_lm_eval_samples
 from marin.inference.types import RunningModel
 
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
-_EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy_client.py"
+_EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
 
 
@@ -231,3 +233,35 @@ def run_evalchemy(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=EvalchemyResult(path=output_dir),
     )
+
+
+@dataclass(frozen=True)
+class EvalchemyExecutor:
+    """Run one resolved Evalchemy configuration."""
+
+    config: EvalchemyRunConfig
+
+    def __call__(
+        self,
+        model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        try:
+            outcome = run_evalchemy(model, self.config, output_dir, env_vars=env_vars)
+        except EvalPipelineError as exc:
+            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
+            raise EvaluationError(
+                str(exc),
+                status=status,
+                jobs=exc.jobs,
+                log_tails=exc.log_tails,
+            ) from exc
+        metrics = outcome.result.task_metrics()
+        if not metrics:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.INFRA_FAILED,
+                jobs=outcome.jobs,
+            )
+        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)

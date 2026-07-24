@@ -8,12 +8,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from marin.evaluation.evalchemy import EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.harbor_runner import HarborRunConfig
+from marin.evaluation.harbor.runner import HarborExecutor, HarborRunConfig
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
-from marin.evaluation.runner import EvalchemyExecutor, EvalExecutor, HarborExecutor
+from marin.evaluation.runner import EvalExecutor
 
 _TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
 _SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
@@ -139,7 +139,7 @@ def _agentic_eval(
 
 EVALS: dict[str, EvaluationDefinition] = {
     # The core benchmarks, one eval per task so every model x task pair is its own run with its own
-    # serve/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
+    # inference/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
     # conventions so scores line up with public leaderboards.
     "mmlu": _mcq_eval("mmlu", "mmlu", 5),
     "arc-challenge": _mcq_eval("arc-challenge", "arc_challenge", 25),

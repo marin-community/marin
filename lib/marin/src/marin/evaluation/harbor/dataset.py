@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve Harbor datasets that are stored as local or Hugging Face task directories."""
+"""Resolve Harbor datasets stored as local or Hugging Face task directories."""
 
 from pathlib import Path
 

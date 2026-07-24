@@ -14,14 +14,14 @@ from fray.cluster import ResourceConfig
 from rigging.filesystem import StoragePath, marin_prefix, prefix_join
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_result import (
+from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
     EvalReport,
     EvalResult,
     ReportEntry,
     compile_eval_report,
 )
-from marin.evaluation.evalchemy import (
+from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     run_evalchemy,
 )

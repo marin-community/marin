@@ -8,7 +8,7 @@ in progressively, each eval independently inspectable (own record, own eval-chil
 parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
 
 `marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
-each runner. An evaluation failure is recorded and later evaluations continue. If inference fails,
+each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
@@ -59,7 +59,7 @@ uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: model, hardware, status (`succeeded` / `failed` / `infra_failed`), the
 per-task metrics, provenance, the `group_id` shared by every eval from the same serve, and the iris
-job paths of every job behind the run (`jobs`: orchestrator, the shared serve child, this eval's
+job paths of every job behind the run (`jobs`: orchestrator, the shared inference child, this eval's
 child). The orchestrator writes it on success and on failure, so a failed run is still accounted
 for -- and a failure carries the failed child's last 100 log lines (`log_tails`), so most failures
 are diagnosable straight from the record (or the dashboard) without cluster access.
@@ -99,6 +99,9 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-
 
 A Daytona-backed Harbor launch needs `DAYTONA_API_KEY` in the launch environment. Harbor runs as an
 isolated `uv` subprocess outside the Marin lock.
+
+Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
+runner depends only on the callable executor protocol and the shared record types.
 
 ## Adding a model or eval
 

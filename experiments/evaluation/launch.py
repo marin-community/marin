@@ -16,8 +16,8 @@ from datetime import UTC, datetime
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.evalchemy_runtime import EVALCHEMY_IMAGE
-from marin.evaluation.harbor_runner import canonical_served_name
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_IMAGE
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
