@@ -114,3 +114,8 @@ def test_launcher_has_valid_bash_and_dry_run_contract() -> None:
 def test_diagnostic_parity_mode_is_explicit() -> None:
     assert parse_args(["--parity-mode", "strict"]).parity_mode == "strict"
     assert parse_args(["--parity-mode", "diagnostic"]).parity_mode == "diagnostic"
+
+
+def test_overflow_policy_is_explicit() -> None:
+    assert parse_args(["--overflow-policy", "trap"]).overflow_policy == "trap"
+    assert parse_args(["--overflow-policy", "drop"]).overflow_policy == "drop"

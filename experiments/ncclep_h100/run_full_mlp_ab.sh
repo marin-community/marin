@@ -9,6 +9,7 @@ WORK=${WORK:-/tmp/ncclep-h100}
 WARMUP=${WARMUP:-6}
 ITERATIONS=${ITERATIONS:-20}
 PARITY_MODE=${PARITY_MODE:-strict}
+NCCLEP_OVERFLOW_POLICY=${NCCLEP_OVERFLOW_POLICY:-trap}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -23,6 +24,7 @@ Environment overrides:
   WARMUP                   interleaved warmup pairs (6)
   ITERATIONS               interleaved measured pairs (20)
   PARITY_MODE               strict or diagnostic (strict)
+  NCCLEP_OVERFLOW_POLICY    trap or drop (trap)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
 
@@ -51,6 +53,7 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   timing: alternating arm order, $WARMUP warmup pairs, $ITERATIONS measured pairs
   sample aggregation: slowest rank per sample
   parity mode: $PARITY_MODE
+  overflow policy: $NCCLEP_OVERFLOW_POLICY
   parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
   decision: TE value_and_grad p50 >= 1.10x ring and all parity/finite checks pass
   XLA preallocation fraction: $XLA_PREALLOC_FRACTION
@@ -70,6 +73,10 @@ if [[ "$#" -ne 0 ]]; then
 fi
 if [[ "$PARITY_MODE" != "strict" && "$PARITY_MODE" != "diagnostic" ]]; then
   echo "FATAL: PARITY_MODE must be strict or diagnostic, got '$PARITY_MODE'" >&2
+  exit 64
+fi
+if [[ "$NCCLEP_OVERFLOW_POLICY" != "trap" && "$NCCLEP_OVERFLOW_POLICY" != "drop" ]]; then
+  echo "FATAL: NCCLEP_OVERFLOW_POLICY must be trap or drop, got '$NCCLEP_OVERFLOW_POLICY'" >&2
   exit 64
 fi
 
@@ -128,6 +135,11 @@ PY
 echo "runtime NCCL integer version: $NCCL_VERSION"
 
 echo "=== build: task-local Transformer Engine wheel ==="
+if [[ "$NCCLEP_OVERFLOW_POLICY" == "drop" ]]; then
+  export NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH=1
+else
+  export NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH=0
+fi
 bash "$SCRIPT_DIR/build_te_wheel.sh"
 
 JIT_INCLUDE=$(<"$WORK/nccl-ep-jit-include")
@@ -158,4 +170,5 @@ exec python -m iris.runtime.multigpu --nproc 8 --devices-per-proc 1 -- \
   python -u "$SCRIPT_DIR/ep_full_mlp_ab.py" \
   --warmup "$WARMUP" \
   --iterations "$ITERATIONS" \
-  --parity-mode "$PARITY_MODE"
+  --parity-mode "$PARITY_MODE" \
+  --overflow-policy "$NCCLEP_OVERFLOW_POLICY"

@@ -35,6 +35,7 @@ BF16_ATOL = 2e-4
 PROMOTION_SPEEDUP = 1.10
 DEFAULT_WARMUP = 6
 DEFAULT_ITERATIONS = 20
+OVERFLOW_POLICIES = ("trap", "drop")
 SUMMARY_EVENT = "ncclep_h100_full_mlp_ab"
 ARM_RING = "marin_bulk_ring"
 ARM_TE = "transformer_engine_nccl_ep"
@@ -216,6 +217,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="strict",
         help="strict stops before timing on parity failure; diagnostic times but remains non-promotable",
     )
+    parser.add_argument("--overflow-policy", choices=OVERFLOW_POLICIES, default="trap")
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -551,7 +553,7 @@ def run_ab(args: argparse.Namespace) -> int:
     global_shard_guard = te_sharding.global_shard_guard
 
     with jax.set_mesh(mesh), global_shard_guard(MeshResource(dp_resource="data", ep_resource="expert")):
-        te_ep.ep_bootstrap(
+        bootstrap_kwargs = dict(
             world_size=world,
             rank=rank,
             num_experts=NUM_EXPERTS,
@@ -559,6 +561,9 @@ def run_ab(args: argparse.Namespace) -> int:
             recv_capacity_per_rank=RECV_CAPACITY_PER_RANK,
             hidden_dim=HIDDEN_DIM,
         )
+        if args.overflow_policy == "drop":
+            bootstrap_kwargs["overflow_policy"] = "drop"
+        te_ep.ep_bootstrap(**bootstrap_kwargs)
         layer_config = te_ep.EpLayerConfig(
             top_k=TOP_K,
             dispatch_output_per_expert_alignment=DISPATCH_ALIGNMENT,
@@ -642,6 +647,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "warmup_pairs": args.warmup,
         "measured_pairs": args.iterations,
         "parity_mode": args.parity_mode,
+        "overflow_policy": args.overflow_policy,
     }
     summary = build_summary(
         timings=timings,
