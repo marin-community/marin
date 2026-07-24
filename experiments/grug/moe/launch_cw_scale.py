@@ -156,6 +156,7 @@ def build_scale_model() -> GrugModelConfig:
             s.strip() for s in os.environ.get("SCALE_SCONV_SITES", "k,v,attn,mlp").split(",") if s.strip()
         ),
         sconv_global_only=os.environ.get("SCALE_SCONV_GLOBAL_ONLY") == "1",
+        sconv_pko_init=os.environ.get("SCALE_SCONV_PKO_INIT") == "1",
         global_every=env_int("SCALE_GLOBAL_EVERY", 0),
         nope_global=os.environ.get("SCALE_NOPE_GLOBAL") == "1",
         pko_global=os.environ.get("SCALE_PKO_GLOBAL") == "1",

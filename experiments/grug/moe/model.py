@@ -153,6 +153,9 @@ class GrugModelConfig:
     # Apply the SConv only on the global (long) layers when True (requires global_every > 0); the
     # conv is a no-op on local layers. False = conv on every layer.
     sconv_global_only: bool = False
+    # Initialize the K SConv (kernel-2) to copy PKO: identity on the rope dims, shift-back-1 on the
+    # rope-stationary dims. A learnable PKO -- starts at the PKO point, then training can move off it.
+    sconv_pko_init: bool = False
     # Local/global layer split. 0 = every layer identical (uses ``sliding_window``). >0 makes every
     # ``global_every``-th layer (plus the last) a "long"/global full-causal layer; the rest are
     # "short"/local sliding-window layers.
@@ -295,6 +298,20 @@ class ShortConv(eqx.Module):
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
+    @staticmethod
+    def init_pko(channels: int, head_dim: int, rope_dim: int) -> "ShortConv":
+        """Kernel-2 conv initialized to copy PKO: per (head, dim) channel, the rope dims
+        (``dim < rope_dim``) get [1, 0] (current token), the stationary dims get [0, 1] (previous
+        token). With the segment-aware shift this reproduces PKO at step 0 -- but the conv is learnable
+        so training can move off the PKO point. ``channels`` = num_kv_heads * head_dim.
+        """
+        dim_idx = jnp.arange(channels) % head_dim
+        stationary = dim_idx >= rope_dim  # [channels]
+        w0 = jnp.where(stationary, 0.0, 1.0)  # lag-0 (current) tap: 1 on rope dims, 0 on stationary
+        w1 = jnp.where(stationary, 1.0, 0.0)  # lag-1 (previous) tap: 0 on rope dims, 1 on stationary
+        weight = jnp.stack([w0, w1], axis=0)  # [2, channels]
+        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=2)
+
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # Depthwise causal shift-and-sum. When segment_ids are given (packed documents), a tap that
         # reaches back into a previous document is zeroed, so the conv never mixes across a document
@@ -333,7 +350,15 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _O_SPEC),
             # Zero-init -> 2*sigmoid(0) == 1 pass-through at step 0, identical to the no-gate model.
             attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_k=(
+                (
+                    ShortConv.init_pko(m * h, h, cfg.rope_dim)
+                    if cfg.sconv_pko_init
+                    else ShortConv.init(m * h, cfg.sconv_kernel)
+                )
+                if cfg.sconv and "k" in cfg.sconv_sites
+                else None
+            ),
             sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
         )
