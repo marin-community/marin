@@ -145,3 +145,14 @@ RANKING (contribution >=1pp toward LOCKED 25%, preserving fidelity; post-adjoint
    (views, ~free), from jnp.stack(output_parts) + its backward transpose. Cosmetic; not worth a fix.
 9. **3 TE-at-tip NCCL_EP (1/10)** — d3 trending confident-negative: #3231's collective-stream pin deterministically
    crashes 64-GPU first exec; stripped, tip==old wheel ~17% vs 18% anchor. Not a path to 25%; value is the NVIDIA report.
+
+## Check-in 23:46 UTC — watcher + tripwire (per coordinator)
+- Tripwire ARMED, NOT triggered. rav active (not idle). Prepared 120-step matched A/B commands stand as
+  the fallback to lock 1a if rav goes idle >=45m or his runs keep dying. No matched 120-step adjoint A/B
+  exists on the record yet.
+- WATCH /rav/ep64-batched-expert-gemms-30-v2-20260724-2339 (leg-batching = the batching-vs-rotation race vs d4):
+  - Config harvested = the REAL operating point: d5120, 256e/top8, 48L, EP64, batch1024, seq4096, muonh,
+    remat recompute_all, scan (split_scan_layers), 30 steps. Same denom (2.5 PF/s, theoretical_flops 1e16).
+  - v1 (2338) FAILED at [iris setup]; v2 (2339) RUNNING, still in compile/warmup — 96 watch(grad/param) summaries
+    logged, ZERO throughput/mfu samples so far. No step-time/MFU number to harvest yet. Re-poll next round.
+- No new build work (per coordinator). Holding for reassignment (new sub-direction or watch/lock role).
