@@ -513,6 +513,26 @@ def _parquet_records(path: str) -> Iterator[dict[str, Any]]:
             yield from batch.to_pylist()
 
 
+def _validate_score_counts(
+    score_counters: dict[str, int | float],
+    baseline_dedup: dict[str, Any],
+    treatment_dedup: dict[str, Any],
+) -> None:
+    """Require the score pass to cover every marker and drop in both artifacts."""
+    for variant, dedup in (("baseline", baseline_dedup), ("treatment", treatment_dedup)):
+        artifact_counters = dedup["counters"]
+        expected_markers = int(artifact_counters.get("dedup/fuzzy/document/cluster_members", 0))
+        canonicals = int(artifact_counters.get("dedup/fuzzy/document/canonicals", 0))
+        expected_drops = expected_markers - canonicals
+        actual_markers = int(score_counters.get(f"audit/markers/{variant}", 0))
+        actual_drops = int(score_counters.get(f"audit/drops/{variant}", 0))
+        if actual_markers != expected_markers or actual_drops != expected_drops:
+            raise AssertionError(
+                f"{variant} score coverage mismatch: markers={actual_markers}/{expected_markers}, "
+                f"drops={actual_drops}/{expected_drops}"
+            )
+
+
 def _comparison_input_records(entry: dict[str, str]) -> Iterator[dict[str, Any]]:
     for record in _parquet_records(entry["path"]):
         if entry["kind"] == "graph_distance":
@@ -698,6 +718,7 @@ def audit(
     score_files = list(score_outcome.results)
     if not score_files:
         raise ValueError("A/B audit produced no score files")
+    _validate_score_counts(dict(score_outcome.counters), baseline_dedup, treatment_dedup)
 
     graph_distances_dir = f"{output_path.rstrip('/')}/baseline-graph-distances"
     graph_context = ZephyrContext(

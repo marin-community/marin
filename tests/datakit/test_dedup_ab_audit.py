@@ -10,6 +10,7 @@ from experiments.datakit.scripts.dedup_ab_audit import (
     _evidence_class,
     _graph_distance_records,
     _set_metrics,
+    _validate_score_counts,
 )
 
 
@@ -121,3 +122,30 @@ def test_graph_distance_rejects_a_capped_nonconverged_shard(monkeypatch) -> None
                 }
             )
         )
+
+
+def test_score_counts_require_every_artifact_marker_and_drop() -> None:
+    baseline = {
+        "counters": {
+            "dedup/fuzzy/document/cluster_members": 13,
+            "dedup/fuzzy/document/canonicals": 5,
+        }
+    }
+    treatment = {
+        "counters": {
+            "dedup/fuzzy/document/cluster_members": 4,
+            "dedup/fuzzy/document/canonicals": 2,
+        }
+    }
+    counters = {
+        "audit/markers/baseline": 13,
+        "audit/drops/baseline": 8,
+        "audit/markers/treatment": 4,
+        "audit/drops/treatment": 2,
+    }
+
+    _validate_score_counts(counters, baseline, treatment)
+
+    counters["audit/drops/treatment"] = 1
+    with pytest.raises(AssertionError, match="treatment score coverage mismatch"):
+        _validate_score_counts(counters, baseline, treatment)
