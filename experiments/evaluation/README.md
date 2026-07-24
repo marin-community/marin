@@ -103,6 +103,28 @@ isolated `uv` subprocess outside the Marin lock.
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.
 
+## Long-context (RULER)
+
+The `ruler` eval runs lm-eval's RULER group (13 needle-in-a-haystack / long-context reasoning tasks)
+and `ruler-smoke` is a one-length, capped cut for a fast check; both sit in the `longcontext` suite.
+RULER carries `EvalTaskConfig.metadata` (`max_seq_lengths`), which lm-eval reads at data-prep time to
+synthesize exactly-N-token haystacks. The evalchemy fork drops `--metadata` for lm-eval-native tasks,
+so a metadata-carrying task runs through lm-eval's own CLI (`python -m lm_eval`) instead: it merges
+`--model_args` (the served tokenizer) into the task metadata and honors `--metadata`. The client
+clamps `max_seq_lengths` to the served context window, so one `ruler` key runs whatever lengths the
+model supports — serve the model with a large `max_model_len` (per-model `serve.max_model_len`, capped
+by the checkpoint's native window) to exercise the long end of the ladder.
+
+```bash
+# Long-context on a model served with a wide window.
+uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals ruler-smoke
+```
+
+RULER is kept out of `smoke`/`core`: it needs the eval image rebuilt with lm-eval's `[ruler]` deps
+(`wonderwords`, `scipy`; `nltk` is already baked). `docker/evalchemy-tpu/Dockerfile` carries them, so
+the next `evalchemy-tpu` rebuild + digest re-pin (`marin.evaluation.evalchemy.runtime`) makes RULER
+runnable; on the current pinned image the eval child fails on the missing deps.
+
 ## Adding a model or eval
 
 A model is a `ModelConfig` (`marin.evaluation.model_config`): its `location` (HF id or `gs://`/`s3://`

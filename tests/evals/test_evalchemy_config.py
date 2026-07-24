@@ -1,24 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``eval.eval`` argv.
+"""The parent builds the Evalchemy child's config; the child turns each task into an lm-eval argv.
 
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
-task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the empty-results guard. Everything else (job submission,
-serving, the eval itself) is exercised by the cluster smoke.
+task do not collide), the lm-eval command the child runs per task (the ``eval.eval`` fork route, the
+``python -m lm_eval`` route a metadata task takes, and completions-vs-chat selection), and the
+empty-results guard. Everything else (job submission, serving, the eval itself) is exercised by the
+cluster smoke.
 """
 
 import json
 import os
 
+import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
@@ -53,6 +55,8 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
     # Each task carries the bare lm-eval name (what --tasks runs) plus its own upload dir: an alias is
     # used verbatim, an un-aliased task falls back to name_Nshot. The dir is what keeps results apart;
     # the flags drive the child's completions-vs-chat route and unsafe-code opt-in per task.
+    # A task with no metadata carries no metadata key at all, so an existing eval's child config is
+    # byte-identical to before RULER was added.
     assert payload["tasks"] == [
         {
             "name": "arc_easy",
@@ -156,6 +160,80 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
     assert "--confirm_run_unsafe_code" in cmd
+
+
+def _ruler_config(lengths=(4096, 8192)) -> EvalchemyRunConfig:
+    return _config(
+        tasks=(
+            EvalTaskConfig(
+                "ruler",
+                0,
+                task_alias="ruler",
+                generation=True,
+                completion_only=True,
+                metadata={"max_seq_lengths": list(lengths)},
+            ),
+        ),
+        max_gen_toks=128,
+    )
+
+
+def test_metadata_only_serialized_for_metadata_tasks():
+    # A metadata-driven task (RULER) carries its lm-eval metadata to the child; an ordinary task omits
+    # the key so its child config (and thus command) is unchanged.
+    assert _payload(_ruler_config())["tasks"][0]["metadata"] == {"max_seq_lengths": [4096, 8192]}
+    assert "metadata" not in _payload()["tasks"][0]
+
+
+def test_build_command_routes_metadata_task_through_native_lm_eval():
+    # RULER must run through lm-eval's own CLI: only it merges --model_args into the TaskManager
+    # metadata, so the served tokenizer reaches RULER's data-prep and --metadata is honored. The fork's
+    # eval.eval drops both. --max_tokens is a fork-only flag, so the native route must not emit it.
+    config = _payload(_ruler_config())
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 262144)
+
+    assert cmd[:3] == ["/opt/py", "-m", "lm_eval"]
+    assert "--max_tokens" not in cmd
+    # completion_only pins RULER to the raw-continuation completions route.
+    assert cmd[cmd.index("--model") + 1] == "local-completions"
+    assert cmd[cmd.index("--tasks") + 1] == "ruler"
+    assert cmd[cmd.index("--num_fewshot") + 1] == "0"
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=128"
+    # The served tokenizer travels in --model_args (lm-eval merges it into metadata); --metadata only
+    # carries the context ladder, which fits the large window untouched.
+    model_args = dict(pair.split("=", 1) for pair in cmd[cmd.index("--model_args") + 1].split(","))
+    assert model_args["tokenizer"] == _MODEL.tokenizer
+    assert json.loads(cmd[cmd.index("--metadata") + 1]) == {"max_seq_lengths": [4096, 8192]}
+
+
+def test_build_command_clamps_ruler_lengths_to_served_window():
+    # lm-eval left-truncates a prompt to the served window, silently cutting a haystack that does not
+    # fit; the client drops any RULER length whose haystack + generation budget overflows the window.
+    config = _payload(_ruler_config(lengths=(4096, 8192, 16384)))
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 8192)
+    assert json.loads(cmd[cmd.index("--metadata") + 1]) == {"max_seq_lengths": [4096]}
+
+
+def test_build_command_rejects_window_too_small_for_any_ruler_length():
+    config = _payload(_ruler_config(lengths=(4096, 8192)))
+    with pytest.raises(ValueError, match="fits no RULER length"):
+        build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 2048)
+
+
+def test_levanter_conversion_rejects_metadata_tasks():
+    # The Levanter harness has no channel for lm-eval metadata, so converting a metadata-bearing task
+    # (RULER) to a Levanter TaskConfig must fail loudly rather than drop max_seq_lengths silently.
+    with pytest.raises(ValueError, match="metadata"):
+        convert_to_levanter_task_config([EvalTaskConfig("ruler", 0, metadata={"max_seq_lengths": [4096]})])
+
+
+def test_build_command_without_metadata_stays_on_the_fork_route():
+    # Every existing eval sets no metadata, so it keeps the eval.eval route with --max_tokens and no
+    # --metadata flag.
+    cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
+    assert cmd[:3] == ["/opt/py", "-m", "eval.eval"]
+    assert "--metadata" not in cmd
+    assert "--max_tokens" in cmd
 
 
 def test_model_args_carry_served_max_length():

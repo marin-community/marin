@@ -82,6 +82,16 @@ RUN . "${VIRTUAL_ENV}/bin/activate" && \
     python -c "import eval.eval; from bespokelabs import curator; print('eval.eval CLI imports OK (curator backend registered)')" && \
     python -c "import importlib.metadata as m; assert m.version('vllm-tpu')=='0.20.0', m.version('vllm-tpu'); print('derisk intact: vllm-tpu', m.version('vllm-tpu'))"
 
+# 3c. RULER long-context tasks synthesize their haystacks at runtime and need lm-eval's [ruler] extra
+#     (nltk -- pre-cached in step 4 below -- plus wonderwords and scipy), which the bare lm-eval install
+#     in step 2 omits. RULER runs through lm-eval's own CLI (python -m lm_eval), which honors --metadata,
+#     so no evalchemy-fork change is needed -- only these deps. --no-deps keeps their transitive sets
+#     from re-resolving the base's derisked pins (scipy's numpy is already present); re-assert the derisk.
+RUN . "${VIRTUAL_ENV}/bin/activate" && \
+    uv pip install --no-cache-dir --no-deps wonderwords scipy && \
+    python -c "import wonderwords, scipy.stats; print('ruler deps OK')" && \
+    python -c "import importlib.metadata as m; assert m.version('vllm-tpu')=='0.20.0', m.version('vllm-tpu'); print('derisk intact: vllm-tpu', m.version('vllm-tpu'))"
+
 # 4. Pre-cache nltk punkt/punkt_tab so IFEval/AIME24 don't abort mid-run trying to download offline.
 RUN . "${VIRTUAL_ENV}/bin/activate" && \
     python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')" || \

@@ -99,15 +99,45 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     return ",".join(args)
 
 
+def fit_context_lengths(metadata: dict, max_length: int | None, max_gen_toks: int) -> dict:
+    """Drop RULER ``max_seq_lengths`` that do not fit the served window.
+
+    lm-eval left-truncates a prompt to ``max_length``, so a RULER context length above the served
+    window silently loses the tail of its haystack (and the needle) and scores garbage under that
+    length's label instead of failing. Keep only the lengths whose haystack plus the generation budget
+    fits, so one RULER eval runs whatever the served model supports. Returns ``metadata`` unchanged
+    when there is nothing to filter (no ``max_seq_lengths``, or an unknown served window)."""
+    lengths = metadata.get("max_seq_lengths")
+    if not lengths or max_length is None:
+        return metadata
+    fitted = [length for length in lengths if length + max_gen_toks <= max_length]
+    if not fitted:
+        raise ValueError(
+            f"served context {max_length} fits no RULER length in {lengths} "
+            f"(need length + max_gen_toks {max_gen_toks} <= {max_length})"
+        )
+    if fitted == list(lengths):
+        return metadata
+    return {**metadata, "max_seq_lengths": fitted}
+
+
 def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
-    """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
+    """The lm-eval argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
     single global override). The chat route applies only to generation tasks of a chat-template model:
     loglikelihood (MCQ) tasks always go through the completions API, since chat endpoints cannot echo
     prompt logprobs (lm-eval rejects them with "Loglikelihood is not supported for chat completions").
+
+    A task carrying ``metadata`` (RULER's ``max_seq_lengths``) runs through lm-eval's own CLI
+    (``python -m lm_eval``) rather than the evalchemy fork's ``eval.eval``: only lm-eval's CLI merges
+    ``--metadata`` and ``--model_args`` into the TaskManager, so the served tokenizer reaches RULER's
+    data-prep and ``max_seq_lengths`` is honored. The fork's ``eval.eval`` builds the pretrain
+    TaskManager without metadata and drops both. Everything else (route, model args, generation
+    budget, sample logging, output tree) is identical, so both paths score into the same layout.
     """
-    # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
+    native = bool(task.get("metadata"))
+    # completion_only: code-infilling and RULER score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
     gen_budget = generation_budget(config["max_gen_toks"], max_length)
@@ -126,7 +156,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     cmd = [
         python,
         "-m",
-        "eval.eval",
+        "lm_eval" if native else "eval.eval",
         "--model",
         model,
         "--model_args",
@@ -135,10 +165,6 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         task["name"],
         "--gen_kwargs",
         gen_kwargs,
-        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
-        # gen_kwargs; lm-eval-native tasks ignore it.
-        "--max_tokens",
-        str(gen_budget),
         "--output_path",
         output_path,
         # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
@@ -147,6 +173,10 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--verbosity",
         "INFO",
     ]
+    if not native:
+        # --max_tokens is a fork-only flag: chat-native benchmarks (MATH500-style) size generations
+        # from it, not gen_kwargs. lm-eval's own CLI has no such flag and sizes from --gen_kwargs.
+        cmd += ["--max_tokens", str(gen_budget)]
     # Always pass --num_fewshot, including 0. evalchemy's parser defaults it to None, so omitting the
     # flag lets lm-eval fall back to the task YAML's own default (gsm8k defaults to 5-shot) and a
     # 0-shot request is silently ignored. Chat-native benchmarks record it in their config but do not
@@ -159,6 +189,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         cmd += ["--limit", str(config["max_eval_instances"])]
     if use_chat:
         cmd.append("--apply_chat_template")
+    if native:
+        # lm-eval merges --model_args into task metadata, so RULER reads the served tokenizer from
+        # model_args; --metadata only needs to carry the context ladder, clamped to the served window.
+        metadata = fit_context_lengths(task["metadata"], max_length, gen_budget)
+        cmd += ["--metadata", json.dumps(metadata)]
     return cmd
 
 

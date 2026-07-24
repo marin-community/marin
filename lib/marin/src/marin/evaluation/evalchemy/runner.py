@@ -127,6 +127,9 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                     "generation": task.generation,
                     "unsafe_code": task.unsafe_code,
                     "completion_only": task.completion_only,
+                    # Only metadata-driven tasks (RULER) carry this; omitted otherwise so every existing
+                    # eval's child config is unchanged.
+                    **({"metadata": task.metadata} if task.metadata else {}),
                 }
                 for task in config.tasks
             ],

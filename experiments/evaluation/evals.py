@@ -117,6 +117,53 @@ def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = F
     )
 
 
+# RULER long-context ladder: the six context lengths the benchmark synthesizes haystacks at. Chosen
+# per launch via lm-eval `--metadata max_seq_lengths`; a launch is bounded by the served max_model_len,
+# so a model must be served with a window that covers the largest length selected here.
+RULER_CONTEXT_LENGTHS: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
+# One short length for the smoke: RULER synthesizes a fresh haystack per length at dataset-build time,
+# so --max-eval-instances alone would not make it fast -- the single 4k length is what keeps it cheap.
+RULER_SMOKE_CONTEXT_LENGTHS: tuple[int, ...] = (4096,)
+
+# RULER's longest subtask default (niah, 128); cwe/fwe/vt/qa are shorter. One invocation runs the
+# whole group, so one budget covers every subtask.
+RULER_MAX_GEN_TOKS = 128
+
+
+def _ruler_eval(
+    name: str,
+    task: str,
+    context_lengths: tuple[int, ...],
+    *,
+    max_eval_instances: int | None = None,
+) -> EvalchemyDefinition:
+    """A RULER long-context eval over one lm-eval task (the ``ruler`` group or a single subtask).
+
+    RULER tasks are ``generate_until`` and score a raw continuation over a self-contained prompt, so
+    ``completion_only`` runs them through the completions API for base and chat models alike -- a chat
+    template would wrap the haystack in role markers and change retrieval behavior. ``context_lengths``
+    becomes the ``max_seq_lengths`` metadata lm-eval synthesizes haystacks at; the eval client
+    (:func:`marin.evaluation.evalchemy.client.build_command`) clamps it to the served window.
+    """
+    return EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name=name,
+            tasks=(
+                EvalTaskConfig(
+                    task,
+                    0,
+                    task_alias=name,
+                    generation=True,
+                    completion_only=True,
+                    metadata={"max_seq_lengths": list(context_lengths)},
+                ),
+            ),
+            max_gen_toks=RULER_MAX_GEN_TOKS,
+            max_eval_instances=max_eval_instances,
+        )
+    )
+
+
 def _agentic_eval(
     name: str,
     hugging_face_dataset: str,
@@ -221,6 +268,13 @@ EVALS: dict[str, EvaluationDefinition] = {
             max_eval_instances=128,
         )
     ),
+    # --- RULER (long-context retrieval/reasoning) ---
+    # The full 13-task group across the standard length ladder (the client clamps it to the served
+    # window), and a fast single-subtask cut. Both need the eval image rebuilt with lm-eval's [ruler]
+    # deps (see the README RULER note); they are kept out of smoke/core so a routine launch never
+    # selects an eval today's pinned image cannot run.
+    "ruler": _ruler_eval("ruler", "ruler", RULER_CONTEXT_LENGTHS),
+    "ruler-smoke": _ruler_eval("ruler-smoke", "niah_single_1", RULER_SMOKE_CONTEXT_LENGTHS, max_eval_instances=8),
     # --- Harbor (agentic registry benchmarks) ---
     # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
     # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
@@ -306,6 +360,10 @@ AGENTIC_EVALS: tuple[str, ...] = (
     "financeagent",
 )
 
+# Long-context benchmarks. A standalone group: RULER needs a long-context serve and the rebuilt eval
+# image, so it is never folded into smoke/core.
+LONGCONTEXT_EVALS: tuple[str, ...] = ("ruler",)
+
 # Named suite groups selectable by name on the CLI (``--evals smoke``). Launch NLP and CHAT as
 # separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
 # 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
@@ -317,4 +375,5 @@ SUITES: dict[str, tuple[str, ...]] = {
     "math": MATH_EVALS,
     "code": CODE_EVALS,
     "agentic": AGENTIC_EVALS,
+    "longcontext": LONGCONTEXT_EVALS,
 }

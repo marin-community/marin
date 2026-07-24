@@ -26,9 +26,18 @@ class EvalTaskConfig:
     """Whether scoring executes model-generated code."""
     completion_only: bool = False
     """Whether generation must use the completions API even for chat-template models."""
+    metadata: dict | None = None
+    """lm-eval task metadata (``--metadata`` JSON). RULER reads ``max_seq_lengths`` from here to size
+    its haystacks; the eval client routes a metadata-carrying task through lm-eval's own CLI, which
+    merges the served tokenizer (from ``--model_args``) into this metadata."""
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+    for task in tasks:
+        if task.metadata is not None:
+            # metadata (RULER's max_seq_lengths/tokenizer) is honored only by the Evalchemy path; the
+            # Levanter harness has no channel for it, so fail loudly rather than run a misconfigured task.
+            raise ValueError(f"task {task.name!r} sets metadata, which the Levanter eval path cannot apply")
     return [
         TaskConfig(
             task=task.name,
