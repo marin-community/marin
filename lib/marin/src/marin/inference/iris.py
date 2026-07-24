@@ -300,6 +300,7 @@ def remote_inference(
     *,
     instances: int = 1,
     broker: BrokerConfig | None = None,
+    endpoint_access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
 ) -> Iterator[RemoteInferenceSession]:
     """Start inference on Iris, adding broker transport when requested or required."""
 
@@ -307,9 +308,11 @@ def remote_inference(
         raise RuntimeError("remote_inference must run inside an Iris job")
     resolved_broker = _broker_config(instances, broker)
     if resolved_broker is None:
-        with _start_direct_inference(model, engine, iris) as session:
+        with _start_direct_inference(model, engine, iris, endpoint_access) as session:
             yield session
         return
+    if endpoint_access != EndpointAccess.ENDPOINT_ACCESS_PRIVATE:
+        raise ValueError("link-access remote inference requires a direct endpoint")
     with _start_brokered_inference(model, engine, iris, instances, resolved_broker) as session:
         yield session
 
@@ -319,6 +322,7 @@ def _start_direct_inference(
     model: ServedModelConfig,
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
+    endpoint_access: int,
 ) -> Iterator[RemoteInferenceSession]:
     run_id = uuid.uuid4().hex[:8]
     endpoint_name = f"/serve/inference-{run_id}"
@@ -327,6 +331,7 @@ def _start_direct_inference(
         engine=engine,
         iris=iris,
         endpoint_name=endpoint_name,
+        access=endpoint_access,
         timeout_hours=24 * 365,
         port_name=None,
     )

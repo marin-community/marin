@@ -16,6 +16,7 @@ import httpx
 import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
+from iris.cluster.types import EndpointAccess
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -111,8 +112,13 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
             self.terminated = True
 
     job = _FailedJob()
+    requests = []
     monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
-    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=lambda _request: job))
+    monkeypatch.setattr(
+        iris_module,
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: requests.append(request) or job),
+    )
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
@@ -126,11 +132,19 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     )
 
     with pytest.raises(RemoteInferenceStartupError) as exc_info:
-        with remote_inference(ServedModelConfig(model="gpt2"), VllmEngineConfig(), iris):
+        with remote_inference(
+            ServedModelConfig(model="gpt2"),
+            VllmEngineConfig(),
+            iris,
+            endpoint_access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ):
             pass
 
     assert exc_info.value.jobs == (job,)
     assert job.terminated
+    (request,) = requests
+    (service,) = request.entrypoint.callable_entrypoint.args
+    assert service.access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:

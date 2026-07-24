@@ -11,6 +11,7 @@ the Harbor run -- the pure planning pieces that need no cluster.
 
 from dataclasses import replace
 
+from iris.cluster.types import EndpointAccess
 from marin.evaluation.records import Provenance
 
 from experiments.evaluation.evals import EVALS, SUITES, EvalMechanism
@@ -55,6 +56,7 @@ def test_model_agent_kwargs_flow_into_the_harbor_run():
     (run,) = params.runs
     assert run.harbor is not None
     assert "enable_thinking" in run.harbor.agent_kwargs["extra_body"]
+    assert params.session.serve.endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK
 
 
 def test_suite_level_agent_kwargs_override_model_level():

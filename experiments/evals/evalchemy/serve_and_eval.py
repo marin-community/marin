@@ -35,6 +35,7 @@ from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.constraints import region_constraint
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import (
+    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
@@ -170,6 +171,9 @@ class ServeSpec:
     Passed to :class:`~marin.inference.config.ServedModelConfig`."""
     instances: int = 1
     broker: BrokerConfig | None = None
+    endpoint_access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    """Iris registry access for the served endpoint. Agentic sandboxes require link access so a
+    minted endpoint-scoped capability URL can reach it; in-cluster eval clients stay private."""
     auto_overrides: bool = True
     """Derive text-eval vLLM options from the model's ``config.json`` (a GDN prefill backend, a
     multimodal-off limit, a reasoning parser) and clamp ``max_model_len`` to the model's own context.
@@ -383,6 +387,7 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
             inference.iris,
             instances=inference.instances,
             broker=inference.broker,
+            endpoint_access=spec.endpoint_access,
         ) as session:
             if not session.jobs:
                 raise RuntimeError("Iris inference returned no worker jobs")

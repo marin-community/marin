@@ -4,6 +4,7 @@
 from pathlib import Path
 
 from marin.evaluation.harbor_dataset import materialize_harbor_dataset
+from marin.evaluation.harbor_runner import HarborTrial, _write_samples
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
@@ -38,3 +39,12 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
         }
     ]
     assert not (snapshot / ".gitattributes").exists()
+
+
+def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
+    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory=None, error=None)
+
+    path = _write_samples([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
+
+    assert path == str(tmp_path / "samples_harbor.parquet")
+    assert Path(path).exists()

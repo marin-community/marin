@@ -36,6 +36,18 @@ pass. All eight imported DCAgent repositories resolve at the configured `main` r
 
 The live retry is pending.
 
+## Hypothesis 2
+
+The first retry materialized all 861 Terminal-Bench files, started two Daytona trials, and sent model
+requests through the minted URL. Iris rejected those requests with
+`endpoint-scoped token cannot access this endpoint`.
+
+The direct inference lifecycle registered the endpoint with private access. Iris accepts a scoped
+capability token only for an endpoint registered with link access. Harbor serve sessions now request
+link access explicitly while in-cluster eval sessions retain the private default. The same retry also
+exposed a result-path bug: the raw `hf://` dataset identifier was interpolated into the sample parquet
+filename. Agentic runs now use the run-local `samples_harbor.parquet` name.
+
 ## Future work
 
 - [x] Confirm all imported DCAgent preset repositories still exist at their configured revisions.

@@ -28,7 +28,7 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, daytona_sdk_env, env_vars_from_keys
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.harbor_runner import HarborRunConfig, canonical_served_name, run_harbor_eval
@@ -513,7 +513,11 @@ def _group_params(plans: list[RunPlan], spec: LaunchSpec, provenance: Provenance
     serve = first.serve
     if is_harbor:
         served_name = canonical_served_name(first.model.name)
-        serve = replace(serve, vllm_extra_args=(*serve.vllm_extra_args, "--served-model-name", served_name))
+        serve = replace(
+            serve,
+            vllm_extra_args=(*serve.vllm_extra_args, "--served-model-name", served_name),
+            endpoint_access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        )
     return EvalGroupParams(
         group_id=_group_id(first.model_key),
         user=user,

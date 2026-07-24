@@ -196,7 +196,7 @@ def _write_samples(trials: list[HarborTrial], dataset: str, out_path: str) -> st
     if not trials:
         return None
     samples = [_sample_for(trial, dataset, out_path) for trial in trials]
-    dest = prefix_join(out_path, f"samples_{dataset}_harbor.parquet")
+    dest = prefix_join(out_path, "samples_harbor.parquet")
     fs, _ = url_to_fs(dest)
     write_sample_parquet(fs, dest, samples)
     return dest
