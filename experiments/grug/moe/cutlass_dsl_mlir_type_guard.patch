@@ -1,0 +1,15 @@
+--- cutlass/_mlir/dialects/arith.py
++++ cutlass/_mlir/dialects/arith.py
+@@ -18,11 +18,7 @@
+     raise RuntimeError("Error loading imports from extension module") from e
+
+ def _isa(obj: Any, cls: type):
+-    try:
+-        cls(obj)
+-    except ValueError:
+-        return False
+-    return True
++    return isinstance(obj, cls)
+
+ def _is_any_of(obj: Any, classes: List[type]):
+     return any(_isa(obj, cls) for cls in classes)

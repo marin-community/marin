@@ -113,8 +113,10 @@ intermediate dimension to zero.
 
 These commands add the production attention/norm/residual block to the
 completed learned-routing boundary. They also install the patched multi-device
-JAX TVM FFI dependency used by the production JaxPP launcher and verify the
-CuTe/FA4 imports before starting the reproducer.
+JAX TVM FFI dependency used by the production JaxPP launcher. The commands
+also replace CUTLASS DSL 4.5.2's MLIR wrapper-constructor type probe with the
+`isinstance` check used by CUTLASS DSL 4.6, while retaining the 4.5 APIs
+required by the pinned FA4 and QuACK releases.
 
 BF16 expert control:
 
@@ -137,6 +139,10 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    cutlass_site=$(.venv/bin/python -c \
+      "from pathlib import Path; import cutlass; print(Path(cutlass.__file__).resolve().parent.parent)")
+    patch --batch --forward -p0 -d "$cutlass_site" \
+      < "$IRIS_WORKDIR/experiments/grug/moe/cutlass_dsl_mlir_type_guard.patch"
     .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
     .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
@@ -173,6 +179,10 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     uv pip install --link-mode=symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi
     uv pip install --link-mode=symlink --no-deps \
       "jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+    cutlass_site=$(.venv/bin/python -c \
+      "from pathlib import Path; import cutlass; print(Path(cutlass.__file__).resolve().parent.parent)")
+    patch --batch --forward -p0 -d "$cutlass_site" \
+      < "$IRIS_WORKDIR/experiments/grug/moe/cutlass_dsl_mlir_type_guard.patch"
     .venv/bin/python -c "import cutlass.cute, cutlass.jax, flash_attn.cute.flash_bwd_sm90"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=.50
     .venv/bin/python -u experiments/grug/moe/repro_jaxpp_fp8_expert_compile.py \
