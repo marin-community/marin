@@ -364,3 +364,22 @@ statistics for performance comparisons.
   persisted texts against the audited SHA-256 values, and cover exactly every
   drop and every marker. The audit, materialization, census, and review suite
   passes all 25 focused tests.
+
+### 2026-07-24T16:42:00Z — persisted full-text smoke coverage
+
+- Materialized the current-schema smoke review corpus from its exact score
+  artifact. The distributed job accounted for all 10 drop requests, both
+  complete texts for every request, and all 10 output pairs.
+- Bound the historical manual decisions to the current member and canonical
+  locations, then rehashed the persisted complete texts. The independent
+  validator covered all 17 marker occurrences and all 10 drops with no
+  missing, extra, or duplicate labels.
+- The smoke result remains seven false positives and one true duplicate among
+  eight baseline drops, versus one false positive and one true duplicate among
+  two treatment drops. All labels use full-text semantic review; this smoke
+  result validates the workflow but is not evidence substituted for the full
+  100B adjudication.
+- The focused audit, census, materialization, label-binding, and coverage suite
+  now passes all 30 tests. Baseline connected-components changes in iterations
+  39–44 were 682, 480, 251, 224, 287, and 149. Iteration 45 is running; the
+  full audit remains gated on a zero-change iteration.
