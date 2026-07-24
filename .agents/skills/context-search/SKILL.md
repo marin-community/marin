@@ -22,10 +22,10 @@ doing, use the `work-log` skill — same database, different table.
 ## Commands
 
 ```bash
-scripts/context_search.py search "expert parallel MoE MFU on B200" --limit 10
-scripts/context_search.py search "..." --source discord --kind message --since 2026-06-01
-scripts/context_search.py grep "ragged_all_to_all" --source discord   # exact substring, newest first
-scripts/context_search.py show <id>                                   # full text of one hit
+scripts/echo_search.py search "expert parallel MoE MFU on B200" --limit 10
+scripts/echo_search.py search "..." --source discord --kind message --since 2026-06-01
+scripts/echo_search.py grep "ragged_all_to_all" --source discord   # exact substring, newest first
+scripts/echo_search.py show <id>                                   # full text of one hit
 ```
 
 - `search` embeds the query with the corpus's model (bge-small, downloaded on first use)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the pure logic of context_search.py — no Cloud SQL connection."""
+"""Unit tests for the pure logic of echo_search.py — no Cloud SQL connection."""
 
 import argparse
 import importlib.util
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-spec = importlib.util.spec_from_file_location("context_search", Path(__file__).parent / "context_search.py")
+spec = importlib.util.spec_from_file_location("echo_search", Path(__file__).parent / "echo_search.py")
 cs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cs)
 
