@@ -15,14 +15,14 @@ def test_loom_alert_configuration_is_explicit(monkeypatch):
     for name in LOOM_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOM_ALERT_URL", "https://loom.example.com/")
-    monkeypatch.setenv("LOOM_ALERT_PROFILE", "grafana_alert")
+    monkeypatch.setenv("LOOM_ALERT_PROFILE", "ops")
     monkeypatch.setenv("LOOM_ALERT_REPOSITORY", "marin-community/marin")
 
     config = BridgeConfig.from_environment()
 
     assert config.loom_alerts is not None
     assert config.loom_alerts.url == "https://loom.example.com"
-    assert config.loom_alerts.profile == "grafana_alert"
+    assert config.loom_alerts.profile == "ops"
     assert config.loom_alerts.repository == "marin-community/marin"
 
 

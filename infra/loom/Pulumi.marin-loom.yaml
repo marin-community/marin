@@ -15,9 +15,9 @@ config:
   marin-loom:pruneDeployment: "false"
   marin-loom:snapshotRetentionDays: "14"
   marin-loom:profiles:
-    grafana_alert:
+    ops:
       agent: claude
-      description: Triage critical Grafana alerts for Marin
+      description: Coordinate Grafana alerts and delegate incident triage for Marin
       model: sonnet
       effort: high
       protocol: acp
@@ -27,14 +27,14 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 3600
-      maxConcurrent: 2
-      turnBudget: 8
+      maxConcurrent: 1
+      turnBudget: 100
       prelude: weaver
       restricted: false
       allowedTools: []
   marin-loom:workloads:
     - name: grafana-alerts
-      profile: grafana_alert
+      profile: ops
       serviceTag: grafana
       serviceAccountId: marin-grafana
       createServiceAccount: false

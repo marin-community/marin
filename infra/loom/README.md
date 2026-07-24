@@ -79,7 +79,7 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana_alert` profile is restricted to the Google identity of
+activation. The `ops` profile is restricted to the Google identity of
 the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
 account's email and immutable numeric subject; it does not create or copy a Loom
 token.
