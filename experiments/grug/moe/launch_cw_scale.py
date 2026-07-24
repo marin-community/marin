@@ -72,11 +72,12 @@ from marin.training.training import LevanterCheckpoint
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
-from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component, datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
+from experiments.marin_tokenizer import marin_tokenizer
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
@@ -280,7 +281,10 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # SCALE_EVAL=1 adds the Paloma perplexity suite as validation (weight 0) + periodic bpb evals.
     # Off by default (throughput runs); on for quality ablations that need held-out loss.
     use_eval = os.environ.get("SCALE_EVAL") == "1"
-    eval_validation = list(paloma_datasets(tokenizer=llama3_tokenizer).values()) if use_eval else []
+    # Tokenize the Paloma eval to match the training source (marin_tokenizer for the datakit store,
+    # llama3 for SlimPajama; both share the 128256 vocab so ids agree on normal text).
+    eval_tokenizer = marin_tokenizer if use_datakit else llama3_tokenizer
+    eval_validation = list(paloma_datasets(tokenizer=eval_tokenizer).values()) if use_eval else []
     eval_config = (
         GrugEvalConfig(
             eval_batch_size=env_int("SCALE_EVAL_BATCH", 256),
@@ -310,12 +314,19 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             # Two-phase datakit store mixture (phase 1 begins at 80% of steps). Bucket cache dirs
             # are relative and rooted at marin_prefix() -> the local CoreWeave bucket, so there is
             # no cross-region I/O and no hardcoded bucket names.
+            if use_eval:
+                if ctx.is_fingerprint:
+                    val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in eval_validation}
+                else:
+                    val_components = {v.name: ctx.resolved(v).as_component() for v in eval_validation}
+            else:
+                val_components = {}
             data = datakit_data_config(
                 total_steps=steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
                 enable_simulated_epoching=False,
-                val_components={},
+                val_components=val_components,
             )
         else:
             data = mixture(ctx, {slim: 1.0}, validation=eval_validation, shuffle=_SLIMPAJAMA_SHUFFLE)
