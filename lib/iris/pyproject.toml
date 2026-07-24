@@ -16,8 +16,7 @@ dependencies = [
     "marin-finelog >= 0.2.10",
     "marin-finelog-server >= 0.2.10",
     # Platform companion wheel containing the Rust-owned public proxy listener.
-    # The dev floor opts uv into its scheduled nightly wheels.
-    "marin-iris-native >= 0.1.1.dev202607241746",
+    "marin-iris-native >= 0.1.1",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
