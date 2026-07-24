@@ -150,6 +150,9 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     # Which of the 4 SConv sites are active (subset of "k","v","attn","mlp"); default all four.
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
+    # Apply the SConv only on the global (long) layers when True (requires global_every > 0); the
+    # conv is a no-op on local layers. False = conv on every layer.
+    sconv_global_only: bool = False
     # Local/global layer split. 0 = every layer identical (uses ``sliding_window``). >0 makes every
     # ``global_every``-th layer (plus the last) a "long"/global full-causal layer; the rest are
     # "short"/local sliding-window layers.
@@ -336,6 +339,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
+        sconv_active: bool | jax.Array = True,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -353,10 +357,12 @@ class CausalSelfAttention(eqx.Module):
         # self-attention q == kv, and the conv indexes positions within the one sequence.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
+        # sconv_active (per-layer scalar) gates the conv off on non-selected layers (global-only mode);
+        # jnp.where composes with the traced scan schedule. True (Python) keeps the conv on every layer.
         if self.sconv_k is not None:
-            k_flat = self.sconv_k(k_flat, sconv_segment_ids)
+            k_flat = jnp.where(sconv_active, self.sconv_k(k_flat, sconv_segment_ids), k_flat)
         if self.sconv_v is not None:
-            v_flat = self.sconv_v(v_flat, sconv_segment_ids)
+            v_flat = jnp.where(sconv_active, self.sconv_v(v_flat, sconv_segment_ids), v_flat)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
@@ -650,6 +656,7 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
+        sconv_active: bool | jax.Array = True,
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
@@ -675,9 +682,9 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        attn_out = self.attn(attn_in, mask, disable_rope)
+        attn_out = self.attn(attn_in, mask, disable_rope, sconv_active)
         if self.sconv_attn is not None:
-            attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
+            attn_out = jnp.where(sconv_active, self.sconv_attn(attn_out, sconv_segment_ids), attn_out)
         x = x + attn_out
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
@@ -691,7 +698,7 @@ class Block(eqx.Module):
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
-            mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
+            mlp_out = jnp.where(sconv_active, self.sconv_mlp(mlp_out, sconv_segment_ids), mlp_out)
         return x + mlp_out, qb_beta
 
 
@@ -798,8 +805,9 @@ class Transformer(eqx.Module):
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.nope_global else jnp.asarray(False)
+                sconv_active = use_long if cfg.sconv_global_only else jnp.asarray(True)
                 new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, layer_mask, disable_rope
+                    carry_hidden, layer_mask, disable_rope, sconv_active
                 )
                 return new_hidden, qb_beta
 

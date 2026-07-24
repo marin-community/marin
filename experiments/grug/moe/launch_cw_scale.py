@@ -136,6 +136,8 @@ def build_scale_model() -> GrugModelConfig:
         vocab_size=VOCAB_SIZE,
         head_dim=HEAD_DIM,
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
+        num_heads=env_int("SCALE_NUM_HEADS", base.num_heads),
+        num_kv_heads=env_int("SCALE_NUM_KV_HEADS", base.num_kv_heads),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
@@ -152,6 +154,7 @@ def build_scale_model() -> GrugModelConfig:
         sconv_sites=tuple(
             s.strip() for s in os.environ.get("SCALE_SCONV_SITES", "k,v,attn,mlp").split(",") if s.strip()
         ),
+        sconv_global_only=os.environ.get("SCALE_SCONV_GLOBAL_ONLY") == "1",
         global_every=env_int("SCALE_GLOBAL_EVERY", 0),
         nope_global=os.environ.get("SCALE_NOPE_GLOBAL") == "1",
         rope_fraction=float(os.environ.get("SCALE_ROPE_FRACTION", "1.0")),
