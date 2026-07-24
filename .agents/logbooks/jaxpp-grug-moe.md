@@ -2677,3 +2677,19 @@ author: dlwh
   - `460da06052` replicates the expert-score and bias dimensions before `top_k`, then explicitly shards selected global IDs and combine weights only over token axes. An independent EP8 CPU probe preserved winners `[63, 62, 61, 60]` through the same `auto_axes` boundary, and routing statistics remain correctly replicated/reduced.
 - Next action:
   - Run the unchanged reduced smoke from merged commit `012111e22a` as r10. Require global expert ownership and at least one finite step before scaling to L24.
+
+### 2026-07-23 20:50 PDT - r10 falsifies the router-score sharding diagnosis
+- Hypothesis: Explicitly replicating all 64 router-score columns before top-k will preserve global expert IDs and let the unchanged reduced NCCL_EP pipeline smoke complete a finite step.
+- Commit Hash: `012111e22a` (current `origin/main` merge plus `460da06052` global-route constraints).
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` smoke with four stages, 16 microbatches, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, three steps, XLA preallocation `0.65`, and matching NCCL_EP receive capacity `81,920`. Parent `/dlwh/iris-run-job-20260724-025549`; child `/dlwh/iris-run-job-20260724-025549/grug-train-jaxpp-rno2a-ncclep-smoke-r10-l8-e64k4-b512-s4096-p4m16-20260723-1946`.
+- Results:
+  - All four workers completed setup, and all 32 ranks again bootstrapped four physical EP8 groups with `16,384` tokens/rank and `81,920` receive rows/rank.
+  - JaxPP lowered and compiled all 30 distinct stage programs. The first stage-0 forward execution then reproduced `padded EM slots 524288 > max_recv_tokens_per_rank 81920` on task 0 local rank 0.
+  - The assertion poisoned the CUDA context; the later launch, retry, telltale, and coordination failures are secondary. No finite step, loss, duration, MFU, or W&B history was produced. Parent, child, and all tasks are terminal with no live resources.
+  - W&B: https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-smoke-r10-l8-e64k4-b512-s4096-p4m16-20260723-1946
+- Interpretation:
+  - The explicit router replication did not change the failure, so the r9 claim that JaxPP top-k emitted local expert IDs is not supported and is superseded by this result.
+  - r8 is the critical control: with the same topology and model but a `65,536`-row receive shape, stage-0 local rank 3 reported a plausible `66,368` routed assignments. Changing the NCCL_EP receive shape to `81,920` was the only relevant transition before r9 began reporting the exact global assignment count on local rank 0.
+  - Do not raise receive capacity to `524,288`; that would mask a TE/NCCL_EP prepare or stage-local partitioning defect and allocate an unjustified global-assignment buffer on every rank.
+- Next action:
+  - Add a bounded route fingerprint immediately before `ep_prepare` and rerun the unchanged shape once. Capture each local shard's route min/max and eight destination-rank counts to distinguish valid global routes from corruption inside TE/NCCL_EP. Preserve the backend-only accepted `0.203554%` forward mismatch; keep loss and gradient parity strict.
