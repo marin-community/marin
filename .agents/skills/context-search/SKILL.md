@@ -40,5 +40,7 @@ scripts/context_search.py show <id>                                   # full tex
 
 ## Access
 
-gcloud ADC with `roles/cloudsql.client` and accessor on the `cloudsql-agents-password`
-secret in `hai-gcp-models`. Read-only: the `agents` SQL user cannot modify `chunks`.
+Cloud SQL IAM, no password: you connect as your own ADC identity, which must be a member
+of `eng-all@openathena.ai` (granted `roles/cloudsql.instanceUser` + `roles/cloudsql.client`).
+Read-only on `chunks`. If your ADC is a service-account key, set `MARIN_DB_USER` or grant
+that principal directly.

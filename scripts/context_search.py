@@ -27,34 +27,45 @@ search. Every hit carries a canonical, citable URL. See
 on first use) and ranks by cosine distance; `grep` is a plain ILIKE substring scan ordered
 newest-first — use it for identifiers and exact strings.
 
-Auth: gcloud ADC with roles/cloudsql.client plus accessor on the
-cloudsql-agents-password secret in hai-gcp-models.
+Auth: Cloud SQL IAM — you connect as your own ADC identity (a member of the
+`eng-all@openathena.ai` group, granted read), so you need roles/cloudsql.instanceUser and
+roles/cloudsql.client, no password.
 """
 
 import argparse
-import subprocess
+import json
+import os
 import textwrap
+import urllib.request
 
+import google.auth
 from fastembed import TextEmbedding
+from google.auth.transport.requests import Request
 from google.cloud.sql.connector import Connector
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 INSTANCE = f"{PROJECT}:{REGION}:marin-metadata"
 DATABASE = "context"
-DB_USER = "agents"
-PASSWORD_SECRET = "cloudsql-agents-password"
 # Must match the corpus's embedding space (see infra/echo/schema.py).
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 
-def db_password() -> str:
-    return subprocess.run(
-        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={PASSWORD_SECRET}", f"--project={PROJECT}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+def db_user() -> str:
+    """The Postgres username for the caller's ADC identity under Cloud SQL IAM auth.
+
+    A service account's DB name is its email minus `.gserviceaccount.com`; a user's is
+    their email. `MARIN_DB_USER` overrides for principals ADC cannot resolve locally.
+    """
+    if override := os.environ.get("MARIN_DB_USER"):
+        return override
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    sa_email = getattr(credentials, "service_account_email", None)
+    if sa_email and sa_email != "default":
+        return sa_email.removesuffix(".gserviceaccount.com")
+    credentials.refresh(Request())
+    with urllib.request.urlopen(f"https://oauth2.googleapis.com/tokeninfo?access_token={credentials.token}") as resp:
+        return json.load(resp)["email"]
 
 
 def chunk_filters(args: argparse.Namespace) -> tuple[str, list[str]]:
@@ -147,7 +158,7 @@ def main() -> None:
     args = parser.parse_args()
     connector = Connector(quota_project=PROJECT)
     try:
-        conn = connector.connect(INSTANCE, "pg8000", user=DB_USER, password=db_password(), db=DATABASE)
+        conn = connector.connect(INSTANCE, "pg8000", user=db_user(), enable_iam_auth=True, db=DATABASE)
         try:
             args.func(conn.cursor(), args)
         finally:
