@@ -691,7 +691,7 @@ class MoEMLP(eqx.Module):
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router_bias=reshard(jnp.zeros((e,)), P(None)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -715,21 +715,24 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+        # Keep every expert score visible on each token shard. In particular,
+        # top-k indices must remain global expert IDs when the token axis is
+        # sharded over the expert mesh axis.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+        router_logits = reshard(router_logits, P(_BATCH_AXES, None))
+        biased_logits = router_logits + jax.lax.stop_gradient(reshard(self.router_bias, P(None)))
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
+        selected_experts = reshard(selected_experts[:, :-1], P(_BATCH_AXES, None))
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        combine_weights = reshard(combine_weights_f.astype(x.dtype), P(_BATCH_AXES, None))
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
