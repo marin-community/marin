@@ -2943,3 +2943,19 @@ author: dlwh
   - Commit `0bcbb00e19` changes the backward `out_specs` to the list pytree returned by the registered TE multi-result primitive. Full-geometry forward/backward abstract tracing with list-valued fake TE primitives, focused tests, Pyrefly, and changed-file precommit pass.
 - Next action:
   - Babysit r11i parent `/dlwh/iris-run-job-20260724-205516`; preserve the exact r11g geometry, receive capacity, and XLA flags.
+
+### 2026-07-24 14:19 PDT - r11i proves nested shard_map does not localize TE prepare lowering
+- Hypothesis: Fixing the TE backward primitive's output pytree will let the nested expert-axis `shard_map` carry rank-local route extents through execution.
+- Commit Hash: `0bcbb00e19` (`[levanter] Match NCCL EP backward output tree`).
+- Command: matched r11g L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` gate with run ID `jaxpp-rno2a-ncclep-localffi-r11i-l8-e64k4-b512-s4096-p4m16-20260724-1355`. Parent `/dlwh/iris-run-job-20260724-205516`.
+- Results:
+  - All four stages lowered, compiled, and entered the first stage-0 forward execution. The TE JIT generated dispatch and combine variants with `maxt16384`, hidden size `2560`, top-k four, and eight local experts.
+  - At execution, task 0 rank 0 reported `scan_impl_flat(em): padded EM slots 524288 > max_recv_tokens_per_rank 81920` fourteen times from `ht_scan_flat`, called by `EpPreparePrimitive.inner_primitive`.
+  - `524,288` again equals `131,072` global tokens times top-k four. The later XLA `loop_gather_fusion` launch failure, CUDA module-unload errors, and coordination failures were cascading.
+  - No loss, gradient, duration, throughput, or MFU result was produced. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-localffi-r11i-l8-e64k4-b512-s4096-p4m16-20260724-1355>.
+  - The babysitter stopped only the parent. Parent, child, and all tasks are terminal killed; no matching jobs or pods remain.
+- Interpretation:
+  - A nested `shard_map` can produce local-looking TE JIT specialization metadata while the surrounding JaxPP `auto_axes` transformation still gives the prepare lowering a global route extent.
+  - Commit `c1b3087add` removes `auto_axes` from this backend and places the complete NCCL_EP MoE body, including custom VJPs and all inner TE primitives, inside one outer `shard_map`. A public-backend regression test verifies that global EP8 forward and backward inputs reach a fake TE boundary with rank-local shapes and reassemble global gradients. Focused tests pass `7/7`; Pyrefly and changed-file precommit pass.
+- Next action:
+  - Babysit r11j parent `/dlwh/iris-run-job-20260724-211906`. Require the prepare scan to remain within 65,536 local assignments and produce finite training metrics before L24.
