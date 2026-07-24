@@ -18,6 +18,8 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
+from jax import shard_map
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -82,25 +84,39 @@ def shared_expert_sonic_cute(
     w_gate: Float[Array, "H I"],
     w_up: Float[Array, "H I"],
     w_down: Float[Array, "I H"],
+    *,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    token_spec: P,
 ) -> Float[Array, "T H"]:
     """Dense (all-token) SwiGLU expert via the QuACK SM100 kernel, as a single expert group.
 
     Reuses the routed-expert fused-SwiGLU forward and custom-VJP backward (:func:`_expert_mlp`)
-    with ``E=1`` and ``cu=[0, T]`` — the gate/up GEMM fuses ``silu(gate) * up`` in its epilogue
-    instead of materializing the ``[T, I]`` activation like the plain-einsum dense path.
+    with ``E=1`` and ``cu=[0, T_local]`` — the gate/up GEMM fuses ``silu(gate) * up`` in its
+    epilogue instead of materializing the ``[T, I]`` activation like the plain-einsum dense path.
 
-    The kernel is local/per-device: ``w_gate``/``w_up`` (``[H, I]``) and ``w_down`` (``[I, H]``)
-    must already be replicated over the data axis; ``x_flat`` (``[T, H]``) stays token-sharded so
-    GSPMD runs the ``cutlass_call`` data-parallel.
+    Runs inside a ``shard_map`` over the batch axes (``token_spec`` shards ``x``'s row axis; the
+    weights are replicated), so the token axis is *local* inside the body. Both the QuACK kernel
+    and the ``ragged_dot`` weight-grad slice rows by expert group, which is only legal on an
+    unsharded axis — the same reason the routed path runs under ``shard_map``. ``w_gate``/``w_up``
+    are ``[H, I]``, ``w_down`` is ``[I, H]`` (already replicated by the caller).
     """
-    t = x_flat.shape[0]
     moe_dim = w_gate.shape[1]
-    w13 = jnp.concatenate([w_gate, w_up], axis=-1)[None]  # [1, H, 2I], gate then up
-    w13_il = _interleave_gate_up(w13, moe_dim)  # QuACK interleaved [g0,u0,g1,u1,...]
+    w13_il = _interleave_gate_up(jnp.concatenate([w_gate, w_up], axis=-1)[None], moe_dim)  # [1,H,2I]
     w2 = w_down[None]  # [1, I, H], n-major for the down GEMM
-    group_sizes = jnp.asarray([t], dtype=jnp.int32)
-    cu = jnp.asarray([0, t], dtype=jnp.int32)
-    return _expert_mlp(x_flat, w13_il, w2, group_sizes, cu)
+
+    def _local(x_l, w13_l, w2_l):
+        t = x_l.shape[0]
+        group_sizes = jnp.asarray([t], dtype=jnp.int32)
+        cu = jnp.asarray([0, t], dtype=jnp.int32)
+        return _expert_mlp(x_l, w13_l, w2_l, group_sizes, cu)
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(token_spec, P(None, None, None), P(None, None, None)),
+        out_specs=token_spec,
+        check_vma=False,
+    )(x_flat, w13_il, w2)
 
 
 def _moe_mlp_local_sonic_cute(

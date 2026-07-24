@@ -9,6 +9,7 @@ SM90 fa4 kernels), then runs one fwd+bwd. Run on an allocated GB200 node with qu
 installed. Prints ``SONIC_CUTE_SMOKE_OK`` on success.
 """
 
+import os
 import traceback
 
 import jax
@@ -105,6 +106,16 @@ def main() -> None:
         loss, grads = jax.value_and_grad(loss_fn)(model)
         jax.block_until_ready(grads)
         print(f"SONIC_CUTE_SMOKE_OK loss={float(loss):.4f}", flush=True)
+
+        # Exercise the sharded shared-expert QuACK path (SCALE_SHARED_QUACK) end-to-end under the
+        # mesh: the shard_map/token-sharding is what the replicated kernel check below cannot cover.
+        os.environ["SCALE_SHARED_QUACK"] = "1"
+        try:
+            loss_q, grads_q = jax.value_and_grad(loss_fn)(model)
+            jax.block_until_ready(grads_q)
+            print(f"SHARED_QUACK_MODEL_OK loss={float(loss_q):.4f}", flush=True)
+        finally:
+            del os.environ["SCALE_SHARED_QUACK"]
 
     # Kernel-numerics check for the QuACK shared-expert path (replicated, outside the mesh).
     _check_shared_expert_quack()
