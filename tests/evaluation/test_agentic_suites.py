@@ -3,10 +3,10 @@
 
 """Agentic benchmarks route through the group launcher as Harbor suites.
 
-The benchmarks absorbed from #7246 (tb2, swebench, ...) are Harbor registry datasets: the launcher
-serves the model once and drives an in-sandbox agent against it, exactly like the existing Harbor
-path. These check the registry wiring and that a model's agent_kwargs reach the Harbor run -- the
-pure planning pieces that need no cluster.
+The benchmarks absorbed from #7246 (tb2, swebench, ...) are Hugging Face repositories of Harbor task
+directories: the launcher serves the model once and drives an in-sandbox agent against them, exactly
+like the existing Harbor path. These check the registry wiring and that a model's agent_kwargs reach
+the Harbor run -- the pure planning pieces that need no cluster.
 """
 
 from dataclasses import replace
@@ -25,12 +25,13 @@ def test_agentic_suites_are_harbor_datasets():
         assert suite.harbor is not None
         # Every agentic benchmark runs its trials in a Daytona sandbox against the served endpoint.
         assert suite.harbor.env == "daytona"
-        assert suite.harbor.dataset
+        assert suite.harbor.dataset.startswith("hf://")
+        assert suite.harbor.version == "main"
 
 
 def test_tb2_lite_caps_instances_for_validation():
     lite = EVALS["tb2-lite"]
-    assert lite.harbor.dataset == "DCAgent2/terminal_bench_2"
+    assert lite.harbor.dataset == "hf://DCAgent2/terminal_bench_2"
     assert lite.max_eval_instances == 2
 
 

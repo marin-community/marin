@@ -30,11 +30,21 @@ async def _run(config: dict) -> None:
         env_type = EnvironmentType(config["env"])
     except ValueError:
         env_type = EnvironmentType.DOCKER
+    dataset = (
+        DatasetConfig(path=Path(config["dataset_path"]), n_tasks=config["n_tasks"])
+        if config["dataset_path"] is not None
+        else DatasetConfig(
+            name=config["dataset"],
+            version=config["version"],
+            ref=config["version"],
+            n_tasks=config["n_tasks"],
+        )
+    )
     job = await Job.create(
         JobConfig(
             job_name=config["job_name"],
             jobs_dir=Path(config["jobs_dir"]),
-            datasets=[DatasetConfig(name=config["dataset"], version=config["version"], n_tasks=config["n_tasks"])],
+            datasets=[dataset],
             agents=[
                 AgentConfig(
                     name=config["agent"],

@@ -26,11 +26,11 @@ from typing import Any
 
 import pandas as pd
 import wandb
-from huggingface_hub import snapshot_download
 from rigging.filesystem import StoragePath, is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.harbor_dataset import materialize_harbor_dataset
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
@@ -349,53 +349,17 @@ class HarborEvaluator(Evaluator):
             except ValueError:
                 logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
-        dataset_config: DatasetConfig
-        dataset_path = Path(dataset).expanduser()
-        if (
-            dataset.startswith("hf://")
-            or dataset.startswith("hf:")
-            or (version == "hf" and "/" in dataset and not dataset_path.exists())
-        ):
-            if dataset.startswith("hf://"):
-                hf_repo_id = dataset[len("hf://") :]
-            elif dataset.startswith("hf:"):
-                hf_repo_id = dataset[len("hf:") :]
-            else:
-                hf_repo_id = dataset
-
-            # Use stable cache directories inside workdir
-            hf_cache_dir = workdir / "hf_cache"
-            hf_local_dir = workdir / "hf_dataset"
-            hf_local_dir.mkdir(parents=True, exist_ok=True)
-            dataset_root = snapshot_download(
-                repo_id=hf_repo_id,
-                repo_type="dataset",
-                local_dir=str(hf_local_dir),
-                cache_dir=str(hf_cache_dir),
-                token=os.environ.get("HF_TOKEN", False),
-            )
-            gitattributes_path = Path(dataset_root) / ".gitattributes"
-            if gitattributes_path.exists():
-                gitattributes_path.unlink()
-
-            dataset_config = DatasetConfig(
-                path=Path(dataset_root),
-                n_tasks=task_limit,
-            )
-        elif dataset_path.exists():
-            if not dataset_path.is_dir():
-                raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
-            dataset_config = DatasetConfig(
-                path=dataset_path,
-                n_tasks=task_limit,
-            )
-        else:
+        dataset_path = materialize_harbor_dataset(dataset, version, workdir)
+        if dataset_path is None:
             # No registry_url/registry_path means the default remote registry.
             dataset_config = DatasetConfig(
                 name=dataset,
                 version=version,
+                ref=version,
                 n_tasks=task_limit,
             )
+        else:
+            dataset_config = DatasetConfig(path=dataset_path, n_tasks=task_limit)
 
         # Create Harbor JobConfig with deterministic job name
         config = JobConfig(

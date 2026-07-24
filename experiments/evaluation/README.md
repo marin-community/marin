@@ -86,11 +86,13 @@ changing it never forks the artifact's identity.
 ## Agentic benchmarks (Harbor)
 
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
-in-sandbox agentic benchmarks through the same launcher. Each is a Harbor registry dataset: the
-launcher serves the model once, mints a capability URL for the served endpoint, and drives an
-in-sandbox terminal agent (Daytona) that reaches the model through that URL; Harbor's verifier scores
-each trial, which normalizes into one agentic `EvalSample` (reward -> `Grading(method="harbor:verifier")`,
-trajectory -> `trajectory_uri`) plus a record, so agentic runs land in evaldash like every other eval.
+in-sandbox agentic benchmarks through the same launcher. Each preset names an `hf://` repository whose
+root contains Harbor task directories. The runner materializes that repository at its configured
+revision, the launcher serves the model once and mints a capability URL for the served endpoint, and
+an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
+each trial, which normalizes into one agentic `EvalSample` (reward ->
+`Grading(method="harbor:verifier")`, trajectory -> `trajectory_uri`) plus a record, so agentic runs
+land in evaldash like every other eval.
 
 ```bash
 # A capped agentic validation run (2 tasks) -- needs DAYTONA_EVAL_API_KEY in the launch env.

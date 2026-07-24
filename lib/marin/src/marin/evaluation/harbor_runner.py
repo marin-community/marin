@@ -26,6 +26,7 @@ from pathlib import Path
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join
 
+from marin.evaluation.harbor_dataset import materialize_harbor_dataset
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 
@@ -255,6 +256,7 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
     output_dir = workdir / "harbor_results"
     output_dir.mkdir(parents=True, exist_ok=True)
     job_dir = output_dir / job_name
+    dataset_path = materialize_harbor_dataset(config.dataset, config.version, workdir)
 
     if is_remote_path(out_path):
         restored = _restore_completed_trials(out_path, job_dir)
@@ -269,6 +271,7 @@ def run_harbor_eval(config: HarborRunConfig, out_path: str) -> HarborRunResult:
         "jobs_dir": str(output_dir),
         "dataset": config.dataset,
         "version": config.version,
+        "dataset_path": str(dataset_path) if dataset_path is not None else None,
         "n_tasks": config.task_limit,
         "agent": config.agent,
         "model_name": f"hosted_vllm/{config.served_model_name}",
