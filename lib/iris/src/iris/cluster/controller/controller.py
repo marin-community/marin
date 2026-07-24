@@ -77,7 +77,6 @@ from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
 from iris.cluster.controller.native_proxy_metrics import (
     NativeProxyMetricsCollector,
     install_native_proxy_metrics,
-    uninstall_native_proxy_metrics,
 )
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -850,7 +849,7 @@ class Controller:
         if self._telltale_forwarding:
             telltale.stop_forwarding()
         if self._native_proxy_metrics is not None:
-            uninstall_native_proxy_metrics(self._native_proxy_metrics)
+            telltale.unregister_collector(self._native_proxy_metrics)
             self._native_proxy_metrics = None
         if self._native_proxy is not None:
             self._native_proxy.stop()

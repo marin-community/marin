@@ -17,7 +17,17 @@ interface TelltaleRow {
   le?: string
 }
 
+const METRIC_NAMES = {
+  requests: 'iris_rpc_requests_total',
+  responses: 'iris_rpc_responses_total',
+  inFlight: 'iris_rpc_in_flight',
+  durationBucket: 'iris_rpc_duration_seconds_bucket',
+  durationSum: 'iris_rpc_duration_seconds_sum',
+  durationCount: 'iris_rpc_duration_seconds_count',
+} as const
+
 function statsSql(): string {
+  const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
 SELECT name, value, ts,
        json_get(labels, 'service') AS service,
@@ -26,10 +36,7 @@ SELECT name, value, ts,
        json_get(labels, 'status') AS status,
        json_get(labels, 'le') AS le
 FROM telltale
-WHERE source = 'iris' AND name IN (
-  'iris_rpc_requests_total', 'iris_rpc_responses_total', 'iris_rpc_in_flight',
-  'iris_rpc_duration_seconds_bucket', 'iris_rpc_duration_seconds_sum', 'iris_rpc_duration_seconds_count'
-)
+WHERE source = 'iris' AND name IN (${names})
 QUALIFY row_number() OVER (
   PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
                json_get(labels, 'upstream'), json_get(labels, 'status'), json_get(labels, 'le')
@@ -100,12 +107,12 @@ const rows = computed<MethodRow[]>(() => {
     }
     row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
     const value = Number(metric.value ?? 0)
-    if (metric.name === 'iris_rpc_requests_total') row.count = value
-    if (metric.name === 'iris_rpc_responses_total' && metric.status !== '200') row.errorCount += value
-    if (metric.name === 'iris_rpc_in_flight') row.inFlight = value
-    if (metric.name === 'iris_rpc_duration_seconds_sum') row.totalDurationMs = value * 1000
-    if (metric.name === 'iris_rpc_duration_seconds_count') row.durationCount = value
-    if (metric.name === 'iris_rpc_duration_seconds_bucket') {
+    if (metric.name === METRIC_NAMES.requests) row.count = value
+    if (metric.name === METRIC_NAMES.responses && metric.status !== '200') row.errorCount += value
+    if (metric.name === METRIC_NAMES.inFlight) row.inFlight = value
+    if (metric.name === METRIC_NAMES.durationSum) row.totalDurationMs = value * 1000
+    if (metric.name === METRIC_NAMES.durationCount) row.durationCount = value
+    if (metric.name === METRIC_NAMES.durationBucket) {
       row.bucketSamples.push({
         bound: metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000,
         cumulative: value,

@@ -49,6 +49,7 @@ use auth::{CacheStats, NativeVerifier, VerifyOutcome, IAP_ASSERTION_HEADER};
 const MAX_DECISION_BODY_BYTES: usize = 64 * 1024;
 const PROXY_PATH_PREFIX: &str = "/proxy/";
 const REGISTRY_LOCK_POISONED: &str = "native proxy registry lock is poisoned";
+const RPC_METRICS_LOCK_POISONED: &str = "native proxy RPC metrics lock is poisoned";
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOUT_SECONDS);
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
@@ -117,11 +118,9 @@ pub struct ProxyStats {
     pub jwt_cache_misses: u64,
 }
 
-/// A Prometheus-compatible snapshot owned by the native listener.
+/// Lifetime RPC counters and latency observations from the native listener.
 ///
-/// The Python companion only re-exposes this as a Telltale collector; it never
-/// keeps RPC totals itself. Counters reset with this proxy process and histogram
-/// buckets are cumulative, matching Prometheus exposition semantics.
+/// Counters reset with the proxy process. Histogram buckets are cumulative.
 #[derive(Debug, Serialize)]
 pub struct RpcMetricsSnapshot {
     pub series: Vec<RpcMetricSeries>,
@@ -221,7 +220,11 @@ struct RpcRequestTimer {
 impl RpcRequestTimer {
     fn begin(control: &ProxyControl, request: &Request) -> Option<Self> {
         let key = rpc_metric_key(request)?;
-        control.rpc_metrics.lock().ok()?.begin(key.clone());
+        control
+            .rpc_metrics
+            .lock()
+            .expect(RPC_METRICS_LOCK_POISONED)
+            .begin(key.clone());
         Some(Self {
             key,
             metrics: Arc::clone(&control.rpc_metrics),
@@ -230,9 +233,10 @@ impl RpcRequestTimer {
     }
 
     fn finish(self, status: StatusCode) {
-        if let Ok(mut metrics) = self.metrics.lock() {
-            metrics.finish(&self.key, status, self.started.elapsed());
-        }
+        self.metrics
+            .lock()
+            .expect(RPC_METRICS_LOCK_POISONED)
+            .finish(&self.key, status, self.started.elapsed());
     }
 }
 

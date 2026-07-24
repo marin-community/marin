@@ -210,8 +210,6 @@ class ControllerDashboard:
         return self._proxy_decision_secret
 
     def _create_app(self) -> ASGIApp:
-        # Only the controller RPC chain feeds the stats collector. Finelog RPCs
-        # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
         auth_interceptor = PolicyAuthInterceptor(

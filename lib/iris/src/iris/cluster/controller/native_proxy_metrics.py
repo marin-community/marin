@@ -55,7 +55,3 @@ def install_native_proxy_metrics(proxy: NativeProxy) -> NativeProxyMetricsCollec
     telltale.register_collector(collector)
     telltale.set_global_labels(source="iris")
     return collector
-
-
-def uninstall_native_proxy_metrics(collector: NativeProxyMetricsCollector) -> None:
-    telltale.unregister_collector(collector)
