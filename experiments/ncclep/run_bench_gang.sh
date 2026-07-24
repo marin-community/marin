@@ -23,13 +23,19 @@ pushd "$WORK"
 source "$REPO_ROOT/experiments/ncclep/cuda_wheels_env.sh"
 
 uv pip install s3fs
-python - "$STASH" <<'EOF'
+# NCCLEP_WHEEL_PATTERN pins the TE wheel by substring (e.g. "68493d2" or
+# "ea41e08"); empty = newest by sort order.
+python - "$STASH" "${NCCLEP_WHEEL_PATTERN:-}" <<'EOF'
 import os, sys
 import s3fs
 fs = s3fs.S3FileSystem(endpoint_url=os.environ.get("AWS_ENDPOINT_URL"))
 stash = sys.argv[1].rstrip("/")
+pattern = sys.argv[2]
 whls = sorted(fs.glob(stash + "/wheels/*.whl"))
 assert whls, f"no wheels under {stash}/wheels/"
+if pattern:
+    whls = [w for w in whls if pattern in w]
+    assert whls, f"no wheels matching {pattern!r} under {stash}/wheels/"
 fs.get(whls[-1], os.path.basename(whls[-1]))
 print("fetched", whls[-1])
 fs.get(stash + "/jit/nccl-ep-jit-headers.tgz", "nccl-ep-jit-headers.tgz")
