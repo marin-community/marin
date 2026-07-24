@@ -9,6 +9,8 @@ input directory, transforms each record into the standard schema (``id``,
 within each partition, and writes Parquet output with
 ``part-{shard}-of-{total}`` naming.
 
+An explicit output schema may select a subset of the transformed columns.
+
 All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/main/`` and (when dedup is enabled) duplicates land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
