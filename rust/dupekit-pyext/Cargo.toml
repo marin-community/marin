@@ -10,8 +10,10 @@ name = "dupekit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-# arrow/parquet 59: the workspace-unified pyo3 0.29 requires arrow-pyarrow 59,
-# which is also the version finelog's datafusion 54 pulls — so arrow stays unified.
+# arrow/parquet 59: the workspace-unified pyo3 0.29 requires arrow-pyarrow 59.
+# finelog's datafusion 53 stack is still on arrow 58 (no datafusion release ships
+# arrow 59 yet), so the two arrow majors coexist — in separate wheels that never
+# share arrow objects.
 arrow = { version = "59", default-features = false, features = ["pyarrow"] }
 blake2 = "0.10"
 blake3 = "1.8"

@@ -67,11 +67,11 @@ rustls = { version = "0.23", default-features = false, features = [
     "logging",
 ] }
 webpki-roots = "1"
-# Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
-# `fs` feature is the only one needed; tower-http 0.6 is compatible with the
-# crate's axum 0.7 tower::Service contract. `tower` (already in the lock via
-# axum/tower-http) supplies the `Service` trait bound for the SPA catch-all's
-# method-fallback to the connect service.
+# ServeDir static-file service for the Vue SPA `/static` mount. The `fs` feature is
+# the only one needed; tower-http 0.6 is compatible with the crate's axum 0.7
+# tower::Service contract. `tower` (already in the lock via axum/tower-http)
+# supplies the `Service` trait bound for the SPA catch-all's method-fallback to the
+# connect service.
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs"] }
 http-body = "1"
