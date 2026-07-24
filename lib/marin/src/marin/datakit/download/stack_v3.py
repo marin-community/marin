@@ -23,20 +23,31 @@ REPOSITORY_HEADER = "Repository:"
 FILE_HEADER = "File:"
 SERIALIZATION_FORMAT = "natural_headers_directory_block_dfs_v1"
 
-FILE_SORT_MARKER = 0
-DIRECTORY_SORT_MARKER = 1
 
+def _directory_block_dfs(files: list[dict]) -> list[dict]:
+    files_by_directory: dict[tuple[str, ...], list[dict]] = {}
+    child_directories: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    for file in files:
+        *directory_parts, _ = PurePosixPath(file["file_path"]).parts
+        directory = tuple(directory_parts)
+        files_by_directory.setdefault(directory, []).append(file)
+        for depth in range(len(directory)):
+            parent = directory[:depth]
+            child_directories.setdefault(parent, set()).add(directory[: depth + 1])
 
-def _directory_block_dfs_key(file: dict) -> tuple[tuple[int, str], ...]:
-    *directories, filename = PurePosixPath(file["file_path"]).parts
-    return (
-        *((DIRECTORY_SORT_MARKER, directory) for directory in directories),
-        (FILE_SORT_MARKER, filename),
-    )
+    ordered_files = []
+    pending_directories = [()]
+    while pending_directories:
+        directory = pending_directories.pop()
+        ordered_files.extend(
+            sorted(files_by_directory.get(directory, []), key=lambda file: PurePosixPath(file["file_path"]).name)
+        )
+        pending_directories.extend(sorted(child_directories.get(directory, ()), reverse=True))
+    return ordered_files
 
 
 def row_to_doc(row: dict) -> list[dict]:
-    files = sorted(row["files"], key=_directory_block_dfs_key)
+    files = _directory_block_dfs(row["files"])
     sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
     sections.extend(f"{FILE_HEADER} {file['file_path']}\n{file['content']}" for file in files)
 
