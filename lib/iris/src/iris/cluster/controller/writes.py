@@ -165,6 +165,15 @@ def meta_sequence_bump(tx: Tx, key: str) -> int:
     return value
 
 
+@writes_to(meta_table)
+def meta_value_set(tx: Tx, key: str, value: int) -> None:
+    tx.execute(
+        sqlite_insert(meta_table)
+        .values(key=key, value=value)
+        .on_conflict_do_update(index_elements=[meta_table.c.key], set_={"value": value})
+    )
+
+
 # ---------------------------------------------------------------------------
 # Job writes (previously writes/jobs.py)
 # ---------------------------------------------------------------------------

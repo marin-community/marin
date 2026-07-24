@@ -11,7 +11,7 @@ under `/cloudsql` (see `iac.gcp.cloud_run.CloudRunService.cloudsql_instances`).
 Pulumi owns the instance, the two databases, the two Secret Manager secret *shells*, and the
 bucket. It does not own the SQL users or their passwords: a password passed to Pulumi would
 land in stack state. Users and secret values are set out-of-band with `gcloud` (below). This
-directory is its own Pulumi project, runs on the shared repo venv, and shares `infra/iac`'s
+directory is its own Pulumi project, runs on the shared repo venv, and shares `infra/pulumi`'s
 state backend.
 
 ## Deploy
@@ -21,13 +21,16 @@ uv sync --all-packages --extra deploy                     # once: iac + Pulumi p
 
 cd infra/cloudsql
 pulumi login gs://marin-iac-state
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
-pulumi stack select marin-cloudsql                        # first time: pulumi stack init marin-cloudsql
+pulumi stack select marin-cloudsql
 
 pulumi preview                                            # plan; then, once it looks right:
 pulumi up
 ```
+
+The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used. Grafana reads
+this stack through a `StackReference`, so both stacks must remain on providers its deploy
+identity can decrypt.
 
 `pulumi up` creates the instance, the `grafana` and `evals` databases, the
 `cloudsql-grafana-password` and `cloudsql-evals-password` secret shells, and the

@@ -138,7 +138,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
     # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
-    # (multi-controller) via the iris.runtime.multigpu supervisor.
+    # (multi-controller) via the iris.hooks.multigpu_main supervisor.
     processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).

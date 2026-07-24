@@ -2,6 +2,34 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
+## Agent prose cleanup
+
+`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
+`agent-generated` label. It runs when an item is opened, edited, reopened, or
+labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
+default branch; `pull_request_target` never checks out the PR head.
+
+Claude reads the common writing-style guide, the AI-writing checklist, and the
+applicable issue or pull request guide from `.agents/skills/writing-style/`, then
+rewrites the description as a permanent record for a technical reader. The
+workflow prompt narrows that policy to a soft edit: preserve source facts,
+measurements, caveats, links, and useful code examples; do not import facts from
+the diff or comments; do not target a word count; and leave compliant text and
+titles unchanged.
+
+The model job has read-only repository permissions, receives only the filesystem
+`Read` tool, and returns a schema-validated body. A separate write job runs the
+Python finalizer, which applies deterministic presentation checks outside fenced
+and inline code, rejects empty or oversized rewrites, and prepares the GitHub
+update.
+
+Before an edit, the workflow stores the exact prior description in a collapsed
+`github-actions[bot]` comment. The edited description ends with an `Original
+description` link to that comment. Content hashes make archive creation
+idempotent across retries, and the workflow rechecks the current description
+before writing so a queued run cannot overwrite a newer edit. It skips cleanup
+when the archive or updated body would exceed GitHub's size limit.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.

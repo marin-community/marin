@@ -29,6 +29,7 @@ from haliax.partitioning import set_mesh
 from iris.client import IrisClient
 from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
@@ -69,11 +70,13 @@ def _to_main_model(params: VendoredTransformer, config: GrugModelConfig) -> Tran
     )
 
 
-def _assert_vllm_bf16(export_dir: Path) -> None:
+def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
     exported_config = json.loads((export_dir / "config.json").read_text())
     assert exported_config["architectures"] == ["GrugMoeForCausalLM"]
     assert exported_config["model_type"] == "grug_moe"
     assert exported_config["dtype"] == "bfloat16"
+    # Checked on the real config_overrides-merged artifact, which could otherwise reintroduce an alias.
+    validate_single_name_config(exported_config, config)
 
     tensor_dtypes: set[str] = set()
     for shard_path in export_dir.glob("model-*.safetensors"):
@@ -127,7 +130,7 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
                 export_dir_str,
                 dtype=jnp.bfloat16,
             )
-            _assert_vllm_bf16(export_dir)
+            _assert_vllm_bf16(export_dir, main_config)
             actual_sha256 = _tree_sha256(export_dir)
             assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
 

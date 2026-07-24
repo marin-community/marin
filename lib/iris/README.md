@@ -337,7 +337,7 @@ iris --config cluster.yaml job logs /my-job --since-seconds 300
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop /my-job --no-include-children
+iris --config cluster.yaml job stop --prefix /my-job-prefix
 ```
 
 ## Smoke Test

@@ -204,7 +204,7 @@ class GcpPlatformConfig(_Config):
     # Workers rewrite matching images so pulls stay on-continent and dodge
     # upstream rate limits; unlisted registries and zone prefixes pull straight
     # from upstream. Every named repo must exist and be enabled or pulls fail
-    # (provisioned by infra/iac from provisioning.gcp.registries).
+    # (provisioned by infra/pulumi from provisioning.gcp.registries).
     registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
@@ -625,6 +625,7 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
+    # Image for GPU jobs (a device.gpu request), used unless a job overrides with
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
@@ -774,7 +775,7 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
-    # Infrastructure-as-code provisioning section (see infra/iac). Carried as an
+    # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
     provisioning: dict[str, Any] | None = None
@@ -836,8 +837,7 @@ def validate_scale_group_resources(scale_groups: dict[str, ScaleGroupConfig]) ->
             raise ValueError(f"Scale group '{name}' has invalid device_count={res.device_count}.")
         if res.capacity_type is None:
             raise ValueError(
-                f"Scale group '{name}': resources.capacity_type is required "
-                "(one of: preemptible, on-demand, reserved)."
+                f"Scale group '{name}': resources.capacity_type is required (one of: preemptible, on-demand, reserved)."
             )
 
 

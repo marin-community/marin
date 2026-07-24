@@ -37,7 +37,9 @@ fixtures, mocks, markers, or commands:
 
 ## Default Commands
 
-- Root or mixed changes: `uv run pytest -m 'not slow'` over touched test dirs.
+- Root or mixed changes: `uv run pytest` over touched test directories. Do not
+  override the repository's default marker expression; it excludes tests that
+  require slow, integration, live-cluster, Docker, or manual execution.
 - For package-specific commands, use the relevant `lib/*/AGENTS.md` or testing
   doc.
 

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useApi } from '@/composables/useApi'
+import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatScore, formatStderr } from '@/utils/formatting'
-import type { LeaderboardEntry, Matrix, MatrixCell } from '@/types/api'
+import type { LeaderboardEntry, Matrix, MatrixCell, MatrixRow, Meta } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 import EvalProfileChart from '@/components/charts/EvalProfileChart.vue'
@@ -12,10 +12,22 @@ import SparkStrip from '@/components/charts/SparkStrip.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
 const router = useRouter()
-const { data, loading, error, refresh } = useApi<Matrix>(() => 'api/matrix')
 
-onMounted(refresh)
-onViewRefresh(refresh)
+const showArchived = ref(false)
+const { data, loading, error, refresh } = useApi<Matrix>(() =>
+  showArchived.value ? 'api/matrix?include_archived=1' : 'api/matrix',
+)
+const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+
+onMounted(() => {
+  refresh()
+  refreshMeta()
+})
+watch(showArchived, refresh)
+onViewRefresh(() => {
+  refresh()
+  refreshMeta()
+})
 
 // --- Model comparison selection (2–4 models -> grouped bar chart) ---
 const MAX_COMPARE = 4
@@ -40,6 +52,101 @@ function deltaBest(entry: LeaderboardEntry): number | null {
   if (entry.score === null || topScore.value === null || entry.score === topScore.value) return null
   return entry.score - topScore.value
 }
+
+// --- Archived models sort last and render dimmed ---
+const rankedLeaderboard = computed<LeaderboardEntry[]>(() =>
+  [...(data.value?.leaderboard ?? [])].sort((a, b) => Number(a.archived) - Number(b.archived)),
+)
+const sortedRows = computed<MatrixRow[]>(() =>
+  [...(data.value?.rows ?? [])].sort((a, b) => Number(a.archived) - Number(b.archived)),
+)
+
+async function toggleArchive(model: string, archived: boolean) {
+  await apiPost(`api/models/${encodeURIComponent(model)}/archive`, { archived: !archived })
+  await Promise.all([refresh(), refreshMeta()])
+}
+
+// --- Eval column selection: a suite tree, persisted so column choices survive reloads ---
+const SELECTED_KEY = 'evaldash.selectedEvals'
+const KNOWN_KEY = 'evaldash.knownEvals'
+const columnsOpen = ref(false)
+const selectedEvals = reactive(new Set<string>())
+
+function readStored(key: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as string[]) : null
+  } catch {
+    return null
+  }
+}
+
+function persistSelection(present: string[]) {
+  localStorage.setItem(SELECTED_KEY, JSON.stringify([...selectedEvals]))
+  localStorage.setItem(KNOWN_KEY, JSON.stringify(present))
+}
+
+// Keep prior choices, default brand-new evals (never seen) to selected, drop evals no longer present.
+function syncSelection(present: string[]) {
+  const stored = readStored(SELECTED_KEY)
+  const known = new Set(readStored(KNOWN_KEY) ?? [])
+  selectedEvals.clear()
+  for (const name of present) {
+    if (stored === null || stored.includes(name) || !known.has(name)) selectedEvals.add(name)
+  }
+  persistSelection(present)
+}
+
+watch(
+  () => data.value?.tasks,
+  (tasks) => {
+    if (tasks) syncSelection(tasks)
+  },
+  { immediate: true },
+)
+
+interface SuiteNode {
+  suite: string
+  evals: string[]
+}
+
+const presentTasks = computed(() => new Set(data.value?.tasks ?? []))
+
+const suiteTree = computed<SuiteNode[]>(() =>
+  (meta.value?.suites ?? [])
+    .map((s) => ({ suite: s.suite, evals: s.evals.filter((e) => presentTasks.value.has(e)) }))
+    .filter((s) => s.evals.length > 0),
+)
+
+function suiteState(node: SuiteNode): 'all' | 'none' | 'some' {
+  const on = node.evals.filter((e) => selectedEvals.has(e)).length
+  if (on === 0) return 'none'
+  if (on === node.evals.length) return 'all'
+  return 'some'
+}
+
+function toggleSuite(node: SuiteNode) {
+  const enable = suiteState(node) !== 'all'
+  for (const e of node.evals) {
+    if (enable) selectedEvals.add(e)
+    else selectedEvals.delete(e)
+  }
+  persistSelection(data.value?.tasks ?? [])
+}
+
+function toggleEval(name: string) {
+  if (selectedEvals.has(name)) selectedEvals.delete(name)
+  else selectedEvals.add(name)
+  persistSelection(data.value?.tasks ?? [])
+}
+
+const visibleTasks = computed(() => (data.value?.tasks ?? []).filter((t) => selectedEvals.has(t)))
+
+// The task-column-filtered matrix the charts and heatmap read.
+const filteredMatrix = computed<Matrix>(() => {
+  const m = data.value
+  return m ? { ...m, tasks: visibleTasks.value } : { tasks: [], rows: [], leaderboard: [] }
+})
 
 // --- Score-over-time modal target ---
 const historyTarget = ref<{ model: string; task: string } | null>(null)
@@ -83,6 +190,44 @@ function goToRun(runId: string) {
       </div>
     </div>
 
+    <div class="flex flex-wrap items-center gap-4 mb-4">
+      <label class="flex items-center gap-2 text-sm text-text-secondary">
+        <input v-model="showArchived" type="checkbox" class="accent-accent" />
+        Show archived
+      </label>
+      <button
+        class="text-sm px-3 py-1 rounded border border-surface-border hover:bg-surface-raised"
+        @click="columnsOpen = !columnsOpen"
+      >
+        Columns ({{ visibleTasks.length }}/{{ data?.tasks.length ?? 0 }})
+      </button>
+    </div>
+
+    <div v-if="columnsOpen && suiteTree.length" class="rounded-lg border border-surface-border bg-surface p-4 mb-4">
+      <div class="flex flex-wrap gap-x-8 gap-y-4">
+        <div v-for="node in suiteTree" :key="node.suite" class="min-w-[10rem]">
+          <label class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1.5">
+            <input
+              type="checkbox"
+              class="accent-accent"
+              :checked="suiteState(node) === 'all'"
+              :indeterminate.prop="suiteState(node) === 'some'"
+              @change="toggleSuite(node)"
+            />
+            {{ node.suite }}
+          </label>
+          <label
+            v-for="e in node.evals"
+            :key="e"
+            class="flex items-center gap-2 text-sm text-text-secondary pl-1 py-0.5"
+          >
+            <input type="checkbox" class="accent-accent" :checked="selectedEvals.has(e)" @change="toggleEval(e)" />
+            <span class="font-mono text-[13px]">{{ e }}</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
     <div v-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2 mb-4">
       {{ error }}
     </div>
@@ -113,13 +258,15 @@ function goToRun(runId: string) {
                 <th class="px-3 py-2 text-right">Δ best</th>
                 <th class="px-3 py-2 text-right">Coverage</th>
                 <th class="px-3 py-2 text-left">Profile</th>
+                <th class="px-3 py-2 text-right"></th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(entry, i) in data.leaderboard"
+                v-for="(entry, i) in rankedLeaderboard"
                 :key="entry.model"
                 class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+                :class="{ 'opacity-50': entry.archived }"
               >
                 <td class="px-3 py-2">
                   <input
@@ -131,7 +278,13 @@ function goToRun(runId: string) {
                   />
                 </td>
                 <td class="px-3 py-2 text-text-muted tabular-nums">{{ i + 1 }}</td>
-                <td class="px-3 py-2 font-mono text-[13px] whitespace-nowrap">{{ entry.model }}</td>
+                <td class="px-3 py-2 font-mono text-[13px] whitespace-nowrap">
+                  {{ entry.model }}
+                  <span
+                    v-if="entry.version"
+                    class="ml-1 rounded bg-surface-sunken px-1.5 py-0.5 text-[11px] font-mono text-text-muted"
+                  >{{ entry.version }}</span>
+                </td>
                 <td class="px-3 py-2 text-right tabular-nums font-medium whitespace-nowrap">
                   <template v-if="entry.score !== null">
                     {{ formatScore(entry.score) }}
@@ -144,7 +297,14 @@ function goToRun(runId: string) {
                 </td>
                 <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ entry.covered }}/{{ entry.total }} tasks</td>
                 <td class="px-3 py-2">
-                  <SparkStrip :model="entry.model" :tasks="data.tasks" :matrix="data" />
+                  <SparkStrip :model="entry.model" :tasks="visibleTasks" :matrix="filteredMatrix" />
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <button
+                    class="text-[11px] text-text-muted hover:text-accent whitespace-nowrap"
+                    :title="entry.archived ? 'Unarchive model' : 'Archive model'"
+                    @click="toggleArchive(entry.model, entry.archived)"
+                  >{{ entry.archived ? 'unarchive' : 'archive' }}</button>
                 </td>
               </tr>
             </tbody>
@@ -158,7 +318,7 @@ function goToRun(runId: string) {
         <p class="text-xs text-text-muted mb-2">
           each row: one eval; dots: models; highlighted: snowball; line: gap to fleet best
         </p>
-        <EvalProfileChart :matrix="data" />
+        <EvalProfileChart :matrix="filteredMatrix" />
       </div>
 
       <!-- Model comparison chart -->
@@ -166,7 +326,7 @@ function goToRun(runId: string) {
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
           Comparing {{ selected.length }} models
         </h3>
-        <ModelCompareChart :matrix="data" :models="selected" />
+        <ModelCompareChart :matrix="filteredMatrix" :models="selected" />
       </div>
 
       <!-- Per-task heatmap -->
@@ -180,7 +340,7 @@ function goToRun(runId: string) {
                   Model
                 </th>
                 <th
-                  v-for="task in data.tasks"
+                  v-for="task in visibleTasks"
                   :key="task"
                   class="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wider text-text-secondary whitespace-nowrap"
                 >
@@ -190,15 +350,20 @@ function goToRun(runId: string) {
             </thead>
             <tbody>
               <tr
-                v-for="row in data.rows"
+                v-for="row in sortedRows"
                 :key="row.model"
                 class="border-b border-surface-border-subtle"
+                :class="{ 'opacity-50': row.archived }"
               >
                 <td class="sticky left-0 z-10 bg-surface px-3 py-2 font-mono text-[13px] whitespace-nowrap">
                   {{ row.model }}
+                  <span
+                    v-if="row.version"
+                    class="ml-1 rounded bg-surface-sunken px-1.5 py-0.5 text-[11px] font-mono text-text-muted"
+                  >{{ row.version }}</span>
                 </td>
                 <td
-                  v-for="task in data.tasks"
+                  v-for="task in visibleTasks"
                   :key="task"
                   class="p-1 text-center align-middle"
                 >

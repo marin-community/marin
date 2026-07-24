@@ -276,6 +276,10 @@ class Overlay:
                 finished_at=_first(old.finished_at, delta.finished_at),
                 exit_code=_last_non_null(old.exit_code, delta.exit_code),
                 error=_last_non_null(old.error, delta.error),
+                pod_name=_last_non_null(old.pod_name, delta.pod_name),
+                pod_uid=_last_non_null(old.pod_uid, delta.pod_uid),
+                node_name=_last_non_null(old.node_name, delta.node_name),
+                terminal_reason=_last_non_null(old.terminal_reason, delta.terminal_reason),
             )
         self._effects.attempts[key] = merged
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a

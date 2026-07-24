@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
 
@@ -116,12 +116,15 @@ impl Store {
     /// `remote_log_dir` configures the per-namespace offload target (empty
     /// disables sync). Pass it through to each `Namespace`.
     pub fn new(data_dir: Option<PathBuf>, remote_log_dir: String) -> Result<Store, StatsError> {
+        let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
                 StatsError::Internal(format!("create data_dir {}: {e}", dir.display()))
             })?;
         }
+        let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
+        let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
         // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
         // earlier server populated, the sqlite sidecar is empty, so the disk
         // parquet layout + footers are the only record of the namespaces +
@@ -131,7 +134,9 @@ impl Store {
         // sentinel (subsequent boots). REMOTE adoption is the engines'
         // `boot_reconcile`, run in the background by each namespace's
         // maintenance task (spawned by `bootstrap_maintenance`), not before bind.
+        let catalog_adoption_started = Instant::now();
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
+        let catalog_adoption_ms = catalog_adoption_started.elapsed().as_millis() as u64;
         let store = Store {
             data_dir,
             remote_log_dir,
@@ -146,8 +151,22 @@ impl Store {
         // evolving after rehydrate would instead require rebuilding a live engine,
         // whose stop-and-join uses a runtime `block_on` that is illegal here (this
         // runs directly on the async `main` task, not a `spawn_blocking` worker).
+        let log_schema_started = Instant::now();
         store.ensure_log_namespace_schema()?;
+        let log_schema_ms = log_schema_started.elapsed().as_millis() as u64;
+        let rehydrate_started = Instant::now();
         store.rehydrate_from_catalog()?;
+        let rehydrate_ms = rehydrate_started.elapsed().as_millis() as u64;
+        let namespaces = store.engines.lock().unwrap().len();
+        tracing::info!(
+            namespaces,
+            catalog_open_ms,
+            catalog_adoption_ms,
+            log_schema_ms,
+            rehydrate_ms,
+            total_ms = startup_started.elapsed().as_millis() as u64,
+            "finelog store startup complete"
+        );
         Ok(store)
     }
 

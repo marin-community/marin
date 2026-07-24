@@ -17,15 +17,15 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import httpx
-from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_REPO
+from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_API_BASE, GITHUB_REPO
 from errors import UpstreamError
-from nightly import NightlyLaneSnapshot, NightlyRun, nightly_matrix, project_nightlies
+from graphql_source import graphql_data
+from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
 from nightly_config import NIGHTLY_LANES, NightlyLane
 
 logger = logging.getLogger(__name__)
 
-_REST_BASE = "https://api.github.com"
-_GRAPHQL_URL = "https://api.github.com/graphql"
+_GRAPHQL_URL = f"{GITHUB_API_BASE}/graphql"
 
 # Per-commit rollup states GitHub reports; the build success rate is over finalized ones.
 _FINALIZED_STATES = ("SUCCESS", "FAILURE", "ERROR")
@@ -47,7 +47,7 @@ query MainCommits($owner: String!, $repo: String!, $count: Int!) {
               messageHeadline
               committedDate
               url
-              author { user { login } name }
+              author { user { login avatarUrl(size: 80) } name }
               statusCheckRollup { state }
             }
           }
@@ -94,15 +94,17 @@ def _to_nightly_run(run: dict) -> NightlyRun:
 class GithubSource:
     """Ferry and build status for the configured repo."""
 
-    def __init__(self, *, token: str | None, timeout: float) -> None:
+    def __init__(self, *, auth: httpx.Auth | None, timeout: float) -> None:
         headers = {
             "accept": "application/vnd.github+json",
             "x-github-api-version": "2022-11-28",
             "user-agent": "marin-grafana-bridge",
         }
-        if token:
-            headers["authorization"] = f"Bearer {token}"
-        self._client = httpx.Client(timeout=timeout, headers=headers)
+        # auth attaches a cached GitHub App installation token, refreshed near expiry
+        # (see github_app.GithubAppAuth). None leaves requests unauthenticated: the
+        # REST ferry/nightly panels still work but rate-limit fast, and the GraphQL
+        # build panel returns no data.
+        self._client = httpx.Client(timeout=timeout, headers=headers, auth=auth)
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         try:
@@ -119,7 +121,7 @@ class GithubSource:
         for group in FERRY_GROUPS:
             for tier in group.tiers:
                 runs = self._get(
-                    f"{_REST_BASE}/repos/{GITHUB_REPO}/actions/workflows/{tier.file}/runs",
+                    f"{GITHUB_API_BASE}/repos/{GITHUB_REPO}/actions/workflows/{tier.file}/runs",
                     params={"per_page": FERRY_RUN_LIMIT, "branch": "main"},
                 ).get("workflow_runs", [])
                 finished = [r for r in runs if r.get("conclusion")]
@@ -151,26 +153,18 @@ class GithubSource:
 
     def builds(self) -> list[dict]:
         """One row per recent commit on main with its CI rollup state and finalized success rate."""
-        try:
-            response = self._client.post(
-                _GRAPHQL_URL,
-                json={
-                    "query": _BUILD_QUERY,
-                    "variables": {
-                        "owner": GITHUB_REPO.split("/")[0],
-                        "repo": GITHUB_REPO.split("/")[1],
-                        "count": BUILD_HISTORY,
-                    },
-                },
-            )
-        except httpx.TransportError as err:
-            raise UpstreamError("github", f"graphql unreachable ({err})", status_code=504) from err
-        if response.status_code != 200:
-            raise UpstreamError("github", f"graphql returned {response.status_code}", status_code=502)
-        payload = response.json()
-        if payload.get("errors"):
-            raise UpstreamError("github", f"graphql errors: {payload['errors']}", status_code=502)
-        nodes = (((payload.get("data") or {}).get("repository") or {}).get("ref") or {}).get("target", {})
+        data = graphql_data(
+            self._client,
+            source="github",
+            url=_GRAPHQL_URL,
+            query=_BUILD_QUERY,
+            variables={
+                "owner": GITHUB_REPO.split("/")[0],
+                "repo": GITHUB_REPO.split("/")[1],
+                "count": BUILD_HISTORY,
+            },
+        )
+        nodes = ((data.get("repository") or {}).get("ref") or {}).get("target") or {}
         nodes = ((nodes or {}).get("history") or {}).get("nodes") or []
 
         states = [(node.get("statusCheckRollup") or {}).get("state") or "NONE" for node in nodes]
@@ -188,6 +182,7 @@ class GithubSource:
                     "headline": node.get("messageHeadline"),
                     "committed_at": _iso_to_ms(node.get("committedDate")),
                     "author": user.get("login") or author.get("name"),
+                    "avatar_url": user.get("avatarUrl"),
                     "url": node.get("url"),
                     "state": state,
                     "success_rate": success_rate,
@@ -197,7 +192,7 @@ class GithubSource:
 
     def _nightly_lane_snapshot(self, lane: NightlyLane, now: datetime) -> NightlyLaneSnapshot:
         """Fetch one lane's recent scheduled runs; a failure becomes an error snapshot, not a raise."""
-        url = f"{_REST_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
+        url = f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
         params = {
             "branch": lane.branch,
             "event": "schedule",
@@ -212,13 +207,7 @@ class GithubSource:
         return NightlyLaneSnapshot(lane_id=lane.id, runs=runs, error=None)
 
     def nightlies(self, now: datetime | None = None) -> list[dict]:
-        """The nightly regression matrix: one wide row per day over the trailing 7 UTC days.
-
-        Each row carries a `status_code` per lane keyed by lane id, which the
-        state-timeline panel renders as one row per lane. Each configured lane is
-        fetched independently; a lane whose fetch fails renders its cells
-        "unavailable" rather than failing the whole matrix.
-        """
+        """One linked, duration-aware cell per nightly lane and UTC day."""
         effective_now = now or datetime.now(UTC)
         snapshots = [self._nightly_lane_snapshot(lane, effective_now) for lane in NIGHTLY_LANES]
-        return nightly_matrix(project_nightlies(NIGHTLY_LANES, snapshots, effective_now))
+        return project_nightlies(NIGHTLY_LANES, snapshots, effective_now)

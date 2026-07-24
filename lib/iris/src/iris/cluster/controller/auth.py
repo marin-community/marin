@@ -29,17 +29,27 @@ trusted peer does authenticate, via the separate
 """
 
 import dataclasses
+import json
 import logging
 import secrets
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
+from urllib.parse import unquote
 
 from rigging.server_auth import (
+    ANONYMOUS_ADMIN,
+    IAP_ISSUER,
+    IAP_PUBLIC_KEYS_URL,
+    AuthDecision,
+    AuthOutcome,
+    AuthRequest,
     IapAssertionVerifier,
     RequestAuthPolicy,
     TokenVerifier,
     VerifiedIdentity,
 )
 from rigging.token_authority import (
+    DEFAULT_LEEWAY_SECONDS,
     JwksVerifier,
     JwtSigner,
     generate_ed25519_keypair,
@@ -47,11 +57,13 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
+VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
+INVALID_VERIFIED_IDENTITY_REASON = "Invalid verified identity"
 
 # Role for an authenticated non-admin on a gcp cluster (and the fallback default
 # anywhere config carries no more specific rule). "user" is the ordinary
@@ -114,7 +126,17 @@ ENDPOINT_TOKEN_ROLE = "endpoint"
 # endpoint as the identity's audience only when this scope is present.
 ENDPOINT_TOKEN_SCOPE = "proxy"
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
-MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
+# Ceiling on a requested endpoint-token TTL. Set to a week so a long-running
+# agentic datagen/eval job can hold one capability URL for its whole run instead
+# of hitting 401s when a shorter token expires under a still-healthy endpoint. The
+# token stays narrowly scoped — one endpoint, /proxy access only, zero RPC
+# authority (see authorize_method) — so a week-long, non-revocable lifetime widens
+# nothing: a leak exposes only that one endpoint until it ages out. Callers opt
+# into a long TTL explicitly; the default stays short.
+MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400 * 7  # 7 days
+NATIVE_PROXY_JWT_CACHE_CAPACITY = 4096
+NATIVE_PROXY_JWT_CACHE_TTL_SECONDS = 60
+NATIVE_PROXY_JWT_LEEWAY_SECONDS = DEFAULT_LEEWAY_SECONDS
 
 # Federation plane: the token a parent controller presents on RPCs to this cluster,
 # verified against the parent's published key by a dedicated verifier. Kept OUT of
@@ -124,6 +146,74 @@ FEDERATION_AUDIENCE = "federation"
 # Short-lived and unrevocable: a fresh token is minted per outgoing RPC, so replay is
 # bounded by the TTL plus the IP allowlist and the issuer/aud/requester binding.
 FEDERATION_TOKEN_TTL_SECONDS = 300  # 5 minutes
+
+
+class NativeProxyAuthMode(StrEnum):
+    """How the native listener handles missing or invalid credentials."""
+
+    PERMISSIVE = "permissive"
+    OPTIONAL = "optional"
+    ENFORCING = "enforcing"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class NativeProxyAuthConfig:
+    """Public verification policy passed to the native listener."""
+
+    mode: NativeProxyAuthMode
+    issuers: tuple[str, ...]
+    jwks: dict
+    leeway_seconds: int
+    cache_capacity: int
+    cache_ttl_seconds: int
+    trusted_cidrs: tuple[str, ...]
+    control_audience: str = CONTROL_PLANE_AUDIENCE
+    proxy_audience: str = PROXY_PLANE_AUDIENCE
+    proxy_scope: str = ENDPOINT_TOKEN_SCOPE
+    federation_audience: str = FEDERATION_AUDIENCE
+    session_cookie: str = SESSION_COOKIE
+    iap_public_keys_url: str = IAP_PUBLIC_KEYS_URL
+    iap_issuer: str = IAP_ISSUER
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+    admin_users: tuple[str, ...] = ()
+    default_user_role: str = DEFAULT_USER_ROLE
+
+
+@dataclasses.dataclass(frozen=True)
+class NativeProxyIdentityAuthenticator:
+    """Trust the private listener and use its verified identity stamp when present."""
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        encoded_identity = request.headers.get(VERIFIED_IDENTITY_HEADER)
+        if encoded_identity is None:
+            return AuthOutcome(AuthDecision.AUTHENTICATED, identity=ANONYMOUS_ADMIN)
+        try:
+            payload = json.loads(unquote(encoded_identity))
+        except (json.JSONDecodeError, TypeError):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if not isinstance(payload, dict):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+
+        user_id = payload.get("user_id")
+        role = payload.get("role")
+        audience = payload.get("audience")
+        if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if audience is not None and not isinstance(audience, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        return AuthOutcome(
+            AuthDecision.AUTHENTICATED,
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+        )
+
+
+def native_proxy_auth_policy(external_policy: RequestAuthPolicy) -> RequestAuthPolicy:
+    """Trust private ingress and retain the external verifier for session login."""
+    return RequestAuthPolicy(
+        authenticators=(NativeProxyIdentityAuthenticator(),),
+        verifier=external_policy.verifier,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +253,10 @@ class JwtTokenManager:
     def public_jwks(self) -> dict:
         """Public JWKS for ``/.well-known/jwks.json`` (current + retained-previous keys)."""
         return self._signer.public_jwks(also=self._previous_public_keys)
+
+    def native_proxy_verification_material(self) -> tuple[tuple[str, ...], dict]:
+        """Return accepted issuers and public keys for the native listener."""
+        return tuple(sorted({self._signer.issuer, _LEGACY_ISSUER})), self.public_jwks()
 
     def create_token(
         self,
@@ -402,6 +496,8 @@ class ControllerAuth:
     # none (fail closed). The federation token itself only proves the requester; the
     # verifier that checks it is folded into ``verifier``.
     allowed_submitters: tuple[str, ...] = ()
+    iap_audience: str | None = None
+    federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
@@ -550,6 +646,7 @@ def create_controller_auth(
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
             allowed_submitters=allowed_submitters,
+            federation_keys=federation_peers,
         )
 
     provider = auth_config.provider_kind() or CIDR_PROVIDER
@@ -589,6 +686,8 @@ def create_controller_auth(
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
         allowed_submitters=allowed_submitters,
+        iap_audience=signed_header_audience if provider == "iap" else None,
+        federation_keys=federation_peers,
     )
 
 

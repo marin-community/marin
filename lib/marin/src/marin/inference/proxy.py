@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import socket
 import threading
@@ -10,7 +11,6 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
 
 import anyio
 import uvicorn
@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
@@ -27,8 +28,6 @@ from marin.inference.types import (
     OpenAIEndpoint,
     RunningModel,
     format_request_ids,
-    pack_json_payload,
-    unpack_json_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,9 +77,8 @@ class InferenceProxy:
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[
-                Route("/v1/models", self._models),
-                Route("/v1/completions", self._forward, methods=["POST"]),
-                Route("/v1/chat/completions", self._forward, methods=["POST"]),
+                Route("/health", self._health),
+                Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
         )
 
@@ -118,28 +116,49 @@ class InferenceProxy:
         self._poll_stop_event = None
         logger.info("InferenceProxy stopped stats=%s", self.stats)
 
-    def _models(self, request: Request) -> Response:
-        return self.forward_request(
-            request.url.path,
-            {},
-            method="GET",
-            timeout_seconds=self._readiness_timeout_seconds,
+    def _health(self, _request: Request) -> Response:
+        ready = self._poll_thread is not None and self._poll_thread.is_alive()
+        return JSONResponse({"status": "ok" if ready else "stopped"}, status_code=200 if ready else 503)
+
+    async def _forward(self, request: Request) -> Response:
+        body = await request.body()
+        timeout_seconds = (
+            self._readiness_timeout_seconds if request.url.path == "/v1/models" else self._request_timeout_seconds
+        )
+        content_type = request.headers.get("content-type", "")
+        if body and "application/json" in content_type:
+            try:
+                request_json = json.loads(body)
+            except ValueError:
+                return JSONResponse({"error": "request body must be valid JSON"}, status_code=400)
+            if not isinstance(request_json, dict):
+                return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
+            if request_json.get("stream") is True:
+                return JSONResponse({"error": "brokered inference does not support streaming"}, status_code=400)
+            if self._ignored_request_fields:
+                request_json = {
+                    key: value for key, value in request_json.items() if key not in self._ignored_request_fields
+                }
+                body = json.dumps(request_json, separators=(",", ":")).encode()
+        return await anyio.to_thread.run_sync(
+            lambda: self.forward_raw_request(
+                request.url.path,
+                body,
+                method=request.method,
+                query_string=request.url.query,
+                headers=forwardable_request_headers(request.headers),
+                timeout_seconds=timeout_seconds,
+            )
         )
 
-    def _forward(self, request: Request) -> Response:
-        # Starlette runs sync endpoints in a worker thread, but request.json()
-        # still reads the async ASGI body stream.
-        request_json = anyio.from_thread.run(request.json)
-        if not isinstance(request_json, dict):
-            return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
-        return self.forward_request(request.url.path, request_json, method=request.method)
-
-    def forward_request(
+    def forward_raw_request(
         self,
         path: str,
-        request_json: Mapping[str, Any],
+        body: bytes,
         *,
         method: str,
+        query_string: str = "",
+        headers: Mapping[str, str] | None = None,
         timeout_seconds: float | None = None,
     ) -> Response:
         request_id = str(uuid.uuid4())
@@ -165,15 +184,14 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
-            forwarded_json = {
-                key: value for key, value in request_json.items() if key not in self._ignored_request_fields
-            }
             self._broker.submit_request(
                 InferenceRequest(
                     request_id=request_id,
                     method=method,
                     path=path,
-                    payload=pack_json_payload(forwarded_json),
+                    payload=body,
+                    query_string=query_string,
+                    headers=tuple((headers or {}).items()),
                 ),
             )
             logger.info(
@@ -208,7 +226,7 @@ class InferenceProxy:
             path,
             response.status_code,
         )
-        return JSONResponse(unpack_json_payload(response.payload), status_code=response.status_code)
+        return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
 
     def run_forever(
         self,

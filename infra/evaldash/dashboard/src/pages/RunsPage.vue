@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatTimestamp } from '@/utils/formatting'
-import type { Meta, RunRow } from '@/types/api'
+import { formatScore, formatStderr, formatTimestamp } from '@/utils/formatting'
+import type { LaunchGroup, Meta, RunRow } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -23,6 +23,11 @@ const filters = reactive({
 // since group ids are opaque.
 const group = computed(() => (typeof route.query.group === 'string' ? route.query.group : ''))
 
+// "By launch" collapses runs into one row per serve group; "All runs" is the flat table. A group
+// chip is a flat-mode concept, so arriving with one forces that view.
+type View = 'launches' | 'runs'
+const view = ref<View>(group.value ? 'runs' : 'launches')
+
 function runsPath(): string {
   const params = new URLSearchParams()
   if (filters.model) params.set('model', filters.model)
@@ -34,22 +39,53 @@ function runsPath(): string {
   return `api/runs?${params.toString()}`
 }
 
+function groupsPath(): string {
+  const params = new URLSearchParams()
+  if (filters.model) params.set('model', filters.model)
+  if (filters.user) params.set('user', filters.user)
+  params.set('limit', String(filters.limit))
+  return `api/groups?${params.toString()}`
+}
+
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
-const { data: runs, loading, error, refresh: refreshRuns } = useApi<RunRow[]>(runsPath)
+const { data: runs, loading: runsLoading, error: runsError, refresh: refreshRuns } = useApi<RunRow[]>(runsPath)
+const { data: groups, loading: groupsLoading, error: groupsError, refresh: refreshGroups } =
+  useApi<LaunchGroup[]>(groupsPath)
+
+const loading = computed(() => (view.value === 'launches' ? groupsLoading.value : runsLoading.value))
+const error = computed(() => (view.value === 'launches' ? groupsError.value : runsError.value))
+
+function refreshActive() {
+  if (view.value === 'launches') refreshGroups()
+  else refreshRuns()
+}
+
+// Expanded launches, keyed by group id.
+const expanded = reactive(new Set<string>())
+function toggleGroup(groupId: string) {
+  if (expanded.has(groupId)) expanded.delete(groupId)
+  else expanded.add(groupId)
+}
 
 onMounted(() => {
   refreshMeta()
-  refreshRuns()
+  refreshActive()
 })
 
-// Re-query whenever a filter or the group chip changes.
-watch(filters, () => refreshRuns())
-watch(group, () => refreshRuns())
+// Re-query the active view whenever a filter or the view toggle changes.
+watch(filters, refreshActive)
+watch(view, refreshActive)
+
+// A group chip only makes sense in flat mode, so selecting one switches views and refetches runs.
+watch(group, (g) => {
+  if (g) view.value = 'runs'
+  refreshRuns()
+})
 
 // A manual or timed refresh reloads both the rows and the filter vocabulary.
 onViewRefresh(() => {
   refreshMeta()
-  refreshRuns()
+  refreshActive()
 })
 
 function tasksSummary(row: RunRow): string {
@@ -85,6 +121,22 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
   <section>
     <div class="flex items-baseline justify-between mb-4">
       <h2 class="text-lg font-semibold">Runs</h2>
+      <div class="flex items-center gap-1 text-sm">
+        <button
+          class="px-3 py-1 rounded border"
+          :class="view === 'launches'
+            ? 'border-accent-border bg-accent-subtle text-accent'
+            : 'border-surface-border text-text-muted hover:bg-surface-raised'"
+          @click="view = 'launches'"
+        >By launch</button>
+        <button
+          class="px-3 py-1 rounded border"
+          :class="view === 'runs'
+            ? 'border-accent-border bg-accent-subtle text-accent'
+            : 'border-surface-border text-text-muted hover:bg-surface-raised'"
+          @click="view = 'runs'"
+        >All runs</button>
+      </div>
     </div>
 
     <!-- Filters -->
@@ -96,7 +148,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
           <option v-for="m in meta?.models ?? []" :key="m" :value="m">{{ m }}</option>
         </select>
       </label>
-      <label class="flex flex-col text-xs text-text-secondary gap-1">
+      <label v-if="view === 'runs'" class="flex flex-col text-xs text-text-secondary gap-1">
         Eval
         <select v-model="filters.eval" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[10rem]">
           <option value="">All</option>
@@ -110,7 +162,7 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
           <option v-for="u in meta?.users ?? []" :key="u" :value="u">{{ u }}</option>
         </select>
       </label>
-      <label class="flex flex-col text-xs text-text-secondary gap-1">
+      <label v-if="view === 'runs'" class="flex flex-col text-xs text-text-secondary gap-1">
         Status
         <select v-model="filters.status" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[8rem]">
           <option value="">All</option>
@@ -129,8 +181,8 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
       </label>
     </div>
 
-    <!-- Active group chip -->
-    <div v-if="group" class="mb-4">
+    <!-- Active group chip (flat mode only) -->
+    <div v-if="group && view === 'runs'" class="mb-4">
       <button
         class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border border-accent-border bg-accent-subtle text-accent"
         title="Clear group filter"
@@ -144,7 +196,88 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
       {{ error }}
     </div>
 
-    <div v-if="loading && !runs" class="text-sm text-text-muted py-12 text-center">Loading…</div>
+    <div
+      v-if="loading && (view === 'launches' ? !groups : !runs)"
+      class="text-sm text-text-muted py-12 text-center"
+    >Loading…</div>
+
+    <!-- By launch: one row per serve group, expandable to its evals -->
+    <template v-else-if="view === 'launches'">
+      <EmptyState
+        v-if="groups && groups.length === 0"
+        icon="🔍"
+        message="No launches match these filters."
+      />
+      <div v-else-if="groups" class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse text-sm">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary">
+              <th class="px-3 py-2 text-left w-8"></th>
+              <th class="px-3 py-2 text-left">Model</th>
+              <th class="px-3 py-2 text-left">Version</th>
+              <th class="px-3 py-2 text-left">Created</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-left">Evals</th>
+              <th class="px-3 py-2 text-left">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="g in groups" :key="g.group_id">
+              <tr
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
+                @click="toggleGroup(g.group_id)"
+              >
+                <td class="px-3 py-2 text-text-muted select-none">{{ expanded.has(g.group_id) ? '▾' : '▸' }}</td>
+                <td class="px-3 py-2 font-mono text-[13px] whitespace-nowrap">{{ g.model_name }}</td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <span
+                    v-if="g.version"
+                    class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
+                  >{{ g.version }}</span>
+                  <span v-else class="text-text-muted">—</span>
+                </td>
+                <td class="px-3 py-2 whitespace-nowrap text-text-secondary">{{ formatTimestamp(g.created_at) }}</td>
+                <td class="px-3 py-2"><StatusChip :status="g.status" /></td>
+                <td class="px-3 py-2 tabular-nums text-text-secondary whitespace-nowrap">{{ g.n_succeeded }}/{{ g.n_evals }}</td>
+                <td class="px-3 py-2 text-text-secondary max-w-[32ch] truncate" :title="g.description ?? ''">
+                  {{ g.description ?? '—' }}
+                </td>
+              </tr>
+              <tr v-if="expanded.has(g.group_id)" class="border-b border-surface-border-subtle bg-surface-sunken">
+                <td></td>
+                <td colspan="6" class="px-3 py-2">
+                  <table class="w-full border-collapse text-sm">
+                    <tbody>
+                      <tr
+                        v-for="e in g.evals"
+                        :key="e.run_id"
+                        class="border-b border-surface-border-subtle last:border-0"
+                      >
+                        <td class="px-3 py-1.5 whitespace-nowrap">{{ e.eval_name }}</td>
+                        <td class="px-3 py-1.5"><StatusChip :status="e.status" /></td>
+                        <td class="px-3 py-1.5 tabular-nums whitespace-nowrap">
+                          <template v-if="e.value !== null">
+                            {{ formatScore(e.value) }}
+                            <span class="text-text-muted text-xs">{{ formatStderr(e.value, e.stderr) }}</span>
+                          </template>
+                          <span v-else class="text-text-muted">—</span>
+                        </td>
+                        <td class="px-3 py-1.5 text-right">
+                          <RouterLink
+                            :to="`/runs/${e.run_id}`"
+                            class="text-accent hover:text-accent-hover hover:underline whitespace-nowrap"
+                          >detail →</RouterLink>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
 
     <EmptyState
       v-else-if="runs && runs.length === 0"

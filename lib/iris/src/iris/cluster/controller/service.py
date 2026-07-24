@@ -47,6 +47,7 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
 )
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_launch_job_request,
@@ -62,9 +63,12 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
+    federation_changelog_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     local_tasks,
+    meta_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -384,6 +388,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
             attempt_uid=attempt.attempt_uid,
+            pod_name=attempt.pod_name or "",
+            pod_uid=attempt.pod_uid or "",
+            node_name=attempt.node_name or "",
+            terminal_reason=attempt.terminal_reason or "",
         )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
@@ -988,6 +996,10 @@ def _attempts_for_worker(
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
             attempt_uid=row.attempt_uid,
+            pod_name=row.pod_name or "",
+            pod_uid=row.pod_uid or "",
+            node_name=row.node_name or "",
+            terminal_reason=row.terminal_reason or "",
         )
         if row.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
@@ -1133,6 +1145,17 @@ class ControllerServiceImpl:
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
+
+    def probe_database(self) -> int | None:
+        """Return checkpoint ancestry after verifying controller state is readable."""
+        with self._db.read_snapshot() as tx:
+            checkpoint_epoch_ms = tx.execute(
+                select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)
+            ).scalar()
+            tx.execute(select(task_attempts_table.c.attempt_uid).limit(1)).first()
+            tx.execute(select(federation_changelog_table.c.seq).limit(1)).first()
+            tx.execute(select(federation_sync_state_table.c.peer_id).limit(1)).first()
+        return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id, merged across
@@ -2479,11 +2502,20 @@ class ControllerServiceImpl:
         its worker is gone or unhealthy. Shared by ``profile_task`` and
         ``exec_in_container``.
         """
+        # The K8s backend rebuilds the pod name from (task_id, attempt_id, uid);
+        # the uid rides on the attempt rows already attached to ``task``.
+        attempt_uid = next((a.attempt_uid for a in task.attempts if a.attempt_id == attempt_id), "")
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
             if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
-            return TaskTarget(task_id=task.task_id.to_wire(), attempt_id=attempt_id, worker_id=None, address=None)
+            return TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=None,
+                address=None,
+                attempt_uid=attempt_uid,
+            )
         worker = _read_worker(self._db, task_worker_id)
         if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
@@ -2492,6 +2524,7 @@ class ControllerServiceImpl:
             attempt_id=attempt_id,
             worker_id=task_worker_id,
             address=worker.address,
+            attempt_uid=attempt_uid,
         )
 
     @property

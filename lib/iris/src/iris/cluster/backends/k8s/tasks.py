@@ -74,6 +74,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_PRODUCTION,
     K8sResource,
     KubectlError,
+    parse_k8s_cpu,
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
@@ -345,24 +346,31 @@ def _job_id_from_task(task_id: JobName) -> str:
     return _sanitize_label_value(_job_path(task_id))
 
 
-def _pod_name(task_id: JobName, attempt_id: int) -> str:
-    """Build a DNS-label-safe pod name from task_id and attempt_id.
+def _pod_name(task_id: JobName, attempt_id: int, attempt_uid: str = "") -> str:
+    """Build a DNS-label-safe pod name from task_id, attempt_id, and attempt_uid.
 
     k8s pod names must match [a-z0-9][a-z0-9-]* and be at most 253 chars.
     We lowercase and replace non-alphanumeric chars with hyphens, then truncate.
 
-    Both a 8-char task hash and the attempt_id are reserved before truncating
-    the readable prefix, so:
+    A 8-char task hash, the attempt_id, and the attempt_uid are reserved before
+    truncating the readable prefix, so:
     - Different task IDs with the same long prefix cannot share a pod name
       (the task hash distinguishes them).
     - Different retry attempts of the same task cannot share a pod name
       (the attempt_id distinguishes them).
+    - Different incarnations of the same (task, attempt) — a resubmit reuses the
+      task name and resets attempt_id to 0 — cannot share a pod name (the
+      per-attempt uid distinguishes them). This is what lets ``create`` always
+      succeed for a fresh attempt instead of colliding with a previous run's
+      leftover pod. ``attempt_uid`` is empty only off the direct-dispatch path
+      (older controllers, tests), which keeps the pre-uid name.
     """
     task_id_wire = task_id.to_wire()
     # 8-char hash ensures different task IDs produce different pod names
     # even after prefix truncation.
     hash8 = hashlib.sha256(task_id_wire.encode()).hexdigest()[:8]
-    suffix = f"-{hash8}-{attempt_id}"
+    uid_part = f"-{attempt_uid}" if attempt_uid else ""
+    suffix = f"-{hash8}-{attempt_id}{uid_part}"
     prefix_raw = f"iris-{task_id_wire}"
     prefix = re.sub(r"[^a-z0-9-]", "-", prefix_raw.lower())
     prefix = re.sub(r"-{2,}", "-", prefix).strip("-")
@@ -370,6 +378,43 @@ def _pod_name(task_id: JobName, attempt_id: int) -> str:
     if len(prefix) > max_prefix_len:
         prefix = prefix[:max_prefix_len].rstrip("-")
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
+
+
+def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str, *, allow_legacy: bool) -> list[str]:
+    """Pod names an attempt may be running under, current scheme first.
+
+    Pods are created under the uid-embedded name; attempts dispatched before the
+    name embedded ``attempt_uid`` run under the uid-less name, so lookups must
+    accept it too. It ranks last, so an attempt whose uid-named pod exists always
+    resolves to its own pod rather than a leftover one.
+
+    ``allow_legacy`` must be false for any attempt this process dispatched. Such
+    an attempt was created under the current name, and a resubmit reuses
+    ``(task_id, attempt_id)``, so a uid-less pod sharing those is a previous
+    incarnation's — adopting it is the collision #7518 removed. Drop the legacy
+    candidate entirely once no attempt predating that change can still be running.
+    """
+    current = _pod_name(task_id, attempt_id, attempt_uid)
+    if not allow_legacy:
+        return [current]
+    legacy = _pod_name(task_id, attempt_id)
+    return [current] if legacy == current else [current, legacy]
+
+
+def _lookup_pod(
+    pods_by_name: dict[str, dict], task_id: JobName, attempt_id: int, attempt_uid: str, *, allow_legacy: bool
+) -> tuple[str, dict | None]:
+    """Resolve an attempt to its pod in *pods_by_name*, tolerating the pre-uid name.
+
+    Returns the matched name and pod, or the current-scheme name and ``None``
+    when the attempt has no pod under any candidate name.
+    """
+    candidates = _pod_name_candidates(task_id, attempt_id, attempt_uid, allow_legacy=allow_legacy)
+    for name in candidates:
+        pod = pods_by_name.get(name)
+        if pod is not None:
+            return name, pod
+    return candidates[0], None
 
 
 def _build_volumes_and_mounts(
@@ -716,13 +761,13 @@ def _build_pod_manifest(
     """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
     task_id = JobName.from_wire(run_req.task_id)
     attempt_id = run_req.attempt_id
-    pod_name = _pod_name(task_id, attempt_id)
+    pod_name = _pod_name(task_id, attempt_id, run_req.attempt_uid)
 
     namespace = config.namespace
-    default_image = config.default_image
-    # Per-task image override (RunTaskRequest.task_image). The init container
-    # keeps default_image since it runs iris's own bundle_fetch tooling.
-    task_image = run_req.task_image or default_image
+    # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
+    # cluster default. GPU tooling (nsys) is baked into the task image, so a GPU
+    # job needs no special image and iris does not inspect the resource request.
+    task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -931,12 +976,9 @@ def _build_pod_manifest(
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-    # Skip activeDeadlineSeconds for gangs only: k8s counts it from pod creation,
-    # including time a gang spends SchedulingGated while it waits for the autoscaler
-    # to provision every node, so a large gang could hit DeadlineExceeded before it
-    # ever runs. Single pods admit quickly and, on a K8s-only cluster, this is their
-    # only timeout enforcement (the controller's execution-timeout scan runs only for
-    # worker-daemon backends), so they keep the deadline.
+    # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
+    # may wait SchedulingGated while nodes provision. The controller times gangs
+    # from execution start; single pods keep the earlier native deadline.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
@@ -1024,6 +1066,15 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     phase = pod.get("status", {}).get("phase", "Unknown")
     task_id = entry.task_id
     attempt_id = entry.attempt_id
+    # Backend object identity is known once the pod exists; capture it on every
+    # update (not only the terminal one) so a later preemption that deletes the pod
+    # still leaves the identity persisted.
+    metadata = pod.get("metadata", {})
+    identity = {
+        "pod_name": metadata.get("name") or None,
+        "pod_uid": metadata.get("uid") or None,
+        "node_name": pod.get("spec", {}).get("nodeName") or None,
+    }
 
     if phase == "Pending":
         return TaskUpdate(
@@ -1031,6 +1082,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_BUILDING,
             status_message=_pod_status_message(pod, workload),
+            **identity,
         )
 
     if phase == "Running":
@@ -1039,6 +1091,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
             status_message="",
+            **identity,
         )
 
     if phase == "Succeeded":
@@ -1047,6 +1100,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
             status_message="",
+            **identity,
         )
 
     # Failed or Unknown -- distinguish infrastructure vs application failure. The
@@ -1063,6 +1117,8 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         exit_code=exit_code,
         error=_extract_error(pod),
         status_message="",
+        terminal_reason=_extract_terminal_reason(pod),
+        **identity,
     )
 
 
@@ -1088,6 +1144,41 @@ def _extract_error(pod: dict) -> str | None:
     if reason == "Completed":
         return message or None
     return message or reason or None
+
+
+# An init-container failure message can be a full log tail
+# (terminationMessagePolicy: FallbackToLogsOnError), so bound what we persist.
+_TERMINAL_REASON_MAX_CHARS = 500
+
+
+def _init_container_failure(pod: dict) -> str | None:
+    """Return ``Init:<reason> <container>: <message>`` for the first init container
+    that terminated non-zero (excluding the log-shipper sidecar), else ``None``.
+
+    Task pods never surfaced init-container status, so a ``stage-workdir`` bundle
+    fetch that 404s in init showed only as a generic ``Pending`` (#7542).
+    """
+    for status in pod.get("status", {}).get("initContainerStatuses", []):
+        if status.get("name") == _LOGSHIP_CONTAINER_NAME:
+            continue
+        terminated = status.get("state", {}).get("terminated", {})
+        code = terminated.get("exitCode")
+        if isinstance(code, int) and code != 0:
+            reason = terminated.get("reason") or "Error"
+            message = (terminated.get("message") or "").strip()
+            head = f"Init:{reason} {status.get('name', '?')}"
+            return f"{head}: {message}" if message else head
+    return None
+
+
+def _extract_terminal_reason(pod: dict) -> str | None:
+    """A bounded terminal-cause string for a failed attempt.
+
+    Prefers an init-container failure — invisible to the task-container extractors —
+    over the task container's own terminal reason.
+    """
+    reason = _init_container_failure(pod) or _extract_error(pod)
+    return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
 
 
 def _format_bytes(n: int) -> str:
@@ -1491,10 +1582,8 @@ def _node_status_summary(node: dict) -> str:
 
 
 def _node_cpu_millicores(node: dict) -> int:
-    allocatable = node.get("status", {}).get("allocatable", {})
-    cpu_str = str(allocatable.get("cpu", "0"))
-    cpu_val = parse_k8s_quantity(cpu_str)
-    return cpu_val if cpu_str.endswith("m") else cpu_val * 1000
+    cpu_str = str(node.get("status", {}).get("allocatable", {}).get("cpu", "0"))
+    return parse_k8s_cpu(cpu_str)
 
 
 def _node_memory_bytes(node: dict) -> int:
@@ -2187,6 +2276,10 @@ class K8sTaskProvider:
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    # (task_id_wire, attempt_id) this process has dispatched a pod for. Those pods
+    # were created under the current name, so their lookups must never consider the
+    # pre-uid name — see _pod_name_candidates.
+    _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
@@ -2413,6 +2506,35 @@ class K8sTaskProvider:
 
         return updates
 
+    def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
+        """Resolve a running entry to its pod, allowing the pre-uid name only when this
+        process did not dispatch the attempt."""
+        return _lookup_pod(
+            pods_by_name,
+            entry.task_id,
+            entry.attempt_id,
+            entry.attempt_uid,
+            allow_legacy=(entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts,
+        )
+
+    def _live_pod_name(self, target: TaskTarget) -> str:
+        """Pod name for *target*, preferring the current scheme over the pre-uid name.
+
+        Probes the uid-embedded name and returns it when that pod exists,
+        otherwise returns the pre-uid name unprobed — a target with no pod under
+        either name still yields a name for the caller to fail against.
+        """
+        candidates = _pod_name_candidates(
+            JobName.from_wire(target.task_id),
+            target.attempt_id,
+            target.attempt_uid,
+            allow_legacy=(target.task_id, target.attempt_id) not in self._dispatched_attempts,
+        )
+        for name in candidates[:-1]:
+            if self.kubectl.get_json(K8sResource.PODS, name) is not None:
+                return name
+        return candidates[-1]
+
     def profile_task(
         self,
         target: TaskTarget,
@@ -2427,7 +2549,7 @@ class K8sTaskProvider:
         the profile duration itself.
         """
         attempt_id = target.attempt_id
-        pod_name = _pod_name(JobName.from_wire(target.task_id), attempt_id)
+        pod_name = self._live_pod_name(target)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
@@ -2468,7 +2590,7 @@ class K8sTaskProvider:
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
@@ -2492,7 +2614,7 @@ class K8sTaskProvider:
         memory, cpu, thread, and fd counters. Logs are served separately via
         FetchLogs, so ``log_entries`` stays empty.
         """
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        pod_name = self._live_pod_name(target)
         result = self.kubectl.exec(
             pod_name, ["sh", "-c", _POD_PROC_STATUS_SCRIPT], container="task", timeout=_POD_PROC_STATUS_TIMEOUT
         )
@@ -2549,7 +2671,8 @@ class K8sTaskProvider:
         manifest = _build_pod_manifest(run_req, self.pod_config)
 
         task_id_name = JobName.from_wire(run_req.task_id)
-        pod_name = _pod_name(task_id_name, run_req.attempt_id)
+        pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
+        self._dispatched_attempts.add((run_req.task_id, run_req.attempt_id))
 
         init_containers, extra_volumes, configmap_name = _build_init_container_spec(
             run_req,
@@ -2919,7 +3042,7 @@ class K8sTaskProvider:
         # each. Lazy: only fetched on cycles where at least one pod is missing,
         # so steady-state cycles add no call. setdefault keeps the active entry
         # if a name somehow appears in both.
-        if any(_pod_name(entry.task_id, entry.attempt_id) not in pods_by_name for entry in running):
+        if any(self._lookup_entry_pod(pods_by_name, entry)[1] is None for entry in running):
             for pod in self._list_terminal_pods():
                 pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
 
@@ -2933,10 +3056,9 @@ class K8sTaskProvider:
         event_log = self._ensure_task_event_log()
 
         for entry in running:
-            pod_name = _pod_name(entry.task_id, entry.attempt_id)
+            pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             event_key = (entry.task_id.to_wire(), entry.attempt_id)
-            pod = pods_by_name.get(pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1

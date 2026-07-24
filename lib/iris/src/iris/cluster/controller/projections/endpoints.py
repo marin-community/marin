@@ -14,8 +14,8 @@ disk.
 """
 
 import logging
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from threading import RLock
 from typing import ClassVar
@@ -68,7 +68,35 @@ class EndpointRow:
         return self.lease_deadline is not None and self.lease_deadline <= now
 
 
+@dataclass(frozen=True, slots=True)
+class EndpointDelta:
+    """One committed, atomic delta to the endpoint projection."""
+
+    upserts: tuple[EndpointRow, ...]
+    deletes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointReset:
+    """Notification that the endpoint projection was rehydrated."""
+
+
+@dataclass(slots=True)
+class _PendingEndpointMutation:
+    upserts: dict[str, EndpointRow] = field(default_factory=dict)
+    deletes: set[str] = field(default_factory=set)
+
+    def upsert(self, row: EndpointRow) -> None:
+        self.deletes.discard(row.endpoint_id)
+        self.upserts[row.endpoint_id] = row
+
+    def delete(self, endpoint_id: str) -> None:
+        self.upserts.pop(endpoint_id, None)
+        self.deletes.add(endpoint_id)
+
+
 logger = logging.getLogger(__name__)
+_PENDING_MUTATION_KEY = "endpoints_projection.pending_mutation"
 
 
 # Module-level INSERT OR REPLACE. SA Core caches its compiled SQL across calls;
@@ -115,6 +143,7 @@ class EndpointsProjection(Projection):
         # enforce uniqueness on ``name`` and the upsert keys off endpoint_id.
         self._by_name: dict[str, set[str]] = {}
         self._by_task: dict[JobName, set[str]] = {}
+        self._listeners: list[Callable[[EndpointDelta | EndpointReset], None]] = []
         super().__init__(db)
 
     # -- Loading --------------------------------------------------------------
@@ -146,6 +175,42 @@ class EndpointsProjection(Projection):
                     )
                     self._index(endpoint)
         logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
+        self._notify(EndpointReset())
+
+    def subscribe(self, listener: Callable[[EndpointDelta | EndpointReset], None]) -> None:
+        """Receive one notification for each committed transaction."""
+        with self._lock:
+            self._listeners.append(listener)
+
+    def _pending_mutation(self, cur: db.Tx) -> _PendingEndpointMutation:
+        existing = cur.memo.get(_PENDING_MUTATION_KEY)
+        if existing is not None:
+            assert isinstance(existing, _PendingEndpointMutation)
+            return existing
+        pending = _PendingEndpointMutation()
+        cur.memo[_PENDING_MUTATION_KEY] = pending
+        cur.register(lambda: self._apply_pending(pending))
+        return pending
+
+    def _apply_pending(self, pending: _PendingEndpointMutation) -> None:
+        with self._lock:
+            for endpoint_id in pending.deletes:
+                self._unindex(endpoint_id)
+            for row in pending.upserts.values():
+                self._unindex(row.endpoint_id)
+                self._index(row)
+        self._notify(
+            EndpointDelta(
+                upserts=tuple(pending.upserts.values()),
+                deletes=tuple(pending.deletes),
+            )
+        )
+
+    def _notify(self, mutation: EndpointDelta | EndpointReset) -> None:
+        with self._lock:
+            listeners = tuple(self._listeners)
+        for listener in listeners:
+            listener(mutation)
 
     def _index(self, row: EndpointRow) -> None:
         self._by_id[row.endpoint_id] = row
@@ -288,14 +353,7 @@ class EndpointsProjection(Projection):
             },
         )
 
-        def apply() -> None:
-            with self._lock:
-                # Replace: drop any previous row with this id first so the
-                # name/task indexes stay consistent on overwrite.
-                self._unindex(endpoint.endpoint_id)
-                self._index(endpoint)
-
-        cur.register(apply)
+        self._pending_mutation(cur).upsert(endpoint)
         return AddEndpointOutcome.OK
 
     def replace_remote_for_peer(self, cur: db.Tx, peer_id: str, rows: Sequence[EndpointRow]) -> None:
@@ -347,15 +405,11 @@ class EndpointsProjection(Projection):
                 },
             )
 
-        def apply() -> None:
-            with self._lock:
-                for eid in stale:
-                    self._unindex(eid)
-                for row in keep:
-                    self._unindex(row.endpoint_id)
-                    self._index(row)
-
-        cur.register(apply)
+        pending = self._pending_mutation(cur)
+        for endpoint_id in stale:
+            pending.delete(endpoint_id)
+        for row in keep:
+            pending.upsert(row)
 
     def _present_task_ids(self, cur: db.Tx, task_ids: Sequence[JobName]) -> set[JobName]:
         """Which of ``task_ids`` have a persisted task row (FK target for an endpoint)."""
@@ -374,11 +428,7 @@ class EndpointsProjection(Projection):
             return None
         cur.execute(delete(endpoints_table).where(endpoints_table.c.endpoint_id == endpoint_id))
 
-        def apply() -> None:
-            with self._lock:
-                self._unindex(endpoint_id)
-
-        cur.register(apply)
+        self._pending_mutation(cur).delete(endpoint_id)
         return existing
 
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
@@ -401,12 +451,9 @@ class EndpointsProjection(Projection):
         if not to_remove:
             return []
 
-        def apply() -> None:
-            with self._lock:
-                for eid in to_remove:
-                    self._unindex(eid)
-
-        cur.register(apply)
+        pending = self._pending_mutation(cur)
+        for endpoint_id in to_remove:
+            pending.delete(endpoint_id)
         return to_remove
 
     def sweep_expired(self, cur: db.Tx, now: Timestamp) -> list[str]:
@@ -425,10 +472,7 @@ class EndpointsProjection(Projection):
             {"ids": expired},
         )
 
-        def apply() -> None:
-            with self._lock:
-                for eid in expired:
-                    self._unindex(eid)
-
-        cur.register(apply)
+        pending = self._pending_mutation(cur)
+        for endpoint_id in expired:
+            pending.delete(endpoint_id)
         return expired

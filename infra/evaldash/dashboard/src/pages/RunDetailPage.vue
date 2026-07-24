@@ -67,8 +67,15 @@ async function copyPath() {
       <div class="flex items-center gap-3 flex-wrap">
         <h2 class="text-lg font-semibold font-mono">{{ data.run_id }}</h2>
         <StatusChip :status="data.status" />
+        <span
+          v-if="data.version"
+          class="rounded bg-surface-sunken px-1.5 py-0.5 text-xs font-mono text-text-secondary"
+          :title="`version ${data.version}`"
+        >{{ data.version }}</span>
         <span class="text-xs text-text-muted">{{ formatTimestamp(data.created_at) }}</span>
       </div>
+
+      <p v-if="data.description" class="text-sm text-text-secondary -mt-3">{{ data.description }}</p>
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
@@ -160,7 +167,7 @@ async function copyPath() {
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Provenance</h3>
         <dl class="text-sm grid grid-cols-1 md:grid-cols-3 gap-2">
           <div class="flex gap-2"><dt class="text-text-muted w-28">git sha</dt><dd class="font-mono" :title="data.provenance.git_sha">{{ shortSha(data.provenance.git_sha) }}</dd></div>
-          <div class="flex gap-2"><dt class="text-text-muted w-28">image</dt><dd class="font-mono break-all">{{ data.provenance.evalchemy_image }}</dd></div>
+          <div class="flex gap-2"><dt class="text-text-muted w-28">image</dt><dd class="font-mono break-all">{{ data.provenance.eval_image }}</dd></div>
           <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
         </dl>
       </div>

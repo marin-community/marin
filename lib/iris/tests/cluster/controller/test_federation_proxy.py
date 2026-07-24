@@ -14,16 +14,16 @@ and a real upstream:
          peer, and served by the upstream
       -> unregistering the endpoint on the peer drops it from the parent's proxy.
 
-The federation bearer is a real EdDSA JWT: the parent signs with its key, the peer
-trusts the parent's public key and resolves the token to a federation-peer identity,
-then authorizes the forward by the RECEIVED handle the handoff created — the same
-crypto and authorization path the controllers run in production.
+The federation bearer is a real EdDSA JWT: the parent signs with its key, the
+peer's Rust listener verifies it, then the private control-plane decision checks
+the RECEIVED handle the handoff created.
 """
 
+import json
 import socket
 from collections.abc import Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import httpx
 import pytest
@@ -34,9 +34,12 @@ from iris.cluster.controller.auth import (
     FederationTokenProvider,
     FederationTokenVerifier,
     JwtTokenManager,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
+from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
+from iris.cluster.controller.native_proxy import NativeProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
@@ -129,7 +132,7 @@ def _federation_auth(requester: str = PARENT_ID):
     )
     parent_manager = JwtTokenManager(signer, control_plane_verifier)
     mint_token = FederationTokenProvider(requester, parent_manager).get_token
-    return mint_token, FederationTokenVerifier({requester: key.public_pem})
+    return mint_token, FederationTokenVerifier({requester: key.public_pem}), key.public_pem
 
 
 def _register_endpoint(
@@ -184,25 +187,77 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             with peer_state._db.read_snapshot() as q:
                 return reads.has_received_job_from_peer(q, peer_id, root_job)
 
-        mint_token, peer_verifier = _federation_auth(PARENT_ID)
+        mint_token, peer_verifier, parent_public_key = _federation_auth(PARENT_ID)
+        decision_secret = "federation-native-proxy-test"
         peer_dashboard = ControllerDashboard(
             peer_service,
             auth_policy=RequestAuthPolicy.enforcing(verifier=peer_verifier),
             federation_owner_check=peer_owns,
+            proxy_decision_secret=decision_secret,
         )
-        peer_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
+        peer_private_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
+        peer_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            peer_private_url,
+            decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                        federation_keys={PARENT_ID: parent_public_key},
+                    )
+                )
+            ),
+        )
+        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(peer_proxy.stop)
+        peer_url = peer_proxy.address
 
         # Parent dashboard: resolves the mirrored remote endpoint and forwards to the
         # peer under a freshly minted federation bearer.
+        parent_decision_secret = "parent-federation-native-proxy-test"
         parent_dashboard = ControllerDashboard(
             parent_service,
             auth_policy=RequestAuthPolicy.permissive(),
-            federated_proxy=FederatedEndpointProxy(lambda pid: peer_url if pid == PEER_ID else None, mint_token),
+            federated_handoff=FederatedEndpointHandoff(
+                lambda pid: peer_url if pid == PEER_ID else None,
+                mint_token,
+            ),
+            proxy_decision_secret=parent_decision_secret,
         )
-        parent_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
+        parent_private_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
 
         # Sync mirrors the peer's endpoint onto the parent as a remote (peer_id) row.
         manager.sync_once()
+        parent_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            parent_private_url,
+            parent_decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.PERMISSIVE,
+                        issuers=(),
+                        jwks={"keys": []},
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        stack.callback(parent_proxy.stop)
+        parent_url = parent_proxy.address
 
         # The whole forward: parent /proxy -> federation bearer -> peer /proxy -> upstream.
         with httpx.Client() as client:
@@ -211,9 +266,14 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
                 params={"q": "1"},
                 headers={"cookie": "session=secret", "authorization": "Bearer browser-user-token"},
             )
+            subdomain_resp = client.get(
+                f"{parent_url}/greet",
+                headers={"host": f"{ENDPOINT_PROXY_NAME}.proxy.example.test"},
+            )
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["marker"] == UPSTREAM_MARKER
+        assert subdomain_resp.status_code == 502
         # The upstream served the forwarded sub-path and query verbatim.
         assert upstream.paths[-1] == "/greet?q=1"
         # The browser's own session credentials never reached the serving process:
@@ -227,6 +287,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id), None
         )
         manager.sync_once()
+        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
 
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")

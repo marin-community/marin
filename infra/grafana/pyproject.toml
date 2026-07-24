@@ -16,6 +16,9 @@ dependencies = [
     "google-cloud-compute >= 1.19",
     "starlette >= 0.40",
     "uvicorn >= 0.32",
+    # RS256-signed JWTs for GitHub App auth (github_app.py). The [crypto] extra
+    # pulls cryptography, already resolved transitively via google-auth.
+    "pyjwt[crypto] >= 2.8",
     # marin-finelog pulls s3fs -> aiobotocore, which breaks at import under the
     # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
     # line, matching infra/probes.

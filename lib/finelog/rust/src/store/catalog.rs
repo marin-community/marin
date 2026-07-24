@@ -118,6 +118,21 @@ fn upsert_segment_in(conn: &Connection, row: &SegmentRow) -> Result<(), StatsErr
     Ok(())
 }
 
+fn remove_segments_in(
+    conn: &Connection,
+    namespace: &str,
+    paths: &[String],
+) -> Result<(), StatsError> {
+    for path in paths {
+        conn.execute(
+            "DELETE FROM segments WHERE namespace = ?1 AND path = ?2",
+            rusqlite::params![namespace, path],
+        )
+        .map_err(sqlite_err)?;
+    }
+    Ok(())
+}
+
 impl Catalog {
     /// Open the catalog. `data_dir = None` -> in-memory; otherwise the sidecar
     /// lives at `{data_dir}/_finelog_catalog.sqlite`. Creates the three tables
@@ -127,7 +142,28 @@ impl Catalog {
             None => Connection::open_in_memory().map_err(sqlite_err)?,
             Some(dir) => Connection::open(dir.join(CATALOG_DB_FILENAME)).map_err(sqlite_err)?,
         };
+        let journal_mode: String = if data_dir.is_some() {
+            // WAL requires shared memory and is not safe on the network-backed
+            // filesystems used by Kubernetes finelog. PERSIST keeps rollback
+            // journaling while avoiding a journal-file delete on every commit.
+            conn.query_row("PRAGMA journal_mode = PERSIST", [], |row| row.get(0))
+                .map_err(sqlite_err)?
+        } else {
+            conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .map_err(sqlite_err)?
+        };
+        conn.execute_batch("PRAGMA synchronous = FULL;")
+            .map_err(sqlite_err)?;
+        let synchronous: i64 = conn
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .map_err(sqlite_err)?;
         Self::create_tables(&conn)?;
+        tracing::info!(
+            persistent = data_dir.is_some(),
+            journal_mode,
+            synchronous,
+            "finelog catalog sqlite ready"
+        );
         Ok(Catalog {
             inner: Mutex::new(CatalogInner {
                 conn,
@@ -528,6 +564,30 @@ impl Catalog {
         upsert_segment_in(&inner.conn, row)
     }
 
+    /// Insert or replace a set of segment rows in one durable transaction.
+    pub fn upsert_segments(&self, rows: &[SegmentRow]) -> Result<(), StatsError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let tx = inner.conn.transaction().map_err(sqlite_err)?;
+        for row in rows {
+            upsert_segment_in(&tx, row)?;
+        }
+        tx.commit().map_err(sqlite_err)
+    }
+
+    /// Remove a set of namespace segment rows in one durable transaction.
+    pub fn remove_segments(&self, namespace: &str, paths: &[String]) -> Result<(), StatsError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let tx = inner.conn.transaction().map_err(sqlite_err)?;
+        remove_segments_in(&tx, namespace, paths)?;
+        tx.commit().map_err(sqlite_err)
+    }
+
     /// Atomically swap `removed_paths` for `added` rows in one transaction.
     ///
     /// Compaction collapses N inputs at level n into one level-(n+1) output. The
@@ -541,13 +601,7 @@ impl Catalog {
     ) -> Result<(), StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let tx = inner.conn.transaction().map_err(sqlite_err)?;
-        for path in removed_paths {
-            tx.execute(
-                "DELETE FROM segments WHERE namespace = ?1 AND path = ?2",
-                rusqlite::params![namespace, path],
-            )
-            .map_err(sqlite_err)?;
-        }
+        remove_segments_in(&tx, namespace, removed_paths)?;
         for seg in added {
             upsert_segment_in(&tx, seg)?;
         }

@@ -33,6 +33,23 @@ name: cw-rno2a
 finelog:
   config: cw-rno2a
 
+# Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
+provisioning:
+  provider: coreweave
+  coreweave:
+    cluster: { name: marin-rn02a, zone: RNO2A }
+    kueue:
+      flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
+    ingress:
+      ingress_class: traefik
+      acme_email: ops@openathena.ai
+      cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      active_cluster_issuer: letsencrypt-http01-prod
+    federation_dns:
+      hostname: iris-cw-rno2a.oa.dev
+      target: iris-cw-rno2a.208261-marin-rn02a.coreweave.app
+    rbac: { service_account: iris-controller }
+
 platform:
   label_prefix: cw-rno2a
   coreweave:
@@ -78,7 +95,10 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai"]
+  # *@openathena.ai covers human operators. github-iris is the GitHub Actions service
+  # account that federates the MarinSkyRL nightly single-H100 GRPO gate through the marin
+  # hub; admit it explicitly so the nightly can place its job here.
+  allowed_submitters: ["*@openathena.ai", "github-iris@hai-gcp-models.iam.gserviceaccount.com"]
 
 kubernetes_provider:
   namespace: iris

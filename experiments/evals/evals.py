@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from fray.cluster import ResourceConfig
+from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_result import (
     EvalchemyResult,
     EvalReport,
@@ -36,7 +37,6 @@ from marin.evaluation.eval_result import (
     compile_eval_report,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact, result_type_name
@@ -154,7 +154,7 @@ def evaluate_evalchemy(
         run=remote(
             serve_and_eval,
             resources=_ORCHESTRATOR_RESOURCES,
-            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
         ),
         build_config=build_config,
         deps=deps,
@@ -395,7 +395,7 @@ def evaluate_harbor(
         run=remote(
             evaluate,
             resources=dispatch_resources,
-            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
+            env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
             pip_dependency_groups=["harbor"],
         ),
         build_config=build_config,

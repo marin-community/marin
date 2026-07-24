@@ -11,6 +11,7 @@ KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controll
 IRIS_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/iris-controller"
 TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
 CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
+FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
 
 
@@ -23,15 +24,27 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
         github_cache_ttl=60.0,
         k8s_cache_ttl=30.0,
         http_timeout=5.0,
-        github_token=None,
+        github_app_credentials=None,
         cw_read_token=None,
+        loom_alerts=None,
     )
 
 
-def deployment(namespace: str, name: str, *, ready: int = 1, desired: int = 1) -> dict:
+def deployment(
+    namespace: str,
+    name: str,
+    *,
+    ready: int = 1,
+    desired: int = 1,
+    containers: tuple[str, ...] = (),
+) -> dict:
     return {
         "metadata": {"namespace": namespace, "name": name},
-        "spec": {"replicas": desired, "selector": {"matchLabels": {"app": name}}},
+        "spec": {
+            "replicas": desired,
+            "selector": {"matchLabels": {"app": name}},
+            "template": {"spec": {"containers": [{"name": container} for container in containers]}},
+        },
         "status": {"readyReplicas": ready},
     }
 
@@ -53,6 +66,30 @@ def pod(
         "status": {
             "conditions": conditions or [],
             "containerStatuses": [{"name": "main", "restartCount": restarts, "state": state}],
+        },
+    }
+
+
+def node(
+    name: str,
+    *,
+    rack: str | None = None,
+    rack_name: str = "",
+    instance_type: str = "",
+    gpu_capacity: int = 0,
+    ready: bool = True,
+) -> dict:
+    labels = {}
+    if rack is not None:
+        labels["node.coreweave.cloud/rack"] = rack
+        labels["ds.coreweave.com/physical-topology.rack-name"] = rack_name
+    if instance_type:
+        labels["node.kubernetes.io/instance-type"] = instance_type
+    return {
+        "metadata": {"name": name, "labels": labels},
+        "status": {
+            "capacity": {"nvidia.com/gpu": str(gpu_capacity)},
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
         },
     }
 
@@ -86,13 +123,14 @@ def make_k8s_source(handler, name: str = "cw-a", token: str | None = "secret") -
 
 
 def healthy_k8s_routes() -> dict:
-    """A cluster where every watched component is up and the webhook has one endpoint."""
+    """A cluster where every watched component is up, the webhook has one endpoint, and one GPU rack is full."""
     return {
         "/version": {"gitVersion": "v1.32.0"},
         KUEUE_DEPLOY: deployment("kueue-system", "kueue-controller-manager"),
         IRIS_DEPLOY: deployment("iris", "iris-controller"),
         TRAEFIK_DEPLOY: deployment("traefik", "traefik"),
         CERT_DEPLOY: deployment("cert-manager", "cert-manager"),
+        FINELOG_DEPLOYMENTS_PATH: [deployment("iris", "finelog-cw-a", containers=("finelog",))],
         "/api/v1/namespaces/kueue-system/pods": [pod("kueue-system", "kueue-controller-manager-abc")],
         "/api/v1/namespaces/iris/pods": [pod("iris", "iris-controller-abc")],
         "/api/v1/namespaces/traefik/pods": [pod("traefik", "traefik-abc")],
@@ -101,4 +139,7 @@ def healthy_k8s_routes() -> dict:
         "/api/v1/namespaces": [],
         "/apis/kueue.x-k8s.io/v1beta2/workloads": [],
         "/api/v1/events": [],
+        "/api/v1/nodes": [
+            node("g1", rack="169", rack_name="dh1-r169-us-east-08a", instance_type="gb200-4x", gpu_capacity=4)
+        ],
     }

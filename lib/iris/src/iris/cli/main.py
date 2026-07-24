@@ -256,6 +256,7 @@ def budget_list(ctx):
 # Register subcommand groups — imported at module level to ensure they are
 # always available when the ``iris`` group is used.
 from iris.cli.actor import actor as actor_cmd  # noqa: E402
+from iris.cli.attempt import attempt as attempt_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.endpoints import endpoints  # noqa: E402
@@ -266,6 +267,7 @@ from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.task import task  # noqa: E402
 
 iris.add_command(actor_cmd)
+iris.add_command(attempt_cmd)
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(endpoints)

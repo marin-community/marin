@@ -59,11 +59,22 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
+
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+
+Restarts default to the fast Rust profile, which skips LTO and reduces native link time. The controller is built for amd64 because controller nodes are pinned to that architecture. Worker and task images remain amd64+arm64 by default for clusters with arm64 GPU nodes. To build amd64-only workload images on a dev cluster:
+
+```bash
+iris --cluster=marin-dev cluster controller restart \
+  --image-platform linux/amd64
+```
+
+Pass `--cargo-profile release` for an LTO build. Keep the default workload image platforms when the deployed cluster needs arm64 workers.
 
 **Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
 
@@ -144,7 +155,8 @@ curl -sf http://localhost:10000/health && echo " controller healthy"
 iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow job + child logs
-iris job stop /user/job-name            # kill job + children
+iris job stop /user/job-name            # exact job name + its children
+iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 ```
 
@@ -201,6 +213,21 @@ preemption budget; `failed` is terminal with no retry.
 `kick`, `stop`, and `kill` also read ids from **stdin** (`--stdin`, or a literal
 `-` target) and take `--dry-run`. This is the query→act bridge: select the
 targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
+
+### Recovering a stuck terminating Kubernetes pod
+
+Use [the `recover-stuck-k8s-pod` skill](../../.agents/skills/recover-stuck-k8s-pod/SKILL.md)
+when a CoreWeave pod remains after its Kubernetes deletion deadline. The Grafana
+**K8s control plane** dashboard classifies overdue pods; its alert fires only for
+node-bound, nonterminal GPU pods without finalizers.
+
+The recovery order is safety-critical: record the node's existing cordon state,
+cordon it, quiesce the exact Iris attempt and every sibling workload, then use a
+CoreWeave force reboot if targeted graceful deletion still cannot stop the pod.
+Never force-delete the pod object while the old process may still be running.
+Kubernetes does not wait for kubelet confirmation, so replacement work can start
+while the old process still owns the GPU. Force-delete a stale object only after
+CoreWeave confirms the reboot completed (or process death is otherwise proven).
 
 ## Process Inspection & Profiling
 

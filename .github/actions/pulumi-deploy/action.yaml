@@ -8,9 +8,12 @@ inputs:
   work-dir:
     description: "Directory holding the Pulumi.yaml (e.g. infra/grafana)."
     required: true
-  gcp-credentials:
-    description: "Service-account key JSON for the deploy account."
+  service-account:
+    description: "GCP service account impersonated through Workload Identity Federation."
     required: true
+  workload-identity-provider:
+    description: "GCP workload identity provider resource name."
+    default: "projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc"
   gcp-project-id:
     description: "GCP project id."
     required: true
@@ -27,21 +30,18 @@ runs:
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v3
       with:
-        credentials_json: ${{ inputs.gcp-credentials }}
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.service-account }}
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v3
       with:
         project_id: ${{ inputs.gcp-project-id }}
 
-    - name: Configure Pulumi backend and registry auth
+    - name: Configure registry auth
       shell: bash
-      run: |
-        passphrase="$(gcloud secrets versions access latest \
-          --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
-        echo "::add-mask::$passphrase"
-        echo "PULUMI_CONFIG_PASSPHRASE=$passphrase" >> "$GITHUB_ENV"
-        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7

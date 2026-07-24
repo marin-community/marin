@@ -3,17 +3,20 @@
 
 import tempfile
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fray.types import ResourceConfig
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalResults, LmEvalRun, run_lm_eval
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.inference.vllm import (
-    BrokeredVllmSystemConfig,
-    start_iris_brokered_vllm,
+from marin.inference.config import (
+    BrokerConfig,
+    IrisConfig,
+    ServedModelConfig,
+    VllmEngineConfig,
 )
+from marin.inference.iris import remote_inference
 from rigging.filesystem import StoragePath
 
 _EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
@@ -24,19 +27,34 @@ _EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
 )
 
 
+@dataclass(frozen=True)
+class BrokeredEvalInference:
+    model: ServedModelConfig
+    engine: VllmEngineConfig
+    iris: IrisConfig
+    instances: int = 1
+    broker: BrokerConfig = field(default_factory=BrokerConfig)
+
+
 def _run_brokered_lm_eval_artifact(
-    inference: BrokeredVllmSystemConfig,
+    inference: BrokeredEvalInference,
     eval_run: LmEvalRun,
     output_path: str,
 ) -> None:
     with tempfile.TemporaryDirectory() as local_output:
-        with start_iris_brokered_vllm(inference) as model:
-            run_lm_eval(model, eval_run, local_output)
+        with remote_inference(
+            inference.model,
+            inference.engine,
+            inference.iris,
+            instances=inference.instances,
+            broker=inference.broker,
+        ) as session:
+            run_lm_eval(session.model, eval_run, local_output)
         StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
 def brokered_lm_eval_step(
-    inference: BrokeredVllmSystemConfig,
+    inference: BrokeredEvalInference,
     eval_run: LmEvalRun,
     *,
     name: str,
@@ -44,15 +62,12 @@ def brokered_lm_eval_step(
     parent_env_vars: Mapping[str, str],
 ) -> ArtifactStep[LmEvalResults]:
     """Build a lazy artifact containing lm-eval metrics and samples."""
-    if inference.worker_resources is None:
-        raise ValueError("inference.worker_resources must be set for a brokered lm-eval artifact")
-    worker_resources = inference.worker_resources
-    inference = replace(inference, worker_resources=None)
+    worker_resources = inference.iris.worker_resources
     eval_run = replace(
         eval_run,
         extra_model_args={
-            "num_concurrent": inference.workers.max_in_flight_per_worker,
-            "timeout": int(inference.proxy.request_timeout_seconds),
+            "num_concurrent": inference.broker.worker.max_in_flight,
+            "timeout": int(inference.broker.proxy.request_timeout_seconds),
             **eval_run.extra_model_args,
         },
     )
@@ -60,7 +75,10 @@ def brokered_lm_eval_step(
 
     def build_config(context: StepContext) -> dict[str, Any]:
         return {
-            "inference": replace(inference, worker_resources=context.runtime_arg("worker_resources")),
+            "inference": replace(
+                inference,
+                iris=replace(inference.iris, worker_resources=context.runtime_arg("worker_resources")),
+            ),
             "lm_eval_uv_packages": LM_EVAL_UV_PACKAGES,
             "eval_run": eval_run,
             "results_path": results_path,

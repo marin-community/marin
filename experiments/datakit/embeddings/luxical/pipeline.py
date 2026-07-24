@@ -53,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 LUXICAL_REPO = "DatologyAI/luxical-one"
 LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
+# Immutable HF commit for the weights. Passed to ``hf_hub_download`` so every region
+# fetches identical bytes, and folded into the staging path + embed hash so a retag
+# re-stages and re-keys rather than silently changing embeddings under a fixed hash.
+LUXICAL_REVISION = "474cfeb959dd473b3d1cd61da630f566037e69e2"
 LUXICAL_DIM = 192
 
 # Records per ``embedder(texts)`` call. The native
@@ -105,6 +109,7 @@ class EmbeddingAttrData(BaseModel):
     output_dir: str
     source_main_dir: str
     model_name: str
+    model_revision: str = ""
     embedding_dim: int
     quantization_scale: float
     quantization_range: float
@@ -149,20 +154,22 @@ def _load_embedder_from_shared() -> Any:
     return Embedder.load(local)
 
 
-def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
+def _stage_luxical_to_gcs(repo_id: str, weights_filename: str, revision: str) -> str:
     """Download the .npz from HF on the driver and upload it to an in-region TTL'd
     GCS path. Returns the GCS URL workers will read from. Stable per
-    ``(region, repo_id, weights_filename)`` so concurrent / consecutive pipeline
-    runs share the staged file."""
+    ``(region, repo_id, weights_filename, revision)`` so concurrent / consecutive
+    pipeline runs share the staged file, and a revision bump stages to a distinct path."""
     sanitized_repo = repo_id.replace("/", "__")
-    staged_url = f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{weights_filename}"
+    staged_url = (
+        f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{revision}/{weights_filename}"
+    )
     staged = StoragePath(staged_url)
     if staged.exists():
         logger.info("Luxical weights already staged at %s (cache hit)", staged_url)
         return staged_url
 
-    logger.info("Fetching luxical weights %s/%s on driver", repo_id, weights_filename)
-    npz_local = hf_hub_download(repo_id=repo_id, filename=weights_filename)
+    logger.info("Fetching luxical weights %s/%s@%s on driver", repo_id, weights_filename, revision)
+    npz_local = hf_hub_download(repo_id=repo_id, filename=weights_filename, revision=revision)
     size_mb = os.path.getsize(npz_local) / 1e6
     logger.info("Uploading %.1f MB of luxical weights to %s", size_mb, staged_url)
     staged.parent.mkdirs()
@@ -219,6 +226,7 @@ def embed_source(
     *,
     repo_id: str = LUXICAL_REPO,
     weights_filename: str = LUXICAL_WEIGHTS_FILE,
+    revision: str = LUXICAL_REVISION,
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_shards: int | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -255,7 +263,7 @@ def embed_source(
     # will pull the file via fs.get; we only broadcast the URL through
     # Zephyr shared data, so no 880 MB ever touches coordinator RAM or
     # cloudpickle.
-    staged_url = _stage_luxical_to_gcs(repo_id, weights_filename)
+    staged_url = _stage_luxical_to_gcs(repo_id, weights_filename, revision)
 
     # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
     # extra read at 15 B-doc scale, and we don't need it.
@@ -287,6 +295,7 @@ def embed_source(
         output_dir=output_path,
         source_main_dir=normalized.main_output_dir,
         model_name=f"{repo_id}/{weights_filename}",
+        model_revision=revision,
         embedding_dim=LUXICAL_DIM,
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,

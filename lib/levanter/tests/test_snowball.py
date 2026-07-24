@@ -32,6 +32,7 @@ from levanter.models.snowball import (
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
+    validate_single_name_config,
 )
 
 
@@ -106,6 +107,10 @@ def test_snowball_config_hf_roundtrip():
     ):
         assert getattr(back, field) == getattr(cfg, field), field
     assert back.inferred_head_dim == cfg.inferred_head_dim
+
+    # The serialized config carries one canonical name per field and no dropped alias, while
+    # from_hf_config still round-trips it (above) through its tolerant fallback tuples.
+    validate_single_name_config(hf.to_dict(), cfg)
 
 
 def test_snowball_hf_converter_matches_config_class():

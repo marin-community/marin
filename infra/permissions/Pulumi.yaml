@@ -1,0 +1,6 @@
+name: marin-permissions
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Shared IAM grants for Marin deployment automation.

@@ -61,6 +61,13 @@ def cli() -> None:
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
+@click.option(
+    "--version",
+    "version",
+    default=None,
+    help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
+)
+@click.option("--description", default=None, help="Free-text note on why this launch was run.")
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -75,6 +82,8 @@ def launch(
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    version: str | None,
+    description: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -93,6 +102,8 @@ def launch(
         limit=limit,
         records_prefix=records_prefix,
         cluster=cluster,
+        version=version,
+        description=description,
     )
     if dry_run:
         _print_plan(spec)

@@ -16,6 +16,7 @@ from fray.iris_backend import (
     IrisActorHandle,
     convert_constraints,
     resolve_coscheduling,
+    wrap_multiprocess,
 )
 from fray.types import (
     ANY_REGION,
@@ -27,6 +28,8 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
+from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.cluster.types import ResourceSpec, gpu_device
 
 
 class TestConvertConstraints:
@@ -347,3 +350,55 @@ def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
 def test_resolve_coscheduling_single_replica_is_none():
     assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
     assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+
+
+def _gpu_resources(count: int) -> ResourceSpec:
+    return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
+
+
+def test_wrap_multiprocess_one_process_per_gpu() -> None:
+    # fray composes the multigpu supervisor into the command; iris runs it verbatim.
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
+    )
+    assert wrapped.command == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "8",
+        "--devices-per-proc",
+        "1",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "10",
+    ]
+
+
+def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
+    )
+    assert wrapped.command[:8] == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "4",
+        "--devices-per-proc",
+        "2",
+        "--",
+    ]
+
+
+def test_wrap_multiprocess_requires_gpu() -> None:
+    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
+    with pytest.raises(ValueError, match="requires a GPU device"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+
+
+def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
+    with pytest.raises(ValueError, match="must divide the GPU count"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)

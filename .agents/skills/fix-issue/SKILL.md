@@ -71,7 +71,7 @@ There are 2 cases:
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
 * **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per `.agents/skills/write-design-doc/` directly in the issue comment
+  Write it per `.agents/skills/write-design-doc/SKILL.md` directly in the issue comment
   (agents cannot commit files before the PR). The 3-4 sentence prose cap
   applies to `# Research`; the design doc follows its own length guidelines.
   Keep everything in one comment.
@@ -90,7 +90,11 @@ create branches on github and submit PRs from them.
 * Never use mocks.
 * Keep tests simple and minimal. Do not test obvious behavior like "object has an attr".
 * Run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues.
-* Run `uv run pytest -m 'not slow'` and ensure _all_ tests pass before uploading.
+* Run the default local test suite for the touched package and ensure it passes
+  before uploading. Use `uv run pytest` for root or mixed changes; do not
+  override the configured marker expression. Slow, integration, live-cluster,
+  Docker, and manual tests run in dedicated CI jobs unless the task explicitly
+  requires one.
 
 ## Uploading
 

@@ -73,9 +73,13 @@
       "error": null,
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 9,
       "task_id": "/test-user/endpoint-job/0",
+      "terminal_reason": "",
       "worker_id": "w-endpoint"
     }
   ],

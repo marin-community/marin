@@ -434,6 +434,13 @@ task_attempts_table = Table(
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
     Column("backend_id", String, nullable=False, server_default=""),
+    # Backend object identity, captured when the pod is observed so a past attempt
+    # is describable after its pod is gone. terminal_reason is the bounded failure
+    # cause (init-container or task-container). See migration 0047.
+    Column("pod_name", String, nullable=False, server_default=""),
+    Column("pod_uid", String, nullable=False, server_default=""),
+    Column("node_name", String, nullable=False, server_default=""),
+    Column("terminal_reason", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(

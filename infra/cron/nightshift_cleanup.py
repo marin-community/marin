@@ -13,6 +13,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
+
 logger = logging.getLogger(__name__)
 
 SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephyr", "lib/levanter/src/levanter"]
@@ -188,22 +190,27 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     )
 
     logger.info("Starting scout for %s in %s", subproject, worktree_path)
-    subprocess.run(
+    agent_result = run_claude(
+        prompt,
         [
-            "claude",
             "--model=opus",
-            "--print",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "400",
-            "--",
-            prompt,
         ],
-        check=False,
         cwd=worktree_path,
     )
+    if agent_result.status == ClaudeRunStatus.RATE_LIMITED:
+        Path(result_file).unlink(missing_ok=True)
+        report_rate_limit()
+        return (
+            subproject,
+            {"subproject": subproject, "status": "rate_limited", "summary": "Claude rate limited"},
+            str(worktree_path),
+        )
+    logger.info("%s", agent_result.output)
 
     result = {"subproject": subproject, "status": "error", "summary": "Scout did not produce a result file"}
     if Path(result_file).exists():
@@ -230,21 +237,21 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
         date=date,
     )
 
-    subprocess.run(
+    result = run_claude(
+        prompt,
         [
-            "claude",
             "--model=opus",
-            "--print",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "200",
-            "--",
-            prompt,
         ],
-        check=True,
     )
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
+        return
+    logger.info("%s", result.output)
 
 
 def cleanup_worktrees(repo_root: Path) -> None:
@@ -293,6 +300,11 @@ def main() -> None:
             if result.get("status") == "changed":
                 worktree_info.append((subproject, worktree_path))
             logger.info("Scout %s: %s", subproject, result.get("status"))
+
+    failed = [result for result in scout_results if result.get("status") == "error"]
+    if failed:
+        cleanup_worktrees(repo_root)
+        raise RuntimeError(f"{len(failed)} cleanup scouts failed")
 
     changed = [r for r in scout_results if r.get("status") == "changed"]
     if not changed:

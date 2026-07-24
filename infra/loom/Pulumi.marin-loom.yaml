@@ -1,0 +1,42 @@
+config:
+  gcp:project: hai-gcp-models
+  marin-loom:region: us-central1
+  marin-loom:zone: us-central1-a
+  marin-loom:domain: loom.oa.dev
+  marin-loom:operatorCidr: 51.81.155.107/32
+  marin-loom:dnsZoneId: 169959d6aafcbfd77764b8efafa3a509
+  marin-loom:network: default
+  marin-loom:instanceName: loom
+  marin-loom:vmServiceAccountName: loom-vm
+  marin-loom:machineType: e2-highmem-4
+  marin-loom:bootDiskGb: "100"
+  marin-loom:dataDiskGb: "500"
+  marin-loom:dotenvSecretVersion: "3"
+  marin-loom:pruneDeployment: "false"
+  marin-loom:snapshotRetentionDays: "14"
+  marin-loom:profiles:
+    grafana_alert:
+      agent: claude
+      description: Triage critical Grafana alerts for Marin
+      model: sonnet
+      effort: high
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 2
+      turnBudget: 8
+      prelude: weaver
+      restricted: false
+      allowedTools: []
+  marin-loom:workloads:
+    - name: grafana-alerts
+      profile: grafana_alert
+      serviceTag: grafana
+      serviceAccountId: marin-grafana
+      createServiceAccount: false
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

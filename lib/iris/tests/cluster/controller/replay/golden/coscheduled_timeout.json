@@ -73,9 +73,13 @@
       "error": "execution-timeout",
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 5,
       "task_id": "/test-user/cosched-job/0",
+      "terminal_reason": "",
       "worker_id": "w-cosched-a"
     },
     {
@@ -86,9 +90,13 @@
       "error": "Coscheduled sibling /test-user/cosched-job/0 failed",
       "exit_code": null,
       "finished_at_ms": null,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 11,
       "task_id": "/test-user/cosched-job/1",
+      "terminal_reason": "",
       "worker_id": "w-cosched-b"
     }
   ],

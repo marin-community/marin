@@ -6,8 +6,8 @@
 import pytest
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.cluster.types import JobName
+from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.runtime import telltale
 
 

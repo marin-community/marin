@@ -61,14 +61,30 @@ class EvalTaskRef(BaseModel):
     num_fewshot: int
 
 
+class HarborRef(BaseModel):
+    """The Harbor dataset a run evaluated: registry name, version, agent, and sandbox environment."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dataset: str
+    version: str
+    agent: str
+    env: str
+
+
 class EvalRef(BaseModel):
-    """The eval suite that was run: its name, mechanism, and constituent tasks."""
+    """The eval that was run: its name, mechanism, and mechanism-specific detail.
+
+    ``tasks`` carries the lm-eval task list for the ``evalchemy`` mechanism; ``harbor`` carries the
+    dataset descriptor for the ``harbor`` mechanism. Exactly one is populated per record.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     mechanism: str
-    tasks: tuple[EvalTaskRef, ...]
+    tasks: tuple[EvalTaskRef, ...] = ()
+    harbor: HarborRef | None = None
 
 
 class HardwareRef(BaseModel):
@@ -82,12 +98,16 @@ class HardwareRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval container digest, and launch host."""
+    """Where the run came from: launch-time git SHA, eval container digest, and launch host.
+
+    ``eval_image`` is the eval mechanism's container: the evalchemy client image for an evalchemy run,
+    the Harbor sandbox image for a Harbor run.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    evalchemy_image: str
+    eval_image: str
     launch_host: str
 
 
@@ -110,6 +130,14 @@ class EvalRunRecord(BaseModel):
     ``run_id`` as the group."""
     created_at: str
     user: str
+    version: str | None = None
+    """A human version label for the launch (``--version``), e.g. ``2026.07.20`` or ``rl-fix-sweep``.
+    Every record in a group shares it. The dashboard groups a model's runs by version so the headline
+    matrix shows the latest labelled cohort rather than mixing evals across model states; ``None`` for
+    an unlabelled launch."""
+    description: str | None = None
+    """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
+    after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef

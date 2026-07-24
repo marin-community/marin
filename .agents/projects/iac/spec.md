@@ -1,7 +1,7 @@
 # IaC for Marin — Spec
 
 Contract layer for [design.md](design.md). Pins: the `provisioning:` config schema,
-the `infra/iac/` layout, the Pulumi component surface, the Iris cede/verify change,
+the `infra/pulumi/` layout, the Pulumi component surface, the Iris cede/verify change,
 new error types, migration/failure semantics, and an explicit out-of-scope list.
 CoreWeave is fully specified; the GCP components are named (committed, sequenced after)
 and their ownership boundary sketched, but not signed here.
@@ -24,7 +24,7 @@ key to that one file via the existing iris config search path.
 ## 1. `provisioning:` config schema
 
 A new **provider-discriminated** section in `lib/iris/config/<cluster>.yaml`, extending the schema the [cluster-admin-unification design](../2026-06-23_cluster_admin_unification.md) introduces (`provisioning.gcp`); this design adds the `coreweave` variant. Typed as pydantic.
-**Canonical home: `infra/iac/src/iac/config.py`** — this design operationalizes the
+**Canonical home: `infra/pulumi/src/iac/config.py`** — this design operationalizes the
 section; `marin-cluster admin` imports the models from here. If `lib/cluster` lands its
 `ClusterConfig`, it embeds these by import, not re-definition.
 
@@ -40,7 +40,7 @@ never re-declared:
   binds its LocalQueue to). IaC creates the queue Iris expects; the name is not duplicated.
 
 ```python
-# infra/iac/src/iac/config.py
+# infra/pulumi/src/iac/config.py
 from enum import StrEnum
 from pydantic import BaseModel, Field
 
@@ -131,10 +131,10 @@ provisioning:
 
 ---
 
-## 2. `infra/iac/` layout
+## 2. `infra/pulumi/` layout
 
 ```text
-infra/iac/
+infra/pulumi/
 ├── Pulumi.yaml                     # project: name=marin-iac, runtime=python
 ├── Pulumi.cw-us-east-02a.yaml      # stack config: marin-iac:cluster = cw-us-east-02a, secretsprovider = gcpkms://…
 ├── Pulumi.cw-rno2a.yaml            # stack config: marin-iac:cluster = cw-rno2a, secretsprovider = gcpkms://…
@@ -156,7 +156,7 @@ infra/iac/
 **Backend bootstrap (manual, out of IaC).** The GCS state bucket (`gs://marin-iac-state`) and
 the KMS key that encrypts secrets are provisioned once, by hand, *before* any `pulumi up` — they
 cannot be IaC-managed without a chicken-and-egg. Documented as a two-command bootstrap in the
-`infra/iac/` README. `pulumi login gs://marin-iac-state`; `secretsprovider: gcpkms://…` in
+`infra/pulumi/` README. `pulumi login gs://marin-iac-state`; `secretsprovider: gcpkms://…` in
 `Pulumi.<stack>.yaml`. Both are operator/CI environment, overridable by third-party deployers.
 
 **Who runs apply.** `pulumi up` is **operator-run**; CI runs `pulumi preview` and posts the plan
@@ -273,7 +273,7 @@ class ObjectStorage(pulumi.ComponentResource):
 ```
 
 ```python
-# infra/iac/src/iac/nodepools.py
+# infra/pulumi/src/iac/nodepools.py
 def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
     """Project the Iris config's scale_groups onto CoreWeave NodePool specs, byte-compatible with
     the manifests ensure_nodepools() builds today.
@@ -316,7 +316,7 @@ def verify_prerequisites(self, config: IrisClusterConfig) -> None:
     (§6) — there are no per-scale-group NodePools there, so the check is a different set, not a
     reused CoreWeave shape. Presence only: it does not assert health (a running Kueue manager) —
     that is `pulumi up`'s success gate, not cluster-start's. Raises PrerequisitesNotProvisionedError
-    enumerating every missing object with remediation `cd infra/iac && pulumi stack select
+    enumerating every missing object with remediation `cd infra/pulumi && pulumi stack select
     <cluster> && pulumi up`. Creates nothing.
     """
 ```
@@ -334,7 +334,7 @@ conflict, and a reconcile-delete could deprovision a reserved 256-GPU fleet. Pro
 
 1. Bootstrap state bucket + KMS (§2).
 2. `pulumi import` the existing Namespace, RBAC objects, and each NodePool into the stack (an
-   `infra/iac/import/<cluster>.sh` mapping k8s object → Pulumi resource address), so state
+   `infra/pulumi/import/<cluster>.sh` mapping k8s object → Pulumi resource address), so state
    reflects reality with **no diff**.
 3. `pulumi preview` must then show an **empty plan** (or only additive add-ons: Kueue
    ResourceFlavor/ClusterQueue, Traefik, buckets). A non-empty destructive plan on NodePools is
@@ -388,7 +388,7 @@ Reviewers: do **not** push back on these being absent — they are deliberate.
 - **Iris-owned runtime objects** — ConfigMap, `iris-task-env` Secret, LocalQueue, priority
   classes, controller Deployment + Service stay in `start_controller()`.
 - **`marin-cluster admin` CLI wiring.** This spec pins the *invocation surface*: admin drives the
-  same `infra/iac` program **in-process via the Pulumi Automation API** (not by shelling to the
+  same `infra/pulumi` program **in-process via the Pulumi Automation API** (not by shelling to the
   CLI); the acceptance test and operator flow shell `pulumi` directly against the same program.
   The CLI wiring itself lands with admin-unification.
 - **CKS cluster-*create* maturity** — if `coreweave_cks_cluster` create proves weak (design Open
@@ -400,15 +400,15 @@ Reviewers: do **not** push back on these being absent — they are deliberate.
 
 | Piece                                                | Path                                                                              |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Provisioning schema + loader                         | `infra/iac/src/iac/config.py`                                               |
-| NodePool derivation (single owner of NodePool shape) | `infra/iac/src/iac/nodepools.py`                                            |
-| Pulumi entry / dispatch                              | `infra/iac/__main__.py`                                                           |
-| Project / stacks / backend bootstrap README          | `infra/iac/Pulumi.yaml`, `infra/iac/Pulumi.<cluster>.yaml`, `infra/iac/README.md` |
-| Import/adoption scripts                              | `infra/iac/import/<cluster>.sh`                                                   |
-| CoreWeave components                                 | `infra/iac/src/iac/coreweave/{cluster,rbac,kueue,traefik,storage}.py`       |
+| Provisioning schema + loader                         | `infra/pulumi/src/iac/config.py`                                               |
+| NodePool derivation (single owner of NodePool shape) | `infra/pulumi/src/iac/nodepools.py`                                            |
+| Pulumi entry / dispatch                              | `infra/pulumi/__main__.py`                                                           |
+| Project / stacks / backend bootstrap README          | `infra/pulumi/Pulumi.yaml`, `infra/pulumi/Pulumi.<cluster>.yaml`, `infra/pulumi/README.md` |
+| Import/adoption scripts                              | `infra/pulumi/import/<cluster>.sh`                                                   |
+| CoreWeave components                                 | `infra/pulumi/src/iac/coreweave/{cluster,rbac,kueue,traefik,storage}.py`       |
 | Iris cede/verify                                     | `lib/iris/src/iris/cluster/platforms/k8s/controller.py`                           |
 | New config section                                   | `lib/iris/config/<cluster>.yaml` → `provisioning:`                                |
-| GCP components (later)                               | `infra/iac/src/iac/gcp/`                                                    |
+| GCP components (later)                               | `infra/pulumi/src/iac/gcp/`                                                    |
 
 ---
 
@@ -418,7 +418,7 @@ Two phases; phase 1 is what this design builds.
 
 ### Phase 1 — CI preview + manual apply
 
-- **CI (preview only).** A GitHub Actions workflow triggers on PRs touching `infra/iac/**` and
+- **CI (preview only).** A GitHub Actions workflow triggers on PRs touching `infra/pulumi/**` and
   the cluster configs it reads. It authenticates to GCP via **Workload Identity Federation**
   (keyless OIDC — no service-account JSON in GitHub secrets), runs `pulumi preview` per affected
   stack, and posts the plan as a PR comment (`pulumi/actions`). **CI never runs `pulumi up`.**

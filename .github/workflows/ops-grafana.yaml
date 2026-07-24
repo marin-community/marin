@@ -38,9 +38,12 @@ jobs:
 
   deploy:
     needs: test
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     concurrency:
       group: marin-grafana-deploy
       cancel-in-progress: false
@@ -53,5 +56,5 @@ jobs:
         with:
           stack: marin-grafana
           work-dir: infra/grafana
-          gcp-credentials: ${{ secrets.MARIN_CD_CLOUD_RUN_SA_KEY }}
-          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
+          service-account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+          gcp-project-id: hai-gcp-models

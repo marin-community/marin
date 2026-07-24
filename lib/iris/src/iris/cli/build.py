@@ -13,6 +13,8 @@ from rigging.provenance import Provenance
 from iris.cluster.provenance import provenance_to_env
 
 GHCR_DEFAULT_ORG = "marin-community"
+DEFAULT_CARGO_PROFILE = "fast"
+CARGO_PROFILES = (DEFAULT_CARGO_PROFILE, "release")
 
 # Compression for pushed images and their registry cache. The two must match: a
 # mismatch forces BuildKit to recompress every layer when exporting the cache
@@ -169,6 +171,7 @@ def build_image(
     git_sha: str,
     ghcr_org: str = GHCR_DEFAULT_ORG,
     verbose: bool = False,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> None:
     """Build a Docker image for Iris using the unified multi-stage Dockerfile.
 
@@ -222,6 +225,7 @@ def build_image(
 
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
+    cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
     # tree_hash is pinned to the rollout's git_sha (which the tags also use) so a
     # mid-build edit can't make a worker report a hash that disagrees with its tag.
     provenance = replace(Provenance.from_git(), tree_hash=git_sha)

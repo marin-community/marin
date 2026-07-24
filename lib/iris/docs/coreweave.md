@@ -226,10 +226,11 @@ CoreWeave publishes a wildcard record, `*.<tenant>.coreweave.app`, that resolves
 that LoadBalancer. `install_cw_network.py install --apply` prints the exact CNAME
 record to create, substituting the ingress host's first label into the wildcard
 (`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
-DNS is at Namecheap, Advanced DNS panel. Routing, Host matching, and TLS all key on
-the `oa.dev` name; `coreweave.app` is only the CNAME target.
+DNS is at Cloudflare, as a DNS-only (not proxied) record. Routing, Host matching, and TLS all
+key on the `oa.dev` name; `coreweave.app` is only the CNAME target.
 
-TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+TLS terminates in-cluster (no IAP/edge layer; the record is DNS-only, so Cloudflare never
+proxies or intercepts TLS).
 `install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
@@ -512,11 +513,11 @@ max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
 deploys in whole racks of 18, so a rack pool's node count must be a multiple of
 18.
 
-**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+**2. Provision the static prerequisites (IaC).** The `infra/pulumi` Pulumi program
 declares the namespace, controller RBAC, the reserved NodePools, and the whole
 cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
 ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
-`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`provisioning:` section of the config. See `infra/pulumi/README.md`. (Pre-IaC path:
 `install_kueue.py --with-queues` for Kueue and let `cluster start` create the
 RBAC + NodePools.)
 
@@ -566,8 +567,8 @@ kubectl get svc traefik -n traefik \
   -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
 ```
 
-**(manual)** Create the record in the `oa.dev` registrar (**Namecheap**, Advanced
-DNS panel — not Cloudflare):
+**(manual)** Create the record in the `oa.dev` registrar (**Cloudflare**, DNS-only — do not
+enable the proxy):
 
 ```
 iris-cw-<cluster>.oa.dev   CNAME   iris-cw-<cluster>.<tenant>.coreweave.app
@@ -662,7 +663,7 @@ iris --controller-url=http://localhost:10000 ...
 |--------------|-----------|---------|-------------|
 | `cw-us-east-02a` | `iris` | `iris-controller-svc` | `cw-us-east-02a.yaml` |
 | `cw-rno2a` | `iris` | `iris-controller-svc` | `cw-rno2a.yaml` |
-| `ci-coreweave` | `iris-ci` | `iris-ci-controller-svc` | `ci-coreweave.yaml` (CI only) |
+| `cw-us-west-04a` | `iris-ci` | `iris-ci-controller-svc` | `cw-us-west-04a.yaml` (CI only) |
 
 ### GPU Configs
 
@@ -786,18 +787,16 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
-- **A controller restart can CrashLoop on a stale node-local state DB.** The
-  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
-  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
-  different CPU node. If that node holds a corrupt leftover state DB from an earlier
-  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
-  trusts it (skips the checkpoint restore) and crashes with `database disk image is
-  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
-  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
-  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
-  checkpoint makes a stale node restore the clean checkpoint, and landing back on
-  the current controller node reuses its good DB. A persistently bad node needs its
-  `local_state_dir/db` wiped so startup falls back to the checkpoint.
+- **Controller state is node-local.** The controller keeps SQLite state on
+  node-local NVMe (`storage.local_state_dir`, a hostPath), and
+  `cluster controller restart` may reschedule the replacement onto another CPU
+  node. Startup runs `PRAGMA quick_check` on both local databases and only reuses
+  them when their `last_checkpoint_epoch_ms` marker matches the selected remote
+  checkpoint. Otherwise it stages and validates a clean checkpoint directory
+  before replacing the local directory, which also discards stale WAL/SHM files.
+  A corrupt local directory is retained as `db.corrupt-<epoch_ms>` for diagnosis.
+  The readiness endpoint also reads the task-attempt and federation tables, so a
+  static HTTP response cannot mask a broken database.
 
 Cold-start timings:
 
@@ -1033,7 +1032,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
-| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded endpoint, addressing, timeout, and retry config |
 | `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts

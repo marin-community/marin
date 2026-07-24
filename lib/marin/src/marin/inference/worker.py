@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import threading
 from collections import Counter
@@ -12,6 +13,7 @@ from typing import Any
 import httpx
 from rigging.timing import ExponentialBackoff
 
+from marin.inference.http_proxy import forwardable_response_headers
 from marin.inference.types import (
     InferenceRequest,
     InferenceRequestProvider,
@@ -20,14 +22,9 @@ from marin.inference.types import (
     LeasedInferenceResponse,
     RunningModel,
     format_request_ids,
-    pack_json_payload,
-    unpack_json_payload,
 )
 
 logger = logging.getLogger(__name__)
-
-# Keep brokered error payloads bounded when upstream returns arbitrary text.
-ERROR_BODY_LIMIT_BYTES = 1000
 
 
 class InferenceWorker:
@@ -127,14 +124,19 @@ class InferenceWorker:
 
     def _send(self, client: httpx.Client, request: InferenceRequest, url: str) -> httpx.Response:
         method = request.method.upper()
-        if method == "GET":
-            return client.get(url)
-        if method == "POST":
-            return client.post(url, json=unpack_json_payload(request.payload))
-        return httpx.Response(
-            status_code=405,
-            json={"error": f"unsupported brokered request method {request.method!r}"},
-            request=httpx.Request(method, url),
+        if method not in {"GET", "POST", "OPTIONS"}:
+            return httpx.Response(
+                status_code=405,
+                json={"error": f"unsupported brokered request method {request.method!r}"},
+                request=httpx.Request(method, url),
+            )
+        if request.query_string:
+            url = f"{url}?{request.query_string}"
+        return client.request(
+            method,
+            url,
+            content=request.payload,
+            headers=dict(request.headers),
         )
 
 
@@ -161,23 +163,11 @@ def run_inference_worker(
 
 
 def _response_from_upstream(request: InferenceRequest, response: httpx.Response) -> InferenceResponse:
-    try:
-        payload = response.json()
-    except ValueError:
-        return _inference_error_response(
-            request,
-            response.status_code,
-            "upstream endpoint returned a non-JSON response",
-            body=response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
-        )
-    if not isinstance(payload, dict):
-        return _inference_error_response(
-            request, response.status_code, "upstream endpoint returned a non-object JSON response"
-        )
     return InferenceResponse(
         request_id=request.request_id,
         status_code=response.status_code,
-        payload=pack_json_payload(payload),
+        payload=response.content,
+        headers=tuple(forwardable_response_headers(response.headers).items()),
     )
 
 
@@ -212,7 +202,6 @@ def _inference_error_response(
     status_code: int,
     message: str,
     *,
-    body: str | None = None,
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
@@ -227,7 +216,10 @@ def _inference_error_response(
         exc_info=exc_info,
     )
     error: dict[str, Any] = {"message": message}
-    if body is not None:
-        error["body"] = body
     payload: dict[str, Any] = {"error": error}
-    return InferenceResponse(request_id=request.request_id, status_code=status_code, payload=pack_json_payload(payload))
+    return InferenceResponse(
+        request_id=request.request_id,
+        status_code=status_code,
+        payload=json.dumps(payload).encode(),
+        headers=(("content-type", "application/json"),),
+    )

@@ -198,7 +198,7 @@ def test_delete_nonexistent_is_idempotent(svc: InMemoryK8sService):
 
 
 def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
-    """Re-applying an existing pod is a no-op: the live pod is never overwritten.
+    """Re-applying an existing live pod is a no-op: it is never overwritten.
 
     A task attempt's pod name is stable, so a redrive re-applies the same name
     every tick. Overwriting (delete-then-create) would destroy a running pod and
@@ -213,6 +213,23 @@ def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
     assert result is not None
     # Second apply was a no-op — the original pod (no version label) survives.
     assert result["metadata"].get("labels", {}).get("version") is None
+
+
+def test_apply_pod_keeps_own_terminal_pod(svc: InMemoryK8sService):
+    """Re-applying the same pod name over its own finished pod is a no-op.
+
+    A fast-finishing attempt is redriven every tick until poll observes it, so its
+    own terminal pod is re-applied under the same name (the uid is baked into the
+    name upstream). That pod must be kept so poll can read its verdict — deleting
+    it would destroy a real result and misreport it as infra loss.
+    """
+    svc.apply_json(_pod_manifest("p1"))
+    svc.transition_pod("p1", "Succeeded")
+
+    svc.apply_json(_pod_manifest("p1"))
+    result = svc.get_json(K8sResource.PODS, "p1")
+    assert result is not None
+    assert result["status"]["phase"] == "Succeeded"
 
 
 # ========================================================================

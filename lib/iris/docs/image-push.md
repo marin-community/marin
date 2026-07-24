@@ -79,7 +79,7 @@ In CI (GitHub Actions), use the automatic `GITHUB_TOKEN` secret instead — see
 The mirror repos and their cleanup policies are Infrastructure-as-Code: the
 `registries:` block of the `provisioning:` section in
 [`lib/iris/config/marin.yaml`](../config/marin.yaml) declares each repo (name,
-Docker upstream, multi-regions), and `infra/iac/src/iac/gcp/registries.py`
+Docker upstream, multi-regions), and `infra/pulumi/src/iac/gcp/registries.py`
 (`GcpArtifactRegistries`) turns it into `google_artifact_registry_repository`
 resources with `mode=REMOTE_REPOSITORY` and the cleanup policies. `ghcr-mirror`
 uses the default 30d-delete / keep-16 (sized for the versioned iris image
@@ -89,7 +89,7 @@ Both repos are declared there, so a stack bring-up provisions them together:
 
 ```bash
 # Recon against the live repos (imports, never plans a destructive create):
-cd infra/iac && pulumi stack select marin
+cd infra/pulumi && pulumi stack select marin
 pulumi config set marin-iac:import true && pulumi preview   # adopt existing repos
 # Steady state:
 pulumi config set marin-iac:import false && pulumi up

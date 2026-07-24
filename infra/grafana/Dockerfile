@@ -11,7 +11,18 @@
 # GF_INSTALL_PLUGINS, so a cold start never depends on grafana.com being reachable.
 # The version is pinned: the provisioned alert rules evaluate through this plugin,
 # so an untested plugin build must never arrive as a side effect of an image build.
-FROM grafana/grafana:13.1.0-ubuntu
+FROM node:24.16.0-bookworm-slim AS infra-panel
+
+WORKDIR /plugin
+COPY marin-infra-panel/package.json marin-infra-panel/package-lock.json ./
+RUN npm ci
+COPY marin-infra-panel/.config .config
+COPY marin-infra-panel/src src
+COPY marin-infra-panel/CHANGELOG.md marin-infra-panel/LICENSE marin-infra-panel/README.md ./
+COPY marin-infra-panel/tsconfig.json ./
+RUN npm run build
+
+FROM grafana/grafana:13.1.1-ubuntu
 
 USER root
 
@@ -20,6 +31,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource 3.10.1
+COPY --from=infra-panel /plugin/dist /var/lib/grafana/plugins/marin-infra-panel
 
 # The bridge lives in its own venv; nothing else in the image is Python.
 #
@@ -35,7 +47,14 @@ RUN cd /opt/bridge \
     && UV_PROJECT_ENVIRONMENT=/opt/bridge/venv uv sync --frozen --no-dev --compile-bytecode
 
 COPY provisioning /etc/grafana/provisioning
-COPY dashboards /etc/grafana/dashboards
+# dashboards/*.json holds panelRef markers for panels shared across dashboards
+# (see src/dashboard_stitch.py); this resolves them into the full panel bodies
+# Grafana actually loads, the same way the infra-panel build above resolves
+# TSX into JS. The source stays git-reviewable; only the resolved output ships.
+COPY dashboards /tmp/dashboards-src
+RUN /opt/bridge/venv/bin/python -m dashboard_stitch \
+    --src-dir /tmp/dashboards-src --panels-dir /tmp/dashboards-src/panels --out-dir /etc/grafana/dashboards \
+    && rm -rf /tmp/dashboards-src
 COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh && chown -R grafana:root /opt/bridge /etc/grafana/dashboards
 
@@ -67,6 +86,8 @@ ENV GF_SMTP_HOST=smtp.gmail.com:587 \
     GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
 
 ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
+    GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json \
+    GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=marin-infra-panel \
     GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
     GF_AUTH_DISABLE_LOGIN_FORM=true \

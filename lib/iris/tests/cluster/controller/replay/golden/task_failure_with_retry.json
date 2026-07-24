@@ -73,9 +73,13 @@
       "error": "boom",
       "exit_code": null,
       "finished_at_ms": 1704067200001,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 5,
       "task_id": "/test-user/retry-job/0",
+      "terminal_reason": "",
       "worker_id": "w-retry"
     },
     {
@@ -86,9 +90,13 @@
       "error": null,
       "exit_code": 0,
       "finished_at_ms": 1704067200003,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 4,
       "task_id": "/test-user/retry-job/0",
+      "terminal_reason": "",
       "worker_id": "w-retry"
     }
   ],
