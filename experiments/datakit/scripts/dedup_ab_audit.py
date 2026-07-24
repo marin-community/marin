@@ -47,8 +47,11 @@ logger = logging.getLogger(__name__)
 class DedupAuditData(BaseModel):
     """Paths and exact counters produced by one exhaustive A/B audit."""
 
-    version: str = "v3"
+    version: str = "v4"
     baseline_dedup: str
+    baseline_cc_dedup: str
+    baseline_cc_max_iteration: int | None
+    require_baseline_converged: bool
     treatment_dedup: str
     baseline_minhash: str
     treatment_minhash: str
@@ -176,11 +179,19 @@ def _cc_shards(directory: str) -> dict[int, str]:
     return result
 
 
-def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[dict[str, Any]]:
+def _cc_distance_entries(
+    dedup_path: str,
+    source_main_dirs: set[str],
+    *,
+    max_iteration: int | None = None,
+    require_converged: bool = True,
+) -> list[dict[str, Any]]:
     iterations: list[dict[int, str]] = []
     expected_shards: set[int] | None = None
     iteration = 0
     while True:
+        if max_iteration is not None and iteration > max_iteration:
+            break
         shards = _cc_shards(f"{dedup_path.rstrip('/')}/metadata/cc/it_{iteration}")
         if not shards:
             break
@@ -195,6 +206,10 @@ def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[di
         iteration += 1
     if not iterations or expected_shards is None:
         raise FileNotFoundError(f"No complete connected-components iterations under {dedup_path}/metadata/cc")
+    if max_iteration is not None and len(iterations) != max_iteration + 1:
+        raise FileNotFoundError(
+            f"Connected-components state ends at iteration {len(iterations) - 1}, expected {max_iteration}"
+        )
 
     source_by_tag = {f"source_{index:03d}": source for index, source in enumerate(sorted(source_main_dirs))}
     logger.info(
@@ -207,6 +222,7 @@ def _cc_distance_entries(dedup_path: str, source_main_dirs: set[str]) -> list[di
             "shard_index": shard_index,
             "iteration_paths": [iteration[shard_index] for iteration in iterations],
             "source_by_tag": source_by_tag,
+            "require_converged": require_converged,
         }
         for shard_index in sorted(expected_shards)
     ]
@@ -218,7 +234,7 @@ def _graph_distance_records(entry: dict[str, Any]) -> Iterator[dict[str, Any]]:
         ["record_id", "id_norm", "adjacency_list", "component_id", "changed"],
     )
     final_changes = sum(bool(changed) for changed in final_table["changed"].to_pylist())
-    if final_changes:
+    if final_changes and entry["require_converged"]:
         raise AssertionError(
             f"Final connected-components shard {entry['shard_index']} still has {final_changes} changed nodes"
         )
@@ -693,6 +709,9 @@ def audit(
     treatment_minhash_path: str,
     output_path: str,
     max_workers: int,
+    baseline_cc_dedup_path: str | None = None,
+    baseline_cc_max_iteration: int | None = None,
+    require_baseline_converged: bool = True,
 ) -> DedupAuditData:
     """Run the exhaustive marker join, pair scoring, and A/B occurrence comparison."""
     baseline_dedup = _artifact_result(baseline_dedup_path)
@@ -754,8 +773,16 @@ def audit(
         resources=resources,
         coordinator_resources=coordinator,
     )
+    baseline_cc_dedup_path = baseline_cc_dedup_path or baseline_dedup_path
     graph_pipeline = (
-        Dataset.from_list(_cc_distance_entries(baseline_dedup_path, set(baseline_dedup["sources"])))
+        Dataset.from_list(
+            _cc_distance_entries(
+                baseline_cc_dedup_path,
+                set(baseline_dedup["sources"]),
+                max_iteration=baseline_cc_max_iteration,
+                require_converged=require_baseline_converged,
+            )
+        )
         .flat_map(_graph_distance_records)
         .write_parquet(f"{graph_distances_dir}/part-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
@@ -802,6 +829,9 @@ def audit(
     }
     return DedupAuditData(
         baseline_dedup=baseline_dedup_path,
+        baseline_cc_dedup=baseline_cc_dedup_path,
+        baseline_cc_max_iteration=baseline_cc_max_iteration,
+        require_baseline_converged=require_baseline_converged,
         treatment_dedup=treatment_dedup_path,
         baseline_minhash=baseline_minhash_path,
         treatment_minhash=treatment_minhash_path,
@@ -818,6 +848,9 @@ def main() -> None:
     parser.add_argument("--treatment-dedup", required=True)
     parser.add_argument("--baseline-minhash", required=True)
     parser.add_argument("--treatment-minhash", required=True)
+    parser.add_argument("--baseline-cc-dedup")
+    parser.add_argument("--baseline-cc-max-iteration", type=int)
+    parser.add_argument("--allow-nonconverged-baseline", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-workers", type=int, default=128)
     args = parser.parse_args()
@@ -830,6 +863,9 @@ def main() -> None:
         treatment_minhash_path=args.treatment_minhash,
         output_path=args.output,
         max_workers=args.max_workers,
+        baseline_cc_dedup_path=args.baseline_cc_dedup,
+        baseline_cc_max_iteration=args.baseline_cc_max_iteration,
+        require_baseline_converged=not args.allow_nonconverged_baseline,
     )
     StoragePath(f"{args.output.rstrip('/')}/audit.json").write_text(result.model_dump_json(indent=2))
     logger.info("Wrote audit artifact to %s/audit.json", args.output.rstrip("/"))

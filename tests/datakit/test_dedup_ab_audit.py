@@ -97,6 +97,7 @@ def test_graph_distance_discovers_iterations_beyond_original_run_cap(monkeypatch
     assert len(entries) == 1
     assert len(entries[0]["iteration_paths"]) == iteration_count
     assert entries[0]["iteration_paths"][-1].endswith("/it_57/part-00000.parquet")
+    assert entries[0]["require_converged"] is True
 
 
 def test_graph_distance_rejects_a_capped_nonconverged_shard(monkeypatch) -> None:
@@ -120,9 +121,33 @@ def test_graph_distance_rejects_a_capped_nonconverged_shard(monkeypatch) -> None
                     "shard_index": 0,
                     "iteration_paths": ["s3://bucket/dedup/metadata/cc/it_50/part-00000.parquet"],
                     "source_by_tag": {"source_000": "s3://bucket/source"},
+                    "require_converged": True,
                 }
             )
         )
+
+
+def test_graph_distance_can_pin_and_inspect_a_nonconverged_cap(monkeypatch) -> None:
+    iteration_count = 60
+
+    def fake_cc_shards(directory: str) -> dict[int, str]:
+        iteration = int(directory.rsplit("it_", 1)[1])
+        if iteration >= iteration_count:
+            return {}
+        return {0: f"{directory}/part-00000.parquet"}
+
+    monkeypatch.setattr(dedup_ab_audit, "_cc_shards", fake_cc_shards)
+
+    entries = _cc_distance_entries(
+        "s3://bucket/dedup",
+        {"s3://bucket/source"},
+        max_iteration=50,
+        require_converged=False,
+    )
+
+    assert len(entries[0]["iteration_paths"]) == 51
+    assert entries[0]["iteration_paths"][-1].endswith("/it_50/part-00000.parquet")
+    assert entries[0]["require_converged"] is False
 
 
 def test_score_counts_require_every_artifact_marker_and_drop() -> None:
