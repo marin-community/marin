@@ -2928,3 +2928,18 @@ author: dlwh
   - This fix preserves Transformer Engine's NCCL kernels, 81,920-row receive capacity, and custom gradients. It changes only the custom-partitioning boundary that supplied the wrong static extent.
 - Next action:
   - Babysit r11h parent `/dlwh/iris-run-job-20260724-203827`, which runs the unchanged reduced configuration from `35f766630c`. Require finite loss and gradients before launching the L24 target.
+
+### 2026-07-24 13:55 PDT - r11h finds a trace-only backward pytree mismatch
+- Hypothesis: Explicit expert-axis `shard_map` calls to Transformer Engine's inner primitives will present rank-local token extents to every NCCL_EP FFI.
+- Commit Hash: `35f766630c` (`[levanter] Pin NCCL EP FFI to local shards`).
+- Command: matched r11g L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` gate with run ID `jaxpp-rno2a-ncclep-localffi-r11h-l8-e64k4-b512-s4096-p4m16-20260724-1338`. Parent `/dlwh/iris-run-job-20260724-203827`.
+- Results:
+  - Transformer Engine `4adad4c` built on all four workers, all 32 ranks initialized, and every stage reached JaxPP lowering.
+  - Lowering stopped before execution because `EpDispatchBwdPrimitive.inner_primitive` returns a list pytree while `_ep_dispatch_bwd` declared tuple `out_specs`. All four workers reported the same `shard_map` pytree mismatch.
+  - No `ep_prepare`, NCCL_EP scan, CUDA FFI, loss, gradient, duration, throughput, or MFU result was reached. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-localffi-r11h-l8-e64k4-b512-s4096-p4m16-20260724-1338>.
+  - Iris retried once. The babysitter stopped only the parent; parent and child are terminal killed and no matching pods remain.
+- Interpretation:
+  - This is a deterministic JAX output-tree declaration error in the new adapter, not evidence about local FFI shapes or NCCL transport.
+  - Commit `0bcbb00e19` changes the backward `out_specs` to the list pytree returned by the registered TE multi-result primitive. Full-geometry forward/backward abstract tracing with list-valued fake TE primitives, focused tests, Pyrefly, and changed-file precommit pass.
+- Next action:
+  - Babysit r11i parent `/dlwh/iris-run-job-20260724-205516`; preserve the exact r11g geometry, receive capacity, and XLA flags.
