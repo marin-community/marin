@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import html
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -26,13 +27,14 @@ logger = logging.getLogger(__name__)
 _SOURCE_MARKER = ".xprof-source"
 _REWRITE_SUFFIXES = (".html", ".js")
 _XPROF_RUN_PATH = ("plugins", "profile")
+_XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
 
 StartResponse = Callable[[str, list[tuple[str, str]]], Callable[[bytes], object] | None]
 WsgiApplication = Callable[[dict, StartResponse], Iterable[bytes]]
 
 
 class ProfileSourceError(ValueError):
-    """Raised when a profile URI does not use a supported object store."""
+    """Raised when a profile URI is not a supported XProf TTL root."""
 
 
 class ProfileCache:
@@ -46,8 +48,14 @@ class ProfileCache:
 
     def validate(self, uri: str) -> str:
         source = StoragePath(uri)
-        if source.scheme not in ("gs", "s3"):
+        if source.scheme not in ("gs", "s3") or not source.bucket:
             raise ProfileSourceError("profile URI must use gs:// or s3://")
+        # Leave room after the TTL segment for xprof and at least one run segment.
+        if not any(
+            _XPROF_TTL_SEGMENT.fullmatch(segment) and source.segments[index + 1] == "xprof"
+            for index, segment in enumerate(source.segments[:-2])
+        ):
+            raise ProfileSourceError("profile URI must contain ttl=Nd/xprof/<run>")
         return str(source)
 
     def stage(self, uri: str) -> Path:

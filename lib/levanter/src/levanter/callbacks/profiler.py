@@ -64,13 +64,10 @@ class XprofUploadConfig:
 
     enabled: bool = True
     ttl_days: int = 30
-    path: str | None = None
     service_url: str = DEFAULT_XPROF_SERVICE_URL
 
     def destination_for_run(self, run_id: str) -> str:
         """Resolve the run's upload root."""
-        if self.path is not None:
-            return str(StoragePath(self.path))
         return marin_temp_bucket(self.ttl_days, prefix=f"xprof/{run_id}")
 
 
@@ -110,7 +107,7 @@ class ProfilerConfig:
         if num_steps is None:
             num_steps = self.num_steps
         upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
-        if upload_uri is not None and self.upload.path is None and StoragePath(upload_uri).is_local:
+        if upload_uri is not None and StoragePath(upload_uri).is_local:
             logger.info("MARIN_PREFIX has no remote TTL store; keeping the profile at %s", path)
             upload_uri = None
         service_url = None

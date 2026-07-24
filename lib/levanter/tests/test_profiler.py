@@ -96,7 +96,7 @@ def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tm
     assert parse_qs(urlparse(link).query) == {"uri": [f"file://{upload_dir}"]}
 
 
-def test_upload_destination_uses_explicit_path_or_ttl_fallback(monkeypatch):
+def test_upload_destination_uses_xprof_ttl_path(monkeypatch):
     calls = []
 
     def temp_bucket(ttl_days: int, prefix: str) -> str:
@@ -105,10 +105,6 @@ def test_upload_destination_uses_explicit_path_or_ttl_fallback(monkeypatch):
 
     monkeypatch.setattr(profiler_module, "marin_temp_bucket", temp_bucket)
 
-    assert XprofUploadConfig(path="s3://profiles/custom-run").destination_for_run("run-123") == (
-        "s3://profiles/custom-run"
-    )
-    assert calls == []
     assert XprofUploadConfig().destination_for_run("run-123") == "gs://marin-us-east5/tmp/ttl=30d/xprof/run-123"
     assert calls == [(30, "xprof/run-123")]
 
