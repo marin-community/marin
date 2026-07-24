@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
 VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
+INVALID_VERIFIED_IDENTITY_REASON = "Invalid verified identity"
 
 # Role for an authenticated non-admin on a gcp cluster (and the fallback default
 # anywhere config carries no more specific rule). "user" is the ordinary
@@ -190,17 +191,17 @@ class NativeProxyIdentityAuthenticator:
         try:
             payload = json.loads(unquote(encoded_identity))
         except (json.JSONDecodeError, TypeError):
-            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if not isinstance(payload, dict):
-            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
 
         user_id = payload.get("user_id")
         role = payload.get("role")
         audience = payload.get("audience")
         if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
-            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if audience is not None and not isinstance(audience, str):
-            return AuthOutcome(AuthDecision.REJECTED, reason="Invalid verified identity")
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
             identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
