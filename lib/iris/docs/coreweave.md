@@ -787,18 +787,16 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
-- **A controller restart can CrashLoop on a stale node-local state DB.** The
-  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
-  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
-  different CPU node. If that node holds a corrupt leftover state DB from an earlier
-  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
-  trusts it (skips the checkpoint restore) and crashes with `database disk image is
-  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
-  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
-  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
-  checkpoint makes a stale node restore the clean checkpoint, and landing back on
-  the current controller node reuses its good DB. A persistently bad node needs its
-  `local_state_dir/db` wiped so startup falls back to the checkpoint.
+- **Controller state is node-local.** The controller keeps SQLite state on
+  node-local NVMe (`storage.local_state_dir`, a hostPath), and
+  `cluster controller restart` may reschedule the replacement onto another CPU
+  node. Startup runs `PRAGMA quick_check` on both local databases and only reuses
+  them when their `last_checkpoint_epoch_ms` marker matches the selected remote
+  checkpoint. Otherwise it stages and validates a clean checkpoint directory
+  before replacing the local directory, which also discards stale WAL/SHM files.
+  A corrupt local directory is retained as `db.corrupt-<epoch_ms>` for diagnosis.
+  The readiness endpoint also reads the task-attempt and federation tables, so a
+  static HTTP response cannot mask a broken database.
 
 Cold-start timings:
 

@@ -43,13 +43,14 @@ from rigging.server_auth import (
     extract_bearer_token,
     public,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
-from iris.cluster.controller.auth import JwtTokenManager
+from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
@@ -174,6 +175,7 @@ class ControllerDashboard:
         endpoint_service: EndpointServiceImpl | None = None,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        reported_auth_policy: RequestAuthPolicy | None = None,
         jwt_manager: JwtTokenManager | None = None,
         federated_handoff: FederatedEndpointHandoff | None = None,
         federation_owner_check: FederationOwnerCheck | None = None,
@@ -185,6 +187,8 @@ class ControllerDashboard:
         self._endpoint_service = endpoint_service or service.endpoint_service
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        self._reports_native_identity = reported_auth_policy is not None
+        self._auth_optional = (reported_auth_policy or auth_policy).allows_anonymous
         # The signing authority, for serving public keys at /.well-known/jwks.json
         # (None when the controller has no auth configured, so no signer exists).
         self._jwt_manager = jwt_manager
@@ -349,12 +353,15 @@ class ControllerDashboard:
         """Report whether auth is required and whether this request is authenticated.
 
         Public endpoint the frontend reads before rendering to decide whether to
-        show the login page. ``authenticated`` resolves the request through the
-        same policy the RPC surface enforces, so a request carrying any accepted
-        credential — a session cookie, a bearer token, or the signed IAP edge
-        header — is reported as authenticated.
+        show the login page. On the native listener, ``authenticated`` reflects
+        Rust's verified identity stamp. Standalone dashboards resolve the
+        request through the same policy as the RPC surface.
         """
-        authenticated = _request_is_authenticated(self._auth_policy, request)
+        authenticated = (
+            VERIFIED_IDENTITY_HEADER in request.headers
+            if self._reports_native_identity
+            else _request_is_authenticated(self._auth_policy, request)
+        )
         descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
         representative = backend_descriptor(self._service.provider)
@@ -373,7 +380,7 @@ class ControllerDashboard:
                     "name": representative.name,
                     "capabilities": representative.capabilities,
                 },
-                "optional": self._auth_policy.allows_anonymous,
+                "optional": self._auth_optional,
             }
         )
 
@@ -409,7 +416,18 @@ class ControllerDashboard:
     @public
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        return JSONResponse({"status": "ok"})
+        try:
+            checkpoint_epoch_ms = self._service.probe_database()
+        except SQLAlchemyError:
+            logger.exception("Controller database health probe failed")
+            return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)
+        return JSONResponse(
+            {
+                "status": "ok",
+                "database": "ok",
+                "checkpoint_epoch_ms": checkpoint_epoch_ms,
+            }
+        )
 
     @public
     def _bundle_download(self, request: Request) -> Response:

@@ -61,7 +61,8 @@ from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
 
-DEFAULT_IMAGE_PLATFORM = "linux/amd64,linux/arm64"
+CONTROLLER_IMAGE_PLATFORM = "linux/amd64"
+DEFAULT_WORKLOAD_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,7 @@ def _build_and_push_image(
     image_type: str,
     git_sha: str,
     verbose: bool = False,
-    platform: str = DEFAULT_IMAGE_PLATFORM,
+    platform: str = DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> None:
     """Build and push a single image to GHCR, parsing org/name/version from the tag.
@@ -201,22 +202,34 @@ def _build_cluster_images(
     config,
     git_sha: str,
     verbose: bool = False,
-    platform: str = DEFAULT_IMAGE_PLATFORM,
+    workload_platforms: str = DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> dict[str, str]:
     built: dict[str, str] = {}
 
-    for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
-        if tag:
-            _build_and_push_image(
-                tag,
-                typ,
-                git_sha,
-                verbose=verbose,
-                platform=platform,
-                cargo_profile=cargo_profile,
-            )
-            built[typ] = tag
+    worker_tag = config.defaults.worker.docker_image
+    if worker_tag:
+        _build_and_push_image(
+            worker_tag,
+            "worker",
+            git_sha,
+            verbose=verbose,
+            platform=workload_platforms,
+            cargo_profile=cargo_profile,
+        )
+        built["worker"] = worker_tag
+
+    controller_tag = config.controller.image
+    if controller_tag:
+        _build_and_push_image(
+            controller_tag,
+            "controller",
+            git_sha,
+            verbose=verbose,
+            platform=CONTROLLER_IMAGE_PLATFORM,
+            cargo_profile=cargo_profile,
+        )
+        built["controller"] = controller_tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
@@ -225,7 +238,7 @@ def _build_cluster_images(
             "task",
             git_sha,
             verbose=verbose,
-            platform=platform,
+            platform=workload_platforms,
             cargo_profile=cargo_profile,
         )
         built["task"] = task_tag
@@ -273,7 +286,7 @@ def _build_and_pin_deploy_images(
     ctx,
     config,
     *,
-    platform: str = DEFAULT_IMAGE_PLATFORM,
+    workload_platforms: str = DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> None:
     """Pin :latest tags to the working-tree hash, build + push the images, echo them."""
@@ -284,7 +297,7 @@ def _build_and_pin_deploy_images(
         config,
         git_sha,
         verbose=verbose,
-        platform=platform,
+        workload_platforms=workload_platforms,
         cargo_profile=cargo_profile,
     )
     if built:
@@ -514,8 +527,22 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 @click.option(
     "--fresh", is_flag=True, default=False, help="Start with an empty database, ignoring any remote checkpoint"
 )
+@click.option(
+    "--image-platform",
+    "workload_image_platforms",
+    default=DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
+    show_default=True,
+    help="Docker platform(s) to build and push for worker and task images.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start(ctx, local: bool, fresh: bool):
+def cluster_start(ctx, local: bool, fresh: bool, workload_image_platforms: str, cargo_profile: str):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -535,7 +562,13 @@ def cluster_start(ctx, local: bool, fresh: bool):
         git_sha = get_git_sha()
         _pin_latest_images(config, git_sha)
         verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, git_sha, verbose=verbose)
+        built = _build_cluster_images(
+            config,
+            git_sha,
+            verbose=verbose,
+            workload_platforms=workload_image_platforms,
+            cargo_profile=cargo_profile,
+        )
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():
@@ -574,8 +607,31 @@ def cluster_start(ctx, local: bool, fresh: bool):
 @click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
 @click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
 @click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
+@click.option(
+    "--image-platform",
+    "workload_image_platforms",
+    default=DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
+    show_default=True,
+    help="Docker platform(s) to build and push for worker and task images.",
+)
+@click.option(
+    "--cargo-profile",
+    type=click.Choice(CARGO_PROFILES),
+    default=DEFAULT_CARGO_PROFILE,
+    show_default=True,
+    help="Rust profile used to build native Iris components.",
+)
 @click.pass_context
-def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout, clear_state):
+def cluster_start_smoke(
+    ctx,
+    label_prefix,
+    url_file,
+    min_workers,
+    worker_timeout,
+    clear_state,
+    workload_image_platforms,
+    cargo_profile,
+):
     """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
 
     Designed for CI: run in background, poll for url_file, then pass URL to pytest.
@@ -594,7 +650,13 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     git_sha = get_git_sha()
     _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    _build_cluster_images(config, git_sha, verbose=verbose)
+    _build_cluster_images(
+        config,
+        git_sha,
+        verbose=verbose,
+        workload_platforms=workload_image_platforms,
+        cargo_profile=cargo_profile,
+    )
 
     bundle = provider_bundle(config)
 
@@ -1159,9 +1221,10 @@ def controller_checkpoint(ctx, stop: bool):
 )
 @click.option(
     "--image-platform",
-    default=DEFAULT_IMAGE_PLATFORM,
+    "workload_image_platforms",
+    default=DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
     show_default=True,
-    help="Docker platform(s) to build and push for this rollout.",
+    help="Docker platform(s) to build and push for worker and task images.",
 )
 @click.option(
     "--cargo-profile",
@@ -1176,7 +1239,7 @@ def controller_restart(
     skip_checkpoint: bool,
     checkpoint_timeout: int,
     rollback: bool,
-    image_platform: str,
+    workload_image_platforms: str,
     cargo_profile: str,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
@@ -1200,9 +1263,14 @@ def controller_restart(
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
+    bundle = provider_bundle(config)
+    try:
+        bundle.controller.preflight_controller(config)
+    except Exception as e:
+        raise click.ClickException(f"Controller restart preflight failed: {e}") from e
+
     remote_state_dir = config.storage.remote_state_dir
     prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
-    bundle = provider_bundle(config)
 
     if rollback:
         _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
@@ -1216,7 +1284,7 @@ def controller_restart(
         new_image = _build_forward_image(
             ctx,
             config,
-            platform=image_platform,
+            workload_platforms=workload_image_platforms,
             cargo_profile=cargo_profile,
         )
         try:
@@ -1246,7 +1314,7 @@ def controller_restart(
     new_image = _build_forward_image(
         ctx,
         config,
-        platform=image_platform,
+        workload_platforms=workload_image_platforms,
         cargo_profile=cargo_profile,
     )
     previous_image = prior_record.image if prior_record else None
@@ -1307,14 +1375,14 @@ def _build_forward_image(
     ctx,
     config,
     *,
-    platform: str = DEFAULT_IMAGE_PLATFORM,
+    workload_platforms: str = DEFAULT_WORKLOAD_IMAGE_PLATFORMS,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> str:
     """Build deploy images from the working tree and return the controller image tag."""
     _build_and_pin_deploy_images(
         ctx,
         config,
-        platform=platform,
+        workload_platforms=workload_platforms,
         cargo_profile=cargo_profile,
     )
     return config.controller.image

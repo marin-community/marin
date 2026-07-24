@@ -28,13 +28,14 @@ use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 
 pub const DECISION_PATH: &str = "/_iris/internal/proxy-decision";
 pub const DECISION_SECRET_HEADER: &str = "x-iris-decision-secret";
+pub const IDENTITY_HEADER: &str = "x-iris-verified-identity";
 pub const UPSTREAM_URL_HEADER: &str = "x-iris-upstream-url";
 pub const UPSTREAM_AUTHORIZATION_HEADER: &str = "x-iris-upstream-authorization";
 pub const PROXY_PREFIX_HEADER: &str = "x-iris-proxy-prefix";
@@ -346,6 +347,20 @@ struct ProxyDecision {
     timeout: Duration,
 }
 
+struct ControllerHandoff {
+    secret: HeaderValue,
+    identity: Option<HeaderValue>,
+}
+
+enum ForwardMode {
+    Controller(ControllerHandoff),
+    Proxy {
+        proxy_prefix: Option<HeaderValue>,
+        upstream_authorization: Option<HeaderValue>,
+        timeout: Duration,
+    },
+}
+
 struct ProxyRoute {
     encoded_name: String,
     sub_path: String,
@@ -467,6 +482,7 @@ fn remove_connection_headers(headers: &mut HeaderMap) {
 fn remove_internal_headers(headers: &mut HeaderMap) {
     for name in [
         DECISION_SECRET_HEADER,
+        IDENTITY_HEADER,
         UPSTREAM_URL_HEADER,
         UPSTREAM_AUTHORIZATION_HEADER,
         PROXY_PREFIX_HEADER,
@@ -668,10 +684,17 @@ fn rewrite_location(location: &str, upstream: &Uri, proxy_prefix: &str) -> Optio
     Some(rewritten)
 }
 
-fn prepare_controller_request(headers: &mut HeaderMap) {
+fn prepare_controller_request(headers: &mut HeaderMap, handoff: ControllerHandoff) {
     remove_connection_headers(headers);
+    headers.remove(header::AUTHORIZATION);
+    headers.remove(header::COOKIE);
+    headers.remove(IAP_ASSERTION_HEADER);
     headers.remove(header::HOST);
     remove_internal_headers(headers);
+    headers.insert(DECISION_SECRET_HEADER, handoff.secret);
+    if let Some(identity) = handoff.identity {
+        headers.insert(IDENTITY_HEADER, identity);
+    }
 }
 
 fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
@@ -791,16 +814,61 @@ async fn verified_identity(
         .await
     {
         VerifyOutcome::Verified(identity) => Ok(identity),
-        VerifyOutcome::Anonymous => Ok(auth::VerifiedIdentity {
-            endpoint: None,
-            federation_peer: None,
-            expires_at: u64::MAX,
-        }),
-        VerifyOutcome::Invalid => Err(Box::new(error_response(
+        VerifyOutcome::Anonymous => Ok(anonymous_identity()),
+        VerifyOutcome::Invalid | VerifyOutcome::Missing => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
             "authentication required",
         ))),
     }
+}
+
+fn anonymous_identity() -> auth::VerifiedIdentity {
+    auth::VerifiedIdentity {
+        user_id: "anonymous".to_string(),
+        role: auth::ADMIN_ROLE.to_string(),
+        audience: None,
+        endpoint: None,
+        federation_peer: None,
+        expires_at: u64::MAX,
+    }
+}
+
+fn identity_header(identity: &auth::VerifiedIdentity) -> Result<HeaderValue, Box<Response<Body>>> {
+    let payload = serde_json::to_string(identity).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to encode verified identity: {error}"),
+        ))
+    })?;
+    HeaderValue::from_str(&utf8_percent_encode(&payload, NON_ALPHANUMERIC).to_string()).map_err(
+        |error| {
+            Box::new(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to prepare verified identity: {error}"),
+            ))
+        },
+    )
+}
+
+fn controller_handoff(
+    state: &AppState,
+    outcome: VerifyOutcome,
+) -> Result<ControllerHandoff, Box<Response<Body>>> {
+    let identity = match outcome {
+        VerifyOutcome::Verified(identity) => Some(identity_header(&identity)?),
+        VerifyOutcome::Anonymous => Some(identity_header(&anonymous_identity())?),
+        VerifyOutcome::Missing => None,
+        VerifyOutcome::Invalid => {
+            return Err(Box::new(error_response(
+                StatusCode::UNAUTHORIZED,
+                "authentication failed",
+            )))
+        }
+    };
+    Ok(ControllerHandoff {
+        secret: state.decision_secret.clone(),
+        identity,
+    })
 }
 
 fn authorize_mapping(
@@ -1008,19 +1076,28 @@ async fn send(
     client: &HttpsClient,
     mut request: Request,
     uri: Uri,
-    proxy_prefix: Option<Option<HeaderValue>>,
-    upstream_authorization: Option<HeaderValue>,
-    timeout: Option<Duration>,
+    mode: ForwardMode,
 ) -> Response<Body> {
     let upstream_uri = uri.clone();
     *request.uri_mut() = uri;
-    let is_proxy = proxy_prefix.is_some();
-    let response_proxy_prefix = proxy_prefix.as_ref().and_then(Option::as_ref).cloned();
-    if let Some(prefix) = proxy_prefix {
-        prepare_proxy_request(request.headers_mut(), prefix, upstream_authorization);
-    } else {
-        prepare_controller_request(request.headers_mut());
-    }
+    let (is_proxy, response_proxy_prefix, timeout) = match mode {
+        ForwardMode::Controller(handoff) => {
+            prepare_controller_request(request.headers_mut(), handoff);
+            (false, None, None)
+        }
+        ForwardMode::Proxy {
+            proxy_prefix,
+            upstream_authorization,
+            timeout,
+        } => {
+            prepare_proxy_request(
+                request.headers_mut(),
+                proxy_prefix.clone(),
+                upstream_authorization,
+            );
+            (true, proxy_prefix, Some(timeout))
+        }
+    };
 
     let response = if let Some(timeout) = timeout {
         match tokio::time::timeout(timeout, client.request(request)).await {
@@ -1078,19 +1155,49 @@ async fn send(
     }
 }
 
+async fn forward_controller(
+    state: &AppState,
+    request: Request,
+    peer: SocketAddr,
+    direct_connection: bool,
+) -> Response<Body> {
+    let auth = state
+        .verifier
+        .verify_request(request.headers(), None, peer.ip(), direct_connection)
+        .await;
+    if matches!(auth, VerifyOutcome::Missing) && request.uri().path().starts_with("/iris.") {
+        return error_response(StatusCode::UNAUTHORIZED, "authentication required");
+    }
+    let handoff = match controller_handoff(state, auth) {
+        Ok(handoff) => handoff,
+        Err(response) => return *response,
+    };
+    let uri = match controller_uri(&state.controller_url, request.uri()) {
+        Ok(uri) => uri,
+        Err(response) => return *response,
+    };
+    send(
+        &state.controller_client,
+        request,
+        uri,
+        ForwardMode::Controller(handoff),
+    )
+    .await
+}
+
 async fn ingress(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut request: Request,
 ) -> Response<Body> {
     let direct_connection = !request.headers().contains_key(&X_FORWARDED_FOR);
+    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
+        || proxy_subdomain(request.headers()).is_some();
     prepare_public_headers(request.headers_mut(), peer);
     if request.uri().path() == DECISION_PATH {
         return error_response(StatusCode::NOT_FOUND, "route not found");
     }
 
-    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
-        || proxy_subdomain(request.headers()).is_some();
     if proxy_request {
         match native_decision(
             &state,
@@ -1107,19 +1214,17 @@ async fn ingress(
                     &state.upstream_client,
                     request,
                     decision.upstream,
-                    Some(decision.proxy_prefix),
-                    decision.upstream_authorization,
-                    Some(decision.timeout),
+                    ForwardMode::Proxy {
+                        proxy_prefix: decision.proxy_prefix,
+                        upstream_authorization: decision.upstream_authorization,
+                        timeout: decision.timeout,
+                    },
                 )
                 .await;
             }
             NativeDecision::Response(response) => return *response,
             NativeDecision::ControllerProxy => {
-                let uri = match controller_uri(&state.controller_url, request.uri()) {
-                    Ok(uri) => uri,
-                    Err(response) => return *response,
-                };
-                return send(&state.controller_client, request, uri, None, None, None).await;
+                return forward_controller(&state, request, peer, direct_connection).await;
             }
             NativeDecision::Federation(federation) => {
                 let decision = decision(&state, &federation).await;
@@ -1129,9 +1234,11 @@ async fn ingress(
                             &state.upstream_client,
                             request,
                             decision.upstream,
-                            Some(decision.proxy_prefix),
-                            decision.upstream_authorization,
-                            Some(decision.timeout),
+                            ForwardMode::Proxy {
+                                proxy_prefix: decision.proxy_prefix,
+                                upstream_authorization: decision.upstream_authorization,
+                                timeout: decision.timeout,
+                            },
                         )
                         .await
                     }
@@ -1141,11 +1248,7 @@ async fn ingress(
         }
     }
 
-    let uri = match controller_uri(&state.controller_url, request.uri()) {
-        Ok(uri) => uri,
-        Err(response) => return *response,
-    };
-    send(&state.controller_client, request, uri, None, None, None).await
+    forward_controller(&state, request, peer, direct_connection).await
 }
 
 pub fn app(config: ProxyConfig, control: ProxyControl) -> Result<Router, String> {

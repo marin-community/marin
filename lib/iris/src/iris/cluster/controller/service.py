@@ -47,6 +47,7 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
 )
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_launch_job_request,
@@ -62,9 +63,12 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
+    federation_changelog_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     local_tasks,
+    meta_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -1141,6 +1145,17 @@ class ControllerServiceImpl:
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
+
+    def probe_database(self) -> int | None:
+        """Return checkpoint ancestry after verifying controller state is readable."""
+        with self._db.read_snapshot() as tx:
+            checkpoint_epoch_ms = tx.execute(
+                select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)
+            ).scalar()
+            tx.execute(select(task_attempts_table.c.attempt_uid).limit(1)).first()
+            tx.execute(select(federation_changelog_table.c.seq).limit(1)).first()
+            tx.execute(select(federation_sync_state_table.c.peer_id).limit(1)).first()
+        return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id, merged across
