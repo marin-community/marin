@@ -17,7 +17,7 @@
 #     --extra gpu --job-name ncclep-te-build -- bash experiments/ncclep/build_te_wheel.sh
 set -euxo pipefail
 
-TE_SHA=${TE_SHA:-68493d2d55ac37e540301467b278bdb1c2019e81}  # TE main 2026-07-17
+export TE_SHA=${TE_SHA:-68493d2d55ac37e540301467b278bdb1c2019e81}  # TE main 2026-07-17
 STASH=${STASH:-s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep}
 WORK=${WORK:-/tmp/ncclep-build}
 export MAX_JOBS=${MAX_JOBS:-64}
