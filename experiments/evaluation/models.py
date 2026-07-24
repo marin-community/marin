@@ -143,6 +143,10 @@ def _build_registry() -> dict[str, ModelConfig]:
 
 
 @cache
-def models() -> dict[str, ModelConfig]:
-    """Load the model catalog on first use and reuse the resulting registry."""
+def _cached_models() -> dict[str, ModelConfig]:
     return _build_registry()
+
+
+def models() -> dict[str, ModelConfig]:
+    """Return the registered evaluation models keyed by launcher name."""
+    return dict(_cached_models())

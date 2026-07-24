@@ -62,7 +62,7 @@ class ServedModelConfig:
 
 @dataclass
 class InferenceModelConfig:
-    """Model inputs shared by in-process vLLM and evaluator entry points."""
+    """Model inputs shared by in-process vLLM and inference smoke tests."""
 
     name: str
     path: str | None

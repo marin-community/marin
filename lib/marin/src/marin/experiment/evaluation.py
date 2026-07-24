@@ -180,7 +180,6 @@ def eval_step(
     *,
     version: str | None = None,
 ) -> ArtifactStep[EvalResult]:
-    """Build one Evalchemy artifact from ``group``."""
     step = evaluate_evalchemy(
         model_name=model.name,
         model=model,

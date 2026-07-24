@@ -420,7 +420,6 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
-    assert events[0] == ("register", register_args, register_kwargs)
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:

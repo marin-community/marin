@@ -7,7 +7,7 @@ import contextlib
 import logging
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -145,7 +145,7 @@ def _server_root(model: RunningModel) -> str:
     return model.endpoint.base_url.removesuffix("/v1")
 
 
-def _new_endpoint() -> tuple[str, str]:
+def _new_endpoint_identity() -> tuple[str, str]:
     run_id = uuid.uuid4().hex
     return run_id, f"/serve/inference-{run_id}"
 
@@ -232,17 +232,10 @@ def _register_dashboard(
             yield
 
 
-def _block_until_timeout(session: LocalInferenceSession, timeout_hours: float) -> None:
+def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) -> None:
     deadline = time.monotonic() + timeout_hours * 3600
     while time.monotonic() < deadline:
-        session.check_alive()
-        time.sleep(_TIMEOUT_POLL_SECONDS)
-
-
-def _block_remote_until_timeout(session: RemoteInferenceSession, timeout_hours: float) -> None:
-    deadline = time.monotonic() + timeout_hours * 3600
-    while time.monotonic() < deadline:
-        session.check_alive()
+        check_alive()
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
@@ -261,7 +254,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 backend_name=local_session.backend_name,
                 streaming=True,
             ):
-                _block_until_timeout(local_session, service.timeout_hours)
+                _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
 
     with remote_inference(
@@ -280,7 +273,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             backend_name=session.backend_name,
             streaming=session.streaming,
         ):
-            _block_remote_until_timeout(session, service.timeout_hours)
+            _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
@@ -306,36 +299,23 @@ def remote_inference(
         raise RuntimeError("remote_inference must run inside an Iris job")
     resolved_broker = _broker_config(config.instances, config.broker)
     if resolved_broker is None:
-        with _start_direct_inference(
-            config.model,
-            config.engine,
-            config.iris,
-            config.capability_origin,
-        ) as session:
+        with _start_direct_inference(config) as session:
             yield session
         return
-    with _start_brokered_inference(
-        config.model,
-        config.engine,
-        config.iris,
-        config.instances,
-        resolved_broker,
-        config.capability_origin,
-    ) as session:
+    with _start_brokered_inference(config, resolved_broker) as session:
         yield session
 
 
 @contextlib.contextmanager
 def _start_direct_inference(
-    model: ServedModelConfig,
-    engine: VllmEngineConfig | LevanterEngineConfig,
-    iris: IrisConfig,
-    capability_origin: str | None,
+    config: RemoteInferenceConfig,
 ) -> Iterator[RemoteInferenceSession]:
-    run_id, endpoint_name = _new_endpoint()
+    model = config.model
+    iris = config.iris
+    run_id, endpoint_name = _new_endpoint_identity()
     service = IrisServiceConfig(
         model=model,
-        engine=engine,
+        engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
         timeout_hours=24 * 365,
@@ -372,8 +352,8 @@ def _start_direct_inference(
         )
         yield RemoteInferenceSession(
             model=(
-                _capability_model(running_model, endpoint_name, capability_origin)
-                if capability_origin is not None
+                _capability_model(running_model, endpoint_name, config.capability_origin)
+                if config.capability_origin is not None
                 else running_model
             ),
             jobs=(job,),
@@ -416,17 +396,15 @@ def _run_broker_worker(
 
 @contextlib.contextmanager
 def _start_brokered_inference(
-    model: ServedModelConfig,
-    engine: VllmEngineConfig | LevanterEngineConfig,
-    iris: IrisConfig,
-    instances: int,
+    config: RemoteInferenceConfig,
     broker: BrokerConfig,
-    capability_origin: str | None,
 ) -> Iterator[RemoteInferenceSession]:
+    model = config.model
+    iris = config.iris
     client = current_client()
     job_info = get_job_info()
     assert job_info is not None
-    run_id, endpoint_name = _new_endpoint()
+    run_id, endpoint_name = _new_endpoint_identity()
     broker_group = None
     worker_jobs: list[JobHandle] = []
     started = False
@@ -442,14 +420,14 @@ def _start_brokered_inference(
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
-        for worker_index in range(instances):
+        for worker_index in range(config.instances):
             worker_id = f"inference-worker-{run_id}-{worker_index}"
             job = client.submit(
                 JobRequest(
                     name=worker_id,
                     entrypoint=Entrypoint.from_callable(
                         _run_broker_worker,
-                        args=(worker_id, model, engine, iris, broker, request_provider),
+                        args=(worker_id, model, config.engine, iris, broker, request_provider),
                     ),
                     resources=iris.worker_resources,
                     environment=iris.worker_environment,
@@ -494,8 +472,8 @@ def _start_brokered_inference(
             ):
                 internal_model = replace(running_model, tokenizer=model.tokenizer)
                 exposed_model = (
-                    _capability_model(internal_model, endpoint_name, capability_origin)
-                    if capability_origin is not None
+                    _capability_model(internal_model, endpoint_name, config.capability_origin)
+                    if config.capability_origin is not None
                     else internal_model
                 )
                 started = True

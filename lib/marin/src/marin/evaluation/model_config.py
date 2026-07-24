@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
-import fsspec
+from rigging.filesystem import StoragePath
 
 
 class ServeBackend(StrEnum):
@@ -170,7 +170,7 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
 
 def load_model_config(path: Path) -> ModelConfig:
     """Load one model catalog file, rejecting fields outside the configuration schema."""
-    with fsspec.open(str(path), "r") as handle:
+    with StoragePath(str(path)).open("r") as handle:
         return draccus.load(ModelConfig, handle)
 
 

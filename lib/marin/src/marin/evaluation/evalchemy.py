@@ -109,7 +109,6 @@ def _task_dir(task: EvalTaskConfig) -> str:
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
-    """Build the plain JSON boundary consumed by the isolated Evalchemy image."""
     tokenizer = model.tokenizer
     if tokenizer is None:
         raise ValueError("Evalchemy requires RunningModel.tokenizer")

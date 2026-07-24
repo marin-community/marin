@@ -19,7 +19,7 @@ from marin.evaluation.evalchemy import (
 )
 from marin.evaluation.evalchemy_client import build_command, build_model_args, scored_results
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.serving_config import _auto_serve_overrides_from_config
+from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -202,6 +202,22 @@ def test_auto_overrides_never_overrides_explicit_flags():
     # A None cap stays None: vLLM then falls back to the model's own default context.
     _, max_model_len = _auto_serve_overrides_from_config("org/gdn-model", config, None, ())
     assert max_model_len is None
+
+
+def test_auto_serve_overrides_reads_local_model_config(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3NextForCausalLM"],
+                "max_position_embeddings": 16384,
+            }
+        )
+    )
+
+    extra_args, max_model_len = auto_serve_overrides(str(tmp_path), 32768)
+
+    assert extra_args == ("--gdn-prefill-backend", "triton")
+    assert max_model_len == 16384
 
 
 def _write_results(local_out: str, results: dict) -> None:

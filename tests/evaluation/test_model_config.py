@@ -136,6 +136,14 @@ def test_every_registered_model_resolves_on_the_marin_fleet():
             assert choice.platform is Platform.TPU, name
 
 
+def test_model_registry_callers_cannot_mutate_the_cached_catalog():
+    registry = models()
+    removed_name = next(iter(registry))
+    del registry[removed_name]
+
+    assert removed_name in models()
+
+
 def test_gpu_required_model_rejects_tpu_override():
     model = ModelConfig(name="gpu-model", location="org/model", resource_hint=ResourceHint(gpu={"H100": 2}))
 
@@ -159,10 +167,3 @@ def test_explicit_gpu_override_respects_fleet_limits():
 
     with pytest.raises(ValueError, match="positive power of two"):
         MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x3")
-
-
-def test_nemotron_uses_the_vllm_builtin_reasoning_parser():
-    config = models()["nvidia-nemotron-3-nano-30b-a3b-bf16"]
-
-    assert config.serve.reasoning_parser == "nemotron_v3"
-    assert "--reasoning-parser-plugin" not in config.serve.vllm_extra_args

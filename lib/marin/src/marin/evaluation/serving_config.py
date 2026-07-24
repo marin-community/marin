@@ -4,12 +4,13 @@
 """Lower evaluation model policy into exact remote-inference configuration."""
 
 import json
-import logging
 from collections.abc import Mapping
+from pathlib import Path
 
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
+from rigging.filesystem import StoragePath
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend, has_vllm_option, serve_config_vllm_args
@@ -23,8 +24,6 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
-
-logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
@@ -82,13 +81,14 @@ def auto_serve_overrides(
     *,
     revision: str | None = None,
 ) -> tuple[tuple[str, ...], int | None]:
-    """Inspect an HF config and fill portable vLLM defaults."""
-    try:
-        with open(hf_hub_download(model, "config.json", revision=revision)) as handle:
-            config = json.load(handle)
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not inspect config.json for %s; using explicit serving options: %s", model, exc)
-        return existing_extra_args, max_model_len
+    """Inspect a model's config.json and fill portable vLLM defaults."""
+    if "://" in model:
+        config_path = StoragePath(model) / "config.json"
+    elif Path(model).is_dir():
+        config_path = StoragePath(str(Path(model) / "config.json"))
+    else:
+        config_path = StoragePath(hf_hub_download(model, "config.json", revision=revision))
+    config = json.loads(config_path.read_text())
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 

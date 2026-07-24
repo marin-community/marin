@@ -15,6 +15,9 @@ from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalchemyExecutor, EvalExecutor, HarborExecutor
 
+_TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
+_SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
+
 
 class EvaluationDefinition(Protocol):
     """Experiment-owned record metadata and model adaptation for one evaluation."""
@@ -230,12 +233,10 @@ EVALS: dict[str, EvaluationDefinition] = {
         max_eval_instances=2,
     ),
     # Agentic datasets contain Harbor task directories and run with Daytona.
-    "tb2": _agentic_eval("tb2", "DCAgent2/terminal_bench_2", n_concurrent=32),
-    "tb2-lite": _agentic_eval("tb2-lite", "DCAgent2/terminal_bench_2", n_concurrent=4, max_instances=2),
-    "swebench": _agentic_eval("swebench", "DCAgent2/swebench-verified-random-100-folders", n_concurrent=32),
-    "swebench-lite": _agentic_eval(
-        "swebench-lite", "DCAgent2/swebench-verified-random-100-folders", n_concurrent=4, max_instances=2
-    ),
+    "tb2": _agentic_eval("tb2", _TERMINAL_BENCH_DATASET, n_concurrent=32),
+    "tb2-lite": _agentic_eval("tb2-lite", _TERMINAL_BENCH_DATASET, n_concurrent=4, max_instances=2),
+    "swebench": _agentic_eval("swebench", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=32),
+    "swebench-lite": _agentic_eval("swebench-lite", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=4, max_instances=2),
     "swebench-full": _agentic_eval("swebench-full", "DCAgent/swebench-verified", n_concurrent=32),
     "gaia": _agentic_eval("gaia", "DCAgent/gaia_127", n_concurrent=32),
     "bfcl": _agentic_eval("bfcl", "DCAgent2/bfcl-parity", n_concurrent=32),

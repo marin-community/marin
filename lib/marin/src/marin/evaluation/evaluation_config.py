@@ -29,7 +29,6 @@ class EvalTaskConfig:
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert task configs to the Levanter eval harness representation."""
     return [
         TaskConfig(
             task=task.name,
