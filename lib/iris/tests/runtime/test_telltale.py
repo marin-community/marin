@@ -82,3 +82,67 @@ def test_start_forwarding_resolves_the_endpoint_and_hands_a_sink_to_telltale(mon
     assert isinstance(built["sink"], _Sink)
     assert built["identity"].job_id == "/alice/train"
     assert built["identity"].task_index == 0
+
+
+def test_start_registers_the_port_bound_by_uvicorn(monkeypatch):
+    registered: dict[str, object] = {}
+
+    class _Socket:
+        def getsockname(self):
+            return ("0.0.0.0", 45678)
+
+    class _Listener:
+        def __init__(self) -> None:
+            self.sockets = [_Socket()]
+
+    class _Server:
+        def __init__(self, config) -> None:
+            registered["configured_port"] = config.port
+            self.started = False
+            self.servers = []
+
+        def run(self) -> None:
+            self.servers = [_Listener()]
+            self.started = True
+
+    class _Threads:
+        def spawn_server(self, server, *, name, daemon):
+            assert name == "telltale"
+            assert daemon
+            server.run()
+
+    class _Registry:
+        def register(self, name, address, metadata):
+            registered["endpoint"] = (name, address, metadata)
+            return "endpoint-id"
+
+        def unregister(self, endpoint_id):
+            pass
+
+    class _JobId:
+        def to_wire(self):
+            return "/alice/train/worker"
+
+    class _Ctx:
+        client = object()
+        registry = _Registry()
+        job_id = _JobId()
+
+    info = JobInfo(task_id=JobName.from_wire("/alice/train/worker/3"), advertise_host="10.0.0.7")
+    monkeypatch.setattr(telltale, "_started", False)
+    monkeypatch.setattr(telltale, "get_job_info", lambda: info)
+    monkeypatch.setattr(telltale, "get_iris_ctx", lambda: _Ctx())
+    monkeypatch.setattr(telltale, "get_thread_container", _Threads)
+    monkeypatch.setattr(telltale.uvicorn, "Server", _Server)
+    monkeypatch.setattr(telltale, "_start_forwarding", lambda *_: None)
+    monkeypatch.setattr(telltale.atexit, "register", lambda *_: None)
+
+    address = telltale.start()
+
+    assert registered["configured_port"] == 0
+    assert address == "http://10.0.0.7:45678"
+    assert registered["endpoint"] == (
+        "telltale/worker/3",
+        "http://10.0.0.7:45678",
+        {"job_id": "/alice/train/worker"},
+    )

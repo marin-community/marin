@@ -2766,3 +2766,19 @@ author: dlwh
   - JAX 0.11 does not provide a useful fallback on RNO2A: native ragged all-to-all now requires symmetric/exportable memory, and this cluster rejects the required FABRIC allocation with `CUDA_ERROR_NOT_PERMITTED`. NCCL EP v0.1.0 plus Transformer Engine's merged-but-unreleased JAX binding remains the only released transport with a measured target-shape gain; the branch already pins that binding.
 - Next action:
   - Make Iris's JAX distributed initialization timeout explicitly configurable and set this launcher to two hours. Validate locally, commit the startup fix, then run one final unchanged r11 fingerprint attempt before modifying model or transport code.
+
+### 2026-07-24 11:58 PDT - r11d validates the longer JAX timeout and exposes a telltale port race
+- Hypothesis: A two-hour distributed-initialization timeout will absorb per-node Transformer Engine build skew and let all 32 ranks reach the unchanged NCCL_EP route fingerprint diagnostic.
+- Commit Hash: `6cd8d90938` (`[iris] Allow slow distributed JAX bootstrap`).
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` diagnostic with four stages, 16 microbatches, NCCL_EP, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, preallocation `0.65`, three steps, and `--jax-init-timeout 7200`. Parent `/dlwh/iris-run-job-20260724-184256`; child `/dlwh/iris-run-job-20260724-184256/grug-train-jaxpp-rno2a-ncclep-routefp-r11d-l8-e64k4-b512-s4096-p4m16-20260724-1142`.
+- Results:
+  - All four workers completed Transformer Engine setup and launched ranks. Every observed rank logged `JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT=7200`; peers reached supervised JAX initialization instead of reproducing r11c's 1,800-second coordinator expiry.
+  - On task 1, local ranks 1 and 7 both selected telltale port `39535`. Rank 1 timed out after five seconds with `TimeoutError: telltale server did not start on port 39535`, exited `1`, and caused the supervisor to terminate its peers before distributed initialization completed.
+  - The child is terminal killed with all four tasks complete, one failure, and four preemptions. The parent is terminal killed. Prefix inspection shows no running or pending resources.
+  - The run emitted zero route fingerprints and never reached `ep_prepare`, JaxPP lowering, compilation, training, W&B history, loss, duration, throughput, or MFU.
+- Interpretation:
+  - The configurable timeout fix is validated at rank launch, but r11d remains infrastructure-invalid and contains no NCCL_EP correctness or performance evidence.
+  - Telltale used `find_free_port()` to probe and release an ephemeral port before Uvicorn bound it. Concurrent supervised ranks could therefore select the same candidate. This is a startup race independent of NCCL_EP, model topology, capacity, or numerical behavior.
+  - The fix makes Uvicorn bind port `0` directly and registers the kernel-assigned port from its live listener, eliminating the probe/release window.
+- Next action:
+  - Validate and snapshot the telltale fix, then launch one unchanged r11e diagnostic. Preserve the NCCL_EP-only accepted `0.203554%` top-k output mismatch; keep loss and all gradient groups strict.

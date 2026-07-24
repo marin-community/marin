@@ -16,7 +16,6 @@ from starlette.applications import Starlette
 from iris.client.client import IrisContext, get_iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.managed_thread import get_thread_container
@@ -76,6 +75,16 @@ def _endpoint_name() -> str:
     return f"{name}/{process_index}" if process_index is not None else name
 
 
+def _bound_port(server: uvicorn.Server) -> int:
+    """Return the TCP port assigned to a started Uvicorn server."""
+    assert len(server.servers) == 1
+    sockets = server.servers[0].sockets
+    assert sockets is not None and len(sockets) == 1
+    port = sockets[0].getsockname()[1]
+    assert isinstance(port, int)
+    return port
+
+
 def start() -> str | None:
     """Serve telltale on an ephemeral port and register it for discovery.
 
@@ -99,25 +108,23 @@ def start() -> str | None:
         logger.warning("telltale: no Iris controller client for task %s; skipping server startup", job_info.task_id)
         return None
 
-    # Ephemeral rather than a named port: a named port is allocated per task, so
-    # the processes sharing a multi-process host would collide on it, and a fixed
-    # port gets taken by whatever co-tenant grabs it first.
-    port = find_free_port()
-    address = f"http://{job_info.advertise_host}:{port}"
-    logger.info("telltale: starting HTTP server at %s", address)
-
     app = Starlette(routes=telltale.routes())
-    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error", log_config=None))
+    # Let Uvicorn hold the kernel-assigned ephemeral port from bind onward. Probing
+    # a free port first leaves a race where sibling processes can select the same
+    # port before either server binds it.
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=0, log_level="error", log_config=None))
     # Daemon: this runs on the process-wide default container, which the callable
     # runner never stop()s. As a non-daemon thread it wedged threading._shutdown()
     # after the callable returned, so the task never reached a terminal state.
-    get_thread_container().spawn_server(server, name=f"telltale-{port}", daemon=True)
+    get_thread_container().spawn_server(server, name="telltale", daemon=True)
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
         lambda: server.started,
         timeout=Duration.from_seconds(5.0),
-        error_message=f"telltale server did not start on port {port}",
+        error_message="telltale server did not start",
     )
 
+    port = _bound_port(server)
+    address = f"http://{job_info.advertise_host}:{port}"
     name = _endpoint_name()
     endpoint_id = ctx.registry.register(name, address, {"job_id": ctx.job_id.to_wire()})
     # Match the registrations in jax_init: drop the endpoint on a clean exit so a
