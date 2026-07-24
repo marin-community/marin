@@ -297,3 +297,27 @@ statistics for performance comparisons.
   prefilter to drop every file. The successful third query omitted that broken
   metadata prefilter and retained the exact execution-ID SQL predicate. These
   helper failures did not read corpus data or affect either A/B arm.
+
+### 2026-07-24T13:52:00Z — treatment convergence and report validation
+
+- The treatment graph converged exactly after 24 connected-components
+  iterations. Changes in iterations 16–24 were 94; 97; 52; 65; 30; 32; 5; 4;
+  0. One iteration-16 worker exited, but Zephyr recovered all 512 tasks without
+  a failed or retried stage and the final counters are exact.
+- Treatment marker emission accounted for every input document:
+  103,388,382 singletons, 297,446 emitted cluster members, and 31,160
+  transitive members kept sum to 103,716,988 documents. The markers contain
+  142,234 canonicals and 155,212 drops.
+- The treatment report completed, and an independent validator read the
+  manifest and report data rather than trusting job success alone. It verified
+  the 103,716,988-document total, all six dedup counters, the WORD/5-gram
+  MinHash parameters, a 29,780-member report sample, and a renderable HTML
+  report. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-100b-20260724-v1/validation/treatment-report.json`.
+- Baseline changes through iteration 24 are 922,366; 249,346; 206,516;
+  142,637; 114,607; 85,577; 70,279; 62,095; 55,204; 49,510; 44,698;
+  38,120; 32,140; 26,468; 21,103; 16,774; 14,257; 13,627; 12,502;
+  11,735; 11,671; 13,915; 14,924; 16,472. The late increase is a propagation
+  wave, not convergence. Iteration 25 is running; the baseline must reach a
+  true zero-change round before its drop set is used for false-positive
+  adjudication.
