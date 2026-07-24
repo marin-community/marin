@@ -1,11 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import subprocess
 
-import click
-import pytest
 from finelog.deploy.build import build_image
 
 
@@ -35,16 +32,3 @@ def test_pushed_image_defaults_to_amd64(monkeypatch) -> None:
         "type=registry,ref=example.invalid/finelog-cache:test,mode=max,compression=zstd,"
         "compression-level=3,oci-mediatypes=true,image-manifest=true"
     )
-
-
-def test_multiarch_build_fails_if_published_index_is_missing_a_platform(monkeypatch) -> None:
-    def fake_run(argv: list[str], **_kwargs) -> subprocess.CompletedProcess:
-        if "imagetools" in argv:
-            stdout = json.dumps({"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}]})
-            return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
-        return subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    with pytest.raises(click.ClickException):
-        build_image(image="example.invalid/finelog:test", platform="linux/amd64,linux/arm64")

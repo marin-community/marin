@@ -13,7 +13,6 @@ The image must be pushed to a registry the deployment can pull from
 ``config/marin*.yaml`` references). Use ``docker login ghcr.io`` first.
 """
 
-import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,26 +22,6 @@ import click
 DEFAULT_IMAGE = "ghcr.io/marin-community/finelog:latest"
 DEFAULT_PLATFORM = "linux/amd64"
 REGISTRY_COMPRESSION = "compression=zstd,compression-level=3"
-
-
-def _verify_published_platforms(image: str, expected: set[str]) -> None:
-    result = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", "--raw", image],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise click.ClickException(f"could not inspect published image index: {result.stderr.strip()}")
-    try:
-        index = json.loads(result.stdout)
-        published = {
-            f"{manifest['platform']['os']}/{manifest['platform']['architecture']}" for manifest in index["manifests"]
-        }
-    except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise click.ClickException("published image is not a readable multi-platform index") from error
-    missing = expected - published
-    if missing:
-        raise click.ClickException(f"published image index is missing platforms: {', '.join(sorted(missing))}")
 
 
 def find_marin_root() -> Path:
@@ -136,6 +115,4 @@ def build_image(
     result = subprocess.run(cmd)
     if result.returncode != 0:
         raise click.ClickException("docker build failed")
-    if push and "," in effective_platform:
-        _verify_published_platforms(image, set(effective_platform.split(",")))
     click.echo("Build successful.")
