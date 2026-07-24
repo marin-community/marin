@@ -212,13 +212,15 @@ points or their credentials, send a test notification to all receivers (Alerting
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group, the bridge asks the Cloud Run metadata
 server for a Google-signed identity token for `https://loom.oa.dev`, exchanges it
-for a short-lived `grafana_alert` Loom token, and creates an idempotent run for
-`marin-community/marin`. Resolved notifications do not create sessions. Repeated
-notifications for the same alert fingerprint and start time reuse the same Loom
-run. The Loom Pulumi stack binds the exact `marin-grafana` service-account email
-and numeric subject to this profile. The Grafana stack reads the Loom URL and
-profile from that stack's `workloadClients` output, so the caller and verifier
-cannot drift through duplicated configuration.
+for a short-lived `ops` Loom token, and creates an idempotent run for
+`marin-community/marin` on the `operator` channel. Distinct firing groups feed
+one live `Grafana operator` session; the operator can delegate independent
+incidents to child Loom sessions. Resolved notifications do not create runs.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run. The Loom Pulumi stack binds the exact `marin-grafana`
+service-account email and numeric subject to this profile. The Grafana stack
+reads the Loom URL and profile from that stack's `workloadClients` output, so
+the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation
 
