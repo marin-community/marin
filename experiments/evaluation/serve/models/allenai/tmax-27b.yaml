@@ -8,7 +8,6 @@ serve:
   tensor_parallel_size: 2
   data_parallel_size: 2
   max_model_len: 32768
-  swap_space_gb: 32
   limit_mm_per_prompt: '{"image":0,"video":0}'
 agent:
   agent_kwargs:

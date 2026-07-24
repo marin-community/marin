@@ -5,7 +5,6 @@ resource_hint:
   gpu:
     H100: 1
 serve:
-  trust_remote_code: true
   tool_call_parser: hermes
   vllm_extra_args:
   - --enable-prefix-caching

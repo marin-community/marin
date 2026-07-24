@@ -85,7 +85,7 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         location="Qwen/Qwen3-8B",
         apply_chat_template=True,
         resource_hint=ResourceHint(hbm_gb=21),
-        serve=ServeConfig(trust_remote_code=True, tool_call_parser="hermes"),
+        serve=ServeConfig(tool_call_parser="hermes"),
         agent=AgentConfig(agent_kwargs={"extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}'}),
     ),
     ModelConfig(

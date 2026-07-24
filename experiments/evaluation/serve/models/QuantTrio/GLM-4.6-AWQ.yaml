@@ -7,8 +7,6 @@ resource_hint:
 serve:
   tensor_parallel_size: 4
   max_model_len: 32768
-  swap_space_gb: 8
-  trust_remote_code: true
   vllm_extra_args:
   - --enable-expert-parallel
   - --enable-prefix-caching
