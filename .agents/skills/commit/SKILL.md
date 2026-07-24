@@ -248,5 +248,5 @@ pauses for the answer; it does not end monitoring.
 - Commit before you run `--review`; the review never commits, pushes, or edits.
 - Never amend a commit unless the user explicitly asks.
 - If there are no changes to commit, say so and stop.
-- `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
+- `.agents/skills/fix-issue/SKILL.md` — end-to-end issue-fix workflow.
 - `AGENTS.md` — coding guidelines.

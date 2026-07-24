@@ -1,4 +1,4 @@
-# Debugging log for CoreWeave CI secret access
+# CoreWeave CI signing-key access failure
 
 Restore the CoreWeave smoke test after GitHub credentials became available.
 

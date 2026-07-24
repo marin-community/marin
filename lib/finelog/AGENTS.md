@@ -1,9 +1,9 @@
 # Finelog Agent Notes
 
 Standalone log store + log service. Originally lifted out of `lib/iris`
-(`iris/cluster/log_store/` and `iris/log_server/`); see the design plan at
-`.agents/projects/2026-04-27_finelog_lift.md` (if present) or the original
-extraction PR for context.
+(`iris/cluster/log_store/` and `iris/log_server/`); see the worked proposal in
+`.agents/projects/design-template.md` or the original extraction PR for
+context.
 
 Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 

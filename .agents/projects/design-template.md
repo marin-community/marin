@@ -13,7 +13,9 @@ A design lives in `.agents/projects/<slug>/` as a directory:
 
 - `design.md` — the 1-pager (this template). Always present.
 - `research.md` — in-repo refs, prior-art comparison, Q&A summary that shaped the design. Always present, even if short.
-- `spec.md` — concrete contracts (proto, public client API, persisted shapes, error types). Present when the design adds new external contracts; skip for internal refactors.
+- `spec.md` — concrete contracts (proto, public client API, persisted shapes,
+  error types). Always present; an internal refactor may need only a short
+  contract for its imported or configured surface.
 
 **Length target for `design.md`**: ~1000 words is the goal, not a hard limit. Spend words where they buy clarity. If you're well over, you're either solving multiple problems (split it) or writing implementation details (move them to `spec.md`). The 1-pager is a snapshot, not a living doc — close the issue when the PR lands, don't sync it as the design evolves. `research.md` and `spec.md` have no length cap.
 

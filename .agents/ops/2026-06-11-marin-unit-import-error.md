@@ -1,4 +1,4 @@
-# Debugging log for PR 6216 Marin unit failure
+# Marin unit import failure on PR 6216
 
 Fix the Marin unit test failure on PR 6216.
 

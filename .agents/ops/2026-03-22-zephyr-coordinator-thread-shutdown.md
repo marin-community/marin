@@ -1,4 +1,4 @@
-# Debugging log for zephyr coordinator thread shutdown
+# Zephyr coordinator thread leaked during shutdown
 
 Fix the PR 3963 CI failure where the Zephyr test suite finished successfully, then crashed during interpreter shutdown because a background coordinator thread was still logging to a closed stderr stream.
 
@@ -22,7 +22,7 @@ The real `ZephyrContext.execute()` teardown path leaves the coordinator actor's 
 - Inspect `LocalClient.host_actor()` in `lib/fray/src/fray/local_backend.py`
 - Add a regression test in `lib/zephyr/tests/test_execution.py` that exercises `execute()` and waits for `zephyr-coordinator-loop` to disappear
 
-## Future Work
+## Future work
 
 - [ ] Consider teaching `LocalClient.host_actor()` to attach a generic stop hook for hosted actors that implement `shutdown()`
 - [ ] Audit other daemon-thread actors to make sure their lifecycle is owned by the caller

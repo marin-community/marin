@@ -1,23 +1,26 @@
 ---
 name: write-ops-log
-description: Write a postmortem ops log to .agents/ops/. Use after an infrastructure-debugging session.
+description: Write a postmortem incident record to .agents/ops/. Use after an infrastructure or durable debugging session.
 ---
 
 # Skill: Ops Log
 
 Summarize a debugging / incident-response conversation as a standalone
-postmortem entry under `.agents/ops/`. The audience is a future sysops
-engineer (probably another Claude session) with no memory of this conversation
-who must reconstruct: what broke, what was tried, what the user steered, what
-fixed it, and how OPS.md guidance could have shortened the investigation.
+postmortem entry under `.agents/ops/`. This is the canonical home for
+infrastructure and durable debugging incident records; `docs/` is not. The
+audience is a future sysops engineer (probably another Claude session) with no
+memory of this conversation who must reconstruct: what broke, what was tried,
+what the user steered, what fixed it, and how OPS.md guidance could have
+shortened the investigation.
 
 ## Filename
 
 `.agents/ops/YYYY-MM-DD-<slug>.md`
 
 The `.agents/ops/` directory is checked into git; `.agents/ops/logs/` is
-gitignored (matched by the global `logs/` pattern), so do not nest logs
-under a `logs/` subdirectory.
+gitignored (matched by the global `logs/` pattern), so do not nest records
+under a `logs/` subdirectory. Do not use `docs/debug-log-*.md` or another
+debug-log directory.
 
 - Use the date the issue was investigated, not today's arbitrary date.
 - `<slug>` is 3-6 words, kebab-case, naming the system + symptom. Examples:

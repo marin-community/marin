@@ -1,4 +1,4 @@
-# Debugging Log for worker-row-columns
+# Iris worker-row schema mismatch
 
 Investigate `sqlite3.OperationalError: no such column: total_cpu_millicores` from the Iris controller scheduling loop.
 
@@ -29,6 +29,6 @@ The denormalized worker scheduling fields were added to controller code paths, b
 
 Confirmed by inspecting fresh `ControllerDB` startup: `PRAGMA table_info(workers)` did not contain the new columns before this fix.
 
-## Future Work
+## Future work
 
 - [ ] Add coverage for other denormalized row-model columns so missing migrations fail earlier.

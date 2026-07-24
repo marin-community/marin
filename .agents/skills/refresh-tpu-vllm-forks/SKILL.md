@@ -241,7 +241,7 @@ workload or smoke test as part of this refresh.
 ### 6. Review Before PR
 
 Do a PR-review-style pass over the fork commits and Marin diff. Use
-`.agents/skills/review-pr/` as a checklist, then run
+`.agents/skills/review-pr/SKILL.md` as a checklist, then run
 `./infra/pre-commit.py --review` before opening the PR and fix or respond to
 every finding.
 
