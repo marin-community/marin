@@ -1147,7 +1147,7 @@ class ControllerServiceImpl:
         return self._bundle_store.get(blob_id)
 
     def probe_database(self) -> int | None:
-        """Run lightweight reads over controller and federation state."""
+        """Return checkpoint ancestry after verifying controller state is readable."""
         with self._db.read_snapshot() as tx:
             checkpoint_epoch_ms = tx.execute(
                 select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)

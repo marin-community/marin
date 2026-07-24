@@ -109,13 +109,7 @@ def _sqlite_quick_check(path: Path) -> str | None:
 
 
 def probe_database_dir(db_dir: Path) -> DatabaseProbe:
-    """Verify both SQLite files and return the latest checkpoint they contain.
-
-    ``PRAGMA quick_check`` reads every table and index without changing the
-    database. The checkpoint epoch is a logical ancestry marker written after a
-    successful upload and after every restore; unlike filesystem mtimes it is
-    unaffected by WAL/SHM creation or node clock skew.
-    """
+    """Return database integrity and checkpoint ancestry for reuse decisions."""
     main_path = db_dir / ControllerDB.DB_FILENAME
     auth_path = db_dir / ControllerDB.AUTH_DB_FILENAME
     existing = [path for path in (main_path, auth_path) if path.exists()]
@@ -413,7 +407,6 @@ def latest_checkpoint_epoch_ms(remote_state_dir: str) -> int | None:
 
 
 def checkpoint_epoch_ms(checkpoint_dir: str) -> int | None:
-    """Return the logical checkpoint epoch encoded in a checkpoint directory."""
     return _entry_epoch_ms(checkpoint_dir)
 
 

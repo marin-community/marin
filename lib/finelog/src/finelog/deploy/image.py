@@ -16,7 +16,7 @@ import click
 
 
 def resolve_image_digest(image: str) -> str:
-    """Pin a tag to its content digest via ``docker buildx imagetools inspect``.
+    """Return a digest-pinned image reference when registry inspection succeeds.
 
     Returns ``ghcr.io/...@sha256:...`` on success, or the original tag with a
     warning on any failure (no docker CLI, no network, private registry, etc.).

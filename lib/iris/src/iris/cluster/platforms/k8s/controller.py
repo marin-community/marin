@@ -379,8 +379,8 @@ class K8sControllerProvider:
 
     def preflight_controller(self, config: IrisClusterConfig) -> None:
         """Resolve controller-only secrets without changing Kubernetes resources."""
-        refs = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        self._prepared_controller_env = (refs, _controller_env(config))
+        signing_key_specs = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        self._prepared_controller_env = (signing_key_specs, _controller_env(config))
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).

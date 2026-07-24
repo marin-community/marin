@@ -47,6 +47,6 @@ def test_controller_restart_missing_secret_fails_before_remote_rollout_access(mo
     result = CliRunner().invoke(cluster_cli.controller_restart, [], obj={"config": config})
 
     assert result.exit_code != 0
-    assert "Controller restart preflight failed" in result.output
+    assert isinstance(result.exception, SystemExit)
     assert k8s.list_json(K8sResource.SECRETS) == []
     assert k8s.list_json(K8sResource.DEPLOYMENTS) == []

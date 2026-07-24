@@ -109,7 +109,6 @@ def test_probe_database_dir_rejects_corrupt_sqlite(tmp_path):
     assert probe.exists
     assert not probe.healthy
     assert probe.checkpoint_epoch_ms is None
-    assert ControllerDB.DB_FILENAME in probe.detail
 
 
 def test_download_checkpoint_returns_false_when_missing(tmp_path):

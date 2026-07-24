@@ -36,7 +36,7 @@ class ManualControllerProvider:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def preflight_controller(self, config: IrisClusterConfig) -> None:
+    def preflight_controller(self, _config: IrisClusterConfig) -> None:
         """Manual controller inputs are resolved on the controller host."""
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
