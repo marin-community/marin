@@ -88,8 +88,11 @@ TIER1_TASKS = (
 TIER2_TASKS = (
     EvalTaskConfig("MATH500", 0, generation=True),
     # AIME24 is NOT here; it runs as a dedicated 10-seed mean/stddev set (EVAL_TASK_SET=aime24_seeds).
-    EvalTaskConfig("HumanEvalPlus", 0, generation=True, unsafe_code=True, completion_only=True),
-    EvalTaskConfig("MBPPPlus", 0, generation=True, unsafe_code=True, completion_only=True),
+    # These Plus benchmarks construct OpenAI chat-message requests.  Unlike the legacy raw-infill
+    # ``humaneval`` task, sending them to /v1/completions makes vLLM reject every request as a
+    # non-string prompt, so they must retain the normal Tier-2 chat route.
+    EvalTaskConfig("HumanEvalPlus", 0, generation=True, unsafe_code=True),
+    EvalTaskConfig("MBPPPlus", 0, generation=True, unsafe_code=True),
     # MMLUPro DEFERRED — fork construction load_dataset fails (not a clean pip dep); N/A in RESULTS.
     EvalTaskConfig("GPQADiamond", 0, generation=True),
     # CruxEval DEFERRED — the fork's CruxEval does `from execution import ...` (local-module import,

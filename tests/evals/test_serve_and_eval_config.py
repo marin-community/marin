@@ -17,7 +17,12 @@ from typing import cast
 from iris.client import Job
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-from experiments.evals.evalchemy.marin_evalchemy_gpu import CANONICAL_AIME_SEEDS, _aime_seeds, _grug_profile
+from experiments.evals.evalchemy.marin_evalchemy_gpu import (
+    CANONICAL_AIME_SEEDS,
+    TIER2_TASKS,
+    _aime_seeds,
+    _grug_profile,
+)
 from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, scored_results
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalSession,
@@ -156,6 +161,18 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
     assert "--confirm_run_unsafe_code" in cmd
+
+
+def test_plus_code_benchmarks_use_chat_completions():
+    """HumanEvalPlus and MBPPPlus send message lists, which /v1/completions rejects."""
+    code_tasks = tuple(task for task in TIER2_TASKS if task.name in {"HumanEvalPlus", "MBPPPlus"})
+    config = _payload(session=_session(apply_chat_template=True), unit=_unit(tasks=code_tasks))
+
+    for task in config["tasks"]:
+        command = build_command(config, task, "/tmp/out", "/opt/py", None)
+        assert command[command.index("--model") + 1] == "local-chat-completions"
+        assert "--apply_chat_template" in command
+        assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in command[command.index("--model_args") + 1]
 
 
 def test_client_forwards_seed_and_extra_generation_kwargs():
