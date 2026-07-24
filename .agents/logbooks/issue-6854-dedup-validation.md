@@ -243,3 +243,29 @@ statistics for performance comparisons.
   but it is not yet a final runtime claim. Continue both arms to actual
   convergence, include every executed iteration in matched finelog totals,
   and do not confuse stage number with report work.
+
+### 2026-07-24T10:35:00Z — exhaustive review coverage and later convergence
+
+- Added an exact semantic-label coverage gate. It rejects missing, extra, or
+  duplicate drop labels; requires raw-identity and low-overlap machine labels
+  to match their computed evidence; and requires every marker occurrence to
+  be covered as either a labeled member or its reviewed canonical.
+- Added a distributed full-text materializer. It groups requests by normalized
+  shard, reads each requested shard once, verifies member and canonical raw
+  text against SHA-256 values recorded by the audit, and requires exactly two
+  texts and one output pair per drop. Fourteen focused audit, coverage, and
+  materialization tests pass.
+- Connected-components change counts now extend through:
+  - baseline iteration 8: 922,366; 249,346; 206,516; 142,637; 114,607;
+    85,577; 70,279; 62,095;
+  - treatment iteration 9: 182,128; 18,892; 14,942; 7,342; 6,503; 4,407;
+    3,363; 3,136; 2,462.
+  Neither graph has converged.
+- Retained live finelog rows cover baseline iterations 2–7 and treatment
+  iterations 3–9. After deduplicating identical END rows, the baseline rounds
+  average 5,817 CPU-seconds over 210,424,922 items; treatment rounds average
+  5,527 CPU-seconds over 207,984,482 items. Normalized CPU per item is about
+  3.9% lower for treatment. Peak shard RSS is broadly flat (baseline
+  623–628 MB, treatment 621–634 MB). These are interim steady-round numbers,
+  not the final total; recover missing early rows from archived finelog and
+  include all iterations plus marker emission before reporting.
