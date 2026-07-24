@@ -25,6 +25,11 @@ run_arm() {
 
 run_arm gc2-a2a-anchor --moe-implementation ragged_all_to_all_cute
 
+# No-shim seam: does the dispatch/combine-only integration also hit the
+# collective-stream crash? (Discriminates annotation-on-primitives vs
+# moe()-block interplay for the upstream report.)
+run_arm gc2-nccl-ep-noshim --moe-implementation nccl_ep
+
 NCCLEP_DISABLE_COLLECTIVE_STREAM=1 \
   run_arm gc2-te-moe-shim-base --moe-implementation te_moe
 NCCLEP_DISABLE_COLLECTIVE_STREAM=1 NCCLEP_CMD_BUFFER="$SCOPED_CB" NCCLEP_EXTRA_XLA_FLAGS="$MS_FLAG" \
