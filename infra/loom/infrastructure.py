@@ -22,10 +22,10 @@ import pulumi_github as github
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DISK_TYPE = "pd-balanced"
-REPOSITORY_URL = "https://github.com/marin-community/loom.git"
 REPOSITORY_OWNER = "marin-community"
 REPOSITORY_NAME = "loom"
 REPOSITORY_BRANCH = "main"
+REPOSITORY_URL = f"https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}.git"
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
