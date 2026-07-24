@@ -2782,3 +2782,35 @@ author: dlwh
   - The fix makes Uvicorn bind port `0` directly and registers the kernel-assigned port from its live listener, eliminating the probe/release window.
 - Next action:
   - Validate and snapshot the telltale fix, then launch one unchanged r11e diagnostic. Preserve the NCCL_EP-only accepted `0.203554%` top-k output mismatch; keep loss and all gradient groups strict.
+
+### 2026-07-24 12:20 PDT - r11e clears startup and exposes JaxPP's four-minute DIME timeout
+- Hypothesis: Atomic telltale binding and the two-hour JAX initialization timeout will let all 32 ranks reach the bounded NCCL_EP route/token fingerprint.
+- Commit Hashes:
+  - `80b0813105` makes telltale port binding atomic.
+  - `827062a3a5` exposes JaxPP's coordination-client timeout and defaults it to two hours for this launcher.
+- Command: unchanged L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` diagnostic with four stages, 16 microbatches, NCCL_EP, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, preallocation `0.65`, three steps, and `--jax-init-timeout 7200`. Parent `/dlwh/iris-run-job-20260724-185905`; child `/dlwh/iris-run-job-20260724-185905/grug-train-jaxpp-rno2a-ncclep-routefp-r11e-l8-e64k4-b512-s4096-p4m16-20260724-1159`.
+- Results:
+  - All 32 ranks registered unique telltale endpoints, initialized distributed JAX with timeout `7200`, and bootstrapped four physical NCCL_EP groups with `16,384` tokens/rank and `81,920` receive rows/rank.
+  - At `19:09:28 UTC`, all task-0 ranks entered compilation of `grug_1f1b_mb0_stage0_forward`. Tasks 1-3 entered JaxPP `eval_local` and requested their DIME2 communicators, but task 0 did not finish compilation before the downstream rendezvous deadline.
+  - At `19:13:29 UTC`, every downstream rank failed in `jaxpp/dime2.py:get_nccl_id` after exactly four minutes. Task 1 timed out on keys `0,8` through `7,15`; task 2 on `8,16` through `15,23`; task 3 on `16,24` through `23,31`.
+  - Pinned JaxPP defines `JAXPP_CLIENT_TIMEOUT=240000` milliseconds. The launcher now validates and exports an explicit `--jaxpp-client-timeout-ms`, defaulting to `7,200,000` milliseconds.
+  - No route/token fingerprint, `ep_prepare`, padded-EM assertion, finite step, loss, gradient, duration, throughput, or MFU was reached. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-routefp-r11e-l8-e64k4-b512-s4096-p4m16-20260724-1159>.
+  - The babysitter stopped only the failed parent. Parent and child are terminal killed; the prefix contains no live resources.
+- Interpretation:
+  - The startup fixes are validated. r11e is still infrastructure/runtime-invalid for NCCL_EP correctness because JaxPP's independent DIME rendezvous timeout expired during first-stage compilation.
+  - Increasing the DIME wait changes no model, transport, capacity, or numerical behavior. It is a bounded correction to match the already-required two-hour compilation/startup budget.
+  - The accepted approximately `0.2%` NCCL_EP output discrepancy was not exercised; loss and all gradient-group checks remain strict.
+- Next action:
+  - Run one final unchanged r11f fingerprint diagnostic with `JAXPP_CLIENT_TIMEOUT=7200000`. Do not increase NCCL_EP receive capacity or modify the model until the pre-`ep_prepare` fingerprints are captured.
+
+### 2026-07-24 12:20 PDT - XLA device-initiated ragged all-to-all landed but is not yet consumable
+- Hypothesis: A newly released JAX/XLA device-initiated ragged all-to-all path may replace the measured slow private-memory fallback and remove NCCL_EP as the remaining transport dependency.
+- Evidence:
+  - OpenXLA commit [`acb5aaffe4c0`](https://github.com/openxla/xla/commit/acb5aaffe4c0d844bacb57ad85234422f0ceaae0), from [PR #41903](https://github.com/openxla/xla/pull/41903), adds a single CUDA kernel using LSA for local peers and GIN for remote peers. It is opt-in with `--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true`.
+  - The path also requires symmetric mode and symmetric buffers for `RaggedAllToAll`; it requests symmetric input and output windows. NCCL `>=2.29.0` is required, with full remote GIN support effectively requiring `>=2.29.7`.
+  - The latest coherent public nightly, `0.11.1.dev20260724`, embeds JAX commit [`30a436d63e89`](https://github.com/jax-ml/jax/commit/30a436d63e895930cdefe4a87475502b9d6a5e49), which pins XLA [`b0512ae684f0`](https://github.com/openxla/xla/commit/b0512ae684f0a7d7c6e1e12d9ca3a9ba3bf9f822), 12 commits before the device kernel. JAX main advanced past it in [`36e7372f1318`](https://github.com/jax-ml/jax/commit/36e7372f13180bdae9bef8be4bf63176dfc236e0), so `20260725` or later is the first plausible nightly.
+- Interpretation:
+  - No released or nightly JAX artifact currently contains the new kernel. Upstream reports DeepSeek-v3 functional testing but no performance result.
+  - The kernel does not eliminate RNO2A's main risk: symmetric-window registration remains mandatory, and prior FABRIC/POSIX-FD allocation on this cluster failed with `CUDA_ERROR_NOT_PERMITTED`. EP8 is node-local and should use LSA with `gin=0`, so the newer allocation fallback may still succeed; this is unproven.
+- Next action:
+  - When a nightly pins XLA at or after `acb5aaffe4c0`, first run a one-node H100x8 direct `jax.lax.ragged_all_to_all` gate at the exact EP8 microbatch geometry. Require output parity, `Device kernel: lsa_size=8 num_ranks=8 gin=0`, successful symmetric registration, and roughly 10% improvement over private-memory mode before testing reduced JaxPP or L24.
