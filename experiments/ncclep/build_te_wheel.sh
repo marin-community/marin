@@ -113,10 +113,14 @@ import glob, os, sys
 import s3fs
 dest = sys.argv[1].rstrip("/")
 fs = s3fs.S3FileSystem(endpoint_url=os.environ.get("AWS_ENDPOINT_URL"))
-for src, sub in [(w, "wheels") for w in glob.glob("wheelhouse/*.whl")] + [
-    ("nccl-ep-jit-headers.tgz", "jit"),
+sha = os.environ["TE_SHA"][:7]
+# Per-SHA header tarball: wheels of different TE checkouts need matching JIT
+# trees (the tip nccl-extensions layout differs from the old in-tree nccl
+# one); the unsuffixed name stays for the newest build.
+for src, tgt in [(w, f"{dest}/wheels/{os.path.basename(w)}") for w in glob.glob("wheelhouse/*.whl")] + [
+    ("nccl-ep-jit-headers.tgz", f"{dest}/jit/nccl-ep-jit-headers-{sha}.tgz"),
+    ("nccl-ep-jit-headers.tgz", f"{dest}/jit/nccl-ep-jit-headers.tgz"),
 ]:
-    tgt = f"{dest}/{sub}/{os.path.basename(src)}"
     fs.put(src, tgt)
     print("uploaded", tgt, fs.info(tgt)["size"])
 EOF

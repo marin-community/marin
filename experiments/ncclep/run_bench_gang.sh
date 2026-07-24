@@ -36,9 +36,19 @@ assert whls, f"no wheels under {stash}/wheels/"
 if pattern:
     whls = [w for w in whls if pattern in w]
     assert whls, f"no wheels matching {pattern!r} under {stash}/wheels/"
-fs.get(whls[-1], os.path.basename(whls[-1]))
-print("fetched", whls[-1])
-fs.get(stash + "/jit/nccl-ep-jit-headers.tgz", "nccl-ep-jit-headers.tgz")
+wheel = whls[-1]
+fs.get(wheel, os.path.basename(wheel))
+print("fetched", wheel)
+# Fetch the JIT-header tarball matching the wheel's TE sha (wheel names embed
+# it as +<sha7>); fall back to the unsuffixed (newest-build) tarball.
+sha = os.path.basename(wheel).split("+")[1].split("-")[0][:7]
+suffixed = f"{stash}/jit/nccl-ep-jit-headers-{sha}.tgz"
+if fs.exists(suffixed):
+    fs.get(suffixed, "nccl-ep-jit-headers.tgz")
+    print("fetched", suffixed)
+else:
+    fs.get(stash + "/jit/nccl-ep-jit-headers.tgz", "nccl-ep-jit-headers.tgz")
+    print("fetched unsuffixed jit headers (no per-sha tarball for", sha + ")")
 EOF
 uv pip install ./transformer_engine*.whl
 mkdir -p jit-include && tar -C jit-include -xzf nccl-ep-jit-headers.tgz
