@@ -248,12 +248,11 @@ class ShortConv(eqx.Module):
     baseline changes nothing until training learns the local mixing. Weights are tiny (``W*C``) and
     routed to Adam (never Muon-orthogonalized).
 
-    Implemented as a single fused depthwise ``lax.conv_general_dilated`` (``feature_group_count`` =
-    channels) so XLA emits one kernel that reads ``x`` once instead of the ~W read passes a
-    pad-and-shift sum costs -- the win on this bandwidth-bound model. The conv is per-channel and the
-    sequence axis is unsharded, so it stays shard-local under whatever layout ``x`` already has
-    (channels sharded on ``model`` for K/V, replicated for the branch outputs); the output sharding
-    constraint pins it to ``x``'s layout so no all-gather is introduced.
+    Implemented as a pad-and-shift weighted sum rather than ``lax.conv_general_dilated``: for this
+    shape (kernel 4, per-channel over 1024/6144 channels, seq 4096) a fused depthwise conv fell into
+    cuDNN's slow generic grouped-conv path and measured ~4 MFU points *worse* than this elementwise
+    version, which XLA fuses well. It is also trivially shard-local -- pure elementwise plus a
+    sequence-axis shift, no cross-channel or cross-shard dependency, so no collectives.
     """
 
     weight: Float[Array, "W C"]
@@ -265,25 +264,12 @@ class ShortConv(eqx.Module):
         return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"]) -> Float[Array, "B S C"]:
-        w = self.kernel_size
-        # Depthwise causal kernel [W, 1, C]. Flip taps: lax cross-correlates kernel[k] with x[t+k-pad];
-        # with left pad (W-1) that yields out[t] = sum_k weight[W-1-k]*x[t-(W-1-k)], so kernel = flip(weight)
-        # reproduces out[t] = sum_lag weight[lag]*x[t-lag]. Identity-init (weight[0]=1) stays pass-through.
-        kernel = jnp.flip(self.weight, axis=0)[:, None, :].astype(x.dtype)
-        # Pin the output to x's layout so the depthwise conv stays shard-local (no all-gather of the
-        # model-sharded K/V channels). Under sharding, conv_general_dilated *requires* out_sharding;
-        # None (no mesh, e.g. eager unit tests) falls back to the default inferred sharding.
-        mesh = get_abstract_mesh()
-        out_sharding = jax.typeof(x).sharding if (mesh is not None and mesh.axis_names) else None
-        return jax.lax.conv_general_dilated(
-            x,
-            kernel,
-            window_strides=(1,),
-            padding=[(w - 1, 0)],
-            dimension_numbers=("NWC", "WIO", "NWC"),
-            feature_group_count=x.shape[-1],
-            out_sharding=out_sharding,
-        )
+        seq_len = x.shape[1]
+        out = self.weight[0] * x
+        for lag in range(1, self.kernel_size):
+            shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
+            out = out + self.weight[lag] * shifted
+        return out
 
 
 class CausalSelfAttention(eqx.Module):
