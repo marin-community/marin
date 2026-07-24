@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Initial schema: pgvector extension, tables, indexes, and role grants.
+"""Initial schema: pgvector extension, tables, indexes, and IAM-user grants.
 
 The DDL is frozen at the time this migration was written (compiled from schema.py as of
 then) — it must not track later schema.py changes, or a fresh database would receive the
-newest schema here and re-apply it in later migrations. Grants live beside the DDL they
-depend on (Pulumi owns the roles themselves): `agents` reads the corpus and appends to the
-shared logbook — no UPDATE/DELETE, the log is append-only; `echo_sync` keeps `chunks` and
-`sync_state` current.
+newest schema here and re-apply it in later migrations. Grants target the Cloud SQL IAM
+database users that Pulumi creates before migrate.py runs: the `eng-all@openathena.ai`
+group reads the corpus and appends to the logbook (no UPDATE/DELETE — the log is
+append-only), and the sync job's service account keeps `chunks`/`sync_state` current.
 """
 
 import sqlalchemy
@@ -59,10 +59,10 @@ CREATE TABLE work_log (
 CREATE INDEX idx_work_log_project_at ON work_log (project, at DESC);
 CREATE INDEX idx_work_log_at ON work_log (at DESC);
 
-GRANT SELECT ON chunks TO agents;
-GRANT SELECT, INSERT ON work_log TO agents;
-GRANT SELECT, INSERT, UPDATE, DELETE ON chunks TO echo_sync;
-GRANT SELECT, INSERT, UPDATE ON sync_state TO echo_sync;
+GRANT SELECT ON chunks TO "eng-all@openathena.ai";
+GRANT SELECT, INSERT ON work_log TO "eng-all@openathena.ai";
+GRANT SELECT, INSERT, UPDATE, DELETE ON chunks TO "echo-sync@hai-gcp-models.iam";
+GRANT SELECT, INSERT, UPDATE ON sync_state TO "echo-sync@hai-gcp-models.iam";
 """
 
 

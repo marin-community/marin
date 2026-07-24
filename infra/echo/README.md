@@ -16,8 +16,16 @@ The shared context store for Marin's agents: the `context` database on the
 Agents use these through the `context-search` and `work-log` skills
 (`.agents/skills/`), which wrap `scripts/context_search.py` and `scripts/work_log.py`.
 
-Tables are defined in `schema.py` and applied with `migrate.py`; the stack is deployed
-with `pulumi up` (see `__main__.py` for the roles and secrets involved).
+Access is Cloud SQL IAM, not passwords. The `eng-all@openathena.ai` group is registered
+as an IAM database user and granted corpus read + logbook append; members connect as their
+own ADC identity through the connector with a short-lived token — no per-user setup, no
+secret. The `echo-sync` job writes as its own service account the same way. `__main__.py`
+owns the IAM users and their login roles (`roles/cloudsql.instanceUser` + `.client`).
+
+Tables live in `schema.py` and are applied with `migrate.py`, which grants the IAM users;
+run it after `pulumi up` on a fresh database. `migrate.py` connects as `pulumi_db_admin`
+(the pre-existing marin-metadata system role that owns the tables and can create
+extensions), reading its password from Secret Manager via the API.
 
 ## Operations
 

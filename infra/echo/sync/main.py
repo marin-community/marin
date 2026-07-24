@@ -29,9 +29,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import pg8000.dbapi
 import schema
 import sqlalchemy
+from google.cloud.sql.connector import Connector
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -63,15 +63,21 @@ def download_corpus(dest: Path, expected_sha: str) -> None:
         raise RuntimeError(f"corpus sha256 mismatch: got {digest.hexdigest()}, manifest says {expected_sha}")
 
 
-def make_engine() -> sqlalchemy.Engine:
-    socket_dir = f"/cloudsql/{os.environ['CLOUDSQL_CONNECTION']}"
+def make_engine(connector: Connector) -> sqlalchemy.Engine:
+    """Engine authenticating as the job's service account via Cloud SQL IAM auth.
+
+    The connector mints a short-lived OAuth token from the job's ADC identity — no
+    password. PGUSER is the SA's database username (its email minus the
+    `.gserviceaccount.com` suffix).
+    """
     return sqlalchemy.create_engine(
         "postgresql+pg8000://",
-        creator=lambda: pg8000.dbapi.connect(
+        creator=lambda: connector.connect(
+            os.environ["CLOUDSQL_CONNECTION"],
+            "pg8000",
             user=os.environ["PGUSER"],
-            password=os.environ["PGPASSWORD"],
-            database=os.environ["PGDATABASE"],
-            unix_sock=f"{socket_dir}/.s.PGSQL.5432",
+            db=os.environ["PGDATABASE"],
+            enable_iam_auth=True,
         ),
     )
 
@@ -174,11 +180,10 @@ def fetch_corpus(dest: Path, manifest: dict, attempts: int = 2) -> int:
     return built
 
 
-def main() -> int:
+def run(engine: sqlalchemy.Engine) -> int:
     manifest = fetch_manifest()
     built = manifest["built_at_epoch"]
 
-    engine = make_engine()
     with engine.connect() as conn:
         watermark = conn.execute(sqlalchemy.select(schema.sync_state.c.built_at_epoch)).scalar()
     if watermark is not None and watermark >= built:
@@ -214,6 +219,11 @@ def main() -> int:
             )
     print(f"synced build {built}: {upserted} chunks upserted, {deleted} deleted, {time.time() - start:.0f}s")
     return 0
+
+
+def main() -> int:
+    with Connector() as connector:
+        return run(make_engine(connector))
 
 
 if __name__ == "__main__":

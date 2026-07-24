@@ -6,6 +6,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "cloud-sql-python-connector[pg8000]>=1.9",
+#     "google-cloud-secret-manager>=2.20",
 #     "sqlalchemy>=2",
 #     "pgvector>=0.3",
 # ]
@@ -14,9 +15,8 @@
 
 Migrations are `migrations/mNNNN_*.py` modules, each exposing `upgrade(conn)`; applied
 names are recorded in `schema_migrations`, and each pending migration runs in its own
-transaction. Connects as `pulumi_db_admin` (password in the cloudsql-pulumi-admin-password
-secret) through the Cloud SQL connector, so created objects are owned by the same role
-Pulumi administers roles with.
+transaction. Connects as `pulumi_db_admin` — the pre-existing marin-metadata system role
+that owns the tables and can create extensions — through the Cloud SQL connector.
 
     infra/echo/migrate.py            # apply pending
     infra/echo/migrate.py --list     # show applied/pending and exit
@@ -24,11 +24,11 @@ Pulumi administers roles with.
 
 import argparse
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
 import sqlalchemy
+from google.cloud.secretmanager import SecretManagerServiceClient
 from google.cloud.sql.connector import Connector
 
 PROJECT = "hai-gcp-models"
@@ -42,20 +42,8 @@ sys.path.insert(0, str(Path(__file__).parent))  # migrations import the sibling 
 
 
 def admin_password() -> str:
-    return subprocess.run(
-        [
-            "gcloud",
-            "secrets",
-            "versions",
-            "access",
-            "latest",
-            f"--secret={ADMIN_PASSWORD_SECRET}",
-            f"--project={PROJECT}",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+    name = f"projects/{PROJECT}/secrets/{ADMIN_PASSWORD_SECRET}/versions/latest"
+    return SecretManagerServiceClient().access_secret_version(name=name).payload.data.decode()
 
 
 def load_migration(path: Path):
