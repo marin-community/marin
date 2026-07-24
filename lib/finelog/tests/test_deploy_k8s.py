@@ -16,6 +16,7 @@ from finelog.deploy._k8s import (
     _MANIFESTS,
     _build_env_secret_manifest,
     _env_secret_name,
+    _probe_transition_patch,
     _render_manifest,
     k8s_down,
 )
@@ -171,6 +172,38 @@ def test_k8s_deployment_requires_amd64_node() -> None:
     deployment = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
 
     assert deployment["spec"]["template"]["spec"]["nodeSelector"] == {"kubernetes.io/arch": "amd64"}
+
+
+def test_probe_transition_replaces_complete_probe() -> None:
+    live = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "finelog",
+                            "livenessProbe": {"tcpSocket": {"port": 10001}, "timeoutSeconds": 5},
+                            "readinessProbe": {"tcpSocket": {"port": 10001}, "timeoutSeconds": 5},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    desired = yaml.safe_load(_render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", _forwarding_cfg()))
+
+    assert _probe_transition_patch(live, desired) == [
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/livenessProbe",
+            "value": desired["spec"]["template"]["spec"]["containers"][0]["livenessProbe"],
+        },
+        {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/readinessProbe",
+            "value": desired["spec"]["template"]["spec"]["containers"][0]["readinessProbe"],
+        },
+    ]
 
 
 def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
