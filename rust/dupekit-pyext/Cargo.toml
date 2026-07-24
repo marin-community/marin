@@ -10,15 +10,15 @@ name = "dupekit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-# arrow/parquet 59: the workspace-unified pyo3 0.29 requires arrow-pyarrow 59.
-# finelog's datafusion 53 stack is still on arrow 58 (no datafusion release ships
-# arrow 59 yet), so the two arrow majors coexist — in separate wheels that never
-# share arrow objects.
-arrow = { version = "59", default-features = false, features = ["pyarrow"] }
+# arrow/parquet 58: matches finelog's datafusion 53 stack, so the whole workspace
+# shares one arrow. arrow-pyarrow 58 pins the workspace pyo3 at 0.28. (arrow 59
+# would force pyo3 0.29, but no datafusion release ships arrow 59 yet, so it would
+# split finelog onto a second arrow major.)
+arrow = { version = "58", default-features = false, features = ["pyarrow"] }
 blake2 = "0.10"
 blake3 = "1.8"
 hex = "0.4"
-parquet = { version = "59", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
 pyo3.workspace = true  # unified workspace version (abi3-py312, extension-module)
 rand = "0.8"
 rand_pcg = "0.3"

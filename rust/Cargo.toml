@@ -19,21 +19,21 @@ members = [
 # it carries `links = "python"`, so a workspace-wide `cargo build`/`cargo test`
 # cannot contain two pyo3 versions (all three `*-pyext` crates build against it).
 # That version is coupled to arrow: dupekit's `pyarrow` feature pulls `arrow-pyarrow`,
-# which pins pyo3 (arrow 59 -> pyo3 0.29), so the workspace pyo3 and dupekit's arrow
-# move together.
+# which pins pyo3 (arrow 58 -> pyo3 0.28). arrow is held at 58 because finelog's
+# datafusion 53 stack requires it and no datafusion release ships arrow 59 yet;
+# pinning dupekit there too keeps the whole workspace on ONE arrow (and one pyo3).
+# When datafusion catches up, arrow and pyo3 move up together.
 #
 # jsonwebtoken/axum/serde are shared by finelog and iris (both terminate authed
 # ingress: finelog/src/server/auth.rs and iris-proxy/src/auth.rs verify EdDSA JWTs
 # with the same jsonwebtoken build). One pin keeps that verification consistent — the
 # groundwork for extracting the shared marin-jwt crate.
 #
-# arrow and parquet stay per-member and, for now, at two majors: dupekit's kernels
-# are on arrow 59 (whose arrow-pyarrow matches pyo3 0.29), while finelog's datafusion
-# 53 stack still requires arrow 58 — no datafusion release ships arrow 59 yet. The two
-# compile into different wheels and never share arrow objects, so the duplicate is
-# contained; it collapses to one major once datafusion catches up to arrow 59.
+# arrow and parquet stay declared per-member (finelog wants default features while
+# dupekit's wheel wants a minimal `default-features = false` build, which workspace
+# inheritance cannot express both of), but the single lock pins them to one version.
 [workspace.dependencies]
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }

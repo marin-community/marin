@@ -81,10 +81,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # ColumnType<->Arrow DataType map, Arrow IPC decode, and the parquet L0
 # writer/footer reader. The parquet `async`/`object_store` features back remote
-# footer reads. arrow/parquet track datafusion below (datafusion 53 -> arrow 58).
-# This is a separate arrow major from dupekit's kernels (arrow 59, pinned by the
-# workspace pyo3 0.29 through arrow-pyarrow) because no datafusion release ships
-# arrow 59 yet; the two live side by side in the lock, in different wheels.
+# footer reads. arrow/parquet track datafusion below (datafusion 53 -> arrow 58),
+# and this is the version the whole workspace pins to: dupekit's kernels ride the
+# same arrow 58, and arrow-pyarrow 58 fixes the shared pyo3 at 0.28. When a
+# datafusion release ships arrow 59, arrow and pyo3 move up together.
 arrow = "58"
 parquet = { version = "58", features = ["async", "object_store"] }
 bytes = "1"

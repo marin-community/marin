@@ -432,21 +432,22 @@ regression suite below.
 Finding from doing it: pyo3 and arrow are coupled through dupekit. dupekit's
 `pyarrow` feature pulls `arrow-pyarrow`, which pins the pyo3 version (arrow-pyarrow
 57.x → pyo3 0.26, 58.x → pyo3 0.28, 59.x → pyo3 0.29). pyo3 MUST be one version
-(`links = "python"`), and iris's pyext is on 0.29, so the workspace unifies UP to
-pyo3 0.29 — which forces dupekit onto arrow 59 (dupekit moved 0.26→0.29 and arrow
-57.1→59; finelog-pyext moved back to 0.29). The dupekit pyo3 bump surfaced two
-mechanical deprecations (`downcast` → `cast`; the `#[pyclass]` Clone
-auto-`FromPyObject` becoming opt-in via `from_py_object`).
+(`links = "python"`). The binding constraint on arrow is finelog: its datafusion
+53 stack requires arrow 58, and no datafusion release ships arrow 59 yet (54, the
+latest, is still arrow 58). So the whole workspace pins arrow 58, and arrow-pyarrow
+58 fixes pyo3 at 0.28. dupekit moved 0.26→0.28 and arrow 57.1→58; iris moved
+0.29→0.28 (it compiled unchanged — no 0.29-only APIs); finelog-pyext to 0.28. The
+dupekit pyo3 bump surfaced two mechanical deprecations (`downcast` → `cast`; the
+`#[pyclass]` Clone auto-`FromPyObject` becoming opt-in via `from_py_object`).
 
-arrow does NOT fully unify, though: finelog's datafusion 53 stack requires arrow
-58, and no datafusion release ships arrow 59 yet (54, the latest, is still arrow
-58). So arrow stays split — finelog on 58, dupekit on 59 — which is safe because
-they compile into different wheels and never share arrow objects; the lock carries
-both majors until datafusion catches up. finelog's datafusion/arrow are left
-untouched (bumping datafusion to 54 gains nothing and risks its fragile
-`ParquetAccessPlan` downcast seam). So the pyo3 `links` constraint is the hard
-one; arrow can tolerate a contained duplicate when a downstream (datafusion) pins
-it below the pyarrow-coupled version.
+The alternative — unify UP to pyo3 0.29 (iris's incoming version) — was rejected.
+It forces dupekit onto arrow 59, which splits finelog onto a second arrow major
+(finelog is pinned at 58 by datafusion, so the lock would carry both 58 and 59).
+Aligning down to 0.28/arrow 58 keeps one arrow and one pyo3 across the workspace
+at no cost: 0.29 buys nothing over 0.28 for these crates, and iris builds clean on
+0.28. finelog's datafusion/arrow are the anchor and are left untouched (bumping
+datafusion to 54 gains nothing and risks its fragile `ParquetAccessPlan` downcast
+seam). When a datafusion release ships arrow 59, arrow and pyo3 move up together.
 
 The phased plan below is the general recipe; the notes above record where this PR
 diverged.
@@ -462,10 +463,11 @@ consolidation into an unlanded crate would couple two large reviews.
 
 Phase 1a — unify `pyo3` in place, before any move (a hard prerequisite).
 PyO3's `links = "python"` means a single `cargo build`/`cargo test` over a
-workspace cannot contain two pyo3 versions, so dupekit (0.26) must move to 0.29
-to share a workspace with finelog/iris at all. Do this as its own PR against the
-current `lib/dupekit/rust` layout: bump, fix any 0.26→0.29 API breaks, run the
-dupekit suite. This isolates a real API-migration risk from the mechanical move.
+workspace cannot contain two pyo3 versions, so dupekit (0.26) must move to the
+shared version (0.28) to share a workspace with finelog/iris at all. Do this as
+its own PR against the current `lib/dupekit/rust` layout: bump, fix any 0.26→0.28
+API breaks, run the dupekit suite. This isolates a real API-migration risk from
+the mechanical move.
 
 Phase 1b — the mechanical move, all consumers retargeted atomically. In one PR:
 `git mv` each `lib/<pkg>/rust` tree into `rust/` (`rust/finelog`,
@@ -491,12 +493,11 @@ Dockerfiles, and the ones easy to miss:
 
 Leaving `rust-checks.yaml` or a release workflow on a stale
 `--manifest-path lib/<pkg>/rust` runs the job against a path that no longer
-exists, so every consumer must move in the same commit. No shared crate and no
-arrow bump yet —
-this PR reproduces today's wheels modulo the pyo3 already unified in 1a. `arrow`
-stays split (finelog 58, dupekit 57.1) for now, allowlisted in the `cargo-deny`
-duplicate policy; a workspace tolerates the duplicate, and forcing dupekit's
-kernels onto arrow 58 is a separate tested change (Phase 1c, optional/deferred).
+exists, so every consumer must move in the same commit. No shared crate yet —
+this PR reproduces today's wheels modulo the version alignment from 1a. dupekit's
+kernels move onto arrow 58 to match finelog's datafusion stack (57.1→58), so the
+workspace lands on one arrow and one pyo3 with no `cargo-deny` allowlist for a
+tolerated duplicate.
 
 Phase 2 — extract the first shared crate (`marin-jwt`), behind a compatibility
 gate. Two large auth implementations sharing a dependency does not prove
@@ -596,9 +597,9 @@ this more feasible and shapes how to do it.
    existing extension? This decides whether the shared auth crate needs a pyext,
    and is the one open question that changes the crate taxonomy (an internal crate
    that also ships its own wheel).
-3. `arrow`/`parquet` unification (finelog 58, dupekit 57.1): the plan keeps them
-   split and allowlisted through the move (Phase 1b) and treats the dupekit 58
-   bump as a separate tested change (Phase 1c). Confirm that ordering, or bump
-   dupekit to 58 up front if its kernels are already known-good on 58.
+3. `arrow`/`parquet` unification: this PR bumps dupekit's kernels 57.1→58 to match
+   finelog's datafusion stack, landing the workspace on one arrow (and, through
+   arrow-pyarrow, one pyo3 at 0.28). Confirm the dupekit kernels are happy on 58
+   (the suite passes) rather than deferring the bump to a follow-up.
 4. Confirm the platform-owner set for `rust/crates/**` in CODEOWNERS — the group
    that takes the compatibility obligation for shared security-sensitive code.
