@@ -164,7 +164,7 @@ def test_missing_token_is_an_auth_error_without_a_network_call():
 
 
 def test_transport_error_does_not_expose_authorization_header():
-    def rejected_header(request: httpx.Request) -> httpx.Response:
+    def rejected_header(_request: httpx.Request) -> httpx.Response:
         raise httpx.LocalProtocolError("Illegal header value b'Bearer secret\\n'")
 
     with pytest.raises(K8sError) as excinfo:
