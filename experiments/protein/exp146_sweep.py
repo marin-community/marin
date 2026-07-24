@@ -81,6 +81,7 @@ CACHE_VERSION: str = "2026.07.13.1"
 DATA_SUBVERSION: str = "1"
 RUN_PREFIX: str = "prot-exp146"
 WANDB_GROUP: str = "exp146-contacts-v1-3b-tune"
+CHECKPOINT_ROOT: str = "checkpoints/protein"
 
 # Smoke mode: a throwaway end-to-end validation run under an isolated identity (distinct prefix,
 # W&B group, "smoke" tag, tiny cadence) so it never resumes or shares a run with a real point.
@@ -192,7 +193,8 @@ def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
     Keyed on the point and the region -- never the TPU -- so a region change is a fresh run
     while any compatible-slice re-dispatch in the same region resumes the same run. ``prefix``
     selects the identity namespace (``SMOKE_RUN_PREFIX`` isolates smoke runs from real ones).
-    Run outputs (checkpoints, W&B mirror) land at ``gs://marin-<region>/{run_id}/{SWEEP_VERSION}/``.
+    Run outputs land at
+    ``gs://marin-<region>/checkpoints/protein/{run_id}/{SWEEP_VERSION}/``.
     """
     return f"{prefix}-cv1-s{SWEEP_SUBVERSION}-{MODEL_SIZE}-{point.point_id}-{region}"
 
@@ -502,7 +504,6 @@ def _apply_recipe_overrides(
 
 def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble one production or smoke training run."""
-    name = shape.run_id
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     batch_config = batch_fit(point, tpu)
@@ -510,7 +511,7 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
     if ram := resource_ram():
         resource_kwargs["ram"] = ram
     step = train_lm(
-        name=name,
+        name=f"{CHECKPOINT_ROOT}/{shape.run_id}",
         model=MODEL_CONFIG,
         optimizer=AdamConfig(
             learning_rate=point.learning_rate,
@@ -531,7 +532,7 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
         wandb_group=shape.wandb_group,
-        run_id=name,
+        run_id=shape.run_id,
         tags=shape.tags,
         env_vars=_training_env(region),
     )
@@ -554,7 +555,8 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
         f"permanent ckpts={shape.checkpoint_policy})\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B "
         f"schedule={LR_SCHEDULE} warmup={WARMUP}\n"
-        f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
+        f"  tpu={tpu} region={region}\n"
+        f"  output={marin_prefix_for_region(region)}/{CHECKPOINT_ROOT}/{shape.run_id}/{SWEEP_VERSION}\n"
         f"  correction_factor={correction_factor_for(tpu):g} "
         f"data_parallelism={config.data_parallelism} tensor_parallelism={config.tensor_parallelism}\n"
         f"  per_device_parallelism={config.per_device_parallelism} "
