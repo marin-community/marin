@@ -2992,3 +2992,17 @@ author: dlwh
   - Commit `f35a6414c2` derives valid rows from `sum(token_counts)` and excludes tail rows plus non-finite/zero routing weights from both the weighting primal and transpose. A focused regression proves NaN tail values produce exact zero outputs and gradients; focused tests pass `7/7`, and changed-file precommit including Pyrefly passes. This preserves exact routed assignments and does not use the `0.2%` approximate-path allowance.
 - Next action:
   - Babysit r11l parent `/dlwh/iris-run-job-20260724-221415`, which changes only the receive-tail mask and runs four steps. Require at least two finite post-compilation executions before scaling to the L24 target.
+
+### 2026-07-24 15:35 PDT - r11l tail mask exceeds the 0.55 XLA allocator pool
+- Hypothesis: Masking undefined receive-tail rows in the value and transpose will preserve r11k's memory feasibility and prevent the post-step NaN.
+- Commit Hash: `f35a6414c2` (`[levanter] Mask unused NCCL EP receive rows`), documented through `afb4e6bf44`.
+- Command: r11k's exact L8/d2560/e64/top-k4/seq4096/b512/m16 configuration with four steps and the receive-tail mask. Parent `/dlwh/iris-run-job-20260724-221415`; child `/dlwh/iris-run-job-20260724-221415/grug-train-jaxpp-rno2a-ncclep-tailmask-r11l-l8-e64k4-b512-s4096-p4m16-20260724-1520`.
+- Results:
+  - Setup, NCCL_EP bootstrap, and forward compilation succeeded. During stage-3 backward executable loading, every rank failed with `RESOURCE_EXHAUSTED` while requesting `24.70-25.24 GiB` under `XLA_PYTHON_CLIENT_MEM_FRACTION=0.55`.
+  - No step executed, so this run produced no loss, gradient, duration, throughput, or MFU evidence. W&B remained at step zero: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-tailmask-r11l-l8-e64k4-b512-s4096-p4m16-20260724-1520>.
+  - Parent, child, all four tasks, and matching pods are terminal.
+- Interpretation:
+  - r11l does not falsify the numerical fix; it failed before execution. The new mask changes backward memory planning, and the 55% XLA pool is too small for its transient 25 GiB allocation plus resident program buffers.
+  - r11m parent `/dlwh/iris-run-job-20260724-223512` changes only XLA preallocation to `0.70`. This gives XLA roughly 56 GiB while leaving roughly 24 GiB for NCCL_EP and other non-XLA allocations.
+- Next action:
+  - Require r11m to load all executables and produce at least two finite post-compilation steps. If non-XLA NCCL_EP allocation then fails, tune the pool between `0.55` and `0.70` or reduce the mask's backward materialization before considering an approximate overflow policy.
