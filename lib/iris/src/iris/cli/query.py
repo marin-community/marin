@@ -5,18 +5,13 @@
 
 import csv
 import io
-import json
 
 import click
 from tabulate import tabulate
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cli.raw_query import parse_rows
 from iris.rpc import query_pb2
-
-
-def _parse_rows(response_rows: list[str]) -> list[list[object]]:
-    """Decode JSON-encoded row arrays from the query response."""
-    return [json.loads(row) for row in response_rows]
 
 
 def _format_table(columns: list[query_pb2.ColumnMeta], rows: list[list[object]]) -> str:
@@ -66,7 +61,7 @@ def query_cmd(ctx: click.Context, sql: str, fmt: str) -> None:
         response = client.execute_raw_query(request)
 
     columns = list(response.columns)
-    rows = _parse_rows(list(response.rows))
+    rows = parse_rows(response)
     formatter = _FORMATTERS[fmt]
     output = formatter(columns, rows)
 

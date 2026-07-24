@@ -10,11 +10,15 @@ Usage:
 
 import csv
 import difflib
+import json
 import logging
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Protocol, cast
 
 import click
 import humanfriendly
@@ -25,9 +29,11 @@ from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
-from iris.cli.connect import iris_client_for_ctx, require_controller_url
+from iris.cli.connect import iris_client_for_ctx, require_controller_url, rpc_client_for_ctx
+from iris.cli.raw_query import query_dicts, sql_literal
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.client.remote_client import LAUNCH_JOB_TIMEOUT_FLOOR_MS
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -41,6 +47,8 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.controller.codec import LaunchJobRow, reconstruct_launch_job_request
+from iris.cluster.controller.schema import JSONList, job_config_table
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -50,6 +58,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
+    TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
@@ -60,6 +69,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
@@ -1499,3 +1509,120 @@ def logs(
     for entry in entries:
         ts = entry.timestamp.as_short_time()
         click.echo(f"[{ts}] task={entry.task_id} | {entry.data}")
+
+
+# job_config columns the DB decodes from JSON text. The query RPC hands back the
+# raw column value, so a restore has to decode them itself; deriving the set from
+# the table keeps a newly added JSONList column from silently arriving as a string.
+_JSON_LIST_COLUMNS = frozenset(c.name for c in job_config_table.columns if isinstance(c.type, JSONList))
+
+
+class StoredJobRow(LaunchJobRow, Protocol):
+    """A stored job row, plus the two columns a restore reads outside the reconstructor.
+
+    ``job_id`` carries the original case, which ``LaunchJobRow.name`` does not:
+    ``job_config.name`` is stored lowercased, so relaunching under it forks a
+    second job. ``state`` gates the relaunch on the job being terminal.
+    """
+
+    job_id: str
+    state: int
+
+
+def _stored_job_row(client: ControllerServiceClientSync, job_id: str) -> StoredJobRow | None:
+    """Read the stored config of *job_id* in the shape the reconstructor expects."""
+    rows = query_dicts(
+        client,
+        "SELECT c.*, j.num_tasks, j.state "
+        "FROM job_config c JOIN jobs j ON j.job_id = c.job_id "
+        f"WHERE c.job_id = {sql_literal(job_id)}",
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    for column in _JSON_LIST_COLUMNS:
+        value = row.get(column)
+        row[column] = json.loads(value) if isinstance(value, str) else (value or [])
+    row["has_coscheduling"] = bool(row.get("has_coscheduling"))
+    # The field set comes from `SELECT c.*`, so the schema decides it; the cast
+    # records the row shape without restating it.
+    return cast(StoredJobRow, SimpleNamespace(**row))
+
+
+def _stored_workdir_files(client: ControllerServiceClientSync, job_id: str) -> dict[str, bytes]:
+    """Read the job's workdir files.
+
+    ``data`` is a BLOB and the query RPC carries JSON, so it crosses as hex and
+    is decoded back to bytes here.
+    """
+    rows = query_dicts(
+        client,
+        f"SELECT filename, hex(data) AS data_hex FROM job_workdir_files WHERE job_id = {sql_literal(job_id)}",
+    )
+    return {row["filename"]: bytes.fromhex(row["data_hex"]) for row in rows}
+
+
+@job.command("restore")
+@click.argument("job_id", nargs=-1)
+@click.option("--stdin", is_flag=True, help="Read job IDs from stdin (first field of each line)")
+@click.option("--dry-run", is_flag=True, help="Show what would be relaunched without submitting")
+@click.pass_context
+def restore(ctx, job_id: tuple[str, ...], stdin: bool, dry_run: bool) -> None:
+    """Relaunch finished jobs from the config the controller already stores.
+
+    Every input a job was submitted with — entrypoint, environment, resources,
+    constraints, workdir files, and the workspace bundle id — is kept in the
+    controller database, so a job can be put back without the submitting client,
+    its workspace, or its original machine. Use this to restart work that a
+    control-plane fault ended rather than the job's own code.
+
+    The job keeps its id and owner, so this replaces the finished run in place
+    rather than creating a differently-named copy. Child jobs are not restored
+    directly: a parent recreates its own children when it runs again.
+    """
+    targets = _collect_targets(job_id, stdin)
+    if not targets:
+        raise click.UsageError("No job IDs provided")
+
+    controller_url = require_controller_url(ctx)
+    restored: list[str] = []
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        for target in targets:
+            row = _stored_job_row(client, target)
+            if row is None:
+                click.echo(f"skip {target}: no stored config")
+                continue
+            # RECREATE cancels a job that is still going, and targets often arrive
+            # from a piped query whose results have moved on. Stop it first if
+            # replacing live work is really the intent.
+            if row.state not in TERMINAL_JOB_STATES:
+                click.echo(f"skip {target}: still {job_state_friendly(row.state)}")
+                continue
+
+            request = reconstruct_launch_job_request(row, workdir_files=_stored_workdir_files(client, target))
+            # The reconstructor names the job from the stored ``name`` column, which
+            # is lowercased; ``job_id`` keeps the case the job was submitted under.
+            # Launching under ``name`` would fork a second job at a different id and
+            # leave the one being restored untouched.
+            request.name = row.job_id
+            # The stored policy is the one that governed the original submission;
+            # a restore always means "this id should be running again".
+            request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+            request.fail_if_exists = False
+            # Freshness is judged against the client submitting now, not the
+            # long-finished run being restored.
+            request.client_revision_date = date.today().isoformat()
+
+            state = job_state_friendly(row.state)
+            if dry_run:
+                click.echo(f"would restore {target} (state={state}, tasks={request.replicas})")
+                continue
+
+            # Replacing a finished job can block on its worker-bound attempts
+            # draining, which outlasts the default per-call deadline.
+            client.launch_job(request, timeout_ms=LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+            restored.append(target)
+            click.echo(f"restored {target} (was {state})")
+
+    if restored and not dry_run:
+        click.echo(f"\nRestored {len(restored)} job(s).")

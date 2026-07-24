@@ -19,6 +19,42 @@ from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
 
 
+class LaunchJobRow(Protocol):
+    """Structural shape of the joined ``jobs``/``job_config`` row a launch is rebuilt from.
+
+    Names the exact read surface of :func:`reconstruct_launch_job_request`, so a
+    caller assembling the row itself (a federated handoff, a restore from the CLI)
+    can tell what it has to supply. ``ports_json`` and ``submit_argv_json`` are
+    decoded lists, not the JSON text of the underlying column.
+    """
+
+    name: str
+    bundle_id: str
+    num_tasks: int
+    max_task_failures: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    preemption_policy: int
+    existing_job_policy: int
+    priority_band: int
+    container_profile: int
+    task_image: str
+    fail_if_exists: bool
+    entrypoint_json: str
+    environment_json: str
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    constraints_json: str | None
+    ports_json: list
+    submit_argv_json: list
+    has_coscheduling: bool
+    coscheduling_group_by: str
+    scheduling_timeout_ms: int | None
+    timeout_ms: int | None
+
+
 class WorkerAttributeRow(Protocol):
     """Structural shape of a ``worker_attributes`` SA row read by the value decoders."""
 
@@ -151,7 +187,7 @@ def resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
 
 
 def reconstruct_launch_job_request(
-    job, *, workdir_files: dict[str, bytes]
+    job: LaunchJobRow, *, workdir_files: dict[str, bytes]
 ) -> controller_pb2.Controller.LaunchJobRequest:
     """Reconstruct a LaunchJobRequest proto from native job columns.
 
