@@ -341,3 +341,26 @@ statistics for performance comparisons.
   coverage tests pass.
 - The acceptance gates and reproducible commands now live in
   `.agents/projects/issue-6854-dedup-validation.md`.
+
+### 2026-07-24T15:45:00Z — second baseline wave and exhaustive census smoke
+
+- Baseline changes through iteration 38 are now 922,366; 249,346; 206,516;
+  142,637; 114,607; 85,577; 70,279; 62,095; 55,204; 49,510; 44,698;
+  38,120; 32,140; 26,468; 21,103; 16,774; 14,257; 13,627; 12,502;
+  11,735; 11,671; 13,915; 14,924; 16,472; 15,708; 12,690; 9,673; 7,196;
+  5,566; 4,807; 4,319; 3,047; 2,141; 1,848; 2,406; 2,963; 2,138;
+  1,222. The rise in rounds 35–36 is a second propagation wave. Round 39 is
+  running, and the primary comparison remains gated on a zero-change round.
+- The current-schema smoke audit and its exhaustive census both completed.
+  The census accounted for all 17 score rows and all 15 comparison rows. Its
+  categories exactly partition the occurrences: seven baseline-only drops,
+  one shared drop, one treatment-only drop, and six canonical-only rows. The
+  baseline has five canonicals and eight drops; treatment has two of each.
+- The audit can now inspect an explicitly pinned nonconverged baseline
+  iteration while reading markers from a separately preserved cap artifact.
+  Primary audits still reject any final shard with changed nodes. This keeps a
+  possible old cap-50 result distinct from the true-convergence comparison.
+- Full-text review labels now require the score and pair artifacts, verify both
+  persisted texts against the audited SHA-256 values, and cover exactly every
+  drop and every marker. The audit, materialization, census, and review suite
+  passes all 25 focused tests.
