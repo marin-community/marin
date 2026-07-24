@@ -28,7 +28,7 @@ on first use) and ranks by cosine distance; `grep` is a plain ILIKE substring sc
 newest-first — use it for identifiers and exact strings.
 
 Auth: Cloud SQL IAM — you connect as your own ADC identity (a member of the
-`eng-all@openathena.ai` group, granted read), so you need roles/cloudsql.instanceUser and
+`echo@openathena.ai` group, granted read), so you need roles/cloudsql.instanceUser and
 roles/cloudsql.client, no password.
 """
 

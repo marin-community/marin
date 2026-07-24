@@ -41,6 +41,6 @@ scripts/context_search.py show <id>                                   # full tex
 ## Access
 
 Cloud SQL IAM, no password: you connect as your own ADC identity, which must be a member
-of `eng-all@openathena.ai` (granted `roles/cloudsql.instanceUser` + `roles/cloudsql.client`).
+of `echo@openathena.ai` (granted `roles/cloudsql.instanceUser` + `roles/cloudsql.client`).
 Read-only on `chunks`. If your ADC is a service-account key, set `MARIN_DB_USER` or grant
 that principal directly.
