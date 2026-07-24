@@ -153,6 +153,41 @@ class GrugMuonConfig(MuonConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+def _grouped_nonexpert_transform(updates, params, transform_array, steps, eps, coefficient_type, use_kimi_scaling):
+    """Group same-shape 3D non-expert leaves and run ONE padded stack-sharded NS per shape group
+    (instead of one distributed NS per leaf). Numerically identical to the per-leaf path -- NS is
+    per-matrix and zero-padding NS's to zero and is sliced off -- but it collapses the collective
+    transients (one scatter/gather per shape, not per leaf) and lets a group whose total matrix count
+    is a multiple of the shard count skip padding entirely (e.g. the four [d,3072] shared gate/up
+    leaves at 2 shared experts = 4*48 = 192 = 3*64). Non-3D leaves fall through to ``transform_array``.
+    """
+    upd_paths = jax.tree_util.tree_leaves_with_path(updates)
+    leaves = [leaf for _, leaf in upd_paths]
+    par_leaves = jax.tree_util.tree_leaves(params) if params is not None else [None] * len(leaves)
+    _, treedef = jax.tree_util.tree_flatten(updates)
+    out: list = [None] * len(leaves)
+    groups: dict = {}
+    for i, ((path, u), p) in enumerate(zip(upd_paths, par_leaves)):
+        if hasattr(u, "ndim") and u.ndim == 3 and os.environ.get("SCALE_MUON_NO_NS") != "1":
+            groups.setdefault(tuple(u.shape), []).append(i)
+        else:
+            out[i] = transform_array(path, u, p)
+    for shape, idxs in groups.items():
+        layers = shape[0]
+        stacked = jnp.concatenate([leaves[i] for i in idxs], axis=0)  # [k*L, m, n]
+        ns = _newtonschulz_padded_stack_sharded(stacked, steps, eps, coefficient_type)
+        fan_in, fan_out = shape[-2], shape[-1]
+        scale = (
+            0.2 * jnp.sqrt(jnp.maximum(fan_in, fan_out))
+            if use_kimi_scaling
+            else jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
+        )
+        ns = ns * scale
+        for j, i in enumerate(idxs):
+            out[i] = ns[j * layers : (j + 1) * layers]
+    return jax.tree_util.tree_unflatten(treedef, out)
+
+
 def _grug_scale_with_muon(
     momentum=0.95,
     nesterov=True,
@@ -265,7 +300,12 @@ def _grug_scale_with_muon(
             updated *= scale
             return updated
 
-        if params is None:
+        if os.environ.get("SCALE_MUON_GROUP_NONEXPERT") == "1":
+            # Batch same-shape 3D non-expert leaves into one padded stack-sharded NS per shape group.
+            updates = _grouped_nonexpert_transform(
+                updates, params, transform_array, steps, muon_eps, coefficient_type, use_kimi_scaling
+            )
+        elif params is None:
             updates = jax.tree_util.tree_map_with_path(lambda path, x: transform_array(path, x, None), updates)
         else:
             updates = jax.tree_util.tree_map_with_path(transform_array, updates, params)
