@@ -503,7 +503,7 @@ class Controller:
 
         external_auth_policy = request_auth_policy(config.auth)
         proxy_decision_secret = secrets.token_urlsafe(32)
-        self._auth_policy = native_proxy_auth_policy(external_auth_policy, proxy_decision_secret)
+        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,

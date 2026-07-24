@@ -203,6 +203,17 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
     assert auth.jwt_manager is not None
     token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
 
+    auth_config = httpx.get(
+        f"{controller.url}/auth/config",
+        headers={"x-forwarded-for": "203.0.113.10"},
+    )
+    authenticated_auth_config = httpx.get(
+        f"{controller.url}/auth/config",
+        headers={
+            "authorization": f"Bearer {token}",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
     direct = httpx.post(
         f"{controller.url}/iris.cluster.ControllerService/ListJobs",
         json={},
@@ -235,6 +246,8 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
         },
     )
 
+    assert auth_config.json()["authenticated"] is False
+    assert authenticated_auth_config.json()["authenticated"] is True
     assert direct.status_code == 200
     assert forwarded.status_code == 401
     assert authenticated.status_code == 200

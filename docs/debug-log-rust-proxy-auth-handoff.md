@@ -21,10 +21,10 @@ the private Uvicorn server. Rigging intentionally refuses loopback and CIDR
 authentication when that header is present, so the Rust-to-Python hop discards
 the direct caller's trusted-network identity.
 
-Treating every request as loopback in Python is also unsafe unless Python can
-distinguish a request admitted by Rust from a caller that reached the private
-port directly. The private hop needs a capability-bound identity rather than
-another interpretation of the public request headers.
+The Python listener is loopback-only, so it can trust direct private ingress.
+The public Rust listener must reject unauthenticated RPCs before forwarding and
+pass authenticated callers' identities without asking Python to interpret the
+original public headers again.
 
 ## Changes to make
 
@@ -33,9 +33,8 @@ another interpretation of the public request headers.
 - Authenticate JWT, IAP, trusted-network, and permissive-mode callers in Rust.
 - Strip public credentials and caller-supplied internal headers before the
   private hop.
-- Stamp the verified user, role, and audience together with the per-process
-  decision secret. Python accepts only this identity and retains method and
-  resource authorization.
+- Stamp the verified user, role, and audience. Python trusts private ingress and
+  retains method and resource authorization.
 - Build the native extension from the checked-out Rust source in local tests and
   the controller Docker image.
 
@@ -47,8 +46,10 @@ controller RPCs returned HTTP 401.
 The native listener now owns public authentication. It removes `Authorization`,
 cookies, IAP assertions, and spoofed Iris-internal headers before forwarding to
 Uvicorn. A request that Rust authenticates carries a percent-encoded identity
-stamp plus the per-process decision secret. Python does not re-read the public
-credential; it accepts the stamp and applies Iris authorization.
+stamp. Python does not re-read the public credential; it trusts its loopback
+ingress, accepts the stamp when present, and applies Iris authorization. Rust
+rejects missing authentication on controller RPC paths while still forwarding
+public dashboard, login, health, bundle, and static routes.
 
 The boundary regressions pass against a source-built `marin-iris-native`: a
 trusted direct request and a valid bearer request return HTTP 200, a forwarded

@@ -1165,6 +1165,9 @@ async fn forward_controller(
         .verifier
         .verify_request(request.headers(), None, peer.ip(), direct_connection)
         .await;
+    if matches!(auth, VerifyOutcome::Missing) && request.uri().path().starts_with("/iris.") {
+        return error_response(StatusCode::UNAUTHORIZED, "authentication required");
+    }
     let handoff = match controller_handoff(state, auth) {
         Ok(handoff) => handoff,
         Err(response) => return *response,
