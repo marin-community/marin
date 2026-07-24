@@ -543,3 +543,37 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   `run_arms_b512.sh`): te_moe → nccl_ep → a2a_cute, d5120 L48 e64 top4
   seq4096 **b512** EP8 data8×expert8 (largest config that fits te_moe's
   unchunked no-drop capacity), one allocation, 3 in-job attempts per arm.
+- **RESULTS (`/mwittmann/ncclep-b512-arms`, all arms rc=0 first attempt, one
+  16-node allocation, steady = median over steps ≥ 8):**
+  | arm | steady MFU (B200 conv.) | s/step | tok/s | final loss |
+  |---|---|---|---|---|
+  | a2a_cute EP8 (incumbent) | **18.28 %** | 8.21 | 256 k | 8.761653 |
+  | nccl_ep EP8 (TE transport + QuACK FFN) | 17.15 % | 8.75 | 240 k | 8.759782 |
+  | te_moe EP8 (full TE MoE block) | 16.94 % | 8.86 | 237 k | 8.764898 |
+- Interpretation:
+  1. **The full TE block reproduces the seam's result, not beats it** — 16.94
+     vs 17.15 % is inside same-allocation step noise. The NCCLEP-006 concern
+     ("maybe the full block is faster than our integration") is answered: at
+     b512/EP8/64 GPUs on stock jax 0.10.1 + bf16 wire, NVIDIA's recommended
+     path lands in the same place, ~1.1–1.3 pp below a2a_cute. The Slack
+     claim "NCCL_EP less performant than a2a+sonic" survives the fairness
+     correction at this config, now with the recommended integration tested.
+  2. Corollary: our QuACK FFN seam ≈ TE's grouped-quantize+grouped GEMMs
+     (consistent with B200MFU-011, TE grouped_dense QuACK-class) and the
+     fused-router gain is negligible at this scale; the gap to a2a_cute is
+     in the EP transport+capacity structure, not the expert compute.
+  3. Loss parity three ways (8.7598/8.7617/8.7649); te_moe's +5e-3 vs the
+     others is consistent with the score-space bias placement.
+- Fairness caveats that still favor a future TE arm: bf16 wire only (the
+  deck's DeepSeek-v3 numbers ride MXFP8 grouped quant — explicitly
+  out-of-scope in today's moe.py); wheel predates #3231 (EP dispatch/combine
+  on XLA's collective stream) and #3226; stock jax, not NGC JAX 26.05
+  (ragged-dot fusion, multi-stream collectives, host offloading); command
+  buffers globally off for all three arms (control parity, but absolute
+  numbers depressed); no chunked mode in moe() → b1024 unchunkable on the
+  te_moe arm (our chunked seam covers it at 18.0 %, NCCLEP-007).
+- Decision: NCCLEP-009 complete; promote to #7331. Ranked follow-ups:
+  (1) rebuild TE at main tip for #3231/#3226 and rerun the TE arms;
+  (2) fp8/MXFP8 dispatch wire + grouped quant when moe.py grows quantizer
+  support (ties #7282); (3) NGC JAX container arm (deck stack, JAX-Toolbox
+  task-image work); (4) upstream ask: chunked-dispatch mode in moe().
