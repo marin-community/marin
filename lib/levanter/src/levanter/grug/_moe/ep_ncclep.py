@@ -90,6 +90,23 @@ def _local_expert_ffn(
     return expert_out.reshape(recv_tokens.shape)
 
 
+def _apply_recv_weights(
+    expert_out: jax.Array,
+    recv_weights: jax.Array,
+    token_counts: jax.Array,
+) -> jax.Array:
+    recv_rows = expert_out.shape[-2]
+    # HT dispatch leaves the over-allocation tail undefined; mask it in both the primal and transpose.
+    valid_rows = jnp.arange(recv_rows, dtype=jnp.int32) < jnp.sum(token_counts, dtype=jnp.int32)
+    active = valid_rows & jnp.isfinite(recv_weights) & (recv_weights != 0)
+    safe_weights = jnp.where(active, recv_weights, jnp.zeros((), dtype=recv_weights.dtype))
+    return jnp.where(
+        active[..., None],
+        expert_out * safe_weights[..., None].astype(expert_out.dtype),
+        jnp.zeros((), dtype=expert_out.dtype),
+    )
+
+
 @partial(jax.custom_vjp, nondiff_argnums=(0, 4))
 def _ep_dispatch(
     layer_config,
@@ -301,12 +318,7 @@ def moe_mlp_ep_ncclep(
             expert_w2,
             activation_fn=activation_fn,
         )
-        slot_weights = recv_weights[..., None].astype(expert_out.dtype)
-        weighted_out = jnp.where(
-            slot_weights != 0,
-            expert_out * slot_weights,
-            jnp.zeros((), dtype=expert_out.dtype),
-        )
+        weighted_out = _apply_recv_weights(expert_out, recv_weights, token_counts)
         return _ep_combine(
             layer_config,
             handle_memory,

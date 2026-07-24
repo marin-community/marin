@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import pytest
 from jax.sharding import AbstractMesh, PartitionSpec as P
 
-from levanter.grug._moe.ep_ncclep import moe_mlp_ep_ncclep, ncclep_receive_capacity
+from levanter.grug._moe.ep_ncclep import _apply_recv_weights, moe_mlp_ep_ncclep, ncclep_receive_capacity
 
 
 class _FakePrimitive:
@@ -50,6 +50,33 @@ def test_ncclep_receive_capacity_rejects_invalid_layouts(
 ) -> None:
     with pytest.raises(ValueError):
         ncclep_receive_capacity(global_tokens, top_k, ep_size)
+
+
+def test_ncclep_recv_weighting_masks_unused_rows_from_values_and_gradients() -> None:
+    expert_out = jnp.array(
+        [
+            [2.0, 3.0],
+            [5.0, 7.0],
+            [jnp.nan, jnp.nan],
+            [jnp.nan, jnp.nan],
+        ],
+        dtype=jnp.float32,
+    )
+    recv_weights = jnp.array([0.5, 0.25, jnp.nan, 1.0], dtype=jnp.float32)
+    token_counts = jnp.array([2], dtype=jnp.int32)
+
+    def weighted_sum(outputs, weights):
+        return _apply_recv_weights(outputs, weights, token_counts).sum()
+
+    weighted = _apply_recv_weights(expert_out, recv_weights, token_counts)
+    output_gradient, weight_gradient = jax.grad(weighted_sum, argnums=(0, 1))(expert_out, recv_weights)
+
+    assert jnp.array_equal(weighted, jnp.array([[1.0, 1.5], [1.25, 1.75], [0.0, 0.0], [0.0, 0.0]]))
+    assert jnp.array_equal(
+        output_gradient,
+        jnp.array([[0.5, 0.5], [0.25, 0.25], [0.0, 0.0], [0.0, 0.0]]),
+    )
+    assert jnp.array_equal(weight_gradient, jnp.array([5.0, 12.0, 0.0, 0.0]))
 
 
 def test_ncclep_backend_passes_rank_local_shapes_to_transformer_engine(
