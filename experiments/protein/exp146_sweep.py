@@ -193,12 +193,17 @@ LR_SCHEDULE: str = "cosine"  # AdamW + cosine decay
 NUM_EVALS_PER_EPOCH: int = 2
 WANDB_WATCH_CONFIG = WatchConfig(watch_targets=[], interval=0)
 
-# First-pass estimates. Exp117's calibrated 1.5B values are the anchor; 3B and
-# 6B must be retuned from smoke runs before the production sweep.
+# Batch-fit correction factors. The 1.5B row comes from exp117 calibration; the
+# 3B row and 6B/v6e were confirmed with representative calibration smoke runs
+# that exercised training, checkpointing, and eval. The 6B/v5p value is an
+# extrapolated guess from 3B/v5p and 6B/v6e because v5p capacity did not become
+# available for a full run. The 6B/v5e (v5litepod) value is not a viable
+# calibrated result: 6B still OOMed at TP=1 once per-device batch reached 1, so
+# correction-factor tuning alone cannot make that case representative.
 CORRECTION_FACTORS: dict[str, dict[str, float]] = {
     "1_5b": {"v5e": 0.50, "v6e": 0.30, "v5p": 0.45},
-    "3b": {"v5e": 0.65, "v6e": 0.42, "v5p": 0.60},
-    "6b": {"v5e": 0.80, "v6e": 0.55, "v5p": 0.75},
+    "3b": {"v5e": 1.20, "v6e": 0.30, "v5p": 0.30},
+    "6b": {"v5e": 0.80, "v6e": 0.70, "v5p": 0.70},
 }
 
 
