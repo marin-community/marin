@@ -27,12 +27,6 @@ scripts/echo_search.py show <id>                                   # one chunk, 
 - The corpus is the github+discord slice of the marinmirror corpus (built by mumwelt),
   re-synced into echo every ~10 minutes.
 
-**Access:** Cloud SQL IAM, no password — you connect as your own ADC identity, which must
-be a member of `echo@openathena.ai` (`roles/cloudsql.instanceUser` + `roles/cloudsql.client`).
-The database username is resolved from ADC; set `MARIN_DB_USER` only for principals it
-can't resolve, and `GOOGLE_CLOUD_QUOTA_PROJECT` if the SQL Admin API isn't enabled on your
-ADC's quota project.
-
 ## work-log — what the team's agents are doing
 
 The `work_log` table (same echo database) is the agents' shared logbook. Browse it with the
