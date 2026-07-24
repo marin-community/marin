@@ -419,12 +419,104 @@ def _run_broker_worker(
                 time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
+def _submit_broker_workers(
+    run_id: str,
+    config: RemoteInferenceConfig,
+    broker: BrokerConfig,
+    request_provider: InferenceRequestProvider,
+) -> list[JobHandle]:
+    iris = config.iris
+    client = current_client()
+    jobs: list[JobHandle] = []
+    for worker_index in range(config.instances):
+        worker_id = f"inference-worker-{run_id}-{worker_index}"
+        jobs.append(
+            client.submit(
+                JobRequest(
+                    name=worker_id,
+                    entrypoint=Entrypoint.from_callable(
+                        _run_broker_worker,
+                        args=(worker_id, config.model, config.engine, iris, broker, request_provider),
+                    ),
+                    resources=iris.worker_resources,
+                    environment=iris.worker_environment,
+                    max_retries_failure=broker.max_retries_failure,
+                    max_retries_preemption=broker.max_retries_preemption,
+                    priority=iris.priority,
+                )
+            )
+        )
+    return jobs
+
+
+def _registered_worker_metadata(request_provider: InferenceRequestProvider) -> InferenceWorkerMetadata:
+    metadata_by_worker = request_provider.worker_metadata()
+    if not metadata_by_worker:
+        raise RuntimeError("Brokered inference became ready before a worker registered metadata")
+    return next(iter(metadata_by_worker.values()))
+
+
+@contextlib.contextmanager
+def _expose_brokered_inference(
+    config: RemoteInferenceConfig,
+    broker: BrokerConfig,
+    endpoint_name: str,
+    request_provider: InferenceRequestProvider,
+    response_provider: InferenceResponseProvider,
+    worker_jobs: list[JobHandle],
+    advertise_host: str,
+) -> Iterator[RemoteInferenceSession]:
+    model = config.model
+    iris = config.iris
+    proxy = broker.proxy
+    with serve_inference_proxy(
+        broker=response_provider,
+        model=model.model_id,
+        host=advertise_host,
+        port=proxy.port,
+        request_timeout_seconds=proxy.request_timeout_seconds,
+        readiness_timeout_seconds=proxy.readiness_timeout_seconds,
+        max_pending_requests=proxy.max_pending_requests,
+        response_fetch_batch_size=proxy.response_fetch_batch_size,
+        server_start_timeout_seconds=proxy.server_start_timeout_seconds,
+        ignored_request_fields=proxy.ignored_request_fields,
+    ) as running_model:
+        response = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
+        response.raise_for_status()
+        worker_metadata = _registered_worker_metadata(request_provider)
+        with iris_ctx().registry.registered(
+            endpoint_name,
+            _server_root(running_model),
+            _endpoint_metadata(
+                model=model.model_id,
+                backend=worker_metadata.backend_name,
+                accelerator=_accelerator_label(iris),
+                tensor_parallel_size=worker_metadata.tensor_parallel_size,
+                streaming=False,
+                proxy_timeout_seconds=proxy.request_timeout_seconds,
+            ),
+            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ):
+            internal_model = replace(running_model, tokenizer=model.tokenizer)
+            exposed_model = (
+                _capability_model(internal_model, endpoint_name, config.capability_origin)
+                if config.capability_origin is not None
+                else internal_model
+            )
+            yield RemoteInferenceSession(
+                model=exposed_model,
+                jobs=tuple(worker_jobs),
+                streaming=False,
+                tensor_parallel_size=worker_metadata.tensor_parallel_size,
+                backend_name=worker_metadata.backend_name,
+            )
+
+
 @contextlib.contextmanager
 def _start_brokered_inference(
     config: RemoteInferenceConfig,
     broker: BrokerConfig,
 ) -> Iterator[RemoteInferenceSession]:
-    model = config.model
     iris = config.iris
     client = current_client()
     job_info = get_job_info()
@@ -445,69 +537,18 @@ def _start_brokered_inference(
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
-        for worker_index in range(config.instances):
-            worker_id = f"inference-worker-{run_id}-{worker_index}"
-            job = client.submit(
-                JobRequest(
-                    name=worker_id,
-                    entrypoint=Entrypoint.from_callable(
-                        _run_broker_worker,
-                        args=(worker_id, model, config.engine, iris, broker, request_provider),
-                    ),
-                    resources=iris.worker_resources,
-                    environment=iris.worker_environment,
-                    max_retries_failure=broker.max_retries_failure,
-                    max_retries_preemption=broker.max_retries_preemption,
-                    priority=iris.priority,
-                )
-            )
-            worker_jobs.append(job)
-        proxy = broker.proxy
-        with serve_inference_proxy(
-            broker=response_provider,
-            model=model.model_id,
-            host=job_info.advertise_host,
-            port=proxy.port,
-            request_timeout_seconds=proxy.request_timeout_seconds,
-            readiness_timeout_seconds=proxy.readiness_timeout_seconds,
-            max_pending_requests=proxy.max_pending_requests,
-            response_fetch_batch_size=proxy.response_fetch_batch_size,
-            server_start_timeout_seconds=proxy.server_start_timeout_seconds,
-            ignored_request_fields=proxy.ignored_request_fields,
-        ) as running_model:
-            response = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
-            response.raise_for_status()
-            metadata_by_worker = request_provider.worker_metadata()
-            if not metadata_by_worker:
-                raise RuntimeError("Brokered inference became ready before a worker registered metadata")
-            worker_metadata = next(iter(metadata_by_worker.values()))
-            with iris_ctx().registry.registered(
-                endpoint_name,
-                _server_root(running_model),
-                _endpoint_metadata(
-                    model=model.model_id,
-                    backend=worker_metadata.backend_name,
-                    accelerator=_accelerator_label(iris),
-                    tensor_parallel_size=worker_metadata.tensor_parallel_size,
-                    streaming=False,
-                    proxy_timeout_seconds=proxy.request_timeout_seconds,
-                ),
-                access=EndpointAccess.ENDPOINT_ACCESS_LINK,
-            ):
-                internal_model = replace(running_model, tokenizer=model.tokenizer)
-                exposed_model = (
-                    _capability_model(internal_model, endpoint_name, config.capability_origin)
-                    if config.capability_origin is not None
-                    else internal_model
-                )
-                started = True
-                yield RemoteInferenceSession(
-                    model=exposed_model,
-                    jobs=tuple(worker_jobs),
-                    streaming=False,
-                    tensor_parallel_size=worker_metadata.tensor_parallel_size,
-                    backend_name=worker_metadata.backend_name,
-                )
+        worker_jobs = _submit_broker_workers(run_id, config, broker, request_provider)
+        with _expose_brokered_inference(
+            config,
+            broker,
+            endpoint_name,
+            request_provider,
+            response_provider,
+            worker_jobs,
+            job_info.advertise_host,
+        ) as session:
+            started = True
+            yield session
     except Exception as exc:
         if not started:
             raise RemoteInferenceStartupError(
