@@ -106,7 +106,7 @@ def _directory_block_dfs(files: list[StackV3File]) -> list[StackV3File]:
     return ordered_files
 
 
-def row_to_doc(row: dict) -> list[dict]:
+def row_to_docs(row: dict) -> list[dict]:
     files = _directory_block_dfs(row["files"])
     sections = [f"{REPOSITORY_HEADER} {row['repo_path']}"]
     sections.extend(f"{FILE_HEADER} {file['file_path']}\n{file['content']}" for file in files)
@@ -131,7 +131,7 @@ def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(prefix_join(input_path, TRAIN_PARQUET_GLOB))
         .flat_map(load_parquet)
-        .flat_map(row_to_doc)
+        .flat_map(row_to_docs)
         .write_parquet(
             prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             schema=OUTPUT_SCHEMA,

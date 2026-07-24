@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from marin.datakit.download.stack_v3 import (
     HF_DATASET_ID,
     SERIALIZATION_FORMAT,
-    row_to_doc,
+    row_to_docs,
     transform,
 )
 
@@ -27,7 +27,7 @@ def _file(path: str, content: str, content_id: str) -> dict:
     }
 
 
-def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
+def test_row_to_docs_keeps_same_directory_files_together_in_depth_first_order():
     row = {
         "repo_path": "marin-community/marin",
         "repo_id": 123,
@@ -42,7 +42,7 @@ def test_row_to_doc_keeps_same_directory_files_together_in_depth_first_order():
         ],
     }
 
-    [doc] = row_to_doc(row)
+    [doc] = row_to_docs(row)
 
     assert doc["text"] == (
         "Repository: marin-community/marin\n\n"

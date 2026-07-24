@@ -26,6 +26,7 @@ values as nulls while fixing their logical types across every batch.
 A local transform containing a null `github_metadata.forked_from` now writes
 that field as nullable string and reads the null value back unchanged.
 
-## Future work
+## Production validation
 
-- [ ] Confirm both production transforms pass the affected shards.
+Relaunch the GCP and CoreWeave transforms and confirm the affected shards
+complete before considering the incident resolved.
