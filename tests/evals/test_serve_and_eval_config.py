@@ -190,6 +190,7 @@ def test_client_forwards_seed_and_extra_generation_kwargs():
 def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving(monkeypatch):
     """Grug must use one immutable checkpoint revision for both vLLM metadata paths."""
     model = "penfever/grug-67b-a2b-sft-s2-thinking-step630"
+    revision = "e671a2fd4ded0cadbae27a72956c3220c886b26f"
     profile = _grug_profile(model)
     args = profile["vllm_extra_args"]
 
@@ -198,12 +199,12 @@ def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving
         "8",
         "--enable-expert-parallel",
         "--revision",
-        "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
+        revision,
         "--tokenizer-revision",
-        "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
+        revision,
     )
     assert "--model-loader-extra-config" not in args
-    assert profile["revision"] == "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b"
+    assert profile["revision"] == revision
     assert profile["tokenizer"] == model
 
     # The repaired checkpoint embeds the authoritative Delphi template.  The

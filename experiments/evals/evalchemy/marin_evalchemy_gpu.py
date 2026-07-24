@@ -191,10 +191,11 @@ def _grug_profile(model: str) -> dict:
     return {
         "tp": 1,  # 256-expert MoE: experts shard via data + expert parallelism, NOT tensor parallelism
         # ``main`` was repaired at this exact commit to carry the byte-identical
-        # Delphi thinking template.  Pinning the immutable model *and tokenizer*
-        # revision lets vLLM consume the checkpoint's own metadata; do not keep a
-        # separately fetched template as a second, drift-prone source of truth.
-        "revision": "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
+        # Delphi thinking template, both turn/document EOS IDs, and the public
+        # Transformers fast-tokenizer class. Pinning the immutable model *and
+        # tokenizer* revision lets vLLM and Evalchemy consume one metadata source;
+        # do not keep a separately fetched template as a second drift-prone source.
+        "revision": "e671a2fd4ded0cadbae27a72956c3220c886b26f",
         # Keep the tokenizer in the model repository.  The tokenizer-only
         # companion repo has a different commit history, so a model metadata
         # revision is not a valid --tokenizer-revision there.
@@ -208,9 +209,9 @@ def _grug_profile(model: str) -> dict:
             "8",
             "--enable-expert-parallel",
             "--revision",
-            "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
+            "e671a2fd4ded0cadbae27a72956c3220c886b26f",
             "--tokenizer-revision",
-            "c8e0e4ae6a892bced2263a6894cd61be8aa3a93b",
+            "e671a2fd4ded0cadbae27a72956c3220c886b26f",
         ),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
