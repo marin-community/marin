@@ -105,9 +105,9 @@ MIN_FILES_PER_SHARD = 15
 
 # Native (maturin) packages, keyed by their owning scope. A change under a crate's
 # rust/ tree is invisible to the Python import graph, so classify force-selects the
-# owning scope and builds it from source. Its own tests cover the extension;
-# downstream consumers are selected only by their Python-level changes and run
-# against the prebuilt wheel.
+# owning scope and builds it from source. When the same diff changes that package's
+# Python surface, selected consumers also need the source build because the published
+# wheel may implement the previous ABI.
 NATIVE_CRATE_DIR: dict[str, str] = {
     "dupekit": "lib/dupekit/rust",
     "finelog": "lib/finelog/rust",
@@ -433,6 +433,18 @@ def extra_suites(changed_files: list[str]) -> list[str]:
     )
 
 
+def required_source_build_scopes(classification: ClassifyResult) -> set[str]:
+    """Scopes whose selected test legs must use native packages from this checkout."""
+    coordinated_native_changes = {
+        scope
+        for scope in classification.native_changed
+        if any(module == scope or module.startswith(f"{scope}.") for module in classification.src_modules)
+    }
+    if coordinated_native_changes:
+        return set(SCOPES)
+    return set(classification.native_changed)
+
+
 # ---------------------------------------------------------------------------
 # Test selection
 # ---------------------------------------------------------------------------
@@ -597,11 +609,10 @@ def main() -> None:
     classification = classify(changed, repo_root)
     suites = extra_suites(changed)
 
-    # The scopes whose native extension's Rust changed build it from source; every other
-    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
-    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
-    # fast prebuilt-wheel path.
-    source_build_scopes = set(classification.native_changed)
+    # Rust-only changes source-build the owning scope. A coordinated native/Python API
+    # change source-builds every selected consumer because the published wheel may expose
+    # the previous ABI. This is independent of full vs. diff-driven selection.
+    source_build_scopes = required_source_build_scopes(classification)
 
     if args.run_all_tests:
         reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)

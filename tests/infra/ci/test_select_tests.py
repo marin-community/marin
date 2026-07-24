@@ -18,6 +18,7 @@ from infra.ci.select_tests import (
     full_matrix,
     is_test_module,
     matrix_leg,
+    required_source_build_scopes,
     scope_legs,
     shard_files,
 )
@@ -26,7 +27,7 @@ from infra.ci.select_tests import (
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
     """Mirror the diff-driven branch of select_tests.main without git."""
     classification = classify(changed_files, repo_root)
-    source_build_scopes = set(classification.native_changed)
+    source_build_scopes = required_source_build_scopes(classification)
     if classification.broad:
         return full_matrix(repo_root, source_build_scopes)
     return compute_matrix(
@@ -369,6 +370,26 @@ def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> No
 
     assert _leg(matrix, "finelog")["setup"] == "rust"
     assert _leg(matrix, "iris")["setup"] == ""
+
+
+def test_coordinated_native_api_change_source_builds_selected_consumers(tmp_path: Path) -> None:
+    """A native crate and its Python surface can change ABI together, so selected
+    consumers must test against the source build instead of the published wheel."""
+    write(tmp_path, "lib/finelog/src/finelog/__init__.py", "from finelog import native\n")
+    write(tmp_path, "lib/finelog/src/finelog/native.py", "X = 1\n")
+    write(tmp_path, "lib/finelog/tests/test_native.py", "from finelog.native import X\n")
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/log.py", "from finelog.native import X\n")
+    write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
+
+    matrix = select_matrix(
+        ["lib/finelog/rust/pyext/src/lib.rs", "lib/finelog/src/finelog/native.py"],
+        tmp_path,
+    )
+
+    assert scopes_in(matrix) == {"finelog", "iris"}
+    assert _leg(matrix, "finelog")["setup"] == "rust"
+    assert _leg(matrix, "iris")["setup"] == "rust"
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
