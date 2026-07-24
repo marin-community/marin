@@ -113,8 +113,6 @@ def main() -> None:
         gcp_provider=gcp_provider,
     )
 
-    # The echo HTTP API: one IAP-gated service holding the DB identity and the query model,
-    # so agents reach the corpus over HTTP without their own database grants.
     api = CloudRunService(
         "api",
         CloudRunServiceArgs(

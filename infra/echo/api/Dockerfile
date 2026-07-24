@@ -14,5 +14,4 @@ COPY api/app.py .
 # Bake the query embedding model into the image so the first request is not a cold download.
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
-# Cloud Run injects PORT; uvicorn serves the FastAPI app on it.
 CMD exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}
