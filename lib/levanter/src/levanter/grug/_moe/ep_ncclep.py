@@ -75,7 +75,6 @@ def _local_expert_ffn(
     valid_rows = jnp.arange(dispatched.shape[0], dtype=jnp.int32) < jnp.sum(group_sizes, dtype=jnp.int32)
     dispatched = jnp.where(valid_rows[:, None], dispatched, jnp.zeros((), dtype=dispatched.dtype))
     dispatched = tree_checkpoint_name(dispatched, _CHECKPOINT_DISPATCH_INPUT)
-    group_sizes = group_sizes.at[-1].add(dispatched.shape[0] - jnp.sum(group_sizes, dtype=jnp.int32))
 
     w13_out = tree_checkpoint_name(
         ragged_dot(dispatched, w_up_gate, group_sizes, implementation="triton"),
