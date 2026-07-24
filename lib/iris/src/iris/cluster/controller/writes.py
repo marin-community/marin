@@ -314,9 +314,8 @@ def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> Non
 
     ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
     files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
-    explicitly through the projection — which also keeps the in-memory endpoint
-    cache in sync, something the old CASCADE never did (callers used to remove
-    endpoints separately for exactly that reason).
+    explicitly through the projection, which keeps the in-memory endpoint cache in
+    sync as well as the row.
 
     ``record_tombstone=False`` is for a deletion that immediately re-creates the
     job id for the same requester (a federated resubmission replacing a finished

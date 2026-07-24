@@ -52,13 +52,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from ._test_support import ControllerTestState
-from .conftest import promote_queued_federation, query_task, submit_direct_job
+from .conftest import promote_queued_federation, submit_direct_job
 from .test_federation_handoff import (
     _attach_federation,
     _cluster_pinned_request,
     _InProcessPeerConnection,
     _make_service,
+    register_endpoint_on_task,
 )
 
 # The parent cluster's id: the requester stamped on the handoff, the federation
@@ -135,27 +135,6 @@ def _federation_auth(requester: str = PARENT_ID):
     return mint_token, FederationTokenVerifier({requester: key.public_pem}), key.public_pem
 
 
-def _register_endpoint(
-    peer_service: ControllerServiceImpl,
-    peer_state: ControllerTestState,
-    job_id: JobName,
-    address: str,
-) -> str:
-    """Register a LINK endpoint on the peer's received-job task; return its id."""
-    task = job_id.task(0)
-    response = peer_service.endpoint_service.register_endpoint(
-        controller_pb2.Controller.RegisterEndpointRequest(
-            name=ENDPOINT_NAME,
-            address=address,
-            task_id=task.to_wire(),
-            attempt_id=query_task(peer_state, task).current_attempt_id,
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
-        ),
-        None,
-    )
-    return response.endpoint_id
-
-
 @pytest.fixture
 def threads() -> Iterator[ThreadContainer]:
     container = ThreadContainer()
@@ -165,21 +144,11 @@ def threads() -> Iterator[ThreadContainer]:
         container.stop()
 
 
-def _register_local_link_endpoint(
-    peer_service: ControllerServiceImpl, peer_state, task_id: JobName, address: str
-) -> str:
-    """Register a LINK endpoint on a locally-owned (never handed-off) task."""
-    response = peer_service.endpoint_service.register_endpoint(
-        controller_pb2.Controller.RegisterEndpointRequest(
-            name=ENDPOINT_NAME,
-            address=address,
-            task_id=task_id.to_wire(),
-            attempt_id=query_task(peer_state, task_id).current_attempt_id,
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
-        ),
-        None,
+def _register_link_endpoint(peer_service: ControllerServiceImpl, peer_state, task_id: JobName, address: str) -> str:
+    """Register this module's LINK endpoint on ``task_id`` at ``address``; return its id."""
+    return register_endpoint_on_task(
+        peer_service, peer_state, task_id, ENDPOINT_NAME, EndpointAccess.ENDPOINT_ACCESS_LINK, address
     )
-    return response.endpoint_id
 
 
 def test_absorbed_local_link_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path, log_client, threads):
@@ -198,7 +167,7 @@ def test_absorbed_local_link_endpoint_serves_through_the_parent_proxy_end_to_end
         # A local job on the peer (not a handoff): the peer materializes its own task
         # and registers a link endpoint on it. There is no RECEIVED handle.
         [local_task] = submit_direct_job(peer_state, "local-serve")
-        _register_local_link_endpoint(peer_service, peer_state, local_task, upstream_url)
+        _register_link_endpoint(peer_service, peer_state, local_task, upstream_url)
 
         # The peer's received-handle check returns False for this job — so if the
         # forward is authorized, it is authorized by the link-access relaxation alone.
@@ -306,7 +275,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
         # the endpoint on it.
         job_id = JobName.from_wire(parent_service.launch_job(_cluster_pinned_request("fed-serve"), None).job_id)
         promote_queued_federation(manager, parent_state)
-        endpoint_id = _register_endpoint(peer_service, peer_state, job_id, upstream_url)
+        endpoint_id = _register_link_endpoint(peer_service, peer_state, job_id.task(0), upstream_url)
 
         # Peer dashboard: enforces real federation auth on the inbound /proxy and
         # authorizes it by the RECEIVED handle the handoff created on the peer.

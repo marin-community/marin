@@ -481,18 +481,23 @@ def test_federation_sync_binds_the_requester_to_the_authenticated_peer(tmp_path,
             )
 
 
-def _register_local_endpoint(
+def register_endpoint_on_task(
     peer_service: ControllerServiceImpl,
     peer_state: ControllerTestState,
     task_id: JobName,
     name: str,
     access: int,
+    address: str = "http://10.0.0.5:8000",
 ) -> str:
-    """Register an endpoint of ``access`` on a locally-owned (non-federated) task."""
+    """Register an endpoint of ``access`` on ``task_id``; return its id.
+
+    Works for a task on a handed-off (received) job or a locally-owned one — the
+    registry does not distinguish. Shared with the federation-proxy e2e tests.
+    """
     response = peer_service.endpoint_service.register_endpoint(
         controller_pb2.Controller.RegisterEndpointRequest(
             name=name,
-            address="http://10.0.0.5:8000",
+            address=address,
             task_id=task_id.to_wire(),
             attempt_id=query_task(peer_state, task_id).current_attempt_id,
             access=access,
@@ -509,8 +514,8 @@ def test_federation_sync_absorbs_local_link_endpoints_but_not_private(tmp_path, 
     with ExitStack() as stack:
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         [task_id] = submit_direct_job(peer_state, "local-serve")
-        _register_local_endpoint(peer_service, peer_state, task_id, "/serve/link", EndpointAccess.ENDPOINT_ACCESS_LINK)
-        _register_local_endpoint(
+        register_endpoint_on_task(peer_service, peer_state, task_id, "/serve/link", EndpointAccess.ENDPOINT_ACCESS_LINK)
+        register_endpoint_on_task(
             peer_service, peer_state, task_id, "/serve/private", EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         )
 
