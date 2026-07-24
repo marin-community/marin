@@ -2976,3 +2976,19 @@ author: dlwh
   - The user accepts at most `0.2%` relative error for explicitly approximate QuACK/NCCL_EP/FP8 comparisons. Loss and gradient validation remain strict, exact XLA transport remains bitwise, and no overflow-drop policy is enabled by this fix.
 - Next action:
   - Commit and push the exact-capacity correction, then run the unchanged reduced L8 gate with lower XLA preallocation. If it executes finite steps, compare strict loss/gradient behavior before scaling to L24. If the exact 524,288-row flat layout OOMs, investigate an explicitly approximate overflow-drop variant under the accepted `0.2%` ceiling rather than silently changing semantics.
+
+### 2026-07-24 15:14 PDT - r11k clears exact-capacity execution but poisons the next update
+- Hypothesis: Provisioning Transformer Engine's documented 524,288-row worst-case receive extent will clear the prepare trap and execute finite reduced-pipeline training without exhausting H100 memory.
+- Commit Hash: `210a5c6e8f` (`[levanter] Provision exact NCCL EP receive capacity`).
+- Command: matched L8/d2560/e64/top-k4/seq4096/b512/m16 explicit-MPMD `std_1f1b` gate, four H100x8 nodes, 16 microbatches, CuTe FA4, Pallas-Triton `block_k=32`/8 warps, `save_moe`, XLA preallocation `0.55`, three steps, and `--xla_gpu_shard_autotuning=false`. Parent `/dlwh/iris-run-job-20260724-214550`; child `/dlwh/iris-run-job-20260724-214550/grug-train-jaxpp-rno2a-ncclep-exactcap-r11k-l8-e64k4-b512-s4096-p4m16-20260724-1444`.
+- Results:
+  - All 32 ranks bootstrapped four NCCL_EP groups with `max_tokens_per_rank=16384` and `recv_capacity_per_rank=524288`. All stages compiled forward, backward, accumulation, averaging, and update programs. The prior padded-EM trap did not recur, and no OOM occurred.
+  - The first execution produced finite `train/loss=11.79250431060791`. Its compilation-contaminated metrics were `276.2362775s`, `7,591.8776 tokens/s`, and `15.8435726% MFU`; they are not a steady-state performance result.
+  - The immediately following execution returned NaN on the training ranks and stopped before a finite gradient norm was captured. W&B finished at global step one: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ncclep-exactcap-r11k-l8-e64k4-b512-s4096-p4m16-20260724-1444>.
+  - Iris began an automatic retry after distributed shutdown aborted. The babysitter stopped only this parent. Parent, child, all tasks, and matching pods are terminal.
+- Interpretation:
+  - Exact flat-layout capacity is memory-feasible for the reduced target geometry and fixes the prepare failure.
+  - A finite first forward followed by an immediate NaN is consistent with undefined over-allocation rows entering the backward/update path. Transformer Engine documents that HT dispatch leaves the receive tail uninitialized. The branch masked invalid token inputs before grouped GEMMs but weighted every receive row, so undefined tail weights or cotangents could poison parameter gradients.
+  - Commit `f35a6414c2` derives valid rows from `sum(token_counts)` and excludes tail rows plus non-finite/zero routing weights from both the weighting primal and transpose. A focused regression proves NaN tail values produce exact zero outputs and gradients; focused tests pass `7/7`, and changed-file precommit including Pyrefly passes. This preserves exact routed assignments and does not use the `0.2%` approximate-path allowance.
+- Next action:
+  - Babysit r11l parent `/dlwh/iris-run-job-20260724-221415`, which changes only the receive-tail mask and runs four steps. Require at least two finite post-compilation executions before scaling to the L24 target.
