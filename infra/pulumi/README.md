@@ -139,23 +139,10 @@ pulumi config rm marin-iac:import
 pulumi up       # normal run, adopt=false now — creates the remaining components fresh
 ```
 
-The Grafana observer RBAC was created live before Pulumi ownership. Adopt only that component
-on each configured Grafana cluster:
-
-```bash
-pulumi stack select <cluster>
-pulumi config set marin-iac:import true
-target="urn:pulumi:<cluster>::marin-iac::marin:coreweave:GrafanaObserverRbac::grafana-observer-rbac"
-pulumi preview --target "$target"
-pulumi up --target "$target"
-pulumi config rm marin-iac:import
-```
-
-Do not leave `marin-iac:import` set. A CoreWeave token rotation creates a new Managed Auth
-username (`cwtoken-…`). Append it to `grafana_observer_rbac.usernames` in all three cluster
-configs and run a normal preview/up for each stack before switching Grafana to the new token.
-Remove the old username and update the stacks again only after the new Grafana revision passes
-its bridge checks.
+A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
+`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+each stack before switching Grafana to the new token. Remove the old username and update the
+stacks again only after the new Grafana revision passes its bridge checks.
 
 ### Backend
 
