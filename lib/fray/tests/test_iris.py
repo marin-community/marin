@@ -14,6 +14,7 @@ import pytest
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
+    IrisJobHandle,
     convert_constraints,
     resolve_coscheduling,
     wrap_multiprocess,
@@ -98,6 +99,13 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
 
+    def test_target_cluster_produces_eq_constraint(self):
+        constraints = convert_constraints(ResourceConfig(target_cluster="cw-us-east-02a"))
+        cluster_constraints = [constraint for constraint in constraints if constraint.key == "cluster"]
+        assert len(cluster_constraints) == 1
+        assert cluster_constraints[0].op == ConstraintOp.EQ
+        assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
@@ -133,6 +141,20 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+def test_iris_job_handle_returns_a_globally_bounded_tail():
+    job = MagicMock()
+    job.job_id = "/user/job"
+    job.logs.return_value = [
+        MagicMock(data="task-0 earlier\n"),
+        MagicMock(data="task-1 latest\n"),
+    ]
+
+    lines = IrisJobHandle(job).logs(max_lines=2)
+
+    assert lines == ("task-0 earlier", "task-1 latest")
+    job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
 class TestResourceConfigScale:

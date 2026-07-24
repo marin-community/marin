@@ -10,9 +10,14 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
-from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION, VllmEngineConfig, VllmLauncherType, VllmSource
+from marin.inference.config import (
+    DEFAULT_CUDA_VLLM_VERSION,
+    InferenceModelConfig,
+    VllmEngineConfig,
+    VllmLauncherType,
+    VllmSource,
+)
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -84,7 +89,8 @@ class VllmBackend:
             engine_kwargs["max_model_len"] = spec.max_model_len
         if self.config.max_num_batched_tokens is not None:
             engine_kwargs["max_num_batched_tokens"] = self.config.max_num_batched_tokens
-        model = ModelConfig(name=spec.model, path=spec.model_path, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)
+        revision_args = ("--revision", spec.revision) if spec.revision is not None else ()
         with _chat_template_argument(spec.chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
@@ -98,7 +104,8 @@ class VllmBackend:
                         else ()
                     ),
                     "--served-model-name",
-                    spec.model,
+                    spec.api_model,
+                    *revision_args,
                     *chat_template_args,
                     *self.config.extra_args,
                 ],
@@ -108,6 +115,6 @@ class VllmBackend:
                     raise RuntimeError("vLLM server did not report a model id")
                 yield VllmServedModel(
                     base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
-                    model_id=environment.model_id,
+                    model_id=spec.api_model,
                     environment=environment,
                 )

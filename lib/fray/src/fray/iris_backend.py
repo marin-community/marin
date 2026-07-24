@@ -26,7 +26,9 @@ from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
@@ -134,6 +136,14 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    if resources.target_cluster:
+        constraints.append(
+            Constraint.create(
+                key=CLUSTER_CONSTRAINT_KEY,
+                op=ConstraintOp.EQ,
+                value=resources.target_cluster,
+            )
+        )
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
@@ -205,12 +215,6 @@ class IrisJobHandle:
         self._job = job
 
     @property
-    def iris_job(self) -> IrisJob:
-        """Iris-native job handle used for logs and state inspection."""
-
-        return self._job
-
-    @property
     def job_id(self) -> str:
         return str(self._job.job_id)
 
@@ -231,6 +235,10 @@ class IrisJobHandle:
                 raise
             logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
+
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return the most recent Iris log lines across all tasks."""
+        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
         self._job.terminate()
@@ -501,7 +509,7 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
+        endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
         for ep in endpoints:

@@ -115,7 +115,7 @@ class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
     ``metrics`` is ``{task: {metric: value}}`` as produced by
-    :meth:`~marin.evaluation.eval_result.EvalchemyResult.task_metrics`; it is empty when the run did
+    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
     not reach the metric-reading stage (an infra failure). The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
@@ -146,7 +146,7 @@ class EvalRunRecord(BaseModel):
     results_path: str
     metrics: dict[str, dict[str, float]]
     jobs: dict[str, str]
-    """Pipeline role (``orchestrator``/``serve``/``eval``) to iris job path, for every job the run
+    """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
     log_tails: dict[str, tuple[str, ...]]
     """For failed runs, the last log lines of the child job(s) behind the failure, keyed like

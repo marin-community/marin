@@ -1,0 +1,13 @@
+name: devstral-small-2-24b-instruct-2512
+location: mistralai/Devstral-Small-2-24B-Instruct-2512
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  swap_space_gb: 32
+  tool_call_parser: mistral
+  vllm_extra_args:
+  - --enable-prefix-caching
