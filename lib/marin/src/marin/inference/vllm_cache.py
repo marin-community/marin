@@ -6,13 +6,13 @@
 import dataclasses
 import hashlib
 import logging
-import multiprocessing
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import time
 import zipfile
-from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, TypeVar
@@ -35,7 +35,6 @@ ARCHIVE_FILENAME = "cache.zip"
 _CACHE_TTL_DAYS = 30
 _CACHE_PREFIX = "vllm-compilation-cache"
 _TRANSFER_DEADLINE_SECONDS = 120
-_TRANSFER_START_METHOD = "forkserver"
 _MAX_METADATA_BYTES = 1 << 20
 _MAX_ARCHIVE_BYTES = 20 << 30
 _MAX_EXTRACTED_BYTES = 20 << 30
@@ -48,6 +47,7 @@ _CHAT_TEMPLATE_ARG = "--chat-template"
 _CHAT_TEMPLATE_DIGEST_ARG = "--chat-template-sha256"
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _CACHE_ALL_ENTRIES = "-1"
+_TRANSFER_HELPER = "from marin.inference.vllm_cache import _transfer_process_main; " "_transfer_process_main()"
 
 _Digest = Annotated[str, Field(pattern=_DIGEST_PATTERN)]
 _ArchiveSize = Annotated[int, Field(strict=True, ge=0, le=_MAX_ARCHIVE_BYTES)]
@@ -63,6 +63,11 @@ class _TransferStatus(StrEnum):
     OK = "ok"
     MISS = "miss"
     ERROR = "error"
+
+
+class _TransferOperation(StrEnum):
+    RESTORE = "restore"
+    PUBLISH = "publish"
 
 
 class _CacheModel(BaseModel):
@@ -372,8 +377,21 @@ def _read_transfer_result(path: Path) -> _TransferResult:
     return _TransferResult.model_validate_json(path.read_text())
 
 
+def _execute_transfer(operation: _TransferOperation, args: tuple[str, ...]) -> None:
+    if operation is _TransferOperation.RESTORE:
+        remote_cache_dir, archive_path, result_path = args
+        _restore_transfer_worker(remote_cache_dir, archive_path, result_path)
+        return
+    remote_cache_dir, generation_id, archive_path, manifest_json, result_path = args
+    _publish_transfer_worker(remote_cache_dir, generation_id, archive_path, manifest_json, result_path)
+
+
+def _transfer_process_main() -> None:
+    _execute_transfer(_TransferOperation(sys.argv[1]), tuple(sys.argv[2:]))
+
+
 def _run_transfer(
-    target: Callable[..., None],
+    operation: _TransferOperation,
     args: tuple[str, ...],
     result_path: Path,
     remote_cache_dir: str,
@@ -383,30 +401,36 @@ def _run_transfer(
     """Return the transfer outcome, reporting remote deadline expiry as an error."""
     result_path.unlink(missing_ok=True)
     if StoragePath(remote_cache_dir).is_local:
-        target(*args, str(result_path))
+        _execute_transfer(operation, (*args, str(result_path)))
         return _read_transfer_result(result_path)
 
-    context = multiprocessing.get_context(_TRANSFER_START_METHOD)
-    process = context.Process(target=target, args=(*args, str(result_path)))
-    process.start()
-    process.join(timeout_seconds)
-    if process.is_alive():
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _TRANSFER_HELPER,
+            operation.value,
+            *args,
+            str(result_path),
+        ]
+    )
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
         process.terminate()
-        process.join(_TRANSFER_PROCESS_GRACE_SECONDS)
-        if process.is_alive():
+        try:
+            process.wait(timeout=_TRANSFER_PROCESS_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
             process.kill()
-            process.join(_TRANSFER_PROCESS_GRACE_SECONDS)
-        process.close()
+            process.wait(timeout=_TRANSFER_PROCESS_GRACE_SECONDS)
         return _TransferResult(
             status=_TransferStatus.ERROR,
             reason=f"transfer exceeded {timeout_seconds}s deadline",
         )
-    exit_code = process.exitcode
-    process.close()
     if not result_path.exists():
         return _TransferResult(
             status=_TransferStatus.ERROR,
-            reason=f"transfer helper exited with code {exit_code}",
+            reason=f"transfer helper exited with code {process.returncode}",
         )
     return _read_transfer_result(result_path)
 
@@ -535,7 +559,7 @@ class VllmCompilationCache:
                 entry_count=archive.entry_count,
             )
             result = _run_transfer(
-                _publish_transfer_worker,
+                _TransferOperation.PUBLISH,
                 (
                     managed.remote_cache_dir,
                     generation_id,
@@ -594,7 +618,7 @@ class VllmCompilationCache:
         restored_cache_dir = managed.local_temp_dir / "restored-cache"
         try:
             result = _run_transfer(
-                _restore_transfer_worker,
+                _TransferOperation.RESTORE,
                 (managed.remote_cache_dir, str(archive_path)),
                 managed.local_temp_dir / "restore-result.json",
                 managed.remote_cache_dir,
