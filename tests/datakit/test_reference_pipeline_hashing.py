@@ -14,6 +14,7 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_minhash import NgramKind
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
@@ -83,7 +84,14 @@ def test_minhash_params_rekey_minhash_and_dedup():
     mh = dataclasses.replace(SMOKE_SCALE.minhash, num_bands=13)
     changed = _steps_by_name(_build(scale=dataclasses.replace(SMOKE_SCALE, minhash=mh)))
     assert changed["datakit/minhash/a"].hash_id != base["datakit/minhash/a"].hash_id
-    # dedup has no params of its own; it must re-key via its minhash deps.
+    assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
+
+
+def test_ngram_kind_rekeys_minhash_and_dedup():
+    base = _steps_by_name(_build())
+    mh = dataclasses.replace(SMOKE_SCALE.minhash, ngram_kind=NgramKind.CHAR)
+    changed = _steps_by_name(_build(scale=dataclasses.replace(SMOKE_SCALE, minhash=mh)))
+    assert changed["datakit/minhash/a"].hash_id != base["datakit/minhash/a"].hash_id
     assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
 
 
