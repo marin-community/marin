@@ -3,10 +3,24 @@
 
 set -euo pipefail
 
-TE_SHA=${TE_SHA:-4adad4c218c115cd9af235fb3d4e13ef4cec55a8}
+PINNED_TE_SHA=4adad4c218c115cd9af235fb3d4e13ef4cec55a8
+TE_SHA=${TE_SHA:-$PINNED_TE_SHA}
 WORK=${WORK:-/tmp/ncclep-h100}
 MAX_JOBS=${MAX_JOBS:-64}
+NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH=${NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH:-0}
 export MAX_JOBS
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+OVERFLOW_DROP_PATCH="$SCRIPT_DIR/transformer_engine_jax_overflow_drop.patch"
+OVERFLOW_DROP_VALIDATOR="$SCRIPT_DIR/validate_te_overflow_drop_patch.sh"
+
+case "$NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH" in
+  0 | 1) ;;
+  *)
+    echo "FATAL: NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH must be 0 or 1" >&2
+    exit 64
+    ;;
+esac
 
 if [[ -z "${CUDA_HOME:-}" || -z "${NCCL_HOME:-}" ]]; then
   echo "FATAL: source cuda_wheels_env.sh before build_te_wheel.sh" >&2
@@ -33,6 +47,18 @@ git -C "$TE_SOURCE" fetch --depth 1 origin "$TE_SHA"
 git -C "$TE_SOURCE" checkout --detach FETCH_HEAD
 git -C "$TE_SOURCE" submodule update --init --recursive --depth 1 \
   || git -C "$TE_SOURCE" submodule update --init --recursive
+
+if [[ "$NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH" == 1 ]]; then
+  if [[ "$TE_SHA" != "$PINNED_TE_SHA" ]]; then
+    echo "FATAL: overflow-drop patch requires TE $PINNED_TE_SHA, got $TE_SHA" >&2
+    exit 1
+  fi
+  "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --check
+  git -C "$TE_SOURCE" apply --whitespace=error-all "$OVERFLOW_DROP_PATCH"
+  "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --patched
+else
+  echo "=== build: overflow-drop patch disabled; using pristine TE source ==="
+fi
 
 echo "=== build: JAX wheel with NCCL_EP for sm_90 ==="
 export NVTE_FRAMEWORK=jax

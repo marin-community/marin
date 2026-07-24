@@ -1,0 +1,208 @@
+diff --git a/transformer_engine/common/ep/ep_backend.cpp b/transformer_engine/common/ep/ep_backend.cpp
+index a82ec1c9..0f584579 100644
+--- a/transformer_engine/common/ep/ep_backend.cpp
++++ b/transformer_engine/common/ep/ep_backend.cpp
+@@ -53,6 +53,20 @@ ncclDataType_t te_dtype_to_nccl_dtype(NVTEDType dtype) {
+   return ncclFloat32;  // unreachable
+ }
+
++ncclEpOverflowPolicy_t te_overflow_policy_to_nccl(NVTEEpOverflowPolicy policy) {
++  switch (policy) {
++    case kNVTEEpOverflowAuto:
++      return NCCL_EP_OVERFLOW_AUTO;
++    case kNVTEEpOverflowTrap:
++      return NCCL_EP_OVERFLOW_TRAP;
++    case kNVTEEpOverflowDrop:
++      return NCCL_EP_OVERFLOW_DROP;
++    default:
++      NVTE_ERROR("Unsupported NVTEEpOverflowPolicy: ", static_cast<int>(policy));
++  }
++  return NCCL_EP_OVERFLOW_AUTO;  // unreachable
++}
++
+ // shape_out is caller-owned; desc.sizes aliases shape_out.data and must
+ // outlive the NCCL EP call.
+ inline ncclEpTensor_t make_nccl_ep_tensor(const NVTETensor t, NVTEShape& shape_out,
+@@ -112,6 +126,14 @@ void EPBackend::validate_config(const NVTEEpGroupConfig& config) {
+              ") must be divisible by ep_size (", config.ep_size, ")");
+   NVTE_CHECK(config.num_comm_sms >= 0, "num_comm_sms must be >= 0 (0 = auto), got ",
+              config.num_comm_sms);
++  (void)te_overflow_policy_to_nccl(config.overflow_policy);
++  if (config.overflow_policy == kNVTEEpOverflowDrop) {
++    NVTE_CHECK(config.max_recv_tokens_per_rank >= config.max_tokens_per_rank,
++               "max_recv_tokens_per_rank must be >= max_tokens_per_rank in overflow-drop mode; "
++               "got max_recv_tokens_per_rank=",
++               config.max_recv_tokens_per_rank,
++               ", max_tokens_per_rank=", config.max_tokens_per_rank);
++  }
+
+   const int sm = cuda::sm_arch();
+   NVTE_CHECK(sm >= 90, "NCCL EP requires SM_90+ (Hopper or later), but current device is SM_", sm);
+@@ -213,6 +235,7 @@ void EPBackend::init(ncclComm_t ep_comm, NVTEEpGroupConfig group_config) {
+   // Must be > 0; NCCL EP errors out on 0.
+   cfg.max_recv_tokens_per_rank = static_cast<unsigned int>(group_config.max_recv_tokens_per_rank);
+   cfg.zero_copy = group_config.zero_copy ? NCCL_EP_ZERO_COPY_ON : NCCL_EP_ZERO_COPY_OFF;
++  cfg.overflow_policy = te_overflow_policy_to_nccl(group_config.overflow_policy);
+
+   NVTE_CHECK_NCCL(ncclEpCreateGroup(&ep_group_, ep_comm, &cfg));
+
+diff --git a/transformer_engine/common/include/transformer_engine/ep.h b/transformer_engine/common/include/transformer_engine/ep.h
+index 224622fd..a903d23b 100644
+--- a/transformer_engine/common/include/transformer_engine/ep.h
++++ b/transformer_engine/common/include/transformer_engine/ep.h
+@@ -33,6 +33,16 @@ extern "C" {
+  * zero-defaults the rest; struct_size 0 means the base layout. Append new
+  * fields at the end only; never reorder, resize, or remove existing ones. */
+
++/*! \brief Policy applied when an EP rank exceeds its receive capacity. */
++typedef enum {
++  /*! Resolve to the backend default (currently trap). */
++  kNVTEEpOverflowAuto = 0,
++  /*! Device trap on receive overflow. */
++  kNVTEEpOverflowTrap = 1,
++  /*! Drop routes that exceed receive capacity and continue. */
++  kNVTEEpOverflowDrop = 2,
++} NVTEEpOverflowPolicy;
++
+ /*! \brief Group-level EP configuration (fixed for the EP group lifetime). */
+ typedef struct {
+   /*! Struct size in bytes, or 0 for the base layout. Set to
+@@ -58,11 +68,13 @@ typedef struct {
+    *  by NVTECommWindow handles and transfer in place (no staging copies);
+    *  0 (default) = staged. */
+   int zero_copy;
++  /*! Receive overflow policy. Zero-init defaults to kNVTEEpOverflowAuto,
++   *  which currently resolves to kNVTEEpOverflowTrap. */
++  NVTEEpOverflowPolicy overflow_policy;
+ } NVTEEpGroupConfig;
+
+ /*! \brief Per-layer configuration consumed by nvte_ep_handle_mem_size and
+- *         nvte_ep_prepare. Reserved for future per-call options (fp8 scale,
+- *         overflow policy, ...).
++ *         nvte_ep_prepare. Reserved for future per-call options (fp8 scale, ...).
+  */
+ typedef struct {
+   /*! Struct size in bytes, or 0 for the base layout. Set to
+diff --git a/transformer_engine/jax/csrc/extensions.h b/transformer_engine/jax/csrc/extensions.h
+index b9c7c849..41d9d18d 100644
+--- a/transformer_engine/jax/csrc/extensions.h
++++ b/transformer_engine/jax/csrc/extensions.h
+@@ -209,7 +209,8 @@ XLA_FFI_DECLARE_HANDLER_SYMBOL(FusedMoEAuxLossBackwardHandler);
+ // the group will dispatch.
+ void SetEpBootstrapParams(pybind11::bytes unique_id_bytes, int ep_size, int rank_within_group,
+                           int num_experts, int max_tokens_per_rank, int max_recv_tokens_per_rank,
+-                          int hidden_dim, int max_num_sms, int max_token_dtype);
++                          int hidden_dim, int max_num_sms, int max_token_dtype,
++                          int overflow_policy);
+ void ReleaseEpResources();
+ // Return the handle_mem byte size for a layer config.
+ size_t EpHandleMemSize(int top_k, size_t dispatch_output_per_expert_alignment);
+diff --git a/transformer_engine/jax/csrc/extensions/ep.cpp b/transformer_engine/jax/csrc/extensions/ep.cpp
+index cdd77302..4a05d1ac 100644
+--- a/transformer_engine/jax/csrc/extensions/ep.cpp
++++ b/transformer_engine/jax/csrc/extensions/ep.cpp
+@@ -35,6 +35,7 @@ struct EpBootstrapParams {
+   int hidden_dim = 0;
+   int max_num_sms = 0;
+   NVTEDType max_token_dtype = kNVTEBFloat16;
++  NVTEEpOverflowPolicy overflow_policy = kNVTEEpOverflowTrap;
+ };
+
+ class EpResources {
+@@ -53,7 +54,8 @@ class EpResources {
+                           .hidden_dim = p.hidden_dim,
+                           .num_comm_sms = p.max_num_sms,
+                           .max_token_dtype = p.max_token_dtype,
+-                          .zero_copy = 0};
++                          .zero_copy = 0,
++                          .overflow_policy = p.overflow_policy};
+     try {
+       nvte_ep_initialize(static_cast<void*>(comm_), &cfg);
+     } catch (...) {
+@@ -125,7 +127,8 @@ struct EpConfig {
+ // synchronize via the UID broadcast).
+ void SetEpBootstrapParams(pybind11::bytes unique_id_bytes_obj, int ep_size, int rank_within_group,
+                           int num_experts, int max_tokens_per_rank, int max_recv_tokens_per_rank,
+-                          int hidden_dim, int max_num_sms, int max_token_dtype) {
++                          int hidden_dim, int max_num_sms, int max_token_dtype,
++                          int overflow_policy) {
+   std::string uid_str = unique_id_bytes_obj;
+   NVTE_CHECK(static_cast<int>(uid_str.size()) >= 128,
+              "unique_id_bytes must be at least 128 bytes (ncclUniqueId size).");
+@@ -143,6 +146,7 @@ void SetEpBootstrapParams(pybind11::bytes unique_id_bytes_obj, int ep_size, int
+     g_ep_params.hidden_dim = hidden_dim;
+     g_ep_params.max_num_sms = max_num_sms;
+     g_ep_params.max_token_dtype = static_cast<NVTEDType>(max_token_dtype);
++    g_ep_params.overflow_policy = static_cast<NVTEEpOverflowPolicy>(overflow_policy);
+     g_ep_params_set = true;
+   }
+   // Acquire outside the lock: EpResources ctor runs ncclCommInitRank which is
+diff --git a/transformer_engine/jax/csrc/extensions/pybind.cpp b/transformer_engine/jax/csrc/extensions/pybind.cpp
+index db5468af..53fcf9c0 100644
+--- a/transformer_engine/jax/csrc/extensions/pybind.cpp
++++ b/transformer_engine/jax/csrc/extensions/pybind.cpp
+@@ -159,8 +159,8 @@ PYBIND11_MODULE(transformer_engine_jax, m) {
+   m.def("set_ep_bootstrap_params", &SetEpBootstrapParams, pybind11::arg("unique_id_bytes"),
+         pybind11::arg("ep_size"), pybind11::arg("rank_within_group"), pybind11::arg("num_experts"),
+         pybind11::arg("max_tokens_per_rank"), pybind11::arg("max_recv_tokens_per_rank"),
+-        pybind11::arg("hidden_dim"), pybind11::arg("max_num_sms"),
+-        pybind11::arg("max_token_dtype"));
++        pybind11::arg("hidden_dim"), pybind11::arg("max_num_sms"), pybind11::arg("max_token_dtype"),
++        pybind11::arg("overflow_policy"));
+   m.def("release_ep_resources", &ReleaseEpResources);
+   m.def("ep_handle_mem_size", &EpHandleMemSize, pybind11::arg("top_k"),
+         pybind11::arg("dispatch_output_per_expert_alignment") = 0);
+diff --git a/transformer_engine/jax/ep.py b/transformer_engine/jax/ep.py
+index 9704e515..153fb462 100644
+--- a/transformer_engine/jax/ep.py
++++ b/transformer_engine/jax/ep.py
+@@ -36,6 +36,11 @@ __all__ = [
+ ]
+
+ _atexit_registered = False
++_OVERFLOW_POLICIES = {
++    "auto": 0,
++    "trap": 1,
++    "drop": 2,
++}
+
+
+ def _allgather_uid(uid_arr, world_size, uid_size):
+@@ -78,6 +83,7 @@ def ep_bootstrap(
+     hidden_dim,
+     max_token_dtype=jnp.bfloat16,
+     max_num_sms=0,
++    overflow_policy="trap",
+ ):
+     """Initialize the EP communicator. Call once per process before any EP op.
+
+@@ -90,12 +96,19 @@ def ep_bootstrap(
+         rank: Global rank of the calling process.
+         num_experts: Total experts across the EP group.
+         max_tokens_per_rank: Max tokens one rank dispatches per step (sizes send buffers).
+-        recv_capacity_per_rank: Max tokens one rank receives per step; set to
+-            at least ep_size * max_tokens_per_rank * top_k to avoid drops.
++        recv_capacity_per_rank: Max tokens one rank receives per step. Exceeding
++            this capacity traps unless ``overflow_policy="drop"``.
+         hidden_dim: Feature dimension of token tensors passed to ep_dispatch.
+         max_token_dtype: Widest dtype the group will dispatch (only bfloat16 supported).
+         max_num_sms: SM budget for EP kernels; 0 = auto.
++        overflow_policy: Receive-capacity overflow behavior. Must be ``"auto"``,
++            ``"trap"``, or ``"drop"``. Defaults to ``"trap"``.
+     """
++    if not isinstance(overflow_policy, str) or overflow_policy not in _OVERFLOW_POLICIES:
++        raise ValueError(
++            "ep_bootstrap: overflow_policy must be one of 'auto', 'trap', or 'drop';"
++            f" got {overflow_policy!r}."
++        )
+     if jnp.dtype(max_token_dtype) != jnp.bfloat16:
+         raise NotImplementedError(
+             "ep_bootstrap: only max_token_dtype=jnp.bfloat16 is supported today, got"
+@@ -169,6 +182,7 @@ def ep_bootstrap(
+         hidden_dim,
+         max_num_sms=int(max_num_sms),
+         max_token_dtype=int(jax_dtype_to_te_dtype(max_token_dtype)),
++        overflow_policy=_OVERFLOW_POLICIES[overflow_policy],
+     )
+
+     # Release the C++ anchor at interpreter shutdown so RAII can tear down NCCL.
