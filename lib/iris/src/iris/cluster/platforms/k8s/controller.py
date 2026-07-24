@@ -353,7 +353,8 @@ class K8sControllerProvider:
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._s3_enabled = False
-        self._prepared_controller_env: tuple[tuple[str, ...], dict[str, str]] | None = None
+        self.signing_key_spec: tuple[str, ...] = ()
+        self._prepared_controller_env: dict[str, str] | None = None
 
     @property
     def kubectl(self) -> K8sService:
@@ -381,8 +382,8 @@ class K8sControllerProvider:
 
     def preflight_controller(self, config: IrisClusterConfig) -> None:
         """Resolve controller-only secrets without changing Kubernetes resources."""
-        signing_key_specs = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        self._prepared_controller_env = (signing_key_specs, _controller_env(config))
+        self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        self._prepared_controller_env = _controller_env(config)
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -421,13 +422,12 @@ class K8sControllerProvider:
         if default_env:
             self.ensure_task_env_secret(default_env)
 
-        signing_key_refs = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        if self._prepared_controller_env is None or self._prepared_controller_env[0] != signing_key_refs:
+        signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
             self.preflight_controller(config)
         assert self._prepared_controller_env is not None
-        controller_env = self._prepared_controller_env[1]
-        if controller_env:
-            self.ensure_controller_env_secret(controller_env)
+        if self._prepared_controller_env:
+            self.ensure_controller_env_secret(self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
