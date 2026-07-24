@@ -633,16 +633,26 @@ def test_gather_dispatch_matches_scatter_forward_and_drops(monkeypatch: pytest.M
     monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
     monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
     scatter_out, scatter_dropped, _ = _run_fixed_a2a_value_and_grads(
-        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
-        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
-        num_experts=num_experts, capacity_factor=0.5,
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
     )
 
     monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
     gather_out, gather_dropped, _ = _run_fixed_a2a_value_and_grads(
-        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
-        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
-        num_experts=num_experts, capacity_factor=0.5,
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
     )
 
     np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
@@ -666,16 +676,26 @@ def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
     monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
     auto_out, auto_dropped, auto_grads = _run_fixed_a2a_value_and_grads(
-        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
-        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
-        num_experts=num_experts, capacity_factor=0.5,
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
     )
 
     monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
     custom_out, custom_dropped, custom_grads = _run_fixed_a2a_value_and_grads(
-        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
-        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
-        num_experts=num_experts, capacity_factor=0.5,
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
     )
 
     np.testing.assert_allclose(np.asarray(custom_out), np.asarray(auto_out), rtol=1e-5, atol=1e-5)

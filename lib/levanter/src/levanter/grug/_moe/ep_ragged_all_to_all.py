@@ -228,8 +228,10 @@ def _fixed_a2a_core(
     # slot -> assignment inverse of linear_indices (assignments_per_shard marks an unfilled slot).
     # Shared by the gather-dispatch forward and the combine gather's structured backward.
     if gather_dispatch:
-        assignment_sources = jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32).at[linear_indices].set(
-            jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop"
+        assignment_sources = (
+            jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32)
+            .at[linear_indices]
+            .set(jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop")
         )
 
     moe_dim = moe_w2_local.shape[1]
