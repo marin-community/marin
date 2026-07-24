@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -330,12 +329,12 @@ class DeploymentConfig:
         config = pulumi.Config()
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
-        source_path = os.environ.get("LOOM_SOURCE")
+        source_path = config.get("buildContext")
         source = REPOSITORY_URL
         if source_path is not None:
             local_source = Path(source_path).expanduser().resolve()
             if not (local_source / "Dockerfile").is_file():
-                raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {local_source}")
+                raise ValueError(f"buildContext does not contain a Dockerfile: {local_source}")
             source = str(local_source)
         region = config.require("region")
         raw_profiles = config.get_object("profiles") or {}

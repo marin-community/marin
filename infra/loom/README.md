@@ -42,13 +42,15 @@ pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
 curl -fsS https://loom.oa.dev/api/ready
 ```
 
-Set `LOOM_SOURCE` to a Loom worktree to deploy local changes instead. The local
+Set `buildContext` to a Loom worktree to deploy local changes instead. The local
 build includes tracked and untracked files allowed by that worktree's
-`.dockerignore`; review its diff before deployment.
+`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
+the stack configuration, so remove the override to return to the remote HEAD.
 
 ```sh
-export LOOM_SOURCE=/path/to/loom
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
+pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
+  -c buildContext=/path/to/loom
+pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
