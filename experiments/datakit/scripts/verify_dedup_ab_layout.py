@@ -39,7 +39,10 @@ def _result(path: str) -> dict[str, Any]:
 
 def _read_table(path: str) -> pa.Table:
     with StoragePath(path).open("rb") as fh:
-        return pq.ParquetFile(fh).read(columns=["id", "attributes"])
+        parquet_file = pq.ParquetFile(fh)
+        if parquet_file.metadata.num_rows == 0:
+            return pa.table({})
+        return parquet_file.read(columns=["id", "attributes"])
 
 
 def _shards(attr_dir: str) -> dict[str, str]:
@@ -78,9 +81,10 @@ def compare_artifacts(left_path: str, right_path: str) -> ArtifactCounts:
                 )
             shards += 1
             marker_rows += left_table.num_rows
-            canonical_rows += sum(
-                bool(attributes["is_cluster_canonical"]) for attributes in left_table["attributes"].to_pylist()
-            )
+            if left_table.num_rows:
+                canonical_rows += sum(
+                    bool(attributes["is_cluster_canonical"]) for attributes in left_table["attributes"].to_pylist()
+                )
 
     return ArtifactCounts(
         sources=len(left_sources),
