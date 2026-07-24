@@ -50,7 +50,19 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # with capture on, XLA can run an EP op's host-side handle lookup before
 # ep_prepare's cache insert (lookup_handle assertion). Unlimited handle cache
 # is TE's own documented JAX workaround for handle_mem relocation.
-export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${XLA_FLAGS:-}"
+# NCCLEP_CMD_BUFFER scopes capture instead of disabling it globally:
+#   off (default) — capture fully disabled (the NCCLEP-005..-009 baseline);
+#   default       — omit the flag, XLA's default capture set;
+#   <LIST>        — pass an explicit type list, e.g. FUSION,CUBLAS,CUBLASLT,CUDNN
+#                   (no CUSTOM_CALL: EP FFI + cutlass_call ops stay uncaptured).
+case "${NCCLEP_CMD_BUFFER:-off}" in
+  off) CB_FLAG="--xla_gpu_enable_command_buffer=" ;;
+  default) CB_FLAG="" ;;
+  *) CB_FLAG="--xla_gpu_enable_command_buffer=${NCCLEP_CMD_BUFFER}" ;;
+esac
+# NCCLEP_EXTRA_XLA_FLAGS: per-arm additions (e.g. the multi-stream collective
+# overlap limit from NVIDIA's DevLab deck).
+export XLA_FLAGS="$CB_FLAG ${NCCLEP_EXTRA_XLA_FLAGS:-} ${XLA_FLAGS:-}"
 export NVTE_EP_HANDLE_CACHE_SIZE=-1
 # Shared compile cache: retries below (and warm reruns) skip the ~15-min cold
 # compile, isolating the intermittent first-execution CUBIN-load bug

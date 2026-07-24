@@ -2202,6 +2202,16 @@ def _parse():
             "(NCCLEP-006 wall). 0 = single dispatch over the whole batch."
         ),
     )
+    p.add_argument(
+        "--ep-max-num-sms",
+        type=int,
+        default=0,
+        help=(
+            "nccl_ep/te_moe: SM budget for NCCL_EP's persistent comm kernels "
+            "(ep_bootstrap max_num_sms; one-sided — GEMMs stay opportunistic). "
+            "0 = TE auto."
+        ),
+    )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument(
         "--remat-mode",
@@ -2317,6 +2327,7 @@ def main():
                 max_tokens_per_rank=dispatch_tokens,
                 recv_capacity_per_rank=recv_capacity,
                 hidden_dim=a.hidden_dim,
+                max_num_sms=a.ep_max_num_sms,
             )
             configure_nccl_ep(a.num_experts_per_token, recv_capacity, chunk_tokens_per_rank=a.ep_chunk_tokens)
         elif a.moe_implementation == "te_moe":
@@ -2341,6 +2352,7 @@ def main():
                 max_tokens_per_rank=tokens_per_rank,
                 recv_capacity_per_rank=recv_capacity,
                 hidden_dim=a.hidden_dim,
+                max_num_sms=a.ep_max_num_sms,
             )
             record_ep_bootstrap_signature_for_moe(
                 num_experts=a.num_experts,
