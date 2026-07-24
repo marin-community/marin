@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 class DedupAuditData(BaseModel):
     """Paths and exact counters produced by one exhaustive A/B audit."""
 
-    version: str = "v2"
+    version: str = "v3"
     baseline_dedup: str
     treatment_dedup: str
     baseline_minhash: str
@@ -473,6 +473,8 @@ def _score_cluster(pair_key: str, records: Iterator[dict[str, Any]]) -> Iterator
             "cross_source": record["source_main_dir"] != canonical["source_main_dir"],
             "raw_chars": record["raw_chars"],
             "canonical_raw_chars": canonical["raw_chars"],
+            "raw_sha256": record["raw_sha256"],
+            "canonical_raw_sha256": canonical["raw_sha256"],
             "member_is_longer": record["raw_chars"] > canonical["raw_chars"],
             "member_text_truncated_for_minhash": record["raw_chars"] > TEXT_CAP_CHARS,
             "canonical_text_truncated_for_minhash": canonical["raw_chars"] > TEXT_CAP_CHARS,
