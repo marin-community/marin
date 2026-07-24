@@ -568,6 +568,123 @@ def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pyte
     assert int(dropped) == 0
 
 
+def _run_fixed_a2a_value_and_grads(
+    *,
+    x,
+    selected_experts,
+    combine_weights,
+    w_up_gate,
+    w_down,
+    seed_cotangent,
+    num_experts,
+    capacity_factor,
+):
+    """Value, dropped count, and grads of a fixed-a2a step under the ambient env flags."""
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+
+    def core(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+
+    sharded = jax.shard_map(
+        core,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    def loss(x, combine_weights, w_up_gate, w_down):
+        out, dropped = sharded(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return jnp.sum(out * seed_cotangent), (out, dropped)
+
+    with jax.set_mesh(mesh):
+        (loss_value, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(
+            x, combine_weights, w_up_gate, w_down
+        )
+    return out, int(dropped), grads
+
+
+def test_gather_dispatch_matches_scatter_forward_and_drops(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(7),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(99), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    scatter_out, scatter_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
+        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
+        num_experts=num_experts, capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    gather_out, gather_dropped, _ = _run_fixed_a2a_value_and_grads(
+        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
+        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
+        num_experts=num_experts, capacity_factor=0.5,
+    )
+
+    np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
+    assert gather_dropped == scatter_dropped
+    assert gather_dropped > 0  # capacity_factor=0.5 must exercise the drop path
+
+
+def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(13),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(31), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    auto_out, auto_dropped, auto_grads = _run_fixed_a2a_value_and_grads(
+        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
+        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
+        num_experts=num_experts, capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_out, custom_dropped, custom_grads = _run_fixed_a2a_value_and_grads(
+        x=x, selected_experts=selected_experts, combine_weights=combine_weights,
+        w_up_gate=w_up_gate, w_down=w_down, seed_cotangent=seed,
+        num_experts=num_experts, capacity_factor=0.5,
+    )
+
+    np.testing.assert_allclose(np.asarray(custom_out), np.asarray(auto_out), rtol=1e-5, atol=1e-5)
+    assert custom_dropped == auto_dropped
+    assert custom_dropped > 0
+    for auto_g, custom_g in zip(auto_grads, custom_grads):
+        np.testing.assert_allclose(np.asarray(custom_g), np.asarray(auto_g), rtol=1e-5, atol=1e-5)
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [
