@@ -233,6 +233,13 @@ def moe_mlp(
                 return out, dropped
             return out
 
+        if resolved_implementation == "te_moe":
+            raise ValueError(
+                "te_moe replaces the whole MoE layer (router included) via TE's fused block; "
+                "call levanter.grug._moe.te_moe._moe_mlp_te_block from the model instead of "
+                "moe_mlp(), which takes precomputed token-to-expert assignments"
+            )
+
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ring_cute":

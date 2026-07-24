@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import math
 import os
 import time
 from pathlib import Path
@@ -32,7 +31,7 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 
 # TE must be imported before the JAX CUDA client exists so the NCCL_EP FFI
-# handlers register (required for --moe-implementation nccl_ep).
+# handlers register (required for --moe-implementation nccl_ep / te_moe).
 try:
     from transformer_engine.jax.ep import ep_bootstrap as _te_ep_bootstrap
     from transformer_engine.jax.sharding import MeshResource as _TeMeshResource
@@ -40,6 +39,11 @@ try:
 except ImportError:
     _te_ep_bootstrap = None
 from levanter.grug._moe.ep_nccl import configure_nccl_ep
+from levanter.grug._moe.te_moe import (
+    _moe_mlp_te_block,
+    record_ep_bootstrap_signature_for_moe,
+    te_moe_recv_capacity,
+)
 
 try:  # iris is only present on cluster jobs; single-process runs don't need it
     from iris.runtime.jax_init import initialize_jax as _iris_initialize_jax
@@ -776,6 +780,29 @@ class MoEMLP(eqx.Module):
             in_specs=(P(_BATCH_AXES, None),),
             out_specs=P(),
         )(s_minus_alpha)
+
+        if self.cfg.moe_implementation == "te_moe":
+            # Full TE fused MoE block: TE's router (fused sigmoid top-k, bias
+            # in score space) replaces the selection above for the actual
+            # compute path; the routing tensors computed above feed only the
+            # observational stats and the QB beta update. No drop path.
+            data_axes = tuple(a for a in _BATCH_AXES if a != "expert" and a in mesh.shape)
+            routed = _moe_mlp_te_block(
+                x,
+                reshard(self.router, P(None, None)),
+                self.expert_mlp.w_gate,
+                self.expert_mlp.w_up,
+                self.expert_mlp.w_down,
+                self.router_bias,
+                num_experts=self.cfg.num_experts,
+                top_k=self.cfg.num_experts_per_token,
+                combine_renorm_sum=_ROUTING_RENORM_SUM,
+                mesh=mesh,
+                data_axes=data_axes,
+            )
+            router_stats["capacity_overflow"] = jnp.zeros((), dtype=jnp.float32)
+            routed = reshard(routed, _batch_spec())
+            return routed, router_stats
 
         routed_flat, dropped_assignments = self.expert_mlp(
             x_flat,
@@ -2253,18 +2280,20 @@ def main():
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
     mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis_size)
     ep_guard = contextlib.nullcontext()
-    if a.moe_implementation == "nccl_ep":
+    if a.moe_implementation in ("nccl_ep", "te_moe"):
         # TE NCCL_EP: process-per-GPU, single dp/fsdp axis outside expert, and
         # a process-global bootstrap before any tracing (see ep_nccl.py).
         if _te_ep_bootstrap is None:
-            raise ModuleNotFoundError("--moe-implementation nccl_ep requires a TE build with NCCL_EP")
+            raise ModuleNotFoundError(f"--moe-implementation {a.moe_implementation} requires a TE build with NCCL_EP")
         if jax.local_device_count() != 1:
             raise ValueError(
-                "nccl_ep requires one process per GPU; launch via the iris multigpu supervisor "
+                f"{a.moe_implementation} requires one process per GPU; launch via the iris multigpu supervisor "
                 f"(got local_device_count={jax.local_device_count()})"
             )
         if int(mesh.shape.get("replica_dcn", 1)) != 1:
-            raise ValueError("nccl_ep supports one dp/fsdp axis outside expert; use --replica-axis-size 1")
+            raise ValueError(
+                f"{a.moe_implementation} supports one dp/fsdp axis outside expert; use --replica-axis-size 1"
+            )
         # compact_grug_mesh drops size-1 axes; TE asserts named resources exist.
         fsdp_axis = "data" if int(mesh.shape.get("data", 1)) > 1 else None
         ep_guard = _te_global_shard_guard(_TeMeshResource(fsdp_resource=fsdp_axis, ep_resource="expert"))
@@ -2279,9 +2308,7 @@ def main():
             # is what decouples EP buffer memory from batch size.
             dispatch_tokens = a.ep_chunk_tokens or tokens_per_rank
             if tokens_per_rank % dispatch_tokens != 0:
-                raise ValueError(
-                    f"--ep-chunk-tokens {a.ep_chunk_tokens} must divide per-rank tokens {tokens_per_rank}"
-                )
+                raise ValueError(f"--ep-chunk-tokens {a.ep_chunk_tokens} must divide per-rank tokens {tokens_per_rank}")
             recv_capacity = a.expert_parallelism * dispatch_tokens * a.num_experts_per_token
             _te_ep_bootstrap(
                 world_size=jax.process_count(),
@@ -2292,6 +2319,36 @@ def main():
                 hidden_dim=a.hidden_dim,
             )
             configure_nccl_ep(a.num_experts_per_token, recv_capacity, chunk_tokens_per_rank=a.ep_chunk_tokens)
+        elif a.moe_implementation == "te_moe":
+            # Full TE MoE block: moe() re-derives its no-drop capacity per
+            # call WITH 128-token per-expert alignment padding and asserts the
+            # bootstrap covers it — size with TE's own bound, not the bare
+            # ep × tokens × top_k product. No chunked mode exists on this
+            # path, so big batches hit the NCCLEP-006 capacity wall as-is.
+            if a.ep_chunk_tokens:
+                raise ValueError("--ep-chunk-tokens is nccl_ep-only; TE's moe() has no chunked-dispatch mode")
+            tokens_per_rank = a.batch_size * a.seq_len // jax.process_count()
+            recv_capacity = te_moe_recv_capacity(
+                tokens_per_rank,
+                a.expert_parallelism,
+                a.num_experts_per_token,
+                a.num_experts // a.expert_parallelism,
+            )
+            _te_ep_bootstrap(
+                world_size=jax.process_count(),
+                rank=jax.process_index(),
+                num_experts=a.num_experts,
+                max_tokens_per_rank=tokens_per_rank,
+                recv_capacity_per_rank=recv_capacity,
+                hidden_dim=a.hidden_dim,
+            )
+            record_ep_bootstrap_signature_for_moe(
+                num_experts=a.num_experts,
+                max_tokens_per_rank=tokens_per_rank,
+                recv_capacity_per_rank=recv_capacity,
+                hidden_dim=a.hidden_dim,
+                ep_size=a.expert_parallelism,
+            )
 
         @jax.jit
         def init(rng):
