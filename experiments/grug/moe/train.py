@@ -567,6 +567,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     levanter.tracker.current_tracker().finish()
 
+    # The iris runtime brings up the JAX distributed coordination service (even for a
+    # single-task multi-GPU job). Without an explicit shutdown its teardown races the
+    # async checkpoint commit as the process exits and SIGABRTs, so the run exits
+    # non-zero and iris marks it failed despite having finished. Shut it down cleanly;
+    # best-effort, since it is a no-op when distributed was never initialized.
+    try:
+        jax.distributed.shutdown()
+    except Exception:
+        logger.warning("jax.distributed.shutdown() at end of run failed", exc_info=True)
+
 
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
