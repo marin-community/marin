@@ -15,7 +15,6 @@ README.md's "Future work".
 
 import os
 import sys
-from pathlib import Path
 
 # Make the `iac` package importable without a separate install step: Pulumi runs this file
 # from infra/pulumi/, so add its src/ to the path. Deps (pulumi, pulumi-kubernetes) and
@@ -81,24 +80,26 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         namespace = DEFAULT_NAMESPACE
 
     platform_coreweave = iris_config.platform.coreweave
-    if platform_coreweave is None or not platform_coreweave.kubeconfig_path:
+    if platform_coreweave is None:
         raise ValueError(
-            f"cluster {cluster!r} has no platform.coreweave.kubeconfig_path; "
-            "the minimal IaC cut needs an out-of-cluster kubeconfig to target"
+            f"cluster {cluster!r} has no platform.coreweave config; "
+            "the minimal IaC cut needs an out-of-cluster Kubernetes target"
         )
-    kubeconfig_path = os.path.expanduser(platform_coreweave.kubeconfig_path)
-    kubeconfig = pulumi.Output.secret(Path(kubeconfig_path).read_text())
+    if not os.environ.get("KUBECONFIG"):
+        raise ValueError(
+            f"cluster {cluster!r} requires KUBECONFIG; "
+            "Pulumi reads Kubernetes credentials from the execution environment"
+        )
     # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
     # otherwise a stack silently targets whatever `kubectl` was last pointed at.
     #
     # enable_patch_force=True: declared here until the "cede" ships (spec.md §4). Iris's
     # controller still re-applies RBAC/NodePools under its own field manager on every restart, so
     # a plain SSA dry-run reports a field conflict without forced ownership (README §Adoption
-    # check). Keep kubeconfig and context as ordinary provider inputs: ignoring either makes
-    # Pulumi reuse stale local credentials or even a previously stored path string.
+    # check). KUBECONFIG stays in the execution environment instead of becoming a provider
+    # input, which keeps credentials and machine-local paths out of Pulumi state.
     k8s_provider = k8s.Provider(
         "cw-k8s",
-        kubeconfig=kubeconfig,
         context=platform_coreweave.kube_context or None,
         enable_patch_force=True,
     )
