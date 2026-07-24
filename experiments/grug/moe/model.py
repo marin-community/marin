@@ -57,7 +57,7 @@ except ModuleNotFoundError:
     jaxpp = None
 
 GRUG_MOE_EP_CAPACITY_FACTOR = 1.0
-GRUG_MOE_NCCL_EP_CAPACITY_FACTOR = 1.25
+GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR = 1.25
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _FP8_EXPERT_GEMM_ALIGNMENT = 128
@@ -695,7 +695,9 @@ class MoEMLP(eqx.Module):
                 implementation=moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=(
-                    GRUG_MOE_NCCL_EP_CAPACITY_FACTOR if moe_implementation == "nccl_ep" else GRUG_MOE_EP_CAPACITY_FACTOR
+                    GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR
+                    if moe_implementation == "nccl_ep_drop"
+                    else GRUG_MOE_EP_CAPACITY_FACTOR
                 ),
                 ragged_dot_ops=ragged_dot_ops,
             ),

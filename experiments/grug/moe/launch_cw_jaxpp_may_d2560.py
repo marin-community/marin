@@ -8,7 +8,7 @@ import datetime
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 import jax.numpy as jnp
 import numpy as np
@@ -56,6 +56,7 @@ NCCL_EP_RUNTIME_VERSION = "2.30.7"
 DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
 DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
 DEEPEP_CUDA_RUNTIME_VERSION = "13.2.75"
+_NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
 
 
 def env_float(key: str, default: float) -> float:
@@ -112,8 +113,15 @@ def deepep_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
     )
 
 
-def nccl_ep_setup_scripts() -> tuple[str, ...]:
+def nccl_ep_setup_scripts(*, overflow_policy: Literal["trap", "drop"]) -> tuple[str, ...]:
     """Build pinned Transformer Engine with NCCL_EP and persist its runtime environment."""
+    if overflow_policy == "trap":
+        enable_overflow_drop_patch = "0"
+    elif overflow_policy == "drop":
+        enable_overflow_drop_patch = "1"
+    else:
+        raise ValueError(f"unknown NCCL_EP overflow policy: {overflow_policy!r}")
+
     return (
         "\n".join(
             [
@@ -124,6 +132,7 @@ def nccl_ep_setup_scripts() -> tuple[str, ...]:
                 'export WORK="/tmp/grug-nccl-ep"',
                 f'export TE_SHA="{DEFAULT_NCCL_EP_TE_REVISION}"',
                 f'export NCCL_RUNTIME_VERSION="{NCCL_EP_RUNTIME_VERSION}"',
+                f'export NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH="{enable_overflow_drop_patch}"',
                 "source experiments/ncclep_h100/cuda_wheels_env.sh",
                 "bash experiments/ncclep_h100/build_te_wheel.sh",
                 'jit_include="$(<"$WORK/nccl-ep-jit-include")"',
@@ -311,7 +320,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     pipeline = build_pipeline_config() if env_bool("MAY_PIPELINE", True) else None
     processes_per_task = env_int(
         "MAY_PROCESSES_PER_TASK",
-        expert_axis if model.moe_implementation == "nccl_ep" else 1,
+        expert_axis if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS else 1,
     )
     if model.research_fp8_expert_gemm is not None:
         if pipeline is None or pipeline.implementation != "explicit_mpmd":
@@ -328,7 +337,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
                 "staged_per_step Sonic FSDP materialization requires MAY_EXPERT_AXIS=1 because Sonic does not "
                 "support expert parallelism"
             )
-    if model.moe_implementation == "nccl_ep":
+    if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
         if pipeline is None or pipeline.implementation != "explicit_mpmd":
             raise ValueError("NCCL_EP requires PP_IMPLEMENTATION=explicit_mpmd")
         if expert_axis != gpus_per_replica or processes_per_task != gpus_per_replica:
@@ -357,8 +366,9 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             source_root=source_root,
             revision=os.environ.get("DEEPEP_REVISION", DEFAULT_DEEPEP_REVISION),
         )
-    if model.moe_implementation == "nccl_ep":
-        post_setup_scripts += nccl_ep_setup_scripts()
+    if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
+        overflow_policy = "drop" if model.moe_implementation == "nccl_ep_drop" else "trap"
+        post_setup_scripts += nccl_ep_setup_scripts(overflow_policy=overflow_policy)
 
     mpmd_dim = 1 if pipeline is None else pipeline.mpmd_dim or pipeline.stages
     global_devices = replicas * gpus_per_replica
@@ -369,7 +379,7 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             f"PP_MPMD_DIM={mpmd_dim} * MAY_REPLICA_AXIS={replica_axis} * MAY_EXPERT_AXIS={expert_axis}"
         )
     data_axis = global_devices // fixed_axes
-    if model.moe_implementation == "nccl_ep" and data_axis != 1:
+    if model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS and data_axis != 1:
         raise ValueError(
             "NCCL_EP currently supports pipeline x expert process groups without an additional data axis; "
             f"got data axis size={data_axis}"

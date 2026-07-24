@@ -7,6 +7,7 @@ from collections.abc import Callable
 from functools import partial
 import importlib
 import math
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -47,6 +48,35 @@ def ncclep_receive_capacity(
     if global_tokens % ep_size != 0:
         raise ValueError(f"global_tokens={global_tokens} must be divisible by ep_size={ep_size}")
     return global_tokens * top_k
+
+
+def ncclep_drop_receive_capacity(
+    global_tokens: int,
+    top_k: int,
+    ep_size: int,
+    num_experts: int,
+    capacity_factor: float,
+) -> int:
+    """Return the bounded receive rows allocated on each approximate NCCL_EP rank."""
+    _ = ncclep_receive_capacity(global_tokens, top_k, ep_size)
+    if num_experts <= 0:
+        raise ValueError(f"num_experts must be positive, got {num_experts}")
+    if num_experts % ep_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by ep_size={ep_size}")
+    if not math.isfinite(capacity_factor) or capacity_factor <= 0:
+        raise ValueError(f"capacity_factor must be finite and positive, got {capacity_factor}")
+
+    local_experts = num_experts // ep_size
+    alignment = local_experts * _NCCLEP_DISPATCH_ALIGNMENT
+    balanced_assignments = global_tokens * top_k // ep_size
+    recv_capacity = math.ceil(balanced_assignments * capacity_factor / alignment) * alignment
+    max_tokens_per_rank = global_tokens // ep_size
+    if recv_capacity < max_tokens_per_rank:
+        raise ValueError(
+            "bounded NCCL_EP receive capacity must be at least max_tokens_per_rank; "
+            f"got capacity={recv_capacity} and max_tokens_per_rank={max_tokens_per_rank}"
+        )
+    return recv_capacity
 
 
 def _batch_leading_axes(batch_spec: P) -> tuple[str, ...]:
@@ -239,6 +269,7 @@ def moe_mlp_ep_ncclep(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    overflow_policy: Literal["trap", "drop"],
     mesh: Mesh | AbstractMesh,
     batch_spec: P,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
@@ -246,12 +277,10 @@ def moe_mlp_ep_ncclep(
 
     Transformer Engine is imported lazily because it is an optional GPU
     dependency. The process must register its FFI handlers and bootstrap the
-    NCCL_EP communicator before tracing this function. ``capacity_factor`` is
-    part of the common MoE interface; exact NCCL_EP transport always provisions
-    the backend's worst-case receive extent.
+    NCCL_EP communicator before tracing this function. Trap mode provisions the
+    exact worst-case receive extent; drop mode uses a bounded receive extent and
+    discards assignments that exceed it.
     """
-    del capacity_factor
-
     if x.ndim != 2:
         raise ValueError(f"x must be rank-2 [T, H], got shape={x.shape}")
     if selected_experts.ndim != 2 or selected_experts.shape != combine_weights.shape:
@@ -293,11 +322,22 @@ def moe_mlp_ep_ncclep(
         )
 
     top_k = int(selected_experts.shape[1])
-    recv_capacity = ncclep_receive_capacity(
-        global_tokens=int(x.shape[0]),
-        top_k=top_k,
-        ep_size=ep_size,
-    )
+    if overflow_policy == "trap":
+        recv_capacity = ncclep_receive_capacity(
+            global_tokens=int(x.shape[0]),
+            top_k=top_k,
+            ep_size=ep_size,
+        )
+    elif overflow_policy == "drop":
+        recv_capacity = ncclep_drop_receive_capacity(
+            global_tokens=int(x.shape[0]),
+            top_k=top_k,
+            ep_size=ep_size,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+    else:
+        raise ValueError(f"unknown NCCL_EP overflow policy: {overflow_policy!r}")
 
     te_ep = importlib.import_module("transformer_engine.jax.ep")
     layer_config = te_ep.EpLayerConfig(

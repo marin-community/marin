@@ -52,6 +52,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import (
+    GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR,
     GrugModelConfig,
     Transformer,
     TransformerPipelineStage,
@@ -89,6 +90,7 @@ ExplicitMpmdPipelineWireFormat = Literal["bf16", "fp8"]
 Fp8PipelineWireDtype = Literal["e4m3", "e5m2"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
 _RESEARCH_FP8_EXPERT_GEMM_SCHEDULES = ("gpipe", "interleaved_gpipe", "std_1f1b")
+_NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
 
 
 def _fp8_pipeline_wire_dtype(dtype: Fp8PipelineWireDtype) -> jnp.dtype:
@@ -279,7 +281,7 @@ class GrugRunConfig:
     post_setup_scripts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.model.moe_implementation == "nccl_ep":
+        if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
             pipeline = self.trainer.pipeline
             if pipeline is None or pipeline.implementation != "explicit_mpmd":
                 raise ValueError("NCCL_EP requires the explicit MPMD JaxPP pipeline")
@@ -376,7 +378,7 @@ def _load_nccl_ep_modules() -> tuple[Any, Any]:
         sharding = importlib.import_module("transformer_engine.jax.sharding")
     except ModuleNotFoundError as error:
         raise ModuleNotFoundError(
-            "Transformer Engine with NCCL_EP is required when moe_implementation='nccl_ep'."
+            "Transformer Engine with NCCL_EP is required when using an NCCL_EP MoE implementation."
         ) from error
     return ep, sharding
 
@@ -2762,19 +2764,39 @@ def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
     max_tokens_per_rank = global_microbatch_tokens // expert_size
 
     nccl_ep_backend = importlib.import_module("levanter.grug._moe.ep_ncclep")
-    recv_capacity_per_rank = nccl_ep_backend.ncclep_receive_capacity(
-        global_tokens=global_microbatch_tokens,
-        top_k=config.model.num_experts_per_token,
-        ep_size=expert_size,
-    )
-    ep.ep_bootstrap(
-        world_size=jax.process_count(),
-        rank=jax.process_index(),
-        num_experts=config.model.num_experts,
-        max_tokens_per_rank=max_tokens_per_rank,
-        recv_capacity_per_rank=recv_capacity_per_rank,
-        hidden_dim=config.model.hidden_dim,
-    )
+    if config.model.moe_implementation == "nccl_ep_drop":
+        recv_capacity_per_rank = nccl_ep_backend.ncclep_drop_receive_capacity(
+            global_tokens=global_microbatch_tokens,
+            top_k=config.model.num_experts_per_token,
+            ep_size=expert_size,
+            num_experts=config.model.num_experts,
+            capacity_factor=GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR,
+        )
+        ep.ep_bootstrap(
+            world_size=jax.process_count(),
+            rank=jax.process_index(),
+            num_experts=config.model.num_experts,
+            max_tokens_per_rank=max_tokens_per_rank,
+            recv_capacity_per_rank=recv_capacity_per_rank,
+            hidden_dim=config.model.hidden_dim,
+            overflow_policy="drop",
+        )
+    elif config.model.moe_implementation == "nccl_ep":
+        recv_capacity_per_rank = nccl_ep_backend.ncclep_receive_capacity(
+            global_tokens=global_microbatch_tokens,
+            top_k=config.model.num_experts_per_token,
+            ep_size=expert_size,
+        )
+        ep.ep_bootstrap(
+            world_size=jax.process_count(),
+            rank=jax.process_index(),
+            num_experts=config.model.num_experts,
+            max_tokens_per_rank=max_tokens_per_rank,
+            recv_capacity_per_rank=recv_capacity_per_rank,
+            hidden_dim=config.model.hidden_dim,
+        )
+    else:
+        raise ValueError(f"unsupported NCCL_EP implementation: {config.model.moe_implementation!r}")
     te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
     physical_ep_config = te_cpp_ep.get_ep_config()
     if physical_ep_config.num_ep_groups != pipeline_groups:
@@ -2805,7 +2827,7 @@ def _bootstrap_nccl_ep(config: GrugRunConfig, mesh: Mesh, ep: Any) -> None:
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
-    nccl_ep_modules = _load_nccl_ep_modules() if config.model.moe_implementation == "nccl_ep" else None
+    nccl_ep_modules = _load_nccl_ep_modules() if config.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS else None
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)

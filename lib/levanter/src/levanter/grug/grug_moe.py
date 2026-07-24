@@ -241,7 +241,7 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
-        elif resolved_implementation == "nccl_ep":
+        elif resolved_implementation in ("nccl_ep", "nccl_ep_drop"):
             shard_local_fn = None
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
@@ -255,7 +255,8 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-        if resolved_implementation == "nccl_ep":
+        if resolved_implementation in ("nccl_ep", "nccl_ep_drop"):
+            overflow_policy = "drop" if resolved_implementation == "nccl_ep_drop" else "trap"
             out, dropped = moe_mlp_ep_ncclep(
                 x,
                 selected_experts,
@@ -265,6 +266,7 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                overflow_policy=overflow_policy,
                 mesh=mesh,
                 batch_spec=batch_spec,
             )

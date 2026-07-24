@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 import sys
 from types import SimpleNamespace
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from levanter.grug._moe.ep_ncclep import (
     _apply_recv_weights,
     _mask_unused_recv_rows,
     moe_mlp_ep_ncclep,
+    ncclep_drop_receive_capacity,
     ncclep_receive_capacity,
 )
 
@@ -39,6 +41,18 @@ def test_ncclep_receive_capacity_matches_ep8_training_shape() -> None:
     assert capacity == 524_288
 
 
+def test_ncclep_drop_receive_capacity_matches_ep8_training_shape() -> None:
+    capacity = ncclep_drop_receive_capacity(
+        global_tokens=131_072,
+        top_k=4,
+        ep_size=8,
+        num_experts=64,
+        capacity_factor=1.25,
+    )
+
+    assert capacity == 81_920
+
+
 @pytest.mark.parametrize(
     ("global_tokens", "top_k", "ep_size"),
     [
@@ -55,6 +69,29 @@ def test_ncclep_receive_capacity_rejects_invalid_layouts(
 ) -> None:
     with pytest.raises(ValueError):
         ncclep_receive_capacity(global_tokens, top_k, ep_size)
+
+
+@pytest.mark.parametrize(
+    ("num_experts", "capacity_factor"),
+    [
+        (0, 1.25),
+        (65, 1.25),
+        (64, 0.0),
+        (64, float("inf")),
+    ],
+)
+def test_ncclep_drop_receive_capacity_rejects_invalid_layouts(
+    num_experts: int,
+    capacity_factor: float,
+) -> None:
+    with pytest.raises(ValueError):
+        ncclep_drop_receive_capacity(
+            global_tokens=131_072,
+            top_k=4,
+            ep_size=8,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
 
 
 def test_ncclep_recv_weighting_masks_unused_rows_from_values_and_gradients() -> None:
@@ -109,30 +146,40 @@ def test_ncclep_masks_unused_ragged_dot_rows_from_values_and_gradients() -> None
     )
 
 
-def test_ncclep_backend_passes_rank_local_shapes_to_transformer_engine(
+@pytest.mark.parametrize(
+    ("overflow_policy", "expected_recv_capacity"),
+    [
+        ("trap", 128),
+        ("drop", 32),
+    ],
+)
+def test_ncclep_backend_traces_rank_local_shapes_to_transformer_engine(
     monkeypatch: pytest.MonkeyPatch,
+    overflow_policy: Literal["trap", "drop"],
+    expected_recv_capacity: int,
 ) -> None:
     def prepare(routes, **_kwargs):
-        assert routes.shape == (2, 1)
+        assert routes.shape == (16, 1)
         return [jnp.zeros((1, 1), jnp.int32), jnp.zeros((1, 32), jnp.uint8)]
 
     def dispatch(_handle, _routes, tokens, weights, *, recv_capacity_per_rank, **_kwargs):
-        assert tokens.shape == (2, 4)
+        assert tokens.shape == (16, 4)
+        assert recv_capacity_per_rank == expected_recv_capacity
         return [
             jnp.zeros((1, recv_capacity_per_rank, 4), tokens.dtype),
             jnp.zeros((1, recv_capacity_per_rank), weights.dtype),
         ]
 
     def dispatch_bwd(_handle, token_cotangent, weight_cotangent, *, out_leading_shape, **_kwargs):
-        assert out_leading_shape == (2,)
+        assert out_leading_shape == (16,)
         return [
-            jnp.zeros((2, 4), token_cotangent.dtype),
-            jnp.zeros((2, 1), weight_cotangent.dtype),
+            jnp.zeros((16, 4), token_cotangent.dtype),
+            jnp.zeros((16, 1), weight_cotangent.dtype),
         ]
 
     def combine(_handle, expert_out, *, out_leading_shape, **_kwargs):
-        assert out_leading_shape == (2,)
-        return jnp.zeros((2, 4), expert_out.dtype)
+        assert out_leading_shape == (16,)
+        return jnp.zeros((16, 4), expert_out.dtype)
 
     def combine_bwd(_handle, output_cotangent, *, recv_capacity_per_rank, **_kwargs):
         return jnp.zeros((1, recv_capacity_per_rank, 4), output_cotangent.dtype)
@@ -153,9 +200,9 @@ def test_ncclep_backend_passes_rank_local_shapes_to_transformer_engine(
     )
 
     mesh = AbstractMesh((8,), ("expert",))
-    routes = jax.ShapeDtypeStruct((16, 1), jnp.int32)
-    tokens = jax.ShapeDtypeStruct((16, 4), jnp.bfloat16)
-    weights = jax.ShapeDtypeStruct((16, 1), jnp.float32)
+    routes = jax.ShapeDtypeStruct((128, 1), jnp.int32)
+    tokens = jax.ShapeDtypeStruct((128, 4), jnp.bfloat16)
+    weights = jax.ShapeDtypeStruct((128, 1), jnp.float32)
     w_up_gate = jax.ShapeDtypeStruct((8, 4, 4), jnp.bfloat16)
     w_down = jax.ShapeDtypeStruct((8, 2, 4), jnp.bfloat16)
 
@@ -169,6 +216,7 @@ def test_ncclep_backend_passes_rank_local_shapes_to_transformer_engine(
             activation_fn=jax.nn.silu,
             num_experts=8,
             capacity_factor=1.25,
+            overflow_policy=overflow_policy,
             mesh=mesh,
             batch_spec=P("expert", None),
         )
