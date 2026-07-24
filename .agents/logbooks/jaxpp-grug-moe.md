@@ -2814,3 +2814,18 @@ author: dlwh
   - The kernel does not eliminate RNO2A's main risk: symmetric-window registration remains mandatory, and prior FABRIC/POSIX-FD allocation on this cluster failed with `CUDA_ERROR_NOT_PERMITTED`. EP8 is node-local and should use LSA with `gin=0`, so the newer allocation fallback may still succeed; this is unproven.
 - Next action:
   - When a nightly pins XLA at or after `acb5aaffe4c0`, first run a one-node H100x8 direct `jax.lax.ragged_all_to_all` gate at the exact EP8 microbatch geometry. Require output parity, `Device kernel: lsa_size=8 num_ranks=8 gin=0`, successful symmetric registration, and roughly 10% improvement over private-memory mode before testing reduced JaxPP or L24.
+
+### 2026-07-24 12:35 PDT - exact-shape private ragged all-to-all baseline is bitwise correct
+- Hypothesis: A standalone one-node H100x8 benchmark at the exact target EP8 microbatch transport shape will provide a stable correctness and timing baseline for the forthcoming XLA device-kernel path.
+- Commit Hash: `b4b0d3add8` (`[grug] Add XLA ragged all-to-all benchmark`).
+- Command: one H100x8 task on `cw-rno2a` running `experiments/grug/moe/benchmark_xla_ragged_all_to_all.py --assignments-per-rank 65536 --hidden-dim 2560 --warmup 5 --iterations 30` with `XLA_PYTHON_CLIENT_MEM_FRACTION=.50`. Job `/dlwh/xla-ragged-a2a-private-ep8-20260724-1232`.
+- Results:
+  - The job succeeded in `16.76s` with JAX/JAXLIB `0.10.1`, default `XLA_FLAGS=""`, and eight H100 80GB devices.
+  - The BF16 output was bitwise exact: `mismatch_count=0`, checksum `3623878656`.
+  - Transport timing for `65,536` assignments/rank, d2560, and `335,544,320` payload bytes/rank was mean `16.954763ms`, median `16.952521ms`, min `16.909279ms`, and max `17.007264ms`.
+  - FABRIC+POSIX_FD allocation was not permitted, but XLA's private path retried with simpler handle types and completed. No failed resource remains live.
+- Interpretation:
+  - The benchmark isolates transport from input construction and supplies a bitwise-correct baseline for the future device-kernel A/B.
+  - The user accepts approximately `0.2%` numerical error for the explicitly approximate QuACK, NCCL_EP, and FP8 research comparisons under discussion. This does not relax loss or gradient checks, and this exact XLA transport gate remains bitwise because it already passes at zero error.
+- Next action:
+  - Wait for a public JAX nightly whose pinned XLA includes `acb5aaffe4c0`, then run the identical benchmark with the required symmetric/device-kernel flags. Require `gin=0` LSA evidence, successful symmetric registration, and about 10% speedup before pipeline integration.
