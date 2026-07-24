@@ -12,12 +12,12 @@
 
 The work_log is a team-wide, agent-written logbook: one row per distilled milestone
 (a result, a decision, a blocker, a handoff), never session transcripts. See
-`.agents/skills/work-log/SKILL.md` for when to read and write, and
+`.agents/skills/echo-log/SKILL.md` for when to read and write, and
 `infra/echo/README.md` for the database itself.
 
-    scripts/work_log.py recent [--days 7] [--project P] [--limit 30]
-    scripts/work_log.py show <id>
-    scripts/work_log.py add --project P --title T [--body -|TEXT] [--author A]
+    scripts/echo_log.py recent [--days 7] [--project P] [--limit 30]
+    scripts/echo_log.py show <id>
+    scripts/echo_log.py add --project P --title T [--body -|TEXT] [--author A]
 
 Auth: Cloud SQL IAM. The caller connects as their own ADC identity — a member of the
 `echo@openathena.ai` group, which is granted read+append — so they need

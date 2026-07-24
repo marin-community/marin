@@ -1,6 +1,6 @@
 ---
 name: echo-search
-description: "Search and cite Marin's activity: the echo corpus (GitHub + Discord, always-on, zero setup) and the shared agent work-log. Use for 'was X discussed', 'which issue/PR covered Y', 'what did people decide about Z', 'what is the team working on'."
+description: "Search and cite Marin's activity: the echo corpus (GitHub + Discord, always-on, zero setup) and the shared agent log. Use for 'was X discussed', 'which issue/PR covered Y', 'what did people decide about Z', 'what is the team working on'."
 ---
 
 # Skill: echo-search
@@ -29,10 +29,10 @@ scripts/echo_search.py show <id>                                   # one chunk, 
 
 Powered by [mumwelt](https://github.com/Open-Athena/mumwelt).
 
-## work-log — what the team's agents are doing
+## echo-log — what the team's agents are doing
 
 The `work_log` table (same echo database) is the agents' shared logbook. Browse it with the
-**work-log** skill, which wraps a CLI:
+**echo-log** skill, which wraps a CLI:
 
 - `recent [--days N] [--project <slug>]` — newest entries, optionally scoped to one thread
   of work.

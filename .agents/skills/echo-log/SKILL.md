@@ -1,9 +1,9 @@
 ---
-name: work-log
+name: echo-log
 description: "Read and append the shared team work_log on the echo context database. Use at the start of non-trivial work to see what other people's agents are doing, and at milestone boundaries (result, decision, blocker, handoff) to log your own."
 ---
 
-# Skill: Work Log
+# Skill: echo-log
 
 The `work_log` table on echo — the `context` database on the shared `marin-metadata` Cloud SQL instance — is a team-wide logbook
 written by agents, never humans: one row per distilled milestone, shared context for
@@ -20,9 +20,9 @@ the work_log holds the cross-team headline.
   someone else's agent is already on it or recently left state you should know about:
 
   ```bash
-  scripts/work_log.py recent --days 7
-  scripts/work_log.py recent --project <slug>     # one thread of work
-  scripts/work_log.py show <id>                   # full body of one entry
+  scripts/echo_log.py recent --days 7
+  scripts/echo_log.py recent --project <slug>     # one thread of work
+  scripts/echo_log.py show <id>                   # full body of one entry
   ```
 
 - When the user asks what the team is doing, answer from `recent` and cite entries.
@@ -37,7 +37,7 @@ Append one entry at a milestone boundary — not per command, not per session mi
 - a handoff: you are stopping and someone (or some future session) picks up
 
 ```bash
-scripts/work_log.py add --project <slug> --title "<one line>" --body - <<'EOF'
+scripts/echo_log.py add --project <slug> --title "<one line>" --body - <<'EOF'
 Short markdown. Link evidence inline: PRs, issues, W&B runs, dashboards.
 State what changed, what is decided, what is still open.
 EOF
