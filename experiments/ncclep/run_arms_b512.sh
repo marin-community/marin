@@ -7,6 +7,10 @@
 # controls for the placement variance and the B200MFU-036 CUBIN envelope.
 set -ux
 
+# In-job sequential retries absorb the intermittent CUBIN-load failure
+# (B200MFU-036); the shared compile cache makes warm retries ~10 min cheaper.
+export NCCLEP_BENCH_ATTEMPTS=${NCCLEP_BENCH_ATTEMPTS:-3}
+
 COMMON=(--output-dir /tmp/out --num-gpus 64 --steps 20 --num-layers 48
         --hidden-dim 5120 --batch-size 512 --expert-parallelism 8)
 
