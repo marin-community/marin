@@ -28,7 +28,9 @@ def _check_shared_expert_quack() -> None:
     GemmGatedSm100 is bf16-compute, so compare against a bf16 einsum reference at a bf16-appropriate
     tolerance, not fp32.
     """
-    from levanter.grug._moe.sonic_cute import shared_expert_sonic_cute  # noqa: PLC0415
+    # Test the fused-SwiGLU kernel directly (single group, replicated) — decoupled from the
+    # shard_map/FSDP gather, which the flagged model run under the mesh exercises separately.
+    from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
 
     h, i, t = 512, 256, 384
     key = jax.random.PRNGKey(1)
@@ -44,7 +46,9 @@ def _check_shared_expert_quack() -> None:
         return jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, wd)
 
     def quack(x_, wg, wu, wd):
-        return shared_expert_sonic_cute(x_, wg, wu, wd)
+        w13_il = _interleave_gate_up(jnp.concatenate([wg, wu], axis=-1)[None], i)
+        cu = jnp.asarray([0, t], dtype=jnp.int32)
+        return _expert_mlp(x_, w13_il, wd[None], jnp.asarray([t], jnp.int32), cu)
 
     y_ref, vjp_ref = jax.vjp(ref, x, w_gate, w_up, w_down)
     y_q, vjp_q = jax.vjp(quack, x, w_gate, w_up, w_down)

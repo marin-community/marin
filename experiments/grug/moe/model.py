@@ -380,15 +380,22 @@ class DenseMLP(eqx.Module):
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _batch_spec())
         if use_quack:
             # Fused-SwiGLU QuACK kernel (single expert group), run under a shard_map so the token
-            # axis is local. Replicate the FSDP-sharded weights so the local per-device kernel sees
-            # full weights; x stays token-sharded (data-parallel). Guarded import: quack is B200-only.
+            # axis is local. Weights stay FSDP-sharded (canonical DenseMLP specs) and are gathered
+            # over the data axis inside the region (just-in-time, freed after). Guarded import:
+            # quack is B200-only.
             from levanter.grug._moe.sonic_cute import shared_expert_sonic_cute  # noqa: PLC0415
 
-            w_gate = reshard(self.w_gate, P(None, None))
-            w_up = reshard(self.w_up, P(None, None))
-            w_down = reshard(self.w_down, P(None, None))
+            gate_up_spec = P("data", "model")
+            down_spec = P("model", "data")
             out_flat = shared_expert_sonic_cute(
-                x_flat, w_gate, w_up, w_down, mesh=get_abstract_mesh(), token_spec=_batch_spec()
+                x_flat,
+                reshard(self.w_gate, gate_up_spec),
+                reshard(self.w_up, gate_up_spec),
+                reshard(self.w_down, down_spec),
+                mesh=get_abstract_mesh(),
+                token_spec=_batch_spec(),
+                gate_up_spec=gate_up_spec,
+                down_spec=down_spec,
             )
             return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
