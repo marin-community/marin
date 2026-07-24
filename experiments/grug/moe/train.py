@@ -276,6 +276,12 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
 # backward re-gathers), streaming it back to device only for the optimizer update. Viable on GB200
 # via the ~900 GB/s NVLink-C2C Grace<->Blackwell link; ~50ms/direction hides under the ~15s step.
 _OFFLOAD_OPT_STATE = os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1"
+# SCALE_OFFLOAD_MASTER_PARAMS=1 additionally parks the fp32 master weights on pinned host between
+# steps. To keep them off-HBM during forward/backward the cast to bf16 is hoisted OUT of the
+# differentiated loss (so value_and_grad tracks the bf16 params, not the fp32 master); the fp32
+# master is streamed to device only for that cast and again for the optimizer update. Numerically
+# identical to the on-device path -- the cast's gradient is identity, so dL/dbf16 == dL/dfp32.
+_OFFLOAD_MASTER_PARAMS = os.environ.get("SCALE_OFFLOAD_MASTER_PARAMS") == "1"
 
 
 def _opt_state_to_memory_kind(tree, kind: str):
@@ -309,9 +315,10 @@ def initial_state(
     opt_state = optimizer.init(params)
     if _OFFLOAD_OPT_STATE:
         opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
+    host_params = _opt_state_to_memory_kind(params, "pinned_host") if _OFFLOAD_MASTER_PARAMS else params
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
-        params=params,
+        params=host_params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         # Every grug layer is MoE, so this is [num_layers, num_experts]; zero == no bias at step 0.
@@ -341,7 +348,6 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply the pending QB betas (from the previous step) to the router biases inside JIT, before
         # the forward. All-zero when QB is off, so qb_params is numerically identical to state.params.
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas) if ema_beta is not None else None
 
         def loss_fn(params):
@@ -354,7 +360,23 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        if _OFFLOAD_MASTER_PARAMS:
+            # Host-resident master: stream to device, cast to bf16, and differentiate the bf16 params
+            # (cast hoisted out of the loss) so the fp32 master is dead through fwd/bwd and XLA frees
+            # its HBM. Re-stream the fp32 for the update below. dL/dbf16 == dL/dfp32 (cast grad is id).
+            qb_params_cast = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
+            bf16_params = mp.cast_to_compute(qb_params_cast)
+            (loss, qb_beta_per_layer), grads = jax.value_and_grad(
+                lambda bp: bp.next_token_loss(
+                    batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="mean", logsumexp_weight=z_loss
+                ),
+                has_aux=True,
+            )(bf16_params)
+            grads = mp.cast_to_param(grads)  # bf16 grads -> fp32 to match the master/optimizer
+            qb_params = _apply_qb_betas(_opt_state_to_memory_kind(state.params, "device"), state.pending_qb_betas)
+        else:
+            qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+            (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss}
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
@@ -390,6 +412,8 @@ def _make_train_step(
 
         if _OFFLOAD_OPT_STATE:
             opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
+        if _OFFLOAD_MASTER_PARAMS:
+            params = _opt_state_to_memory_kind(params, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
