@@ -187,28 +187,30 @@ def _grug_profile(model: str) -> dict:
         return {}
     return {
         "tp": 1,  # 256-expert MoE: experts shard via data + expert parallelism, NOT tensor parallelism
-        "revision": "delphi-v0-think",  # the checkpoint revision carrying the Delphi chat_template (NOT main)
+        # ``main`` was repaired at this exact commit to carry the byte-identical
+        # Delphi thinking template.  Pinning the immutable model *and tokenizer*
+        # revision lets vLLM consume the checkpoint's own metadata; do not keep a
+        # separately fetched template as a second, drift-prone source of truth.
+        "revision": "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
         "tokenizer": "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
-        # Grug MoE expert-parallel serve; --revision selects the Delphi-template checkpoint.
+        # Grug MoE expert-parallel serve.  vLLM loads both model and tokenizer
+        # metadata at the same repaired immutable revision.
         # ``distributed`` was a RunAI-streamer loader option. The canonical local-weight path
         # uses vLLM's ``auto`` loader, which rejects it as an unknown loader extra config.
-        "vllm_extra_args": ("--data-parallel-size", "8", "--enable-expert-parallel", "--revision", "delphi-v0-think"),
+        "vllm_extra_args": (
+            "--data-parallel-size",
+            "8",
+            "--enable-expert-parallel",
+            "--revision",
+            "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+            "--tokenizer-revision",
+            "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+        ),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
         # loops (marin #7321) so long-CoT MATH500/GPQA samples terminate + box within the gen budget.
         "extra_gen_kwargs": {"skip_special_tokens": "false", "repetition_penalty": "1.1"},
     }
-
-
-def _grug_chat_template(model: str, revision: str) -> str | None:
-    """Fetch the Delphi thinking chat_template.jinja from the model's revision (it carries the
-    <|start_think|>/<|end_think|> machinery). cw nodes have egress. Returns None on failure so the serve
-    degrades to the repo's own template rather than hard-failing the launch."""
-    try:
-        return Path(hf_hub_download(model, "chat_template.jinja", revision=revision)).read_text()
-    except Exception as e:
-        print(f"[warn] grug chat_template fetch failed (rev={revision}): {e!r}; using served repo template")
-        return None
 
 
 def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
@@ -289,17 +291,15 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         )
         apply_chat_template = True
     max_eval_instances = int(os.environ["EVAL_LIMIT"]) if os.environ.get("EVAL_LIMIT") else None
-    # LOCAL (grug thinking model): serve a chat template the model's repo does not carry a vLLM-loadable
-    # copy of (or override it). EVAL_CHAT_TEMPLATE_FILE → ServeSpec.chat_template_content (server renders
-    # /v1/chat/completions with it). For Delphi grug this is the delphi_v0_think jinja carrying the
-    # <|start_think|>/<|end_think|> machinery — the marin `/think` default in the repo would mis-structure
-    # the prompt and never cue the model's thinking protocol.
+    # An operator may explicitly override the server's chat template for an
+    # experiment.  Grug's default deliberately remains ``None``: its immutable
+    # checkpoint revision above is the authoritative source for the Delphi
+    # start-think/end-think protocol.  Passing a copied template would create a
+    # second source of truth and reintroduce the historical main-template drift.
     chat_template_content = None
     ctf = os.environ.get("EVAL_CHAT_TEMPLATE_FILE")
     if ctf:
         chat_template_content = Path(ctf).read_text()
-    elif prof:  # grug thinking: default to the Delphi thinking template from the delphi-v0-think revision
-        chat_template_content = _grug_chat_template(model, prof["revision"])
     # LOCAL (grug thinking model): extra --gen_kwargs (key=value, comma-separated) folded into every
     # lm-eval request. THE crux for Delphi thinking models: EVAL_EXTRA_GEN_KWARGS="skip_special_tokens=false"
     # PRESERVES the atomic 128002/128003 delimiters (vLLM's skip_special_tokens=True default STRIPS them,

@@ -17,6 +17,7 @@ from typing import cast
 from iris.client import Job
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+from experiments.evals.evalchemy import marin_evalchemy_gpu as gpu_driver
 from experiments.evals.evalchemy.marin_evalchemy_gpu import (
     CANONICAL_AIME_SEEDS,
     TIER2_TASKS,
@@ -186,18 +187,30 @@ def test_client_forwards_seed_and_extra_generation_kwargs():
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048,skip_special_tokens=false"
 
 
-def test_grug_profile_uses_local_weight_loader_compatible_extra_args():
-    """Grug's old RunAI-only loader config must not leak into local-weight GPU serving."""
-    args = _grug_profile("penfever/grug-67b-a2b-sft-s2-thinking-step630")["vllm_extra_args"]
+def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving(monkeypatch):
+    """Grug must use one immutable checkpoint revision for both vLLM metadata paths."""
+    model = "penfever/grug-67b-a2b-sft-s2-thinking-step630"
+    profile = _grug_profile(model)
+    args = profile["vllm_extra_args"]
 
     assert args == (
         "--data-parallel-size",
         "8",
         "--enable-expert-parallel",
         "--revision",
-        "delphi-v0-think",
+        "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
+        "--tokenizer-revision",
+        "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a",
     )
     assert "--model-loader-extra-config" not in args
+    assert profile["revision"] == "1a375bd4b75a59434b3df8fb81f0bae4343d2c1a"
+
+    # The repaired checkpoint embeds the authoritative Delphi template.  The
+    # default must not copy a second template into the serve config.
+    monkeypatch.delenv("EVAL_CHAT_TEMPLATE_FILE", raising=False)
+    monkeypatch.setattr(gpu_driver, "_auto_serve_overrides", lambda *_: ((), 32768))
+    config = gpu_driver.build_config(model, profile["tokenizer"], tier=2)
+    assert config.serve.chat_template_content is None
 
 
 def test_aime_defaults_to_the_three_canonical_campaign_seeds():
