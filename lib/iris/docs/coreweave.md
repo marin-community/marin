@@ -1223,12 +1223,29 @@ If `Valid` is `False`, the instance type or configuration is rejected.
 ### Pod stuck in Pending
 
 ```bash
-kubectl describe pod <name> -n iris      # Check Events section
-kubectl get events -n iris --sort-by='.lastTimestamp'
+iris --cluster=<cluster> task describe <task-id>
+kubectl get pod <name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.status=="False")]}{.reason}{": "}{.message}{"\n"}{end}'
+kubectl get workload -n iris
+kubectl get workload <workload-name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.type=="QuotaReserved")]}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
 ```
 
-Common causes: node not yet provisioned (wait for autoscaler), resource limits
-exceeded, or missing tolerations.
+`SchedulingGated` means Kueue has not admitted the Workload. The
+`QuotaReserved` message reports quota or topology fit failures such as
+`excluded: resource "memory"`. Iris copies that verdict into the task's backend
+status, including for singleton Pods whose generated Workload is linked by Pod
+UID.
+
+Common causes are node capacity fragmented across running Pods, resource limits
+exceeded, missing tolerations, or a node still provisioning. Kueue preempts only
+the priorities allowed by the ClusterQueue policy; equal-priority work remains
+in place.
+
+Avoid `kubectl describe pod` when a task carries credentials in literal
+environment variables. It prints those values. Use the JSONPath commands above
+for scheduling state, and rotate any credential printed into a terminal or
+transcript.
 
 ### Image pull errors
 
