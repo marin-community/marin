@@ -477,3 +477,32 @@ statistics for performance comparisons.
   per-source tables, and sampled cluster-size histograms are populated and
   internally consistent; no blank, malformed, overlapping, or non-finite
   fields are visible.
+
+### 2026-07-25T07:01:00Z — semantic calibration label correction
+
+- A two-H100 `Qwen/Qwen3.5-35B-A3B` calibration served all 20 structured
+  judgments for the ten manually reviewed smoke pairs, but the v6 model-facing
+  label enum matched only 2/10 pairs. All ten pairs were unanimous. Several
+  explanations identified distinct payloads while the serialized label still
+  said `true_duplicate`, so the 755,281-pair production launch remained gated.
+  Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-calibration-qwen35-35b-a3b-20260725-v6/calibration.json`.
+- Commit `79198807a` replaced the model-facing audit labels with the directional
+  boolean `deletion_loses_substantive_content`. Evidence is generated before
+  the boolean and the audit label is mapped deterministically in code. The same
+  calibration then reached 9/10 correct, 10/10 unanimous, and 20/20 valid
+  judgments. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-calibration-qwen35-35b-a3b-20260725-v7/calibration.json`.
+- The sole v7 miss was the treatment's known low-value college/career spam
+  template. The 875- and 763-character documents preserve the same sentences
+  while substituting institutions, locations, jobs, and programs; word 5-gram
+  Jaccard is 0.5033 and member containment is 0.6333. Both model passes treated
+  the nonsensical slot values as facts. Commit `8c2d28445` makes this template
+  boundary explicit while retaining different function-call examples, source
+  programs, and API methods as distinct content.
+- Calibration command:
+  `uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait --job-name datakit-6854-semantic-calibration-qwen35-35b-a3b-v7 --enable-extra-resources --cpu 2 --memory 8g --disk 20g --priority batch --extra marin-core:cpu -- python experiments/datakit/scripts/dedup_ab_semantic_judge.py --machine-labels s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-machine-labels-smoke-0.1b-20260725-v2/machine-labels.json --manual-labels .agents/logbooks/issue-6854-dedup-smoke-labels.json --model Qwen/Qwen3.5-35B-A3B --output s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-calibration-qwen35-35b-a3b-20260725-v7/calibration.json`.
+- Nine focused semantic-judge tests pass and the two touched files pass the
+  repository pre-commit checks. Next action: rerun the full ten-pair gate after
+  the template-policy clarification; do not launch production unless it reaches
+  10/10 correct and unanimous.
