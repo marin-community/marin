@@ -631,3 +631,30 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   base — the "a2a paid the TE command-buffer tax" and "multi-stream would
   lift a2a" theories are both ~0 at this config. Allocation-2 a2a anchor:
   18.05 % (draw variance ~0.2 pp).
+- **NCCLEP-010c RESULTS (gapclose3, one 16-node allocation, 68493d2 wheel,
+  steady = median steps ≥ 8; plus allocation-1 a2a arms):**
+  | arm | steady MFU | s/step | final loss |
+  |---|---|---|---|
+  | a2a_cute base (alloc 1) | 18.24 % | 8.23 | 8.761659 |
+  | a2a_cute tuned: default capture + overlap (alloc 1) | 18.19 % | 8.25 | 8.761649 |
+  | a2a_cute anchor (alloc 3) | 18.10 % | 8.29 | 8.761649 |
+  | te_moe base | 16.82 % | 8.92 | 8.764873 |
+  | te_moe + scoped capture | 16.85 % | 8.90 | 8.764893 |
+  | te_moe + scoped capture + overlap | 16.78 % | 8.94 | 8.764871 |
+  | te_moe + capture + overlap + max_num_sms 16 | 15.73 % | 9.54 | 8.764887 |
+  | te_moe + capture + overlap + max_num_sms 32 | 16.42 % | 9.13 | 8.764884 |
+  | nccl_ep seam + scoped capture + overlap | 17.15 % | 8.75 | 8.759784 |
+- Interpretation: **every non-quantization knob NVIDIA's guidance exposes is
+  a wash or a loss in bf16 at this config.** Scoped command-buffer capture is
+  SAFE with TE EP (settling the NCCLEP-006 "scoping" next-step) but worth
+  +0.03 pp; the multi-stream collective overlap flag is −0.05 pp on te_moe
+  and −0.05 pp on a2a; `max_num_sms` is monotonically negative (auto > 32 >
+  16 — third falsification of SM-budgeting on this stack after
+  B200MFU-016/-021). The tuned seam (17.15 %) exactly reproduces its untuned
+  number. The a2a_cute lead stands at ~1.3 pp over the best TE arm,
+  unchanged through every knob.
+- NGC 26.06 arm status: machinery works end-to-end (guarded overlay + pinned
+  wheel + per-sha JIT headers + patched PJRT plugin; gang up at 16×4, all
+  ranks entered `jit_train_step` compile) but the a2a_cute compile under the
+  NGC XLA has emitted nothing for >90 min (`/mwittmann/ngc-gc-a2a3`) —
+  timeboxed; te_moe and ragged-fusion-native NGC arms deferred with it.
