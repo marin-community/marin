@@ -40,6 +40,10 @@ GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
+MCP_ACCESS_NONE = "none"
+MCP_ACCESS_ALL = "all"
+MCP_ACCESS_GROUPS = "groups"
+MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -144,13 +148,13 @@ class McpAccessConfig:
     def parse(cls, value: object, profile: str) -> McpAccessConfig:
         if not isinstance(value, dict):
             raise ValueError(f"profile {profile!r} mcpAccess must be an object")
-        mode = str(value.get("mode", "none")).strip()
+        mode = str(value.get("mode", MCP_ACCESS_NONE)).strip()
         groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", profile)
-        if mode not in {"none", "all", "groups"}:
+        if mode not in MCP_ACCESS_MODES:
             raise ValueError(f"profile {profile!r} mcpAccess.mode must be none, all, or groups")
-        if mode != "groups" and groups:
+        if mode != MCP_ACCESS_GROUPS and groups:
             raise ValueError(f"profile {profile!r} mcpAccess.groups requires mode groups")
-        if mode == "groups" and not groups:
+        if mode == MCP_ACCESS_GROUPS and not groups:
             raise ValueError(f"profile {profile!r} mcpAccess mode groups requires at least one group")
         return cls(mode, groups)
 
