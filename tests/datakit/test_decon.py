@@ -1180,8 +1180,7 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
 
 
 def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
-    """The distributed (zephyr) builder writes one drop.parquet per source: a
-    source's ubiquitous ngram is dropped, another source's distinctive one kept."""
+    """Nested source names load only their exact local drop set."""
     eval_dir = tmp_path / "eval"
     _write_eval_jsonl(
         eval_dir / "eval.jsonl.gz",
@@ -1211,7 +1210,7 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
 
     out = tmp_path / "drops"
     res = build_all_source_drop_sets(
-        sources=[("srcA", str(a_dir)), ("srcB", str(b_dir))],
+        sources=[("finepdfs/fra_Latn", str(a_dir)), ("finepdfs", str(b_dir))],
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out),
         ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
@@ -1223,8 +1222,8 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
         global_common_min_sources=2,
     )
     assert res.num_sources == 2
-    assert len(_load_drop_set(str(out / "srcA"))) > 0  # boilerplate (df=20) dropped
-    assert len(_load_drop_set(str(out / "srcB"))) == 0  # distinctive (df=1) kept
+    assert len(_load_drop_set(str(out / "finepdfs/fra_Latn"))) > 0  # boilerplate (df=20) dropped
+    assert len(_load_drop_set(str(out / "finepdfs"))) == 0  # does not recursively load the language child
     assert res.n_global_dropped == 0  # high DF in only one source is not global boilerplate
 
 

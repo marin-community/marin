@@ -877,12 +877,11 @@ def _iter_normalized_texts(main_output_dir: str, text_field: str) -> Iterator[st
 
 
 def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
-    files = sorted(str(m) for m in StoragePath(f"{drop_set_dir.rstrip('/')}/**/*.parquet").glob())
-    out: set[int] = set()
-    for f in files:
-        with StoragePath(f).open("rb") as fh:
-            out.update(pq.read_table(fh, columns=["hash"]).column("hash").to_pylist())
-    return frozenset(out)
+    drop_path = StoragePath(f"{drop_set_dir.rstrip('/')}/drop.parquet")
+    if not drop_path.exists():
+        return frozenset()
+    with drop_path.open("rb") as fh:
+        return frozenset(pq.read_table(fh, columns=["hash"]).column("hash").to_pylist())
 
 
 def _load_drop_sets(drop_set_dirs: list[str]) -> frozenset[int]:
