@@ -71,6 +71,8 @@ peers:
     controller_address: https://iris-cw-us-east-02a.oa.dev
   cw-us-east-08a:
     controller_address: https://iris-cw-us-east-08a.oa.dev
+  cw-us-west-04a:
+    controller_address: https://iris-cw-us-west-04a.oa.dev
 
 worker_provider: {}
 

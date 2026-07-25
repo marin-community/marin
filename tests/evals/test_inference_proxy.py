@@ -81,7 +81,7 @@ def test_remote_topology_selection() -> None:
         iris_module._broker_config(0, None)
 
 
-def test_remote_inference_yields_an_iris_link_for_its_generated_endpoint(monkeypatch) -> None:
+def test_remote_inference_uses_controller_minted_federated_capability_url(monkeypatch) -> None:
     class _Job:
         job_id = "serve-job"
         iris_job = None
@@ -94,7 +94,11 @@ def test_remote_inference_yields_an_iris_link_for_its_generated_endpoint(monkeyp
     submitted = []
     job = _Job()
     iris_client = SimpleNamespace(
-        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl)) or SimpleNamespace(token="secret-token"),
+        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl))
+        or SimpleNamespace(
+            token="secret-token",
+            capability_url="https://iris.example/proxy/cw-us-west-04a/t/secret-token/serve.inference",
+        ),
     )
     monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
     monkeypatch.setattr(
@@ -135,7 +139,7 @@ def test_remote_inference_yields_an_iris_link_for_its_generated_endpoint(monkeyp
     assert service.controller_proxy_timeout_seconds > 1800
     assert service.endpoint_name == minted[0][0]
     assert "physical-model" not in service.endpoint_name
-    assert model.endpoint.base_url.startswith("https://iris.example/proxy/t/secret-token/")
+    assert model.endpoint.base_url == ("https://iris.example/proxy/cw-us-west-04a/t/secret-token/serve.inference/v1")
     assert "10.0.0.1" not in model.endpoint.base_url
     assert model.endpoint.model == "public-model"
     assert model.tokenizer == "Qwen/Qwen3-0.6B"
@@ -379,7 +383,8 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
 
     registry = SimpleNamespace(registered=registered)
     iris_client = SimpleNamespace(
-        mint_endpoint_token=lambda name, ttl: minted.append(name) or SimpleNamespace(token="broker-token"),
+        mint_endpoint_token=lambda name, ttl: minted.append(name)
+        or SimpleNamespace(token="broker-token", capability_url=""),
     )
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
     monkeypatch.setattr(

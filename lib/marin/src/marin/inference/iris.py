@@ -178,9 +178,12 @@ def _new_endpoint_identity() -> tuple[str, str]:
 
 def _capability_model(model: RunningModel, endpoint_name: str, capability_origin: str) -> RunningModel:
     response = iris_ctx().client.mint_endpoint_token(endpoint_name, ttl=_CAPABILITY_TTL)
+    capability_url = response.capability_url or (
+        f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}"
+    )
     endpoint = replace(
         model.endpoint,
-        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{OPENAI_API_SUFFIX}",
+        base_url=f"{capability_url}{OPENAI_API_SUFFIX}",
     )
     return replace(model, endpoint=endpoint)
 
