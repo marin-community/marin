@@ -1483,6 +1483,36 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T20:56:02Z — 47,121 pairs verified
+
+- Eighteen additional baseline checkpoints passed independent validation:
+  2,304 pairs, 1,286 model false positives, 1,017 model true duplicates,
+  and one unresolved outcome. They contain 5,365 valid judgments across
+  5,365 attempts, with no invalid responses or retries. Seven pairs were
+  chunked and 2,297 were direct.
+- Complete-text review resolves the ambiguity as a false positive. Both
+  documents are incoherent college SEO pages, but the member contains complete
+  advanced-degree permanence and work-hard guidance absent from the canonical;
+  the canonical instead contains early-decision and certification guidance.
+  The difference exceeds the template's institution, sport, and program slots.
+  Character similarity is 0.564896. The member/canonical text SHA-256 values
+  are `dfc0cedac52819f05ad258ad9a053ee42560db812e1dccfbc92c708546c82255` /
+  `aa1d8fee3f01e7edece44c88166d773c2ec0b834b92b62194193de5e388ff286`.
+- The hash-bound manual record has Parquet SHA-256
+  `2e57d2b636e1e550f9fd079e60a466cb0b81c63907b6ac080ef14010c6c20085`
+  and semantic-judgments SHA-256
+  `7e3fb0ff427b91136896778be83f60a1cf44f8b1db98ae3a0c86c30d22192830`.
+  A separate batch-priority Iris process exactly reread the source pair,
+  semantic checkpoint, manual record, Parquet bytes, and completion marker.
+- Across the stable 370-checkpoint snapshot, all 43 manual records leave:
+
+  - baseline: 39,801 pairs, 25,036 false positives, 14,765 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 47,121 pairs, 28,862 false positives, 18,259 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:49:22Z — 44,817 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
