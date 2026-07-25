@@ -426,3 +426,64 @@ drop-tolerant training evidence) is now the highest-leverage fidelity work.
 
 Job mutations across the session: submissions only (4 smokes/probes, 9 rack legs, 3 iris
 setup flakes resubmitted); zero stops/kills/kicks. Standing down.
+
+## Check-in 2026-07-25 11:15 UTC — NEW ASSIGNMENT (QB tuning to close the drops gap)
+
+- QB implementation analyzed (model.py _compute_qb_beta + train.py _apply_qb_betas): NOT DeepSeek-V3's incremental +-gamma sign rule (gamma=0.001, integral control). It is a per-step quantile equalization: beta_i = qb_count-th largest (unbiased logit - biased threshold), bias = -centered(beta), FULLY REPLACED each step. Key insight: at the balanced fixed point beta_i = -bias_i, so the replacement rule is an implicit PROPORTIONAL controller with gain exactly 1 on the residual imbalance — "update rate" exists as a hidden gain, not a gamma.
+- Knob added (one line, env-gated, commit 58c9a19eb): SCALE_QB_GAIN=g blends beta states, applying g x residual per step (g=1 byte-identical stock; g=2 = the coordinator's "2x bias update rate"; fixed point preserved for any g, overshoot risk grows with g).
+- Falsifiable hypothesis stated up front: if the ~6% plateau is under-correction, g=2 accelerates the crossing; if it is sender-local bucket hotspots (fixed path drops at 64x256 sender-expert granularity, which a GLOBAL expert bias cannot address) or quantile-pmean approximation error, g=2 changes little or oscillates. The early-collapse phase (0.89 peak) is router-training dynamics, present with QB off too — gain will not remove it.
+- Smoke submitted: /mwittmann/ep25d4-qbgain-smoke-ep4-20260725 (EP4, g=2). Then ONE 350-step rack probe at g=2, cf1.0, vs baseline 350-run (0.064@349, 22.002%, loss 3.335). Draw-variance caveat will be stated in the verdict.
+Confidence: 4/10 that g=2 crosses 3% by step 300 (the sender-local hypothesis argues against)
+Next: smoke -> rack probe.
+
+## Check-in 2026-07-25 11:24 UTC
+
+- QB gain smoke SUCCEEDED (sentinel "QB over-relaxation active: SCALE_QB_GAIN=2.0", loss finite 6.704@20, drops computed).
+- Rack probe submitted: /mwittmann/ep25d4-qbgain2-cf100-350-v1-20260725 (g=2, cf1.0, adjoint, drops, 350 steps). ETA ~13:00 UTC. This is the last leg; final wrap after harvest.
+Confidence: 4/10
+Next: babysit probe.
+
+## Check-in 2026-07-25 12:12 UTC
+
+- g=2 probe mid-run: window p50 MFU 23.407% (fast draw), but drop_fraction ~0.71 around step ~120 vs baseline 0.175 — early signal that gain 2 OVERSHOOTS (controller oscillation), the predicted failure mode. Awaiting the full step-indexed series before the verdict; done ~13:05.
+Confidence: 3/10 for the crossing criterion
+Next: continue babysitting.
+
+## FINAL (QB tuning) 2026-07-25 13:10 UTC — gain-2 over-relaxation: CLEAN NEGATIVE (destabilizes QB)
+
+/mwittmann/ep25d4-qbgain2-cf100-350-v1-20260725 (g=2, cf1.0, adjoint, 350 steps, 349 samples)
+vs baseline /mwittmann/ep25d4-qb-cf100-drops-350-v1 (g=1):
+
+| | g=1 baseline | g=2 probe |
+|---|---:|---:|
+| p50 MFU | 22.002% | 23.386% |
+| drop_fraction @ 60 / 119 / 200 / 300 / 349 | 0.271 / 0.175 / 0.126 / 0.070 / 0.064 | 0.793 / 0.721 / 0.698 / 0.695 / 0.675 |
+| tail 250-349 mean | 0.0732 | 0.6899 |
+| loss @ 350 (tail20) | 3.3434 | 3.4342 |
+
+- VERDICT on the deliverable question: NO. g=2 never approaches 3% — it never drops below
+  0.67. The controller enters a persistent overshoot limit cycle: doubling the residual
+  correction flips the over/under-demanded expert sets each step instead of converging.
+  This is FAR outside QB draw variance (both g=1 draws declined below 0.18 by step 150;
+  g=2 sits above 0.67 for 350 steps).
+- Loss confirms real damage: +0.091 at step 350 (marginally outside the ~0.06 run noise,
+  and in the expected direction for ~68% dropped assignments).
+- The higher MFU (23.39 vs 22.00) is the drop-speed artifact seen across the session:
+  heavy-drop runs run faster (collapsed QB-off 24.04, g=2 23.39, both ~0.65+ drops)
+  than balanced ones (22.0-22.6) — dropped assignments all gather the same zero pad row,
+  cheapening the dispatch-build and combine gathers. MFU gains from drops are not wins.
+- Synthesis for the milestone: the stock QB rule is already at gain 1 on the residual
+  (full quantile equalization per step); gain 2 overshoots into a limit cycle, and gain 1
+  plateaus at ~6% — together these say the ~6% steady state is NOT under-correction of
+  the global bias. The remaining hypotheses are sender-local bucket hotspots (the fixed
+  path drops at 64x256 sender-expert granularity, invisible to any global-expert
+  controller) and the quantile-pmean approximation; the sender-local one predicts exactly
+  the observed cf-sensitivity (cf1.15 halves drops). Un-probed QB directions that remain:
+  damped gain (g<1, smooths the early spike at best), DeepSeek-style integral
+  accumulation, or a per-sender bias — the last requires kernel-level changes and is the
+  only one aimed at the hypothesized actual cause.
+- Production recommendation UNCHANGED and now better-founded: QB(g=1) + cf1.15 at 20.85%
+  is the fidelity-compliant point; faster global QB is not a path to cf1.0 at 22.6%.
+
+Commit: 58c9a19eb (SCALE_QB_GAIN knob; g=1 byte-identical). Jobs this assignment: 1 smoke
++ 1 rack probe, submissions only. Standing down — final.
