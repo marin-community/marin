@@ -1037,3 +1037,21 @@ statistics for performance comparisons.
 
 - Partition p1 moved to semantic range 256:384. All 12 pods remain Ready with
   zero restarts.
+
+### 2026-07-25T14:40:00Z — partition 0 completes its first large batch
+
+- The first checkpoint in baseline decision file 1 passed independent
+  validation: 128 pairs, 116 false positives, 12 true duplicates, and zero
+  unresolved outcomes.
+- This batch contained 31 chunked pairs and 97 direct pairs. All 2,459 model
+  judgments were valid on their first attempt. The audit verified the marker,
+  outcome bytes and SHA-256, ordered case-key SHA-256, identities,
+  configuration hash, counters, and deterministic outcomes.
+- Across the stable 97-checkpoint snapshot, the 13 prior manual records leave:
+
+  - baseline: 9,914 pairs, 6,492 false positives, 3,422 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 12,369 pairs, 7,776 false positives, 4,593 true duplicates.
+
+- Partition p0 moved to semantic range 128:256. All four GPU workers continue
+  serving requests with all 12 pods Ready and zero restarts.
