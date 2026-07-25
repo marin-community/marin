@@ -328,3 +328,77 @@ satisfied via reset, keeping the original worktree-path constraint), uv sync, re
 `ep_ragged_all_to_all.py` + the gather-dispatch patch + NCCLEP-007's chunked-scan
 design (preserved in my history at cb735f9f3), write the 4b design before touching
 code. Coordinate with d4 (rotation) via the coordinator only.
+
+## Check-in 2026-07-25 ~04:05 UTC — round-2 (4b) design
+
+Round-2 context read (d4's branch, local): **direction-4 is a CONFIDENT NEGATIVE, both
+variants** — rotation G=8 11.14% vs mono 20.59% (−9.46pp), and crucially for 4b:
+**prefetch (dispatch a2a for local expert le+1 issued before le's GEMM) = EXACT NULL
+(−0.015pp vs control)** — "overlap here is scheduler/runtime-gated, not
+dataflow-gated". d4's note to me: "trace-order pipelining inside this shard_map did NOT
+induce overlap; the FSDP chunk-2 precedent lived outside the shard_map seam."
+This also closes my round-1 cross-reference: structural overlap does NOT work in stock
+XLA → TE's remaining case was thin indeed; the direction-3 verdict stands unaffected.
+
+### 4b design (coordinator assignment: token-chunk pipelining, dispatch k+1 under FFN k)
+
+Prior: ~2/10 (d4's prefetch null is the same mechanism class at round granularity;
+SCALE_A2A_CHUNKS=2 < 1 already measured unpipelined token-chunk overhead). Still worth
+the one cheap falsification leg: it closes the whole dataflow-restructuring family with
+a third matched-draw measurement AND quantifies the drop-granularity cost of token
+chunking (Larry's fidelity concern) at K=2.
+
+1. Base: this worktree reset to rav/ep-2 tip fe21ea495 (round-1 history safe on the
+   branch; AGENT_LOG restored from 629e0edc8). Port d4's committed gather-dispatch
+   reconstruction (`_dispatch_rows` + SCALE_A2A_GATHER_DISPATCH gate, their 9726d6e6e)
+   — required for the 20.558-protocol control leg.
+2. Feature: `_fixed_a2a_chunk_pipeline`, gated `SCALE_A2A_CHUNK_PIPELINE=1` +
+   `SCALE_A2A_CHUNKS=K`. Software-pipelined loop: chunk k+1's index math + send_x
+   build + dispatch a2a issue BEFORE chunk k's per-expert GEMMs; combine a2a + fp32
+   weighted-gather accumulate per chunk. Per-chunk math identical to `_fixed_a2a_core`
+   (same capacity ratio, same gather dispatch); per-expert round structure unchanged
+   (no contamination with d4's proven-null prefetch).
+3. Parity test (CPU EP8 subprocess, d4's harness pattern): pipeline K∈{2,4} × gather
+   {0,1} vs monolithic — fwd + all 4 grads rtol=atol=1e-5; assert pipeline drops ==
+   plain-chunks drops (execution-structure invariance); REPORT drops vs K=1 (expected
+   increase from chunk-local capacity granularity — fidelity datum).
+4. Smoke: 1-replica EP4 GPU job.
+5. Matched A/B at the operating point (the exact 5073017396 submission,
+   SCALE_DISABLE_CHECKPOINT=1): control = gather K=1; treatment = gather + pipeline
+   K=2. Back-to-back, 120 steps, json_logger, p50 MFU + loss + drop fractions (need
+   the overflow metric enabled — d4 flagged model.py:495 report_capacity_overflow=False;
+   I'll add an env-gated drop-fraction log line, small patch).
+6. Verdict bar: ≥+0.5pp over control = interesting; null/negative = confident negative
+   closing the family.
+
+## Check-in 2026-07-25 ~04:40 UTC — 4b implemented, parity green, smoke in flight
+
+- **Implementation committed** (60ffcbb50): gather-dispatch port (`_dispatch_rows`,
+  faithful to d4's committed reconstruction of the comment patch) +
+  `_fixed_a2a_chunk_pipeline` gated `SCALE_A2A_CHUNK_PIPELINE=1` with
+  `SCALE_A2A_CHUNKS=K`. Software-pipelined loop: chunk k+1's prep (index math +
+  dispatch build) and dispatch a2a issue before chunk k's per-expert GEMMs; combine
+  a2a before the loop advances. Per-chunk math identical to `_fixed_a2a_core`.
+- **CPU EP8 parity PASSES** (`test_fixed_a2a_chunk_pipeline_matches_unpipelined_chunks`):
+  pipeline K∈{2,4} × gather {0,1} vs plain chunks at the same K — fwd + all 4 grads
+  rtol=atol=1e-5, drop counts identical. All 3 fixed-a2a tests pass (regression clean).
+  First-pass bug found by the test: cross-chunk assembly must CONCAT (disjoint token
+  slices), not accumulate — fixed before any GPU time burned.
+- **Fidelity datum (toy config, skewed routing)**: drops K=1: 115 → K=2: 124 (+8%) →
+  K=4: 72 (−37%): chunk granularity changes overflow counts in BOTH directions —
+  the real-config number must come from the A/B legs.
+- **Drop reporting** (env-gated, `SCALE_REPORT_DROPS=1`): model.py calls expert_mlp
+  with report_capacity_overflow=True and `jax.debug.print`s the global
+  dropped-assignment count per layer (ordered=False, non-blocking). Fraction
+  denominator = batch×seq×topk assignments, computed at analysis time.
+- **Smoke submitted**: `/mwittmann/ep25d3-chunkpipe-smoke-20260725` — 1 replica (4
+  GPUs), EP4, L4, b32, 6 steps, pipeline K=2 + gather + drop reporting on. Verify:
+  sentinel "fixed-a2a chunk pipeline active", A2A_DROP_STAT lines, loss descends.
+
+Confidence: 3/10 for 4b ≥ +0.5pp (d4's prefetch null says the mechanism class is
+scheduler-gated; my leg closes the family + delivers the drop-granularity number).
+
+Next: smoke verdict, then the two 120-step operating-point legs back-to-back:
+control (gather K=1, exact 5073017396 submission + SCALE_DISABLE_CHECKPOINT +
+SCALE_REPORT_DROPS) vs pipeline (same + SCALE_A2A_CHUNK_PIPELINE=1 +
+SCALE_A2A_CHUNKS=2).
