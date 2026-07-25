@@ -10,6 +10,7 @@ full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
 """
 
 import dataclasses
+import math
 import os
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -25,6 +26,7 @@ from jax import random, shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
+from levanter.grug._moe.ep_ragged_all_to_all import _stable_expert_local_rank
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -145,6 +147,10 @@ class GrugModelConfig:
     capacity_balance_temperature: float = 1.0
     capacity_balance_hard_iterations: int = 2
     capacity_balance_hard_update_rate: float = 0.2
+    # Deterministically replace over-capacity top-k assignments with vacant expert slots. This is
+    # an exact-capacity fallback for score geometries where an additive balancing dual cannot round
+    # to a feasible hard top-k assignment.
+    capacity_refill_routing: bool = False
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -186,8 +192,9 @@ class GrugModelConfig:
             raise ValueError("capacity_balance_hard_iterations must be non-negative")
         if self.capacity_balance_hard_update_rate <= 0:
             raise ValueError("capacity_balance_hard_update_rate must be positive")
-        if self.qb_routing and self.capacity_balanced_routing:
-            raise ValueError("qb_routing and capacity_balanced_routing are mutually exclusive")
+        enabled_load_balancers = sum((self.qb_routing, self.capacity_balanced_routing, self.capacity_refill_routing))
+        if enabled_load_balancers > 1:
+            raise ValueError("qb_routing, capacity_balanced_routing, and capacity_refill_routing are mutually exclusive")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
@@ -493,6 +500,67 @@ def _capacity_balanced_top_k(
     )(router_logits)
 
 
+def _capacity_refilled_top_k_local(
+    router_logits: Float[Array, "T E"],
+    *,
+    topk: int,
+    capacity_factor: float,
+) -> Int[Array, "T K"]:
+    """Replace overflowing top-k assignments with a stable sequence of vacant expert slots."""
+    num_tokens, num_experts = router_logits.shape
+    selected_experts = jax.lax.top_k(router_logits, topk)[1].astype(jnp.int32)
+    flat_experts = selected_experts.reshape(-1)
+    assignments = flat_experts.shape[0]
+    capacity = math.ceil(capacity_factor * assignments / num_experts)
+
+    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    keep = local_rank < capacity
+    expert_load = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
+    occupied_slots = jnp.minimum(expert_load, capacity)
+
+    # Rank-major vacancy order cycles through experts before advancing a slot rank, so consecutive
+    # overflow assignments from one token usually receive distinct experts.
+    vacancy_experts = jnp.broadcast_to(
+        jnp.arange(num_experts, dtype=jnp.int32)[None, :],
+        (capacity, num_experts),
+    ).reshape(-1)
+    vacancy_mask = (jnp.arange(capacity, dtype=jnp.int32)[:, None] >= occupied_slots[None, :]).reshape(-1)
+    vacancy_rank = jnp.cumsum(vacancy_mask.astype(jnp.int32), dtype=jnp.int32) - 1
+    total_slots = capacity * num_experts
+    vacancy_destination = jnp.where(vacancy_mask, vacancy_rank, total_slots)
+    compact_vacancy_experts = (
+        jnp.full((total_slots,), num_experts, dtype=jnp.int32).at[vacancy_destination].set(vacancy_experts, mode="drop")
+    )
+
+    overflow_rank = jnp.cumsum(jnp.logical_not(keep).astype(jnp.int32), dtype=jnp.int32) - 1
+    replacement = compact_vacancy_experts[jnp.maximum(overflow_rank, 0)]
+    refilled = jnp.where(keep, flat_experts, replacement)
+    return refilled.reshape(num_tokens, topk)
+
+
+def _capacity_refilled_top_k(
+    router_logits: Float[Array, "T E"],
+    cfg: "GrugModelConfig",
+) -> Int[Array, "T K"]:
+    """Refill expert capacity independently on every fixed-A2A sender shard."""
+    mesh = get_abstract_mesh()
+    router_logits = reshard(router_logits, P(_BATCH_AXES, None))
+
+    def _local(local_router_logits):
+        return _capacity_refilled_top_k_local(
+            local_router_logits,
+            topk=cfg.num_experts_per_token,
+            capacity_factor=cfg.moe_capacity_factor,
+        )
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None),),
+        out_specs=P(_BATCH_AXES, None),
+    )(router_logits)
+
+
 class MoEMLP(eqx.Module):
     """Top-k routed MoE with sigmoid combine weights and optional loss-free balancing."""
 
@@ -538,7 +606,10 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        if self.cfg.capacity_balanced_routing:
+        if self.cfg.capacity_refill_routing:
+            selected_experts = _capacity_refilled_top_k(router_logits, self.cfg)
+            topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        elif self.cfg.capacity_balanced_routing:
             selected_experts = _capacity_balanced_top_k(router_logits, self.cfg)
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         elif self.cfg.qb_routing:
@@ -550,7 +621,12 @@ class MoEMLP(eqx.Module):
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
-        if self.cfg.qb_routing or self.cfg.capacity_balanced_routing or self.cfg.report_capacity_overflow:
+        if (
+            self.cfg.qb_routing
+            or self.cfg.capacity_balanced_routing
+            or self.cfg.capacity_refill_routing
+            or self.cfg.report_capacity_overflow
+        ):
             expert_load = _compute_expert_load(selected_experts, self.cfg)
         else:
             expert_load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32)

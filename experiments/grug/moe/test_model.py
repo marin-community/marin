@@ -19,6 +19,7 @@ from experiments.grug.moe.model import (
     GrugModelConfig,
     MoEMLP,
     _capacity_balanced_top_k_local,
+    _capacity_refilled_top_k_local,
     _compute_expert_load,
 )
 from experiments.grug.moe.train import _compute_flops, _receiver_capacity_overflow_rate, _updated_router_bias
@@ -171,6 +172,26 @@ def test_capacity_balanced_top_k_handles_correlated_logits():
     overflow = jnp.sum(jnp.maximum(load - capacity, 0)) / load.sum()
 
     assert float(overflow) < 0.03
+
+
+def test_capacity_refilled_top_k_exactly_fills_experts():
+    num_tokens = 512
+    num_experts = 32
+    topk = 4
+    router_logits = jax.random.normal(jax.random.key(3), (num_tokens, num_experts)).at[:, :2].add(8.0)
+
+    raw_selected = jax.lax.top_k(router_logits, topk)[1]
+    raw_load = jnp.bincount(raw_selected.reshape(-1), length=num_experts)
+    selected = _capacity_refilled_top_k_local(
+        router_logits,
+        topk=topk,
+        capacity_factor=1.0,
+    )
+    load = jnp.bincount(selected.reshape(-1), length=num_experts)
+    capacity = num_tokens * topk // num_experts
+
+    assert int(jnp.max(raw_load)) > capacity
+    np.testing.assert_array_equal(np.asarray(load), np.full((num_experts,), capacity))
 
 
 def test_loss_free_bias_update_penalizes_overloaded_experts():
