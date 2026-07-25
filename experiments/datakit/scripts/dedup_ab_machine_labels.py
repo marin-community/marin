@@ -27,7 +27,7 @@ MAX_LOW_OVERLAP_CONTAINMENT = 0.15
 class DedupMachineLabelsData(BaseModel):
     """Paths and exact counters for the first exhaustive adjudication pass."""
 
-    version: str = "v1"
+    version: str = "v2"
     review_path: str
     pairs_dir: str
     decisions_dir: str
@@ -98,17 +98,21 @@ def decision_for_pair(pair: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pair_decisions(entry: dict[str, str]) -> Iterator[dict[str, Any]]:
+    row_index = 0
     with StoragePath(entry["path"]).open("rb") as handle:
         parquet_file = pq.ParquetFile(handle)
         for batch in parquet_file.iter_batches(batch_size=16):
             for pair in batch.to_pylist():
                 decision = decision_for_pair(pair)
+                decision["pair_path"] = entry["path"]
+                decision["pair_row_index"] = row_index
                 variant = decision["variant"]
                 route = "semantic" if decision["needs_semantic_review"] else decision["method"]
                 counters.pipeline.update_counter("machine_labels/pairs", 1)
                 counters.pipeline.update_counter(f"machine_labels/{variant}/pairs", 1)
                 counters.pipeline.update_counter(f"machine_labels/{variant}/{route}", 1)
                 yield decision
+                row_index += 1
 
 
 def generate_machine_labels(

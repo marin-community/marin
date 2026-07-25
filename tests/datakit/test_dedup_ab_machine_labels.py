@@ -3,9 +3,11 @@
 
 import hashlib
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
-from experiments.datakit.scripts.dedup_ab_machine_labels import decision_for_pair
+from experiments.datakit.scripts.dedup_ab_machine_labels import _pair_decisions, decision_for_pair
 
 
 def _pair(member: str, canonical: str, **overrides) -> dict:
@@ -82,3 +84,15 @@ def test_persisted_complete_text_hashes_are_reverified() -> None:
 
     with pytest.raises(AssertionError, match="Member text hash changed"):
         decision_for_pair(pair)
+
+
+def test_pair_decisions_retain_exact_parquet_row_reference(tmp_path) -> None:
+    path = tmp_path / "pairs.parquet"
+    pairs = [_pair("same", "same"), _pair("member", "canonical")]
+    pq.write_table(pa.Table.from_pylist(pairs), path)
+
+    decisions = list(_pair_decisions({"path": str(path)}))
+
+    assert [decision["pair_path"] for decision in decisions] == [str(path), str(path)]
+    assert [decision["pair_row_index"] for decision in decisions] == [0, 1]
+    assert [decision["review_key"] for decision in decisions] == [pair["review_key"] for pair in pairs]
