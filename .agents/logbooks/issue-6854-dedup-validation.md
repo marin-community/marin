@@ -1171,3 +1171,29 @@ statistics for performance comparisons.
 - At the latest health sample all 12 pods were Ready with zero restarts. The
   four GPU workers served 5,612 successful responses over the prior 15
   minutes.
+
+### 2026-07-25T15:57:00Z — 19,025 pairs verified; SEO ambiguity resolved
+
+- Seventeen additional baseline checkpoints passed independent validation:
+  2,176 pairs, 1,377 false positives, 798 model true duplicates, and one
+  unresolved model outcome. They used 5,844 valid first-attempt judgments with
+  no invalid responses or retries; 18 pairs were chunked and 2,158 were direct.
+- Complete-text inspection resolves the model ambiguity as a true duplicate
+  under the explicit low-value SEO-template boundary. All 44 member sentence
+  or heading units were compared against all 47 canonical units. Every body
+  sentence has a direct paraphrase; the differences are SEO headings and the
+  `Roseville CA 95678` versus `Cherry Valley MA 01611` location slot. Pair
+  location: `part-00032-of-00128.parquet:4761`; member/canonical text SHA-256:
+  `25ba9708a9fee2794ac1066abcb97d2b4613f0a656f1fe03412b30ecccbcdca7` /
+  `5e0dd4605140ed851a5d8b3d0d72e203325500ce2db75613d4dec5e0bbe74fdd`.
+- The new manual Parquet shard and marker were written, reread, and
+  hash-verified against the exact semantic evidence and source identities.
+- Across the stable 149-checkpoint snapshot, all 16 manual records leave:
+
+  - baseline: 16,570 pairs, 10,922 false positives, 5,648 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 19,025 pairs, 12,206 false positives, 6,819 true duplicates.
+
+- All 12 pods remain Ready with zero restarts. Transient Finelog send timeouts
+  affected telemetry only; Kubernetes and 7,571 successful model responses in
+  the prior 15 minutes confirmed reviewer liveness.
