@@ -1483,6 +1483,36 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T22:08:35Z — 57,837 pairs verified
+
+- Two additional baseline checkpoints passed independent validation: 256
+  pairs, 172 model false positives, 83 model true duplicates, and one
+  unresolved outcome. They contain 527 judgments and 532 request attempts:
+  526 valid responses and six invalid responses across three retried
+  judgments. All 256 pairs used direct review.
+- Complete character comparison resolves the ambiguity as a true duplicate.
+  The first 9,174 characters are identical; the member only adds `\text{` and
+  its matching `}` around the same final boxed `D`. The member/canonical
+  lengths are 9,183 / 9,176 characters and their SHA-256 values are
+  `072d4c3f4b24440df2925af66ea94584656d0d29dce5177a9dc8cf44fc3526f1`
+  and
+  `84d556ca7e793dfe87106a8129e4b841d58e4fdadb9588ee0d01a383ba5c059d`.
+  Pair location: `part-00033-of-00128.parquet:7500`.
+- The hash-bound manual record has Parquet SHA-256
+  `1af569b729c7e27231938b94ef0eb248eceb81558a1eb7ae3f0d1ee7739f4217`
+  and semantic-judgments SHA-256
+  `0eff1cdeec9146cc59d82fc33f4beb8ec0d9e85f4d03add6185ad2ce80af6da0`.
+  A separate batch-priority process reread the full texts, semantic evidence,
+  manual record, Parquet bytes, and completion marker exactly.
+- Across the stable 454-checkpoint snapshot, all 62 manual records leave:
+
+  - baseline: 46,989 pairs, 29,863 false positives, 17,126 true duplicates;
+  - treatment: 10,848 pairs, 5,687 false positives, 5,161 true duplicates;
+  - combined: 57,837 pairs, 35,550 false positives, 22,287 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T21:58:28Z — 57,581 pairs verified
 
 - Two additional baseline checkpoints passed independent validation: 256
