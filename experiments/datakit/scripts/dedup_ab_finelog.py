@@ -102,8 +102,7 @@ stage_rows AS (
         cpu_pct_avg,
         cpu_time_total,
         mem_bytes_avg,
-        mem_peak_bytes_max,
-        cluster
+        mem_peak_bytes_max
     FROM "zephyr.stage"
 )
 SELECT root_executions.*, stage_rows.* EXCLUDE (execution_id)
@@ -185,7 +184,6 @@ def _execution_summary(
                 "cpu_time_total",
                 "mem_bytes_avg",
                 "mem_peak_bytes_max",
-                "cluster",
             )
         }
         for _, row in sorted(unique_end_rows.items())
