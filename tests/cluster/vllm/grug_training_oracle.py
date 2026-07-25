@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Emit a compact Levanter oracle for PyTorch Grug training parity.
-
-This runs in Marin's JAX environment and writes an ordinary tiny HF checkpoint
-plus NPZ observations. MarinSkyRL consumes those files in its own environment;
-neither repository imports the other's framework.
-"""
+"""Emit a compact Levanter oracle for PyTorch Grug training parity."""
 
 from __future__ import annotations
 
