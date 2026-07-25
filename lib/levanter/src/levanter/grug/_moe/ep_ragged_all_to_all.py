@@ -449,6 +449,9 @@ def _stable_expert_local_rank(
     num_experts: int,
 ) -> Int[Array, "TK"]:
     """Return each assignment's stable zero-based rank within its expert."""
+    if os.environ.get("SCALE_A2A_SONIC_EXPERT_RANK") == "1":
+        return sonic_expert_local_rank(flat_experts, num_experts=num_experts)
+
     assignments_per_shard = flat_experts.shape[0]
     order = jnp.argsort(flat_experts, stable=True)
     expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
@@ -779,20 +782,11 @@ def _fixed_a2a_core(
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
 
-    if dispatch_slots_local is not None:
-        slot = dispatch_slots_local.reshape(-1).astype(jnp.int32)
-    elif os.environ.get("SCALE_A2A_SONIC_EXPERT_RANK") == "1":
-        slot = sonic_expert_local_rank(flat_experts, num_experts=num_experts)
-    else:
-        order = jnp.argsort(flat_experts, stable=True)
-        expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
-        segment_start = jnp.cumsum(expert_counts) - expert_counts
-        sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[flat_experts[order]]
-        if os.environ.get("SCALE_A2A_SONIC_SLOT_UNPERMUTE") == "1":
-            slot = sonic_unpermute_i32(sorted_rank, order.astype(jnp.int32))
-        else:
-            inverse_order = jnp.argsort(order)
-            slot = sorted_rank[inverse_order]
+    slot = (
+        dispatch_slots_local.reshape(-1).astype(jnp.int32)
+        if dispatch_slots_local is not None
+        else _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    )
     keep = slot < capacity
     local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
     destination_shards = (flat_experts // local_experts).astype(jnp.int32)
