@@ -432,3 +432,30 @@ statistics for performance comparisons.
   current memory stayed near 15.9 GB and peak memory stayed at 19.7 GB under
   the 24 GiB allocation. The shard remains in the audit rather than being
   sampled or skipped.
+
+### 2026-07-25T00:50:00Z — complete score, distance, and A/B audit
+
+- The full audit completed successfully. It scored all 1,810,956 marker rows,
+  including the skewed shard, and computed a baseline graph distance for all
+  1,513,510 baseline markers. The largest finite propagation distance is 52,
+  consistent with convergence in round 53.
+- The occurrence comparison accounts for all 1,534,372 rows: 863,859 are
+  baseline-drop/treatment-keep, 11,437 are treatment-drop/baseline-keep,
+  143,775 are dropped by both, and 515,301 are canonical-only. These categories
+  reproduce the exact drop totals of 1,007,634 and 155,212.
+- The baseline-only attribution partition is exact: 475,960 direct word-ngram
+  changes, 387,718 combined direct and transitive changes, 77 transitive-only
+  changes, 104 canonical or graph changes, and 670,513 rows where a
+  baseline-only attribution is not applicable.
+- The exhaustive census confirms 414,700 strong false-positive candidates,
+  592,755 ambiguous drops, and 179 byte-identical drops in the baseline. The
+  treatment has 155,033 ambiguous drops, 179 byte-identical drops, and no
+  strong false-positive candidates. Exact clean text occurs in 3,181 baseline
+  drops and 3,241 treatment drops; it is not treated as raw identity.
+- The current semantic-batch loader revalidated every pair reference in the
+  ten-row smoke artifact against its persisted Parquet row. All ten references
+  are unique and reproduce the expected machine decision from the complete
+  texts. All 50 focused A/B validation tests pass.
+- Launched exhaustive materialization of 1,162,846 dropped pairs. It must
+  retrieve and hash-check 2,325,692 complete texts before machine labeling can
+  start. No pair is sampled or omitted.
