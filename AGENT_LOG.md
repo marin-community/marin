@@ -147,3 +147,22 @@ Next: poll arm-1 logs; babysit arm 2 to completion ~00:15; harvest both; decide 
 
 Confidence: 4/10 g=0.5, 1.5/10 integral-g0.001 (measured wrong-direction separation at 150)
 Next: arm-2 series via poller; keep polling arm-1 logs every ~15 min.
+
+## Check-in 2026-07-25 23:35 UTC — arm 2 declining but ~5x too slow; arm 3 justified
+
+- ARM 2 SERIES (telltale, 150s cadence): 0.657(154) 0.636(167) 0.631(180) 0.626(193)
+  0.621(206) 0.609(219). Monotonic decline ~-0.0007/step — the controller IS gaining
+  ground (unlike g=2's flat 0.67-0.70 limit cycle), but the rate projects ~0.52 at step
+  349: nowhere near 3%. Bias travel is the binding constraint: gamma=0.001 gives 0.35
+  units over 350 steps vs the ~1-2 logit units the collapse needs reversed.
+- ARM 3 DECISION (per the brief's "only if movement" clause — movement measured):
+  gamma=0.01 (10x travel, ~1 unit by step 100, 3.5 by 349; fixed-sign updates still
+  cannot overshoot). Submits when arm 2 exits (~23:55), one rack in flight kept.
+- Arm 1: completed 22:28; child rows still 0 on both log paths at 23:30 (3h gap). Its
+  result now rides entirely on pipeline recovery. Risk noted: if worker-side buffers
+  overflowed, arm-1 metrics could be partially lost; mitigations none — a rerun is the
+  only recovery, deferred unless data proves lost.
+- No job mutations beyond submissions.
+
+Confidence: 4/10 g=0.5, 1/10 integral-g0.001, 3/10 integral-g0.01
+Next: arm-2 exit ~23:55 -> submit arm 3 (gamma=0.01); keep polling arm-1 logs.
