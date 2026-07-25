@@ -84,3 +84,19 @@ Confidence: 4/10 g=0.5, 3/10 integral
 Next: poll arm-1 logs from ~22:00; harvest smoke metrics when the log server backfills;
 prepare the arm-2 rack submit command (identical to arm 1 minus SCALE_QB_GAIN, plus
 SCALE_QB_INTEGRAL=0.001) so it fires the moment arm 1 exits.
+
+## Check-in 2026-07-25 22:00 UTC — log gap persists; arm 1 healthy
+
+- Child-task log serving still 0 lines for all new grug-train jobs (mine + peers').
+  Tried: bare/health/metrics on the minted telltale URL (403 endpoint-scope), in-container
+  stdout (pipe only). Remaining bypass (finelog StatsService SQL with iris auth) parked —
+  cost/benefit poor vs waiting; morning jobs prove the pipeline retains data.
+- Arm 1: GPUs 100% on task 0 at 21:58; ~62 min into the train task (started ~20:57).
+  If compile took ~12 min, stepping since ~21:10 -> step ~(48 min * 60 / 12.3s) ~ 230/350.
+  ETA ~22:30. No mutations.
+- Arm-2 rack command staged (fire on arm-1 exit):
+  job-name ep25d3-qbint-cf100-350-v1-20260725, env identical to arm 1 except
+  drop SCALE_QB_GAIN, add SCALE_QB_INTEGRAL=0.001, version ep25d3-dev.
+
+Confidence: 4/10 g=0.5, 3/10 integral
+Next: arm-1 completion ~22:30 -> harvest (logs permitting) -> submit arm 2 rack leg.
