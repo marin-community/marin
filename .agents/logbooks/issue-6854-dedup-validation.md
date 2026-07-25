@@ -1306,3 +1306,43 @@ statistics for performance comparisons.
   - baseline: 25,784 pairs, 16,273 false positives, 9,511 true duplicates;
   - treatment: 2,457 pairs, 1,286 false positives, 1,171 true duplicates;
   - combined: 28,241 pairs, 17,559 false positives, 10,682 true duplicates.
+
+### 2026-07-25T17:00:32Z — context fallback proven; 30,161 pairs verified
+
+- Fifteen additional checkpoints passed independent validation: 1,920 pairs,
+  1,350 model false positives, 568 model true duplicates, and two unresolved
+  outcomes. They contain 4,403 valid judgments across 4,408 attempts; five
+  invalid JSON responses were retried successfully. Nine pairs were chunked
+  and 1,911 were direct.
+- The recovered partition-0 checkpoint contains both source-code pairs that
+  exceeded the model context. The recovered partition-1 checkpoint contains
+  the third context-overflow pair plus two multi-million-character documents.
+  All three overflow pairs completed through exhaustive chunk review, and both
+  jobs continued into later checkpoints.
+- Complete sentence alignment resolves the first ambiguity as a true duplicate.
+  All 11 member units align to the same 11-unit chair SEO scaffold. Differences
+  are product and date slots, synonyms, and a truncated computer-job sentence.
+  Pair location: `part-00097-of-00128.parquet:5448`;
+  member/canonical text SHA-256:
+  `f27fcf602c3e9d9456757bc8b0f2e0d65c303f825fca5cd9ec4f986576e776e5` /
+  `93250706850ba0d21cf4eaafa4529a5fa0eeb16a859a86d0fdacdb275b69d894`.
+- Complete sentence alignment resolves the second ambiguity as a false
+  positive. Its member-only sentence says that pursuing a business internship
+  develops career prospects and work experience. The other seven member units
+  are college-spam scaffolds or entity slots, but that additional advice claim
+  is absent from all six canonical units. Pair location:
+  `part-00097-of-00128.parquet:5508`; member/canonical text SHA-256:
+  `e8c1cce36443c20ff50b52047739be40f151c0243f8221e382e357b756ebbd18` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- Both manual artifacts were written and then reread in a separate process.
+  The verification bound their exact source identities, full-text hashes,
+  semantic outcome hash, judgment-evidence hash, sentence evidence, Parquet
+  bytes, and completion markers.
+- Across the stable 236-checkpoint snapshot, all 21 manual records leave:
+
+  - baseline: 27,431 pairs, 17,478 false positives, 9,953 true duplicates;
+  - treatment: 2,730 pairs, 1,432 false positives, 1,298 true duplicates;
+  - combined: 30,161 pairs, 18,910 false positives, 11,251 true duplicates.
+
+- All 12 pods remain Ready with zero restarts. The four GPU workers served
+  6,956 successful responses over the prior 15 minutes.
