@@ -132,7 +132,7 @@ class GrugModelConfig:
     # vᵢ, zᵢ = yᵢ - (yᵢ·vᵢ / ‖vᵢ‖²) vᵢ. Off in the barebones default (SCALE_XSA=1).
     xsa: bool = False
     # Auxiliary-loss-free load balancing: bias the top-k expert selection while forming combine
-    # weights from the unbiased logits. The previous batch's expert loads drive a signed bias
+    # weights from the unbiased sigmoid scores. The previous batch's expert loads drive a signed bias
     # update in train.py. Off in the barebones default (SCALE_MOE_QB=1); when off the router is the
     # plain top-k path (byte-for-byte unchanged).
     qb_routing: bool = False
@@ -467,10 +467,11 @@ class MoEMLP(eqx.Module):
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         if self.cfg.qb_routing:
-            # Bias only the top-k selection. Combine weights stay based on unbiased logits so the
-            # load controller does not inject gradients into the language-model objective.
-            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-            _, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token)
+            # Bias only the sigmoid routing scores used for top-k selection. Combine weights stay
+            # based on unbiased scores, so the controller does not inject gradients into the
+            # language-model objective.
+            biased_scores = jax.nn.sigmoid(router_logits) + jax.lax.stop_gradient(self.router_bias)
+            _, selected_experts = jax.lax.top_k(biased_scores, self.cfg.num_experts_per_token)
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)

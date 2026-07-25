@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,7 +11,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.launch_cw_scale import build_scale_model
-from experiments.grug.moe.model import CausalSelfAttention, DenseMLP, GrugModelConfig, _compute_expert_load
+from experiments.grug.moe.model import CausalSelfAttention, DenseMLP, GrugModelConfig, MoEMLP, _compute_expert_load
 from experiments.grug.moe.train import _compute_flops, _receiver_capacity_overflow_rate, _updated_router_bias
 
 
@@ -142,3 +143,40 @@ def test_receiver_capacity_overflow_pools_local_experts():
     )
 
     np.testing.assert_allclose(overflow, np.asarray([0.1, 0.0], dtype=np.float32))
+
+
+def test_loss_free_bias_adjusts_sigmoid_routing_scores():
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    config = GrugModelConfig(
+        vocab_size=8,
+        hidden_dim=2,
+        intermediate_dim=2,
+        shared_expert_intermediate_dim=0,
+        num_experts=3,
+        num_experts_per_token=1,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        head_dim=2,
+        max_seq_len=1,
+        qb_routing=True,
+    )
+    with jax.set_mesh(mesh):
+        mlp = MoEMLP.init(config, key=jax.random.key(0))
+        mlp = eqx.tree_at(
+            lambda model: model.router,
+            mlp,
+            jnp.asarray([[4.0, 3.0, 0.0], [0.0, 0.0, 0.0]], dtype=jnp.float32),
+        )
+        mlp = eqx.tree_at(
+            lambda model: model.router_bias,
+            mlp,
+            jnp.asarray([-0.05, 0.05, 0.0], dtype=jnp.float32),
+        )
+        _, expert_load, _ = mlp(jnp.asarray([[[1.0, 0.0]]], dtype=jnp.float32))
+
+    np.testing.assert_array_equal(expert_load, np.asarray([0, 1, 0], dtype=np.int32))
