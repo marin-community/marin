@@ -1482,3 +1482,38 @@ statistics for performance comparisons.
 
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
+### 2026-07-25T18:06:35Z — 35,601 pairs verified
+
+- Four additional treatment checkpoints passed independent validation: 481
+  pairs, 221 model false positives, 258 model true duplicates, and two
+  unresolved outcomes. They contain 1,026 valid judgments across 1,044
+  attempts; 18 invalid responses affected seven retried judgments. One pair
+  was chunked and 480 were direct.
+- Complete character comparison resolves both ambiguities as true duplicates.
+  Every canonical character occurs unchanged in the member; the only two
+  changed spans add `\text{` and `}` around the same boxed answer:
+
+  - `part-00097-of-00128.parquet:9115`, 7,245 / 7,238 characters,
+    similarity 0.999517; member/canonical text SHA-256
+    `647f4c81be7dcc0bcaed08ae4f6f64c93df5e3430fa8bdb0dbd748663ec17aec` /
+    `68e53aa3683085d10e452a97f65daa8482d5dca19da2efe65d237b393935edba`;
+  - `part-00097-of-00128.parquet:9116`, 17,165 / 17,158 characters,
+    similarity 0.999796; member/canonical text SHA-256
+    `adfb9a4cf00e34d9d32eb55cedc8a89f5f7805d46d98367b4adb03a1e93bef0c` /
+    `cb03db77ddc3f9892821ce78a9d62b18ea8f07b1b3a45ec30c87c817fa570e2b`.
+
+- The manual Parquet records have SHA-256
+  `3c54cbb018d2e9da1f0c100f19a2f3b2202d1f7877b99bc3f970d366dcb68782`
+  and `08af4a4e85213121780ead4e9e5c7ae3e23c09fe90d61ab3fa411b514d27e259`.
+  A separate batch-priority Iris process ran in read-only verification mode
+  and exactly reread the source cases, semantic checkpoint, manual records,
+  Parquet hashes, and completion markers.
+- Across the stable 280-checkpoint snapshot, all 36 manual records leave:
+
+  - baseline: 28,281 pairs, 18,089 false positives, 10,192 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 35,601 pairs, 21,915 false positives, 13,686 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
