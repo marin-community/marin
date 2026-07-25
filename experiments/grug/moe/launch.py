@@ -111,6 +111,12 @@ def env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def env_float(key: str, default: float) -> float:
+    """Read a float from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    return float(raw) if raw else default
+
+
 def slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     """SlimPajama-6B, llama3-tokenized — a small corpus for GPU smoke/scale runs.
 

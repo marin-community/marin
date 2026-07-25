@@ -128,6 +128,10 @@ class GrugModelConfig:
     # positional decay hurts a full-context layer, so global layers often generalize better without
     # it (Llama-4 style). No-op unless ``global_every`` interleaving is active.
     disable_long_rope: bool = False
+    # Partial RoPE: rotate only the first ``rope_fraction`` of each head's dimension (GPT-NeoX
+    # ``partial_rotary_factor``); the rest passes through unrotated, giving the head some
+    # position-independent capacity. 1.0 (default) = full RoPE. 0.5 = half-RoPE (reference default).
+    rope_fraction: float = 1.0
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -201,6 +205,12 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    def rotary_dim(self, head_dim: int) -> int:
+        """Leading head dims that get rotary (partial RoPE); the rest pass through. Even, <= head_dim."""
+        if self.rope_fraction >= 1.0:
+            return head_dim
+        return (int(head_dim * self.rope_fraction) // 2) * 2
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
@@ -354,12 +364,28 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
+        # Partial RoPE: rotate only the leading rotary_dim of each head, pass the tail through. When
+        # rotary_dim == head_dim (rope_fraction=1) this is plain full RoPE with no slice/concat. XLA
+        # fuses the contiguous slice+concat, and the rotary math runs on rotary_dim (not head_dim).
+        rotary_dim = self.cfg.rotary_dim(head_dim)
+
+        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
+            if rotary_dim >= head_dim:
+                return apply_rotary_embedding(qh, kh, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+            q_rot, k_rot = apply_rotary_embedding(
+                qh[..., :rotary_dim], kh[..., :rotary_dim], seq_len=seq_len, head_dim=rotary_dim, rope=self.cfg.rope
+            )
+            return (
+                jnp.concatenate([q_rot, qh[..., rotary_dim:]], axis=-1),
+                jnp.concatenate([k_rot, kh[..., rotary_dim:]], axis=-1),
+            )
+
         if disable_rope is None:
-            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+            q, k = _rope(q, k)
         else:
             # NoPE on the flagged (global) layers: keep the pre-rope q,k there, rotate everywhere else.
             # disable_rope is a per-layer scalar bool threaded from the layer scan.
-            q_rope, k_rope = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+            q_rope, k_rope = _rope(q, k)
             q = jnp.where(disable_rope, q, q_rope)
             k = jnp.where(disable_rope, k, k_rope)
         q = q * self.cfg.qk_mult
