@@ -293,11 +293,27 @@ def _same_expert_cloned_fixed_a2a_core(
     keep_by_token = keep.reshape(tokens_per_shard, topk)
 
     with jax.named_scope("dispatch"):
-        send_x = _fixed_dispatch_gather_reference(
-            x_local,
-            dispatch_positions,
-            send_size=send_size,
-        ).reshape(expert_shards, sender_destination_capacity, hidden_dim)
+        if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
+            send_x = _fixed_dispatch_gather_sonic(
+                x_local,
+                dispatch_positions,
+                keep_by_token,
+                send_size,
+            )
+        elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
+            send_x = _fixed_dispatch_gather_sonic_grad(
+                x_local,
+                dispatch_positions,
+                keep_by_token,
+                send_size,
+            )
+        else:
+            send_x = _fixed_dispatch_gather_reference(
+                x_local,
+                dispatch_positions,
+                send_size=send_size,
+            )
+        send_x = send_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
         send_receiver_slot = (
             jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
             .at[transport_position]
