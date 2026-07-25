@@ -582,6 +582,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
+                    extra_metrics = {k: v for k, v in metrics.items() if k != "train/loss"}
+                    if extra_metrics:
+                        levanter.tracker.log(extra_metrics, step=step)
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
 
