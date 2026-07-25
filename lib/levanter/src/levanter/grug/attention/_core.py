@@ -251,6 +251,52 @@ def apply_rotary_embedding(
     return _apply(q), _apply(k)
 
 
+@named_call
+def apply_rotary_embedding_fused(
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S H D"],
+    *,
+    seq_len: int,
+    head_dim: int,
+    rotary_dim: int,
+    rope: RotaryConfig,
+    angle_scale: jax.Array | float | None = None,
+) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
+    """RoPE as a single fused affine ``f1*x + f2*flip(x)`` (interleaved-pair convention).
+
+    Precomputes full-width ``[S, head_dim]`` factor caches with the rotate sign baked into ``f2``,
+    so applying rope to q/k is two multiplies + an add + an adjacent-pair flip -- no split/concat of
+    the (large) activation. ``rotary_dim < head_dim`` gives partial RoPE (tail factors are
+    identity: f1=1, f2=0); ``angle_scale=0`` gives NoPE (cos0=1, sin0=0 -> f1=1, f2=0). Interleaved
+    pairing differs from ``apply_rotary_embedding`` (split-half) -- equivalent for from-scratch
+    training, not checkpoint-compatible across the two.
+    """
+    half = rotary_dim // 2
+    inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half, dtype=jnp.float32) / half))
+    positions = jnp.arange(seq_len, dtype=jnp.float32)
+    angles = positions[:, None] * inv_freq[None, :]
+    if angle_scale is not None:
+        angles = angles * angle_scale
+    cos = jnp.cos(angles)
+    sin = jnp.sin(angles)
+    # Interleave to [S, rotary_dim]: f1 = [cos_i, cos_i, ...], f2 = [-sin_i, +sin_i, ...].
+    f1 = jnp.repeat(cos, 2, axis=-1)
+    f2 = jnp.reshape(jnp.stack([-sin, sin], axis=-1), (seq_len, rotary_dim))
+    if rotary_dim < head_dim:
+        pad = head_dim - rotary_dim
+        f1 = jnp.concatenate([f1, jnp.ones((seq_len, pad), f1.dtype)], axis=-1)
+        f2 = jnp.concatenate([f2, jnp.zeros((seq_len, pad), f2.dtype)], axis=-1)
+    f1 = f1[None, :, None, :]
+    f2 = f2[None, :, None, :]
+
+    def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        dtype = x.dtype
+        x_flip = jnp.flip(x.reshape(*x.shape[:-1], head_dim // 2, 2), axis=-1).reshape(x.shape)
+        return (f1 * x + f2 * x_flip).astype(dtype)
+
+    return _apply(q), _apply(k)
+
+
 def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[Array, "B K Hq D"]:
     """Expand grouped-query KV heads to match query-head layout."""
     num_kv_heads = x.shape[2]

@@ -8,6 +8,7 @@ from levanter.grug.attention._core import (
     ThdSegmentMetadata as ThdSegmentMetadata,
     align_kv_heads as align_kv_heads,
     apply_rotary_embedding as apply_rotary_embedding,
+    apply_rotary_embedding_fused as apply_rotary_embedding_fused,
     attention as attention,
     reference_attention as reference_attention,
     thd_segment_metadata_from_segment_ids as thd_segment_metadata_from_segment_ids,

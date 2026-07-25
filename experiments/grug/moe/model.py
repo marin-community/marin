@@ -31,6 +31,7 @@ from levanter.grug.attention import (
     RotaryConfig,
     align_kv_heads,
     apply_rotary_embedding,
+    apply_rotary_embedding_fused,
     attention,
     fa4_cute_segment_bounds,
 )
@@ -132,6 +133,10 @@ class GrugModelConfig:
     # ``partial_rotary_factor``); the rest passes through unrotated, giving the head some
     # position-independent capacity. 1.0 (default) = full RoPE. 0.5 = half-RoPE (reference default).
     rope_fraction: float = 1.0
+    # Apply RoPE as a single fused ``f1*x + f2*flip(x)`` (interleaved pairs) instead of the split-half
+    # multiply+concat. Drops the concat on the (large) q/k activation. Different pair convention --
+    # fine from scratch, not checkpoint-compatible with the split-half path.
+    rope_fused: bool = False
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -372,25 +377,39 @@ class CausalSelfAttention(eqx.Module):
         rotary_dim = self.cfg.rotary_dim(head_dim)
         angle_scale = None if disable_rope is None else (~disable_rope).astype(jnp.float32)
 
-        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-            if rotary_dim >= head_dim:
-                return apply_rotary_embedding(
-                    qh, kh, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope, angle_scale=angle_scale
-                )
-            q_rot, k_rot = apply_rotary_embedding(
-                qh[..., :rotary_dim],
-                kh[..., :rotary_dim],
+        if self.cfg.rope_fused:
+            # Single fused affine form; handles partial rope (rotary_dim) and NoPE (angle_scale) via the
+            # factor caches, so there is no split/concat on q,k.
+            q, k = apply_rotary_embedding_fused(
+                q,
+                k,
                 seq_len=seq_len,
-                head_dim=rotary_dim,
+                head_dim=head_dim,
+                rotary_dim=rotary_dim,
                 rope=self.cfg.rope,
                 angle_scale=angle_scale,
             )
-            return (
-                jnp.concatenate([q_rot, qh[..., rotary_dim:]], axis=-1),
-                jnp.concatenate([k_rot, kh[..., rotary_dim:]], axis=-1),
-            )
+        else:
 
-        q, k = _rope(q, k)
+            def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
+                if rotary_dim >= head_dim:
+                    return apply_rotary_embedding(
+                        qh, kh, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope, angle_scale=angle_scale
+                    )
+                q_rot, k_rot = apply_rotary_embedding(
+                    qh[..., :rotary_dim],
+                    kh[..., :rotary_dim],
+                    seq_len=seq_len,
+                    head_dim=rotary_dim,
+                    rope=self.cfg.rope,
+                    angle_scale=angle_scale,
+                )
+                return (
+                    jnp.concatenate([q_rot, qh[..., rotary_dim:]], axis=-1),
+                    jnp.concatenate([k_rot, kh[..., rotary_dim:]], axis=-1),
+                )
+
+            q, k = _rope(q, k)
         q = q * self.cfg.qk_mult
 
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)

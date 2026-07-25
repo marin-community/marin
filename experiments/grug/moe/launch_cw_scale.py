@@ -152,6 +152,7 @@ def build_scale_model() -> GrugModelConfig:
         global_every=env_int("SCALE_GLOBAL_EVERY", 0),
         disable_long_rope=os.environ.get("SCALE_DISABLE_LONG_ROPE") == "1",
         rope_fraction=env_float("SCALE_ROPE_FRACTION", 1.0),
+        rope_fused=os.environ.get("SCALE_ROPE_FUSED") == "1",
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",
