@@ -185,6 +185,14 @@ def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: in
     return _CoordinatorRole.POLL
 
 
+def _coordinator_endpoint_name(endpoint_name: str, job_info) -> str:
+    """Scope a coordinator endpoint to one job attempt."""
+    if job_info is None:
+        return endpoint_name
+    job_token = job_info.job_id.to_safe_token()
+    return f"{endpoint_name}-{job_token}-attempt-{job_info.attempt_id}"
+
+
 def _initialize_supervised_jax(
     jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
 ) -> None:
@@ -210,6 +218,7 @@ def _initialize_supervised_jax(
     advertise_host = job_info.advertise_host if job_info else "127.0.0.1"
     bound_port = job_info.ports.get("jax", port) if job_info else port
     coordinator = f"{advertise_host}:{bound_port}"
+    endpoint_name = _coordinator_endpoint_name(endpoint_name, job_info)
 
     role = _supervised_coordinator_role(proc_index, task_index, num_tasks)
     if role is _CoordinatorRole.POLL:
@@ -321,6 +330,7 @@ def initialize_jax(
 
     ctx = iris_ctx()
     task_index = job_info.task_index
+    endpoint_name = _coordinator_endpoint_name(endpoint_name, job_info)
 
     if task_index == 0:
         bound_port = job_info.ports.get("jax", port)
