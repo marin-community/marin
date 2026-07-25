@@ -179,6 +179,26 @@ def test_initialize_jax_task0_registers(
     mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
 
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_uses_coordinator_port_env(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JAX_COORDINATOR_PORT", "18476")
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4)
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+
+    initialize_jax(port=9999)
+
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:18476")]
+    mock_jax_init.assert_called_once_with("10.0.0.1:18476", 4, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
+
+
 @patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")

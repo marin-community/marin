@@ -36,6 +36,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
+    SCALE_PROFILER_PROCESS_INDEX  capture one JAX process only; unset captures
+                          every process
     SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
@@ -170,6 +172,10 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    profiler_process_index_raw = os.environ.get("SCALE_PROFILER_PROCESS_INDEX")
+    profiler_process_index = int(profiler_process_index_raw) if profiler_process_index_raw is not None else None
+    if profiler_process_index is not None and profiler_process_index < 0:
+        raise ValueError("SCALE_PROFILER_PROCESS_INDEX must be non-negative")
     # Host tracer preserves jax.named_scope regions (e.g. "moe_up_down") and enable_hlo_proto
     # exports the xprof collective/kernel aggregate tables — both needed for a compute-vs-comm
     # breakdown of the FSDP all-gather vs the expert GEMMs.
@@ -177,6 +183,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
         enabled=profiler_steps > 0,
         start_step=env_int("SCALE_PROFILER_START", 8),
         num_steps=profiler_steps,
+        process_index=profiler_process_index,
         profile_options=ProfileOptionsConfig(
             host_tracer_level=1,
             python_tracer_level=0,

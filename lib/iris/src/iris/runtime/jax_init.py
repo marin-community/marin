@@ -49,6 +49,7 @@ _JAX_ENV_KEYS = (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
+    "JAX_COORDINATOR_PORT",
 )
 
 
@@ -255,7 +256,8 @@ def initialize_jax(
     multi-task jobs.
 
     Args:
-        port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
+        port: Coordinator port. Overridden by ``JAX_COORDINATOR_PORT`` and then
+            by ``IRIS_PORT_jax`` if allocated.
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
         endpoint_name: Name under which the coordinator registers.
@@ -266,6 +268,8 @@ def initialize_jax(
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
+
+    port = int(os.environ.get("JAX_COORDINATOR_PORT", port))
 
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).

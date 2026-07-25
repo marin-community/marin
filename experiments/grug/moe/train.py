@@ -202,6 +202,9 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
+    attention_seq_len = min(model_config.sliding_window, model_config.max_seq_len)
+    if attention_seq_len <= 0:
+        attention_seq_len = model_config.max_seq_len
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
@@ -209,7 +212,7 @@ def _compute_flops(
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
+        seq_len=attention_seq_len,
         vocab_size=model_config.vocab_size,
         glu=True,
         num_experts=model_config.num_experts,
