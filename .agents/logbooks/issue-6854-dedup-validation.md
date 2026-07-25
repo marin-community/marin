@@ -1346,3 +1346,48 @@ statistics for performance comparisons.
 
 - All 12 pods remain Ready with zero restarts. The four GPU workers served
   6,956 successful responses over the prior 15 minutes.
+
+### 2026-07-25T17:11:05Z — 31,441 pairs verified; fourth partition patched
+
+- Ten additional checkpoints passed independent validation: 1,280 pairs,
+  868 model false positives, 409 model true duplicates, and three unresolved
+  outcomes. All pairs used complete-text review. They contain 2,608 valid
+  judgments across 2,621 attempts; 13 invalid JSON responses caused ten
+  retries.
+- Complete mathematical comparison resolves the sum-of-cubes pair as a true
+  duplicate. Both texts use the same problem, nonzero constraint, identity,
+  derivation, and result. The member's explicit intermediate identity is
+  represented by the canonical derivation; the remaining differences are
+  wording and LaTeX formatting. Pair location:
+  `part-00097-of-00128.parquet:7550`; member/canonical text SHA-256:
+  `3703edfb9d0b6868604bd1d2c296d6db99c33f1cc5372aa3ac001e10612f2d1e` /
+  `a70343994792dbed5345824d17c4573da2a1d3669a13f201679bde9c2ac5d021`.
+- Complete mathematical comparison resolves the inequality pair as a true
+  duplicate. All 39 member units align to the canonical's 38 units: the same
+  inequality, squared expansion, sum-of-squares proof, and equality condition.
+  Only paraphrase and final-display emphasis differ. Pair location:
+  `part-00097-of-00128.parquet:7600`; member/canonical text SHA-256:
+  `4b4a91bd3ad33fe21cb6ff364796f83ba85f5e12dc33bb3881b7a0ca0f275212` /
+  `9b5fb368950d663ea1a20ce1e67cd7db215128f526bcd6cf952394c7781d6e79`.
+- Complete unit and character comparison resolves the cybersecurity SFT pair
+  as a true duplicate. All 121 question, option, reasoning, and answer units
+  match. The only two changed spans add `\text{` and `}` around the same boxed
+  answer, giving character similarity 0.999587. Pair location:
+  `part-00097-of-00128.parquet:7687`; member/canonical text SHA-256:
+  `9cccefe0c17b19cdaf280d1310aacc058adb1a0d2d0593c386bce97b0470fcb5` /
+  `ca080587a0bbfa0de00fe392974fca8a3fa7b5fd50e37b0e6f84a2932980ec6a`.
+- A batch-priority Iris job published the three immutable manual Parquet
+  records and completion markers. A separate Iris process reread the source
+  cases, semantic checkpoint, judgment hashes, exact manual rows, Parquet
+  hashes, and markers; all checks passed.
+- Across the stable 246-checkpoint snapshot, all 24 manual records leave:
+
+  - baseline: 27,943 pairs, 17,773 false positives, 10,170 true duplicates;
+  - treatment: 3,498 pairs, 2,005 false positives, 1,493 true duplicates;
+  - combined: 31,441 pairs, 19,778 false positives, 11,663 true duplicates.
+
+- Partition 3's older `v2` job later reached the same context-limit condition
+  while its current batch was unfinished. It was replaced by the patched `v3`
+  job and is revalidating prior immutable checkpoints before resuming. All
+  four batch-priority 2-H100 workers and their coordinators are Ready with zero
+  Kubernetes restarts.
