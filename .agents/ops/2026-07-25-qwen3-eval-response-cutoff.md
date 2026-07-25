@@ -3,7 +3,7 @@ date: 2026-07-25
 system: marin-eval
 severity: degraded
 resolution: mitigated
-pr: none
+pr: https://github.com/marin-community/marin/pull/7640
 issue: https://github.com/marin-community/marin/issues/6865
 ---
 
