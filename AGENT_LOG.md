@@ -282,3 +282,30 @@ SCALE_MOE_QB=1, cf1.0, 30 steps, operating point, DISABLE_CHECKPOINT. Comparator
 Division of labor: I own THIS quick 30-step confirmation; d4 owns the 120-step production QB-on legs (cf1.0 then
 cf1.15) - not duplicating. Also to report: step-time QB-on vs QB-off (fixed path GEMMs run on capacity-sized
 buffers regardless of drops, so headline MFU should be drop-insensitive; only the router aux-loss adds cost).
+
+## QB-on drop A/B result 00:40 UTC — fidelity section closer
+Matched steps 23-29, drop_fraction (custom adjoint + SCALE_REPORT_DROPS, cf1.0, operating point):
+| step | QB-OFF | QB-ON |
+|  23  | 0.893  | 0.492 |
+|  24  | 0.881  | 0.442 |
+|  25  | 0.870  | 0.397 |
+|  26  | 0.862  | 0.362 |
+|  27  | 0.855  | 0.327 |
+|  28  | 0.850  | 0.289 |
+|  29  | 0.846  | 0.249 |
+=> QB load-balancing cuts drops ~3.4x AND accelerates the decrease (slope -0.035/step vs -0.008/step QB-off).
+Clearly the correct lever, but 30 steps only reaches 0.249 (25%) - still above Larry's 3% bar; whether QB-on
+crosses <3% at steady state needs the longer trajectory (d4's 120-step production QB-on legs).
+STEP-TIME: QB-on p50 24.11% vs QB-off drop-job p50 24.52% = -0.41pp (within +-2-4pp placement noise) => headline
+MFU is DROP-INSENSITIVE (fixed-path GEMMs run on capacity-sized buffers regardless of drops); router aux-loss
+cost is negligible. So QB-on buys a >3x drop reduction essentially for free on MFU.
+
+FIDELITY SECTION SYNTHESIS (mine + peers):
+- QB is the drops lever, NOT capacity factor: d4 cf1.15 QB-OFF = 22.13% p50 (-1.91pp for +15% cap) with drops
+  STILL 0.86 peak / 0.65 late => cf-without-QB is pure MFU cost, zero fidelity gain.
+- My matched A/B: QB-off 0.89->0.85; QB-on 0.49->0.25 (steeply down) at ~free MFU cost.
+- d4 full-run oscillation 0.17-0.79 (QB-off).
+- Metric proven mechanically exact (ratio 1.0 at 2 and 4 shards) - the numbers are real.
+=> The fixed path needs QB-on for fidelity; QB-on is nearly free on speed and drives drops down >3x fast, but
+the <3% crossing is unconfirmed in 30 steps and rests on d4's longer QB-on legs. d2's ragged arm (imminent) is
+the cross-transport fidelity comparator.
