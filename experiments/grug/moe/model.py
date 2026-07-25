@@ -143,6 +143,8 @@ class GrugModelConfig:
     capacity_balanced_routing: bool = False
     capacity_balance_iterations: int = 2
     capacity_balance_temperature: float = 1.0
+    capacity_balance_hard_iterations: int = 2
+    capacity_balance_hard_update_rate: float = 0.2
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -180,6 +182,10 @@ class GrugModelConfig:
             raise ValueError("capacity_balance_iterations must be positive")
         if self.capacity_balance_temperature <= 0:
             raise ValueError("capacity_balance_temperature must be positive")
+        if self.capacity_balance_hard_iterations < 0:
+            raise ValueError("capacity_balance_hard_iterations must be non-negative")
+        if self.capacity_balance_hard_update_rate <= 0:
+            raise ValueError("capacity_balance_hard_update_rate must be positive")
         if self.qb_routing and self.capacity_balanced_routing:
             raise ValueError("qb_routing and capacity_balanced_routing are mutually exclusive")
         if self.shared_expert_intermediate_dim < 0:
@@ -439,6 +445,8 @@ def _capacity_balanced_top_k_local(
     topk: int,
     iterations: int,
     temperature: float,
+    hard_iterations: int,
+    hard_update_rate: float,
 ) -> Int[Array, "T K"]:
     """Choose top-k experts after solving for approximately uniform local expert demand."""
     router_logits = jax.lax.stop_gradient(router_logits)
@@ -452,6 +460,10 @@ def _capacity_balanced_top_k_local(
         soft_assignments = jax.nn.softmax(scaled_scores + expert_dual, axis=-1) * topk
         soft_load = jnp.sum(soft_assignments, axis=0, dtype=jnp.float32)
         expert_dual = expert_dual + jnp.log(target_load / (soft_load + 1e-9))
+    for _ in range(hard_iterations):
+        selected_experts = jax.lax.top_k(scaled_scores + expert_dual, topk)[1]
+        hard_load = jnp.bincount(selected_experts.reshape(-1), length=num_experts).astype(jnp.float32)
+        expert_dual = expert_dual - hard_update_rate * (hard_load - target_load) / target_load
     return jax.lax.top_k(scaled_scores + expert_dual, topk)[1].astype(jnp.int32)
 
 
@@ -469,6 +481,8 @@ def _capacity_balanced_top_k(
             topk=cfg.num_experts_per_token,
             iterations=cfg.capacity_balance_iterations,
             temperature=cfg.capacity_balance_temperature,
+            hard_iterations=cfg.capacity_balance_hard_iterations,
+            hard_update_rate=cfg.capacity_balance_hard_update_rate,
         )
 
     return shard_map(

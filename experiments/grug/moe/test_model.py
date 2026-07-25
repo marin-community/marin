@@ -99,6 +99,8 @@ def test_build_scale_model_reads_capacity_controls(monkeypatch):
     monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCED_ROUTING", "1")
     monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_ITERATIONS", "6")
     monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE", "0.025")
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_HARD_ITERATIONS", "3")
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_HARD_UPDATE_RATE", "0.15")
 
     config = build_scale_model()
 
@@ -108,6 +110,8 @@ def test_build_scale_model_reads_capacity_controls(monkeypatch):
     assert config.capacity_balanced_routing is True
     assert config.capacity_balance_iterations == 6
     assert config.capacity_balance_temperature == 0.025
+    assert config.capacity_balance_hard_iterations == 3
+    assert config.capacity_balance_hard_update_rate == 0.15
 
 
 def test_model_config_rejects_nonpositive_capacity_factor():
@@ -133,6 +137,8 @@ def test_capacity_balanced_top_k_limits_local_overflow():
         topk=topk,
         iterations=2,
         temperature=1.0,
+        hard_iterations=2,
+        hard_update_rate=0.2,
     )
     load = jnp.bincount(selected.reshape(-1), length=num_experts)
     capacity = math.ceil(1.05 * num_tokens * topk / num_experts)
@@ -142,6 +148,29 @@ def test_capacity_balanced_top_k_limits_local_overflow():
     assert float(raw_overflow) > 0.3
     assert float(overflow) < 0.03
     assert np.all(np.diff(np.sort(np.asarray(selected), axis=-1), axis=-1) > 0)
+
+
+def test_capacity_balanced_top_k_handles_correlated_logits():
+    num_tokens = 512
+    num_experts = 32
+    topk = 4
+    token_factors = jax.random.normal(jax.random.key(1), (num_tokens, 4))
+    expert_factors = jax.random.normal(jax.random.key(2), (4, num_experts))
+    router_logits = token_factors @ expert_factors
+
+    selected = _capacity_balanced_top_k_local(
+        router_logits,
+        topk=topk,
+        iterations=2,
+        temperature=1.0,
+        hard_iterations=2,
+        hard_update_rate=0.2,
+    )
+    load = jnp.bincount(selected.reshape(-1), length=num_experts)
+    capacity = math.ceil(1.2 * num_tokens * topk / num_experts)
+    overflow = jnp.sum(jnp.maximum(load - capacity, 0)) / load.sum()
+
+    assert float(overflow) < 0.03
 
 
 def test_loss_free_bias_update_penalizes_overloaded_experts():
