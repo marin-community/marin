@@ -22,7 +22,12 @@ from experiments.grug.moe.model import (
     _capacity_refilled_top_k_local,
     _compute_expert_load,
 )
-from experiments.grug.moe.train import _compute_flops, _receiver_capacity_overflow_rate, _updated_router_bias
+from experiments.grug.moe.train import (
+    _compute_flops,
+    _expert_capacity_overflow_rate,
+    _receiver_capacity_overflow_rate,
+    _updated_router_bias,
+)
 
 
 def test_nonexpert_weights_are_sharded_over_data_and_expert_axes():
@@ -187,7 +192,7 @@ def test_capacity_refilled_top_k_exactly_fills_experts():
 
     raw_selected = jax.lax.top_k(router_logits, topk)[1]
     raw_load = jnp.bincount(raw_selected.reshape(-1), length=num_experts)
-    selected, slots = _capacity_refilled_top_k_local(
+    selected, slots, reported_raw_load, replacements = _capacity_refilled_top_k_local(
         router_logits,
         topk=topk,
         capacity_factor=1.0,
@@ -196,6 +201,8 @@ def test_capacity_refilled_top_k_exactly_fills_experts():
     capacity = num_tokens * topk // num_experts
 
     assert int(jnp.max(raw_load)) > capacity
+    np.testing.assert_array_equal(np.asarray(reported_raw_load), np.asarray(raw_load))
+    assert int(replacements) == int(jnp.sum(jnp.maximum(raw_load - capacity, 0)))
     np.testing.assert_array_equal(np.asarray(load), np.full((num_experts,), capacity))
     for expert in range(num_experts):
         expert_slots = np.asarray(slots)[np.asarray(selected) == expert]
@@ -245,6 +252,24 @@ def test_receiver_capacity_overflow_pools_local_experts():
     )
 
     np.testing.assert_allclose(overflow, np.asarray([0.1, 0.0], dtype=np.float32))
+
+
+def test_expert_capacity_overflow_counts_overloaded_experts():
+    expert_loads = jnp.asarray(
+        [
+            [20, 20, 10, 10],
+            [16, 16, 16, 16],
+        ],
+        dtype=jnp.int32,
+    )
+
+    overflow = _expert_capacity_overflow_rate(
+        expert_loads,
+        assignments_per_layer=64,
+        capacity_factor=1.0,
+    )
+
+    np.testing.assert_allclose(overflow, np.asarray([0.125, 0.0], dtype=np.float32))
 
 
 def test_loss_free_bias_adjusts_sigmoid_routing_scores():

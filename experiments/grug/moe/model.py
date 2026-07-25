@@ -13,7 +13,7 @@ import dataclasses
 import math
 import os
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 import equinox as eqx
 import jax
@@ -54,6 +54,13 @@ _ROUTING_RENORM_SUM = 2.5
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 RematMode = Literal["recompute_all", "save_moe"]
+
+
+class RoutingDiagnostics(NamedTuple):
+    """Global assignment counts for one MoE layer."""
+
+    capacity_drops: Int[Array, ""]
+    capacity_refill_replacements: Int[Array, ""]
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -508,25 +515,30 @@ def _capacity_refilled_top_k_local(
     *,
     topk: int,
     capacity_factor: float,
-) -> tuple[Int[Array, "T K"], Int[Array, "T K"]]:
-    """Replace overflowing top-k assignments and return their exact expert-local slots."""
+) -> tuple[Int[Array, "T K"], Int[Array, "T K"], jax.Array, Int[Array, ""]]:
+    """Replace overflowing top-k assignments and report the original routing demand."""
     num_tokens, num_experts = router_logits.shape
     selected_experts = jax.lax.top_k(router_logits, topk)[1].astype(jnp.int32)
     flat_experts = selected_experts.reshape(-1)
     assignments = flat_experts.shape[0]
     capacity = math.ceil(capacity_factor * assignments / num_experts)
+    expert_load = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
 
     if os.environ.get("SCALE_MOE_CAPACITY_REFILL_SONIC") == "1":
-        refilled_experts, refilled_slots, _ = sonic_capacity_refill(
+        refilled_experts, refilled_slots, replacements = sonic_capacity_refill(
             flat_experts,
             num_experts=num_experts,
             capacity=capacity,
         )
-        return refilled_experts.reshape(num_tokens, topk), refilled_slots.reshape(num_tokens, topk)
+        return (
+            refilled_experts.reshape(num_tokens, topk),
+            refilled_slots.reshape(num_tokens, topk),
+            expert_load,
+            replacements,
+        )
 
     local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
     keep = local_rank < capacity
-    expert_load = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     occupied_slots = jnp.minimum(expert_load, capacity)
 
     # Rank-major vacancy order cycles through experts before advancing a slot rank, so consecutive
@@ -556,29 +568,45 @@ def _capacity_refilled_top_k_local(
     replacement_slot = compact_vacancy_slots[compact_index]
     refilled_experts = jnp.where(keep, flat_experts, replacement_expert)
     refilled_slots = jnp.where(keep, local_rank, replacement_slot)
-    return refilled_experts.reshape(num_tokens, topk), refilled_slots.reshape(num_tokens, topk)
+    replacements = jnp.sum(jnp.logical_not(keep), dtype=jnp.int32)
+    return (
+        refilled_experts.reshape(num_tokens, topk),
+        refilled_slots.reshape(num_tokens, topk),
+        expert_load,
+        replacements,
+    )
 
 
 def _capacity_refilled_top_k(
     router_logits: Float[Array, "T E"],
     cfg: "GrugModelConfig",
-) -> tuple[Int[Array, "T K"], Int[Array, "T K"]]:
+) -> tuple[Int[Array, "T K"], Int[Array, "T K"], jax.Array, Int[Array, ""]]:
     """Refill expert capacity and assign exact slots on every fixed-A2A sender shard."""
     mesh = get_abstract_mesh()
     router_logits = reshard(router_logits, P(_BATCH_AXES, None))
 
     def _local(local_router_logits):
-        return _capacity_refilled_top_k_local(
+        selected_experts, dispatch_slots, expert_load, replacements = _capacity_refilled_top_k_local(
             local_router_logits,
             topk=cfg.num_experts_per_token,
             capacity_factor=cfg.moe_capacity_factor,
+        )
+        global_routing_counts = jax.lax.psum(
+            jnp.concatenate([expert_load, replacements[None]]),
+            _BATCH_AXES,
+        )
+        return (
+            selected_experts,
+            dispatch_slots,
+            global_routing_counts[:-1],
+            global_routing_counts[-1],
         )
 
     return shard_map(
         _local,
         mesh=mesh,
         in_specs=(P(_BATCH_AXES, None),),
-        out_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        out_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None), P()),
     )(router_logits)
 
 
@@ -622,13 +650,17 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         w13_pre0: jax.Array | None = None,
         w2_pre0: jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], jax.Array, Int[Array, ""]]:
+    ) -> tuple[Float[Array, "B S D"], jax.Array, RoutingDiagnostics]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        expert_load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32)
+        capacity_refill_replacements = jnp.zeros((), dtype=jnp.int32)
         if self.cfg.capacity_refill_routing:
-            selected_experts, dispatch_slots = _capacity_refilled_top_k(router_logits, self.cfg)
+            selected_experts, dispatch_slots, expert_load, capacity_refill_replacements = _capacity_refilled_top_k(
+                router_logits, self.cfg
+            )
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         elif self.cfg.capacity_balanced_routing:
             selected_experts = _capacity_balanced_top_k(router_logits, self.cfg)
@@ -645,15 +677,10 @@ class MoEMLP(eqx.Module):
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
             dispatch_slots = None
-        if (
-            self.cfg.qb_routing
-            or self.cfg.capacity_balanced_routing
-            or self.cfg.capacity_refill_routing
-            or self.cfg.report_capacity_overflow
+        if not self.cfg.capacity_refill_routing and (
+            self.cfg.qb_routing or self.cfg.capacity_balanced_routing or self.cfg.report_capacity_overflow
         ):
             expert_load = _compute_expert_load(selected_experts, self.cfg)
-        else:
-            expert_load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32)
         # Sigmoid combine weights on the selected logits, renormalized to sum to ``_ROUTING_RENORM_SUM``.
         combine_weights_f = jax.nn.sigmoid(topk_logits)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
@@ -690,7 +717,11 @@ class MoEMLP(eqx.Module):
             )
             dropped_assignments = jnp.zeros((), dtype=jnp.int32)
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return reshard(routed, _batch_spec()), expert_load, dropped_assignments
+        routing_diagnostics = RoutingDiagnostics(
+            capacity_drops=dropped_assignments,
+            capacity_refill_replacements=capacity_refill_replacements,
+        )
+        return reshard(routed, _batch_spec()), expert_load, routing_diagnostics
 
 
 class Block(eqx.Module):
@@ -730,7 +761,7 @@ class Block(eqx.Module):
     @named_call
     def __call__(
         self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
-    ) -> tuple[Float[Array, "B S D"], jax.Array, Int[Array, ""]]:
+    ) -> tuple[Float[Array, "B S D"], jax.Array, RoutingDiagnostics]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
         # (it will not hoist a collective backward across the whole attention block). Threaded into the
@@ -754,15 +785,20 @@ class Block(eqx.Module):
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
-            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.int32), jnp.zeros((), dtype=jnp.int32)
+            zero = jnp.zeros((), dtype=jnp.int32)
+            return (
+                x,
+                jnp.zeros((self.mlp.cfg.num_experts,), jnp.int32),
+                RoutingDiagnostics(capacity_drops=zero, capacity_refill_replacements=zero),
+            )
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
-        mlp_out, expert_load, dropped_assignments = self.mlp(mlp_in, w13_pre0, w2_pre0)
+        mlp_out, expert_load, routing_diagnostics = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
-        return x + mlp_out, expert_load, dropped_assignments
+        return x + mlp_out, expert_load, routing_diagnostics
 
 
 class Transformer(eqx.Module):
@@ -818,7 +854,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], Int[Array, "L E"], jax.Array]:
+    ) -> tuple[Float[Array, "B S D"], Int[Array, "L E"], RoutingDiagnostics]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -855,17 +891,17 @@ class Transformer(eqx.Module):
         def _scan_layer(
             carry_hidden: Float[Array, "B S D"],
             layer: Block,
-        ) -> tuple[Float[Array, "B S D"], tuple[jax.Array, jax.Array]]:
+        ) -> tuple[Float[Array, "B S D"], tuple[jax.Array, RoutingDiagnostics]]:
             # Carry the hidden state; stack the per-layer routing diagnostics.
-            new_hidden, expert_load, dropped_assignments = eqx.filter_checkpoint(layer, policy=remat_policy)(
+            new_hidden, expert_load, routing_diagnostics = eqx.filter_checkpoint(layer, policy=remat_policy)(
                 carry_hidden, layer_mask
             )
-            return new_hidden, (expert_load, dropped_assignments)
+            return new_hidden, (expert_load, routing_diagnostics)
 
-        hidden, (expert_load_per_layer, capacity_overflow_per_layer) = jax.lax.scan(
+        hidden, (expert_load_per_layer, routing_diagnostics) = jax.lax.scan(
             _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
         )
-        return self.final_norm(hidden), expert_load_per_layer, capacity_overflow_per_layer
+        return self.final_norm(hidden), expert_load_per_layer, routing_diagnostics
 
     @named_call
     def logits(
@@ -885,8 +921,8 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> tuple[jax.Array, Int[Array, "L E"], jax.Array]:
-        hidden, expert_load_per_layer, capacity_overflow_per_layer = self(token_ids, mask=mask)
+    ) -> tuple[jax.Array, Int[Array, "L E"], RoutingDiagnostics]:
+        hidden, expert_load_per_layer, routing_diagnostics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         loss = fused_linear_softmax_cross_entropy_loss(
@@ -898,7 +934,7 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        return loss, expert_load_per_layer, capacity_overflow_per_layer
+        return loss, expert_load_per_layer, routing_diagnostics
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:

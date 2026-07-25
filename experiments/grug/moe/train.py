@@ -303,6 +303,22 @@ def _receiver_capacity_overflow_rate(
     return dropped.astype(jnp.float32) / assignments_per_layer
 
 
+def _expert_capacity_overflow_rate(
+    expert_loads: jax.Array,
+    *,
+    assignments_per_layer: int,
+    capacity_factor: float,
+) -> jax.Array:
+    """Return per-layer overflow with one global capacity pool per expert."""
+    num_experts = expert_loads.shape[-1]
+    expert_capacity = max(
+        math.ceil(capacity_factor * assignments_per_layer / num_experts),
+        1,
+    )
+    dropped = jnp.sum(jnp.maximum(expert_loads - expert_capacity, 0), axis=-1, dtype=jnp.int32)
+    return dropped.astype(jnp.float32) / assignments_per_layer
+
+
 # SCALE_OFFLOAD_OPT_STATE=1 parks the optimizer state on pinned host memory between steps so it
 # is off-HBM during forward/backward (freeing HBM for the memory-aware scheduler to async the
 # backward re-gathers), streaming it back to device only for the optimizer update. Viable on GB200
@@ -395,25 +411,37 @@ def _make_train_step(
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            loss, expert_load_per_layer, capacity_overflow_per_layer = compute_params.next_token_loss(
+            loss, expert_load_per_layer, routing_diagnostics = compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
             )
-            return loss, (expert_load_per_layer, capacity_overflow_per_layer)
+            return loss, (expert_load_per_layer, routing_diagnostics)
 
-        (loss, (expert_load_per_layer, capacity_overflow_per_layer)), grads = jax.value_and_grad(
+        (loss, (expert_load_per_layer, routing_diagnostics)), grads = jax.value_and_grad(
             loss_fn,
             has_aux=True,
         )(balanced_params)
         metrics = {"train/loss": loss}
         if model_config.report_capacity_overflow:
             assignments_per_layer = batch.tokens.size * model_config.num_experts_per_token
-            capacity_overflow_rate = capacity_overflow_per_layer.astype(jnp.float32) / assignments_per_layer
+            capacity_overflow_rate = routing_diagnostics.capacity_drops.astype(jnp.float32) / assignments_per_layer
             metrics["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
             metrics["train/router/capacity_overflow_rate_max"] = jnp.max(capacity_overflow_rate)
+            replacement_rate = (
+                routing_diagnostics.capacity_refill_replacements.astype(jnp.float32) / assignments_per_layer
+            )
+            metrics["train/router/capacity_refill_replacement_rate_mean"] = jnp.mean(replacement_rate)
+            metrics["train/router/capacity_refill_replacement_rate_max"] = jnp.max(replacement_rate)
+            expert_overflow_rate = _expert_capacity_overflow_rate(
+                expert_load_per_layer,
+                assignments_per_layer=assignments_per_layer,
+                capacity_factor=model_config.moe_capacity_factor,
+            )
+            metrics["train/router/expert_capacity_overflow_rate_mean"] = jnp.mean(expert_overflow_rate)
+            metrics["train/router/expert_capacity_overflow_rate_max"] = jnp.max(expert_overflow_rate)
             receiver_overflow_rate = _receiver_capacity_overflow_rate(
                 expert_load_per_layer,
                 assignments_per_layer=assignments_per_layer,
@@ -424,6 +452,9 @@ def _make_train_step(
             metrics["train/router/receiver_capacity_overflow_rate_max"] = jnp.max(receiver_overflow_rate)
             for layer_index in range(model_config.num_layers):
                 metrics[f"train/router/layer_{layer_index}/capacity_overflow_rate"] = capacity_overflow_rate[layer_index]
+                metrics[f"train/router/layer_{layer_index}/capacity_refill_replacement_rate"] = replacement_rate[
+                    layer_index
+                ]
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
