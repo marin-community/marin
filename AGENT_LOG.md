@@ -376,3 +376,12 @@ Draft committed locally, NOT pushed/posted. Ready for human.
   win independent of routing, so it SHOULD transfer, but QB-on changes the drop regime and MFU is only
   comparable within a matched regime; the rack A/B settles it.
 - Next: EP4 smoke (batching + QB-on) to confirm real multi-GPU a2a, then rack A/B control vs +batching.
+
+## R6-1 check-in 14:54 local — smoke green, rack A/B control submitted
+- EP4 batched smoke /mwittmann/ep25d1-batch-smoke-ep4-0725-1350 SUCCEEDED (clean 40-step run on GB200 -> the
+  batched a2a/GEMM path works on real multi-GPU; CPU parity already bit-exact so numerics confirmed).
+- RACK A/B CONTROL submitted: /mwittmann/ep25d1-qbon-adj-control-120-0725-1454 = QB-on cf1.0 + adjoint,
+  NO batching, 120 steps, SCALE_REPORT_DROPS, DISABLE_CHECKPOINT, operating point. Comparator band = d4's
+  QB-on cf1.0 draws 22.595 / 22.002. Will submit +batching treatment back-to-back after control terminates
+  (one rack in flight). Both legs report the drop series for matched-regime comparison.
+- Confidence: 6/10 (unchanged) on batching's +1.35pp transferring to QB-on.
