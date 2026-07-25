@@ -53,9 +53,9 @@ if [[ "$NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH" == 1 ]]; then
     echo "FATAL: overflow-drop patch requires TE $PINNED_TE_SHA, got $TE_SHA" >&2
     exit 1
   fi
-  "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --check
+  bash "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --check
   git -C "$TE_SOURCE" apply --whitespace=error-all "$OVERFLOW_DROP_PATCH"
-  "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --patched
+  bash "$OVERFLOW_DROP_VALIDATOR" "$TE_SOURCE" --patched
 else
   echo "=== build: overflow-drop patch disabled; using pristine TE source ==="
 fi
