@@ -100,3 +100,25 @@ SCALE_QB_INTEGRAL=0.001) so it fires the moment arm 1 exits.
 
 Confidence: 4/10 g=0.5, 3/10 integral
 Next: arm-1 completion ~22:30 -> harvest (logs permitting) -> submit arm 2 rack leg.
+
+## Check-in 2026-07-25 22:30 UTC — arm 1 DONE; arm 2 rack leg submitted; log gap localized
+
+- ARM 1 COMPLETE: /mwittmann/ep25d3-qbg05-cf100-350-v1-20260725 succeeded at ~22:28
+  (350/350 steps, no failures/preemptions). Metrics not yet readable — see below.
+- ARM 2 RACK LEG SUBMITTED at 22:28 (rack slot free, one-in-flight rule kept):
+  /mwittmann/ep25d3-qbint-cf100-350-v1-20260725 — gamma=0.001 integral rule, cf1.0,
+  adjoint, drops, 350 steps, provenance base_commit 3f10dcc6a. Dispatched 22:18:50,
+  ETA ~00:00-00:15.
+- HARVEST TOOL validated (commit, experiments/grug/moe/harvest_ep25.py): finelog SQL
+  path; reproduces ALL d4 published reference numbers exactly (baseline drop checkpoints
+  0.885(5)/0.271(60)/0.175(119)/0.089(250)/0.064(349), tail-100 0.0732, p50 22.002%
+  p10/p90 21.83/22.93, loss 3.335; g=2 limit cycle 0.68-0.70).
+- LOG GAP LOCALIZED: child train-task logs from cw-us-east-08a (GB200 rack) workers are
+  not flowing since ~20:40 UTC — mine AND peers' (d4 sqb, rav hybridep smoke). rav's
+  non-GB200 swarm jobs ingest in real time (rows current to 22:19). SQL namespace lags
+  fetch_logs further. Data is presumed buffered at the source workers (morning jobs fully
+  served); treating as an indexing/shipping outage, polling both paths every ~15 min.
+- Job mutations: submissions only (arm 1, smoke, arm 2).
+
+Confidence: 4/10 g=0.5, 3/10 integral
+Next: poll arm-1 logs; babysit arm 2 to completion ~00:15; harvest both; decide arm 3.
