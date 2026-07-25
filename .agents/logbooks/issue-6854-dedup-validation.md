@@ -689,3 +689,19 @@ statistics for performance comparisons.
   targeted tiebreaks, with zero retries and zero invalid outputs. Across the
   first 256 durable pairs, semantic review has classified 230 false positives
   and 26 true duplicates, with no unresolved pair.
+
+### 2026-07-25T11:25:00Z — third checkpoint verified
+
+- Partition p0 completed decision file 0 semantic range 128:256 and advanced
+  to range 256:384. All 128 baseline pairs resolved: 85 false positives and 43
+  true duplicates. The batch contained 118 direct pairs and 10 chunked pairs,
+  expanding to 931 review units.
+- A separate root-task process verified the 500,684-byte Parquet object, its
+  ordered identity hash, manifest counters, and configuration hash. All 1,921
+  model judgments were valid first responses: 1,862 initial judgments and 59
+  targeted tiebreaks, with zero retries or invalid outputs. Outcome SHA-256:
+  `b4a0018df44e8a2f85f7eea3b5e802af12b57dece203dde54d6d31bc6c7b9bf9`.
+- Across three durable checkpoints, all 384 baseline pairs resolved: 315 false
+  positives and 69 true duplicates. The sample remains far too small for the
+  final comparative rate; its purpose is to verify the production protocol and
+  preserve auditable incremental evidence.
