@@ -36,6 +36,7 @@ from levanter.grug._moe.sonic import (
     sonic_unpermute_i32,
 )
 from levanter.grug.sharding import _batch_axes
+from levanter.kernels.mnnvl.fabric_transport_ffi import mnnvl_combine, mnnvl_dispatch, mnnvl_gather_exchange
 
 
 _DEFAULT_RECEIVER_SENDER_CAPACITY_FACTOR = 1.125
@@ -461,6 +462,7 @@ def _same_expert_cloned_fixed_a2a_core(
         int(math.ceil(assignments_per_shard / expert_shards)) + token_padding_experts * num_experts
     )
     send_size = expert_shards * sender_destination_capacity
+    use_mnnvl_transport = os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") == "1"
 
     use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
     if use_barrier:
@@ -492,60 +494,77 @@ def _same_expert_cloned_fixed_a2a_core(
     keep_by_token = keep.reshape(tokens_per_shard, topk)
 
     with jax.named_scope("dispatch"):
-        if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
-            send_x = _fixed_dispatch_gather_sonic(
-                x_local,
-                dispatch_positions,
-                keep_by_token,
-                send_size,
-            )
-        elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
-            send_x = _fixed_dispatch_gather_sonic_grad(
-                x_local,
-                dispatch_positions,
-                keep_by_token,
-                send_size,
-            )
-        else:
-            send_x = _fixed_dispatch_gather_reference(
-                x_local,
-                dispatch_positions,
-                send_size=send_size,
-            )
-        send_x = send_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
         send_receiver_slot = (
             jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
             .at[transport_position]
             .set(receiver_slot, mode="drop")
             .reshape(expert_shards, sender_destination_capacity)
         )
-        received_x = jax.lax.all_to_all(
-            send_x,
-            "expert",
-            split_axis=0,
-            concat_axis=0,
-            tiled=True,
-        )
-        received_slot = jax.lax.all_to_all(
-            send_receiver_slot,
-            "expert",
-            split_axis=0,
-            concat_axis=0,
-            tiled=True,
-        )
-        received_x = tree_checkpoint_name(received_x, _CHECKPOINT_DISPATCH_INPUT)
-        received_x_flat = received_x.reshape(send_size, hidden_dim)
-        received_slot_flat = received_slot.reshape(send_size)
-        receiver_sources = (
-            jnp.full((receiver_capacity,), send_size, dtype=jnp.int32)
-            .at[received_slot_flat]
-            .set(jnp.arange(send_size, dtype=jnp.int32), mode="drop")
-        )
-        padded_received_x = jnp.concatenate(
-            [received_x_flat, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
-            axis=0,
-        )
-        expert_inputs = padded_received_x[receiver_sources]
+        if use_mnnvl_transport:
+            send_destination = jnp.broadcast_to(
+                jnp.arange(expert_shards, dtype=jnp.int32)[:, None],
+                send_receiver_slot.shape,
+            ).reshape(send_size)
+            token_sources = _fixed_dispatch_token_sources(dispatch_positions, send_size=send_size)
+            expert_inputs, receiver_source_rank, receiver_source_slot = _mnnvl_dispatch_gather(
+                x_local,
+                token_sources,
+                dispatch_positions,
+                keep_by_token,
+                send_destination,
+                send_receiver_slot.reshape(send_size),
+                receiver_capacity,
+            )
+            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
+        else:
+            if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
+                send_x = _fixed_dispatch_gather_sonic(
+                    x_local,
+                    dispatch_positions,
+                    keep_by_token,
+                    send_size,
+                )
+            elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
+                send_x = _fixed_dispatch_gather_sonic_grad(
+                    x_local,
+                    dispatch_positions,
+                    keep_by_token,
+                    send_size,
+                )
+            else:
+                send_x = _fixed_dispatch_gather_reference(
+                    x_local,
+                    dispatch_positions,
+                    send_size=send_size,
+                )
+            send_x = send_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
+            received_x = jax.lax.all_to_all(
+                send_x,
+                "expert",
+                split_axis=0,
+                concat_axis=0,
+                tiled=True,
+            )
+            received_slot = jax.lax.all_to_all(
+                send_receiver_slot,
+                "expert",
+                split_axis=0,
+                concat_axis=0,
+                tiled=True,
+            )
+            received_x = tree_checkpoint_name(received_x, _CHECKPOINT_DISPATCH_INPUT)
+            received_x_flat = received_x.reshape(send_size, hidden_dim)
+            received_slot_flat = received_slot.reshape(send_size)
+            receiver_sources = (
+                jnp.full((receiver_capacity,), send_size, dtype=jnp.int32)
+                .at[received_slot_flat]
+                .set(jnp.arange(send_size, dtype=jnp.int32), mode="drop")
+            )
+            padded_received_x = jnp.concatenate(
+                [received_x_flat, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+                axis=0,
+            )
+            expert_inputs = padded_received_x[receiver_sources]
 
     with jax.named_scope("clone_weights"):
         if sparse_clone_weights:
@@ -624,17 +643,27 @@ def _same_expert_cloned_fixed_a2a_core(
             expert_outputs = ragged_dot(activation_fn(gate) * up, global_w2, group_sizes)
 
     with jax.named_scope("combine"):
-        received_valid = received_slot_flat < receiver_capacity
-        returned_x = expert_outputs[jnp.minimum(received_slot_flat, receiver_capacity - 1)]
-        returned_x = jnp.where(received_valid[:, None], returned_x, 0)
-        returned_x = returned_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
-        returned_x = jax.lax.all_to_all(
-            returned_x,
-            "expert",
-            split_axis=0,
-            concat_axis=0,
-            tiled=True,
-        )
+        if use_mnnvl_transport:
+            returned_x = mnnvl_combine(
+                expert_outputs,
+                receiver_source_rank,
+                receiver_source_slot,
+                send_destination,
+                send_receiver_slot.reshape(send_size),
+                send_size,
+            )
+        else:
+            received_valid = received_slot_flat < receiver_capacity
+            returned_x = expert_outputs[jnp.minimum(received_slot_flat, receiver_capacity - 1)]
+            returned_x = jnp.where(received_valid[:, None], returned_x, 0)
+            returned_x = returned_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
+            returned_x = jax.lax.all_to_all(
+                returned_x,
+                "expert",
+                split_axis=0,
+                concat_axis=0,
+                tiled=True,
+            )
         returned_x = tree_checkpoint_name(returned_x, _CHECKPOINT_MOE_OUTPUT).reshape(send_size, hidden_dim)
         if os.environ.get("SCALE_A2A_SONIC_COMBINE") == "1":
             masked_combine_weights = jnp.where(
@@ -692,6 +721,96 @@ def _fixed_dispatch_token_sources(
         tokens_per_shard,
     )
     return token_sources
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6,))
+def _mnnvl_dispatch_gather(
+    x_local: Float[Array, "Tlocal H"],
+    token_sources: Int[Array, "M"],
+    dispatch_positions: Int[Array, "Tlocal K"],
+    keep: jax.Array,
+    destination_ranks: Int[Array, "M"],
+    destination_slots: Int[Array, "M"],
+    receiver_capacity: int,
+) -> tuple[Float[Array, "R H"], Int[Array, "R"], Int[Array, "R"]]:
+    """Fuse fixed dispatch materialization into the MNNVL peer write."""
+    del dispatch_positions, keep
+    return mnnvl_gather_exchange(
+        x_local,
+        token_sources,
+        destination_ranks,
+        destination_slots,
+        output_rows=receiver_capacity,
+    )
+
+
+def _mnnvl_dispatch_gather_fwd(
+    x_local: Float[Array, "Tlocal H"],
+    token_sources: Int[Array, "M"],
+    dispatch_positions: Int[Array, "Tlocal K"],
+    keep: jax.Array,
+    destination_ranks: Int[Array, "M"],
+    destination_slots: Int[Array, "M"],
+    receiver_capacity: int,
+) -> tuple[
+    tuple[Float[Array, "R H"], Int[Array, "R"], Int[Array, "R"]],
+    tuple[Int[Array, "R"], Int[Array, "R"], Int[Array, "Tlocal K"], jax.Array, int, int],
+]:
+    outputs = mnnvl_gather_exchange(
+        x_local,
+        token_sources,
+        destination_ranks,
+        destination_slots,
+        output_rows=receiver_capacity,
+    )
+    _, source_ranks, source_slots = outputs
+    position_order = jnp.argsort(dispatch_positions, axis=-1)
+    sorted_positions = jnp.take_along_axis(dispatch_positions, position_order, axis=-1)
+    sorted_keep = jnp.take_along_axis(keep, position_order, axis=-1)
+    return outputs, (
+        source_ranks,
+        source_slots,
+        sorted_positions,
+        sorted_keep,
+        token_sources.shape[0],
+        x_local.shape[1],
+    )
+
+
+def _mnnvl_dispatch_gather_bwd(
+    receiver_capacity: int,
+    residuals: tuple[Int[Array, "R"], Int[Array, "R"], Int[Array, "Tlocal K"], jax.Array, int, int],
+    cotangents: tuple[
+        jax.Array | jax.custom_derivatives.SymbolicZero,
+        jax.Array | jax.custom_derivatives.SymbolicZero,
+        jax.Array | jax.custom_derivatives.SymbolicZero,
+    ],
+) -> tuple[jax.Array, None, None, None, None, None]:
+    del receiver_capacity
+    source_ranks, source_slots, dispatch_positions, keep, send_rows, hidden_dim = residuals
+    receiver_cotangent = cotangents[0]
+    if isinstance(receiver_cotangent, jax.custom_derivatives.SymbolicZero):
+        receiver_cotangent = jnp.zeros((source_ranks.shape[0], hidden_dim), dtype=jnp.bfloat16)
+    else:
+        receiver_cotangent = jnp.asarray(receiver_cotangent, dtype=jnp.bfloat16)
+    send_cotangent, _, _ = mnnvl_dispatch(
+        receiver_cotangent,
+        source_ranks,
+        source_slots,
+        send_rows,
+    )
+    x_cotangent = sonic_gather_sum_bf16_accum(
+        send_cotangent,
+        dispatch_positions,
+        keep.astype(send_cotangent.dtype),
+    )
+    return x_cotangent, None, None, None, None, None
+
+
+_mnnvl_dispatch_gather.defvjp(
+    _mnnvl_dispatch_gather_fwd,
+    _mnnvl_dispatch_gather_bwd,
+)
 
 
 def _fixed_dispatch_gather_reference(

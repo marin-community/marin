@@ -33,6 +33,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.kernels.mnnvl.fabric_transport_ffi import ensure_mnnvl_runtime
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -326,6 +327,36 @@ def _expert_capacity_overflow_rate(
 _OFFLOAD_OPT_STATE = os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1"
 
 
+def _initialize_mnnvl_transport(config: GrugRunConfig) -> None:
+    if os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") != "1":
+        return
+    if os.environ.get("SCALE_A2A_SAME_EXPERT_CLONES") != "1":
+        raise ValueError("SCALE_A2A_MNNVL_TRANSPORT=1 requires SCALE_A2A_SAME_EXPERT_CLONES=1")
+    if os.environ.get("SCALE_A2A_CLONE_POOLED") != "1":
+        raise ValueError("SCALE_A2A_MNNVL_TRANSPORT=1 requires SCALE_A2A_CLONE_POOLED=1")
+
+    expert_shards = config.trainer.expert_axis_size
+    global_batch = config.trainer.trainer.batch_schedule.batch_size_at_step(0)
+    global_assignments = global_batch * config.model.max_seq_len * config.model.num_experts_per_token
+    if global_assignments % jax.device_count() != 0:
+        raise ValueError(
+            f"global MoE assignments={global_assignments} must be divisible by devices={jax.device_count()}"
+        )
+    assignments_per_shard = global_assignments // jax.device_count()
+    token_padding_experts = max(
+        int(os.environ.get("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "1")),
+        0,
+    )
+    sender_destination_capacity = (
+        math.ceil(assignments_per_shard / expert_shards) + token_padding_experts * config.model.num_experts
+    )
+    send_rows = expert_shards * sender_destination_capacity
+    ensure_mnnvl_runtime(
+        buffer_rows=max(assignments_per_shard, send_rows),
+        row_bytes=config.model.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize,
+    )
+
+
 def _opt_state_to_memory_kind(tree, kind: str):
     """Move optimizer-state array leaves to ``kind`` (``pinned_host`` to offload, ``device`` to
     bring back), preserving each leaf's PartitionSpec. Works both eagerly and inside jit
@@ -508,6 +539,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
+    _initialize_mnnvl_transport(config)
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
