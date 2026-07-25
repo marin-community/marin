@@ -240,13 +240,10 @@ def _fixed_dispatch_gather_sonic_grad_bwd(
     residuals: tuple[Int[Array, "Tlocal K"], jax.Array],
     send_x_grad: Float[Array, "M H"],
 ) -> tuple[Float[Array, "Tlocal H"], None, None]:
+    del send_size
     dispatch_positions, keep = residuals
-    padded_grad = jnp.concatenate(
-        [send_x_grad, jnp.zeros((1, send_x_grad.shape[1]), dtype=send_x_grad.dtype)],
-        axis=0,
-    )
     x_grad = sonic_gather_sum_bf16_accum(
-        padded_grad,
+        send_x_grad,
         dispatch_positions,
         keep.astype(send_x_grad.dtype),
     )
