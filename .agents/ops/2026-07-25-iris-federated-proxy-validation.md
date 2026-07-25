@@ -3,7 +3,7 @@ date: 2026-07-25
 system: iris
 severity: diagnostic-only
 resolution: fixed
-pr: none
+pr: https://github.com/marin-community/marin/pull/7634
 issue: https://github.com/marin-community/marin/issues/7607
 ---
 
