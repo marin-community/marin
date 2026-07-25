@@ -1562,6 +1562,36 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T21:21:38Z — 53,137 pairs verified
+
+- Five additional checkpoints passed independent validation: 640 pairs, 430
+  model false positives, 206 model true duplicates, and four unresolved
+  outcomes. The block contains 1,330 valid judgments across 1,351 attempts; 21
+  invalid responses affected eight retried judgments. One pair was chunked and
+  639 were direct.
+- Complete character comparison resolves all four ambiguities as true
+  duplicates. Every pair is a cross-source SFT example with identical question,
+  options, reasoning, and answer. The only complete-text differences add or
+  remove `\text{` and its closing `}` around the same final answer letter. Pair
+  lengths are 10,015 / 10,022, 18,211 / 18,218, 9,991 / 9,984, and 11,983 /
+  11,976 characters. Character similarity ranges from 0.999650 to 0.999808.
+- The four hash-bound manual Parquet records have SHA-256
+  `c67e6b06f4df0b29cd9326e7fe8c920f764a7a0d10271cd5a838e91ff190960e`,
+  `73973e01eaa8d62160ff12783a8d9e170a4a68adeb73ab124007067a68bf85b2`,
+  `6e41f8294d73727fba996cb665ad8f2deb0dc691ca9749a4c7e1c074baeb6ff6`,
+  and
+  `80542f90385dd5c90d72f9c7b41463c6ade0157b84b630b867d4618434a844e4`.
+  A separate batch-priority Iris process exactly reread all four source pairs,
+  semantic evidence, manual records, and Parquet bytes.
+- Across the stable 417-checkpoint snapshot, all 54 manual records leave:
+
+  - baseline: 43,533 pairs, 27,771 false positives, 15,762 true duplicates;
+  - treatment: 9,604 pairs, 5,091 false positives, 4,513 true duplicates;
+  - combined: 53,137 pairs, 32,862 false positives, 20,275 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:56:02Z — 47,121 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
