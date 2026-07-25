@@ -584,6 +584,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                    # The returned `metrics` dict is not otherwise logged (train/loss goes through the
+                    # callbacks), so surface the MoE drop counters explicitly when enabled.
+                    if "moe/drop_fraction" in metrics:
+                        levanter.tracker.log(
+                            {
+                                "moe/dropped_assignments": int(metrics["moe/dropped_assignments"]),
+                                "moe/drop_fraction": float(metrics["moe/drop_fraction"]),
+                            },
+                            step=step,
+                        )
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
