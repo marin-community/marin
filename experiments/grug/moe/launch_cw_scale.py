@@ -143,6 +143,7 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
+        global_every=env_int("SCALE_GLOBAL_EVERY", 0),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",

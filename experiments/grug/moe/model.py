@@ -119,6 +119,11 @@ class GrugModelConfig:
     max_seq_len: int = 8192
     # Sliding-window attention applied to every layer. 0 (default) = full causal.
     sliding_window: int = 0
+    # Interleave full-causal ("global") attention layers into an otherwise sliding-window stack:
+    # every ``global_every``-th layer (1-indexed, so the last layer of each group and the final
+    # layer) attends the whole document instead of the ``sliding_window``. 0 (default) = disabled
+    # (pure sliding window). No-op unless ``sliding_window`` is also set.
+    global_every: int = 0
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -743,20 +748,49 @@ class Transformer(eqx.Module):
         sliding_window = cfg.sliding_window or None
         causal_mask = AttentionMask(is_causal=True, sliding_window=sliding_window, segment_ids=segment_ids)
 
-        # Precompute the FA4 per-token metadata for the (single) mask OUTSIDE the scan and attach it
-        # via ``with_fa4_bounds``, keeping the FA4 pure_callback's device-0-pinned metadata out of the
-        # scan body (an in-body callback forces an involuntary full rematerialization that serializes
-        # through device 0 and wedges the MoE all-to-all at 8+ racks).
+        # Precompute the FA4 per-token metadata OUTSIDE the scan and attach it via ``with_fa4_bounds``,
+        # keeping the FA4 pure_callback's device-0-pinned metadata out of the scan body (an in-body
+        # callback forces an involuntary full rematerialization that serializes through device 0 and
+        # wedges the MoE all-to-all at 8+ racks). For interleaved global/sliding stacks we precompute
+        # BOTH window bound sets here and select per layer with a cheap in-body ``jnp.where`` on a
+        # scalar flag -- the exact "precompute once, select per layer" path fa4_bounds was built for.
         batch_size, seq_len = hidden.shape[0], hidden.shape[1]
-        lower_bounds, valid = fa4_cute_segment_bounds(
+        sliding_lb, sliding_valid = fa4_cute_segment_bounds(
             causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=sliding_window
         )
-        layer_mask = causal_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
+        sliding_lb, sliding_valid = _batch_reshard(sliding_lb), _batch_reshard(sliding_valid)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
+
+        interleave_global = bool(cfg.global_every) and sliding_window is not None
+        if interleave_global:
+            # Full-causal (no window) bounds for the global layers; segment_ids still confine attention
+            # to the current document. Every ``global_every``-th layer (1-indexed) is global.
+            global_lb, global_valid = fa4_cute_segment_bounds(
+                causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            global_lb, global_valid = _batch_reshard(global_lb), _batch_reshard(global_valid)
+            is_global = ((jnp.arange(cfg.num_layers) + 1) % cfg.global_every) == 0
+
+            def _scan_layer(
+                carry_hidden: Float[Array, "B S D"], layer_and_flag: tuple[Block, jax.Array]
+            ) -> tuple[Float[Array, "B S D"], jax.Array]:
+                layer, layer_is_global = layer_and_flag
+                lower_bounds = jnp.where(layer_is_global, global_lb, sliding_lb)
+                valid = jnp.where(layer_is_global, global_valid, sliding_valid)
+                layer_mask = causal_mask.with_fa4_bounds(lower_bounds, valid)
+                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
+                return new_hidden, qb_beta
+
+            hidden, qb_beta_per_layer = jax.lax.scan(
+                _scan_layer, hidden, xs=(self.stacked_blocks.stacked, is_global), unroll=cfg.scan_unroll
+            )
+            return self.final_norm(hidden), qb_beta_per_layer
+
+        layer_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
 
         def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], jax.Array]:
             # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
