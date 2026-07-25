@@ -127,7 +127,7 @@ To switch to **source builds** (requires Cargo), use the Makefile targets:
 
 ```bash
 # Cargo builds use sccache; install it separately before enabling dev mode.
-cargo install sccache --locked
+CARGO_BUILD_RUSTC_WRAPPER= cargo install sccache --locked
 
 # Check current mode and Cargo availability
 make rust-status
