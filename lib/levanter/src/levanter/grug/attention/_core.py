@@ -213,11 +213,17 @@ class AttentionMask(eqx.Module):
         return mask
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+def _rotary_cache(
+    seq_len: int, head_dim: int, rope: RotaryConfig, angle_scale: jax.Array | float | None = None
+) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
     positions = jnp.arange(seq_len, dtype=jnp.float32)
     angles = positions[:, None] * inv_freq[None, :]
+    if angle_scale is not None:
+        # Per-call scalar (e.g. 0 to make RoPE the identity -> NoPE) folded into the angle so there is
+        # one rope pass and no post-hoc select/double-materialisation of q,k.
+        angles = angles * angle_scale
     cos = jnp.cos(angles)
     sin = jnp.sin(angles)
     return cos, sin
@@ -231,8 +237,9 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    angle_scale: jax.Array | float | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
+    cos, sin = _rotary_cache(seq_len, head_dim, rope, angle_scale)
     cos = cos[None, :, None, :]
     sin = sin[None, :, None, :]
 

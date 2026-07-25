@@ -367,27 +367,30 @@ class CausalSelfAttention(eqx.Module):
         # Partial RoPE: rotate only the leading rotary_dim of each head, pass the tail through. When
         # rotary_dim == head_dim (rope_fraction=1) this is plain full RoPE with no slice/concat. XLA
         # fuses the contiguous slice+concat, and the rotary math runs on rotary_dim (not head_dim).
+        # NoPE (disable_rope on the flagged global layers) is expressed as angle_scale=0 -> RoPE becomes
+        # the identity, so there is a single rope pass and no jnp.where doubling the live q,k.
         rotary_dim = self.cfg.rotary_dim(head_dim)
+        angle_scale = None if disable_rope is None else (~disable_rope).astype(jnp.float32)
 
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
             if rotary_dim >= head_dim:
-                return apply_rotary_embedding(qh, kh, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+                return apply_rotary_embedding(
+                    qh, kh, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope, angle_scale=angle_scale
+                )
             q_rot, k_rot = apply_rotary_embedding(
-                qh[..., :rotary_dim], kh[..., :rotary_dim], seq_len=seq_len, head_dim=rotary_dim, rope=self.cfg.rope
+                qh[..., :rotary_dim],
+                kh[..., :rotary_dim],
+                seq_len=seq_len,
+                head_dim=rotary_dim,
+                rope=self.cfg.rope,
+                angle_scale=angle_scale,
             )
             return (
                 jnp.concatenate([q_rot, qh[..., rotary_dim:]], axis=-1),
                 jnp.concatenate([k_rot, kh[..., rotary_dim:]], axis=-1),
             )
 
-        if disable_rope is None:
-            q, k = _rope(q, k)
-        else:
-            # NoPE on the flagged (global) layers: keep the pre-rope q,k there, rotate everywhere else.
-            # disable_rope is a per-layer scalar bool threaded from the layer scan.
-            q_rope, k_rope = _rope(q, k)
-            q = jnp.where(disable_rope, q, q_rope)
-            k = jnp.where(disable_rope, k, k_rope)
+        q, k = _rope(q, k)
         q = q * self.cfg.qk_mult
 
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
