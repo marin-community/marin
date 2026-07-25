@@ -676,8 +676,19 @@ class Transformer(eqx.Module):
             # recompute_all plus saving the FA4 forward's (out, lse): the attention
             # backward consumes the saved primals instead of re-running the forward
             # kernel inside the block recompute (~6.7% of kernel time at the d2560
-            # anatomy; est +~1pp here, at +~32 GiB of saved activations at EP64).
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*FA4_LSE_SAVE_NAMES)
+            # anatomy; est +~1pp here). On-device save costs +~32.7 GiB at EP64,
+            # which fits no workable mem fraction at this operating point (0.75 XLA
+            # OOM; 0.85/0.90 NCCL headroom OOM) — SCALE_FA4_LSE_OFFLOAD=1 offloads
+            # the saved tensors to host (Grace C2G) instead.
+            if os.environ.get("SCALE_FA4_LSE_OFFLOAD") == "1":
+                remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                    names_which_can_be_saved=(),
+                    names_which_can_be_offloaded=FA4_LSE_SAVE_NAMES,
+                    offload_src="device",
+                    offload_dst="pinned_host",
+                )
+            else:
+                remat_policy = jax.checkpoint_policies.save_only_these_names(*FA4_LSE_SAVE_NAMES)
         else:
             remat_policy = None
 
