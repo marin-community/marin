@@ -13,6 +13,7 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
+import levanter.grug._moe.ep_ragged_all_to_all as ep_ragged_all_to_all
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core
@@ -510,6 +511,54 @@ def test_moe_ep_path_lowers_on_abstract_mesh(
         assert lowered is not None
 
 
+def test_ring_cute_ep_path_reports_missing_quack_dependency():
+    if importlib.util.find_spec("quack") is not None:
+        pytest.skip("requires an environment without the optional QuACK dependency")
+
+    mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            shape=(8, 16),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            shape=(8, 2),
+            dtype=jnp.int32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        combine_weights = jax.ShapeDtypeStruct(
+            shape=(8, 2),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            shape=(4, 16, 48),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            shape=(4, 24, 16),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+
+        def f(x, sel, cw, up_gate, down):
+            return moe_mlp(
+                x,
+                sel,
+                cw,
+                up_gate,
+                down,
+                activation=ActivationFunctionEnum.silu,
+                implementation="ring_cute",
+                mesh=mesh,
+            )
+
+        with pytest.raises(ModuleNotFoundError, match="ring_cute.*quack-kernels"):
+            jax.jit(f).trace(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+
 def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
     mesh = Mesh(
@@ -566,6 +615,106 @@ def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pyte
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(dropped) == 0
+
+
+def test_fixed_a2a_gather_dispatch_maps_assignments_to_tokens():
+    x_local = jnp.array(
+        [
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
+        ],
+        dtype=jnp.float32,
+    )
+    linear_indices = jnp.array([2, 0, 5, 6, 1, 4], dtype=jnp.int32)
+
+    actual = ep_ragged_all_to_all._fixed_a2a_gather_dispatch(
+        x_local,
+        linear_indices,
+        topk=2,
+        send_size=6,
+    )
+
+    expected = jnp.array(
+        [
+            [1.0, 10.0],
+            [3.0, 30.0],
+            [1.0, 10.0],
+            [0.0, 0.0],
+            [3.0, 30.0],
+            [2.0, 20.0],
+        ],
+        dtype=jnp.float32,
+    )
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+def test_fixed_a2a_gather_dispatch_matches_scatter_forward_and_gradients(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens = 6
+    hidden_dim = 4
+    intermediate_dim = 6
+    num_experts = 2
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(42),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    selected_experts = _make_unique_topk_experts(tokens=tokens, topk=topk, num_experts=num_experts)
+
+    def fixed_a2a(x, combine_weights, w_up_gate, w_down):
+        return _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=2.0,
+        )
+
+    fixed_a2a_sharded = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    def objective(x, combine_weights, w_up_gate, w_down):
+        out, dropped = fixed_a2a_sharded(x, combine_weights, w_up_gate, w_down)
+        return jnp.sum(out.astype(jnp.float32)), (out, dropped)
+
+    def run(gather_dispatch: bool):
+        if gather_dispatch:
+            monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+        else:
+            monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+        return jax.value_and_grad(objective, argnums=(0, 1, 2, 3), has_aux=True)(
+            x,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+
+    with jax.set_mesh(mesh):
+        (_, (scatter_out, scatter_dropped)), scatter_grads = run(False)
+        (_, (gather_out, gather_dropped)), gather_grads = run(True)
+
+    np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
+    assert int(gather_dropped) == int(scatter_dropped)
+    for gather_grad, scatter_grad in zip(gather_grads, scatter_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(scatter_grad), rtol=1e-5, atol=1e-5)
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():

@@ -28,6 +28,33 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug.sharding import _batch_axes
 
 
+def _fixed_a2a_gather_dispatch(
+    x_local: Float[Array, "Tlocal H"],
+    linear_indices: Int[Array, "TK"],
+    *,
+    topk: int,
+    send_size: int,
+) -> Float[Array, "S H"]:
+    """Build the fixed-capacity dispatch buffer via assignment indices and an activation gather."""
+    assignments_per_shard = linear_indices.shape[0]
+    tokens_per_shard = x_local.shape[0]
+    assignment_sources = (
+        jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32)
+        .at[linear_indices]
+        .set(jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop")
+    )
+    token_sources = jnp.where(
+        assignment_sources < assignments_per_shard,
+        assignment_sources // topk,
+        tokens_per_shard,
+    )
+    padded_x = jnp.concatenate(
+        [x_local, jnp.zeros((1, x_local.shape[1]), dtype=x_local.dtype)],
+        axis=0,
+    )
+    return padded_x[token_sources]
+
+
 def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -128,7 +155,15 @@ def _fixed_a2a_core(
 
     moe_dim = moe_w2_local.shape[1]
     with jax.named_scope("dispatch"):
-        send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
+        if os.environ.get("SCALE_A2A_GATHER_DISPATCH") == "1":
+            send_x = _fixed_a2a_gather_dispatch(
+                x_local,
+                linear_indices,
+                topk=topk,
+                send_size=send_size,
+            )
+        else:
+            send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     output_parts = []

@@ -16,6 +16,7 @@ shards one model across every device instead.
 Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
+    SCALE_GPU_IMAGE     optional training-task image, e.g. nvcr.io/nvidia/jax:26.06-py3
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
     SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
@@ -204,6 +205,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     # GPUs per node: 8 for the H100 nodes, 4 for a GB200 node (SCALE_GPUS_PER_NODE=4).
     gpus_per_node = env_int("SCALE_GPUS_PER_NODE", GPUS_PER_NODE)
     gpu_type = os.environ.get("SCALE_GPU_TYPE", "H100")
+    gpu_image = os.environ.get("SCALE_GPU_IMAGE") or None
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
     # rest of the gpus_per_node*replicas devices. Require the global batch to cover every shard.
     data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
@@ -212,7 +214,13 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
     resources = ResourceConfig.with_gpu(
-        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+        gpu_type,
+        count=gpus_per_node,
+        cpu=32,
+        ram="256g",
+        disk="256g",
+        replicas=replicas,
+        image=gpu_image,
     )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"

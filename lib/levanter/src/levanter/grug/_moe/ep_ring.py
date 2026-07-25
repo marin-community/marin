@@ -20,19 +20,31 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug.sharding import _batch_axes
 
+try:
+    from levanter.grug._moe.sonic_cute import _expert_mlp as _quack_expert_mlp
+    from levanter.grug._moe.sonic_cute import _interleave_gate_up
+except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optional
+    _ring_cute_error = _e
+    _quack_expert_mlp = None
+    _interleave_gate_up = None
 
-def _moe_mlp_ep_ring_local(
+
+def _ring_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
-    activation_fn: Callable[[jax.Array], jax.Array],
+    expert_mlp_fn: Callable[[jax.Array, jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect.
+
+    ``expert_mlp_fn(x_dispatch, group_sizes) -> out_dispatch`` runs the grouped
+    expert GEMMs on the capacity-padded, expert-grouped local rows.
+    """
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
@@ -99,13 +111,7 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
-            _CHECKPOINT_DISPATCH_OUTPUT,
-        )
+        out_dispatch = expert_mlp_fn(x_dispatch, group_sizes)
 
     with jax.named_scope("scatter"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
@@ -114,3 +120,81 @@ def _moe_mlp_ep_ring_local(
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
+
+
+def _moe_mlp_ep_ring_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Ring EP with the generic grouped GEMM (`haliax.nn.ragged_dot`)."""
+
+    def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        return tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            _CHECKPOINT_DISPATCH_OUTPUT,
+        )
+
+    return _ring_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        expert_mlp_fn=expert_mlp_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_ep_ring_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Ring EP with the QuACK SM100 grouped GEMMs (sonic_cute's expert MLP).
+
+    SwiGLU is fused into the QuACK gated GEMM, so ``activation_fn`` is unused
+    (same contract as the ``sonic_cute`` local backend).
+    """
+    quack_expert_mlp = _quack_expert_mlp
+    interleave_gate_up = _interleave_gate_up
+    if quack_expert_mlp is None or interleave_gate_up is None:
+        raise ModuleNotFoundError(
+            f"moe_implementation='ring_cute' requires quack-kernels and torch: {_ring_cute_error}"
+        ) from _ring_cute_error
+
+    def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
+        moe_dim = moe_w2_local.shape[1]
+        w13_il = interleave_gate_up(moe_w13_local, moe_dim)
+        cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+        return tree_checkpoint_name(
+            quack_expert_mlp(x_dispatch, w13_il, moe_w2_local, group_sizes, cu),
+            _CHECKPOINT_DISPATCH_OUTPUT,
+        )
+
+    return _ring_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        expert_mlp_fn=expert_mlp_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
