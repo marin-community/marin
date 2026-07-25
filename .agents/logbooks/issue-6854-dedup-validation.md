@@ -794,3 +794,30 @@ statistics for performance comparisons.
   duplicates across all 5,376 pairs. The immutable model shards remain
   unchanged; the manual decisions will be carried in a separate override
   artifact for finalization.
+
+### 2026-07-25T12:35:00Z — semantic review reaches 6,912 verified pairs
+
+- Twelve additional checkpoints passed independent validation: 1,536 baseline
+  pairs, 946 false positives, 588 true duplicates, and two unresolved model
+  outcomes. They used 3,467 request attempts. One structured response failed
+  all three JSON parses, accounting for three invalid attempts and two retries;
+  all other responses were valid on the first attempt.
+- Complete character-level comparison resolves the first ambiguous pair as a
+  true duplicate. Across 5,597/5,604 characters, its only differences are the
+  canonical's `\text{` and matching `}` around the same final boxed `B`.
+  Pair location: `part-00000-of-00128.parquet:7314`; member/canonical text
+  SHA-256:
+  `d605b4dc820a6502cec72f4e48d2f5a36ad3612d807e36f46cca93070edb035e` /
+  `9a4b6be06b14382d4fbbcec64182307a8ce6da536b82989da4245dea4088c554`.
+- Complete character-level comparison resolves the second ambiguous pair as a
+  true duplicate. The shared Naturepedic founding paragraph is unchanged
+  except for `The` versus `This` and an incomplete member suffix, `was the
+  first to create`, with no object. Its other difference is repeated
+  `Dust Mite Mattress Cover` versus `Organic Foldable` keyword stuffing. Pair
+  location: `part-00096-of-00128.parquet:3422`; member/canonical text SHA-256:
+  `952db158f9896de072a2e277302eb2b7439b69c205de9c2107f5a046bbee1b7e` /
+  `1df7ca826f22a2cdd3d2508e91053af274f4bda2339a7f7223c20b0ad44f107e`.
+- Across 54 immutable checkpoints, raw model totals are 4,399 false positives,
+  2,509 true duplicates, and four unresolved. Applying the four separately
+  reviewed overrides yields 4,399 false positives and 2,513 true duplicates
+  across all 6,912 pairs.
