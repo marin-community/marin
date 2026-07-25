@@ -245,6 +245,16 @@ TPU_HBM_BYTES_PER_CHIP: Mapping[str, int] = MappingProxyType(
     }
 )
 
+# Per-GPU HBM capacities, keyed by the ``GpuConfig.variant`` names the CoreWeave
+# clusters advertise. GB200 is the NVL72 per-Blackwell-GPU figure, matching the
+# ``device-variant`` a gb200-4x node reports.
+GPU_HBM_BYTES_PER_DEVICE: Mapping[str, int] = MappingProxyType(
+    {
+        "H100": 80 * _BYTES_PER_GIB,
+        "GB200": 186 * _BYTES_PER_GIB,
+    }
+)
+
 
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
@@ -309,6 +319,14 @@ def tpu_hbm_capacity_bytes(tpu_type: str) -> int:
     """Return the aggregate HBM capacity of a TPU slice in bytes."""
     topology = get_tpu_topology(tpu_type)
     return topology.chip_count * tpu_hbm_bytes_per_chip(tpu_family(tpu_type))
+
+
+def gpu_hbm_bytes_per_device(variant: str) -> int:
+    """Return the HBM capacity of one GPU in bytes."""
+    hbm_bytes = GPU_HBM_BYTES_PER_DEVICE.get(variant)
+    if hbm_bytes is None:
+        raise ValueError(f"Unknown GPU variant {variant!r}; expected one of {sorted(GPU_HBM_BYTES_PER_DEVICE)}")
+    return hbm_bytes
 
 
 DeviceKind = Literal["cpu", "gpu", "tpu"]

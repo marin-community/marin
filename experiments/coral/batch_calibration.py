@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Estimate dense-transformer HBM and select a TPU batch configuration."""
+"""Estimate dense-transformer HBM and select a TPU or GPU batch configuration."""
 
 import math
 from dataclasses import dataclass
@@ -14,6 +14,22 @@ BYTES_PER_GIB = 1024**3
 @dataclass(frozen=True)
 class TpuBatchConfig:
     """Parallelism settings selected for a TPU training batch."""
+
+    data_parallelism: int
+    tensor_parallelism: int
+    per_device_parallelism: int
+    gradient_accumulation: int
+
+
+@dataclass(frozen=True)
+class GpuBatchConfig:
+    """Parallelism settings selected for a GPU training batch.
+
+    Mirrors :class:`TpuBatchConfig`; the axes mean the same thing to Levanter. Kept
+    separate because the two selectors validate different hardware constraints —
+    a TPU slice is one indivisible topology, whereas a GPU gang is N nodes whose
+    tensor-parallel axis must stay inside a node's NVLink domain.
+    """
 
     data_parallelism: int
     tensor_parallelism: int
@@ -188,6 +204,70 @@ def tpu_batch_config(
         f"(microbatch_size={data_parallelism}) needs {_format_gib(minimum_microbatch_bytes)}, "
         f"but target HBM capacity is {_format_gib(capacity_bytes)}. Use a larger TPU slice, "
         "more slices, a larger batch size, or more model/context parallelism."
+    )
+
+
+def gpu_batch_config(
+    gpus_per_node: int,
+    nodes: int,
+    batch_size: int,
+    max_seqs_per_device: int,
+) -> GpuBatchConfig:
+    """Select Levanter parallelism settings for a global batch on a GPU gang.
+
+    Unlike the TPU selector, this takes a *measured* per-device sequence capacity rather
+    than estimating HBM from a model of the transformer. With only two GPU types in the
+    fleet, a capacity measured end to end — including the eval pass and the checkpoint
+    save, which are separate memory peaks from the training step — is both cheaper to
+    obtain and more trustworthy than an analytic estimate scaled by a fitted constant.
+
+    The gang is ``nodes`` machines of ``gpus_per_node`` GPUs. This requires the global
+    batch to be a multiple of the device count, which makes the data axis the full gang
+    and the tensor-parallel axis exactly 1. That is the only regime the capacity table is
+    calibrated for; anything else would engage model parallelism with an uncalibrated
+    memory profile, so it is rejected rather than guessed at.
+
+    Args:
+        gpus_per_node: GPUs on one node (8 for an H100 node, 4 for a GB200 node).
+        nodes: Gang-scheduled nodes (``ResourceConfig.replicas``).
+        batch_size: Global training batch size.
+        max_seqs_per_device: Measured sequences one GPU holds at this device count.
+
+    Returns:
+        The effective data, tensor, per-device, and gradient-accumulation parallelism.
+
+    Raises:
+        ValueError: If an input is invalid or the batch does not divide the device count.
+    """
+    if gpus_per_node <= 0:
+        raise ValueError(f"gpus_per_node must be positive, got {gpus_per_node}")
+    if nodes <= 0:
+        raise ValueError(f"nodes must be positive, got {nodes}")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    if max_seqs_per_device <= 0:
+        raise ValueError(f"max_seqs_per_device must be positive, got {max_seqs_per_device}")
+
+    devices = gpus_per_node * nodes
+    if batch_size % devices != 0:
+        raise ValueError(
+            f"batch_size ({batch_size}) must be a multiple of the {devices} GPUs in the gang "
+            f"({nodes} x {gpus_per_node}). Other batch sizes force tensor parallelism, whose "
+            "memory profile is not calibrated. Use a different batch size or node count."
+        )
+
+    seqs_per_device = batch_size // devices
+    # Largest microbatch that fits and still divides the per-device work evenly; the
+    # remainder becomes gradient accumulation.
+    per_device_parallelism = min(max_seqs_per_device, seqs_per_device)
+    while seqs_per_device % per_device_parallelism != 0:
+        per_device_parallelism -= 1
+
+    return GpuBatchConfig(
+        data_parallelism=devices,
+        tensor_parallelism=1,
+        per_device_parallelism=per_device_parallelism,
+        gradient_accumulation=seqs_per_device // per_device_parallelism,
     )
 
 

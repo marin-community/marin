@@ -146,6 +146,8 @@ def tokenized(
     sample_count: int | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
 ) -> ArtifactStep[TokenizedCache]:
     """A tokenized-dataset handle.
 
@@ -155,6 +157,11 @@ def tokenized(
     to the cache's validation split. ``sample_count`` caps the documents tokenized per shard
     (it bears identity — a sampled cache differs from the full one). ``pin`` references
     already-tokenized data at an existing location instead of recomputing it.
+
+    ``max_workers`` and ``coordinator_resources`` size the Zephyr fan-out that does the
+    tokenizing; both default to Zephyr's own choices. Set them on a cluster whose CPU pool
+    cannot absorb the default fan-out, or whose backend enforces memory limits strictly
+    enough that the default coordinator is OOM-killed (the Kubernetes/CoreWeave case).
     """
     if sum(x is not None for x in (source, paths, raw)) != 1:
         raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
@@ -162,6 +169,12 @@ def tokenized(
         raise ValueError(f"{name}: raw and glob must be given together")
 
     fmt = TextLmDatasetFormat(text_key=text_key)
+
+    fanout: dict[str, object] = {}
+    if max_workers is not None:
+        fanout["max_workers"] = max_workers
+    if coordinator_resources is not None:
+        fanout["coordinator_resources"] = coordinator_resources
 
     def build_config(ctx: StepContext) -> TokenizeConfigBase:
         if source is not None and _looks_like_hf_id(source):
@@ -172,6 +185,7 @@ def tokenized(
                 format=fmt,
                 sample_count=sample_count,
                 tags=[*tags],
+                **fanout,
             )
         if raw is not None:
             resolved = [f"{ctx.artifact_path(raw)}/{glob}"]
@@ -187,6 +201,7 @@ def tokenized(
             format=fmt,
             sample_count=sample_count,
             tags=[*tags],
+            **fanout,
         )
 
     return ArtifactStep(

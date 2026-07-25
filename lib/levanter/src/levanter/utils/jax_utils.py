@@ -377,6 +377,43 @@ def estimated_free_device_memory(device=None) -> Optional[float]:
     return total
 
 
+def device_memory_metrics() -> dict[str, float]:
+    """Per-device HBM high-water mark, as ``memory/*`` metrics for the tracker.
+
+    Reports the allocator's own accounting rather than the process's HBM reservation. Under
+    JAX's default preallocation the reservation is a fixed fraction of the device and says
+    nothing about what a run actually needs, so it cannot be used to judge how much headroom
+    a configuration has; ``peak_bytes_in_use`` can.
+
+    Returns an empty dict on backends that expose no memory stats (CPU, some TPU builds), so
+    callers can merge it unconditionally.
+    """
+    devices = jax.local_devices()
+    if not devices:
+        return {}
+
+    peaks: list[float] = []
+    in_use: list[float] = []
+    limit: Optional[float] = None
+    for device in devices:
+        stats = device.memory_stats()
+        if not stats:
+            return {}
+        peaks.append(float(stats.get("peak_bytes_in_use", 0)))
+        in_use.append(float(stats.get("bytes_in_use", 0)))
+        if limit is None and stats.get("bytes_limit") is not None:
+            limit = float(stats["bytes_limit"])
+
+    metrics = {
+        "memory/peak_bytes_in_use": max(peaks),
+        "memory/bytes_in_use": max(in_use),
+    }
+    if limit:
+        metrics["memory/bytes_limit"] = limit
+        metrics["memory/peak_fraction"] = max(peaks) / limit
+    return metrics
+
+
 def zeros_like_tree(tree: T, axis_mapping: Optional[ResourceMapping] = None, dtype: Optional[jnp.dtype] = None) -> T:
     """
     Creates a tree of zeros with the same structure as the input tree. If the input tree contains NamedArrays, then

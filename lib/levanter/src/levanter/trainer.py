@@ -71,7 +71,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import device_memory_metrics, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
@@ -512,6 +512,7 @@ class Trainer:
 
             # Log metrics from loss function and throughput metrics
             metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time()}
+            metrics_to_log.update(device_memory_metrics())
             levanter.tracker.log(metrics_to_log, step=info.step)
 
         return info

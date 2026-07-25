@@ -137,6 +137,14 @@ class TokenizeConfigBase(abc.ABC):
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
     map_task_resources: ResourceConfig | None = None
 
+    coordinator_resources: ResourceConfig | None = None
+    """Resources for the Zephyr coordinator job; ``None`` keeps Zephyr's own default.
+
+    Kubernetes backends (the CoreWeave clusters) enforce the memory request as a hard
+    cgroup limit, and the task image runs a full workspace ``uv sync`` at startup, so
+    Zephyr's small default coordinator is OOM-killed there before tokenization begins.
+    """
+
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
 
@@ -309,11 +317,15 @@ def _run_split(
         levanter_batch_size=config.levanter_batch_size,
     )
 
+    coordinator_kwargs = (
+        {"coordinator_resources": config.coordinator_resources} if config.coordinator_resources is not None else {}
+    )
     ctx = ZephyrContext(
         resources=config.worker_resources,
         map_task_resources=config.map_task_resources,
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
+        **coordinator_kwargs,
     )
     # Broadcast tokenizer config to workers. We send name + backend rather than
     # the tokenizer object because not all backends support pickling.
