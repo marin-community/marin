@@ -56,6 +56,15 @@ A distinct request, answer, program, article, fact, or API method counts even
 when large wrappers, navigation, schemas, catalogs, licenses, generated IR, or
 formatting are shared. Write "NONE" only when no such content exists.
 
+Use these audit boundaries:
+- Different user requests and tool calls are distinct training examples even
+  when their function-schema catalogs overlap.
+- Different source programs and API methods are distinct even when generated
+  IR or documentation navigation overlaps.
+- Incoherent SEO, college, or career spam with the same sentence scaffold and
+  only institutions, locations, jobs, or programs substituted is one low-value
+  template. Those slot substitutions are not substantive facts.
+
 Then set deletion_loses_substantive_content to true exactly when deleting MEMBER
 would lose distinct substantive content. Set it to false only when MEMBER is the
 same document, a truncated copy whose content is all represented by CANONICAL,
