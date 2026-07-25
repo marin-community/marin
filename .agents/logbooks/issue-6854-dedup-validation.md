@@ -671,3 +671,21 @@ statistics for performance comparisons.
   on node `gb976f0`; inference continued throughout. Monitoring now uses the
   Kubernetes API as the primary liveness path and Iris logs as a secondary
   signal.
+
+### 2026-07-25T10:18:00Z — second checkpoint verified
+
+- Partition p0 completed decision file 0 semantic range 0:128 and advanced to
+  range 128:256. All 128 baseline pairs resolved: 119 false positives and 9
+  true duplicates. The batch contained 102 direct pairs and 26 chunked pairs,
+  expanding to 1,296 review units.
+- The batch produced 2,592 initial judgments and 300 targeted tiebreaks. All
+  2,892 judgments were valid on their first response; there were no retries or
+  invalid structured outputs. A separate root-task process verified the
+  686,085-byte Parquet object, ordered identity hash, all manifest counters,
+  and configuration hash. Outcome SHA-256:
+  `d35eaa5ca70ffe28af64d8673a79724628470b698c188e4ac8266dd3394c2ba6`.
+- The earlier p3 checkpoint contains 111 baseline false positives and 17 true
+  duplicates. Its 86 requests beyond the 1,578 initial judgments were all
+  targeted tiebreaks, with zero retries and zero invalid outputs. Across the
+  first 256 durable pairs, semantic review has classified 230 false positives
+  and 26 true duplicates, with no unresolved pair.
