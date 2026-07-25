@@ -261,7 +261,10 @@ class ShortConv(eqx.Module):
     @staticmethod
     def init(channels: int, kernel_size: int) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
-        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
+        # SCALE_SCONV_SHARD: FSDP-shard the channel dim over data so the grad reduce-scatters
+        # (coalesced) instead of a standalone replicated all-reduce; forward gathers the weight.
+        spec = P(None, "data") if os.environ.get("SCALE_SCONV_SHARD") == "1" else P(None, None)
+        return ShortConv(weight=reshard(weight, spec), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # Depthwise causal shift-and-sum. When segment_ids are given (packed documents), a tap that
