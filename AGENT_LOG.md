@@ -32,3 +32,31 @@ with loss parity. Baselines (d4, 350-step g=1): drop series 0.885(5)/0.271(60)/0
 
 Confidence: 4/10 that g=0.5 reaches <3% steady-state drops
 Next: build arm 2 (SCALE_QB_INTEGRAL) + CPU test while arm 1 runs; babysit arm 1.
+
+## Check-in 2026-07-25 21:12 UTC — arm 2 built, CPU tests green, EP4 smoke submitted
+
+- ARM 1 (/mwittmann/ep25d3-qbg05-cf100-350-v1-20260725) running, 9 min in (setup/compile
+  phase). No intervention needed.
+- ARM 2 IMPLEMENTED (commit 3f10dcc6a): SCALE_QB_INTEGRAL=<gamma> env gate.
+  model.py::_compute_qb_loads ships per-expert biased-top-k assignment counts (psum over
+  the batch axes — same single f32 [num_experts] reduce per layer as the quantile pmean;
+  scatter-add replaces top_k). train.py: extracted _next_qb_betas helper (stock replacement
+  / SCALE_QB_GAIN blend / integral accumulation); integral rule is
+  pending += gamma * sign(load - mean_load), which under bias=-center(beta) is exactly
+  DSv3's bias_i += gamma * sign(mean_load - load_i) up to common-mode (absorbed by
+  centering). Stock path byte-identical when env off (helper returns measured unchanged).
+- CPU TESTS PASS (4/4 in experiments/grug/moe/test_model.py): rule math + DSv3 bias
+  direction (overloaded expert's applied bias goes down), EP8-subprocess bincount parity
+  for _compute_qb_loads, and forward identity (routed output bitwise identical with the
+  integral gate on; loads match the biased top-k bincount). pyrefly clean.
+- EP4 SMOKE SUBMITTED: /mwittmann/ep25d3-qbint-smoke-ep4-20260725 (1 replica/4 GPUs, EP4,
+  e256 top8 d2048 L4 b64, 20 steps, gamma=0.001). Verify: sentinel "QB integral rule
+  active", loss descends, drops computed.
+- Design note for the verdict: gamma=0.001 moves biases at most 0.35 over 350 steps.
+  DSv3's rule works over 100k+ steps by preventing drift, not reversing collapse; at this
+  horizon the integral arm discriminates "can fixed-step integral control hold/gain ground
+  vs the g=1 trajectory", not "does it converge". If it shows directional movement without
+  reaching 3%, arm 3 = gamma sweep point (e.g. 0.01) is the tuned follow-up per the brief.
+
+Confidence: 4/10 g=0.5, 3/10 integral (gamma horizon concern above)
+Next: babysit smoke (~15 min) + arm 1; harvest smoke; arm 1 series at ~22:30.
