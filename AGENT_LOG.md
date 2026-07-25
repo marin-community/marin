@@ -637,5 +637,27 @@ Confidence: 5/10.
 
 Confidence: 4/10 (memory squeeze on both sides narrows the path).
 
-Next: control@0.85 v4.
+## Check-in 2026-07-25 ~13:15 UTC — on-device save dead at all fractions; offload variant built
+
+- **control@0.85 also NCCL-OOMs** (`Cuda failure 2 'out of memory'` at clique init,
+  then 35-min silence = zombie). The windows do not overlap: treatment needs arena
+  ≥ ~156 GiB (fraction ≥0.84); EP64 NCCL needs non-XLA headroom ≥ ~35 GiB (fraction
+  ≤~0.82). **On-device (o,lse) save cannot run at the EP64 operating point at any
+  mem fraction.** Job mutation: stopped the zombie v4 myself (own submission,
+  authorized) — `/mwittmann/ep25d3-fa4lse-ctl-m85-120-v4-20260725` terminated to
+  free the rack.
+- **Fallback built**: `SCALE_FA4_LSE_OFFLOAD=1` → policy
+  `save_and_offload_only_these_names(FA4_LSE_SAVE_NAMES, src=device,
+  dst=pinned_host)` — the saved (o,lse) go to Grace DRAM (~900 GB/s C2G; ~36 ms
+  transfer vs ~880 ms kernel re-run) leaving HBM at control levels, so the A/B runs
+  at the baseline 0.75 fraction. Committed; offload smoke in flight
+  (`/mwittmann/ep25d3-fa4lse-offload-smoke-20260725`).
+- A/B plan: control@0.75 already measured TWICE today (20.543% morning draw,
+  20.368% afternoon draw) — plus I'll run a fresh back-to-back control@0.75 if the
+  coordinator wants same-session draws; treatment = offload@0.75.
+
+Confidence: 5/10 (offload API exists and builds; transfer-vs-rerun math favors it
+36 ms vs ~880 ms; risk is policy×shard_map×scan interaction surprises).
+
+Next: offload smoke → treatment leg.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
