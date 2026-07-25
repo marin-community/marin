@@ -126,6 +126,10 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
         select_tensor_parallel_size,
     )
 
+    # Pin the requested id as the served name before weights is overwritten with the
+    # resolved cache path; otherwise model_id collapses to the path and vLLM advertises
+    # (and only answers to) that path instead of the id the caller asked to serve.
+    api_model = model.model_id
     weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
@@ -133,7 +137,12 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     if tensor_parallel_size is None:
         num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
-    return replace(model, weights=weights, revision=revision, tensor_parallel_size=tensor_parallel_size), num_chips
+    return (
+        replace(
+            model, weights=weights, api_model=api_model, revision=revision, tensor_parallel_size=tensor_parallel_size
+        ),
+        num_chips,
+    )
 
 
 @contextlib.contextmanager
