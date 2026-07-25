@@ -507,5 +507,38 @@ Est +~1pp, composes with all comm work. Escape hatch: if LSE isn't exposed throu
 the FFI/cutlass_call and needs >2 focused CuTe DSL surgery attempts, report a scoping
 assessment instead.
 
-Next: read scoping comment 4984144891, fresh branch agent/ep25-d3-fa4lse off fe21ea495,
-locate the fa4 cute integration + remat recompute structure.
+## Check-in 2026-07-25 ~06:45 UTC — 6a design + implementation
+
+Key finding from code read: **no CuTe DSL surgery needed** — the FA4 FFI already
+returns `(out, lse)` (`segmented_flash_attention_forward`), and the existing
+custom_vjp already saves lse in residuals. The backward re-run happens because
+`eqx.filter_checkpoint(layer, policy=None)` (remat_mode=recompute_all,
+experiments/grug/moe/model.py:664) rematerializes the whole block — including the
+custom_vjp fwd = the attention kernel. Scoping comment's recipe applies cleanly:
+emit lse as a primal + name-save (o, lse) so the block remat keeps them.
+
+Implementation (committed 2973d6d07, branch agent/ep25-d3-fa4lse off fe21ea495):
+- `_fa4_cute_backend.py`: `SCALE_FA4_LSE_SAVE=1` path — raw FFI forward →
+  `tree_checkpoint_name(out, "grug_fa4_attn_out")` + `(lse, "grug_fa4_lse")` →
+  `_fa4_saved_primals_custom_vjp` (identity fwd over saved tensors, residuals =
+  (q,k,v,out,lse,lb,valid), bwd = same backward kernel). Default path untouched.
+- `experiments/grug/moe/model.py`: under the env, recompute_all's policy becomes
+  `save_only_these_names(*FA4_LSE_SAVE_NAMES)` (save (o,lse), recompute the rest).
+- Parity test `test_real_gpu_fa4_lse_save_path_matches_default_path`: out + dq/dk/dv
+  vs default path at 2e-3 (same kernels), lse vs reference logsumexp at 7e-2.
+- 4 pre-existing CPU-test failures in test_fa4_cute_attention.py confirmed on the
+  pristine base (mesh-context env issue, not mine).
+
+Memory math (the risk): saving (o+lse)×48 layers at the EP64 shape = 65536 tok/GPU
+× (40×128×2B + 40×4B) × 48 ≈ **+32.7 GiB** of live activations (comment's +9 GiB was
+d2560). Baseline peak unknown; at 0.90 arena (167 GiB) this may OOM → that outcome
+is itself the verdict (win doesn't clear its memory cost). Fallback if close:
+offload-policy variant (name-save with host offload over Grace C2G ~900 GB/s:
+~36 ms vs ~880 ms re-run) — noted, not built.
+
+Confidence: 5/10 (mechanism is real and cheap to test; the memory cost is the
+swing factor — the comment's est is +~1pp).
+
+Next: GPU parity-test job (1 replica), then 1-replica training smoke, then the
+120-step A/B (control already measured this morning: 20.543% p50 — will re-run
+back-to-back anyway per protocol).
