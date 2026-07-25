@@ -122,6 +122,7 @@ KUEUE_UNADMITTED_MSG = (
     "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
     'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
 )
+SINGLETON_POD_UID = "pod-uid"
 
 
 def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
@@ -143,7 +144,7 @@ def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
     }
 
 
-def singleton_gated_pod(name: str = "iris-job-0-0", uid: str = "pod-uid") -> dict:
+def singleton_gated_pod(name: str = "iris-job-0-0", uid: str = SINGLETON_POD_UID) -> dict:
     """A Kueue-managed singleton Pod, which has no pod-group label."""
     pod = gated_pod(name=name)
     pod["metadata"] = {
@@ -165,7 +166,7 @@ def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -
 
 def singleton_unadmitted_workload(
     pod_name: str = "iris-job-0-0",
-    pod_uid: str = "pod-uid",
+    pod_uid: str = SINGLETON_POD_UID,
     msg: str = KUEUE_UNADMITTED_MSG,
 ) -> dict:
     """The auto-generated Workload owned by one Kueue-managed Pod."""

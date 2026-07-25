@@ -1332,11 +1332,10 @@ def build_job_summary(
     job_status: job_pb2.JobStatus,
     tasks: list[job_pb2.TaskStatus],
 ) -> dict:
-    """Build a structured job/task summary (CLI + test entry point).
+    """Build a structured job/task summary for CLI rendering.
 
-    Returns a dict with job-level fields and a per-task list including
-    peak memory, final state, exit code, duration, and backend diagnostic.
-    Pure function over protos, with no RPC calls.
+    Returns job-level fields and per-task peak memory, final state, exit code,
+    duration, and backend diagnostic.
     """
     task_summaries = []
 

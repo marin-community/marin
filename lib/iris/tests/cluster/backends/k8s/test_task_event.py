@@ -152,10 +152,7 @@ def test_event_log_retain_forgets_gone_attempts():
 # --- end-to-end through sync() -------------------------------------------------
 
 
-def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
-    """Seed a SchedulingGated, Kueue-unadmitted pod + its Workload, discoverable by sync()."""
-    pod_group = _pod_group_name(task_id, attempt_id)
-    pod = gated_pod(name=_pod_name(task_id, attempt_id), pod_group=pod_group)
+def _seed_gated_resources(k8s, task_id: JobName, attempt_id: int, pod: dict, workload: dict) -> None:
     pod["kind"] = "Pod"
     pod["metadata"]["labels"].update(
         {
@@ -166,24 +163,21 @@ def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
         }
     )
     k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
-    k8s.seed_resource(K8sResource.WORKLOADS, pod_group, unadmitted_workload(pod_group))
+    k8s.seed_resource(K8sResource.WORKLOADS, workload["metadata"]["name"], workload)
+
+
+def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
+    """Seed a SchedulingGated, Kueue-unadmitted pod + its Workload, discoverable by sync()."""
+    pod_group = _pod_group_name(task_id, attempt_id)
+    pod = gated_pod(name=_pod_name(task_id, attempt_id), pod_group=pod_group)
+    _seed_gated_resources(k8s, task_id, attempt_id, pod, unadmitted_workload(pod_group))
 
 
 def _seed_singleton_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
     """Seed the Pod-owned Workload shape Kueue creates for a non-gang task."""
     pod = singleton_gated_pod(name=_pod_name(task_id, attempt_id))
-    pod["kind"] = "Pod"
-    pod["metadata"]["labels"].update(
-        {
-            _LABEL_MANAGED: "true",
-            _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
-            _LABEL_ATTEMPT_ID: str(attempt_id),
-        }
-    )
     workload = singleton_unadmitted_workload(pod_name=pod["metadata"]["name"], pod_uid=pod["metadata"]["uid"])
-    k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
-    k8s.seed_resource(K8sResource.WORKLOADS, workload["metadata"]["name"], workload)
+    _seed_gated_resources(k8s, task_id, attempt_id, pod, workload)
 
 
 def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
