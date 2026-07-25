@@ -43,31 +43,35 @@ jobs:
   # the deps stage COPYs the root uv.lock and every workspace member's
   # pyproject.toml (plus lib/rigging source), all of which live above lib/iris.
   #
-  # Each arch builds on a native runner and pushes an arch-suffixed tag; the
-  # iris-manifests job then merges those into one multi-arch tag. CoreWeave GB200
-  # nodes are aarch64 (Grace), so an amd64-only image fails there with "exec
-  # format error". Native runners rather than QEMU: these images build a full
-  # Python dep tree from source, which emulation makes untenably slow.
+  # The controller is pinned to amd64, and Kubernetes does not run the worker
+  # image. Only task pods need arm64 for CoreWeave GB200 Grace nodes. Each build
+  # uses a native runner and pushes an arch-suffixed tag; iris-manifests then
+  # publishes the final tags without QEMU builds.
   iris-images:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     needs: iris-tags
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image:
+        include:
           - name: iris-worker
             target: worker
+            arch: amd64
+            runner: ubuntu-latest
           - name: iris-controller
             target: controller
+            arch: amd64
+            runner: ubuntu-latest
           - name: iris-task
             target: task
-        platform:
-          - arch: amd64
+            arch: amd64
             runner: ubuntu-latest
-          - arch: arm64
+          - name: iris-task
+            target: task
+            arch: arm64
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
@@ -83,17 +87,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+      - name: Build and push ${{ matrix.name }} (${{ matrix.arch }})
         run: |
           docker buildx build --file lib/iris/Dockerfile \
-            --target ${{ matrix.image.target }} \
-            --platform linux/${{ matrix.platform.arch }} \
-            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.image.target }}-${{ matrix.platform.arch }} \
-            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.image.target }}-${{ matrix.platform.arch }},mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
+            --target ${{ matrix.target }} \
+            --platform linux/${{ matrix.arch }} \
+            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }}-${{ matrix.arch }} \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }}-${{ matrix.arch }},mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
             --output type=image,compression=zstd,compression-level=3,push=true \
             --provenance=false \
             --build-arg IRIS_GIT_HASH=${{ needs.iris-tags.outputs.hash }} \
-            --tag ghcr.io/marin-community/${{ matrix.image.name }}:${{ needs.iris-tags.outputs.hash }}-${{ matrix.platform.arch }} \
+            --tag ghcr.io/marin-community/${{ matrix.name }}:${{ needs.iris-tags.outputs.hash }}-${{ matrix.arch }} \
             .
 
   # Merge the per-arch tags into the multi-arch tags that clusters actually pull.
@@ -120,12 +124,15 @@ jobs:
           DATE_TAG: ${{ needs.iris-tags.outputs.date }}
           HASH_TAG: ${{ needs.iris-tags.outputs.hash }}
         run: |
+          SOURCES=("$IMAGE:$HASH_TAG-amd64")
+          if [[ "$IMAGE" == "ghcr.io/marin-community/iris-task" ]]; then
+            SOURCES+=("$IMAGE:$HASH_TAG-arm64")
+          fi
           docker buildx imagetools create \
             --tag "$IMAGE:latest" \
             --tag "$IMAGE:$DATE_TAG" \
             --tag "$IMAGE:$HASH_TAG" \
-            "$IMAGE:$HASH_TAG-amd64" \
-            "$IMAGE:$HASH_TAG-arm64"
+            "${SOURCES[@]}"
 
   # Finelog Image - Standalone log server (lib/finelog)
   finelog-image:
