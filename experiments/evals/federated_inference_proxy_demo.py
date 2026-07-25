@@ -45,6 +45,8 @@ def _redacted_url(url: str) -> str:
     segments = parsed.path.split("/")
     if "t" in segments:
         token_index = segments.index("t") + 1
+        if segments[token_index].startswith("cluster="):
+            token_index += 1
         segments[token_index] = "<redacted>"
     return urlunsplit((parsed.scheme, parsed.netloc, "/".join(segments), "", ""))
 

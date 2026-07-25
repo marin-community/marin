@@ -42,6 +42,7 @@ from marin.inference.types import (
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
+from experiments.evals.federated_inference_proxy_demo import _redacted_url
 from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
@@ -50,6 +51,23 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://iris.example/proxy/t/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/<redacted>/serve.inference/v1",
+        ),
+        (
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/<redacted>/serve.inference/v1",
+        ),
+    ],
+)
+def test_capability_url_redaction(url: str, expected: str) -> None:
+    assert _redacted_url(url) == expected
 
 
 def _json_bytes(payload: object) -> bytes:
