@@ -3,7 +3,9 @@
 
 import itertools
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime
+from html.parser import HTMLParser
 
 import pytest
 from prometheus_client.core import Metric
@@ -71,6 +73,46 @@ class _StaticCollector:
         yield self.metric
 
 
+@dataclass(frozen=True)
+class _MetricRow:
+    cells: tuple[str, ...]
+    titles: tuple[str, ...]
+
+
+class _MetricTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[_MetricRow] = []
+        self._cells: list[str] | None = None
+        self._cell_text: list[str] | None = None
+        self._titles: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._cells = []
+            self._titles = []
+        elif tag == "td" and self._cells is not None:
+            self._cell_text = []
+
+        if self._cells is not None:
+            attributes = dict(attrs)
+            if title := attributes.get("title"):
+                self._titles.append(title)
+
+    def handle_data(self, data: str) -> None:
+        if self._cell_text is not None:
+            self._cell_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "td" and self._cells is not None and self._cell_text is not None:
+            self._cells.append("".join(self._cell_text))
+            self._cell_text = None
+        elif tag == "tr":
+            if self._cells:
+                self.rows.append(_MetricRow(cells=tuple(self._cells), titles=tuple(self._titles)))
+            self._cells = None
+
+
 @pytest.fixture
 def publish_metric():
     collectors: list[_StaticCollector] = []
@@ -92,20 +134,14 @@ def _one(name: str, rows: list[telltale.TelltaleMetric]) -> telltale.TelltaleMet
     return matching[0]
 
 
-def _metric_row(body: str, name: str) -> str:
+def _metric_row(body: str, name: str) -> _MetricRow:
     return _metric_rows(body, name)[0]
 
 
-def _metric_rows(body: str, name: str) -> list[str]:
-    cell = f"<td>{name}</td>"
-    rows = []
-    start = 0
-    while (cell_start := body.find(cell, start)) >= 0:
-        row_start = body.rindex("<tr>", 0, cell_start)
-        row_end = body.index("</tr>", cell_start) + len("</tr>")
-        rows.append(body[row_start:row_end])
-        start = row_end
-    return rows
+def _metric_rows(body: str, name: str) -> list[_MetricRow]:
+    parser = _MetricTableParser()
+    parser.feed(body)
+    return [row for row in parser.rows if row.cells[0] == name]
 
 
 def test_counter_is_get_or_create(name):
@@ -215,17 +251,17 @@ def test_index_compacts_a_histogram_into_interval_buckets(name, client, publish_
     body = client.get("/").text
     row = _metric_row(body, name)
 
-    assert f"{name}_bucket" not in body
-    assert f"{name}_count" not in body
-    assert f"{name}_sum" not in body
-    assert f"{name}_created" not in body
-    assert "<td>engine=4</td>" in row
-    assert "n=3" in row
-    assert "avg=2" in row
-    assert 'title="≤ 1: 2"' in row
-    assert 'title="(1, 2]: 0"' in row
-    assert 'title="(2, 10]: 1"' in row
-    assert 'title="(10, +Inf]: 0"' in row
+    parser = _MetricTableParser()
+    parser.feed(body)
+    rendered_names = {candidate.cells[0] for candidate in parser.rows}
+    assert f"{name}_bucket" not in rendered_names
+    assert f"{name}_count" not in rendered_names
+    assert f"{name}_sum" not in rendered_names
+    assert f"{name}_created" not in rendered_names
+    assert row.cells[2] == "engine=4"
+    assert "n=3" in row.cells[3]
+    assert "avg=2" in row.cells[3]
+    assert row.titles == ("≤ 1: 2", "(1, 2]: 0", "(2, 10]: 1", "(10, +Inf]: 0")
 
 
 def test_index_keeps_histogram_label_sets_as_separate_rows(name, client, publish_metric):
@@ -238,10 +274,10 @@ def test_index_keeps_histogram_label_sets_as_separate_rows(name, client, publish
     publish_metric(metric)
 
     body = client.get("/").text
+    rows = _metric_rows(body, name)
 
-    assert body.count(f"<td>{name}</td>") == 2
-    assert "engine=3" in body
-    assert "engine=4" in body
+    assert len(rows) == 2
+    assert {row.cells[2] for row in rows} == {"engine=3", "engine=4"}
 
 
 def test_index_uses_count_and_infinite_bucket_fallbacks(name, client, publish_metric):
@@ -263,17 +299,17 @@ def test_index_uses_count_and_infinite_bucket_fallbacks(name, client, publish_me
     publish_metric(metric)
 
     body = client.get("/").text
-    rows = {row.split("mode=", 1)[1].split("<", 1)[0]: row for row in _metric_rows(body, name)}
+    rows = {row.cells[2].removeprefix("mode="): row for row in _metric_rows(body, name)}
 
-    assert "n=3" in rows["count-fallback"]
-    assert "avg=2" in rows["count-fallback"]
-    assert 'title="(1, +Inf]: 1"' in rows["count-fallback"]
-    assert "n=5" in rows["overflow"]
-    assert 'title="(2, +Inf]: 2"' in rows["overflow"]
-    assert "truncated" in rows["truncated"]
-    assert "n=" not in rows["truncated"]
-    assert "n=0" in rows["empty"]
-    assert "avg=" not in rows["empty"]
+    assert "n=3" in rows["count-fallback"].cells[3]
+    assert "avg=2" in rows["count-fallback"].cells[3]
+    assert "(1, +Inf]: 1" in rows["count-fallback"].titles
+    assert "n=5" in rows["overflow"].cells[3]
+    assert "(2, +Inf]: 2" in rows["overflow"].titles
+    assert "truncated" in rows["truncated"].cells[3]
+    assert "n=" not in rows["truncated"].cells[3]
+    assert "n=0" in rows["empty"].cells[3]
+    assert "avg=" not in rows["empty"].cells[3]
 
 
 @pytest.mark.parametrize(
@@ -296,8 +332,8 @@ def test_index_marks_invalid_histograms_malformed(name, client, publish_metric, 
 
     row = _metric_row(client.get("/").text, name)
 
-    assert "malformed histogram" in row
-    assert "histogram-spark" not in row
+    assert row.cells[3] == "malformed histogram"
+    assert row.titles == ()
 
 
 def test_index_escapes_status_html(client):
