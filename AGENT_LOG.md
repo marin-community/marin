@@ -353,3 +353,48 @@ uncertainty.
 
 Next: stop for coordinator execution of the relay ladder. Do not submit the EP4
 or rack jobs unless the preceding numerical/drop-parity gate passes.
+
+## Check-in 2026-07-25 22:08 UTC
+
+Findings:
+
+- The relayed numerical job failed before executing its comparisons:
+  CUTLASS DSL's libNVVM backend could not compile generated device IR for
+  `sm_100a`. The frozen bundle export installed both the CUDA 12 and CUDA 13
+  CUTLASS DSL payloads.
+- The 7282 branches solve the 4.5.2 form of this problem by forcing
+  `nvidia-cutlass-dsl-libs-base` inactive. Main now uses CUTLASS DSL 4.6.0,
+  where base/core are shared and the default CUDA payload moved to
+  `libs-cu12`. The version-equivalent fix therefore forces
+  `nvidia-cutlass-dsl-libs-cu12==4.6.0` inactive and retains base/core/cu13.
+- `uv lock --check --offline` resolves 608 packages. A frozen
+  `marin-levanter[gpu]` export now contains CUTLASS DSL 4.6.0 plus
+  `libs-base`, `libs-core`, and `libs-cu13`; `libs-cu12` is absent.
+- The vendored kernel bodies match the final uniform-MXFP8 branch apart from
+  file-level Ruff exclusions. The adapter already contains `4876d9670`'s
+  generic-to-gmem pointer normalization, so no additional addrspace source
+  change was needed.
+- The final requested CPU regression reports 51 passed and 6 skipped in 37.47
+  seconds.
+- `EP25_D2_RELAY_COMMANDS.md` contains the corrected five-job ladder with fresh
+  `-v2` names and a fresh `ep25d2-mxfp8-r6-v2-dev` training bundle version.
+  No job was submitted from this sandbox.
+- The linked-worktree Git index is still read-only:
+  `/home/marin/projects/marin/.git/worktrees/ep25-d2-bakeoff/index.lock`
+  cannot be created. The coordinator must commit exactly:
+
+```text
+AGENT_LOG.md
+EP25_D2_RELAY_COMMANDS.md
+docs/debug-log-ep25-mxfp8-cutlass-env.md
+pyproject.toml
+uv.lock
+```
+
+Confidence: 9/10 that the shipped environment now selects the CUDA 13 CUTLASS
+compiler deterministically; 7/10 that the corrected environment clears the
+GB200 compiler gate, pending the `-v2` numerical relay.
+
+Next: stop for coordinator execution of
+`ep25d2-mxfp8-numerics-20260725-v2`. Do not submit the EP4 or rack jobs unless
+the preceding numerical/drop-parity gate passes.

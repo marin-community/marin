@@ -231,6 +231,7 @@ overrides = [
     { name = "multipart", specifier = ">=1.3.1" },
     { name = "nltk", specifier = ">=3.9.4" },
     { name = "notebook", specifier = ">=7.5.6" },
+    { name = "nvidia-cutlass-dsl-libs-cu12", marker = "sys_platform == 'never'", specifier = "==4.6.0" },
     { name = "omegaconf", specifier = ">=2.4.0.dev4" },
     { name = "orjson", specifier = ">=3.11.9" },
     { name = "pillow", specifier = ">=12.2.0" },
@@ -6717,7 +6718,7 @@ version = "4.6.0"
 source = { registry = "https://pypi.nvidia.com/" }
 dependencies = [
     { name = "nvidia-cutlass-dsl-libs-base", marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
-    { name = "nvidia-cutlass-dsl-libs-cu12", marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
+    { name = "nvidia-cutlass-dsl-libs-cu12", marker = "(sys_platform == 'never' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
 wheels = [
     { url = "https://pypi.nvidia.com/nvidia-cutlass-dsl/nvidia_cutlass_dsl-4.6.0-py3-none-any.whl", hash = "sha256:e3e0e4d8df20d82c8401fa013f4d82021f41daa5fca3d24b55d4a677f2308ca8" },

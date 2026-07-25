@@ -5,8 +5,8 @@ Run these commands from
 Do not advance to the next stage until the current jobs are terminal and their
 logs have been checked. All training jobs use the stock Marin toolchain.
 
-If setup fails before user code starts, resubmit the exact command with `-v2`
-appended to the job name, `RUN_ID`, and JSON logger name.
+If setup fails before user code starts, resubmit the exact command with a fresh
+`-vN` suffix on the job name, `RUN_ID`, and JSON logger name.
 
 ## 1. GB200 numerical ladder
 
@@ -19,11 +19,11 @@ ep25_pythonpath=$(find "$PWD/lib" -mindepth 2 -maxdepth 2 -type d -name src -pri
 env IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   .venv/bin/iris --cluster=marin job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
-  --job-name ep25d2-mxfp8-numerics-20260725 \
+  --job-name ep25d2-mxfp8-numerics-20260725-v2 \
   --enable-extra-resources --gpu GB200x1 --cpu 16 --memory 96GB \
   --extra gpu \
   -- python experiments/grug/moe/standalone/check_mxfp8_expert_mlp.py \
-  --out /tmp/ep25d2-mxfp8-numerics-20260725.json
+  --out /tmp/ep25d2-mxfp8-numerics-20260725-v2.json
 ```
 
 Gate: the job must exit zero, all reported relative Frobenius errors must be
@@ -42,8 +42,8 @@ ep25_pythonpath=$(find "$PWD/lib" -mindepth 2 -maxdepth 2 -type d -name src -pri
 env -u SCALE_MOE_MXFP8 IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   .venv/bin/iris --cluster=marin job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
-  --job-name ep25d2-mxfp8-ep4-bf16-20260725 \
-  -e RUN_ID ep25d2-mxfp8-ep4-bf16-20260725 \
+  --job-name ep25d2-mxfp8-ep4-bf16-20260725-v2 \
+  -e RUN_ID ep25d2-mxfp8-ep4-bf16-20260725-v2 \
   -e SCALE_ATTN_IMPL gpu_fa4_cute \
   -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 1 \
@@ -57,10 +57,10 @@ env -u SCALE_MOE_MXFP8 IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
   -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER ep25d2-mxfp8-ep4-bf16-20260725.metrics \
+  -e SCALE_JSON_LOGGER ep25d2-mxfp8-ep4-bf16-20260725-v2.metrics \
   -e SCALE_REPORT_DROPS 1 -e SCALE_DISABLE_CHECKPOINT 1 \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version ep25d2-mxfp8-r6-dev --run
+  --version ep25d2-mxfp8-r6-v2-dev --run
 ```
 
 ### MXFP8 treatment
@@ -70,8 +70,8 @@ ep25_pythonpath=$(find "$PWD/lib" -mindepth 2 -maxdepth 2 -type d -name src -pri
 env IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   .venv/bin/iris --cluster=marin job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
-  --job-name ep25d2-mxfp8-ep4-treatment-20260725 \
-  -e RUN_ID ep25d2-mxfp8-ep4-treatment-20260725 \
+  --job-name ep25d2-mxfp8-ep4-treatment-20260725-v2 \
+  -e RUN_ID ep25d2-mxfp8-ep4-treatment-20260725-v2 \
   -e SCALE_ATTN_IMPL gpu_fa4_cute \
   -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 1 \
@@ -86,10 +86,10 @@ env IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
   -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER ep25d2-mxfp8-ep4-treatment-20260725.metrics \
+  -e SCALE_JSON_LOGGER ep25d2-mxfp8-ep4-treatment-20260725-v2.metrics \
   -e SCALE_REPORT_DROPS 1 -e SCALE_DISABLE_CHECKPOINT 1 \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version ep25d2-mxfp8-r6-dev --run
+  --version ep25d2-mxfp8-r6-v2-dev --run
 ```
 
 Gate: both jobs must exit zero and report identical dropped-assignment counts at
@@ -112,8 +112,8 @@ ep25_pythonpath=$(find "$PWD/lib" -mindepth 2 -maxdepth 2 -type d -name src -pri
 env -u SCALE_MOE_MXFP8 IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   .venv/bin/iris --cluster=marin job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
-  --job-name ep25d2-mxfp8-rack-bf16-120-20260725 \
-  -e RUN_ID ep25d2-mxfp8-rack-bf16-120-20260725 \
+  --job-name ep25d2-mxfp8-rack-bf16-120-20260725-v2 \
+  -e RUN_ID ep25d2-mxfp8-rack-bf16-120-20260725-v2 \
   -e SCALE_ATTN_IMPL gpu_fa4_cute \
   -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
@@ -127,10 +127,10 @@ env -u SCALE_MOE_MXFP8 IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
   -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER ep25d2-mxfp8-rack-bf16-120-20260725.metrics \
+  -e SCALE_JSON_LOGGER ep25d2-mxfp8-rack-bf16-120-20260725-v2.metrics \
   -e SCALE_REPORT_DROPS 1 -e SCALE_DISABLE_CHECKPOINT 1 \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version ep25d2-mxfp8-r6-dev --run
+  --version ep25d2-mxfp8-r6-v2-dev --run
 ```
 
 ### MXFP8 treatment
@@ -140,8 +140,8 @@ ep25_pythonpath=$(find "$PWD/lib" -mindepth 2 -maxdepth 2 -type d -name src -pri
 env IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   .venv/bin/iris --cluster=marin job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
-  --job-name ep25d2-mxfp8-rack-treatment-120-20260725 \
-  -e RUN_ID ep25d2-mxfp8-rack-treatment-120-20260725 \
+  --job-name ep25d2-mxfp8-rack-treatment-120-20260725-v2 \
+  -e RUN_ID ep25d2-mxfp8-rack-treatment-120-20260725-v2 \
   -e SCALE_ATTN_IMPL gpu_fa4_cute \
   -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 16 \
@@ -156,10 +156,10 @@ env IRIS_USER=mwittmann PYTHONPATH="$ep25_pythonpath:$PWD" \
   -e SCALE_OPTIMIZER muonh -e SCALE_MUON_SYRK 1 \
   -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all \
   -e SCALE_TRACKER json_logger \
-  -e SCALE_JSON_LOGGER ep25d2-mxfp8-rack-treatment-120-20260725.metrics \
+  -e SCALE_JSON_LOGGER ep25d2-mxfp8-rack-treatment-120-20260725-v2.metrics \
   -e SCALE_REPORT_DROPS 1 -e SCALE_DISABLE_CHECKPOINT 1 \
   -- python -m experiments.grug.moe.launch_cw_scale \
-  --version ep25d2-mxfp8-r6-dev --run
+  --version ep25d2-mxfp8-r6-v2-dev --run
 ```
 
 Report p50 MFU from matched steady-state steps, per-step and final drop parity,
