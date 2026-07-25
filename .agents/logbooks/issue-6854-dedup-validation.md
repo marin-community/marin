@@ -903,3 +903,59 @@ statistics for performance comparisons.
   verified every manual record's review key, member/canonical SHA-256 values,
   and semantic `judgments_json` SHA-256, leaving no unresolved record without
   exactly one manual decision.
+
+### 2026-07-25T13:05:00Z — 10,726 pairs verified; treatment ambiguities resolved
+
+- Five new checkpoints passed independent validation: 614 pairs, 450 false
+  positives, 158 true duplicates, and six unresolved model outcomes. The
+  1,287 request attempts include 39 invalid JSON responses and 27 retries.
+  Invalid responses were concentrated in LaTeX-heavy SFT pairs whose generated
+  JSON strings contained unescaped control sequences.
+- Complete character-level comparison resolves five SFT pairs as true
+  duplicates. Each full document is otherwise identical; the only two changed
+  spans insert or delete `\text{` and its closing `}` around the same boxed
+  answer. The three treatment pair locations, member/canonical text SHA-256,
+  and character-similarity ratios are:
+
+  - `part-00000-of-00128.parquet:9024`,
+    `350033bc27ec34d106098fc791e62caadc3f7d97c43808467e2792b39cffd035` /
+    `e2fd0621676f407acb75c4e4fdd10eafb5b33e8af63f1220eaca895c4a3f1d94`,
+    0.999772;
+  - `part-00000-of-00128.parquet:9025`,
+    `aeb80c298bd417cecd04a85a467612f5dd871c39b06f508da08ba564c948edc7` /
+    `b66a89567986730f7598ef6f2bef5cb36e8be997cd56b2d00b7bfb3c2e5e9597`,
+    0.999842;
+  - `part-00000-of-00128.parquet:9026`,
+    `b6781fc424cdbf7ff4e887b2c788631bbf84eaa787b6d3e4128041727b3e5379` /
+    `79a5fecb12722e6f10c788c3944060e7749d8759486af856be50a91f7c9cc1d5`,
+    0.999787.
+
+- The two equivalent baseline SFT pairs are:
+
+  - `part-00096-of-00128.parquet:7694`,
+    `d66deae3d36d2fd69867afcd841a89d2a7f8bc04dc5e50dd765c9a081bae31a1` /
+    `633fc5123e50232ba8386df0d4ab5394490b555a0e934f8e876908367dccaf5c`,
+    0.999634;
+  - `part-00096-of-00128.parquet:7697`,
+    `e68c5138db7797698a0374f71db57969f95493d9ada8e13d1460e45ff03866e9` /
+    `7a29a8629ac14a81447d3f6efbeebf3d5ae9d241b03f286156382b1b613a5aaf`,
+    0.999207.
+
+- The sixth pair is also a true duplicate after complete-text inspection. Both
+  sides contain the same Mia/Noah/Olivia book problem, operands, derivation,
+  and answer 1,800. Its five spans differ only in equivalent `1/5 × 75` versus
+  `75/5` notation and sentence phrasing. Pair location:
+  `part-00096-of-00128.parquet:7620`; member/canonical text SHA-256:
+  `e39d51e6f7067fdd513979e1628900aa501e6fa7385849efab75f7a962049e2d` /
+  `74ca511acacf7115ef9debeb883d83b2813cfbde46cbca014977207892857866`.
+- Six new one-row manual Parquet shards and their completion markers were
+  written, reread, and hash-verified. The stable 84-shard global snapshot
+  contains 10,726 pairs. After all 13 evidence-bound manual decisions:
+
+  - baseline: 9,491 pairs, 6,145 false positives, 3,346 true duplicates;
+  - treatment: 1,235 pairs, 636 false positives, 599 true duplicates;
+  - combined: 10,726 pairs, 6,781 false positives, 3,945 true duplicates.
+
+- A global reread verified every semantic shard and all 13 manual records,
+  including review-key, full-text-hash, and semantic-evidence-hash bindings.
+  No unresolved semantic record in the snapshot lacks a manual decision.
