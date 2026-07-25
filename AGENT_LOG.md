@@ -363,3 +363,16 @@ claims with the measurement caveat (now: MFU not comparable across drop regimes,
 verification: ALL my own measured numbers confirmed against this log; peer numbers (frontier/350-step/gain/
 ragged/ring/fa4-lse/negatives/leg-batching) are coordinator-relayed and not independently verifiable by me.
 Draft committed locally, NOT pushed/posted. Ready for human.
+
+## R6-1 check-in 18:30 UTC — leg-batching reconstructed
+- Bundle extraction (route 1) FAILED: controller get-job-state only returns the state enum, get-task-status
+  no bundle_id; bundles are content-addressed (thousands) with no name->hash map exposed. Pivoted to route 2.
+- RECONSTRUCTED leg-batching (commit 65e3ca50d, SCALE_A2A_BATCH_EXPERTS=1): one dispatch a2a + one grouped
+  up/down einsum + one combine a2a over all local experts, replacing the 4-collective/4-GEMM Python loop.
+  Local-expert axis is a batch dim the a2a passes through (split/concat on the expert-shard axis).
+- PARITY: bit-exact vs the loop at expert_axis=2 (out/grad max abs diff 0.0, drops identical=49>0);
+  single-device kernel test passes at 1e-5. Composes with the custom adjoint (wraps send_x/send_output).
+- Confidence: 6/10 that batching's +1.35pp transfers to QB-on. It's a real launch-overhead/GEMM-efficiency
+  win independent of routing, so it SHOULD transfer, but QB-on changes the drop regime and MFU is only
+  comparable within a matched regime; the rack A/B settles it.
+- Next: EP4 smoke (batching + QB-on) to confirm real multi-GPU a2a, then rack A/B control vs +batching.
