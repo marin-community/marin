@@ -589,3 +589,25 @@ statistics for performance comparisons.
   pass for both changed files, and the production script reports zero pyrefly
   errors. The checkpoint/resume gate is clear for the full 755,281-pair
   semantic pass.
+
+### 2026-07-25T09:03:00Z — eight-H100 semantic launch and cap-impact audit
+
+- Launched four disjoint semantic-review partitions with one two-H100
+  `Qwen/Qwen3.5-35B-A3B` worker each. All four roots, brokers, and workers use
+  Iris batch priority. The first decision files contain 5,862, 5,992, 5,969,
+  and 5,995 pairs; every partition is actively completing inference requests.
+  Output:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-review-100b-qwen35-35b-a3b-20260725-v1`.
+- The first launch revealed that the outer root priority did not propagate to
+  inference child jobs. Commit `46ce6ddc9` adds an explicit semantic-runner
+  priority and passes it through `IrisConfig`; the four replacement roots and
+  all eight H100s were verified at `PRIORITY_BAND_BATCH`.
+- The exhaustive cap-50 versus converged marker audit completed with two
+  differences and zero DataKit keep/drop changes. Both changed
+  `swe-zero-12m` documents remain noncanonical in both artifacts; only
+  `dup_cluster_id` changes. The capped label
+  `100237470490578047684007976797182131665` has no canonical marker, while
+  converged label `100230046777701736319278129735665406779` resolves to
+  `9a0afd4f471c03f07001868f1350f330`. This is a nonconvergence metadata defect,
+  not a document-output difference. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-cap50-relations-100b-20260725-v2/relation-review.json`.
