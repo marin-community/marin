@@ -13,12 +13,15 @@ This avoids both THD compaction and materialized [B, S, S] masks.
 """
 
 import importlib
+import os
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
 import jax
 import jax.numpy as jnp
+
+from haliax.jax_utils import tree_checkpoint_name
 
 from levanter.grug.attention._fa4_cute_kernels import (
     flash_attention_backward_postprocess_launcher,
@@ -28,6 +31,12 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_forward_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
+
+_CHECKPOINT_FA4_OUT = "grug_fa4_attn_out"
+_CHECKPOINT_FA4_LSE = "grug_fa4_lse"
+# Names a jax.checkpoint policy must save so the FA4 backward consumes the forward's
+# (out, lse) instead of rematerializing the forward kernel (SCALE_FA4_LSE_SAVE=1).
+FA4_LSE_SAVE_NAMES = (_CHECKPOINT_FA4_OUT, _CHECKPOINT_FA4_LSE)
 
 
 @dataclass(frozen=True)
@@ -663,9 +672,39 @@ def fa4_cute_attention_forward(
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
     attempt to autodiff through ``cutlass_call``.
+
+    With ``SCALE_FA4_LSE_SAVE=1`` the forward's ``(out, lse)`` are checkpoint-named
+    (:data:`FA4_LSE_SAVE_NAMES`) so a ``save_only_these_names`` remat policy keeps
+    them across the block recompute and the backward skips the attention-forward
+    re-run. The gradient then flows through a thin custom VJP whose forward only
+    repackages the saved tensors (free to rematerialize). Numerically identical to
+    the default path either way; only the residual placement differs.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
+    if os.environ.get("SCALE_FA4_LSE_SAVE") == "1":
+        out, lse = segmented_flash_attention_forward(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid,
+            softmax_scale=sm_scale,
+            kernel_config=kernel_config,
+        )
+        out = tree_checkpoint_name(out, _CHECKPOINT_FA4_OUT)
+        lse = tree_checkpoint_name(lse, _CHECKPOINT_FA4_LSE)
+        return _fa4_saved_primals_custom_vjp(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid,
+            out,
+            lse,
+            sm_scale,
+            kernel_config,
+        )
     return _segmented_flash_attention_custom_vjp(
         q,
         k,
@@ -675,6 +714,66 @@ def fa4_cute_attention_forward(
         sm_scale,
         kernel_config,
     )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(7, 8))
+def _fa4_saved_primals_custom_vjp(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    out: jax.Array,
+    lse: jax.Array,
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+) -> jax.Array:
+    """Identity over the name-saved attention output; gradient via the FA4 backward kernel."""
+    return out
+
+
+def _fa4_saved_primals_custom_vjp_fwd(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    out: jax.Array,
+    lse: jax.Array,
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
+    return out, (q, k, v, out, lse, lower_bounds, valid)
+
+
+def _fa4_saved_primals_custom_vjp_bwd(
+    softmax_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
+) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, None, None]:
+    q, k, v, out, lse, lower_bounds, valid = residuals
+    if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
+        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, None, None
+    dq, dk, dv = segmented_flash_attention_backward(
+        q,
+        k,
+        v,
+        out,
+        cotangent.astype(q.dtype),
+        lse,
+        lower_bounds,
+        valid,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
+    )
+    return dq, dk, dv, None, None, None, None
+
+
+_fa4_saved_primals_custom_vjp.defvjp(
+    _fa4_saved_primals_custom_vjp_fwd,
+    _fa4_saved_primals_custom_vjp_bwd,
+)
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(5, 6))
@@ -872,6 +971,7 @@ def _broadcast_backward_block_sparse_metadata(
 
 
 __all__ = [
+    "FA4_LSE_SAVE_NAMES",
     "cutlass_cute_available",
     "fa4_cute_attention_forward",
     "require_cutlass_cute",

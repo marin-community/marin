@@ -222,3 +222,61 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask()
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
 
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent)
+
+
+def test_real_gpu_fa4_lse_save_path_matches_default_path(monkeypatch):
+    """SCALE_FA4_LSE_SAVE=1 must be numerically identical to the default FA4 path.
+
+    Same forward kernel, same backward kernel, only residual placement differs (saved
+    (out, lse) primals + thin custom VJP vs the forward recompute). Checks out, lse
+    (vs a reference logsumexp), and dq/dk/dv against the default path.
+    """
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    from levanter.grug.attention._fa4_cute import _self_attention_lower_bounds, _segmented_kernel_config
+    from levanter.grug.attention._fa4_cute_backend import segmented_flash_attention_forward
+
+    key = jax.random.PRNGKey(11)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (2, 64, 4, 64), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (2, 64, 2, 64), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (2, 64, 2, 64), dtype=jnp.bfloat16)
+    mask = AttentionMask.causal(sliding_window=7)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+
+    def loss_fn(q_arg, k_arg, v_arg):
+        out = gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    out_default = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
+    grads_default = jax.jit(jax.grad(loss_fn, argnums=(0, 1, 2)))(q, k, v)
+
+    monkeypatch.setenv("SCALE_FA4_LSE_SAVE", "1")
+    jax.clear_caches()
+    out_saved = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
+    grads_saved = jax.jit(jax.grad(loss_fn, argnums=(0, 1, 2)))(q, k, v)
+
+    np.testing.assert_allclose(out_saved, out_default, atol=2e-3, rtol=2e-3)
+    for saved_grad, default_grad, name in zip(grads_saved, grads_default, ("dq", "dk", "dv"), strict=True):
+        np.testing.assert_allclose(saved_grad, default_grad, atol=2e-3, rtol=2e-3, err_msg=name)
+
+    # lse sanity: the raw forward's lse matches a reference logsumexp over the windowed scores.
+    lower_bounds, valid = _self_attention_lower_bounds(q, k, v, mask, backend_name="test")
+    _, lse = segmented_flash_attention_forward(
+        q,
+        k,
+        v,
+        lower_bounds,
+        valid,
+        softmax_scale=64**-0.5,
+        kernel_config=_segmented_kernel_config(64),
+    )
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q.astype(jnp.float32), k.astype(jnp.float32)) * 64**-0.5
+    positions = jnp.arange(64, dtype=jnp.int32)
+    causal = (positions[None, :] <= positions[:, None]) & (positions[None, :] >= positions[:, None] - 6)
+    scores = jnp.where(causal[None, None], scores, -jnp.inf)
+    lse_ref = jax.nn.logsumexp(scores, axis=-1)
+    np.testing.assert_allclose(lse, lse_ref, atol=7e-2, rtol=7e-2)

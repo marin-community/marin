@@ -34,6 +34,7 @@ from levanter.grug.attention import (
     attention,
     fa4_cute_segment_bounds,
 )
+from levanter.grug.attention._fa4_cute_backend import FA4_LSE_SAVE_NAMES
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
@@ -656,6 +657,12 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        elif os.environ.get("SCALE_FA4_LSE_SAVE") == "1":
+            # recompute_all plus saving the FA4 forward's (out, lse): the attention
+            # backward consumes the saved primals instead of re-running the forward
+            # kernel inside the block recompute (~6.7% of kernel time at the d2560
+            # anatomy; est +~1pp here, at +~32 GiB of saved activations at EP64).
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*FA4_LSE_SAVE_NAMES)
         else:
             remat_policy = None
 
