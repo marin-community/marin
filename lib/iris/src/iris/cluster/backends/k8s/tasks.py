@@ -209,6 +209,7 @@ _DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
 _KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 _KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
 _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
+_KUEUE_JOB_UID = "kueue.x-k8s.io/job-uid"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
@@ -1278,13 +1279,29 @@ def _is_preemptible_blocker(pod: dict) -> bool:
     return _pod_gpu_request(pod) > 0
 
 
-def _kueue_workloads_by_name(workloads: list[dict]) -> dict[str, dict]:
-    result = {}
+@dataclass(frozen=True)
+class _KueueWorkloadIndex:
+    by_name: dict[str, dict]
+    by_pod_uid: dict[str, dict]
+
+
+def _kueue_workload_index(workloads: list[dict]) -> _KueueWorkloadIndex:
+    by_name = {}
+    by_pod_uid = {}
     for workload in workloads:
-        name = workload.get("metadata", {}).get("name", "")
+        metadata = workload.get("metadata", {})
+        name = metadata.get("name", "")
         if name:
-            result[name] = workload
-    return result
+            by_name[name] = workload
+
+        job_uid = metadata.get("labels", {}).get(_KUEUE_JOB_UID, "")
+        if job_uid:
+            by_pod_uid[job_uid] = workload
+        for owner in metadata.get("ownerReferences", []):
+            owner_uid = owner.get("uid", "")
+            if owner.get("kind") == "Pod" and owner_uid:
+                by_pod_uid[owner_uid] = workload
+    return _KueueWorkloadIndex(by_name=by_name, by_pod_uid=by_pod_uid)
 
 
 def _format_kueue_condition(cond: dict) -> str:
@@ -1304,9 +1321,11 @@ def _format_kueue_condition(cond: dict) -> str:
 
 def _format_kueue_workload_status(pod: dict, workload: dict | None) -> str:
     """Return Kueue admission context for a gated pod."""
-    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    metadata = pod.get("metadata", {})
+    pod_group = metadata.get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
     if workload is None:
-        return f"Kueue workload {pod_group!r} not found yet; waiting for Kueue to create/admit the pod group"
+        target = pod_group or metadata.get("name", "")
+        return f"Kueue workload for {target!r} not found yet; waiting for Kueue to create or admit it"
 
     spec = workload.get("spec", {})
     status = workload.get("status", {})
@@ -1382,7 +1401,7 @@ def _pod_reason_message(pod: dict, workload: dict | None) -> _PodReason:
                     except (ValueError, AttributeError):
                         pass
                 break
-    if reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+    if reason == _REASON_SCHEDULING_GATED and _is_kueue_managed_pod(pod):
         kueue_status = _format_kueue_workload_status(pod, workload)
         message = f"{message}; {kueue_status}" if message else kueue_status
     return _PodReason(reason, message, last_ts)
@@ -1396,10 +1415,19 @@ def _pod_status_message(pod: dict, workload: dict | None) -> str:
     return pr.reason or pr.message
 
 
-def _workload_for_pod(pod: dict, workloads_by_name: dict[str, dict]) -> dict | None:
-    """Resolve the Kueue workload for a pod from its pod-group label, if any."""
-    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
-    return workloads_by_name.get(pod_group) if pod_group else None
+def _is_kueue_managed_pod(pod: dict) -> bool:
+    labels = pod.get("metadata", {}).get("labels", {})
+    return bool(labels.get(_KUEUE_POD_GROUP_NAME) or labels.get(_KUEUE_QUEUE_NAME))
+
+
+def _workload_for_pod(pod: dict, workloads: _KueueWorkloadIndex) -> dict | None:
+    """Resolve a gang Workload by group name or a singleton Workload by Pod UID."""
+    metadata = pod.get("metadata", {})
+    pod_group = metadata.get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    if pod_group:
+        return workloads.by_name.get(pod_group)
+    pod_uid = metadata.get("uid", "")
+    return workloads.by_pod_uid.get(pod_uid) if pod_uid else None
 
 
 # The layer that produced a task-event verdict, recorded as the event ``source``.
@@ -1466,7 +1494,7 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     container_reason, _ = _container_state_reason(pod)
     if container_reason and container_reason == pr.reason:
         source = _EVENT_SOURCE_CONTAINER
-    elif pr.reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+    elif pr.reason == _REASON_SCHEDULING_GATED and _is_kueue_managed_pod(pod):
         source = _EVENT_SOURCE_KUEUE
     else:
         source = _EVENT_SOURCE_SCHEDULER
@@ -1482,7 +1510,7 @@ def _build_pod_statuses(
 ) -> list[controller_pb2.Controller.KubernetesPodStatus]:
     """Build pod status protos from raw kubectl pod objects."""
     statuses = []
-    workloads_by_name = _kueue_workloads_by_name(workloads or [])
+    workload_index = _kueue_workload_index(workloads or [])
     for pod in pods:
         meta = pod.get("metadata", {})
         pod_name = meta.get("name", "")
@@ -1490,7 +1518,7 @@ def _build_pod_statuses(
         task_id = labels.get(_LABEL_TASK_ID, "")
         node_name = pod.get("spec", {}).get("nodeName", "")
         phase = pod.get("status", {}).get("phase", "Unknown")
-        pr = _pod_reason_message(pod, _workload_for_pod(pod, workloads_by_name))
+        pr = _pod_reason_message(pod, _workload_for_pod(pod, workload_index))
 
         ps = controller_pb2.Controller.KubernetesPodStatus(
             pod_name=pod_name,
@@ -3034,7 +3062,7 @@ class K8sTaskProvider:
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
-        workloads_by_name = _kueue_workloads_by_name(workloads or [])
+        workload_index = _kueue_workload_index(workloads or [])
         updates: list[TaskUpdate] = []
 
         # Resolve running tasks whose pod has left the active list (completed or
@@ -3091,7 +3119,7 @@ class K8sTaskProvider:
                 continue
 
             self._pod_not_found_counts.pop(cursor_key, None)
-            workload = _workload_for_pod(pod, workloads_by_name)
+            workload = _workload_for_pod(pod, workload_index)
             update = _task_update_from_pod(entry, pod, workload)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":

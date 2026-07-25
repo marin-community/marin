@@ -33,6 +33,8 @@ from .conftest import (
     imagepull_pod,
     make_batch,
     make_kueue_provider,
+    singleton_gated_pod,
+    singleton_unadmitted_workload,
     unadmitted_workload,
     unevaluated_workload,
 )
@@ -167,6 +169,23 @@ def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
     k8s.seed_resource(K8sResource.WORKLOADS, pod_group, unadmitted_workload(pod_group))
 
 
+def _seed_singleton_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
+    """Seed the Pod-owned Workload shape Kueue creates for a non-gang task."""
+    pod = singleton_gated_pod(name=_pod_name(task_id, attempt_id))
+    pod["kind"] = "Pod"
+    pod["metadata"]["labels"].update(
+        {
+            _LABEL_MANAGED: "true",
+            _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
+            _LABEL_ATTEMPT_ID: str(attempt_id),
+        }
+    )
+    workload = singleton_unadmitted_workload(pod_name=pod["metadata"]["name"], pod_uid=pod["metadata"]["uid"])
+    k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
+    k8s.seed_resource(K8sResource.WORKLOADS, workload["metadata"]["name"], workload)
+
+
 def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
     """The full producer path: a running task whose pod is stuck SchedulingGated
     lands one Warning row carrying the Kueue admission verdict in iris.task_event."""
@@ -193,5 +212,24 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
         provider.sync(make_batch(running_tasks=[entry]))
         rows = [r for w in event_table.writes for r in w]
         assert len(rows) == 1
+    finally:
+        provider.close()
+
+
+def test_sync_singleton_surfaces_kueue_verdict_on_task_and_event(k8s):
+    event_table = FakeStatsTable()
+    provider = make_kueue_provider(k8s, task_event_table=event_table)
+    try:
+        task_id = JobName.from_wire("/job/0")
+        _seed_singleton_gated_task(k8s, task_id)
+
+        updates = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))
+
+        assert len(updates) == 1
+        assert "couldn't assign flavors" in (updates[0].status_message or "")
+        rows = [row for write in event_table.writes for row in write]
+        assert len(rows) == 1
+        assert rows[0].source == _EVENT_SOURCE_KUEUE
+        assert rows[0].type == "Warning"
     finally:
         provider.close()
