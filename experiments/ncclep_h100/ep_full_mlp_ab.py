@@ -36,6 +36,7 @@ PROMOTION_SPEEDUP = 1.10
 DEFAULT_WARMUP = 6
 DEFAULT_ITERATIONS = 20
 OVERFLOW_POLICIES = ("trap", "drop")
+COMBINE_DTYPES = ("bf16", "fp32")
 SUMMARY_EVENT = "ncclep_h100_full_mlp_ab"
 ARM_RING = "marin_bulk_ring"
 ARM_TE = "transformer_engine_nccl_ep"
@@ -218,6 +219,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="strict stops before timing on parity failure; diagnostic times but remains non-promotable",
     )
     parser.add_argument("--overflow-policy", choices=OVERFLOW_POLICIES, default="trap")
+    parser.add_argument("--combine-dtype", choices=COMBINE_DTYPES, default="bf16")
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -339,6 +341,7 @@ def _compiled_te_forward(
     ep_dispatch: Callable[..., Any],
     ep_combine: Callable[..., Any],
     ragged_dot: Callable[..., Any],
+    combine_dtype: str,
 ) -> Callable[..., Any]:
     P = jax.sharding.PartitionSpec
     batch_spec = P(("replica_dcn", "data", "expert"), None)
@@ -376,11 +379,18 @@ def _compiled_te_forward(
             check_vma=False,
         )
         expert_out = ffn(recv_tokens, token_counts, w13, w2)
-        slot_weights = recv_weights[..., None].astype(expert_out.dtype)
+        if combine_dtype == "fp32":
+            combine_values = expert_out.astype(jnp.float32)
+            slot_weights = recv_weights[..., None]
+        elif combine_dtype == "bf16":
+            combine_values = expert_out
+            slot_weights = recv_weights[..., None].astype(expert_out.dtype)
+        else:
+            raise ValueError(f"unknown NCCL_EP combine dtype: {combine_dtype!r}")
         weighted = jnp.where(
             slot_weights != 0,
-            expert_out * slot_weights,
-            jnp.zeros((), dtype=expert_out.dtype),
+            combine_values * slot_weights,
+            jnp.zeros((), dtype=combine_values.dtype),
         )
         weighted = jax.lax.with_sharding_constraint(weighted, lead)
         return ep_combine(
@@ -578,6 +588,7 @@ def run_ab(args: argparse.Namespace) -> int:
             ep_dispatch=te_ep.ep_dispatch,
             ep_combine=te_ep.ep_combine,
             ragged_dot=ragged_dot,
+            combine_dtype=args.combine_dtype,
         )
         value_and_grads = {
             ARM_RING: jax.jit(
@@ -648,6 +659,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "measured_pairs": args.iterations,
         "parity_mode": args.parity_mode,
         "overflow_policy": args.overflow_policy,
+        "combine_dtype": args.combine_dtype,
     }
     summary = build_summary(
         timings=timings,

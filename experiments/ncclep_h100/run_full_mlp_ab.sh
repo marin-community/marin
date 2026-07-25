@@ -10,6 +10,7 @@ WARMUP=${WARMUP:-6}
 ITERATIONS=${ITERATIONS:-20}
 PARITY_MODE=${PARITY_MODE:-strict}
 NCCLEP_OVERFLOW_POLICY=${NCCLEP_OVERFLOW_POLICY:-trap}
+NCCLEP_COMBINE_DTYPE=${NCCLEP_COMBINE_DTYPE:-bf16}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -25,6 +26,7 @@ Environment overrides:
   ITERATIONS               interleaved measured pairs (20)
   PARITY_MODE               strict or diagnostic (strict)
   NCCLEP_OVERFLOW_POLICY    trap or drop (trap)
+  NCCLEP_COMBINE_DTYPE      bf16 or fp32 (bf16)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
 
@@ -54,6 +56,7 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   sample aggregation: slowest rank per sample
   parity mode: $PARITY_MODE
   overflow policy: $NCCLEP_OVERFLOW_POLICY
+  combine dtype: $NCCLEP_COMBINE_DTYPE
   parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
   decision: TE value_and_grad p50 >= 1.10x ring and all parity/finite checks pass
   XLA preallocation fraction: $XLA_PREALLOC_FRACTION
@@ -77,6 +80,10 @@ if [[ "$PARITY_MODE" != "strict" && "$PARITY_MODE" != "diagnostic" ]]; then
 fi
 if [[ "$NCCLEP_OVERFLOW_POLICY" != "trap" && "$NCCLEP_OVERFLOW_POLICY" != "drop" ]]; then
   echo "FATAL: NCCLEP_OVERFLOW_POLICY must be trap or drop, got '$NCCLEP_OVERFLOW_POLICY'" >&2
+  exit 64
+fi
+if [[ "$NCCLEP_COMBINE_DTYPE" != "bf16" && "$NCCLEP_COMBINE_DTYPE" != "fp32" ]]; then
+  echo "FATAL: NCCLEP_COMBINE_DTYPE must be bf16 or fp32, got '$NCCLEP_COMBINE_DTYPE'" >&2
   exit 64
 fi
 
@@ -171,4 +178,5 @@ exec uv run --package marin-iris --extra worker python -m iris.hooks.multigpu_ma
   --warmup "$WARMUP" \
   --iterations "$ITERATIONS" \
   --parity-mode "$PARITY_MODE" \
-  --overflow-policy "$NCCLEP_OVERFLOW_POLICY"
+  --overflow-policy "$NCCLEP_OVERFLOW_POLICY" \
+  --combine-dtype "$NCCLEP_COMBINE_DTYPE"

@@ -119,3 +119,8 @@ def test_diagnostic_parity_mode_is_explicit() -> None:
 def test_overflow_policy_is_explicit() -> None:
     assert parse_args(["--overflow-policy", "trap"]).overflow_policy == "trap"
     assert parse_args(["--overflow-policy", "drop"]).overflow_policy == "drop"
+
+
+def test_combine_dtype_is_explicit() -> None:
+    assert parse_args(["--combine-dtype", "bf16"]).combine_dtype == "bf16"
+    assert parse_args(["--combine-dtype", "fp32"]).combine_dtype == "fp32"
