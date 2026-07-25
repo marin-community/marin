@@ -1671,6 +1671,37 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T21:43:59Z — 56,429 pairs verified
+
+- Five additional baseline checkpoints passed independent validation: 640
+  pairs, 311 model false positives, 328 model true duplicates, and one
+  unresolved outcome. The block contains 1,379 valid judgments across 1,379
+  attempts, with no invalid responses or retries. All 640 pairs used direct
+  review.
+- Complete-text review resolves the ambiguity as a false positive. Beyond the
+  college and program slots, the member uniquely gives biomedical-engineering
+  degree requirements and corporate-internship career guidance; the canonical
+  instead gives targeted-job-board guidance and a different biomedicine
+  description. Character similarity is 0.460645 and word-5-gram Jaccard is
+  0.131980. Pair location: `part-00033-of-00128.parquet:3942`;
+  member/canonical text SHA-256 values are
+  `21a5e0a8f766ef47b9e7ec935727b480d78b139a9c8d9648773edb99bd4b5e7b` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- The hash-bound manual Parquet record has SHA-256
+  `998d6a562906e4cbbf0a7577b53f0349b403449aac3b3a24633a2d3cd01655af`
+  and semantic-judgments SHA-256
+  `6212c5d6b430a4091c3e6aa9c5f15ad7a64d9daec1145264394d1329970e1451`.
+  A separate batch-priority Iris process exactly reread the source pair,
+  semantic checkpoint, manual record, Parquet bytes, and completion marker.
+- Across the stable 443-checkpoint snapshot, all 61 manual records leave:
+
+  - baseline: 45,581 pairs, 28,915 false positives, 16,666 true duplicates;
+  - treatment: 10,848 pairs, 5,687 false positives, 5,161 true duplicates;
+  - combined: 56,429 pairs, 34,602 false positives, 21,827 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:56:02Z — 47,121 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
