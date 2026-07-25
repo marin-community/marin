@@ -422,9 +422,8 @@ def _compiled_te_forward(
 
 def _loss_with_aux(forward: Callable[..., Any], *inputs: Any) -> tuple[Any, tuple[Any, Any]]:
     output, dropped = forward(*inputs)
-    loss = importlib.import_module("jax.numpy").mean(
-        importlib.import_module("jax.numpy").square(output.astype(np.float32))
-    )
+    jnp = importlib.import_module("jax.numpy")
+    loss = jnp.mean(jnp.sum(jnp.square(output.astype(np.float32)), axis=-1))
     return loss, (output, dropped)
 
 
@@ -671,6 +670,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "overflow_policy": args.overflow_policy,
         "combine_dtype": args.combine_dtype,
         "ring_combine_dtype": args.ring_combine_dtype,
+        "loss_reduction": "mean_tokens_sum_hidden",
     }
     summary = build_summary(
         timings=timings,

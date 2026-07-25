@@ -61,6 +61,7 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   combine dtype: $NCCLEP_COMBINE_DTYPE
   ring combine dtype: $RING_COMBINE_DTYPE
   parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
+  loss: mean over tokens after summing squared hidden activations
   decision: TE value_and_grad p50 >= 1.10x ring and all parity/finite checks pass
   XLA preallocation fraction: $XLA_PREALLOC_FRACTION
 
