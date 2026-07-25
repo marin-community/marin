@@ -10,6 +10,7 @@ full-causal MoE blocks run through a single ``lax.scan`` over stacked blocks.
 """
 
 import dataclasses
+import logging
 import os
 from dataclasses import dataclass
 from typing import Literal
@@ -47,6 +48,8 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _ROUTING_RENORM_SUM = 2.5
+
+logger = logging.getLogger(__name__)
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
@@ -459,6 +462,7 @@ class MoEMLP(eqx.Module):
             for a in _BATCH_AXES:
                 senders *= _mesh_axis_size(mesh, a)
             bias_shape: tuple[int, ...] = (senders, e)
+            logger.info("QB sender-local bias active: senders=%d experts=%d", senders, e)
         else:
             bias_shape = (e,)
         return MoEMLP(
