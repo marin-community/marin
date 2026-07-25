@@ -318,3 +318,13 @@ Wrote EP25_MILESTONE_DRAFT.md (worktree root, internal - NOT pushed/posted). Str
 goal ledger, repro pointers (branch/commits/env/jobs; PR from agent/ep25-d1-adjoint still needed - no pushes).
 Style per .agents/skills/writing-style (reports.md + ai-writing-donts.md): numbers first, one table/section,
 mixed results plain. Awaiting human review before any posting.
+
+## Milestone draft final fills 01:10 UTC
+Filled d4's frontier table (fidelity §2): QB-off cf1.0 24.04 (collapsed) / QB-off cf1.15 22.13 (drops 0.649@119)
+/ QB-on cf1.0 22.60 (drops 0.083@119, loss 5.767) / QB-on cf1.15 20.85 (drops 0.037@119, loss 5.788). Prices:
+QB -1.44pp, cf1.15-under-QB -1.75pp, combined -3.19pp. Transport table (§4): ragged 12.38 mean/drops 0.433,
+ring_cute EP64 DNF (OOM 141.79 GiB in jit_train_step); direction-2 = transport leaves no pp. Goal ledger (§5):
+honest production config (QB-on cf1.0) = 22.60%; >=25% honest needs leg-batching (~+1.3pp) + fa4-lse; QB-off
+24.04/25.39 are bench artifacts. Added rav emission-bug note (drops computed, never logged; fix 2d4a87395).
+TL;DR updated to honest framing. ai-writing-donts pass done. TWO TODO slots remain: d4 300-step steady-state
+drop series (in flight), d3 fa4-lse A/B. Draft committed locally, NOT pushed/posted.

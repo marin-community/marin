@@ -9,12 +9,13 @@ GPUs, EP64) at the d5120 / 8-of-256 / 48-layer / seq-4096 / batch-1024 operating
 - A custom scatter-add adjoint for the fixed-a2a gather dispatch and combine gathers raises p50
   MFU from 20.61% to 24.04% on a matched 120-step A/B (+3.43pp, +16.6%), bands non-overlapping.
   It composes with leg-batched expert GEMMs, which reach 25.39% p50 on a separate 120-step run.
-- The benchmark configs to date route with load balancing off. The routed experts drop 85-89% of
-  assignments early in training (real router collapse, not a metric artifact). Turning QB
-  load-balancing on cuts that 3.4x (0.49 -> 0.25 by step 29) at no measurable MFU cost. Whether
-  QB-on reaches the <3% fidelity bar at steady state is not yet measured.
+- Those numbers route with load balancing off, where the routed experts drop 85-89% of assignments
+  early in training (real router collapse, verified exact, not a metric artifact). QB load-balancing
+  takes drops to 0.083 by step 119 and costs -1.44pp; the honest production config (QB on, cf1.0)
+  measures 22.60% p50. Reaching >=25% at honest fidelity needs leg-batching and fa4-lse on top.
 - Headline MFU is drop-insensitive: the fixed path's expert GEMMs run on capacity-sized buffers
   regardless of how many tokens drop, so the drop fraction is a fidelity metric, not a speed one.
+  The -1.44pp QB cost is the router aux-loss, not the drops.
 
 ## 1. Speed: custom adjoint for the gather-dispatch backward
 
@@ -57,26 +58,39 @@ ratio 1.000, at both 2 and 4 expert shards). An earlier "65-68%" reading elsewhe
 overflow-rate-of-buckets semantics, not the token-drop fraction; capacity == mean makes roughly
 half of all buckets overflow their tail while the dropped tail itself is a smaller fraction.
 
-Matched steps 23-29, `drop_fraction`, custom adjoint + cf1.0:
+120-step frontier at the operating point, p50 MFU and `drop_fraction` at step 119, over
+capacity factor x QB (QB = `SCALE_MOE_QB=1`):
 
-| step | QB off | QB on |
-|--:|--:|--:|
-| 23 | 0.893 | 0.492 |
-| 26 | 0.862 | 0.362 |
-| 29 | 0.846 | 0.249 |
+| config | p50 MFU | drop @119 | loss tail |
+|---|--:|--:|--:|
+| QB off, cf1.0 | 24.04 | collapsed, 0.17-0.79 over run | 5.711 |
+| QB off, cf1.15 | 22.13 | 0.649 | — |
+| QB on, cf1.0 | 22.60 | 0.083 | 5.767 |
+| QB on, cf1.15 | 20.85 | 0.037 | 5.788 |
 
-QB on (`SCALE_MOE_QB=1`) cuts the drop fraction 3.4x and steepens its decline (slope -0.035/step
-vs -0.008/step). Step time is unchanged: QB-on 24.11% vs QB-off 24.52% p50 on the two 30-step drop
-jobs, within the +/-2-4pp placement variance seen across allocation draws. Capacity factor without
-QB is pure cost: d4's cf1.15 QB-off leg measured 22.13% p50 (-1.91pp for +15% capacity) with drops
-still 0.86 peak / 0.65 late.
+QB is the drop lever; capacity factor is not. QB on takes the drop fraction from collapse to 0.083
+at cf1.0 and 0.037 at cf1.15. The loss-tail column is the end-of-run value; at matched steps both QB
+legs sit below every QB-off leg. Raising capacity without QB buys no fidelity: cf1.15 QB-off pays
+-1.91pp (24.04 -> 22.13) and still drops 0.649. Prices: QB costs -1.44pp (24.04 -> 22.60), the
+router aux-loss overhead; cf1.15 under QB costs another -1.75pp (22.60 -> 20.85); combined -3.19pp.
+The QB cost is a router cost, not a drop cost: the fixed-path expert GEMMs run on capacity-sized
+buffers regardless of drops.
 
-Two caveats. The always-on shared expert processes every token, so training loss descends normally
-(5.84 -> 5.71) despite the routed drops. And 30 steps only reaches 0.249 QB-on; whether QB-on
-crosses under the ~3% reference (the known-acceptable rate at 8 buckets from a prior 1e23 run) at
-steady state is not measured here.
+A separate 30-step run measures the early trajectory: at matched steps 23-29 the fraction falls
+0.85 -> 0.25 QB-on against 0.89 -> 0.85 QB-off (3.4x), consistent with the frontier's 0.083 by step
+119. The always-on shared expert processes every token, so loss descends normally (5.84 -> 5.71)
+even under QB-off collapse.
 
-> TODO: <3% steady-state crossing, from d4's 120-step QB-on leg (cf1.0, then cf1.15 if needed).
+Neither QB-on leg is under the ~3% reference at 120 steps (0.083 at cf1.0, 0.037 at cf1.15; the ~3%
+is the known-acceptable rate at 8 buckets from a prior 1e23 run). Both are still falling, so the
+steady-state crossing is unresolved.
+
+rav's drop-report jobs currently log no drop metric: the per-layer count is computed but never
+emitted, because the grug training loop logs `train/loss` through callbacks and never logs the
+returned metrics dict. The fix (`2d4a87395`, explicit `tracker.log`) exists in two worktrees and
+should land so his runs report drops.
+
+> TODO: <3% steady-state crossing, from d4's 300-step QB-on drop series (in flight).
 
 ## 3. Sealed negatives
 
@@ -89,23 +103,36 @@ steady state is not measured here.
 
 ## 4. Transport comparison
 
-Ragged all-to-all with the one-shot kernel off, at the operating-point shape, QB off, single draw
-(job `ep25d2-rack-ragged-120`): mean MFU ~12.38% (cumulative mean, not p50), final loss 5.708,
-`drop_fraction` 0.433 at end of run. That is roughly half of fixed+adjoint's 24.04% p50 on speed,
-and ragged's receiver-side capacity still drops 43% of assignments under the same QB-off router
-collapse, so it is not a fidelity refuge either. QB load-balancing is the drop lever on every
-transport, not the transport choice. Caveats: cumulative mean vs the p50 used elsewhere, one
-allocation draw, QB off; the 0.433 is end-of-run (~step 119) against the fixed path's step-29
-0.846, so the transports are not compared at matched steps here.
+At the operating-point shape, QB off, single draw:
 
-> TODO: ring_cute EP64 arm (running); fill the fixed / ragged / ring table at matched steps before
-> the final pass.
+| transport | MFU | drop @119 |
+|---|--:|--:|
+| fixed + gather + adjoint | 24.04 (p50) | collapsed |
+| ragged, one-shot kernel off (`ep25d2-rack-ragged-120`) | 12.38 (mean) | 0.433 |
+| ring_cute EP64 | DNF | — |
+
+Ragged runs at roughly half of fixed+adjoint on speed, and its receiver-side capacity still drops
+43% under the same QB-off collapse, so it is not a fidelity refuge; QB is the drop lever on every
+transport. ring_cute did not finish: OOM at 141.79 GiB in `jit_train_step`. Its EP4/EP8 backend-ladder
+wins do not transfer to e256/EP64, and fitting it would be a memory-engineering project of its own.
+The ragged one-shot-off control that #7279 asked for is on record at ~12.4%. Caveats: the ragged
+number is a cumulative mean against the p50 used for the fixed path, one draw each, QB off, and the
+0.433 is end-of-run against the fixed path's step-29 0.846, so drops are not matched-step here.
 
 ## 5. Goal ledger
 
-- 25% MFU at the operating point: adjoint (+3.43pp -> 24.04) + leg-batching (25.39). Met on speed.
-- Fidelity: requires QB load-balancing on (drops 0.85 -> 0.25 in 30 steps at ~zero MFU cost);
-  the <3% steady-state number is pending (section 2 TODO). Not yet met on fidelity.
+The honest production config is QB-on cf1.0, which measures 22.60% p50. The QB-off numbers (24.04
+adjoint, 25.39 with leg-batching) are bench artifacts: they route under router collapse and only
+look good because MFU ignores drops. Reaching >=25% at honest fidelity therefore needs the
+compositions on top of 22.60: leg-batching (rav, ~+1.3pp) and fa4-lse (d3, pending). Absent those,
+25% at the operating point holds only if the QB-off bench numbers are accepted as such.
+
+- Speed, QB-off bench: adjoint 24.04, +leg-batching 25.39.
+- Speed, honest (QB-on cf1.0): 22.60; path to 25% is +leg-batching and fa4-lse.
+- Fidelity: QB-on required; 0.083 drops at cf1.0 / 0.037 at cf1.15 by step 119, both still falling,
+  <3% steady-state pending d4's 300-step run.
+
+> TODO: fa4-lse A/B (d3) for the remaining path-to-25% pp on top of the honest 22.60.
 
 ## 6. Reproduction
 
