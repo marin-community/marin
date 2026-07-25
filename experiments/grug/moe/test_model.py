@@ -11,7 +11,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.launch_cw_scale import build_scale_model
 from experiments.grug.moe.model import CausalSelfAttention, DenseMLP, GrugModelConfig, _compute_expert_load
-from experiments.grug.moe.train import _compute_flops, _updated_router_bias
+from experiments.grug.moe.train import _compute_flops, _receiver_capacity_overflow_rate, _updated_router_bias
 
 
 def test_nonexpert_weights_are_sharded_over_data_and_expert_axes():
@@ -123,3 +123,22 @@ def test_loss_free_balancing_counts_global_expert_load():
         expert_load = _compute_expert_load(selected_experts, config)
 
     np.testing.assert_array_equal(expert_load, np.asarray([3, 1, 1, 1], dtype=np.int32))
+
+
+def test_receiver_capacity_overflow_pools_local_experts():
+    expert_loads = jnp.asarray(
+        [
+            [20, 20, 10, 10, 10, 10, 10, 10],
+            [20, 10, 10, 10, 20, 10, 10, 10],
+        ],
+        dtype=jnp.int32,
+    )
+
+    overflow = _receiver_capacity_overflow_rate(
+        expert_loads,
+        assignments_per_layer=100,
+        capacity_factor=1.0,
+        expert_axis_size=2,
+    )
+
+    np.testing.assert_allclose(overflow, np.asarray([0.1, 0.0], dtype=np.float32))

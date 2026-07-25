@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -280,6 +281,28 @@ def _apply_loss_free_bias_update(
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
+def _receiver_capacity_overflow_rate(
+    expert_loads: jax.Array,
+    *,
+    assignments_per_layer: int,
+    capacity_factor: float,
+    expert_axis_size: int,
+) -> jax.Array:
+    """Return per-layer overflow under the ragged receiver-pooled capacity rule."""
+    num_experts = expert_loads.shape[-1]
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert_axis_size={expert_axis_size}")
+    local_experts = num_experts // expert_axis_size
+    receiver_capacity = max(
+        math.ceil(capacity_factor * assignments_per_layer / expert_axis_size),
+        local_experts,
+    )
+    receiver_loads = expert_loads.reshape(*expert_loads.shape[:-1], expert_axis_size, local_experts)
+    receiver_loads = jnp.sum(receiver_loads, axis=-1, dtype=jnp.int32)
+    dropped = jnp.sum(jnp.maximum(receiver_loads - receiver_capacity, 0), axis=-1, dtype=jnp.int32)
+    return dropped.astype(jnp.float32) / assignments_per_layer
+
+
 # SCALE_OFFLOAD_OPT_STATE=1 parks the optimizer state on pinned host memory between steps so it
 # is off-HBM during forward/backward (freeing HBM for the memory-aware scheduler to async the
 # backward re-gathers), streaming it back to device only for the optimizer update. Viable on GB200
@@ -336,6 +359,7 @@ def _make_train_step(
     mp: jmp.Policy,
     *,
     model_config: GrugModelConfig,
+    expert_axis_size: int,
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
@@ -390,6 +414,14 @@ def _make_train_step(
             capacity_overflow_rate = capacity_overflow_per_layer.astype(jnp.float32) / assignments_per_layer
             metrics["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
             metrics["train/router/capacity_overflow_rate_max"] = jnp.max(capacity_overflow_rate)
+            receiver_overflow_rate = _receiver_capacity_overflow_rate(
+                expert_load_per_layer,
+                assignments_per_layer=assignments_per_layer,
+                capacity_factor=model_config.moe_capacity_factor,
+                expert_axis_size=expert_axis_size,
+            )
+            metrics["train/router/receiver_capacity_overflow_rate_mean"] = jnp.mean(receiver_overflow_rate)
+            metrics["train/router/receiver_capacity_overflow_rate_max"] = jnp.max(receiver_overflow_rate)
             for layer_index in range(model_config.num_layers):
                 metrics[f"train/router/layer_{layer_index}/capacity_overflow_rate"] = capacity_overflow_rate[layer_index]
         # Optimizer state is host-resident between steps when offloading; stream it to device
@@ -457,6 +489,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         optimizer,
         trainer.mp,
         model_config=config.model,
+        expert_axis_size=config.trainer.expert_axis_size,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,

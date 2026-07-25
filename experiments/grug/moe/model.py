@@ -472,9 +472,11 @@ class MoEMLP(eqx.Module):
             biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
             _, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token)
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-            expert_load = _compute_expert_load(selected_experts, self.cfg)
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+        if self.cfg.qb_routing or self.cfg.report_capacity_overflow:
+            expert_load = _compute_expert_load(selected_experts, self.cfg)
+        else:
             expert_load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32)
         # Sigmoid combine weights on the selected logits, renormalized to sum to ``_ROUTING_RENORM_SUM``.
         combine_weights_f = jax.nn.sigmoid(topk_logits)
