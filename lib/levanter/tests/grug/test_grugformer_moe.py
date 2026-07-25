@@ -1596,6 +1596,42 @@ def test_same_expert_pooled_dispatch_metadata_fills_receivers_exactly():
             assert start <= slot < end
 
 
+def test_same_expert_pooled_dispatch_metadata_caps_receiver_segments():
+    assignments = [
+        jnp.asarray([0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4], dtype=jnp.int32),
+    ]
+    expert_shards = len(assignments)
+    num_experts = 5
+    assignments_per_sender = assignments[0].size
+    all_group_sizes = jnp.stack(
+        [jnp.bincount(sender_assignments, length=num_experts) for sender_assignments in assignments]
+    ).astype(jnp.int32)
+
+    total_overflow = 0
+    expected_receiver_group_sizes = None
+    for sender_index, flat_experts in enumerate(assignments):
+        transport_position, _, receiver_group_sizes, overflow = _same_expert_pooled_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            jnp.asarray(sender_index, dtype=jnp.int32),
+            sender_destination_capacity=assignments_per_sender,
+            receiver_capacity=assignments_per_sender,
+            max_receiver_segments=1,
+        )
+        total_overflow += int(overflow)
+        expected_receiver_group_sizes = receiver_group_sizes
+        assert int(jnp.sum(transport_position < expert_shards * assignments_per_sender)) == (
+            assignments_per_sender - int(overflow)
+        )
+
+    assert expected_receiver_group_sizes is not None
+    receiver_group_sizes = np.asarray(expected_receiver_group_sizes)
+    np.testing.assert_array_less(np.count_nonzero(receiver_group_sizes, axis=1), 2)
+    assert total_overflow == expert_shards * assignments_per_sender - int(np.sum(receiver_group_sizes))
+
+
 def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
     receiver_group_sizes = jnp.asarray(
         [
@@ -1623,6 +1659,7 @@ def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
             receiver_group_sizes,
             jnp.asarray(shard_index, dtype=jnp.int32),
             local_experts=local_experts,
+            max_receiver_segments=receiver_group_sizes.shape[1],
             topk=2,
         )
         del input_offsets, output_offsets

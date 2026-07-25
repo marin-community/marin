@@ -245,6 +245,7 @@ def _same_expert_pooled_dispatch_metadata(
     *,
     sender_destination_capacity: int,
     receiver_capacity: int,
+    max_receiver_segments: int | None = None,
 ) -> tuple[Int[Array, "TK"], Int[Array, "TK"], Int[Array, "S E"], Int[Array, ""]]:
     """Pack an exact global expert stream into fixed receiver-capacity bins.
 
@@ -286,9 +287,22 @@ def _same_expert_pooled_dispatch_metadata(
         0,
     )
 
+    within_segment_capacity = jnp.ones_like(destination, dtype=jnp.bool_)
+    if max_receiver_segments is not None:
+        receiver_group_position = jnp.cumsum((receiver_group_sizes > 0).astype(jnp.int32), axis=1, dtype=jnp.int32) - 1
+        retained_group = jnp.logical_and(
+            receiver_group_sizes > 0,
+            receiver_group_position < max_receiver_segments,
+        )
+        within_segment_capacity = retained_group[destination, flat_experts]
+        receiver_group_sizes = jnp.where(retained_group, receiver_group_sizes, 0)
+
     destination_rank = _stable_expert_local_rank(destination, num_experts=expert_shards)
     transport_size = expert_shards * sender_destination_capacity
-    within_capacity = destination_rank < sender_destination_capacity
+    within_capacity = jnp.logical_and(
+        destination_rank < sender_destination_capacity,
+        within_segment_capacity,
+    )
     transport_position = jnp.where(
         within_capacity,
         destination * sender_destination_capacity + destination_rank,
@@ -303,6 +317,7 @@ def _sparse_clone_weight_metadata(
     receiver_index: Int[Array, ""],
     *,
     local_experts: int,
+    max_receiver_segments: int,
     topk: int,
 ) -> tuple[
     Int[Array, "Msend"],
@@ -351,7 +366,9 @@ def _sparse_clone_weight_metadata(
     receiver_group_position = jnp.cumsum((receiver_groups > 0).astype(jnp.int32), dtype=jnp.int32) - 1
     receiver_group_position = jnp.where(receiver_groups > 0, receiver_group_position, num_experts)
     compact_group_sizes = (
-        jnp.zeros((num_experts,), dtype=jnp.int32).at[receiver_group_position].set(receiver_groups, mode="drop")
+        jnp.zeros((max_receiver_segments,), dtype=jnp.int32)
+        .at[receiver_group_position]
+        .set(receiver_groups, mode="drop")
     )
     send_overflow = jnp.maximum(jnp.sum(send_sizes, dtype=jnp.int32) - max_send_segments, 0)
     return (
@@ -373,7 +390,7 @@ def _sparse_clone_weight_exchange(
     output_offsets: Int[Array, "S"],
     recv_sizes: Int[Array, "S"],
     *,
-    num_experts: int,
+    max_receiver_segments: int,
 ) -> jax.Array:
     """Move only expert weights needed by this receiver's clone segments."""
     padded_local_weights = jnp.concatenate(
@@ -381,7 +398,7 @@ def _sparse_clone_weight_exchange(
         axis=0,
     )
     send_weights = padded_local_weights[packed_local_experts]
-    output_shape = jnp.zeros((num_experts, *local_weights.shape[1:]), dtype=local_weights.dtype)
+    output_shape = jnp.zeros((max_receiver_segments, *local_weights.shape[1:]), dtype=local_weights.dtype)
     return jax.lax.ragged_all_to_all(
         send_weights,
         output_shape,
@@ -422,6 +439,13 @@ def _same_expert_cloned_fixed_a2a_core(
     assignments_per_shard = tokens_per_shard * topk
     expert_shards = num_experts // local_experts
     pooled_dispatch = os.environ.get("SCALE_A2A_CLONE_POOLED") == "1"
+    sparse_clone_weights = pooled_dispatch and os.environ.get("SCALE_A2A_CLONE_SPARSE_WEIGHTS") == "1"
+    max_receiver_segments = None
+    if sparse_clone_weights:
+        max_receiver_segments = max(
+            int(os.environ.get("SCALE_A2A_CLONE_MAX_RECEIVER_EXPERTS", "16")),
+            1,
+        )
     if pooled_dispatch:
         receiver_capacity = assignments_per_shard
     else:
@@ -429,7 +453,13 @@ def _same_expert_cloned_fixed_a2a_core(
             int(math.ceil(capacity_factor * assignments_per_shard)) + num_experts,
             num_experts,
         )
-    sender_destination_capacity = int(math.ceil(assignments_per_shard / expert_shards)) + num_experts
+    token_padding_experts = max(
+        int(os.environ.get("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "1")),
+        0,
+    )
+    sender_destination_capacity = (
+        int(math.ceil(assignments_per_shard / expert_shards)) + token_padding_experts * num_experts
+    )
     send_size = expert_shards * sender_destination_capacity
 
     use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
@@ -447,6 +477,7 @@ def _same_expert_cloned_fixed_a2a_core(
             receiver_index,
             sender_destination_capacity=sender_destination_capacity,
             receiver_capacity=receiver_capacity,
+            max_receiver_segments=max_receiver_segments,
         )
     else:
         transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_clone_dispatch_metadata(
@@ -517,7 +548,8 @@ def _same_expert_cloned_fixed_a2a_core(
         expert_inputs = padded_received_x[receiver_sources]
 
     with jax.named_scope("clone_weights"):
-        if pooled_dispatch and os.environ.get("SCALE_A2A_CLONE_SPARSE_WEIGHTS") == "1":
+        if sparse_clone_weights:
+            assert max_receiver_segments is not None
             (
                 packed_local_experts,
                 input_offsets,
@@ -530,6 +562,7 @@ def _same_expert_cloned_fixed_a2a_core(
                 receiver_group_sizes,
                 receiver_index,
                 local_experts=local_experts,
+                max_receiver_segments=max_receiver_segments,
                 topk=topk,
             )
             global_w13 = _sparse_clone_weight_exchange(
@@ -539,7 +572,7 @@ def _same_expert_cloned_fixed_a2a_core(
                 send_sizes,
                 output_offsets,
                 recv_sizes,
-                num_experts=num_experts,
+                max_receiver_segments=max_receiver_segments,
             )
             global_w2 = _sparse_clone_weight_exchange(
                 moe_w2_local,
@@ -548,7 +581,7 @@ def _same_expert_cloned_fixed_a2a_core(
                 send_sizes,
                 output_offsets,
                 recv_sizes,
-                num_experts=num_experts,
+                max_receiver_segments=max_receiver_segments,
             )
             overflow = overflow + weight_envelope_overflow
         else:
