@@ -18,10 +18,11 @@ GPU type extrapolates to every gang size, because FSDP shards parameters over th
 while activations are not, so capacity only grows with the gang. Throughput is flat across
 microbatch and accumulation depth, so the number only has to avoid an OOM.
 
-**Storage and speed are known.** ~34 s/step on one node, ~17 on two — near-linear. An
-8-epoch trial is about a week on two nodes and leaves ~0.59 TiB behind; the shorter rungs
-are ~0.09 TiB each. The bucket already holds ~360 TB, so even a full grid is a few percent
-of it.
+**Storage and speed are known, and 8-node gangs work.** 33.7 s/step on one node, 17.0 on
+two, 4.5 on eight — 94% scaling efficiency at 8. An 8-epoch trial is **~1.9 days on 8 nodes**
+(vs ~14 on one) and leaves ~0.59 TiB behind; shorter rungs are ~0.09 TiB each. The bucket
+already holds ~360 TB, so even a full grid is a few percent of it. MarinFold #108's 8-node
+bootstrap failure does not reproduce.
 
 **Batch priority just works.** `--priority batch` on the driver covers every child job — the
 scheduler walks the parent chain. MarinFold #108 had to bypass the executor to get this; we
@@ -50,11 +51,10 @@ section.
    and a recovery triple ending in `cross_region_restart_timeout`; our policy uses nodes and
    has no cross-region concept. Either add a mapping note or adapt the tooling. **Nothing
    launches until this is resolved.**
-2. **8-node scaling is being measured now.** The ceiling is 256 (effectively "no limit";
-   actual usage stays far below it and batch priority is what protects other users). A real
-   8-epoch trial at 8 nodes is in flight to get a trustworthy wall-clock estimate and to
-   confirm val loss falls across evals. MarinFold #108 saw an 8-node JAX bootstrap abort;
-   the timeout suspected of causing it was raised afterwards, so this also retests that.
+2. **Confirm val loss falls across evals.** The 8-node run is being kept alive only long
+   enough for three evals, then stopped. Watch `eval/tokenized/contacts-v1-val/loss` — the
+   qualified key, not `eval/loss`; they read identically today because there is a single
+   validation component, so the loose key would be a latent bug rather than a present one.
 3. **GB200 is untried — no smoke has been attempted yet.** `cw-us-east-08a` has by far the
    most capacity and no levanter dense-LM training has ever run on Blackwell in this repo.
    Nothing here is blocked on peak performance, so a working GB200 path is worth more than

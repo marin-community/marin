@@ -164,21 +164,30 @@ Facts about this cluster family that are not obvious and have already cost time:
 - A Zephyr worker pool reported `killed` / "Terminated by user" once its stage completes is
   normal teardown, not a fault.
 
-## Measured Throughput (2026-07-25 smokes)
+## Measured Throughput (2026-07-25)
 
-Batch 128 x seq 8192, steady state (early steps are contaminated by a ~8 minute first-step
-XLA compile and must be excluded):
+Batch 128 x seq 8192, steady state. Early steps are contaminated by a ~8 minute first-step
+XLA compile and by tqdm's cumulative average, so every figure here is a delta between two
+late step timestamps.
 
-| nodes | s/step | speedup |
-| --- | --- | --- |
-| 1 (8xH100) | 33.7 | 1.00x |
-| 2 (16xH100) | 17.0 | 1.98x |
+| nodes | GPUs | s/step | speedup | scaling efficiency |
+| --- | --- | --- | --- | --- |
+| 1 | 8 | 33.7 | 1.00x | — |
+| 2 | 16 | 17.0 | 1.98x | 99% |
+| 8 | 64 | 4.5 | 7.49x | 94% |
 
-Scaling is effectively linear at 2 nodes. Eval costs ~7 minutes for the full 208-batch
-held-out pass. A checkpoint is ~96 GB (72 GB Levanter state + 24 GB HF export).
+Scaling holds up well to 8 nodes. MarinFold #108's 8-node JAX coordination-bootstrap
+failure does **not** reproduce; the `jax.distributed.initialize` timeout was raised to
+1800s nine days after they hit it.
 
-Projected 8-epoch (35,680-step) trial at batch 128: **~14 days on 1 node, ~7 days on 2**.
-The 2-epoch rung is ~3.5 days on 1 node. Budget accordingly when allocating rungs.
+Projected full-trial wall clock at batch 128 on 8 nodes: **~45 h (1.9 days)** for the
+8-epoch rung (35,680 steps), ~22 h at 4 epochs, ~11 h at 2 epochs. On 1 node the 8-epoch
+rung is ~14 days, so node count is the wall-clock knob and nothing else — the global batch
+is fixed by the trial, so steps, schedule and objective are identical at any gang size.
+
+Eval costs ~7 minutes for the full 208-batch held-out pass. A checkpoint is ~96 GB (72 GB
+Levanter state written sharded in ~15 s, plus a 24 GB HF export that takes ~2.5 min because
+it gathers to a single host).
 
 ## Checkpoint Retention
 
