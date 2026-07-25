@@ -506,3 +506,21 @@ statistics for performance comparisons.
   repository pre-commit checks. Next action: rerun the full ten-pair gate after
   the template-policy clarification; do not launch production unless it reaches
   10/10 correct and unanimous.
+
+### 2026-07-25T07:08:00Z — direct semantic calibration gate passed
+
+- Calibration v8 succeeded with all ten manually reviewed pairs correct and
+  unanimous across two independently framed judgments. All 20 judgments were
+  schema-valid on their first attempt and none remained unresolved. The
+  previously missed college/career spam pair was classified as a true
+  duplicate in both passes using the documented low-value-template boundary.
+- The root Iris job
+  `/rav/datakit-6854-semantic-calibration-qwen35-35b-a3b-v8` completed
+  successfully. The inference broker and worker were cleaned up after the
+  root job finished. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-calibration-qwen35-35b-a3b-20260725-v8/calibration.json`.
+- Calibration command:
+  `uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait --job-name datakit-6854-semantic-calibration-qwen35-35b-a3b-v8 --enable-extra-resources --cpu 2 --memory 8g --disk 20g --priority batch --extra marin-core:cpu -- python experiments/datakit/scripts/dedup_ab_semantic_judge.py --machine-labels s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-machine-labels-smoke-0.1b-20260725-v2/machine-labels.json --manual-labels .agents/logbooks/issue-6854-dedup-smoke-labels.json --model Qwen/Qwen3.5-35B-A3B --output s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-calibration-qwen35-35b-a3b-20260725-v8/calibration.json`.
+- This passes the direct-pair semantic gate only. The 755,281-pair production
+  review remains unlaunched until its restart-safe output shards, exact
+  coverage checks, and oversized-document path are tested and calibrated.
