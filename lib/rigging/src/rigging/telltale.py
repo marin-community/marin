@@ -439,15 +439,16 @@ class _HistogramSummary:
 
 _SPARK_CHARACTERS = "▁▂▃▄▅▆▇█"
 _POSITIVE_INFINITY = "+Inf"
+_HISTOGRAM_COUNT_TOLERANCE = 1e-12
 
 
-def _histogram_summary(acc: _HistogramAccumulator) -> _HistogramSummary:
-    malformed = acc.malformed or len(acc.counts) > 1 or len(acc.sums) > 1
+def _histogram_summary(histogram: _HistogramAccumulator) -> _HistogramSummary:
+    malformed = histogram.malformed or len(histogram.counts) > 1 or len(histogram.sums) > 1
     parsed: list[tuple[float, str, float]] = []
     infinity: tuple[str, float] | None = None
     seen_bounds: set[float] = set()
 
-    for raw_bound, cumulative in acc.buckets:
+    for raw_bound, cumulative in histogram.buckets:
         if not math.isfinite(cumulative) or cumulative < 0:
             malformed = True
             continue
@@ -478,7 +479,7 @@ def _histogram_summary(acc: _HistogramAccumulator) -> _HistogramSummary:
             malformed = True
         previous = cumulative
 
-    count = acc.counts[0] if acc.counts else None
+    count = histogram.counts[0] if histogram.counts else None
     if count is not None and (not math.isfinite(count) or count < 0):
         malformed = True
 
@@ -486,7 +487,12 @@ def _histogram_summary(acc: _HistogramAccumulator) -> _HistogramSummary:
         infinity_count = infinity[1]
         if count is None:
             count = infinity_count
-        elif not math.isclose(count, infinity_count, rel_tol=1e-12, abs_tol=1e-12):
+        elif not math.isclose(
+            count,
+            infinity_count,
+            rel_tol=_HISTOGRAM_COUNT_TOLERANCE,
+            abs_tol=_HISTOGRAM_COUNT_TOLERANCE,
+        ):
             malformed = True
     elif count is not None:
         if cumulative_buckets and count < cumulative_buckets[-1][1]:
@@ -496,8 +502,8 @@ def _histogram_summary(acc: _HistogramAccumulator) -> _HistogramSummary:
 
     if malformed:
         return _HistogramSummary(
-            family=acc.family,
-            labels=acc.labels,
+            family=histogram.family,
+            labels=histogram.labels,
             buckets=(),
             count=None,
             average=None,
@@ -519,11 +525,11 @@ def _histogram_summary(acc: _HistogramAccumulator) -> _HistogramSummary:
         previous_bound = bound
         previous_cumulative = cumulative
 
-    total = acc.sums[0] if acc.sums else None
+    total = histogram.sums[0] if histogram.sums else None
     average = total / count if total is not None and math.isfinite(total) and count is not None and count > 0 else None
     return _HistogramSummary(
-        family=acc.family,
-        labels=acc.labels,
+        family=histogram.family,
+        labels=histogram.labels,
         buckets=tuple(buckets),
         count=count,
         average=average,
