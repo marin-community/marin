@@ -269,15 +269,12 @@ def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
 
 
 def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int | None]:
-    """Return the ``(window_size_left, window_size_right)`` FA4 pair for a Marin sliding window.
+    """Return FA4's ``(window_size_left, window_size_right)`` for a Marin sliding window.
 
-    Marin's ``sliding_window=W`` keeps the last ``W`` tokens including the query itself, so FA4
-    sees ``W - 1`` tokens to the left and none to the right. Full causal attention passes
-    ``(None, None)``, which is what FA4 treats as "no local window".
-
-    Callers must resolve this outside the ``@cute.jit`` launcher bodies. The CuTe DSL rewrites a
-    plain ``if`` into an ``scf.if`` and traces *both* regions, so branching on ``sliding_window``
-    inside a launcher evaluates the dead arm as well.
+    ``sliding_window=W`` keeps the last ``W`` tokens including the query, so FA4 sees ``W - 1``
+    tokens to the left and none to the right; full causal attention is ``(None, None)``. Callers
+    must resolve this outside the ``@cute.jit`` launchers, because the CuTe DSL rewrites a plain
+    ``if`` into an ``scf.if`` and traces both regions.
     """
     if sliding_window is None:
         return None, None

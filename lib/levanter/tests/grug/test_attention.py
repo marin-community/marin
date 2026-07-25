@@ -168,74 +168,6 @@ def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():
     assert fa4_thd._sm90_postprocess_tile_m(100, 128) == 128
 
 
-def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
-    captured_kwargs: dict[str, object] = {}
-
-    # The upstream CUDA kernels are optional in unit tests; exercise the launcher
-    # boundary where Marin passes SM90-safe options into flash-attn-4.
-    class FakeCutlass:
-        BFloat16 = object()
-        Float16 = object()
-        Float32 = object()
-
-    class FakeCute:
-        Tensor = object()
-
-        @staticmethod
-        def jit(fn):
-            return fn
-
-        @staticmethod
-        def kernel(fn):
-            return fn
-
-    class FakeCuda:
-        CUstream = object()
-
-    class FakePreprocess:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class FakeBackward:
-        def __init__(self, *args, **kwargs):
-            captured_kwargs.update(kwargs)
-
-    class FakePostprocess:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    modules = fa4_thd._UpstreamFa4CuteModules(
-        arch=90,
-        cutlass=FakeCutlass,
-        cute=FakeCute,
-        cjax=object(),
-        cuda=FakeCuda,
-        FlashAttentionForward=object(),
-        FlashAttentionBackward=FakeBackward,
-        FlashAttentionBackwardPreprocess=FakePreprocess,
-        FlashAttentionBackwardPostprocess=FakePostprocess,
-    )
-
-    fa4_thd._upstream_fa4_thd_backward_launcher(
-        modules,
-        dtype=jnp.dtype(jnp.bfloat16),
-        head_dim=128,
-        head_dim_v=128,
-        qhead_per_kvhead=2,
-        kernel_config=fa4_thd.Flash4CuteKernelConfig(
-            forward_tile=(128, 64),
-            backward_tile=(64, 128),
-            num_threads=384,
-        ),
-        sliding_window=None,
-    )
-
-    assert captured_kwargs["PdS_stage"] == 1
-    assert captured_kwargs["SdP_swapAB"] is True
-    assert captured_kwargs["AtomLayoutNdKV"] == 2
-    assert captured_kwargs["num_threads"] == 384
-
-
 class _FakeLaunchable:
     def launch(self, **kwargs):
         return None
@@ -276,38 +208,41 @@ class _FakeCuda:
     CUstream = object
 
 
-class _RecordingKernel:
-    """Stands in for an upstream FA4 kernel and records every traced invocation."""
+class _Fa4KernelRecorder:
+    """Fake FA4 kernel class recording the options it is built with and every traced invocation."""
 
-    def __init__(self, invocations):
-        self._invocations = invocations
+    def __init__(self):
+        self.constructor_kwargs: dict = {}
+        self.invocations: list[dict] = []
 
     def __call__(self, *args, **kwargs):
-        self._invocations.append(kwargs)
+        self.constructor_kwargs.update(kwargs)
+        return self._invoke
+
+    def _invoke(self, *args, **kwargs):
+        self.invocations.append(kwargs)
 
 
-class _NoOpKernel:
-    def __call__(self, *args, **kwargs):
-        return None
+def _noop_kernel(*args, **kwargs):
+    return None
 
 
-def _fa4_thd_fake_modules(invocations):
-    def recording_factory(*args, **kwargs):
-        return _RecordingKernel(invocations)
+def _fa4_thd_fake_modules(*, arch, forward=None, backward=None):
+    """Build `_UpstreamFa4CuteModules` with the upstream CUDA kernels replaced by recorders.
 
-    def noop_factory(*args, **kwargs):
-        return _NoOpKernel()
-
+    flash-attn-4 and the CuTe DSL are optional in unit tests, so the launcher boundary is exercised
+    against fakes whose `cute.jit` is the identity.
+    """
     return fa4_thd._UpstreamFa4CuteModules(
-        arch=100,
+        arch=arch,
         cutlass=_FakeCutlass,
         cute=_FakeCute,
         cjax=object(),
         cuda=_FakeCuda,
-        FlashAttentionForward=recording_factory,
-        FlashAttentionBackward=recording_factory,
-        FlashAttentionBackwardPreprocess=noop_factory,
-        FlashAttentionBackwardPostprocess=noop_factory,
+        FlashAttentionForward=forward or _Fa4KernelRecorder(),
+        FlashAttentionBackward=backward or _Fa4KernelRecorder(),
+        FlashAttentionBackwardPreprocess=lambda *args, **kwargs: _noop_kernel,
+        FlashAttentionBackwardPostprocess=lambda *args, **kwargs: _noop_kernel,
     )
 
 
@@ -318,21 +253,39 @@ _BLACKWELL_THD_KERNEL_CONFIG = fa4_thd.Flash4CuteKernelConfig(
 )
 
 
+def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
+    backward = _Fa4KernelRecorder()
+
+    fa4_thd._upstream_fa4_thd_backward_launcher(
+        _fa4_thd_fake_modules(arch=90, backward=backward),
+        dtype=jnp.dtype(jnp.bfloat16),
+        head_dim=128,
+        head_dim_v=128,
+        qhead_per_kvhead=2,
+        kernel_config=fa4_thd.Flash4CuteKernelConfig(
+            forward_tile=(128, 64),
+            backward_tile=(64, 128),
+            num_threads=384,
+        ),
+        sliding_window=None,
+    )
+
+    assert backward.constructor_kwargs["PdS_stage"] == 1
+    assert backward.constructor_kwargs["SdP_swapAB"] is True
+    assert backward.constructor_kwargs["AtomLayoutNdKV"] == 2
+    assert backward.constructor_kwargs["num_threads"] == 384
+
+
 @pytest.mark.parametrize(
     ("sliding_window", "window_size_left", "window_size_right"),
     [(None, None, None), (5, 4, 0)],
     ids=["full-causal", "sliding-window"],
 )
 def test_gpu_fa4_thd_launchers_pass_resolved_window_sizes(sliding_window, window_size_left, window_size_right):
-    """Both launchers must hand FA4 an already-resolved window pair.
-
-    The CuTe DSL turns a plain ``if`` inside a ``@cute.jit`` body into an ``scf.if`` and traces both
-    regions, so a launcher that branches on ``sliding_window`` evaluates the dead arm too. Resolving
-    the window sizes before tracing is what keeps a single kernel invocation in the launcher.
-    """
-    forward_invocations: list[dict] = []
+    """Both launchers hand FA4 an already-resolved window pair from a single call site."""
+    forward = _Fa4KernelRecorder()
     forward_launcher = fa4_thd._upstream_fa4_thd_forward_launcher(
-        _fa4_thd_fake_modules(forward_invocations),
+        _fa4_thd_fake_modules(arch=100, forward=forward),
         dtype=jnp.dtype(jnp.bfloat16),
         head_dim=128,
         head_dim_v=128,
@@ -342,13 +295,13 @@ def test_gpu_fa4_thd_launchers_pass_resolved_window_sizes(sliding_window, window
     )
     forward_launcher(object(), object(), object(), object(), object(), object(), object(), softmax_scale=0.1)
 
-    assert len(forward_invocations) == 1
-    assert forward_invocations[0]["window_size_left"] == window_size_left
-    assert forward_invocations[0]["window_size_right"] == window_size_right
+    assert len(forward.invocations) == 1
+    assert forward.invocations[0]["window_size_left"] == window_size_left
+    assert forward.invocations[0]["window_size_right"] == window_size_right
 
-    backward_invocations: list[dict] = []
+    backward = _Fa4KernelRecorder()
     backward_launcher = fa4_thd._upstream_fa4_thd_backward_launcher(
-        _fa4_thd_fake_modules(backward_invocations),
+        _fa4_thd_fake_modules(arch=100, backward=backward),
         dtype=jnp.dtype(jnp.bfloat16),
         head_dim=128,
         head_dim_v=128,
@@ -358,9 +311,9 @@ def test_gpu_fa4_thd_launchers_pass_resolved_window_sizes(sliding_window, window
     )
     backward_launcher(*[object() for _ in range(16)], softmax_scale=0.1)
 
-    assert len(backward_invocations) == 1
-    assert backward_invocations[0]["window_size_left"] == window_size_left
-    assert backward_invocations[0]["window_size_right"] == window_size_right
+    assert len(backward.invocations) == 1
+    assert backward.invocations[0]["window_size_left"] == window_size_left
+    assert backward.invocations[0]["window_size_right"] == window_size_right
 
 
 @pytest.mark.parametrize("sliding_window", [None, 5], ids=["full-causal", "sliding-window"])
