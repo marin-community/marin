@@ -350,15 +350,16 @@ def _make_train_step(
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
+            loss, qb_beta_per_layer, capacity_overflow_per_layer = compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
             )
+            return loss, (qb_beta_per_layer, capacity_overflow_per_layer)
 
-        (loss, qb_beta_per_layer, capacity_overflow_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+        (loss, (qb_beta_per_layer, capacity_overflow_per_layer)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
             qb_params
         )
         metrics = {"train/loss": loss}
