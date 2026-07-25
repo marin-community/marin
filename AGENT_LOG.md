@@ -274,3 +274,11 @@ maxed at ~16% with untrained random-token routing, so the jump to ~89% is real-s
 CONFIRMED by a QB-load-balancing run (expected to crush drops) - that's d4's cf/QB sweep territory.
 => FIDELITY NOT CLEARED for the barebones fixed path as-configured. Mitigation required (QB load-balancing /
 cf sweep / ragged). Goal-relevant negative for fixed transport fidelity; speed half (24.04% lock) stands.
+
+## QB-on drop A/B submitted 00:28 UTC
+QB load-balancing knob = SCALE_MOE_QB=1 (model.py:150 qb_routing; NOT SCALE_MOE_SKIP_QB which would disable the
+router_bias update). Job /mwittmann/ep25d1-qbon-drops-30-0725-0027: custom adjoint + SCALE_REPORT_DROPS +
+SCALE_MOE_QB=1, cf1.0, 30 steps, operating point, DISABLE_CHECKPOINT. Comparator: QB-OFF series 0.893->0.846.
+Division of labor: I own THIS quick 30-step confirmation; d4 owns the 120-step production QB-on legs (cf1.0 then
+cf1.15) - not duplicating. Also to report: step-time QB-on vs QB-off (fixed path GEMMs run on capacity-sized
+buffers regardless of drops, so headline MFU should be drop-insensitive; only the router aux-loss adds cost).
