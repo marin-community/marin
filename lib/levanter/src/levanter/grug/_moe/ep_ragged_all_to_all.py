@@ -616,9 +616,28 @@ def _receiver_clipped_fixed_a2a_core(
             valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
             local_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
             moe_dim = moe_w2_local.shape[1]
-            hidden = ragged_dot(compact_expert_inputs, moe_w13_local, local_group_sizes)
-            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
-            compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+            if os.environ.get("SCALE_A2A_RECEIVER_SONIC_CUTE") == "1":
+                # QuACK/CuTeDSL is an optional Blackwell-only dependency.
+                from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+                interleaved_w13 = _interleave_gate_up(moe_w13_local, moe_dim)
+                cumulative_group_sizes = jnp.concatenate(
+                    [
+                        jnp.zeros((1,), dtype=jnp.int32),
+                        jnp.cumsum(local_group_sizes, dtype=jnp.int32),
+                    ]
+                )
+                compact_expert_outputs = _expert_mlp(
+                    compact_expert_inputs,
+                    interleaved_w13,
+                    moe_w2_local,
+                    local_group_sizes,
+                    cumulative_group_sizes,
+                )
+            else:
+                hidden = ragged_dot(compact_expert_inputs, moe_w13_local, local_group_sizes)
+                gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+                compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
             expert_outputs = _expand_from_keep_mask(
                 compact_expert_outputs,
                 received_keep.reshape(transport_size),
