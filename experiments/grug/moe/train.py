@@ -477,20 +477,66 @@ def _bind_jaxpp_meshes_shallow(cjaxpr, mpmd_mesh, core_module):
     return cjaxpr.replace(jaxpr=cjaxpr.jaxpr.replace(eqns=new_equations))
 
 
+def _replace_jaxpp_captured_meshes(cjaxpr, new_mesh, core_module):
+    jaxpr = cjaxpr.jaxpr if isinstance(cjaxpr, core_module.jcore.ClosedJaxpr) else cjaxpr
+
+    new_equations = []
+    for equation in jaxpr.eqns:
+        if equation.primitive is core_module.task_p:
+            new_equations.append(core_module._bind_task_eqn_to_mesh(equation, new_mesh))
+            continue
+
+        param_update = {}
+        if equation.primitive is jax.lax.sharding_constraint_p:
+            param_update = {"sharding": core_module.updated_named_sharding_mesh(equation.params["sharding"], new_mesh)}
+        elif equation.primitive is core_module.jc.jit_p:
+            param_update = {
+                "in_shardings": core_module.updated_named_sharding_mesh(equation.params["in_shardings"], new_mesh),
+                "out_shardings": core_module.updated_named_sharding_mesh(equation.params["out_shardings"], new_mesh),
+            }
+        elif equation.primitive is core_module.jc.shard_map_p:
+            mesh = equation.params["mesh"]
+            if not isinstance(mesh, jax.sharding.AbstractMesh):
+                param_update = {"mesh": new_mesh}
+        elif equation.primitive is jax.lax.device_put_p:
+            param_update = {"devices": core_module.updated_named_sharding_mesh(equation.params["devices"], new_mesh)}
+
+        for name, value in equation.params.items():
+            if isinstance(value, (core_module.jcore.ClosedJaxpr, core_module.jcore.Jaxpr)):
+                param_update[name] = _replace_jaxpp_captured_meshes(value, new_mesh, core_module)
+        new_equations.append(equation.replace(params=equation.params | param_update))
+
+    replaced_jaxpr = jaxpr.replace(eqns=new_equations)
+    if isinstance(cjaxpr, core_module.jcore.Jaxpr):
+        return replaced_jaxpr
+    return cjaxpr.replace(jaxpr=replaced_jaxpr)
+
+
 def _install_jaxpp_bind_meshes_patch() -> None:
-    """Keep automatic JaxPP mesh binding from replacing nested task equations."""
+    """Preserve automatic JaxPP equations while binding concrete stage meshes."""
     _require_jaxpp()
     if jaxpp_core is None:
         raise ModuleNotFoundError("jaxpp.core is required for automatic JaxPP mesh binding")
+
+    original_replace_captured_meshes = jaxpp_core.replace_captured_meshes
+    if not getattr(original_replace_captured_meshes, "_grug_abstract_mesh_patch", False):
+
+        def replace_captured_meshes(cjaxpr, new_mesh):
+            return _replace_jaxpp_captured_meshes(cjaxpr, new_mesh, jaxpp_core)
+
+        replace_captured_meshes._grug_abstract_mesh_patch = True
+        cached_replace_captured_meshes = jaxpp_core.jc.weakref_lru_cache(replace_captured_meshes)
+        cached_replace_captured_meshes._grug_abstract_mesh_patch = True
+        jaxpp_core.replace_captured_meshes = cached_replace_captured_meshes
+
     original_bind_meshes = jaxpp_core.bind_meshes
-    if getattr(original_bind_meshes, "_grug_shallow_bind_meshes_patch", False):
-        return
+    if not getattr(original_bind_meshes, "_grug_shallow_bind_meshes_patch", False):
 
-    def bind_meshes_shallow(cjaxpr, mpmd_mesh):
-        return _bind_jaxpp_meshes_shallow(cjaxpr, mpmd_mesh, jaxpp_core)
+        def bind_meshes_shallow(cjaxpr, mpmd_mesh):
+            return _bind_jaxpp_meshes_shallow(cjaxpr, mpmd_mesh, jaxpp_core)
 
-    bind_meshes_shallow._grug_shallow_bind_meshes_patch = True
-    jaxpp_core.bind_meshes = bind_meshes_shallow
+        bind_meshes_shallow._grug_shallow_bind_meshes_patch = True
+        jaxpp_core.bind_meshes = bind_meshes_shallow
 
 
 def _pipeline_schedule(pipeline: GrugJaxPPConfig):

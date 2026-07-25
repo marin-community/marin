@@ -66,3 +66,42 @@ def test_bind_jaxpp_meshes_replaces_only_each_jaxpr_top_level():
     bound_loop = bound.jaxpr.eqns[0].params["jaxpr"]
     bound_task_call = bound_loop.jaxpr.eqns[0].params["call_jaxpr"]
     assert bound_task_call.jaxpr.eqns == call_jaxpr.jaxpr.eqns
+
+
+def test_replace_jaxpp_captured_meshes_preserves_abstract_shard_map():
+    call_jaxpr = jax.make_jaxpr(lambda value: value + 1)(jnp.array(0, dtype=jnp.int32))
+    task_primitive = jax_core.Primitive("test_jaxpp_task")
+    jit_primitive = jax_core.Primitive("test_jaxpp_jit")
+    shard_map_primitive = jax_core.Primitive("test_jaxpp_shard_map")
+    shard_map_primitive.def_abstract_eval(lambda value, **_params: value)
+    input_variable = jax_core.Var(call_jaxpr.in_avals[0])
+    output_variable = jax_core.Var(call_jaxpr.out_avals[0])
+    shard_map_equation = jax_core.new_jaxpr_eqn(
+        [input_variable],
+        [output_variable],
+        shard_map_primitive,
+        {"mesh": jax.sharding.AbstractMesh((1,), ("data",))},
+        call_jaxpr.effects,
+    )
+    outer_jaxpr = jax_core.Jaxpr(
+        (),
+        (input_variable,),
+        (output_variable,),
+        (shard_map_equation,),
+        call_jaxpr.effects,
+    )
+    outer_cjaxpr = jax_core.ClosedJaxpr(outer_jaxpr, ())
+    fake_core = SimpleNamespace(
+        jcore=jax_core,
+        jc=SimpleNamespace(jit_p=jit_primitive, shard_map_p=shard_map_primitive),
+        task_p=task_primitive,
+    )
+
+    replaced = grug_train._replace_jaxpp_captured_meshes(outer_cjaxpr, object(), fake_core)
+
+    assert len(replaced.jaxpr.eqns) == 1
+    assert replaced.jaxpr.eqns[0].primitive is shard_map_primitive
+    assert replaced.jaxpr.eqns[0].invars == shard_map_equation.invars
+    assert replaced.jaxpr.eqns[0].outvars == shard_map_equation.outvars
+    assert replaced.jaxpr.eqns[0].params["mesh"] == shard_map_equation.params["mesh"]
+    jax_core.check_jaxpr(replaced.jaxpr)
