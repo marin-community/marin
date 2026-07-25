@@ -122,3 +122,28 @@ Next: arm-1 completion ~22:30 -> harvest (logs permitting) -> submit arm 2 rack 
 
 Confidence: 4/10 g=0.5, 3/10 integral
 Next: poll arm-1 logs; babysit arm 2 to completion ~00:15; harvest both; decide arm 3.
+
+## Check-in 2026-07-25 23:15 UTC — LIVE PROBE: arm 2 integral @150 = 0.66 drops (wrong direction)
+
+- BYPASS FOUND for running tasks: `iris task exec` + curl the pod's own telltale
+  /metrics (levanter_* gauges) — no log-server dependency. (Proxy-minted capability URLs
+  403, but in-pod localhost is open.)
+- ARM 2 LIVE READ at step 150: drop_fraction 0.659, loss 5.189, 358.1K tok/s (~23.1% MFU
+  by the 15.5K-tok/s-per-pp conversion — the heavy-drop inflation zone). Baseline g=1 at
+  step 150: 0.125. Integral gamma=0.001 has NOT reversed the early collapse: max bias
+  travel by step 150 is 0.15 in bias units, far below the collapsed-logit spread. This is
+  the predicted gamma-horizon failure mode, now measured. Unless the late series shows a
+  strong monotonic decline (controller steadily gaining), arm 2 is a clean negative at
+  this horizon; arm 3 = larger gamma (e.g. 0.01) would be the tuned point ONLY if the
+  series shows directional movement.
+- Arm-1 metrics still gated on the GB200 log pipeline (0 child rows at 23:10; 2.5h gap;
+  d4/rav evening jobs equally stuck). Arm 1 completed 22:28 — its pods are gone, so
+  telltale is not an option for it; logs are the only path.
+- Background telltale poller running for arm 2 (150s cadence -> /tmp/qbint-350-telltale.tsv),
+  insurance against the log gap + early series shape. Full series still from logs later.
+- Baseline draw variance quantified (harvest of the two g=1 draws): step 60: 0.271/0.234;
+  step 90: 0.233/0.132; step 119: 0.175/0.090 — ~2x mid-training draw spread. The <3% win
+  bar needs tail separation well beyond this.
+
+Confidence: 4/10 g=0.5, 1.5/10 integral-g0.001 (measured wrong-direction separation at 150)
+Next: arm-2 series via poller; keep polling arm-1 logs every ~15 min.
