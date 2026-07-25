@@ -256,21 +256,27 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
-    # QB router biases to apply on the NEXT step: [num_layers, num_experts]. All-zero (a no-op) unless
-    # cfg.qb_routing is on, so the model's forward is byte-for-byte unchanged when QB is off.
-    pending_qb_betas: jax.Array
+    # Expert assignment counts from the previous step: [num_layers, num_experts]. All-zero (a no-op)
+    # unless loss-free balancing is on, so the model's forward is unchanged when it is off.
+    pending_expert_loads: jax.Array
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from the QB betas computed on the previous step.
+def _updated_router_bias(router_bias: jax.Array, expert_loads: jax.Array, update_rate: float) -> jax.Array:
+    """Apply one auxiliary-loss-free signed load-balancing update."""
+    mean_load = jnp.mean(expert_loads, axis=-1, keepdims=True)
+    load_error = mean_load - expert_loads
+    updated = router_bias + update_rate * jnp.sign(load_error)
+    return updated - jnp.mean(updated, axis=-1, keepdims=True)
 
-    Every grug layer is MoE and lives in the single stacked scan body, so ``router_bias`` is the
-    [num_layers, num_experts] leaf ``stacked_blocks.stacked.mlp.router_bias`` and this is one
-    vectorized assignment. Per-layer mean-centering keeps each layer's bias zero-sum. When QB is off
-    the betas are all-zero, so the bias stays zero and never enters the (plain top-k) forward.
-    """
-    new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+
+def _apply_loss_free_bias_update(
+    model: Transformer,
+    expert_loads: jax.Array,
+    update_rate: float,
+) -> Transformer:
+    """Update every layer's router bias from the previous batch's expert load."""
+    router_bias = model.stacked_blocks.stacked.mlp.router_bias
+    new_bias = _updated_router_bias(router_bias, expert_loads, update_rate)
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
@@ -317,8 +323,11 @@ def initial_state(
         params=params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
-        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero == no bias at step 0.
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero is a no-op at step 0.
+        pending_expert_loads=jnp.zeros(
+            (model_config.num_layers, model_config.num_experts),
+            dtype=jnp.int32,
+        ),
     )
 
 
@@ -343,25 +352,38 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
-        # Apply the pending QB betas (from the previous step) to the router biases inside JIT, before
-        # the forward. All-zero when QB is off, so qb_params is numerically identical to state.params.
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-        qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas) if ema_beta is not None else None
+        # Update biases from the previous batch before the forward. The pending loads are all-zero
+        # when balancing is off, so balanced_params is numerically identical to state.params.
+        balanced_params = _apply_loss_free_bias_update(
+            state.params,
+            state.pending_expert_loads,
+            model_config.qb_bias_update_rate,
+        )
+        balanced_ema_params = (
+            _apply_loss_free_bias_update(
+                state.ema_params,
+                state.pending_expert_loads,
+                model_config.qb_bias_update_rate,
+            )
+            if ema_beta is not None
+            else None
+        )
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            loss, qb_beta_per_layer, capacity_overflow_per_layer = compute_params.next_token_loss(
+            loss, expert_load_per_layer, capacity_overflow_per_layer = compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
             )
-            return loss, (qb_beta_per_layer, capacity_overflow_per_layer)
+            return loss, (expert_load_per_layer, capacity_overflow_per_layer)
 
-        (loss, (qb_beta_per_layer, capacity_overflow_per_layer)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-            qb_params
-        )
+        (loss, (expert_load_per_layer, capacity_overflow_per_layer)), grads = jax.value_and_grad(
+            loss_fn,
+            has_aux=True,
+        )(balanced_params)
         metrics = {"train/loss": loss}
         if model_config.report_capacity_overflow:
             assignments_per_layer = batch.tokens.size * model_config.num_experts_per_token
@@ -373,17 +395,17 @@ def _make_train_step(
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
-        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        updates, opt_state = optimizer.update(grads, opt_state_in, balanced_params)
+        params = optax.apply_updates(balanced_params, updates)
 
         if ema_beta is None:
             ema_params = None
         else:
-            if qb_ema_params is None:
+            if balanced_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
+                balanced_ema_params,
                 params,
             )
 
@@ -395,7 +417,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=balanced_params,
                 grads=grads,
                 updates=updates,
                 opt_state=opt_state_in,
@@ -411,7 +433,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=qb_beta_per_layer,
+            pending_expert_loads=expert_load_per_layer,
         )
 
         return next_state, metrics, watch_stats

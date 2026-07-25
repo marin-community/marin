@@ -28,6 +28,9 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_MOE_CAPACITY_FACTOR
                         static sender/expert capacity relative to the mean assignments
                         per sender/expert bucket (default 1.0)
+    SCALE_MOE_QB_BIAS_UPDATE_RATE
+                        signed per-step expert-bias update for loss-free balancing
+                        (default 1e-3)
     SCALE_REPORT_CAPACITY_OVERFLOW
                         1 logs mean, max, and per-layer dropped-assignment rates
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
@@ -157,6 +160,7 @@ def build_scale_model() -> GrugModelConfig:
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",
         qb_routing=os.environ.get("SCALE_MOE_QB") == "1",
+        qb_bias_update_rate=float(os.environ.get("SCALE_MOE_QB_BIAS_UPDATE_RATE", "1e-3")),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,

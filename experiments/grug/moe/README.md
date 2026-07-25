@@ -13,15 +13,14 @@ the dense base template.
   experts (contributes to every token).
 
 **Router.**
-- Linear projection of `hidden_dim → num_experts` in **fp32** (cast back at
-  the end). Top-k, softmax, and QB statistics all run in fp32.
+- Linear projection of `hidden_dim → num_experts` in **fp32**. Top-k and
+  sigmoid combine-weight calculations also run in fp32.
 - A `stop_gradient` bias term gets added to the router logits before top-k;
-  the bias is updated each step from the previous step's QB-β statistics
-  (see `train.py::_apply_qb_betas`).
-- **QB load balancing**: per-expert β is the top-k logit threshold averaged
-  across the batch. On the next step, `router_bias := -β`, pushing
-  rarely-selected experts up and over-selected experts down. Replaces an aux
-  load-balancing loss — the bias mechanism is invisible to gradients.
+  the bias is updated each step from the previous batch's expert loads.
+- **Auxiliary-loss-free load balancing**: each overloaded expert's bias is
+  decreased by a fixed update rate and each underloaded expert's bias is
+  increased by the same rate. The bias affects expert selection only, so the
+  controller does not add gradients to the language-model objective.
 - **Combine weights**: sigmoid on the *unbiased* router logits of the K
   selected experts, then **renormalised to sum to 2.5**
   (`_ROUTING_RENORM_SUM`).
@@ -182,7 +181,7 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation.
 - [`optimizer.py`](./optimizer.py) — `GrugMoeAdamHConfig` and
   `GrugMoeMuonHConfig` wrappers with expert-param-group awareness.
-- [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `_apply_qb_betas`,
+- [`train.py`](./train.py) — `GrugTrainState`, `train_step`, loss-free router bias updates,
   `run_grug` (dispatches a Fray job).
 - [`heuristic.py`](./heuristic.py) — `MoeHeuristic` (MuonH, May Recipe
   refit) and `build_from_heuristic` entry point. Current default.
