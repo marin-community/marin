@@ -1391,3 +1391,44 @@ statistics for performance comparisons.
   job and is revalidating prior immutable checkpoints before resuming. All
   four batch-priority 2-H100 workers and their coordinators are Ready with zero
   Kubernetes restarts.
+
+### 2026-07-25T17:34:22Z — 34,143 pairs verified
+
+- Twenty-two additional checkpoints passed independent validation: 2,702
+  pairs, 1,319 model false positives, 1,376 model true duplicates, and seven
+  unresolved outcomes. They contain 5,776 valid judgments across 5,820
+  attempts; 44 invalid responses caused 31 retries. Three pairs were chunked
+  and 2,699 were direct.
+- Complete character comparison resolves six ambiguities as true duplicates.
+  In each case, every character of one document occurs unchanged in the other;
+  the only difference is a seven-character LaTeX answer wrapper. The source
+  locations and member/canonical text SHA-256 prefixes are:
+
+  - `part-00001-of-00128.parquet:9157`, `5c32379b` / `86301086`;
+  - `part-00001-of-00128.parquet:9180`, `0cd19260` / `fe5076b5`;
+  - `part-00032-of-00128.parquet:9269`, `626a3e26` / `8e62a831`;
+  - `part-00064-of-00128.parquet:7794`, `422c74b2` / `741014b7`;
+  - `part-00064-of-00128.parquet:7797`, `52720e61` / `a7568be9`;
+  - `part-00064-of-00128.parquet:7806`, `c4e43a5d` / `018231f1`.
+
+- Complete code and image comparison resolves the seventh ambiguity as a
+  false positive. The source code is byte-identical after replacing its
+  embedded PNG, but the asserted output images differ: both are 360×360 RGBA,
+  while 17,121 pixels differ over a `[0, 0, 360, 133]` bounding box and the
+  mean absolute channel difference is 14.693. The image byte hashes are
+  `53798660` / `be5955ab`, and decoded pixel hashes are `c4bc7e4d` /
+  `2ea4d5ea`. Pair location: `part-00064-of-00128.parquet:8040`;
+  member/canonical text SHA-256 prefixes: `c294f6bf` / `bc50a49f`.
+- A batch-priority Iris job published the seven immutable manual Parquet
+  records and completion markers. A separate Iris job reread all seven source
+  cases, semantic checkpoints, manual rows, judgment hashes, Parquet hashes,
+  and markers; all exact checks passed.
+- Across the stable 268-checkpoint snapshot, all 31 manual records leave:
+
+  - baseline: 28,230 pairs, 18,041 false positives, 10,189 true duplicates;
+  - treatment: 5,913 pairs, 3,057 false positives, 2,856 true duplicates;
+  - combined: 34,143 pairs, 21,098 false positives, 13,045 true duplicates.
+
+- Partition 3 recovered through its immutable frontier and resumed new work.
+  All four batch-priority 2-H100 workers, coordinators, and brokers remain
+  Ready with zero Kubernetes restarts.
