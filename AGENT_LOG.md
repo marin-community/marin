@@ -184,3 +184,23 @@ Provisional ranking: fixed+adjoint leads on production-shape throughput at 24.04
 Confidence: 9/10 that the two rack arms settle a transport or fidelity decision; 4/10 that `ring_cute` beats the 24.04% fixed-adjoint bar.
 
 Next: stop for coordinator execution of the two rack commands, one at a time.
+
+## FINAL TRANSPORT VERDICT — written by coordinator 2026-07-25 09:35 UTC
+(codex backend 503-circuit-open at wrap-up time; codex may amend on recovery. All
+numbers from harvested runs in relay-results/ and peer AGENT_LOGs.)
+
+| transport (operating point, 1 rack, 120 steps) | MFU | drops (QB-off) | note |
+|---|---|---|---|
+| fixed + gather + custom adjoint (QB-off) | 24.04% p50 | 0.85-0.89 early | d1 matched A/B |
+| fixed + gather + custom adjoint (QB-on cf1.0) | 22.60% p50 | 0.90 peak -> 0.083 @119 | d4; honest production config |
+| ragged, one-shot kernel disabled | ~12.38% mean | 0.433 end-of-run | single draw; ran clean |
+| ring_cute EP64 | DNF | — | OOM 141.79 GiB in jit_train_step |
+
+Direction-2 answer: transport choice does NOT leave >=1pp on the table — fixed-capacity
++ gather dispatch + custom adjoint wins decisively at e256/top-8/EP64. The matched
+ragged control #7279 asked for is on record (~12.4%, and its receiver-side capacity
+still drops 43% under router collapse — ragged is not a fidelity refuge; QB balancing
+is the fidelity lever on every transport). ring_cute's ladder wins at e64/e128 do not
+transfer: it cannot fit this shape without memory work (a project, not tuning).
+Caveats: ragged/ring arms were QB-off single draws on NGC 26.06 + #7421 plugin; fixed
+numbers are stock-toolchain. No further arm is worth a rack; 2-rack cells moot.
