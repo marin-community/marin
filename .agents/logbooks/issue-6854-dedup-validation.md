@@ -1074,3 +1074,32 @@ statistics for performance comparisons.
 
 - Partition p1 moved to semantic range 384:512. All 12 pods remain Ready with
   zero restarts.
+
+### 2026-07-25T15:13:00Z — 13,137 pairs verified; Apache ambiguity resolved
+
+- Five new baseline checkpoints passed independent validation: 640 pairs, 463
+  false positives, 176 true duplicates, and one unresolved model outcome.
+  Their 5,295 accepted judgments cover 48 chunked and 592 direct pairs; all
+  responses were valid on their first attempt.
+- Complete-text inspection resolves the ambiguous Apache-on-Windows pair as a
+  false positive. A reproducible comparison covered all 6,668 member
+  characters and 7,554 canonical characters, split into 120 and 136 normalized
+  sentence or command units. Deleting the member loses five technical details:
+  the custom service-config installation command using `-f`, the named-service
+  `shutdown` command, forward-slash path guidance, parent/child process
+  behavior, and `Control-Break` console restart behavior. Pair location:
+  `part-00032-of-00128.parquet:1107`; member/canonical text SHA-256:
+  `02c9fa5b3d10ab13db55ea2d360a8b19dc3d9746b459b145a66caecb85e7ba67` /
+  `d89320ae00be44eb9ca4c88d90d36cc2b81d6b5e6e1775253d6f82099c5eb3f5`.
+- The one-row manual Parquet shard and its completion marker were written,
+  reread, and hash-verified. The record binds the review identity, both
+  full-text hashes, semantic shard hash, and exact `judgments_json` SHA-256.
+- A global reread verified all 103 semantic markers, 13,137 unique outcome
+  records, and 14 manual markers. Every unresolved semantic record has exactly
+  one matching manual decision; none remains unresolved. Adjusted totals are:
+
+  - baseline: 10,682 pairs, 7,044 false positives, 3,638 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 13,137 pairs, 8,328 false positives, 4,809 true duplicates.
+
+- All 12 pods remained Ready with zero restarts at the latest health sample.
