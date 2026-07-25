@@ -871,3 +871,35 @@ statistics for performance comparisons.
   positives, 2,927 true duplicates, and seven unresolved. Applying all seven
   manual records yields 5,003 false positives and 2,933 true duplicates across
   all 7,936 pairs.
+
+### 2026-07-25T12:56:00Z — treatment review begins; 10,112 pairs verified
+
+- Thirteen additional checkpoints first brought audited coverage to 9,600
+  pairs. The new 1,664-pair block contains 1,032 false positives and 632 true
+  duplicates, with zero unresolved outcomes, retries, or invalid responses.
+  Partition p1's first 757,436-byte shard passed all byte, row, key, evidence,
+  and manifest checks; its 128 pairs included 25 chunked reviews, 3,196
+  judgments, and 258 tiebreaks.
+- A global reread caught four more shards that completed during the audit.
+  All four then passed the same independent checks: 512 pairs, 296 false
+  positives, 216 true duplicates, zero unresolved, 1,098 first-attempt-valid
+  judgments, and 62 tiebreaks. They split evenly between baseline and
+  treatment.
+- Exact threshold reconstruction confirms that the first 62 checkpoint entries
+  were correctly described as baseline-only. Treatment cases first appear in
+  the 63rd–75th checkpoint block. At 75 checkpoints, coverage was 8,851
+  baseline pairs and 749 treatment pairs.
+- The stable 79-checkpoint snapshot contains 10,112 semantic pairs. Raw
+  baseline counts are 5,855 false positives, 3,245 true duplicates, and seven
+  unresolved; raw treatment counts are 475 false positives and 530 true
+  duplicates, with none unresolved. Applying the seven hash-bound manual
+  decisions produces:
+
+  - baseline: 9,107 pairs, 5,856 false positives, 3,251 true duplicates;
+  - treatment: 1,005 pairs, 475 false positives, 530 true duplicates;
+  - combined: 10,112 pairs, 6,331 false positives, 3,781 true duplicates.
+
+- The global pass reread all 79 semantic shards and all seven manual shards. It
+  verified every manual record's review key, member/canonical SHA-256 values,
+  and semantic `judgments_json` SHA-256, leaving no unresolved record without
+  exactly one manual decision.
