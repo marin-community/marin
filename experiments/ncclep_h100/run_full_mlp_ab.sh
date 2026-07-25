@@ -11,6 +11,7 @@ ITERATIONS=${ITERATIONS:-20}
 PARITY_MODE=${PARITY_MODE:-strict}
 NCCLEP_OVERFLOW_POLICY=${NCCLEP_OVERFLOW_POLICY:-trap}
 NCCLEP_COMBINE_DTYPE=${NCCLEP_COMBINE_DTYPE:-bf16}
+NCCLEP_DISPATCH_DTYPE=${NCCLEP_DISPATCH_DTYPE:-bf16}
 RING_COMBINE_DTYPE=${RING_COMBINE_DTYPE:-bf16}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
 
@@ -28,6 +29,7 @@ Environment overrides:
   PARITY_MODE               strict or diagnostic (strict)
   NCCLEP_OVERFLOW_POLICY    trap or drop (trap)
   NCCLEP_COMBINE_DTYPE      bf16 or fp32 (bf16)
+  NCCLEP_DISPATCH_DTYPE     bf16 or fp32 (bf16)
   RING_COMBINE_DTYPE        bf16 or fp32 (bf16)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
@@ -59,6 +61,7 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   parity mode: $PARITY_MODE
   overflow policy: $NCCLEP_OVERFLOW_POLICY
   combine dtype: $NCCLEP_COMBINE_DTYPE
+  dispatch dtype: $NCCLEP_DISPATCH_DTYPE
   ring combine dtype: $RING_COMBINE_DTYPE
   parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
   loss: mean over tokens after summing squared hidden activations
@@ -88,6 +91,10 @@ if [[ "$NCCLEP_OVERFLOW_POLICY" != "trap" && "$NCCLEP_OVERFLOW_POLICY" != "drop"
 fi
 if [[ "$NCCLEP_COMBINE_DTYPE" != "bf16" && "$NCCLEP_COMBINE_DTYPE" != "fp32" ]]; then
   echo "FATAL: NCCLEP_COMBINE_DTYPE must be bf16 or fp32, got '$NCCLEP_COMBINE_DTYPE'" >&2
+  exit 64
+fi
+if [[ "$NCCLEP_DISPATCH_DTYPE" != "bf16" && "$NCCLEP_DISPATCH_DTYPE" != "fp32" ]]; then
+  echo "FATAL: NCCLEP_DISPATCH_DTYPE must be bf16 or fp32, got '$NCCLEP_DISPATCH_DTYPE'" >&2
   exit 64
 fi
 if [[ "$RING_COMBINE_DTYPE" != "bf16" && "$RING_COMBINE_DTYPE" != "fp32" ]]; then
@@ -188,4 +195,5 @@ exec uv run --package marin-iris --extra worker python -m iris.hooks.multigpu_ma
   --parity-mode "$PARITY_MODE" \
   --overflow-policy "$NCCLEP_OVERFLOW_POLICY" \
   --combine-dtype "$NCCLEP_COMBINE_DTYPE" \
+  --dispatch-dtype "$NCCLEP_DISPATCH_DTYPE" \
   --ring-combine-dtype "$RING_COMBINE_DTYPE"

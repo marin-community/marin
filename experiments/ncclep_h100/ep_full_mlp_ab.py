@@ -37,6 +37,7 @@ DEFAULT_WARMUP = 6
 DEFAULT_ITERATIONS = 20
 OVERFLOW_POLICIES = ("trap", "drop")
 COMBINE_DTYPES = ("bf16", "fp32")
+DISPATCH_DTYPES = ("bf16", "fp32")
 SUMMARY_EVENT = "ncclep_h100_full_mlp_ab"
 ARM_RING = "marin_bulk_ring"
 ARM_TE = "transformer_engine_nccl_ep"
@@ -221,6 +222,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--overflow-policy", choices=OVERFLOW_POLICIES, default="trap")
     parser.add_argument("--combine-dtype", choices=COMBINE_DTYPES, default="bf16")
     parser.add_argument("--ring-combine-dtype", choices=COMBINE_DTYPES, default="bf16")
+    parser.add_argument("--dispatch-dtype", choices=DISPATCH_DTYPES, default="bf16")
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -350,6 +352,7 @@ def _compiled_te_forward(
     ep_combine: Callable[..., Any],
     ragged_dot: Callable[..., Any],
     combine_dtype: str,
+    dispatch_dtype: str,
 ) -> Callable[..., Any]:
     P = jax.sharding.PartitionSpec
     batch_spec = P(("replica_dcn", "data", "expert"), None)
@@ -369,10 +372,11 @@ def _compiled_te_forward(
         return expert_out.reshape(recv_tokens.shape)
 
     def body(tokens: Any, routes: Any, weights: Any, w13: Any, w2: Any) -> Any:
+        dispatch_tokens = tokens.astype(jnp.float32) if dispatch_dtype == "fp32" else tokens
         recv_tokens, recv_weights, handle_memory, token_counts = ep_dispatch(
             layer_config,
             routes.astype(jnp.int32),
-            tokens,
+            dispatch_tokens,
             weights.astype(jnp.float32),
             RECV_CAPACITY_PER_RANK,
         )
@@ -386,7 +390,7 @@ def _compiled_te_forward(
             out_specs=lead,
             check_vma=False,
         )
-        expert_out = ffn(recv_tokens, token_counts, w13, w2)
+        expert_out = ffn(recv_tokens.astype(tokens.dtype), token_counts, w13, w2)
         if combine_dtype == "fp32":
             combine_values = expert_out.astype(jnp.float32)
             slot_weights = recv_weights[..., None]
@@ -578,7 +582,7 @@ def run_ab(args: argparse.Namespace) -> int:
             recv_capacity_per_rank=RECV_CAPACITY_PER_RANK,
             hidden_dim=HIDDEN_DIM,
         )
-        if args.combine_dtype == "fp32":
+        if args.combine_dtype == "fp32" or args.dispatch_dtype == "fp32":
             bootstrap_kwargs["max_token_dtype"] = jnp.float32
         if args.overflow_policy == "drop":
             bootstrap_kwargs["overflow_policy"] = "drop"
@@ -598,6 +602,7 @@ def run_ab(args: argparse.Namespace) -> int:
             ep_combine=te_ep.ep_combine,
             ragged_dot=ragged_dot,
             combine_dtype=args.combine_dtype,
+            dispatch_dtype=args.dispatch_dtype,
         )
         value_and_grads = {
             ARM_RING: jax.jit(
@@ -670,6 +675,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "overflow_policy": args.overflow_policy,
         "combine_dtype": args.combine_dtype,
         "ring_combine_dtype": args.ring_combine_dtype,
+        "dispatch_dtype": args.dispatch_dtype,
         "loss_reduction": "mean_tokens_sum_hidden",
     }
     summary = build_summary(
