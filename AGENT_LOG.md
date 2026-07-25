@@ -659,5 +659,29 @@ Confidence: 4/10 (memory squeeze on both sides narrows the path).
 Confidence: 5/10 (offload API exists and builds; transfer-vs-rerun math favors it
 36 ms vs ~880 ms; risk is policy×shard_map×scan interaction surprises).
 
-Next: offload smoke → treatment leg.
+## Check-in 2026-07-25 ~14:20 UTC — offload treatment RUNS: 20.650% (+0.11/+0.28pp, under the 0.5pp bar)
+
+- **TREATMENT (`/mwittmann/ep25d3-fa4lse-off-120-v1-20260725`, fa4-lse + host
+  offload, 0.75 fraction, succeeded): p50 MFU 20.650%** (p10 20.598 / p90 20.755,
+  119 samples), final loss 5.747. It RUNS at the baseline fraction — the offload
+  variant clears the memory wall that killed the on-device variant at every
+  fraction (0.75 XLA OOM / 0.85+0.90 NCCL OOM).
+- Controls at 0.75 today: 20.543% (morning), 20.368% (afternoon) → delta +0.11 /
+  +0.28pp. Treatment p10 (20.598) exceeds both control p50s, but the brief's bar
+  is ~0.5pp and today's draw spread is ±0.2pp. **Not claimable yet.**
+- Sizing reality check: full elimination of the attention fwd re-run was estimated
+  +~1pp from the d2560 anatomy (6.7% of kernel time). Measured ≤0.28pp → the
+  re-run share at d5120 EP64 is much smaller than the d2560 anatomy suggested
+  (step 13.17→13.10s ≈ 70 ms saved vs ~880 ms estimate) — attention is a small
+  slice of this comm/MoE-dominated step, and/or offload transfer eats part of it.
+- Offload smoke verified parity first (11.592→8.323 vs on-device smoke 11.591→8.322).
+- Deciding measurement in flight: fresh back-to-back pair — control v5
+  (`/mwittmann/ep25d3-fa4lse-ctl-120-v5-20260725`) then treatment v2 (to submit on
+  v5 completion), identical envs, fresh compile caches.
+
+Confidence: 5/10 that 6a lands a *real but small* (<0.5pp) gain; 2/10 that it
+reaches the ~1pp estimate. The on-device variant is dead (memory); offload is the
+only viable form at this operating point.
+
+Next: v5 → treatment v2 → final verdict with the drop/loss lines.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
