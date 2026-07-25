@@ -649,7 +649,88 @@ def test_fixed_a2a_gather_dispatch_maps_assignments_to_tokens():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
-def test_fixed_a2a_gather_dispatch_matches_scatter_forward_and_gradients(monkeypatch: pytest.MonkeyPatch):
+def test_fixed_a2a_custom_adjoint_requires_gather_dispatch(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(43),
+        tokens=4,
+        hidden_dim=4,
+        intermediate_dim=6,
+        num_experts=2,
+        topk=2,
+    )
+    core = jax.shard_map(
+        lambda x_value, selected, weights, w13, w2: _fixed_a2a_core(
+            x_value,
+            selected,
+            weights,
+            w13,
+            w2,
+            activation_fn=jax.nn.silu,
+            num_experts=2,
+            capacity_factor=1.0,
+        ),
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    with pytest.raises(ValueError, match="requires SCALE_A2A_GATHER_DISPATCH=1"):
+        core(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+
+def test_fixed_a2a_mxfp8_gate_runs_after_routing(monkeypatch: pytest.MonkeyPatch):
+    if jax.devices()[0].platform == "gpu":
+        pytest.skip("GB200 behavior is covered by the accelerator numerical ladder")
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    monkeypatch.setenv("SCALE_MOE_MXFP8", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(44),
+        tokens=4,
+        hidden_dim=128,
+        intermediate_dim=128,
+        num_experts=2,
+        topk=2,
+    )
+    core = jax.shard_map(
+        lambda x_value, selected, weights, w13, w2: _fixed_a2a_core(
+            x_value,
+            selected,
+            weights,
+            w13,
+            w2,
+            activation_fn=jax.nn.silu,
+            num_experts=2,
+            capacity_factor=1.0,
+        ),
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+
+    with pytest.raises(RuntimeError, match="SCALE_MOE_MXFP8=1 requires a Blackwell"):
+        core(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+
+def test_fixed_a2a_gather_and_custom_adjoint_match_scatter_forward_and_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
     mesh = Mesh(
         np.asarray([jax.devices()[0]]),
@@ -695,11 +776,15 @@ def test_fixed_a2a_gather_dispatch_matches_scatter_forward_and_gradients(monkeyp
         out, dropped = fixed_a2a_sharded(x, combine_weights, w_up_gate, w_down)
         return jnp.sum(out.astype(jnp.float32)), (out, dropped)
 
-    def run(gather_dispatch: bool):
+    def run(gather_dispatch: bool, custom_adjoint: bool = False):
         if gather_dispatch:
             monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
         else:
             monkeypatch.delenv("SCALE_A2A_GATHER_DISPATCH", raising=False)
+        if custom_adjoint:
+            monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+        else:
+            monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
         return jax.value_and_grad(objective, argnums=(0, 1, 2, 3), has_aux=True)(
             x,
             combine_weights,
@@ -710,11 +795,16 @@ def test_fixed_a2a_gather_dispatch_matches_scatter_forward_and_gradients(monkeyp
     with jax.set_mesh(mesh):
         (_, (scatter_out, scatter_dropped)), scatter_grads = run(False)
         (_, (gather_out, gather_dropped)), gather_grads = run(True)
+        (_, (custom_out, custom_dropped)), custom_grads = run(True, custom_adjoint=True)
 
     np.testing.assert_allclose(np.asarray(gather_out), np.asarray(scatter_out), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(custom_out), np.asarray(gather_out), rtol=1e-5, atol=1e-5)
     assert int(gather_dropped) == int(scatter_dropped)
+    assert int(custom_dropped) == int(gather_dropped)
     for gather_grad, scatter_grad in zip(gather_grads, scatter_grads, strict=True):
         np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(scatter_grad), rtol=1e-5, atol=1e-5)
+    for custom_grad, gather_grad in zip(custom_grads, gather_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(custom_grad), np.asarray(gather_grad), rtol=1e-5, atol=1e-5)
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():

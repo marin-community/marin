@@ -204,3 +204,152 @@ is the fidelity lever on every transport). ring_cute's ladder wins at e64/e128 d
 transfer: it cannot fit this shape without memory work (a project, not tuning).
 Caveats: ragged/ring arms were QB-off single draws on NGC 26.06 + #7421 plugin; fixed
 numbers are stock-toolchain. No further arm is worth a rack; 2-rack cells moot.
+
+## Round 6 R6-4 background research brief
+
+- Effort: high
+- Stop rule: stopped when the local #7282 kernel history, production wiring, numerical
+  tests, and this worktree's fixed+gather+adjoint call boundary converged on one minimum
+  integration.
+- Date: 2026-07-25
+
+### Question
+
+Can the proven grouped MXFP8 expert MLP replace only the post-routing w13/w2 compute in
+the d5120, e256, top-8, EP64 fixed+gather+custom-adjoint operating point?
+
+### Evidence
+
+- `research/mcwitt/7282-mxfp8-blackwell` commit `42f7d9fa2` measured the forward grouped
+  GEMMs at about 2.2 PF/s on GB200. Commit `9e1d8fdc7` measured the fused whole-layer
+  pipeline at 1.39x BF16; the earlier unfused producer path only reached break-even.
+- Commit `af2110ac5` integrated the winning unit as a stateless whole-expert-MLP custom
+  VJP. It pads each expert group to 256 rows after routing, uses fused
+  w13+SwiGLU+dual-quantize and grouped w2 forward kernels, and provides MXFP8 dgrad and
+  wgrad paths.
+- The branch's GB200 numerical ladder checks every dequantized kernel leg below
+  1e-3/2e-3 relative-Frobenius error, the black-box output/input/weight gradients below
+  0.1 versus an independent BF16-input f32 reference, and exact-zero gradients for
+  zero-token experts.
+- The 64-GPU matched pair recorded in `c3cb334f8` measured a 1.308x clean MXFP8/BF16
+  throughput ratio with full Newton-Schulz. The CuTe activation producer failed
+  executable loading at 16 nodes in 3/3 attempts; the XLA producer succeeded and is
+  therefore the production default.
+- The uniform-MXFP8 branch falsified dense MXFP8 as the next extension: per-tensor FP8
+  remained preferable for dense projections, while hybrid grouped-MXFP8 expert GEMMs
+  were the only production-viable recipe.
+- This worktree's `_ring_local` already exposes exactly the post-routing boundary
+  `expert_mlp_fn(x_dispatch, group_sizes)`. Selecting the MXFP8 whole-MLP op there leaves
+  gather dispatch, QB routing, capacity clipping, drop accounting, combine, and the
+  custom transport adjoint unchanged.
+- GitHub issue reads are currently unavailable because `api.github.com` does not
+  resolve. The complete local 7282 branch/logbook history supplies the implementation
+  and measurement record; no contradictory local evidence changed the design.
+
+### Ranked approaches
+
+1. Port the fused whole-MLP op and its vendored kernels into
+   `lib/levanter/src/levanter/grug/_moe/`, then select it only inside the generic fixed
+   ring expert callback when `SCALE_MOE_MXFP8=1`. This is the smallest operating-point
+   integration and preserves drop parity structurally.
+2. Reintroduce 7282's general `MoeExpertMlpOp` injection abstraction across every EP
+   backend. This is reusable but expands the conflict and validation surface beyond
+   R6-4.
+3. Import the old experiment-local module directly. This is mechanically quick but
+   leaves production code dependent on a standalone benchmark tree and violates the
+   requested Levanter integration boundary.
+
+Confidence: 8/10 that approach 1 can reproduce a material operating-point speedup; 6/10
+that CUTLASS DSL 4.6 accepts the vendored 4.5-era kernels without a bounded port.
+
+Next: validate the minimal design, write the test-first implementation plan, then port
+the CPU glue tests before any production integration.
+
+## Check-in 2026-07-25 21:03 UTC
+
+Findings:
+
+- The 7282 fused whole-MLP custom VJP and pure-JAX MXFP8 quantizer now live
+  under `lib/levanter/src/levanter/grug/_moe/`. The CuTe activation producer
+  and the general `MoeExpertMlpOp` abstraction were not ported.
+- 29/29 CPU layout contracts pass. They cover skewed and empty expert groups,
+  exact pad/unpad behavior, zero-filled padding, host-reference scale-factor
+  permutations, gate/up interleave, and the non-sm100 failure boundary.
+- The operating point is `_fixed_a2a_core` behind `SCALE_A2A_FIXED=1`, not
+  `_ring_local`. The treatment gathers the four local-expert receive buffers,
+  concatenates them into the grouped layout after routing, runs one MXFP8
+  whole-MLP call, then reuses the existing combine all-to-all.
+- This worktree did not contain `c9e30f848` despite the prior round log saying
+  the adjoint stack was present. The structured dispatch/combine gather VJPs
+  are now ported. Focused tests confirm the custom adjoint requires gather
+  dispatch and matches autodiff outputs, drops, and all gradients at
+  `rtol=atol=1e-5`.
+- The default BF16 per-expert loop is unchanged. `SCALE_MOE_MXFP8=1` is the
+  only treatment selector, and the XLA quantization producer is unconditional.
+- The eleven vendored fused kernel files syntax-compile locally. Focused Ruff
+  passes; vendored NVIDIA kernel bodies carry a file-level Ruff exclusion and
+  the Marin adapter remains linted.
+
+Confidence: 8/10 that the integration preserves routing and drop counts; 6/10
+that the vendored kernels lower unchanged on the current CUTLASS DSL 4.6
+toolchain.
+
+Next: run the complete CPU regression set, check the CUTLASS 4.6 adapter
+surface, then prepare the GB200 numerical and EP4 parity jobs.
+
+## Check-in 2026-07-25 21:20 UTC
+
+Findings:
+
+- The final focused CPU suite reports 51 passed and 6 skipped in 37.09s:
+  `test_mxfp8_expert_mlp.py`, `test_grugformer_moe.py`, and
+  `experiments/grug/moe/test_model.py`. The skips are existing
+  accelerator/multi-device conditions.
+- The exact task sources pass Ruff lint and format, Python bytecode
+  compilation, `git diff --check`, and Pyrefly 0.58 with zero errors. The
+  repository pre-commit wrapper reaches and passes Ruff plus all structural
+  checks, but its Black subprocess hangs in this sandbox even with
+  `BLACK_NUM_WORKERS=1`; it was stopped after repeated no-output waits.
+- Iris submission is blocked before controller access because OAuth cannot
+  resolve `oauth2.googleapis.com`. No cluster jobs were submitted or mutated.
+  `EP25_D2_RELAY_COMMANDS.md` now contains the gated stock-toolchain ladder:
+  `ep25d2-mxfp8-numerics-20260725`, matched EP4 BF16/treatment smokes, then
+  matched QB-on cf1.0 120-step rack BF16/treatment jobs. All shell blocks pass
+  `bash -n`.
+- The linked-worktree Git index remains read-only:
+  `/home/marin/projects/marin/.git/worktrees/ep25-d2-bakeoff/index.lock`
+  cannot be created. The coordinator must commit the exact paths below,
+  forcing the ignored `lib/` additions:
+
+```text
+AGENT_LOG.md
+EP25_D2_RELAY_COMMANDS.md
+docs/superpowers/specs/2026-07-25-ep25-mxfp8-expert-gemms-design.md
+docs/superpowers/plans/2026-07-25-ep25-mxfp8-expert-gemms.md
+experiments/grug/moe/standalone/check_mxfp8_expert_mlp.py
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py
+lib/levanter/src/levanter/grug/_moe/mxfp8.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/__init__.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/quantize.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/__init__.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/adapter.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/grouped_gemm_dswiglu_quant.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/grouped_gemm_quant.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/grouped_gemm_swiglu_quant.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/moe_blockscaled_grouped_gemm_wgrad.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/moe_kernel_helpers.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/moe_persistent_scheduler.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/moe_sched_extension.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/moe_utils.py
+lib/levanter/src/levanter/grug/_moe/mxfp8_kernels/fused/utils.py
+lib/levanter/tests/grug/test_grugformer_moe.py
+lib/levanter/tests/grug/test_mxfp8_expert_mlp.py
+```
+
+Confidence: 9/10 that the CPU-side integration and relay A/B isolation are
+correct; 6/10 that the stock GB200 CUTLASS DSL accepts the vendored kernel
+unchanged. The first relay job is the explicit decision gate for that remaining
+uncertainty.
+
+Next: stop for coordinator execution of the relay ladder. Do not submit the EP4
+or rack jobs unless the preceding numerical/drop-parity gate passes.
