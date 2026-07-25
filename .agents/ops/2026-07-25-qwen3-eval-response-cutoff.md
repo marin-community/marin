@@ -85,9 +85,10 @@ sampling panel.
 
 # Fix
 
-`lib/marin/src/marin/inference/iris.py` now prefers the capability URL returned
-by the controller. The configured origin remains a fallback for controllers
-that cannot construct a public URL.
+PR #7634 changed `lib/marin/src/marin/inference/iris.py` to prefer the
+capability URL returned by the controller. The configured origin remains a
+fallback for controllers that cannot construct a public URL. That fix was
+already on main when PR #7640 rebased.
 
 `lib/marin/src/marin/inference/dashboard/src/App.vue` keeps the max-token input
 visible in the shared chat and completion toolbar. Temperature and top-p remain
@@ -110,4 +111,8 @@ normal output-budget exhaustion without printing the capability token.
 - Evaluation record:
   `s3://marin-us-east-02a/marin/eval-metadata/runs/20260725-163141-qwen3-32b-tb2-lite-5113/record.json`
 - Iris relay PR: https://github.com/marin-community/marin/pull/7627
+- Federated capability path and Marin consumer:
+  https://github.com/marin-community/marin/pull/7634
+- Qwen resource sizing and Marin Serve max-token UI:
+  https://github.com/marin-community/marin/pull/7640
 - Tracking issue: https://github.com/marin-community/marin/issues/6865
