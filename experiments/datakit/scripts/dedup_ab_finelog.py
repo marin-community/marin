@@ -4,14 +4,20 @@
 """Recover and validate every archived Zephyr stage row for the dedup A/B."""
 
 import argparse
+import contextlib
 import json
+import re
 import subprocess
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from finelog.client import LogClient
 from rigging.filesystem import StoragePath
+from zephyr.stats import StatsWriter
+
+EXECUTION_ID_PATTERN = re.compile(r"Starting zephyr pipeline: ([0-9]{8}-[0-9]{6}-[0-9a-f]+)")
 
 
 @dataclass(frozen=True)
@@ -92,6 +98,20 @@ ORDER BY root_key, epoch_ms
 """.strip()
 
 
+def _live_root_query(root_job_ids: Iterable[str]) -> str:
+    root_keys = ", ".join(_sql_literal(f"{root_job_id}/0:0") for root_job_id in root_job_ids)
+    return f"""
+SELECT DISTINCT
+    key AS root_key,
+    epoch_ms,
+    data
+FROM "log"
+WHERE key IN ({root_keys})
+  AND data LIKE '%Starting zephyr pipeline:%'
+ORDER BY root_key, epoch_ms
+""".strip()
+
+
 def _archive_stage_query(execution_ids: Iterable[str]) -> str:
     ids = ", ".join(_sql_literal(execution_id) for execution_id in execution_ids)
     return f"""
@@ -138,20 +158,58 @@ def _query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[d
     return [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
 
 
+def _query_live(sql: str) -> list[dict[str, Any]]:
+    url = StatsWriter.resolve_url()
+    if url is None:
+        raise RuntimeError("Live finelog URL is unavailable outside an Iris job")
+    with contextlib.closing(LogClient.connect(url)) as client:
+        return client.query(sql, max_rows=10_000).to_pylist()
+
+
+def _live_roots(root_job_ids: list[str]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in _query_live(_live_root_query(root_job_ids)):
+        match = EXECUTION_ID_PATTERN.search(row["data"])
+        if match is None:
+            raise AssertionError(f"Live root row has no execution ID: {row}")
+        result.append(
+            {
+                "root_key": row["root_key"],
+                "epoch_ms": row["epoch_ms"],
+                "execution_id": match.group(1),
+            }
+        )
+    return result
+
+
+def _unique_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = json.dumps(row, separators=(",", ":"), sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
 def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[str, Any]]:
-    """Recover root execution IDs, then query only their archived stage rows."""
-    roots = _query_namespace(
-        finelog_config=finelog_config,
-        namespace="log",
-        sql=_archive_root_query(root_job_ids),
+    """Recover exact root and stage rows across archive and live retention."""
+    archived_roots = _query_namespace(
+        finelog_config=finelog_config, namespace="log", sql=_archive_root_query(root_job_ids)
     )
+    roots = _unique_rows([*archived_roots, *_live_roots(root_job_ids)])
     if not roots:
-        raise FileNotFoundError("No archived root execution rows found")
-    stage_rows = _query_namespace(
+        raise FileNotFoundError("No archived or live root execution rows found")
+    execution_ids = sorted({row["execution_id"] for row in roots})
+    archived_stages = _query_namespace(
         finelog_config=finelog_config,
         namespace="zephyr.stage",
-        sql=_archive_stage_query(sorted({row["execution_id"] for row in roots})),
+        sql=_archive_stage_query(execution_ids),
     )
+    live_stages = _query_live(_archive_stage_query(execution_ids))
+    stage_rows = _unique_rows([*archived_stages, *live_stages])
     stages_by_execution = _execution_rows(stage_rows)
     missing_stage = {
         "stage_name": None,

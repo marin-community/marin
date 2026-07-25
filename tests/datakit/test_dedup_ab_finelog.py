@@ -92,7 +92,7 @@ def test_report_accounts_for_every_execution_and_compares_identical_minhash_work
     assert report["minhash_comparison"]["items_match"] is True
 
 
-def test_archive_query_fetches_roots_before_exact_stage_ids(monkeypatch) -> None:
+def test_archive_query_combines_archived_and_live_exact_stage_ids(monkeypatch) -> None:
     calls = []
 
     def fake_query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[dict]:
@@ -100,16 +100,56 @@ def test_archive_query_fetches_roots_before_exact_stage_ids(monkeypatch) -> None
         if namespace == "log":
             return [{"root_key": "/baseline/0:0", "epoch_ms": 1, "execution_id": "execution-1"}]
         assert "execution-1" in sql
+        assert "execution-2" in sql
         stage = _row("/ignored", 0, "execution-1", 5.0)
         stage.pop("root_key")
         stage.pop("epoch_ms")
         return [stage]
 
+    def fake_live_roots(root_job_ids: list[str]) -> list[dict]:
+        assert root_job_ids == ["/baseline", "/continuation"]
+        return [{"root_key": "/continuation/0:0", "epoch_ms": 2, "execution_id": "execution-2"}]
+
+    def fake_query_live(sql: str) -> list[dict]:
+        assert "execution-1" in sql
+        assert "execution-2" in sql
+        stage = _row("/ignored", 0, "execution-2", 7.0)
+        stage.pop("root_key")
+        stage.pop("epoch_ms")
+        return [stage]
+
     monkeypatch.setattr(finelog, "_query_namespace", fake_query_namespace)
+    monkeypatch.setattr(finelog, "_live_roots", fake_live_roots)
+    monkeypatch.setattr(finelog, "_query_live", fake_query_live)
 
-    rows = query_archive(finelog_config="config.yaml", root_job_ids=["/baseline"])
+    rows = query_archive(finelog_config="config.yaml", root_job_ids=["/baseline", "/continuation"])
 
-    assert len(rows) == 1
-    assert rows[0]["root_key"] == "/baseline/0:0"
-    assert rows[0]["cpu_time_total"] == 5.0
+    assert [(row["root_key"], row["cpu_time_total"]) for row in rows] == [
+        ("/baseline/0:0", 5.0),
+        ("/continuation/0:0", 7.0),
+    ]
     assert [namespace for _, namespace, _ in calls] == ["log", "zephyr.stage"]
+
+
+def test_live_roots_extracts_execution_ids(monkeypatch) -> None:
+    monkeypatch.setattr(
+        finelog,
+        "_query_live",
+        lambda _: [
+            {
+                "root_key": "/continuation/0:0",
+                "epoch_ms": 2,
+                "data": "Starting zephyr pipeline: 20260725-000001-deadbeef",
+            }
+        ],
+    )
+
+    rows = finelog._live_roots(["/continuation"])
+
+    assert rows == [
+        {
+            "root_key": "/continuation/0:0",
+            "epoch_ms": 2,
+            "execution_id": "20260725-000001-deadbeef",
+        }
+    ]
