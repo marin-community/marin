@@ -222,20 +222,22 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
-    """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
+    """May Recipe MuonH optimizer: four LR groups.
 
-    Three LR groups:
+    Learning-rate groups:
     - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
       Newton-Schulz orthogonalisation + Frobenius hyperball scale-invariant step.
     - ``adamh``: ``lm_head`` / ``output_proj``.
-    - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate``
-      / 1-D norm weights.
+    - ``router``: router projection weights.
+    - ``adam``: ``token_embed`` / ``router_bias`` / ``attn_gate`` / 1-D norm
+      weights.
 
     ``max_grad_norm`` defaults to ``None`` here (no clipping) for the 1pct-noclip
     schedule used by the May Recipe baseline.
     """
 
     adam_lr: float = 6e-4
+    router_lr: float | None = None
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -249,8 +251,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        router_lr = self.adam_lr if self.router_lr is None else self.router_lr
+        if router_lr < 0:
+            raise ValueError(f"router_lr must be non-negative, got {router_lr}")
+        router_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=router_lr)
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, router_lr):
             def muonh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -287,12 +293,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
+                "router": adam_transform_at(router_lr),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
+            router_lr=router_lr_schedule,
         )
 
     def create_mask(self, params):
@@ -301,13 +309,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
+            if "token_embed" in path_lower or "router_bias" in path_lower or path_lower.endswith(".attn_gate"):
                 return "adam"
+            if ".router" in path_lower:
+                return "router"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.

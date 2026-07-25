@@ -253,6 +253,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     )
     schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
     lr_override = os.environ.get("SCALE_LR")
+    router_lr_override = os.environ.get("SCALE_ROUTER_LR")
     opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
     optimizer: OptimizerConfig
     if opt_name in ("muonh", "grug_moe_muonh"):
@@ -261,14 +262,21 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             if lr_override
             else heuristic
         )
+        if router_lr_override is not None:
+            optimizer = dataclasses.replace(optimizer, router_lr=float(router_lr_override))
     elif opt_name in ("adamh", "grug_moe_adamh"):
+        if router_lr_override is not None:
+            raise ValueError("SCALE_ROUTER_LR is only supported by the MuonH optimizer")
         lr = float(lr_override) if lr_override else heuristic.adam_lr
         optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
     else:
+        if router_lr_override is not None:
+            raise ValueError("SCALE_ROUTER_LR is only supported by the MuonH optimizer")
         lr = float(lr_override) if lr_override else heuristic.adam_lr
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
     print(
         f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
+        f"router_lr={router_lr_override or 'adam_lr'}; "
         f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
         f"peak override SCALE_LR={lr_override or 'none'}",
         flush=True,
