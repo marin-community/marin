@@ -350,3 +350,16 @@ hypothesis = sender-local bucket hotspots (64x256, invisible to global bias; exp
 listed: damped g<1, DeepSeek integral, per-sender bias (kernel-level, only one aimed at the cause). §5 updated:
 gap-closing targets sender-local balancing (global gain tuning falsified). §6 repro: added d4 fidelity + gain
 jobs. Scrubbed (removed emphasis asterisks). ONLY fa4-lse TODO remains; whole-doc final pass on its landing.
+
+## Milestone draft FINAL 02:10 UTC — fa4-lse filled, whole-doc pass done
+fa4-lse (d3, agent/ep25-d3-fa4lse) into §3: control 20.465% (3 draws) vs fa4-lse+host-offload 20.648% (2 draws)
+= +0.18pp, below 0.5pp bar; on-device DEAD (+32.7 GiB won't fit), host-offload over Grace C2C saves ~70ms/13.2s
+step; d2560 ~1pp estimate doesn't transfer to d5120 EP64; behind-flag ~0.2pp if robust at d6144, NOT in the 25%
+bridge. §5 goal ledger rewritten to FINAL: goal NOT met at honest fidelity; best honest 22.60% (QB-on cf1.0, ~6%
+drops), strict-3% 20.85% (QB+cf1.15), matched-regime QB-off frontier 24.04/+batching 25.39; ranked follow-ups:
+sender-local balancing (kernel), leg-batching+QB composition, DeepSeek-integral/damped QB, MXFP8 (speed/quality),
+fused fp8 epilogues. Whole-doc ai-writing-donts pass: reconciled the "drop-insensitive"/"−1.44pp not drops"
+claims with the measurement caveat (now: MFU not comparable across drop regimes, −1.44pp = upper bound). Number
+verification: ALL my own measured numbers confirmed against this log; peer numbers (frontier/350-step/gain/
+ragged/ring/fa4-lse/negatives/leg-batching) are coordinator-relayed and not independently verifiable by me.
+Draft committed locally, NOT pushed/posted. Ready for human.

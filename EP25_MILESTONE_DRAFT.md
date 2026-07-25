@@ -21,9 +21,10 @@ overhead, not a clean measurement.
   costs -1.44pp and settles at ~6% drops at cf1.0 (22.60% p50); the only measured 3%-compliant
   config is QB + cf1.15 at 20.85%. The throughput frontier (24.04) and strict fidelity (20.85) sit
   ~3.2pp apart; closing that gap is the top open fidelity direction.
-- Headline MFU is drop-insensitive: the fixed path's expert GEMMs run on capacity-sized buffers
-  regardless of how many tokens drop, so the drop fraction is a fidelity metric, not a speed one.
-  The -1.44pp QB cost is the router aux-loss, not the drops.
+- MFU is not comparable across drop regimes: the expert GEMMs run on fixed capacity-sized buffers,
+  but a run that drops more still reads higher MFU because the dropped rows carry no real work. The
+  drop fraction is a fidelity metric, and cross-regime MFU gaps (like the -1.44pp QB cost) are upper
+  bounds, not clean measurements.
 
 ## 1. Speed: custom adjoint for the gather-dispatch backward
 
@@ -79,10 +80,9 @@ capacity factor x QB (QB = `SCALE_MOE_QB=1`):
 QB is the drop lever; capacity factor is not. QB on takes the drop fraction from collapse to 0.083
 at cf1.0 and 0.037 at cf1.15. The loss-tail column is the end-of-run value; at matched steps both QB
 legs sit below every QB-off leg. Raising capacity without QB buys no fidelity: cf1.15 QB-off pays
--1.91pp (24.04 -> 22.13) and still drops 0.649. Prices: QB costs -1.44pp (24.04 -> 22.60), the
-router aux-loss overhead; cf1.15 under QB costs another -1.75pp (22.60 -> 20.85); combined -3.19pp.
-The QB cost is a router cost, not a drop cost: the fixed-path expert GEMMs run on capacity-sized
-buffers regardless of drops.
+-1.91pp (24.04 -> 22.13) and still drops 0.649. Prices, as upper bounds since these are different
+drop regimes (see the measurement caveat): QB costs at most -1.44pp (24.04 -> 22.60); cf1.15 under
+QB costs another -1.75pp (22.60 -> 20.85); combined -3.19pp.
 
 A separate 30-step run measures the early trajectory: at matched steps 23-29 the fraction falls
 0.85 -> 0.25 QB-on against 0.89 -> 0.85 QB-off (3.4x); the longer runs below continue that decline.
@@ -114,7 +114,7 @@ emitted, because the grug training loop logs `train/loss` through callbacks and 
 returned metrics dict. The fix (`2d4a87395`, explicit `tracker.log`) exists in two worktrees and
 should land so his runs report drops.
 
-## 3. Sealed negatives
+## 3. Sealed and below-bar results
 
 - Rotation ppermute decomposition of the fixed a2a: -9.46pp.
 - Weight-prefetch overlap: null, scheduler-gated (LHS/auto-PGLE inert on this workload).
@@ -122,6 +122,12 @@ should land so his runs report drops.
 - FP8 permutation-leg wire (QDQ decomposition): -2.02pp.
 - TE-at-tip NCCL_EP: #3231's collective-stream pin crashes 64-GPU first execution; with the pin
   shimmed out the tip wheel is functionally the old wheel (~17% vs 18.05% a2a anchor).
+- fa4-lse primal output: matched A/B (0.75 mem fraction, fresh caches) control 20.465% (3 draws) vs
+  fa4-lse + host offload 20.648% (2 draws), +0.18pp, below the 0.5pp bar. The on-device variant is
+  dead on memory (+32.7 GiB saved activations do not fit); host offload over Grace C2C is the only
+  viable form, saving ~70ms of a 13.2s step. The d2560-derived ~1pp estimate does not transfer to
+  d5120 EP64, where attention is a small slice. Recommendation: keep behind a flag as a free ~0.2pp
+  if offload proves robust at d6144; do not count it toward the 25% bridge.
 
 ## 4. Transport comparison
 
@@ -143,22 +149,31 @@ number is a cumulative mean against the p50 used for the fixed path, one draw ea
 
 ## 5. Goal ledger
 
-The QB-off numbers (24.04 adjoint, 25.39 with leg-batching) are bench artifacts: they route under
-router collapse and read high partly because dropped assignments do less real work (see the
-measurement caveat). QB-on cf1.0 is 22.60% p50 but settles at ~6% drops, above a strict 3% bar. The
-only measured 3%-compliant config is QB + cf1.15 at 20.85%. So the throughput frontier (24.04) and
-the strict-fidelity config (20.85) sit ~3.2pp apart. Closing that gap is the highest-leverage
-remaining fidelity work, and the gain probe points it at sender-local bucket hotspots (per-sender
-bias, kernel-level) rather than global-bias tuning, which is falsified. Leg-batching composition and
-fa4-lse are the parallel levers.
+The goal (>=25% at the operating point without regressing fidelity) is not met at honest fidelity.
+The best honest config is QB-on cf1.0 at 22.60% p50, which settles at ~6% steady drops, above a
+strict 3% bar; the only measured 3%-compliant config is QB + cf1.15 at 20.85%. The QB-off frontier
+of 24.04 (adjoint) and 25.39 (with leg-batching) is a matched-regime speed result, but at ~85% early
+drops it is a bench number, not a shippable config, and it reads high partly because dropped
+assignments do less real work (see the measurement caveat).
 
-- Speed, QB-off bench: adjoint 24.04, +leg-batching 25.39.
-- Speed, QB-on cf1.0: 22.60, ~6% steady drops (not 3%-compliant).
-- Speed, strict 3%-fidelity (QB cf1.15): 20.85, drops 0.037.
-- Path to >=25% at strict fidelity: close the ~3.2pp gap (sender-local balancing) plus leg-batching and
-  fa4-lse.
+| config | drop regime | p50 MFU |
+|---|---|--:|
+| QB-off bench, adjoint | ~85% early | 24.04 |
+| QB-off bench, adjoint + leg-batching | ~85% early | 25.39 |
+| QB-on cf1.0 (best honest) | ~6% steady | 22.60 |
+| QB-on cf1.15 (strict 3%) | 0.037 @119 | 20.85 |
 
-> TODO: fa4-lse A/B (d3) for the remaining path-to-25% pp.
+The strict-fidelity config and the throughput frontier are ~3.2pp apart. Ranked follow-ups to close
+it:
+
+- Sender-local balancing (kernel-level): a per-sender router bias aimed at the localized cause the
+  gain probe implicates. Global-bias gain tuning is falsified (g=2 diverges).
+- Leg-batching + QB-on composition: measure the two together; both are measured alone but not stacked.
+- DeepSeek-style integral or damped (g<1) QB: cheaper than kernel work, unprobed.
+- MXFP8 on the expert GEMMs: an explicit speed/quality call, not a free win.
+- Fused fp8 epilogues.
+
+fa4-lse (+0.18pp, section 3) is below the bar and does not count toward the bridge.
 
 ## 6. Reproduction
 
