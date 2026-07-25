@@ -6,8 +6,14 @@ import json
 
 import pytest
 
-from experiments.datakit.scripts.dedup_ab_finalize import final_decision, validate_occurrence_coverage
-from experiments.datakit.scripts.dedup_ab_machine_labels import decision_for_pair
+from experiments.datakit.scripts.dedup_ab_audit import DedupAuditData
+from experiments.datakit.scripts.dedup_ab_finalize import (
+    _validate_counters,
+    final_decision,
+    validate_occurrence_coverage,
+)
+from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData, decision_for_pair
+from experiments.datakit.scripts.dedup_ab_materialize import DedupReviewData
 
 
 def _pair(*, exact: bool = False, ambiguous: bool = False) -> dict:
@@ -173,3 +179,54 @@ def test_occurrence_coverage_rejects_unlabeled_marker() -> None:
             key,
             iter([{"kind": "score", "role": "canonical", "review_key": ""}]),
         )
+
+
+def test_final_counters_read_persisted_stage_namespace() -> None:
+    audit = DedupAuditData(
+        baseline_dedup="baseline",
+        baseline_cc_dedup="baseline",
+        baseline_cc_max_iteration=53,
+        require_baseline_converged=True,
+        treatment_dedup="treatment",
+        baseline_minhash="baseline-minhash",
+        treatment_minhash="treatment-minhash",
+        scores_dir="scores",
+        graph_distances_dir="distances",
+        comparisons_dir="comparisons",
+        counters={
+            "scores/audit/markers/baseline": 3,
+            "scores/audit/drops/baseline": 2,
+            "scores/audit/markers/treatment": 2,
+            "scores/audit/drops/treatment": 1,
+        },
+    )
+    review = DedupReviewData(scores_dir="scores", pairs_dir="pairs", counters={"audit/materialize/pairs": 3})
+    machine = DedupMachineLabelsData(
+        review_path="review.json",
+        pairs_dir="pairs",
+        decisions_dir="decisions",
+        counters={
+            "machine_labels/pairs": 3,
+            "machine_labels/baseline/semantic": 1,
+            "machine_labels/treatment/semantic": 1,
+        },
+    )
+    combined = {
+        "finalize/labels/pairs": 3,
+        "finalize/labels/semantic_required": 2,
+        "finalize/labels/baseline/pairs": 2,
+        "finalize/labels/treatment/pairs": 1,
+        "finalize/coverage/baseline/markers": 3,
+        "finalize/coverage/baseline/drop": 2,
+        "finalize/coverage/treatment/markers": 2,
+        "finalize/coverage/treatment/drop": 1,
+        "finalize/coverage/markers": 5,
+        "finalize/coverage/canonical_references": 3,
+    }
+
+    # Persisted audit artifacts prefix each pipeline's counters. Accepting this
+    # exact schema before checking a corrupted total is the regression contract.
+    _validate_counters(audit, review, machine, combined)
+    combined["finalize/coverage/baseline/markers"] = 0
+    with pytest.raises(AssertionError, match="baseline final coverage mismatch"):
+        _validate_counters(audit, review, machine, combined)

@@ -274,8 +274,8 @@ def _paths(directory: str, kind: str, *, required: bool = True) -> list[dict[str
 
 
 def _expected_counts(audit: DedupAuditData, variant: str) -> tuple[int, int]:
-    markers = int(audit.counters.get(f"audit/markers/{variant}", 0))
-    drops = int(audit.counters.get(f"audit/drops/{variant}", 0))
+    markers = int(audit.counters.get(f"scores/audit/markers/{variant}", 0))
+    drops = int(audit.counters.get(f"scores/audit/drops/{variant}", 0))
     return markers, drops
 
 
