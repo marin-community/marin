@@ -248,6 +248,68 @@ if triton is not None and tl is not None:
             tl.store(ranks_ptr + offsets, ranks, mask=mask & (matches != 0))
             running_count += tl.sum(matches, axis=0)
 
+    @triton.jit
+    def _sonic_refill_rank_and_occupancy_kernel(
+        experts_ptr,  # (N,) int32
+        ranks_ptr,  # (N,) int32
+        occupied_ptr,  # (E,) int32
+        n: tl.constexpr,
+        capacity: tl.constexpr,
+        block_n: tl.constexpr,
+    ):
+        expert = tl.program_id(axis=0)
+        running_count = 0
+        for block_start in tl.range(0, n, block_n):
+            offsets = block_start + tl.arange(0, block_n)
+            mask = offsets < n
+            matches = (tl.load(experts_ptr + offsets, mask=mask, other=-1) == expert).to(tl.int32)
+            ranks = running_count + tl.cumsum(matches, axis=0) - 1
+            tl.store(ranks_ptr + offsets, ranks, mask=mask & (matches != 0))
+            running_count += tl.sum(matches, axis=0)
+        tl.store(occupied_ptr + expert, tl.minimum(running_count, capacity))
+
+    @triton.jit
+    def _sonic_refill_overflow_rank_kernel(
+        ranks_ptr,  # (N,) int32
+        overflow_ranks_ptr,  # (N,) int32; -1 for kept assignments
+        overflow_count_ptr,  # (1,) int32
+        n: tl.constexpr,
+        capacity: tl.constexpr,
+        block_n: tl.constexpr,
+    ):
+        running_count = 0
+        for block_start in tl.range(0, n, block_n):
+            offsets = block_start + tl.arange(0, block_n)
+            mask = offsets < n
+            ranks = tl.load(ranks_ptr + offsets, mask=mask, other=-1)
+            overflow = mask & (ranks >= capacity)
+            block_ranks = running_count + tl.cumsum(overflow.to(tl.int32), axis=0) - 1
+            tl.store(overflow_ranks_ptr + offsets, tl.where(overflow, block_ranks, -1), mask=mask)
+            running_count += tl.sum(overflow.to(tl.int32), axis=0)
+        tl.store(overflow_count_ptr, running_count)
+
+    @triton.jit
+    def _sonic_refill_vacancies_kernel(
+        occupied_ptr,  # (E,) int32
+        vacancy_experts_ptr,  # (capacity * E,) int32
+        vacancy_slots_ptr,  # (capacity * E,) int32
+        num_experts: tl.constexpr,
+        block_e: tl.constexpr,
+    ):
+        slot = tl.program_id(axis=0)
+        experts = tl.arange(0, block_e)
+        expert_mask = experts < num_experts
+        occupied = tl.load(occupied_ptr + experts, mask=expert_mask, other=slot + 1)
+        vacant = expert_mask & (slot >= occupied)
+
+        # Vacancy order is slot-major, then expert-major. Count vacancies in all
+        # prior slot rows to obtain this row's compact output offset.
+        row_offset = tl.sum(tl.maximum(slot - occupied, 0), axis=0)
+        row_rank = tl.cumsum(vacant.to(tl.int32), axis=0) - 1
+        destinations = row_offset + row_rank
+        tl.store(vacancy_experts_ptr + destinations, experts, mask=vacant)
+        tl.store(vacancy_slots_ptr + destinations, slot, mask=vacant)
+
 else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
@@ -255,6 +317,9 @@ else:
     _sonic_slot_weighted_grad_kernel = None
     _sonic_unpermute_i32_kernel = None
     _sonic_expert_local_rank_kernel = None
+    _sonic_refill_rank_and_occupancy_kernel = None
+    _sonic_refill_overflow_rank_kernel = None
+    _sonic_refill_vacancies_kernel = None
 
 
 def _require_sonic_deps() -> None:
@@ -266,6 +331,9 @@ def _require_sonic_deps() -> None:
         or _sonic_slot_weighted_grad_kernel is None
         or _sonic_unpermute_i32_kernel is None
         or _sonic_expert_local_rank_kernel is None
+        or _sonic_refill_rank_and_occupancy_kernel is None
+        or _sonic_refill_overflow_rank_kernel is None
+        or _sonic_refill_vacancies_kernel is None
     ):
         raise ImportError(
             "implementation='sonic' requires jax-triton and triton; install the gpu extra for marin-levanter "
@@ -412,6 +480,73 @@ def sonic_expert_local_rank(
         n=experts.size,
         block_n=block_n,
     )
+
+
+def sonic_capacity_refill(
+    experts: Int[Array, "N"],
+    *,
+    num_experts: int,
+    capacity: int,
+) -> tuple[Int[Array, "N"], Int[Array, "N"], Int[Array, ""]]:
+    """Refill overflowing expert assignments in stable vacancy order."""
+    _require_sonic_deps()
+    if experts.dtype != jnp.int32:
+        raise ValueError(f"experts must be int32, got {experts.dtype}")
+    if experts.ndim != 1:
+        raise ValueError(f"experts must be one-dimensional, got shape {experts.shape}")
+    if num_experts < 1:
+        raise ValueError(f"num_experts must be positive, got {num_experts}")
+    if capacity < 1:
+        raise ValueError(f"capacity must be positive, got {capacity}")
+    if capacity * num_experts < experts.size:
+        raise ValueError(f"capacity={capacity} across {num_experts} experts cannot hold {experts.size} assignments")
+
+    block_n = 4096
+    ranks_shape = jax.ShapeDtypeStruct(experts.shape, experts.dtype)
+    occupied_shape = jax.ShapeDtypeStruct((num_experts,), experts.dtype)
+    local_ranks, occupied = jt.triton_call(
+        experts,
+        kernel=_sonic_refill_rank_and_occupancy_kernel,
+        out_shape=(ranks_shape, occupied_shape),
+        grid=(num_experts,),
+        num_warps=8,
+        num_stages=1,
+        n=experts.size,
+        capacity=capacity,
+        block_n=block_n,
+    )
+
+    overflow_count_shape = jax.ShapeDtypeStruct((1,), experts.dtype)
+    overflow_ranks, overflow_count = jt.triton_call(
+        local_ranks,
+        kernel=_sonic_refill_overflow_rank_kernel,
+        out_shape=(ranks_shape, overflow_count_shape),
+        grid=(1,),
+        num_warps=8,
+        num_stages=1,
+        n=experts.size,
+        capacity=capacity,
+        block_n=block_n,
+    )
+
+    total_slots = capacity * num_experts
+    vacancies_shape = jax.ShapeDtypeStruct((total_slots,), experts.dtype)
+    vacancy_experts, vacancy_slots = jt.triton_call(
+        occupied,
+        kernel=_sonic_refill_vacancies_kernel,
+        out_shape=(vacancies_shape, vacancies_shape),
+        grid=(capacity,),
+        num_warps=8,
+        num_stages=1,
+        num_experts=num_experts,
+        block_e=_next_power_of_2(num_experts),
+    )
+
+    keep = local_ranks < capacity
+    replacement_indices = jnp.maximum(overflow_ranks, 0)
+    refilled_experts = jnp.where(keep, experts, vacancy_experts[replacement_indices])
+    refilled_slots = jnp.where(keep, local_ranks, vacancy_slots[replacement_indices])
+    return refilled_experts, refilled_slots, overflow_count[0]
 
 
 def _sonic_gather_sum_impl(

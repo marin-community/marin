@@ -27,6 +27,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug._moe.ep_ragged_all_to_all import _stable_expert_local_rank
+from levanter.grug._moe.sonic import sonic_capacity_refill
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -514,6 +515,14 @@ def _capacity_refilled_top_k_local(
     flat_experts = selected_experts.reshape(-1)
     assignments = flat_experts.shape[0]
     capacity = math.ceil(capacity_factor * assignments / num_experts)
+
+    if os.environ.get("SCALE_MOE_CAPACITY_REFILL_SONIC") == "1":
+        refilled_experts, refilled_slots, _ = sonic_capacity_refill(
+            flat_experts,
+            num_experts=num_experts,
+            capacity=capacity,
+        )
+        return refilled_experts.reshape(num_tokens, topk), refilled_slots.reshape(num_tokens, topk)
 
     local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
     keep = local_rank < capacity

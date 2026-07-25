@@ -25,6 +25,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _round_robin_ppermute_all_to_all,
 )
 from levanter.grug._moe.sonic import (
+    sonic_capacity_refill,
     sonic_expert_local_rank,
     sonic_gather_sum,
     sonic_slot_weighted_grad,
@@ -493,6 +494,77 @@ def test_sonic_expert_local_rank_matches_stable_sort_on_gpu():
     jax.block_until_ready((actual, expected))
 
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+def test_sonic_capacity_refill_matches_stable_reference_on_gpu():
+    _skip_without_sonic_gpu_runtime()
+    assignments = 524_288
+    num_experts = 256
+    capacity = assignments // num_experts
+    experts = jax.random.randint(
+        jax.random.key(52),
+        (assignments,),
+        minval=0,
+        maxval=num_experts,
+        dtype=jnp.int32,
+    )
+    experts = jnp.where(jnp.arange(assignments) % 4 == 0, 0, experts)
+
+    order = jnp.argsort(experts, stable=True)
+    expert_counts = jnp.bincount(experts, length=num_experts).astype(jnp.int32)
+    segment_starts = jnp.cumsum(expert_counts) - expert_counts
+    sorted_ranks = jnp.arange(assignments, dtype=jnp.int32) - segment_starts[experts[order]]
+    local_ranks = jnp.zeros_like(sorted_ranks).at[order].set(sorted_ranks)
+    keep = local_ranks < capacity
+    occupied = jnp.minimum(expert_counts, capacity)
+
+    vacancy_experts = jnp.broadcast_to(
+        jnp.arange(num_experts, dtype=jnp.int32)[None, :],
+        (capacity, num_experts),
+    ).reshape(-1)
+    vacancy_slots = jnp.broadcast_to(
+        jnp.arange(capacity, dtype=jnp.int32)[:, None],
+        (capacity, num_experts),
+    ).reshape(-1)
+    vacancy_mask = (jnp.arange(capacity, dtype=jnp.int32)[:, None] >= occupied[None, :]).reshape(-1)
+    vacancy_rank = jnp.cumsum(vacancy_mask.astype(jnp.int32), dtype=jnp.int32) - 1
+    vacancy_destination = jnp.where(vacancy_mask, vacancy_rank, assignments)
+    compact_vacancy_experts = (
+        jnp.full((assignments,), num_experts, dtype=jnp.int32)
+        .at[vacancy_destination]
+        .set(vacancy_experts, mode="drop")
+    )
+    compact_vacancy_slots = (
+        jnp.full((assignments,), capacity, dtype=jnp.int32).at[vacancy_destination].set(vacancy_slots, mode="drop")
+    )
+    overflow_rank = jnp.cumsum(jnp.logical_not(keep).astype(jnp.int32), dtype=jnp.int32) - 1
+    compact_index = jnp.maximum(overflow_rank, 0)
+    expected_experts = jnp.where(keep, experts, compact_vacancy_experts[compact_index])
+    expected_slots = jnp.where(keep, local_ranks, compact_vacancy_slots[compact_index])
+    expected_replacements = jnp.sum(jnp.logical_not(keep), dtype=jnp.int32)
+
+    actual_experts, actual_slots, actual_replacements = jax.jit(
+        sonic_capacity_refill,
+        static_argnames=("num_experts", "capacity"),
+    )(
+        experts,
+        num_experts=num_experts,
+        capacity=capacity,
+    )
+    jax.block_until_ready(
+        (
+            actual_experts,
+            actual_slots,
+            actual_replacements,
+            expected_experts,
+            expected_slots,
+            expected_replacements,
+        )
+    )
+
+    np.testing.assert_array_equal(np.asarray(actual_experts), np.asarray(expected_experts))
+    np.testing.assert_array_equal(np.asarray(actual_slots), np.asarray(expected_slots))
+    np.testing.assert_array_equal(np.asarray(actual_replacements), np.asarray(expected_replacements))
 
 
 def test_sonic_gather_sum_h5120_value_and_gradients_match_reference_on_gpu():
