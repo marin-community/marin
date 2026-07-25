@@ -563,6 +563,22 @@ swing factor — the comment's est is +~1pp).
 
 Confidence: 6/10 (numerics proven; mechanism next; memory is the swing factor).
 
-Next: 1-replica training smoke with SCALE_FA4_LSE_SAVE=1 (functional at scale),
-then the A/B legs (control + fa4-lse, 120 steps, back-to-back).
+## Check-in 2026-07-25 ~07:50 UTC — smoke green, A/B control submitted
+
+- Cherry-picks onto agent/ep25-d3-fa4lse: cdaec0c11 (gather port + pipeline + parity
+  test) + 5ab4df531 (drop metric); AGENT_LOG re-merged (conflict resolved, full
+  round-1/2/3 record intact). Housekeeping: caught and reverted a bad merge commit
+  that swept coordinator files into git (reset --soft + unstage; no content lost).
+- **Training smoke PASSED** (`/mwittmann/ep25d3-fa4lse-smoke-20260725`, 1-replica EP4
+  L4 b32, SCALE_FA4_LSE_SAVE=1): loss 11.59 → 8.32 over 6 steps, no crash/OOM. (Ran
+  on the pre-cherry-pick bundle — scatter dispatch, irrelevant for the fa4-lse
+  functional check.)
+- **A/B control leg submitted**: `/mwittmann/ep25d3-fa4lse-ctl-120-v1-20260725` —
+  exact 5073017396 gather config + drop reporting + no-checkpoint, 120 steps.
+  Treatment (same + SCALE_FA4_LSE_SAVE=1) follows on completion.
+
+Confidence: 6/10.
+
+Next: control completes (~40 min) → submit treatment → harvest p50/loss/drops both
+legs. Watch on treatment: the +32.7 GiB saved-activation cost (OOM = verdict too).
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
