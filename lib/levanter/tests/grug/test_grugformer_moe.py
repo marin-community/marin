@@ -23,6 +23,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _fixed_dispatch_gather_sonic_grad,
     _receiver_clipped_dispatch_metadata,
     _round_robin_ppermute_all_to_all,
+    _same_expert_clone_dispatch_metadata,
 )
 from levanter.grug._moe.sonic import (
     sonic_capacity_refill,
@@ -1489,6 +1490,147 @@ def test_round_robin_ppermute_matches_all_to_all():
     )(values)
 
     np.testing.assert_array_equal(np.asarray(round_robin), np.asarray(baseline))
+
+
+def test_same_expert_clone_dispatch_metadata_is_dropless_and_preserves_experts():
+    assignments = [
+        jnp.asarray([0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4], dtype=jnp.int32),
+    ]
+    expert_shards = len(assignments)
+    num_experts = 5
+    assignments_per_sender = assignments[0].size
+    all_group_sizes = jnp.stack(
+        [jnp.bincount(sender_assignments, length=num_experts) for sender_assignments in assignments]
+    ).astype(jnp.int32)
+    sender_destination_capacity = assignments_per_sender // expert_shards + num_experts
+    receiver_capacity = assignments_per_sender + num_experts
+
+    received: list[list[tuple[int, int]]] = [[] for _ in range(expert_shards)]
+    expected_receiver_group_sizes = None
+    for sender_index, flat_experts in enumerate(assignments):
+        transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_clone_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            jnp.asarray(sender_index, dtype=jnp.int32),
+            sender_destination_capacity=sender_destination_capacity,
+            receiver_capacity=receiver_capacity,
+        )
+        assert int(overflow) == 0
+        assert len(np.unique(np.asarray(transport_position))) == assignments_per_sender
+        expected_receiver_group_sizes = receiver_group_sizes
+        for expert, position, slot in zip(
+            np.asarray(flat_experts),
+            np.asarray(transport_position),
+            np.asarray(receiver_slot),
+            strict=True,
+        ):
+            destination = int(position) // sender_destination_capacity
+            received[destination].append((int(slot), int(expert)))
+
+    assert expected_receiver_group_sizes is not None
+    receiver_group_sizes = np.asarray(expected_receiver_group_sizes)
+    receiver_group_offsets = np.cumsum(receiver_group_sizes, axis=1) - receiver_group_sizes
+    for receiver_index, received_assignments in enumerate(received):
+        slots = [slot for slot, _ in received_assignments]
+        assert len(slots) == len(set(slots))
+        assert len(slots) == int(np.sum(receiver_group_sizes[receiver_index]))
+        for slot, expert in received_assignments:
+            start = int(receiver_group_offsets[receiver_index, expert])
+            end = start + int(receiver_group_sizes[receiver_index, expert])
+            assert start <= slot < end
+
+
+def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(monkeypatch: pytest.MonkeyPatch):
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+
+    monkeypatch.setenv("SCALE_A2A_FIXED", "1")
+    monkeypatch.setenv("SCALE_A2A_SAME_EXPERT_CLONES", "1")
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+
+    tokens = len(jax.devices()) * 8
+    hidden_dim = 8
+    intermediate_dim = 12
+    num_experts = 4
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(61),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    selected_experts = jnp.stack(
+        [
+            jnp.zeros((tokens,), dtype=jnp.int32),
+            1 + jnp.arange(tokens, dtype=jnp.int32) % (num_experts - 1),
+        ],
+        axis=1,
+    )
+    output_cotangent = jax.random.normal(jax.random.key(62), x.shape, dtype=x.dtype)
+
+    def dense_loss(x, combine_weights, w_up_gate, w_down):
+        selected_w13 = w_up_gate[selected_experts]
+        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
+        expert_output = jnp.einsum(
+            "tki,tkih->tkh",
+            jax.nn.silu(gate) * up,
+            w_down[selected_experts],
+        )
+        output = jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+        return jnp.sum(output * output_cotangent)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        sharded_x = jax.sharding.reshard(x, batch_sharding)
+        sharded_selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        sharded_combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        sharded_output_cotangent = jax.sharding.reshard(output_cotangent, batch_sharding)
+        sharded_w13 = jax.sharding.reshard(w_up_gate, expert_sharding)
+        sharded_w2 = jax.sharding.reshard(w_down, expert_sharding)
+
+        def cloned_loss(x, combine_weights, w_up_gate, w_down):
+            output, dropped = moe_mlp(
+                x,
+                sharded_selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                implementation="ragged_all_to_all",
+                mesh=None,
+                report_capacity_overflow=True,
+                capacity_factor=1.0,
+            )
+            return jnp.sum(output * sharded_output_cotangent), dropped
+
+        (cloned_value, dropped), cloned_grad = jax.value_and_grad(
+            cloned_loss,
+            argnums=(0, 1, 2, 3),
+            has_aux=True,
+        )(sharded_x, sharded_combine_weights, sharded_w13, sharded_w2)
+        dense_value, dense_grad = jax.value_and_grad(
+            dense_loss,
+            argnums=(0, 1, 2, 3),
+        )(x, combine_weights, w_up_gate, w_down)
+
+    assert int(dropped) == 0
+    np.testing.assert_allclose(np.asarray(cloned_value), np.asarray(dense_value), rtol=1e-5, atol=1e-5)
+    jax.tree.map(
+        lambda cloned, dense: np.testing.assert_allclose(
+            np.asarray(cloned),
+            np.asarray(dense),
+            rtol=1e-5,
+            atol=1e-5,
+        ),
+        cloned_grad,
+        dense_grad,
+    )
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
