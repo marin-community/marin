@@ -129,6 +129,7 @@ class MoEExpertMlp(eqx.Module):
         *,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
+        dispatch_slots: Int[Array, "T K"] | None = None,
         w13_pre0: Float[Array, "per D I2"] | None = None,
         w2_pre0: Float[Array, "per I D"] | None = None,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
@@ -158,6 +159,7 @@ class MoEExpertMlp(eqx.Module):
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            dispatch_slots=dispatch_slots,
             w13_pre0=w13_pre0,
             w2_pre0=w2_pre0,
         )
@@ -176,6 +178,7 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    dispatch_slots: Int[Array, "T K"] | None = None,
     w13_pre0: Float[Array, "per D I2"] | None = None,
     w2_pre0: Float[Array, "per I D"] | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
@@ -211,6 +214,10 @@ def moe_mlp(
         raise ValueError(
             f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
             f"dim ({x.shape[0]})"
+        )
+    if dispatch_slots is not None and dispatch_slots.shape != selected_experts.shape:
+        raise ValueError(
+            f"dispatch_slots must match selected_experts shape {selected_experts.shape}, got {dispatch_slots.shape}"
         )
 
     num_experts = int(w_up_gate.shape[0])
@@ -267,6 +274,29 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        if dispatch_slots is not None:
+            if resolved_implementation != "ragged_all_to_all":
+                raise ValueError("precomputed dispatch slots are only supported by ragged_all_to_all")
+            dispatch_slots = _reshard_for_shard_map(dispatch_slots, mesh, batch_spec)
+            shard_args = (x, selected_experts, combine_weights, w_up_gate, w_down, dispatch_slots)
+            shard_in_specs = (
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                w_up_gate_spec,
+                w_down_spec,
+                batch_spec,
+            )
+        else:
+            shard_args = (x, selected_experts, combine_weights, w_up_gate, w_down)
+            shard_in_specs = (
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                w_up_gate_spec,
+                w_down_spec,
+            )
+
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
@@ -275,17 +305,11 @@ def moe_mlp(
                 capacity_factor=capacity_factor,
             ),
             mesh=mesh,
-            in_specs=(
-                batch_spec,
-                batch_spec,
-                batch_spec,
-                w_up_gate_spec,
-                w_down_spec,
-            ),
+            in_specs=shard_in_specs,
             out_specs=(batch_spec, P()),
             check_vma=False,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, dropped = shard_fn(*shard_args)
         if report_capacity_overflow:
             return out, dropped
         return out

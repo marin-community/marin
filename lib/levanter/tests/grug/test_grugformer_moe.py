@@ -764,6 +764,74 @@ def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pyte
     assert int(dropped) == 0
 
 
+def test_fixed_a2a_precomputed_slots_match_internal_ranking(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens = 4
+    hidden_dim = 4
+    intermediate_dim = 6
+    num_experts = 2
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(48),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    selected_experts = _make_unique_topk_experts(tokens=tokens, topk=topk, num_experts=num_experts)
+    dispatch_slots = jnp.broadcast_to(jnp.arange(tokens, dtype=jnp.int32)[:, None], (tokens, topk))
+
+    def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down, dispatch_slots):
+        ranked = _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=1.0,
+        )
+        precomputed = _fixed_a2a_core(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            dispatch_slots,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=1.0,
+        )
+        return ranked, precomputed
+
+    fixed_a2a_sharded = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P(), P()),
+        out_specs=((P(), P()), (P(), P())),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        ranked, precomputed = fixed_a2a_sharded(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            dispatch_slots,
+        )
+
+    np.testing.assert_array_equal(np.asarray(precomputed[0]), np.asarray(ranked[0]))
+    np.testing.assert_array_equal(np.asarray(precomputed[1]), np.asarray(ranked[1]))
+
+
 def test_fixed_a2a_gather_dispatch_is_bit_exact(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
     mesh = Mesh(

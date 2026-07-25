@@ -187,7 +187,7 @@ def test_capacity_refilled_top_k_exactly_fills_experts():
 
     raw_selected = jax.lax.top_k(router_logits, topk)[1]
     raw_load = jnp.bincount(raw_selected.reshape(-1), length=num_experts)
-    selected = _capacity_refilled_top_k_local(
+    selected, slots = _capacity_refilled_top_k_local(
         router_logits,
         topk=topk,
         capacity_factor=1.0,
@@ -197,6 +197,9 @@ def test_capacity_refilled_top_k_exactly_fills_experts():
 
     assert int(jnp.max(raw_load)) > capacity
     np.testing.assert_array_equal(np.asarray(load), np.full((num_experts,), capacity))
+    for expert in range(num_experts):
+        expert_slots = np.asarray(slots)[np.asarray(selected) == expert]
+        np.testing.assert_array_equal(np.sort(expert_slots), np.arange(capacity))
 
 
 def test_loss_free_bias_update_penalizes_overloaded_experts():

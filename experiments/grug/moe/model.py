@@ -507,8 +507,8 @@ def _capacity_refilled_top_k_local(
     *,
     topk: int,
     capacity_factor: float,
-) -> Int[Array, "T K"]:
-    """Replace overflowing top-k assignments with a stable sequence of vacant expert slots."""
+) -> tuple[Int[Array, "T K"], Int[Array, "T K"]]:
+    """Replace overflowing top-k assignments and return their exact expert-local slots."""
     num_tokens, num_experts = router_logits.shape
     selected_experts = jax.lax.top_k(router_logits, topk)[1].astype(jnp.int32)
     flat_experts = selected_experts.reshape(-1)
@@ -526,6 +526,10 @@ def _capacity_refilled_top_k_local(
         jnp.arange(num_experts, dtype=jnp.int32)[None, :],
         (capacity, num_experts),
     ).reshape(-1)
+    vacancy_slots = jnp.broadcast_to(
+        jnp.arange(capacity, dtype=jnp.int32)[:, None],
+        (capacity, num_experts),
+    ).reshape(-1)
     vacancy_mask = (jnp.arange(capacity, dtype=jnp.int32)[:, None] >= occupied_slots[None, :]).reshape(-1)
     vacancy_rank = jnp.cumsum(vacancy_mask.astype(jnp.int32), dtype=jnp.int32) - 1
     total_slots = capacity * num_experts
@@ -533,18 +537,24 @@ def _capacity_refilled_top_k_local(
     compact_vacancy_experts = (
         jnp.full((total_slots,), num_experts, dtype=jnp.int32).at[vacancy_destination].set(vacancy_experts, mode="drop")
     )
+    compact_vacancy_slots = (
+        jnp.full((total_slots,), capacity, dtype=jnp.int32).at[vacancy_destination].set(vacancy_slots, mode="drop")
+    )
 
     overflow_rank = jnp.cumsum(jnp.logical_not(keep).astype(jnp.int32), dtype=jnp.int32) - 1
-    replacement = compact_vacancy_experts[jnp.maximum(overflow_rank, 0)]
-    refilled = jnp.where(keep, flat_experts, replacement)
-    return refilled.reshape(num_tokens, topk)
+    compact_index = jnp.maximum(overflow_rank, 0)
+    replacement_expert = compact_vacancy_experts[compact_index]
+    replacement_slot = compact_vacancy_slots[compact_index]
+    refilled_experts = jnp.where(keep, flat_experts, replacement_expert)
+    refilled_slots = jnp.where(keep, local_rank, replacement_slot)
+    return refilled_experts.reshape(num_tokens, topk), refilled_slots.reshape(num_tokens, topk)
 
 
 def _capacity_refilled_top_k(
     router_logits: Float[Array, "T E"],
     cfg: "GrugModelConfig",
-) -> Int[Array, "T K"]:
-    """Refill expert capacity independently on every fixed-A2A sender shard."""
+) -> tuple[Int[Array, "T K"], Int[Array, "T K"]]:
+    """Refill expert capacity and assign exact slots on every fixed-A2A sender shard."""
     mesh = get_abstract_mesh()
     router_logits = reshard(router_logits, P(_BATCH_AXES, None))
 
@@ -559,7 +569,7 @@ def _capacity_refilled_top_k(
         _local,
         mesh=mesh,
         in_specs=(P(_BATCH_AXES, None),),
-        out_specs=P(_BATCH_AXES, None),
+        out_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
     )(router_logits)
 
 
@@ -609,10 +619,11 @@ class MoEMLP(eqx.Module):
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         if self.cfg.capacity_refill_routing:
-            selected_experts = _capacity_refilled_top_k(router_logits, self.cfg)
+            selected_experts, dispatch_slots = _capacity_refilled_top_k(router_logits, self.cfg)
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         elif self.cfg.capacity_balanced_routing:
             selected_experts = _capacity_balanced_top_k(router_logits, self.cfg)
+            dispatch_slots = None
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         elif self.cfg.qb_routing:
             # Bias only the sigmoid routing scores used for top-k selection. Combine weights stay
@@ -620,9 +631,11 @@ class MoEMLP(eqx.Module):
             # language-model objective.
             biased_scores = jax.nn.sigmoid(router_logits) + jax.lax.stop_gradient(self.router_bias)
             _, selected_experts = jax.lax.top_k(biased_scores, self.cfg.num_experts_per_token)
+            dispatch_slots = None
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
+            dispatch_slots = None
         if (
             self.cfg.qb_routing
             or self.cfg.capacity_balanced_routing
@@ -647,6 +660,7 @@ class MoEMLP(eqx.Module):
                     combine_weights,
                     mesh=get_abstract_mesh(),
                     report_capacity_overflow=True,
+                    dispatch_slots=dispatch_slots,
                     w13_pre0=w13_pre0,
                     w2_pre0=w2_pre0,
                 ),
@@ -660,6 +674,7 @@ class MoEMLP(eqx.Module):
                     combine_weights,
                     mesh=get_abstract_mesh(),
                     report_capacity_overflow=False,
+                    dispatch_slots=dispatch_slots,
                     w13_pre0=w13_pre0,
                     w2_pre0=w2_pre0,
                 ),

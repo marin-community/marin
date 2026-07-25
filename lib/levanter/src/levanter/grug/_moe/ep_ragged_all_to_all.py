@@ -98,6 +98,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    dispatch_slots_local: Int[Array, "Tlocal K"] | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -109,6 +110,8 @@ def _moe_mlp_ep_fixed_a2a_local(
     if tokens_per_shard % chunks != 0:
         raise ValueError(f"tokens_per_shard={tokens_per_shard} must be divisible by SCALE_A2A_CHUNKS={chunks}")
     if os.environ.get("SCALE_A2A_RECEIVER_CLIP") == "1":
+        if dispatch_slots_local is not None:
+            raise ValueError("precomputed dispatch slots cannot be combined with receiver clipping")
         if chunks != 1:
             raise ValueError("SCALE_A2A_RECEIVER_CLIP=1 currently requires SCALE_A2A_CHUNKS=1")
         sender_capacity_factor = float(
@@ -135,10 +138,14 @@ def _moe_mlp_ep_fixed_a2a_local(
             combine_weights_local,
             moe_w13_local,
             moe_w2_local,
+            dispatch_slots_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
             capacity_factor=capacity_factor,
         )
+
+    if dispatch_slots_local is not None:
+        raise ValueError("precomputed dispatch slots currently require SCALE_A2A_CHUNKS=1")
 
     tokens_per_chunk = tokens_per_shard // chunks
     chunk_outputs = []
@@ -736,6 +743,7 @@ def _fixed_a2a_core(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    dispatch_slots_local: Int[Array, "Tlocal K"] | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -771,7 +779,9 @@ def _fixed_a2a_core(
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
 
-    if os.environ.get("SCALE_A2A_SONIC_EXPERT_RANK") == "1":
+    if dispatch_slots_local is not None:
+        slot = dispatch_slots_local.reshape(-1).astype(jnp.int32)
+    elif os.environ.get("SCALE_A2A_SONIC_EXPERT_RANK") == "1":
         slot = sonic_expert_local_rank(flat_experts, num_experts=num_experts)
     else:
         order = jnp.argsort(flat_experts, stable=True)
@@ -932,6 +942,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    dispatch_slots_local: Int[Array, "Tlocal K"] | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -944,10 +955,14 @@ def _moe_mlp_ep_ragged_a2a_local(
             combine_weights_local,
             moe_w13_local,
             moe_w2_local,
+            dispatch_slots_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
             capacity_factor=capacity_factor,
         )
+
+    if dispatch_slots_local is not None:
+        raise ValueError("precomputed dispatch slots require SCALE_A2A_FIXED=1")
 
     return _moe_mlp_ep_ragged_a2a_core(
         x_local,
