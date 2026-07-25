@@ -752,3 +752,17 @@ statistics for performance comparisons.
 - Across 19 durable checkpoints, all 2,432 baseline pairs resolved: 1,724 false
   positives and 708 true duplicates. All run components remain Ready with zero
   restarts.
+
+### 2026-07-25T12:15:00Z — semantic review reaches 3,712 verified pairs
+
+- Partition p0 completed five additional ranges through 2560:2688, while
+  partition p3 completed five ranges through 896:1024. Independent object-store
+  audits passed for all 10 new shards, including byte hashes, ordered review
+  keys, manifest counters, complete-text coverage, and evidence-derived labels.
+- The new 1,280 baseline pairs contain 707 false positives and 573 true
+  duplicates. Their 2,879 model judgments were all valid first responses, with
+  zero retries, zero invalid outputs, and zero unresolved outcomes. Only four
+  pairs required chunked review; 113 review units required a tiebreak.
+- Across 29 durable checkpoints, all 3,712 baseline pairs resolved: 2,431 false
+  positives and 1,281 true duplicates. All 12 run pods remain Ready with zero
+  restarts.
