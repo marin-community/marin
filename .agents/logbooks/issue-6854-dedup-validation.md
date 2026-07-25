@@ -1537,6 +1537,23 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T19:06:53Z — 35,985 pairs verified
+
+- One additional baseline checkpoint passed independent validation: 128
+  pairs, 118 false positives, 10 true duplicates, and no unresolved outcomes.
+  It contains 2,759 valid judgments across 2,759 request attempts, with no
+  invalid responses or retries. Twenty-three pairs were chunked and 105 were
+  direct. The outcome Parquet SHA-256 is
+  `82e4a27f37094fb9c5228c017a5e046209a91a1270df285a487f29cd39d4b99f`.
+- Across the stable 283-checkpoint snapshot, all 37 manual records leave:
+
+  - baseline: 28,665 pairs, 18,436 false positives, 10,229 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 35,985 pairs, 22,262 false positives, 13,723 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T18:06:35Z — 35,601 pairs verified
 
 - Four additional treatment checkpoints passed independent validation: 481
