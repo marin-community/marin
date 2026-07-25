@@ -166,3 +166,25 @@ Next: arm-2 series via poller; keep polling arm-1 logs every ~15 min.
 
 Confidence: 4/10 g=0.5, 1/10 integral-g0.001, 3/10 integral-g0.01
 Next: arm-2 exit ~23:55 -> submit arm 3 (gamma=0.01); keep polling arm-1 logs.
+
+## Check-in 2026-07-26 00:25 UTC — arm 2 COMPLETE (plateau 0.60); arm 3 in flight
+
+- ARM 2 FINAL (gamma=0.001, /mwittmann/ep25d3-qbint-cf100-350-v1-20260725, succeeded
+  ~00:00): telltale series 0.657(154) 0.609(219) 0.602(296) 0.605(335) 0.606(348).
+  Early decline (-0.0007/step) STALLED to ~-0.0001/step by step ~250: the rule reaches a
+  quasi-equilibrium at ~0.60 drops — bias travel saturates long before the collapsed-logit
+  spread. Loss @348 3.452 (vs baseline 3.335@349 — +0.117, in the expected direction for
+  60% drops). tok/s ~356-358K = heavy-drop-inflated MFU, NOT a win. VERDICT arm 2: clean
+  negative at this horizon (DSv3 gamma reverses nothing in 350 steps).
+- ARM 3 SUBMITTED 00:05: /mwittmann/ep25d3-qbint01-cf100-350-v1-20260726 (gamma=0.01,
+  10x bias travel; same everything). Dispatched + setup; poller attached (task 0 telltale
+  10.186.213.145:55509). ETA ~01:45.
+- Arm-1 (g=0.5) logs: STILL 0 child rows at 00:20 — 4h outage on cw-us-east-08a worker
+  log shipping (d4's 21:08 smoke also dark). CONTINGENCY: if the pipeline is still down
+  when arm 3 exits (~01:45), rerun arm 1 with the telltale poller attached from step 0
+  (guaranteed sparse series + tok/s->MFU conversion calibrated 15.5K tok/s per pp on d4's
+  matched pairs); accept the log copy later if it lands.
+- Mutations: submissions only.
+
+Confidence: 4/10 g=0.5, 1/10 g0.001 (measured), 3/10 g0.01
+Next: babysit arm 3 via poller; arm-1 log polls; arm-1 rerun decision at ~01:45.
