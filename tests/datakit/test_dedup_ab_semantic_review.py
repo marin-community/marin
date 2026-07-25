@@ -116,7 +116,7 @@ def test_chunked_outcome_covers_every_member_character_and_preserves_unique_chun
                 "canonical_chunk_indices": [0, 1],
                 "judgments": [
                     _judgment("loss", deletion_loses_substantive_content=False),
-                    _judgment("duplication", deletion_loses_substantive_content=False),
+                    _judgment("duplication", deletion_loses_substantive_content=True),
                 ],
             },
             {
@@ -139,6 +139,44 @@ def test_chunked_outcome_covers_every_member_character_and_preserves_unique_chun
     assert outcome["member_chunks"] == 2
     assert outcome["canonical_chunks_scanned"] == 3
     assert outcome["covered_member_chars"] == 10
+
+
+def test_chunked_outcome_keeps_unresolved_when_no_chunk_proves_unique_content() -> None:
+    case = _case(member_text="abcdefghij")
+    evidence = {
+        "mode": "chunked",
+        "chunk_chars": 6,
+        "overlap_chars": 2,
+        "canonical_chunks_per_member": 2,
+        "canonical_chunks_scanned": 3,
+        "units": [
+            {
+                "member_chunk_index": 0,
+                "member_start": 0,
+                "member_end": 6,
+                "canonical_chunk_indices": [0, 1],
+                "judgments": [
+                    _judgment("loss", deletion_loses_substantive_content=False),
+                    _judgment("duplication", deletion_loses_substantive_content=False),
+                ],
+            },
+            {
+                "member_chunk_index": 1,
+                "member_start": 4,
+                "member_end": 10,
+                "canonical_chunk_indices": [1, 2],
+                "judgments": [
+                    _judgment("loss", deletion_loses_substantive_content=False),
+                    _judgment("duplication", deletion_loses_substantive_content=True),
+                ],
+            },
+        ],
+    }
+
+    outcome = outcome_from_evidence(case, evidence)
+
+    assert outcome["status"] == "unresolved"
+    assert outcome["label"] == ""
 
 
 def test_chunked_outcome_rejects_gap_in_member_coverage() -> None:

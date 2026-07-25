@@ -226,29 +226,27 @@ def outcome_from_evidence(case: dict[str, Any], evidence: dict[str, Any]) -> dic
         covered_member_chars = _covered_chars(ranges, len(case["member_text"]))
         member_chunks = len(units)
         canonical_chunks_scanned = int(evidence["canonical_chunks_scanned"])
-        labels = []
-        unresolved_chunks = 0
+        unit_labels = []
         for unit in units:
             judgments = unit["judgments"]
             request_attempts += sum(len(judgment["attempts"]) for judgment in judgments)
-            unit_label = _judgment_label(judgments)
-            if unit_label is None:
-                unresolved_chunks += 1
-            else:
-                labels.append(unit_label)
-        if unresolved_chunks:
-            label = None
-            basis = (
-                f"Exhaustive chunk review left {unresolved_chunks}/{member_chunks} member chunks "
-                "invalid, low-confidence, or non-unanimous."
-            )
-        elif "false_positive" in labels:
+            unit_labels.append(_judgment_label(judgments))
+        unique_units = [
+            unit for unit, unit_label in zip(units, unit_labels, strict=True) if unit_label == "false_positive"
+        ]
+        unresolved_chunks = sum(unit_label is None for unit_label in unit_labels)
+        if unique_units:
             label = "false_positive"
-            unique_units = [unit for unit, unit_label in zip(units, labels, strict=True) if unit_label == label]
             examples = " | ".join(_joined_basis(unit["judgments"]) for unit in unique_units[:4])
             basis = (
                 f"Exhaustive chunk review found distinct member content in "
                 f"{len(unique_units)}/{member_chunks} chunks. {examples}"
+            )
+        elif unresolved_chunks:
+            label = None
+            basis = (
+                f"Exhaustive chunk review left {unresolved_chunks}/{member_chunks} member chunks "
+                "invalid, low-confidence, or non-unanimous."
             )
         else:
             label = "true_duplicate"
