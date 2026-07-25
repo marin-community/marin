@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+from collections.abc import Iterator
 from datetime import datetime
 
 import pytest
+from prometheus_client.core import Metric
 from rigging import telltale
 from rigging.server_auth import RequestAuthPolicy, RouteAuthMiddleware
 from starlette.applications import Starlette
@@ -61,10 +63,49 @@ class _RecordingSink:
         self.closed = True
 
 
+class _StaticCollector:
+    def __init__(self, metric: Metric) -> None:
+        self.metric = metric
+
+    def collect(self) -> Iterator[Metric]:
+        yield self.metric
+
+
+@pytest.fixture
+def publish_metric():
+    collectors: list[_StaticCollector] = []
+
+    def publish(metric: Metric) -> None:
+        collector = _StaticCollector(metric)
+        telltale.register_collector(collector)
+        collectors.append(collector)
+
+    yield publish
+
+    for collector in collectors:
+        telltale.unregister_collector(collector)
+
+
 def _one(name: str, rows: list[telltale.TelltaleMetric]) -> telltale.TelltaleMetric:
     matching = [r for r in rows if r.name == name]
     assert len(matching) == 1, f"expected one {name!r} row, got {len(matching)}"
     return matching[0]
+
+
+def _metric_row(body: str, name: str) -> str:
+    return _metric_rows(body, name)[0]
+
+
+def _metric_rows(body: str, name: str) -> list[str]:
+    cell = f"<td>{name}</td>"
+    rows = []
+    start = 0
+    while (cell_start := body.find(cell, start)) >= 0:
+        row_start = body.rindex("<tr>", 0, cell_start)
+        row_end = body.index("</tr>", cell_start) + len("</tr>")
+        rows.append(body[row_start:row_end])
+        start = row_end
+    return rows
 
 
 def test_counter_is_get_or_create(name):
@@ -160,6 +201,103 @@ def test_index_renders_status_and_metric_values(name, client):
     assert "shard 3/10 done" in body
     assert name in body
     assert "12.0" in body
+
+
+def test_index_compacts_a_histogram_into_interval_buckets(name, client, publish_metric):
+    metric = Metric(name, "d", "histogram")
+    for bound, cumulative in [("1", 2), ("2", 2), ("10", 3), ("+Inf", 3)]:
+        metric.add_sample(f"{name}_bucket", {"engine": "4", "le": bound}, cumulative)
+    metric.add_sample(f"{name}_count", {"engine": "4"}, 3)
+    metric.add_sample(f"{name}_sum", {"engine": "4"}, 6)
+    metric.add_sample(f"{name}_created", {"engine": "4"}, 123)
+    publish_metric(metric)
+
+    body = client.get("/").text
+    row = _metric_row(body, name)
+
+    assert f"{name}_bucket" not in body
+    assert f"{name}_count" not in body
+    assert f"{name}_sum" not in body
+    assert f"{name}_created" not in body
+    assert "<td>engine=4</td>" in row
+    assert "n=3" in row
+    assert "avg=2" in row
+    assert 'title="≤ 1: 2"' in row
+    assert 'title="(1, 2]: 0"' in row
+    assert 'title="(2, 10]: 1"' in row
+    assert 'title="(10, +Inf]: 0"' in row
+
+
+def test_index_keeps_histogram_label_sets_as_separate_rows(name, client, publish_metric):
+    metric = Metric(name, "d", "histogram")
+    for engine, count in [("3", 1), ("4", 2)]:
+        metric.add_sample(f"{name}_bucket", {"engine": engine, "le": "1"}, count)
+        metric.add_sample(f"{name}_bucket", {"engine": engine, "le": "+Inf"}, count)
+        metric.add_sample(f"{name}_count", {"engine": engine}, count)
+        metric.add_sample(f"{name}_sum", {"engine": engine}, count * 0.5)
+    publish_metric(metric)
+
+    body = client.get("/").text
+
+    assert body.count(f"<td>{name}</td>") == 2
+    assert "engine=3" in body
+    assert "engine=4" in body
+
+
+def test_index_uses_count_and_infinite_bucket_fallbacks(name, client, publish_metric):
+    metric = Metric(name, "d", "histogram")
+    metric.add_sample(f"{name}_bucket", {"mode": "count-fallback", "le": "1"}, 2)
+    metric.add_sample(f"{name}_bucket", {"mode": "count-fallback", "le": "+Inf"}, 3)
+    metric.add_sample(f"{name}_sum", {"mode": "count-fallback"}, 6)
+
+    metric.add_sample(f"{name}_bucket", {"mode": "overflow", "le": "1"}, 2)
+    metric.add_sample(f"{name}_bucket", {"mode": "overflow", "le": "2"}, 3)
+    metric.add_sample(f"{name}_count", {"mode": "overflow"}, 5)
+
+    metric.add_sample(f"{name}_bucket", {"mode": "truncated", "le": "1"}, 2)
+
+    metric.add_sample(f"{name}_bucket", {"mode": "empty", "le": "1"}, 0)
+    metric.add_sample(f"{name}_bucket", {"mode": "empty", "le": "+Inf"}, 0)
+    metric.add_sample(f"{name}_count", {"mode": "empty"}, 0)
+    metric.add_sample(f"{name}_sum", {"mode": "empty"}, 0)
+    publish_metric(metric)
+
+    body = client.get("/").text
+    rows = {row.split("mode=", 1)[1].split("<", 1)[0]: row for row in _metric_rows(body, name)}
+
+    assert "n=3" in rows["count-fallback"]
+    assert "avg=2" in rows["count-fallback"]
+    assert 'title="(1, +Inf]: 1"' in rows["count-fallback"]
+    assert "n=5" in rows["overflow"]
+    assert 'title="(2, +Inf]: 2"' in rows["overflow"]
+    assert "truncated" in rows["truncated"]
+    assert "n=" not in rows["truncated"]
+    assert "n=0" in rows["empty"]
+    assert "avg=" not in rows["empty"]
+
+
+@pytest.mark.parametrize(
+    "samples",
+    [
+        [("bucket", {"le": "1"}, 2), ("bucket", {"le": "2"}, 1), ("bucket", {"le": "+Inf"}, 2)],
+        [("bucket", {"le": "bad"}, 1), ("bucket", {"le": "+Inf"}, 1)],
+        [("bucket", {"le": "1"}, 1), ("bucket", {"le": "1.0"}, 1), ("bucket", {"le": "+Inf"}, 1)],
+        [("bucket", {"le": "1"}, float("inf")), ("bucket", {"le": "+Inf"}, float("inf"))],
+        [("bucket", {"le": "+Inf"}, 2), ("count", {}, 2), ("count", {}, 2)],
+        [("bucket", {"le": "+Inf"}, 2), ("count", {}, 3)],
+    ],
+    ids=["decreasing", "invalid-bound", "duplicate-bound", "non-finite", "duplicate-count", "count-mismatch"],
+)
+def test_index_marks_invalid_histograms_malformed(name, client, publish_metric, samples):
+    metric = Metric(name, "d", "histogram")
+    for suffix, labels, value in samples:
+        metric.add_sample(f"{name}_{suffix}", labels, value)
+    publish_metric(metric)
+
+    row = _metric_row(client.get("/").text, name)
+
+    assert "malformed histogram" in row
+    assert "histogram-spark" not in row
 
 
 def test_index_escapes_status_html(client):
