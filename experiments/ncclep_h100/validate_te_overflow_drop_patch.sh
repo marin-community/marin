@@ -15,7 +15,7 @@ fi
 TE_SOURCE=$1
 MODE=${2:---check}
 
-if [[ ! -d "$TE_SOURCE/.git" ]]; then
+if ! git -C "$TE_SOURCE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "FATAL: not a Transformer Engine git checkout: $TE_SOURCE" >&2
   exit 1
 fi
@@ -73,6 +73,8 @@ defaults = dict(
 overflow_default = defaults.get("overflow_policy")
 if not isinstance(overflow_default, ast.Constant) or overflow_default.value != "trap":
     raise SystemExit("ep_bootstrap overflow_policy default is not 'trap'")
+if "jnp.float32" not in source:
+    raise SystemExit("ep_bootstrap does not accept float32 as a maximum token dtype")
 PY
     ;;
   *)

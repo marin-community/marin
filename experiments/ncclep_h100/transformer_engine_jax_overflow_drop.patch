@@ -153,7 +153,7 @@ index db5468af..53fcf9c0 100644
    m.def("ep_handle_mem_size", &EpHandleMemSize, pybind11::arg("top_k"),
          pybind11::arg("dispatch_output_per_expert_alignment") = 0);
 diff --git a/transformer_engine/jax/ep.py b/transformer_engine/jax/ep.py
-index 9704e515..153fb462 100644
+index 9704e515..93b73508 100644
 --- a/transformer_engine/jax/ep.py
 +++ b/transformer_engine/jax/ep.py
 @@ -36,6 +36,11 @@ __all__ = [
@@ -176,7 +176,7 @@ index 9704e515..153fb462 100644
  ):
      """Initialize the EP communicator. Call once per process before any EP op.
 
-@@ -90,12 +96,19 @@ def ep_bootstrap(
+@@ -90,16 +96,25 @@ def ep_bootstrap(
          rank: Global rank of the calling process.
          num_experts: Total experts across the EP group.
          max_tokens_per_rank: Max tokens one rank dispatches per step (sizes send buffers).
@@ -185,20 +185,30 @@ index 9704e515..153fb462 100644
 +        recv_capacity_per_rank: Max tokens one rank receives per step. Exceeding
 +            this capacity traps unless ``overflow_policy="drop"``.
          hidden_dim: Feature dimension of token tensors passed to ep_dispatch.
-         max_token_dtype: Widest dtype the group will dispatch (only bfloat16 supported).
+-        max_token_dtype: Widest dtype the group will dispatch (only bfloat16 supported).
++        max_token_dtype: Widest dtype the group will dispatch. Supports bfloat16
++            and float32.
          max_num_sms: SM budget for EP kernels; 0 = auto.
 +        overflow_policy: Receive-capacity overflow behavior. Must be ``"auto"``,
 +            ``"trap"``, or ``"drop"``. Defaults to ``"trap"``.
      """
+-    if jnp.dtype(max_token_dtype) != jnp.bfloat16:
 +    if not isinstance(overflow_policy, str) or overflow_policy not in _OVERFLOW_POLICIES:
 +        raise ValueError(
 +            "ep_bootstrap: overflow_policy must be one of 'auto', 'trap', or 'drop';"
 +            f" got {overflow_policy!r}."
 +        )
-     if jnp.dtype(max_token_dtype) != jnp.bfloat16:
++    max_token_dtype = jnp.dtype(max_token_dtype)
++    if max_token_dtype not in (jnp.bfloat16, jnp.float32):
          raise NotImplementedError(
-             "ep_bootstrap: only max_token_dtype=jnp.bfloat16 is supported today, got"
-@@ -169,6 +182,7 @@ def ep_bootstrap(
+-            "ep_bootstrap: only max_token_dtype=jnp.bfloat16 is supported today, got"
+-            f" {jnp.dtype(max_token_dtype)}."
++            "ep_bootstrap: max_token_dtype must be jnp.bfloat16 or jnp.float32, got"
++            f" {max_token_dtype}."
+         )
+     if world_size < 2:
+         raise ValueError(
+@@ -169,6 +184,7 @@ def ep_bootstrap(
          hidden_dim,
          max_num_sms=int(max_num_sms),
          max_token_dtype=int(jax_dtype_to_te_dtype(max_token_dtype)),

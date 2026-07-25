@@ -571,6 +571,8 @@ def run_ab(args: argparse.Namespace) -> int:
             recv_capacity_per_rank=RECV_CAPACITY_PER_RANK,
             hidden_dim=HIDDEN_DIM,
         )
+        if args.combine_dtype == "fp32":
+            bootstrap_kwargs["max_token_dtype"] = jnp.float32
         if args.overflow_policy == "drop":
             bootstrap_kwargs["overflow_policy"] = "drop"
         te_ep.ep_bootstrap(**bootstrap_kwargs)
