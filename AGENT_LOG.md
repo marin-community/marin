@@ -233,3 +233,14 @@ DROP JOB submitted: /mwittmann/ep25d1-drops-30-0724-2318 (custom adjoint + SCALE
 commit 2d4a87395). d4's fp8-wire leg already exercised the metric: 0.755 early -> 0.172 late; hypothesizes
 64x expert-shard overcount => /64 gives 1.18% -> 0.27%, matching my ~0.9% multinomial estimate. Auditing
 the psum scope now.
+
+## PSUM AUDIT RESULT 05:25 UTC — metric is CORRECT (disproves 64x hypothesis)
+Controlled CPU test (_fixed_a2a_core under a REAL 2-expert-shard shard_map, cf=0.5 to force drops):
+  metric dropped_total = 87, numpy reference (true global drops, per-shard capacity) = 87, ratio = 1.000.
+=> The psum over (replica_dcn,data,expert) sums DISTINCT per-shard drop counts to the correct GLOBAL total;
+   out_spec P() replicates that single global scalar. NO expert-axis double-count. denominator (global
+   B*S*topk*num_layers) matches numerator scope. d4's 64x-overcount hypothesis is DISPROVEN for this code.
+Implication: the true token-drop-fraction is whatever MY drop job reads (commit 2d4a87395), taken at face
+value. Expectation still ~0.9% at the operating point (cf=1.0, capacity==mean per (shard,expert) bucket of
+2048, near-uniform init routing). d4's 0.755 must be fp8-wire-config-specific (different bucket size/capacity)
+or a different metric build, NOT a 64x bug in this metric. Awaiting drop-job numbers to state the final value.
