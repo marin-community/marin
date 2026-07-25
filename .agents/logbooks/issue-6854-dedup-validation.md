@@ -459,3 +459,21 @@ statistics for performance comparisons.
 - Launched exhaustive materialization of 1,162,846 dropped pairs. It must
   retrieve and hash-check 2,325,692 complete texts before machine labeling can
   start. No pair is sampled or omitted.
+
+### 2026-07-25T01:05:00Z — complete materialization and adjudication routing
+
+- Full-text materialization completed with exact coverage: 1,162,846 drop
+  requests produced 2,325,692 hash-verified texts and 1,162,846 pairs. The
+  corpus contains 57,913,756,011 raw characters. The worker stage used
+  3,601.53 CPU-seconds and peaked at 7,786,008,576 bytes on its largest shard.
+- The machine-label pass rehashed every persisted text and reproduced all
+  1,162,846 pair identities. It confirmed 358 byte-identical pairs as true
+  duplicates and 407,207 complete, nontruncated baseline pairs as strong false
+  positives. It routed the remaining 755,281 pairs to semantic adjudication:
+  600,248 baseline and 155,033 treatment.
+- Retrieved the exact converged baseline and treatment report HTML artifacts
+  and verified their SHA-256 values against an in-cluster read. Both render
+  successfully in headless Chromium. Headline cards, MinHash parameters,
+  per-source tables, and sampled cluster-size histograms are populated and
+  internally consistent; no blank, malformed, overlapping, or non-finite
+  fields are visible.
