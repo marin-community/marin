@@ -309,3 +309,12 @@ FIDELITY SECTION SYNTHESIS (mine + peers):
 => The fixed path needs QB-on for fidelity; QB-on is nearly free on speed and drives drops down >3x fast, but
 the <3% crossing is unconfirmed in 30 steps and rests on d4's longer QB-on legs. d2's ragged arm (imminent) is
 the cross-transport fidelity comparator.
+
+## Milestone draft 00:52 UTC
+Wrote EP25_MILESTONE_DRAFT.md (worktree root, internal - NOT pushed/posted). Structure: TL;DR, speed A/B
+(+3.43pp -> 24.04, composes with leg-batching 25.39), fidelity (drops 0.85-0.89 QB-off -> 0.25 QB-on 3.4x at
+~zero MFU cost; metric proven exact; <3% steady-state TODO=d4 120-step QB-on), sealed negatives (rotation
+-9.46, prefetch null, token-chunk -1.96, fp8 wire -2.02, TE-at-tip crash), transport TODO=d2 ragged/ring,
+goal ledger, repro pointers (branch/commits/env/jobs; PR from agent/ep25-d1-adjoint still needed - no pushes).
+Style per .agents/skills/writing-style (reports.md + ai-writing-donts.md): numbers first, one table/section,
+mixed results plain. Awaiting human review before any posting.
