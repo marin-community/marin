@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.rpc import job_pb2
 from marin.inference.iris import remote_inference
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
@@ -227,6 +227,10 @@ def _identity(case: dict[str, Any]) -> dict[str, Any]:
     return {field: case[field] for field in IDENTITY_FIELDS}
 
 
+def _is_context_overflow(error: BadRequestError) -> bool:
+    return "maximum context length" in str(error)
+
+
 def outcome_from_evidence(case: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     """Derive one pair outcome deterministically from persisted model evidence."""
     mode = evidence.get("mode")
@@ -323,27 +327,42 @@ async def _review_case(
         raise ValueError(f"Direct review exceeds {MAX_DIRECT_CHARS} characters for {case['review_key']}")
 
     if mode == "direct":
-        tasks = [
-            _judge_prompt(
+        try:
+            tasks = [
+                _judge_prompt(
+                    client,
+                    model=model,
+                    prompt=_direct_prompt(case, pass_name=pass_name),
+                    semaphore=semaphore,
+                )
+                for pass_name in INITIAL_PASSES
+            ]
+            judgments = list(await asyncio.gather(*tasks))
+            for pass_name, judgment in zip(INITIAL_PASSES, judgments, strict=True):
+                judgment["pass"] = pass_name
+            if _judgment_label(judgments) is None:
+                tiebreak = await _judge_prompt(
+                    client,
+                    model=model,
+                    prompt=_direct_prompt(case, pass_name=TIEBREAK_PASS),
+                    semaphore=semaphore,
+                )
+                tiebreak["pass"] = TIEBREAK_PASS
+                judgments.append(tiebreak)
+        except BadRequestError as error:
+            if force_mode is not None or not _is_context_overflow(error):
+                raise
+            logger.info("Direct prompt exceeds model context; using chunk review for %s", case["review_key"])
+            return await _review_case(
                 client,
                 model=model,
-                prompt=_direct_prompt(case, pass_name=pass_name),
+                case=case,
                 semaphore=semaphore,
+                force_mode="chunked",
+                chunk_chars=chunk_chars,
+                overlap_chars=overlap_chars,
+                canonical_chunks_per_member=canonical_chunks_per_member,
             )
-            for pass_name in INITIAL_PASSES
-        ]
-        judgments = list(await asyncio.gather(*tasks))
-        for pass_name, judgment in zip(INITIAL_PASSES, judgments, strict=True):
-            judgment["pass"] = pass_name
-        if _judgment_label(judgments) is None:
-            tiebreak = await _judge_prompt(
-                client,
-                model=model,
-                prompt=_direct_prompt(case, pass_name=TIEBREAK_PASS),
-                semaphore=semaphore,
-            )
-            tiebreak["pass"] = TIEBREAK_PASS
-            judgments.append(tiebreak)
         evidence = {
             "mode": "direct",
             "chunk_chars": chunk_chars,

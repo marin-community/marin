@@ -6,10 +6,12 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from iris.rpc import job_pb2
+from openai import BadRequestError
 
 from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData, decision_for_pair
 from experiments.datakit.scripts.dedup_ab_semantic_batch import _records, load_semantic_cases
@@ -304,6 +306,19 @@ class _TiebreakCompletions:
         )
 
 
+class _ContextOverflowCompletions:
+    async def create(self, **kwargs):
+        prompt = kwargs["messages"][-1]["content"]
+        if "<MEMBER_CHUNK" not in prompt:
+            response = httpx.Response(400, request=httpx.Request("POST", "http://inference.test"))
+            raise BadRequestError(
+                "This model's maximum context length is 131072 tokens.",
+                response=response,
+                body={"error": {"message": "This model's maximum context length is 131072 tokens."}},
+            )
+        return await _FakeCompletions().create(**kwargs)
+
+
 def test_review_requests_tiebreak_until_two_non_low_votes_agree() -> None:
     completions = _TiebreakCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -348,6 +363,30 @@ def test_forced_chunk_review_persists_two_pass_evidence_for_every_chunk() -> Non
     tampered = outcome_from_evidence(case, evidence)
     with pytest.raises(AssertionError, match="Chunk plan differs"):
         validate_outcome(case, tampered)
+
+
+def test_review_falls_back_to_chunking_when_direct_prompt_exceeds_model_context() -> None:
+    case = _case(member_text="alpha beta gamma delta " * 4, canonical_text="other content " * 4)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=_ContextOverflowCompletions()))
+
+    outcomes = asyncio.run(
+        review_cases(
+            client,
+            model="model",
+            cases=[case],
+            chunk_chars=30,
+            overlap_chars=5,
+            canonical_chunks_per_member=2,
+        )
+    )
+
+    outcome = outcomes[0]
+    evidence = json.loads(outcome["judgments_json"])
+    assert outcome["status"] == "resolved"
+    assert outcome["label"] == "false_positive"
+    assert outcome["review_mode"] == "chunked"
+    assert outcome["covered_member_chars"] == len(case["member_text"])
+    assert all(len(unit["judgments"]) == 2 for unit in evidence["units"])
 
 
 def test_completed_batch_revalidates_checksum_identity_and_evidence(tmp_path) -> None:

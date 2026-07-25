@@ -1270,3 +1270,22 @@ statistics for performance comparisons.
 
 - All 12 pods remain Ready with zero restarts. The four GPU workers served
   7,836 successful responses over the prior 15 minutes.
+
+### 2026-07-25T16:41:33Z — source-code context overflow isolated
+
+- Partitions 0 and 1 stopped on unfinished batches after the model rejected
+  direct source-code prompts over its 131,072-token context. The affected
+  prompts contained 214,156, 158,066, and 165,243 input tokens despite fitting
+  the 300,000-character direct-review cutoff. Partition 2 stopped independently
+  after its inference endpoint returned HTTP 502. No failed batch wrote a
+  completion marker.
+- Exact tokenizer inspection confirms that the existing exhaustive chunk path
+  keeps the affected pairs within context: their largest chunk prompts contain
+  91,028, 116,973, and 90,483 input tokens.
+- Automatic direct review now falls back to exhaustive chunk review only for a
+  model context-limit response. Explicitly forced direct review and other bad
+  requests still fail. The regression failed before the fix and passes after
+  it; all 11 semantic-review tests pass.
+- Partition 3 remains healthy. The failed partitions can resume from their
+  immutable, hash-verified checkpoint frontiers without repeating completed
+  work.
