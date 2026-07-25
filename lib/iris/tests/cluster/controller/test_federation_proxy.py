@@ -164,6 +164,44 @@ def _register_endpoint(
     return response.endpoint_id
 
 
+def _native_proxy(
+    stack: ExitStack,
+    decision_url: str,
+    decision_secret: str,
+    *,
+    mode: NativeProxyAuthMode,
+    issuers: tuple[str, ...] = (),
+    jwks: dict | None = None,
+    federation_keys: dict[str, str] | None = None,
+) -> NativeProxy:
+    """A native proxy on an ephemeral port with the standard cache/leeway/CIDR policy,
+    registered for teardown. Call sites vary only the decision endpoint and the auth
+    material; the caller installs whatever registry it wants to serve.
+    """
+    proxy = NativeProxy(
+        "127.0.0.1",
+        0,
+        decision_url,
+        decision_secret,
+        json.dumps(
+            asdict(
+                NativeProxyAuthConfig(
+                    mode=mode,
+                    issuers=issuers,
+                    jwks=jwks if jwks is not None else {"keys": []},
+                    leeway_seconds=60,
+                    cache_capacity=16,
+                    cache_ttl_seconds=60,
+                    trusted_cidrs=(),
+                    federation_keys=federation_keys or {},
+                )
+            )
+        ),
+    )
+    stack.callback(proxy.stop)
+    return proxy
+
+
 @pytest.fixture
 def threads() -> Iterator[ThreadContainer]:
     container = ThreadContainer()
@@ -204,28 +242,14 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             proxy_decision_secret=decision_secret,
         )
         peer_private_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
-        peer_proxy = NativeProxy(
-            "127.0.0.1",
-            0,
+        peer_proxy = _native_proxy(
+            stack,
             peer_private_url,
             decision_secret,
-            json.dumps(
-                asdict(
-                    NativeProxyAuthConfig(
-                        mode=NativeProxyAuthMode.ENFORCING,
-                        issuers=(),
-                        jwks={"keys": []},
-                        leeway_seconds=60,
-                        cache_capacity=16,
-                        cache_ttl_seconds=60,
-                        trusted_cidrs=(),
-                        federation_keys={PARENT_ID: parent_public_key},
-                    )
-                )
-            ),
+            mode=NativeProxyAuthMode.ENFORCING,
+            federation_keys={PARENT_ID: parent_public_key},
         )
         peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
-        stack.callback(peer_proxy.stop)
         peer_url = peer_proxy.address
 
         # Parent dashboard: resolves the mirrored remote endpoint and forwards to the
@@ -244,27 +268,13 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
 
         # Sync mirrors the peer's endpoint onto the parent as a remote (peer_id) row.
         manager.sync_once()
-        parent_proxy = NativeProxy(
-            "127.0.0.1",
-            0,
+        parent_proxy = _native_proxy(
+            stack,
             parent_private_url,
             parent_decision_secret,
-            json.dumps(
-                asdict(
-                    NativeProxyAuthConfig(
-                        mode=NativeProxyAuthMode.PERMISSIVE,
-                        issuers=(),
-                        jwks={"keys": []},
-                        leeway_seconds=60,
-                        cache_capacity=16,
-                        cache_ttl_seconds=60,
-                        trusted_cidrs=(),
-                    )
-                )
-            ),
+            mode=NativeProxyAuthMode.PERMISSIVE,
         )
         parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
-        stack.callback(parent_proxy.stop)
         parent_url = parent_proxy.address
 
         # The whole forward: parent /proxy -> federation bearer -> peer /proxy -> upstream.
@@ -317,24 +327,14 @@ def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, s
     auth = create_controller_auth(None, cluster_name=CHILD_CLUSTER)
     assert auth.jwt_manager is not None
     issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
-    proxy = NativeProxy(
-        "127.0.0.1",
-        0,
-        "http://127.0.0.1:9",  # unused: a local capability request posts no decision
+    # A local capability request posts no decision, so the decision URL is unused.
+    proxy = _native_proxy(
+        stack,
+        "http://127.0.0.1:9",
         "child-relay-decision",
-        json.dumps(
-            asdict(
-                NativeProxyAuthConfig(
-                    mode=NativeProxyAuthMode.ENFORCING,
-                    issuers=issuers,
-                    jwks=jwks,
-                    leeway_seconds=60,
-                    cache_capacity=16,
-                    cache_ttl_seconds=60,
-                    trusted_cidrs=(),
-                )
-            )
-        ),
+        mode=NativeProxyAuthMode.ENFORCING,
+        issuers=issuers,
+        jwks=jwks,
     )
     proxy.replace_registry(
         json.dumps(
@@ -357,7 +357,6 @@ def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, s
             )
         )
     )
-    stack.callback(proxy.stop)
     return proxy.address, auth.jwt_manager.create_endpoint_token(ENDPOINT_NAME, "iris_ket_relay")
 
 
@@ -393,29 +392,17 @@ def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log
         parent_auth = create_controller_auth(None, cluster_name="parent")
         assert parent_auth.jwt_manager is not None
         parent_issuers, parent_jwks = parent_auth.jwt_manager.native_proxy_verification_material()
-        parent_proxy = NativeProxy(
-            "127.0.0.1",
-            0,
+        parent_proxy = _native_proxy(
+            stack,
             parent_private_url,
             parent_decision_secret,
-            json.dumps(
-                asdict(
-                    NativeProxyAuthConfig(
-                        mode=NativeProxyAuthMode.ENFORCING,
-                        issuers=parent_issuers,
-                        jwks=parent_jwks,
-                        leeway_seconds=60,
-                        cache_capacity=16,
-                        cache_ttl_seconds=60,
-                        trusted_cidrs=(),
-                    )
-                )
-            ),
+            mode=NativeProxyAuthMode.ENFORCING,
+            issuers=parent_issuers,
+            jwks=parent_jwks,
         )
         # A relay consults no local registry, but the proxy still gates proxy traffic
         # on a ready registry, so install an empty one.
         parent_proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(generation=1, endpoints=()))))
-        stack.callback(parent_proxy.stop)
 
         with httpx.Client() as client:
             relayed = client.get(
