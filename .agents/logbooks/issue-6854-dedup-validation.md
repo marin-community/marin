@@ -651,3 +651,23 @@ statistics for performance comparisons.
   their workers had returned 1,660, 754, 725, and 1,079 successful response
   batches with no runtime error. Artifact:
   `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-workload-100b-20260725-v2/workload.json`.
+
+### 2026-07-25T09:52:00Z — first full-run semantic checkpoint verified
+
+- Partition p3 completed semantic range 0:128 for decision file 96 and
+  immediately advanced to range 128:256. All 128 pairs resolved; none remained
+  unresolved. The batch contained 107 direct and 21 chunked pairs and used
+  1,664 model-response attempts.
+- A separate process in the root task reread the completion marker and Parquet
+  bytes from object storage. It independently verified the 433,265-byte object
+  SHA-256, 128-row count, ordered review-key hash, status and mode counters,
+  and single semantic-configuration hash. Outcome SHA-256:
+  `d3a270e72108ab8e88ae876c5cf4f3d5a167cf236cb298633bf99ef45f0d1cc8`.
+  Marker:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-review-100b-qwen35-35b-a3b-20260725-v1/batches/decision-00096/semantic-00000000.json`.
+- The Iris CLI controller port-forward timed out once during a scheduled
+  monitor pass. Direct Kubernetes inspection showed all 12 root, broker, and
+  worker pods Ready with zero restarts. Four GPU pods each request two H100s
+  on node `gb976f0`; inference continued throughout. Monitoring now uses the
+  Kubernetes API as the primary liveness path and Iris logs as a secondary
+  signal.
