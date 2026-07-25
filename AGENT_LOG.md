@@ -156,3 +156,16 @@ RANKING (contribution >=1pp toward LOCKED 25%, preserving fidelity; post-adjoint
   - v1 (2338) FAILED at [iris setup]; v2 (2339) RUNNING, still in compile/warmup — 96 watch(grad/param) summaries
     logged, ZERO throughput/mfu samples so far. No step-time/MFU number to harvest yet. Re-poll next round.
 - No new build work (per coordinator). Holding for reassignment (new sub-direction or watch/lock role).
+
+## Check-in 00:08 UTC — drop metric landed + 1a A/B control submitted
+- DROP METRIC: SCALE_REPORT_DROPS=1 threads a per-layer dropped-assignment count up the qb_beta aux
+  channel (scan stacks [L]); train.py logs moe/dropped_assignments + moe/drop_fraction (denom
+  B*S*topk*num_layers). Threaded unconditionally as cheap int32; only the overflow compute is gated.
+  Validated CPU e2e (reference attn, EP1 mesh): forward/loss/grad-norm IDENTICAL with flag on/off and
+  custom-vs-autodiff; report-off path unchanged. pyrefly clean; test_model.py + adjoint kernel tests pass.
+  Committed 4fbc89152.
+- 1a A/B CONTROL SUBMITTED (one rack, one-in-flight per rule): /mwittmann/ep25d1-adj-control-120-0724-1707
+  = gather-dispatch + autodiff backward + SCALE_REPORT_DROPS=1, 120 steps, SCALE_DISABLE_CHECKPOINT=1,
+  json_logger, operating point (d5120/256e-top8/48L/EP64/b1024). Will babysit to terminal, THEN submit
+  treatment (+SCALE_A2A_CUSTOM_ADJOINT=1) back-to-back. NOT resubmitting on PENDING (rack at capacity).
+- JOB-STATE MUTATIONS BY ME THIS CHECK-IN: none (only my own submission).
