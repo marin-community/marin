@@ -383,3 +383,27 @@ statistics for performance comparisons.
   now passes all 30 tests. Baseline connected-components changes in iterations
   39–44 were 682, 480, 251, 224, 287, and 149. Iteration 45 is running; the
   full audit remains gated on a zero-change iteration.
+
+### 2026-07-25T00:08:00Z — baseline true convergence and full audit launch
+
+- The default baseline run reached its 50-iteration ceiling with four changed
+  rows still present. Before resuming it, copied and size-verified all 768
+  marker shards into the immutable `dedup-cap50` artifact. The snapshot is
+  91,994,385 bytes.
+- Resumed from `metadata/cc/it_50` without recomputing MinHash. Iterations
+  51–53 had one, one, and zero changes, so the baseline converged exactly at
+  iteration 53.
+- The converged artifact has 1,513,510 cluster members, 505,876 canonicals, and
+  1,007,634 drops. An independent report validator again accounts for all
+  103,716,988 input documents and verifies the report parameters, sampled
+  histograms, embedded JSON, and HTML structure.
+- Compared every capped and converged marker across all 768 shards. Both
+  artifacts have 1,513,510 markers; 1,513,508 are byte-for-byte equal at the
+  attribute level. Exactly two noncanonical `swe-zero-12m` documents change
+  cluster ID, with no marker additions, removals, or canonical-role changes.
+  Both old and new member/canonical relationships remain subject to full-text
+  semantic review.
+- Launched the primary full audit against the converged baseline and treatment.
+  Its score pass reads all 768 co-partitioned normalized, marker, and MinHash
+  shard sets. The 34 focused audit, census, full-text, coverage, cap-diff, and
+  archived-metrics tests pass.
