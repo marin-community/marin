@@ -415,4 +415,23 @@ scheduler-gated; my leg closes the family + delivers the drop-granularity number
 
 Confidence: 3/10 for 4b ≥ +0.5pp.
 
-Next: babysit control leg (~40 min), then submit pipeline-K2.
+## Check-in 2026-07-25 ~05:20 UTC — control leg harvested
+
+- **CONTROL (K=1, `/mwittmann/ep25d3-cp-ctl-k1-120-v1-20260725`, succeeded): p50 MFU
+  20.543%** (p10 20.463 / p90 20.628, mean 20.543, 119 samples), final loss 5.764.
+  Reproduces the 20.558 baseline and d4's 20.594 same-week draws within ±0.05pp.
+- Drop reporting works (612-645 lines/window). **Absolute fractions look anomalous**:
+  ~63% (steps 0-12) → ~68% (steps ~107-119) per-layer of global assignments at
+  cf=1.0 — vs ~1% expectation for near-uniform routing. qb_routing=false in this
+  config (no adaptation). Either (a) my DROP_STAT mis-measures (e.g., a psum/batch-
+  axes subtlety in `dropped_total`), or (b) the production config genuinely drops
+  ~2/3 of assignments — which would contradict Larry's 3%-at-8-buckets reference
+  and every loss trajectory (they're in family with all prior runs). **The A/B
+  like-for-like delta is unaffected** (same measurement both legs); flagging the
+  absolute calibration to d1 (owns the shared drop-metric patch) via the coordinator.
+- Pipeline leg (`/mwittmann/ep25d3-cp-pipe-k2-120-v1-20260725`) submitted 04:35,
+  in flight.
+
+Confidence: 3/10 for 4b ≥ +0.5pp.
+
+Next: harvest pipeline leg (p50 + identical-window drops + loss), verdict.
