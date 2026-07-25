@@ -319,6 +319,37 @@ def initial_state(
     )
 
 
+def _next_qb_betas(pending: jax.Array, measured: jax.Array) -> jax.Array:
+    """Combine the previous QB beta state with this step's measurement into the next state.
+
+    Stock rule (gain 1): replace outright. Because beta is measured against the *biased*
+    threshold and satisfies beta_i = -bias_i at the balanced fixed point, replacement is an
+    implicit proportional controller applying exactly 1x the residual imbalance per step.
+
+    SCALE_QB_GAIN=g blends beta states, applying g x the residual (g=2 doubles the bias update
+    rate; g<1 damps).
+
+    SCALE_QB_INTEGRAL=<gamma> instead applies DeepSeek-V3's aux-loss-free integral rule: the
+    model ships per-expert assignment counts (loads) in place of the quantile
+    (model.py::_compute_qb_loads), and the bias state accumulates fixed +-gamma sign updates,
+    bias_i += gamma * sign(mean_load - load_i). In beta space (bias = -center(beta)) that is
+    beta_i += gamma * sign(load_i - mean_load), up to a common-mode shift the mean-centering
+    absorbs. SCALE_QB_GAIN is ignored in this mode. Read at trace time; all env-off behavior is
+    byte-identical to the stock rule.
+    """
+    qb_gain = float(os.environ.get("SCALE_QB_GAIN", "1") or "1")
+    qb_integral = float(os.environ.get("SCALE_QB_INTEGRAL", "") or "0")
+    if qb_integral > 0:
+        logger.info("QB integral rule active: SCALE_QB_INTEGRAL=%s", qb_integral)
+        loads = measured
+        mean_load = jnp.mean(loads, axis=-1, keepdims=True)
+        return pending + qb_integral * jnp.sign(loads - mean_load)
+    if qb_gain != 1.0:
+        logger.info("QB over-relaxation active: SCALE_QB_GAIN=%s", qb_gain)
+        return qb_gain * measured + (1.0 - qb_gain) * pending
+    return measured
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -398,18 +429,9 @@ def _make_train_step(
         if _OFFLOAD_OPT_STATE:
             opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
 
-        # SCALE_QB_GAIN over-relaxes the QB bias update. The stock rule (gain 1) replaces the
-        # beta state outright, which — because beta is measured against the *biased* threshold
-        # and satisfies beta_i = -bias_i at the balanced fixed point — is an implicit
-        # proportional controller applying exactly 1x the residual imbalance per step. Blending
-        # beta states with gain g applies g x the residual (g=2 doubles the bias update rate;
-        # g<1 damps). This scheme differs from DeepSeek-V3's aux-loss-free rule, which
-        # accumulates fixed +-gamma sign updates (gamma=0.001) — integral control — rather than
-        # recomputing an equalizing quantile each step.
-        qb_gain = float(os.environ.get("SCALE_QB_GAIN", "1") or "1")
-        if qb_gain != 1.0:
-            logger.info("QB over-relaxation active: SCALE_QB_GAIN=%s", qb_gain)
-            qb_beta_per_layer = qb_gain * qb_beta_per_layer + (1.0 - qb_gain) * state.pending_qb_betas
+        # QB bias update: stock quantile replacement, SCALE_QB_GAIN damping/over-relaxation,
+        # or the SCALE_QB_INTEGRAL DeepSeek-V3 sign-update rule. See _next_qb_betas.
+        qb_beta_per_layer = _next_qb_betas(state.pending_qb_betas, qb_beta_per_layer)
 
         next_state = dataclasses.replace(
             state,

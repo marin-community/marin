@@ -422,6 +422,37 @@ def _compute_qb_beta(router_logits: jax.Array, qb_alpha: jax.Array, cfg: "GrugMo
     )(s_minus_alpha)
 
 
+def _qb_integral_gamma() -> float:
+    """SCALE_QB_INTEGRAL=<gamma> switches QB from quantile replacement to DeepSeek-V3-style
+    integral accumulation (0/unset keeps the stock path byte-identical). Read at trace time."""
+    return float(os.environ.get("SCALE_QB_INTEGRAL", "") or "0")
+
+
+def _compute_qb_loads(selected_experts: jax.Array, cfg: "GrugModelConfig") -> jax.Array:
+    """Per-expert assignment counts for the SCALE_QB_INTEGRAL rule (DeepSeek-V3 aux-loss-free).
+
+    The loads are the actual (biased top-k) assignment counts, psum'd over the batch axes like
+    the quantile path's pmean, so the critical path carries the same single f32 [num_experts]
+    reduce per layer (a scatter-add replaces the top_k). train.py accumulates the +-gamma sign
+    updates from these counts.
+    """
+    if os.environ.get("SCALE_MOE_SKIP_QB") == "1":
+        return jnp.zeros((cfg.num_experts,), dtype=jnp.float32)
+    mesh = get_abstract_mesh()
+    sel = reshard(selected_experts, P(_BATCH_AXES, None))
+
+    def _local_loads(s):
+        counts = jnp.zeros((cfg.num_experts,), dtype=jnp.float32).at[s.reshape(-1)].add(1.0)
+        return jax.lax.psum(counts, axis_name=_BATCH_AXES)
+
+    return shard_map(
+        _local_loads,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None),),
+        out_specs=P(),
+    )(sel)
+
+
 class MoEMLP(eqx.Module):
     """Top-k routed MoE with sigmoid combine weights (optional QB balancing behind cfg.qb_routing)."""
 
@@ -479,7 +510,13 @@ class MoEMLP(eqx.Module):
             qb_alpha = topk_biased[:, -1:]
             selected_experts = selected_experts[:, :-1]
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-            qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
+            if _qb_integral_gamma() > 0:
+                # Integral rule: ship per-expert load counts to train.py instead of the
+                # equalizing quantile. Selection above is unchanged, so the routed forward
+                # is identical; only the NEXT step's bias update differs.
+                qb_beta = _compute_qb_loads(selected_experts, self.cfg)
+            else:
+                qb_beta = _compute_qb_beta(router_logits, qb_alpha, self.cfg)
         else:
             topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
             qb_beta = jnp.zeros((self.cfg.num_experts,), dtype=jnp.float32)
