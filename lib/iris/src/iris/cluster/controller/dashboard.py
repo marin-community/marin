@@ -94,6 +94,10 @@ class _FederationDecision:
     task_id: str | None
     local_upstream: str | None
     timeout_seconds: float | None
+    # The capability token, carried only on a relay so the parent can rebuild the
+    # child-side /proxy/t/<token>/<name> path. Absent from a native that predates
+    # the relay, and None on inbound/outbound.
+    token: str | None = None
 
 
 def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bool:
@@ -264,6 +268,22 @@ class ControllerDashboard:
                 ):
                     return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
                 headers[UPSTREAM_URL_HEADER] = decision.local_upstream
+                return Response(status_code=204, headers=headers)
+
+            if decision.direction == "relay":
+                # A child-minted capability URL routed through this public parent.
+                # Forward it verbatim to the child's proxy with no credential: the
+                # child owns and validates the token. relay_base is None for an
+                # unconfigured peer, so the relay only reaches a declared peer.
+                if self._federated_handoff is None or decision.token is None:
+                    return JSONResponse({"error": "federation relay unavailable"}, status_code=502)
+                base = self._federated_handoff.relay_base(decision.peer_id)
+                if base is None:
+                    return JSONResponse({"error": f"Peer '{decision.peer_id}' unavailable"}, status_code=404)
+                upstream = f"{base.rstrip('/')}/proxy/t/{decision.token}/{decision.encoded_name}/{decision.sub_path}"
+                if decision.query:
+                    upstream = f"{upstream}?{decision.query}"
+                headers[UPSTREAM_URL_HEADER] = upstream
                 return Response(status_code=204, headers=headers)
 
             if decision.direction != "outbound" or self._federated_handoff is None:

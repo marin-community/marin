@@ -501,6 +501,9 @@ struct ProxyRoute {
     token: Option<String>,
     proxy_prefix: String,
     redirect: bool,
+    // Set when the route is a federation relay (`/proxy/<cluster>/t/...`): the peer
+    // whose proxy the parent forwards the capability URL to, verbatim and unverified.
+    relay_peer: Option<String>,
 }
 
 enum NativeDecision {
@@ -515,6 +518,7 @@ enum NativeDecision {
 enum FederationDirection {
     Inbound,
     Outbound,
+    Relay,
 }
 
 #[derive(Serialize)]
@@ -526,6 +530,9 @@ struct FederationDecision {
     proxy_prefix: String,
     peer_id: String,
     task_id: Option<String>,
+    // The capability token, carried only on a relay so the controller can rebuild
+    // the child-side `/proxy/t/<token>/<name>` path. None on inbound/outbound.
+    token: Option<String>,
     local_upstream: Option<String>,
     timeout_seconds: Option<f64>,
 }
@@ -838,6 +845,19 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
             "invalid proxy route",
         ))
     })?;
+    // Federation relay marker: `<cluster>/t/<token>/<name>/...`. A non-empty,
+    // non-`t` first segment immediately followed by the `t/` capability marker
+    // relays the URL to that peer; the parent strips `<cluster>` and forwards
+    // `/proxy/t/...` verbatim. Requiring the `t/` marker means a tagged URL only
+    // ever relays a capability token, never the child's other auth modes.
+    let (relay_peer, prefix_head, remainder) = match remainder.split_once('/') {
+        Some((head, rest)) if !head.is_empty() && head != "t" && rest.starts_with("t/") => (
+            Some(decode_path_segment(head)?),
+            format!("/proxy/{head}"),
+            rest,
+        ),
+        _ => (None, "/proxy".to_string(), remainder),
+    };
     let (token, endpoint_and_path, token_prefix) =
         if let Some(token_route) = remainder.strip_prefix("t/") {
             let (token, rest) = token_route.split_once('/').ok_or_else(|| {
@@ -849,10 +869,10 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
             (
                 Some(decode_path_segment(token)?),
                 rest,
-                format!("/proxy/t/{token}"),
+                format!("{prefix_head}/t/{token}"),
             )
         } else {
-            (None, remainder, "/proxy".to_string())
+            (None, remainder, prefix_head)
         };
     let (encoded_name, sub_path, redirect) =
         if let Some((name, path)) = endpoint_and_path.split_once('/') {
@@ -873,6 +893,7 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
         sub_path: sub_path.to_string(),
         token,
         redirect,
+        relay_peer,
     })
 }
 
@@ -901,6 +922,7 @@ fn subdomain_proxy_route(headers: &HeaderMap, uri: &Uri) -> Option<ProxyRoute> {
         token: None,
         proxy_prefix: String::new(),
         redirect: false,
+        relay_peer: None,
     })
 }
 
@@ -1079,8 +1101,27 @@ fn federation_decision(
         proxy_prefix: route.proxy_prefix,
         peer_id,
         task_id: mapping.task_id,
+        token: None,
         local_upstream,
         timeout_seconds: mapping.timeout_seconds,
+    })
+}
+
+/// A cluster-tagged capability URL (`/proxy/<cluster>/t/<token>/<name>/...`): the
+/// parent forwards it to the named peer's proxy without resolving or authenticating
+/// it locally. The child owns and validates the token exactly as for a direct call.
+fn relay_decision(route: ProxyRoute, peer_id: String, query: Option<&str>) -> NativeDecision {
+    NativeDecision::Federation(FederationDecision {
+        direction: FederationDirection::Relay,
+        encoded_name: route.encoded_name,
+        sub_path: route.sub_path,
+        query: query.unwrap_or_default().to_string(),
+        proxy_prefix: route.proxy_prefix,
+        peer_id,
+        task_id: None,
+        token: route.token,
+        local_upstream: None,
+        timeout_seconds: None,
     })
 }
 
@@ -1206,6 +1247,16 @@ async fn native_decision(
         Ok(None) => return NativeDecision::ControllerProxy,
         Err(response) => return NativeDecision::Response(response),
     };
+    if let Some(peer_id) = route.relay_peer.clone() {
+        // A cluster-tagged capability URL. Do not resolve or authenticate it here:
+        // the child owns and validates the token. A tagless leading segment (no
+        // trailing sub-path) still redirects to the canonical slashed form, keeping
+        // the external `<cluster>` prefix so the follow-up request relays.
+        if route.redirect {
+            return redirect_decision(&route, request_uri.query());
+        }
+        return relay_decision(route, peer_id, request_uri.query());
+    }
     let resolved = match state.control.resolve(&route.encoded_name) {
         Ok(resolved) => resolved,
         Err(error) => {
@@ -1540,6 +1591,47 @@ mod tests {
         assert!(control.resolve("a").unwrap().is_none());
         assert_eq!(control.resolve("b").unwrap().unwrap().endpoint_id, "b");
         assert_eq!(control.resolve("c").unwrap().unwrap().endpoint_id, "c");
+    }
+
+    fn route(path: &str) -> ProxyRoute {
+        parse_proxy_route(&path.parse::<Uri>().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn relay_route_parses_the_cluster_tag_and_keeps_the_capability_path() {
+        let r = route("/proxy/cw-rno2a/t/tok123/serve.model/v1/models");
+        assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
+        assert_eq!(r.token.as_deref(), Some("tok123"));
+        assert_eq!(r.encoded_name, "serve.model");
+        assert_eq!(r.sub_path, "v1/models");
+        assert!(!r.redirect);
+        // The external prefix keeps the cluster tag so a redirect round-trips.
+        assert_eq!(r.proxy_prefix, "/proxy/cw-rno2a/t/tok123/serve.model");
+    }
+
+    #[test]
+    fn relay_route_without_a_subpath_redirects_to_the_slashed_form() {
+        let r = route("/proxy/cw-rno2a/t/tok123/serve.model");
+        assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
+        assert!(r.redirect);
+    }
+
+    #[test]
+    fn a_local_capability_route_is_not_a_relay() {
+        let r = route("/proxy/t/tok123/serve.model/v1");
+        assert_eq!(r.relay_peer, None);
+        assert_eq!(r.token.as_deref(), Some("tok123"));
+        assert_eq!(r.encoded_name, "serve.model");
+    }
+
+    #[test]
+    fn a_tagless_endpoint_route_is_not_a_relay() {
+        // A `<cluster>/<name>` shape with no `t/` marker stays a local endpoint
+        // lookup, so the relay never exposes non-capability access to the child.
+        let r = route("/proxy/cw-rno2a/v1/models");
+        assert_eq!(r.relay_peer, None);
+        assert_eq!(r.encoded_name, "cw-rno2a");
+        assert_eq!(r.sub_path, "v1/models");
     }
 
     #[test]
