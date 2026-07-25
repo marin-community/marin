@@ -166,7 +166,7 @@ export HALIAX_RAGGED_DOT_TRITON_NUM_WARPS=8
 mkdir -p "$NCCL_EP_JIT_CACHE_DIR"
 
 echo "=== run: paired full routed-MLP A/B on eight one-GPU processes ==="
-exec python -m iris.runtime.multigpu --nproc 8 --devices-per-proc 1 -- \
+exec uv run --package marin-iris --extra worker python -m iris.hooks.multigpu_main --nproc 8 --devices-per-proc 1 -- \
   python -u "$SCRIPT_DIR/ep_full_mlp_ab.py" \
   --warmup "$WARMUP" \
   --iterations "$ITERATIONS" \
