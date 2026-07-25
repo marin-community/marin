@@ -75,7 +75,7 @@ def _adjudication_input_records(entry: dict[str, str]) -> Iterator[dict[str, str
             }
         else:
             payload = record
-        review_key = payload["review_key"]
+        review_key = str(payload["review_key"])
         yield {
             "review_key": review_key,
             "kind": entry["kind"],
@@ -267,7 +267,7 @@ def validate_occurrence_coverage(occurrence_key: str, records: Iterator[dict[str
 
 
 def _paths(directory: str, kind: str, *, required: bool = True) -> list[dict[str, str]]:
-    paths = sorted(str(path) for path in StoragePath(f"{directory.rstrip('/')}/*.parquet").glob())
+    paths = sorted(str(path) for path in StoragePath(f"{directory.rstrip('/')}/**/*.parquet").glob())
     if required and not paths:
         raise FileNotFoundError(f"No {kind} Parquet files under {directory}")
     return [{"kind": kind, "path": path} for path in paths]

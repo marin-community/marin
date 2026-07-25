@@ -8,6 +8,7 @@ import pytest
 
 from experiments.datakit.scripts.dedup_ab_audit import DedupAuditData
 from experiments.datakit.scripts.dedup_ab_finalize import (
+    _paths,
     _validate_counters,
     final_decision,
     validate_occurrence_coverage,
@@ -230,3 +231,17 @@ def test_final_counters_read_persisted_stage_namespace() -> None:
     combined["finalize/coverage/baseline/markers"] = 0
     with pytest.raises(AssertionError, match="baseline final coverage mismatch"):
         _validate_counters(audit, review, machine, combined)
+
+
+def test_semantic_paths_include_nested_checkpoint_shards(tmp_path) -> None:
+    first = tmp_path / "decision-00000" / "semantic-00000000.parquet"
+    second = tmp_path / "decision-00001" / "semantic-00000128.parquet"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.touch()
+    second.touch()
+
+    assert _paths(str(tmp_path), "semantic") == [
+        {"kind": "semantic", "path": str(first)},
+        {"kind": "semantic", "path": str(second)},
+    ]
