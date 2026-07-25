@@ -1255,3 +1255,18 @@ statistics for performance comparisons.
 - All 12 pods remain Ready with zero restarts. Partition p1's latest
   15-minute response-log count was truncated despite four advancing
   checkpoints, so it is excluded from throughput aggregation.
+
+### 2026-07-25T16:27:02Z — semantic review reaches 25,809 verified pairs
+
+- Nineteen additional baseline checkpoints passed independent validation:
+  2,432 pairs, 1,548 false positives, 884 true duplicates, and zero unresolved
+  outcomes. They used 5,464 valid first-attempt judgments with no invalid
+  responses or retries; seven pairs were chunked and 2,425 were direct.
+- Across the stable 202-checkpoint snapshot, all 19 manual records leave:
+
+  - baseline: 23,354 pairs, 14,837 false positives, 8,517 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 25,809 pairs, 16,121 false positives, 9,688 true duplicates.
+
+- All 12 pods remain Ready with zero restarts. The four GPU workers served
+  7,836 successful responses over the prior 15 minutes.
