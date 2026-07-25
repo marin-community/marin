@@ -162,6 +162,24 @@ def test_index_renders_status_and_metric_values(name, client):
     assert "12.0" in body
 
 
+def test_index_compacts_histogram_samples(name, client):
+    metric = telltale.histogram(name, "d", ["engine"])
+    metric.labels("3").observe(0.5)
+    for value in [0.5, 0.5, 5.0]:
+        metric.labels("4").observe(value)
+
+    body = client.get("/").text
+
+    assert body.count(f"<td>{name}</td>") == 2
+    assert f"<td>{name}_bucket</td>" not in body
+    assert f"<td>{name}_count</td>" not in body
+    assert f"<td>{name}_sum</td>" not in body
+    assert "<td>engine=3</td>" in body
+    assert "<td>engine=4</td>" in body
+    assert "n=3 avg=2" in body
+    assert 'class="histogram-spark"' in body
+
+
 def test_index_escapes_status_html(client):
     telltale.set_status("<script>alert(1)</script>")
 
