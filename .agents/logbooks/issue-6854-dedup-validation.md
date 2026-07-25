@@ -836,3 +836,38 @@ statistics for performance comparisons.
   Each marker binds the review key, label, semantic-evidence hash, Parquet byte
   length, and Parquet SHA-256. Writes were reread and checked for exact record
   equality before the markers were published.
+
+### 2026-07-25T12:44:00Z — semantic review reaches 7,936 verified pairs
+
+- Eight additional checkpoints passed independent validation: 1,024 baseline
+  pairs, 603 false positives, 418 true duplicates, and three unresolved model
+  outcomes. They used 2,229 request attempts; two judgments each exhausted
+  three invalid JSON responses, accounting for six invalid attempts and four
+  retries. All other judgments were valid on the first attempt.
+- Two complete SFT pairs resolve as true duplicates. Character-level comparison
+  found only the insertion or deletion of `\text{` and `}` around the same
+  boxed `A` or `E`, with similarity ratios 0.999602 and 0.999796. Pair
+  locations and member/canonical text SHA-256 values:
+  `part-00000-of-00128.parquet:7338`,
+  `0d330d3efa4532ee6a511b64fdaea60422c122efde810aa847766ff4d89ba639` /
+  `399108bcfd36069b7e9fd5905f6f17eff5cdae9a5b4986984137281740035376`;
+  and `part-00000-of-00128.parquet:7599`,
+  `adfb9a4cf00e34d9d32eb55cedc8a89f5f7805d46d98367b4adb03a1e93bef0c` /
+  `cb03db77ddc3f9892821ce78a9d62b18ea8f07b1b3a45ec30c87c817fa570e2b`.
+- The third case resolves conservatively as a false positive. Although many
+  changes are college, location, and program template slots, complete-text
+  comparison found a member-only admissions job-duty sentence about managing
+  public relations and prospective-student calls, plus a distinct
+  business-practices clause. Pair location:
+  `part-00096-of-00128.parquet:4878`; member/canonical text SHA-256:
+  `1a563a858a5c5f0558ffa2a3283d912c6d6dff7ae117437741aed002748e0511` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- The three new override shards were reread and hash-verified. Their initial
+  metadata carried a timestamp one minute ahead of the actual review; all three
+  exact targets were corrected to `2026-07-25T12:44:00Z` and their completion
+  markers were republished with the corrected Parquet hashes before any
+  finalizer consumed them. Labels and evidence were unchanged.
+- Across 62 immutable semantic checkpoints, raw model totals are 5,002 false
+  positives, 2,927 true duplicates, and seven unresolved. Applying all seven
+  manual records yields 5,003 false positives and 2,933 true duplicates across
+  all 7,936 pairs.
