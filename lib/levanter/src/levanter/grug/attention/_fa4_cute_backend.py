@@ -683,23 +683,22 @@ def fa4_cute_attention_forward(
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
     if os.environ.get("SCALE_FA4_LSE_SAVE") == "1":
+        # stop_gradient on the raw call's INPUTS keeps the FFI producer out of the
+        # differentiated graph: its tangents are all-SymbolicZero so jax prunes it
+        # during linearization/transposition (cutlass_call has no JVP/VJP rule).
+        # Primal values are unchanged. The gradient is fully defined by the custom
+        # VJP below, whose backward kernel consumes (out, lse) as residual inputs.
         out, lse = segmented_flash_attention_forward(
-            q,
-            k,
-            v,
-            lower_bounds,
-            valid,
+            jax.lax.stop_gradient(q),
+            jax.lax.stop_gradient(k),
+            jax.lax.stop_gradient(v),
+            jax.lax.stop_gradient(lower_bounds),
+            jax.lax.stop_gradient(valid),
             softmax_scale=sm_scale,
             kernel_config=kernel_config,
         )
         out = tree_checkpoint_name(out, _CHECKPOINT_FA4_OUT)
         lse = tree_checkpoint_name(lse, _CHECKPOINT_FA4_LSE)
-        # The raw cutlass_call has no transpose rule; the gradient is fully defined
-        # by the custom VJP below (its backward kernel consumes (out, lse) as
-        # non-differentiated residual inputs). Stop gradient here so transposition
-        # never reaches the FFI producer.
-        out = jax.lax.stop_gradient(out)
-        lse = jax.lax.stop_gradient(lse)
         return _fa4_saved_primals_custom_vjp(
             q,
             k,
