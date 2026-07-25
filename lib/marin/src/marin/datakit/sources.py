@@ -69,9 +69,8 @@ class DatakitSource:
     """Mixture-component key, e.g. ``"nemotron_cc_v2_1/high_quality"``."""
 
     normalize_steps: tuple[StepSpec, ...]
-    """Ordered step chain. Always starts with a download and ends with
-    ``normalize``; may contain preprocessing steps in between for sources
-    that need filtering or transforms."""
+    """Ordered step chain ending with ``normalize``. Earlier steps include a
+    download or depend on one transitively, and may preprocess the source."""
 
     rough_token_count_b: float
     """Approximate token count in billions (Llama-3 tokenizer). Used as the
