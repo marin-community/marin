@@ -3,14 +3,21 @@
 
 import json
 from dataclasses import asdict
+from urllib.parse import unquote
 
 import httpx
 import uvicorn
 from iris.cluster.config import AuthConfig
-from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode, create_controller_auth
+from iris.cluster.controller.auth import (
+    VERIFIED_IDENTITY_HEADER,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
+    create_controller_auth,
+)
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.managed_thread import ThreadContainer
+from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -65,6 +72,9 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
                 "authorization": request.headers.get("authorization"),
                 "cookie": request.headers.get("cookie"),
                 "proxy_prefix": request.headers.get("x-forwarded-prefix"),
+                "verified_identity": request.headers.get(VERIFIED_IDENTITY_HEADER),
+                "decision_secret": request.headers.get("x-iris-decision-secret"),
+                "iap_assertion": request.headers.get("x-goog-iap-jwt-assertion"),
             },
             headers={"x-native-upstream": "reached"},
         )
@@ -126,20 +136,64 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
                     "cookie": "session=browser-secret",
                 },
             )
+            controller_rpc = client.post("/iris.cluster.ControllerService/ListJobs", json={})
 
         assert redirect.status_code == 307
         assert redirect.headers["location"] == f"/proxy/{_ENCODED_NAME}/"
         assert response.status_code == 200
+        assert controller_rpc.status_code == 200
         assert response.headers["x-native-upstream"] == "reached"
         assert response.json() == {
             "body_bytes": len(payload),
             "authorization": None,
             "cookie": None,
             "proxy_prefix": f"/proxy/{_ENCODED_NAME}",
+            "verified_identity": None,
+            "decision_secret": None,
+            "iap_assertion": None,
         }
         assert received_bodies == [payload]
     finally:
         threads.stop()
+
+
+def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path) -> None:
+    controllers = [
+        make_controller(
+            host="127.0.0.1",
+            port=0,
+            local_state_dir=tmp_path / name,
+            remote_state_dir=f"file://{tmp_path}/{name}-remote",
+        )
+        for name in ("first", "second")
+    ]
+    for controller in controllers:
+        controller.start()
+        response = httpx.post(
+            f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+            json={},
+        )
+        assert response.status_code == 200
+
+    labels = {
+        "service": "iris.cluster.ControllerService",
+        "method": "ListJobs",
+        "upstream": "controller",
+    }
+
+    def sample_value(name: str, **extra_labels: str) -> float:
+        matching = [
+            family_sample.sample.value
+            for family_sample in telltale.samples()
+            if family_sample.sample.name == name and family_sample.sample.labels == {**labels, **extra_labels}
+        ]
+        assert len(matching) == 1
+        return matching[0]
+
+    assert sample_value("iris_rpc_requests_total") == 2
+    assert sample_value("iris_rpc_responses_total", status="200") == 2
+    assert sample_value("iris_rpc_in_flight") == 0
+    assert sample_value("iris_rpc_duration_seconds_count") == 2
 
 
 def test_native_listener_caches_verified_jwt(make_controller) -> None:
@@ -171,6 +225,129 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
         assert stats is not None
         assert stats.jwt_cache_misses == 2
         assert stats.jwt_cache_hits == 1
+    finally:
+        threads.stop()
+
+
+def test_native_listener_preserves_direct_controller_auth_without_trusting_forwarded_request(
+    make_controller,
+) -> None:
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
+        cluster_name="native-controller-auth-test",
+    )
+    controller = make_controller(
+        host="127.0.0.1",
+        port=0,
+        auth=auth,
+    )
+    controller.start()
+    assert auth.jwt_manager is not None
+    token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
+
+    auth_config = httpx.get(
+        f"{controller.url}/auth/config",
+        headers={"x-forwarded-for": "203.0.113.10"},
+    )
+    authenticated_auth_config = httpx.get(
+        f"{controller.url}/auth/config",
+        headers={
+            "authorization": f"Bearer {token}",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
+    direct = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={"content-type": "application/json"},
+    )
+    forwarded = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
+    authenticated = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "x-forwarded-for": "203.0.113.10",
+        },
+    )
+    spoofed = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={
+            "content-type": "application/json",
+            "x-forwarded-for": "203.0.113.10",
+            VERIFIED_IDENTITY_HEADER: "%7B%22user_id%22%3A%22admin%22%2C%22role%22%3A%22admin%22%7D",
+        },
+    )
+
+    assert auth_config.json()["authenticated"] is False
+    assert authenticated_auth_config.json()["authenticated"] is True
+    assert direct.status_code == 200
+    assert forwarded.status_code == 401
+    assert authenticated.status_code == 200
+    assert spoofed.status_code == 401
+
+
+def test_native_listener_stamps_controller_identity_and_strips_caller_credentials() -> None:
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads)
+        auth = create_controller_auth(None, cluster_name="native-controller-handoff")
+        assert auth.jwt_manager is not None
+        token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
+        issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            upstream,
+            "controller-handoff-secret",
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=issuers,
+                        jwks=jwks,
+                        leeway_seconds=0,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+
+        response = httpx.get(
+            f"{proxy.address}/echo",
+            headers={
+                "authorization": f"Bearer {token}",
+                "cookie": "iris_session=caller-cookie",
+                "x-goog-iap-jwt-assertion": "caller-assertion",
+                VERIFIED_IDENTITY_HEADER: "caller-spoof",
+                "x-iris-decision-secret": "caller-spoof",
+                "x-forwarded-for": "203.0.113.10",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["authorization"] is None
+        assert payload["cookie"] is None
+        assert payload["iap_assertion"] is None
+        assert payload["decision_secret"] == "controller-handoff-secret"
+        assert json.loads(unquote(payload["verified_identity"])) == {
+            "user_id": "alice",
+            "role": "user",
+            "audience": None,
+        }
+        proxy.stop()
     finally:
         threads.stop()
 

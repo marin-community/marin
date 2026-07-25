@@ -1251,12 +1251,25 @@ def test_get_worker_status_unknown_id_returns_error(client):
     assert resp.status_code != 200
 
 
-def test_health_endpoint_returns_ok(client):
-    """Health endpoint returns a trivial ok response without querying state."""
+def test_health_endpoint_probes_database(client):
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {
+        "status": "ok",
+        "database": "ok",
+        "checkpoint_epoch_ms": None,
+    }
+
+
+def test_health_endpoint_returns_unhealthy_when_database_is_unreadable(client, state):
+    state._db.close()
+    state._db.db_path.unlink()
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "unhealthy", "database": "error"}
 
 
 # =============================================================================

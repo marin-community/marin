@@ -65,13 +65,31 @@ def _compressed_xprof_app(environ, start_response):
     return [body]
 
 
-def test_cache_accepts_any_gcs_or_s3_path(tmp_path):
+def test_cache_accepts_gcs_and_s3_xprof_ttl_paths(tmp_path):
     cache = ProfileCache(tmp_path / "cache")
 
-    assert cache.validate("gs://other/checkpoints/run") == "gs://other/checkpoints/run"
-    assert cache.validate("s3://another-bucket/profiles/run") == "s3://another-bucket/profiles/run"
-    with pytest.raises(ProfileSourceError, match="must use"):
-        cache.validate("https://example.com/profile")
+    assert cache.validate("gs://other/tmp/ttl=7d/xprof/run") == "gs://other/tmp/ttl=7d/xprof/run"
+    assert cache.validate("s3://another-bucket/tmp/ttl=30d/xprof/run") == ("s3://another-bucket/tmp/ttl=30d/xprof/run")
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://example.com/tmp/ttl=7d/xprof/run",
+        "gs://other/checkpoints/run",
+        "gs://other/tmp/xprof/run",
+        "gs://other/tmp/ttl=7d/run",
+        "gs://other/tmp/xprof/ttl=7d/run",
+        "gs://other/tmp/ttl=0d/xprof/run",
+        "gs://other/tmp/ttl=7d/xprof",
+        "gs://other/tmp/ttl=7d/not-xprof/run",
+    ],
+)
+def test_cache_rejects_paths_outside_xprof_ttl_prefix(tmp_path, uri):
+    cache = ProfileCache(tmp_path / "cache")
+
+    with pytest.raises(ProfileSourceError):
+        cache.validate(uri)
 
 
 def test_cache_returns_the_session_parent_xprof_expects(tmp_path):

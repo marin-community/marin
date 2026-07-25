@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 AdvancedProfileOptionValue = bool | int | str
 DEFAULT_XPROF_SERVICE_URL = "https://iris.oa.dev/proxy/xprof"
 _XPROF_RUN_PATH = "plugins/profile"
+_XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
 
 
 def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
@@ -64,13 +66,10 @@ class XprofUploadConfig:
 
     enabled: bool = True
     ttl_days: int = 30
-    path: str | None = None
     service_url: str = DEFAULT_XPROF_SERVICE_URL
 
     def destination_for_run(self, run_id: str) -> str:
         """Resolve the run's upload root."""
-        if self.path is not None:
-            return str(StoragePath(self.path))
         return marin_temp_bucket(self.ttl_days, prefix=f"xprof/{run_id}")
 
 
@@ -110,8 +109,8 @@ class ProfilerConfig:
         if num_steps is None:
             num_steps = self.num_steps
         upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
-        if upload_uri is not None and self.upload.path is None and StoragePath(upload_uri).is_local:
-            logger.info("MARIN_PREFIX has no remote TTL store; keeping the profile at %s", path)
+        if upload_uri is not None and not _is_xprof_ttl_root(StoragePath(upload_uri)):
+            logger.info("MARIN_PREFIX has no remote XProf TTL store; keeping the profile at %s", path)
             upload_uri = None
         service_url = None
         if upload_uri is not None and StoragePath(upload_uri).scheme in ("gs", "s3"):
@@ -127,6 +126,16 @@ class ProfilerConfig:
             upload_uri=upload_uri,
             xprof_service_url=service_url,
         )
+
+
+def _is_xprof_ttl_root(path: StoragePath) -> bool:
+    if path.scheme not in ("gs", "s3") or not path.bucket:
+        return False
+    # Leave room after the TTL segment for xprof and at least one run segment.
+    return any(
+        _XPROF_TTL_SEGMENT.fullmatch(segment) and path.segments[index + 1] == "xprof"
+        for index, segment in enumerate(path.segments[:-2])
+    )
 
 
 def profile(

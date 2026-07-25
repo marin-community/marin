@@ -144,6 +144,18 @@ def capability_path(name: str, token: str) -> str:
     return f"/proxy/t/{token}/" + name.strip("/").replace("/", ".")
 
 
+def federated_capability_path(cluster: str, name: str, token: str) -> str:
+    """Capability-URL path for an endpoint on a child cluster, routed via the parent.
+
+    Prefixes :func:`capability_path` with the child ``cluster`` tag, targeting the
+    parent's ``/proxy/<cluster>/t/<token>/<name>/...`` relay route: the parent
+    forwards the request to that child without inspecting the token, and the child
+    validates it locally. Used when minting against a cluster that has a public
+    parent configured, so the URL works from outside the child's own origin.
+    """
+    return f"/proxy/{cluster}/t/{token}/" + name.strip("/").replace("/", ".")
+
+
 @dataclass(frozen=True)
 class ParsedTransport:
     """A transport URL resolved into its transport, scheme-implied auth, and path."""

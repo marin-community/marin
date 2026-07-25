@@ -58,7 +58,6 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
-    EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
@@ -248,7 +247,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = client._cluster_client.list_endpoints(endpoint_name, exact=True)
+        endpoints = client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -269,15 +268,19 @@ def _mint_and_print_capability_url(
     authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
     controller's maximum).
     """
-    resp = client._cluster_client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
+    resp = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
     hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    # The controller assembles the origin (a cluster-tagged parent URL when it has a
+    # public parent, else its local origin); fall back to a passed dashboard origin.
+    origin_url = resp.capability_url or (
+        f"{dashboard_url.rstrip('/')}{capability_path(endpoint, resp.token)}" if dashboard_url else ""
+    )
     click.echo("  Shared capability URL (token in the path — anyone with the URL can call it):")
-    if dashboard_url:
-        base_url = f"{dashboard_url.rstrip('/')}{capability_path(endpoint, resp.token)}/v1"
-        click.echo(f"    base_url   {base_url}")
+    if origin_url:
+        click.echo(f"    base_url   {origin_url}/v1")
         click.echo("    api_key    <any non-empty string>   (the URL already carries the credential)")
         click.echo(f"    expires    in {hours_left:.1f}h")
-        click.echo(f"    example    curl {base_url}/models")
+        click.echo(f"    example    curl {origin_url}/v1/models")
     else:
         # No public origin known (bare --controller); front the controller's
         # /proxy/t route for this to be reachable off-cluster.
@@ -532,7 +535,7 @@ def main(
         setup_scripts=setup_scripts,
     )
     model_config = ServedModelConfig(
-        model=model,
+        weights=model,
         dtype=dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
@@ -552,7 +555,6 @@ def main(
         endpoint_name=endpoint,
         instances=instances,
         broker=broker_config,
-        access=EndpointAccess.ENDPOINT_ACCESS_LINK,
         timeout_hours=timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
     )

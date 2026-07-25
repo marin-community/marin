@@ -1,0 +1,93 @@
+{
+  "type": "stat",
+  "title": "Fleet tasks in flight",
+  "description": "Sum over every cluster's latest iris.task_state rollup row (root_job_id='') within the last 2 minutes: tasks running, building, and pending across the CoreWeave fleet. A cluster whose controller has stopped emitting drops out of this sum.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "timeFrom": "2m",
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "color": {
+        "mode": "fixed",
+        "fixedColor": "text"
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "running"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "green"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "orientation": "horizontal",
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value_and_name"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH r AS (SELECT COALESCE(cluster,'') AS c, running, building, pending, ROW_NUMBER() OVER (PARTITION BY COALESCE(cluster,'') ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id = '' AND ts >= {{from}} AND ts < {{to}}) SELECT SUM(running) AS running, SUM(building) AS building, SUM(pending) AS pending FROM r WHERE rn = 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "running",
+          "text": "running",
+          "type": "number"
+        },
+        {
+          "selector": "building",
+          "text": "building",
+          "type": "number"
+        },
+        {
+          "selector": "pending",
+          "text": "pending",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

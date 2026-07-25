@@ -29,14 +29,20 @@ trusted peer does authenticate, via the separate
 """
 
 import dataclasses
+import json
 import logging
 import secrets
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
+from urllib.parse import unquote
 
 from rigging.server_auth import (
+    ANONYMOUS_ADMIN,
     IAP_ISSUER,
     IAP_PUBLIC_KEYS_URL,
+    AuthDecision,
+    AuthOutcome,
+    AuthRequest,
     IapAssertionVerifier,
     RequestAuthPolicy,
     TokenVerifier,
@@ -56,6 +62,8 @@ from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE
 logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
+VERIFIED_IDENTITY_HEADER = "x-iris-verified-identity"
+INVALID_VERIFIED_IDENTITY_REASON = "Invalid verified identity"
 
 # Role for an authenticated non-admin on a gcp cluster (and the fallback default
 # anywhere config carries no more specific rule). "user" is the ordinary
@@ -168,6 +176,44 @@ class NativeProxyAuthConfig:
     iap_issuer: str = IAP_ISSUER
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
+    admin_users: tuple[str, ...] = ()
+    default_user_role: str = DEFAULT_USER_ROLE
+
+
+@dataclasses.dataclass(frozen=True)
+class NativeProxyIdentityAuthenticator:
+    """Trust the private listener and use its verified identity stamp when present."""
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        encoded_identity = request.headers.get(VERIFIED_IDENTITY_HEADER)
+        if encoded_identity is None:
+            return AuthOutcome(AuthDecision.AUTHENTICATED, identity=ANONYMOUS_ADMIN)
+        try:
+            payload = json.loads(unquote(encoded_identity))
+        except (json.JSONDecodeError, TypeError):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if not isinstance(payload, dict):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+
+        user_id = payload.get("user_id")
+        role = payload.get("role")
+        audience = payload.get("audience")
+        if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if audience is not None and not isinstance(audience, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        return AuthOutcome(
+            AuthDecision.AUTHENTICATED,
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+        )
+
+
+def native_proxy_auth_policy(external_policy: RequestAuthPolicy) -> RequestAuthPolicy:
+    """Trust private ingress and retain the external verifier for session login."""
+    return RequestAuthPolicy(
+        authenticators=(NativeProxyIdentityAuthenticator(),),
+        verifier=external_policy.verifier,
+    )
 
 
 # ---------------------------------------------------------------------------

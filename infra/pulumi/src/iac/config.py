@@ -24,7 +24,8 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     DEFAULT_CLIENT_CONNECTION_QPS,
 )
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
-from pydantic import BaseModel, Field
+from iris.cluster.platforms.k8s.types import parse_k8s_quantity
+from pydantic import BaseModel, Field, field_validator
 from rigging.config_discovery import resolve_cluster_config
 
 # IaC reads only the reviewed, in-tree cluster config — deliberately NOT Iris's runtime
@@ -34,6 +35,7 @@ from rigging.config_discovery import resolve_cluster_config
 # reproducible and review-gated, never from a private local override. Relative to the marin
 # project root (resolved by rigging.config_discovery).
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
+MIN_KUEUE_MANAGER_MEMORY = "2Gi"
 
 
 class Provider(StrEnum):
@@ -68,10 +70,19 @@ class KueueProvisioningSpec(BaseModel):
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
     # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
     flavor_topology: str = "infiniband"
-    # Override controllerManager.manager.resources' memory (requests == limits)
-    manager_memory_limit: str | None = None
+    # controllerManager.manager.resources memory request and limit. Kueue retains
+    # every watched Pod and Workload during restart resync, so the chart's 512Mi
+    # default is too small for Marin clusters.
+    manager_memory_limit: str = MIN_KUEUE_MANAGER_MEMORY
     # Override Iris's shared Kueue client-side API rate limit.
     client_connection: KueueClientConnectionSpec = Field(default_factory=KueueClientConnectionSpec)
+
+    @field_validator("manager_memory_limit")
+    @classmethod
+    def validate_manager_memory_limit(_cls, value: str) -> str:
+        if parse_k8s_quantity(value) < parse_k8s_quantity(MIN_KUEUE_MANAGER_MEMORY):
+            raise ValueError(f"manager_memory_limit must be at least {MIN_KUEUE_MANAGER_MEMORY}")
+        return value
 
 
 # Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
@@ -117,12 +128,19 @@ class RbacSpec(BaseModel):
     service_account: str = "iris-controller"
 
 
+class GrafanaObserverRbacSpec(BaseModel):
+    """CoreWeave Managed Auth usernames accepted during Grafana token rotation."""
+
+    usernames: tuple[str, ...] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
     ingress: IngressSpec
     federation_dns: FederationDnsSpec | None = None
     rbac: RbacSpec = RbacSpec()
+    grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):

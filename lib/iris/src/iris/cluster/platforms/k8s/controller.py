@@ -70,6 +70,8 @@ _KUBECTL_TIMEOUT = 1800.0
 # cores during reconcile spikes. Memory is capped to protect the node.
 _CONTROLLER_CPU_REQUEST = "16"
 _CONTROLLER_MEMORY_REQUEST = "64Gi"
+_KUBERNETES_ARCH_LABEL = "kubernetes.io/arch"
+_CONTROLLER_ARCH = "amd64"
 # Relax the liveness/readiness deadline off the k8s defaults (1s / 3): a
 # busy-but-alive controller must not be SIGKILLed just because a /health request
 # queued behind a reconcile tick under heavy load.
@@ -351,6 +353,8 @@ class K8sControllerProvider:
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._s3_enabled = False
+        self.signing_key_spec: tuple[str, ...] = ()
+        self._prepared_controller_env: dict[str, str] | None = None
 
     @property
     def kubectl(self) -> K8sService:
@@ -375,6 +379,11 @@ class K8sControllerProvider:
         service_name = cw.service_name or "iris-controller-svc"
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
+
+    def preflight_controller(self, config: IrisClusterConfig) -> None:
+        """Resolve controller-only secrets without changing Kubernetes resources."""
+        self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        self._prepared_controller_env = _controller_env(config)
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -413,9 +422,12 @@ class K8sControllerProvider:
         if default_env:
             self.ensure_task_env_secret(default_env)
 
-        controller_env = _controller_env(config)
-        if controller_env:
-            self.ensure_controller_env_secret(controller_env)
+        signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
+        if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
+            self.preflight_controller(config)
+        assert self._prepared_controller_env is not None
+        if self._prepared_controller_env:
+            self.ensure_controller_env_secret(self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -447,7 +459,10 @@ class K8sControllerProvider:
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
-            node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
+            node_selector={
+                _KUBERNETES_ARCH_LABEL: _CONTROLLER_ARCH,
+                self._iris_labels.iris_scale_group: cw.scale_group,
+            },
             env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,

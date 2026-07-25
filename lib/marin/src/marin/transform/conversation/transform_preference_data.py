@@ -25,6 +25,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.writers import write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
+from .transform_conversation import get_shard_dir
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +117,6 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
         if col in row:
             result[col] = row[col]
     return result
-
-
-def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
-    if (subset_name == "default") or (subset_name is None):
-        return os.path.join(dir_name, split)
-    return os.path.join(dir_name, subset_name, split)
 
 
 def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):

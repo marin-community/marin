@@ -40,7 +40,6 @@ provisioning:
     cluster: { name: marin-rn02a, zone: RNO2A }
     kueue:
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
-      manager_memory_limit: 2Gi
     ingress:
       ingress_class: traefik
       acme_email: ops@openathena.ai
@@ -50,6 +49,8 @@ provisioning:
       hostname: iris-cw-rno2a.oa.dev
       target: iris-cw-rno2a.208261-marin-rn02a.coreweave.app
     rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
 
 platform:
   label_prefix: cw-rno2a
@@ -96,7 +97,10 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai"]
+  # *@openathena.ai covers human operators. github-iris is the GitHub Actions service
+  # account that federates the MarinSkyRL nightly single-H100 GRPO gate through the marin
+  # hub; admit it explicitly so the nightly can place its job here.
+  allowed_submitters: ["*@openathena.ai", "github-iris@hai-gcp-models.iam.gserviceaccount.com"]
 
 kubernetes_provider:
   namespace: iris

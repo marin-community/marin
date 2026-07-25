@@ -71,7 +71,7 @@ There are 2 cases:
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
 * **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per `.agents/skills/write-design-doc/` directly in the issue comment
+  Write it per `.agents/skills/write-design-doc/SKILL.md` directly in the issue comment
   (agents cannot commit files before the PR). The 3-4 sentence prose cap
   applies to `# Research`; the design doc follows its own length guidelines.
   Keep everything in one comment.

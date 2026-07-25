@@ -11,12 +11,12 @@
 
 mod auth;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
@@ -28,13 +28,14 @@ use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 
 pub const DECISION_PATH: &str = "/_iris/internal/proxy-decision";
 pub const DECISION_SECRET_HEADER: &str = "x-iris-decision-secret";
+pub const IDENTITY_HEADER: &str = "x-iris-verified-identity";
 pub const UPSTREAM_URL_HEADER: &str = "x-iris-upstream-url";
 pub const UPSTREAM_AUTHORIZATION_HEADER: &str = "x-iris-upstream-authorization";
 pub const PROXY_PREFIX_HEADER: &str = "x-iris-proxy-prefix";
@@ -48,11 +49,15 @@ use auth::{CacheStats, NativeVerifier, VerifyOutcome, IAP_ASSERTION_HEADER};
 const MAX_DECISION_BODY_BYTES: usize = 64 * 1024;
 const PROXY_PATH_PREFIX: &str = "/proxy/";
 const REGISTRY_LOCK_POISONED: &str = "native proxy registry lock is poisoned";
+const RPC_METRICS_LOCK_POISONED: &str = "native proxy RPC metrics lock is poisoned";
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOUT_SECONDS);
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 const X_FORWARDED_PREFIX: HeaderName = HeaderName::from_static("x-forwarded-prefix");
 const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
+const RPC_LATENCY_BUCKETS_SECONDS: [f64; 11] = [
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
 
 type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 type DecisionResult = Result<ProxyDecision, Box<Response<Body>>>;
@@ -102,6 +107,7 @@ pub struct ProxyControl {
     registry: Arc<RwLock<RegistryState>>,
     ready: Arc<AtomicBool>,
     stats: Arc<CacheStats>,
+    rpc_metrics: Arc<std::sync::Mutex<RpcMetrics>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,6 +116,128 @@ pub struct ProxyStats {
     pub endpoint_count: usize,
     pub jwt_cache_hits: u64,
     pub jwt_cache_misses: u64,
+}
+
+/// Lifetime RPC counters and latency observations from the native listener.
+///
+/// Counters reset with the proxy process. Histogram buckets are cumulative.
+#[derive(Debug, Serialize)]
+pub struct RpcMetricsSnapshot {
+    pub series: Vec<RpcMetricSeries>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RpcMetricSeries {
+    pub service: String,
+    pub method: String,
+    pub upstream: String,
+    pub requests: u64,
+    pub responses: BTreeMap<u16, u64>,
+    pub in_flight: u64,
+    pub latency_buckets: Vec<(String, u64)>,
+    pub latency_count: u64,
+    pub latency_sum_seconds: f64,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct RpcMetricKey {
+    service: String,
+    method: String,
+    upstream: &'static str,
+}
+
+#[derive(Default)]
+struct RpcMetricState {
+    requests: u64,
+    responses: BTreeMap<u16, u64>,
+    in_flight: u64,
+    latency_bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
+    latency_sum_seconds: f64,
+}
+
+#[derive(Default)]
+struct RpcMetrics {
+    series: BTreeMap<RpcMetricKey, RpcMetricState>,
+}
+
+impl RpcMetrics {
+    fn begin(&mut self, key: RpcMetricKey) {
+        let state = self.series.entry(key).or_default();
+        state.requests += 1;
+        state.in_flight += 1;
+    }
+
+    fn finish(&mut self, key: &RpcMetricKey, status: StatusCode, elapsed: Duration) {
+        let Some(state) = self.series.get_mut(key) else {
+            return;
+        };
+        state.in_flight = state.in_flight.saturating_sub(1);
+        *state.responses.entry(status.as_u16()).or_default() += 1;
+        let seconds = elapsed.as_secs_f64();
+        state.latency_sum_seconds += seconds;
+        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
+            if seconds <= *upper_bound {
+                state.latency_bucket_counts[index] += 1;
+            }
+        }
+    }
+
+    fn snapshot(&self) -> RpcMetricsSnapshot {
+        RpcMetricsSnapshot {
+            series: self
+                .series
+                .iter()
+                .map(|(key, state)| {
+                    let latency_count = state.responses.values().sum();
+                    RpcMetricSeries {
+                        service: key.service.clone(),
+                        method: key.method.clone(),
+                        upstream: key.upstream.to_string(),
+                        requests: state.requests,
+                        responses: state.responses.clone(),
+                        in_flight: state.in_flight,
+                        latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
+                            .iter()
+                            .zip(state.latency_bucket_counts)
+                            .map(|(bound, count)| (bound.to_string(), count))
+                            .chain(std::iter::once(("+Inf".to_string(), latency_count)))
+                            .collect(),
+                        latency_count,
+                        latency_sum_seconds: state.latency_sum_seconds,
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+struct RpcRequestTimer {
+    key: RpcMetricKey,
+    metrics: Arc<std::sync::Mutex<RpcMetrics>>,
+    started: Instant,
+}
+
+impl RpcRequestTimer {
+    fn begin(control: &ProxyControl, request: &Request) -> Option<Self> {
+        let key = rpc_metric_key(request)?;
+        control
+            .rpc_metrics
+            .lock()
+            .expect(RPC_METRICS_LOCK_POISONED)
+            .begin(key.clone());
+        Some(Self {
+            key,
+            metrics: Arc::clone(&control.rpc_metrics),
+            started: Instant::now(),
+        })
+    }
+
+    fn finish(self, status: StatusCode) {
+        self.metrics
+            .lock()
+            .expect(RPC_METRICS_LOCK_POISONED)
+            .finish(&self.key, status, self.started.elapsed());
+    }
 }
 
 impl ProxyControl {
@@ -125,6 +253,13 @@ impl ProxyControl {
             jwt_cache_hits,
             jwt_cache_misses,
         })
+    }
+
+    pub fn rpc_metrics(&self) -> Result<RpcMetricsSnapshot, String> {
+        self.rpc_metrics
+            .lock()
+            .map(|metrics| metrics.snapshot())
+            .map_err(|_| RPC_METRICS_LOCK_POISONED.to_string())
     }
 
     pub fn pause_registry(&self) {
@@ -346,12 +481,29 @@ struct ProxyDecision {
     timeout: Duration,
 }
 
+struct ControllerHandoff {
+    secret: HeaderValue,
+    identity: Option<HeaderValue>,
+}
+
+enum ForwardMode {
+    Controller(ControllerHandoff),
+    Proxy {
+        proxy_prefix: Option<HeaderValue>,
+        upstream_authorization: Option<HeaderValue>,
+        timeout: Duration,
+    },
+}
+
 struct ProxyRoute {
     encoded_name: String,
     sub_path: String,
     token: Option<String>,
     proxy_prefix: String,
     redirect: bool,
+    // Set when the route is a federation relay (`/proxy/<cluster>/t/...`): the peer
+    // whose proxy the parent forwards the capability URL to, verbatim and unverified.
+    relay_peer: Option<String>,
 }
 
 enum NativeDecision {
@@ -366,6 +518,7 @@ enum NativeDecision {
 enum FederationDirection {
     Inbound,
     Outbound,
+    Relay,
 }
 
 #[derive(Serialize)]
@@ -377,6 +530,9 @@ struct FederationDecision {
     proxy_prefix: String,
     peer_id: String,
     task_id: Option<String>,
+    // The capability token, carried only on a relay so the controller can rebuild
+    // the child-side `/proxy/t/<token>/<name>` path. None on inbound/outbound.
+    token: Option<String>,
     local_upstream: Option<String>,
     timeout_seconds: Option<f64>,
 }
@@ -467,6 +623,7 @@ fn remove_connection_headers(headers: &mut HeaderMap) {
 fn remove_internal_headers(headers: &mut HeaderMap) {
     for name in [
         DECISION_SECRET_HEADER,
+        IDENTITY_HEADER,
         UPSTREAM_URL_HEADER,
         UPSTREAM_AUTHORIZATION_HEADER,
         PROXY_PREFIX_HEADER,
@@ -668,10 +825,17 @@ fn rewrite_location(location: &str, upstream: &Uri, proxy_prefix: &str) -> Optio
     Some(rewritten)
 }
 
-fn prepare_controller_request(headers: &mut HeaderMap) {
+fn prepare_controller_request(headers: &mut HeaderMap, handoff: ControllerHandoff) {
     remove_connection_headers(headers);
+    headers.remove(header::AUTHORIZATION);
+    headers.remove(header::COOKIE);
+    headers.remove(IAP_ASSERTION_HEADER);
     headers.remove(header::HOST);
     remove_internal_headers(headers);
+    headers.insert(DECISION_SECRET_HEADER, handoff.secret);
+    if let Some(identity) = handoff.identity {
+        headers.insert(IDENTITY_HEADER, identity);
+    }
 }
 
 fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
@@ -681,6 +845,19 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
             "invalid proxy route",
         ))
     })?;
+    // Federation relay marker: `<cluster>/t/<token>/<name>/...`. A non-empty,
+    // non-`t` first segment immediately followed by the `t/` capability marker
+    // relays the URL to that peer; the parent strips `<cluster>` and forwards
+    // `/proxy/t/...` verbatim. Requiring the `t/` marker means a tagged URL only
+    // ever relays a capability token, never the child's other auth modes.
+    let (relay_peer, prefix_head, remainder) = match remainder.split_once('/') {
+        Some((head, rest)) if !head.is_empty() && head != "t" && rest.starts_with("t/") => (
+            Some(decode_path_segment(head)?),
+            format!("/proxy/{head}"),
+            rest,
+        ),
+        _ => (None, "/proxy".to_string(), remainder),
+    };
     let (token, endpoint_and_path, token_prefix) =
         if let Some(token_route) = remainder.strip_prefix("t/") {
             let (token, rest) = token_route.split_once('/').ok_or_else(|| {
@@ -692,10 +869,10 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
             (
                 Some(decode_path_segment(token)?),
                 rest,
-                format!("/proxy/t/{token}"),
+                format!("{prefix_head}/t/{token}"),
             )
         } else {
-            (None, remainder, "/proxy".to_string())
+            (None, remainder, prefix_head)
         };
     let (encoded_name, sub_path, redirect) =
         if let Some((name, path)) = endpoint_and_path.split_once('/') {
@@ -716,6 +893,7 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
         sub_path: sub_path.to_string(),
         token,
         redirect,
+        relay_peer,
     })
 }
 
@@ -744,6 +922,7 @@ fn subdomain_proxy_route(headers: &HeaderMap, uri: &Uri) -> Option<ProxyRoute> {
         token: None,
         proxy_prefix: String::new(),
         redirect: false,
+        relay_peer: None,
     })
 }
 
@@ -761,6 +940,29 @@ fn decode_path_segment(value: &str) -> Result<String, Box<Response<Body>>> {
 
 fn method_allowed(method: &Method) -> bool {
     PROXY_METHODS.contains(&method.as_str())
+}
+
+fn rpc_metric_key(request: &Request) -> Option<RpcMetricKey> {
+    let segments = request
+        .uri()
+        .path()
+        .split('/')
+        .filter(|segment| !segment.is_empty());
+    let mut segments = segments.skip_while(|segment| !segment.starts_with("iris."));
+    let service = segments.next()?;
+    let method = segments.next()?;
+    if segments.next().is_some() {
+        return None;
+    }
+    Some(RpcMetricKey {
+        service: service.to_string(),
+        method: method.to_string(),
+        upstream: if request.uri().path().starts_with(PROXY_PATH_PREFIX) {
+            "endpoint"
+        } else {
+            "controller"
+        },
+    })
 }
 
 fn proxy_route_for_request(
@@ -791,16 +993,61 @@ async fn verified_identity(
         .await
     {
         VerifyOutcome::Verified(identity) => Ok(identity),
-        VerifyOutcome::Anonymous => Ok(auth::VerifiedIdentity {
-            endpoint: None,
-            federation_peer: None,
-            expires_at: u64::MAX,
-        }),
-        VerifyOutcome::Invalid => Err(Box::new(error_response(
+        VerifyOutcome::Anonymous => Ok(anonymous_identity()),
+        VerifyOutcome::Invalid | VerifyOutcome::Missing => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
             "authentication required",
         ))),
     }
+}
+
+fn anonymous_identity() -> auth::VerifiedIdentity {
+    auth::VerifiedIdentity {
+        user_id: "anonymous".to_string(),
+        role: auth::ADMIN_ROLE.to_string(),
+        audience: None,
+        endpoint: None,
+        federation_peer: None,
+        expires_at: u64::MAX,
+    }
+}
+
+fn identity_header(identity: &auth::VerifiedIdentity) -> Result<HeaderValue, Box<Response<Body>>> {
+    let payload = serde_json::to_string(identity).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to encode verified identity: {error}"),
+        ))
+    })?;
+    HeaderValue::from_str(&utf8_percent_encode(&payload, NON_ALPHANUMERIC).to_string()).map_err(
+        |error| {
+            Box::new(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to prepare verified identity: {error}"),
+            ))
+        },
+    )
+}
+
+fn controller_handoff(
+    state: &AppState,
+    outcome: VerifyOutcome,
+) -> Result<ControllerHandoff, Box<Response<Body>>> {
+    let identity = match outcome {
+        VerifyOutcome::Verified(identity) => Some(identity_header(&identity)?),
+        VerifyOutcome::Anonymous => Some(identity_header(&anonymous_identity())?),
+        VerifyOutcome::Missing => None,
+        VerifyOutcome::Invalid => {
+            return Err(Box::new(error_response(
+                StatusCode::UNAUTHORIZED,
+                "authentication failed",
+            )))
+        }
+    };
+    Ok(ControllerHandoff {
+        secret: state.decision_secret.clone(),
+        identity,
+    })
 }
 
 fn authorize_mapping(
@@ -854,8 +1101,27 @@ fn federation_decision(
         proxy_prefix: route.proxy_prefix,
         peer_id,
         task_id: mapping.task_id,
+        token: None,
         local_upstream,
         timeout_seconds: mapping.timeout_seconds,
+    })
+}
+
+/// A cluster-tagged capability URL (`/proxy/<cluster>/t/<token>/<name>/...`): the
+/// parent forwards it to the named peer's proxy without resolving or authenticating
+/// it locally. The child owns and validates the token exactly as for a direct call.
+fn relay_decision(route: ProxyRoute, peer_id: String, query: Option<&str>) -> NativeDecision {
+    NativeDecision::Federation(FederationDecision {
+        direction: FederationDirection::Relay,
+        encoded_name: route.encoded_name,
+        sub_path: route.sub_path,
+        query: query.unwrap_or_default().to_string(),
+        proxy_prefix: route.proxy_prefix,
+        peer_id,
+        task_id: None,
+        token: route.token,
+        local_upstream: None,
+        timeout_seconds: None,
     })
 }
 
@@ -981,6 +1247,16 @@ async fn native_decision(
         Ok(None) => return NativeDecision::ControllerProxy,
         Err(response) => return NativeDecision::Response(response),
     };
+    if let Some(peer_id) = route.relay_peer.clone() {
+        // A cluster-tagged capability URL. Do not resolve or authenticate it here:
+        // the child owns and validates the token. A tagless leading segment (no
+        // trailing sub-path) still redirects to the canonical slashed form, keeping
+        // the external `<cluster>` prefix so the follow-up request relays.
+        if route.redirect {
+            return redirect_decision(&route, request_uri.query());
+        }
+        return relay_decision(route, peer_id, request_uri.query());
+    }
     let resolved = match state.control.resolve(&route.encoded_name) {
         Ok(resolved) => resolved,
         Err(error) => {
@@ -1008,19 +1284,28 @@ async fn send(
     client: &HttpsClient,
     mut request: Request,
     uri: Uri,
-    proxy_prefix: Option<Option<HeaderValue>>,
-    upstream_authorization: Option<HeaderValue>,
-    timeout: Option<Duration>,
+    mode: ForwardMode,
 ) -> Response<Body> {
     let upstream_uri = uri.clone();
     *request.uri_mut() = uri;
-    let is_proxy = proxy_prefix.is_some();
-    let response_proxy_prefix = proxy_prefix.as_ref().and_then(Option::as_ref).cloned();
-    if let Some(prefix) = proxy_prefix {
-        prepare_proxy_request(request.headers_mut(), prefix, upstream_authorization);
-    } else {
-        prepare_controller_request(request.headers_mut());
-    }
+    let (is_proxy, response_proxy_prefix, timeout) = match mode {
+        ForwardMode::Controller(handoff) => {
+            prepare_controller_request(request.headers_mut(), handoff);
+            (false, None, None)
+        }
+        ForwardMode::Proxy {
+            proxy_prefix,
+            upstream_authorization,
+            timeout,
+        } => {
+            prepare_proxy_request(
+                request.headers_mut(),
+                proxy_prefix.clone(),
+                upstream_authorization,
+            );
+            (true, proxy_prefix, Some(timeout))
+        }
+    };
 
     let response = if let Some(timeout) = timeout {
         match tokio::time::timeout(timeout, client.request(request)).await {
@@ -1078,19 +1363,62 @@ async fn send(
     }
 }
 
+async fn forward_controller(
+    state: &AppState,
+    request: Request,
+    peer: SocketAddr,
+    direct_connection: bool,
+) -> Response<Body> {
+    let auth = state
+        .verifier
+        .verify_request(request.headers(), None, peer.ip(), direct_connection)
+        .await;
+    if matches!(auth, VerifyOutcome::Missing) && request.uri().path().starts_with("/iris.") {
+        return error_response(StatusCode::UNAUTHORIZED, "authentication required");
+    }
+    let handoff = match controller_handoff(state, auth) {
+        Ok(handoff) => handoff,
+        Err(response) => return *response,
+    };
+    let uri = match controller_uri(&state.controller_url, request.uri()) {
+        Ok(uri) => uri,
+        Err(response) => return *response,
+    };
+    send(
+        &state.controller_client,
+        request,
+        uri,
+        ForwardMode::Controller(handoff),
+    )
+    .await
+}
+
 async fn ingress(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+) -> Response<Body> {
+    let timer = RpcRequestTimer::begin(&state.control, &request);
+    let response = ingress_inner(state, peer, request).await;
+    if let Some(timer) = timer {
+        timer.finish(response.status());
+    }
+    response
+}
+
+async fn ingress_inner(
+    state: Arc<AppState>,
+    peer: SocketAddr,
     mut request: Request,
 ) -> Response<Body> {
     let direct_connection = !request.headers().contains_key(&X_FORWARDED_FOR);
+    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
+        || proxy_subdomain(request.headers()).is_some();
     prepare_public_headers(request.headers_mut(), peer);
     if request.uri().path() == DECISION_PATH {
         return error_response(StatusCode::NOT_FOUND, "route not found");
     }
 
-    let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
-        || proxy_subdomain(request.headers()).is_some();
     if proxy_request {
         match native_decision(
             &state,
@@ -1107,19 +1435,17 @@ async fn ingress(
                     &state.upstream_client,
                     request,
                     decision.upstream,
-                    Some(decision.proxy_prefix),
-                    decision.upstream_authorization,
-                    Some(decision.timeout),
+                    ForwardMode::Proxy {
+                        proxy_prefix: decision.proxy_prefix,
+                        upstream_authorization: decision.upstream_authorization,
+                        timeout: decision.timeout,
+                    },
                 )
                 .await;
             }
             NativeDecision::Response(response) => return *response,
             NativeDecision::ControllerProxy => {
-                let uri = match controller_uri(&state.controller_url, request.uri()) {
-                    Ok(uri) => uri,
-                    Err(response) => return *response,
-                };
-                return send(&state.controller_client, request, uri, None, None, None).await;
+                return forward_controller(&state, request, peer, direct_connection).await;
             }
             NativeDecision::Federation(federation) => {
                 let decision = decision(&state, &federation).await;
@@ -1129,9 +1455,11 @@ async fn ingress(
                             &state.upstream_client,
                             request,
                             decision.upstream,
-                            Some(decision.proxy_prefix),
-                            decision.upstream_authorization,
-                            Some(decision.timeout),
+                            ForwardMode::Proxy {
+                                proxy_prefix: decision.proxy_prefix,
+                                upstream_authorization: decision.upstream_authorization,
+                                timeout: decision.timeout,
+                            },
                         )
                         .await
                     }
@@ -1141,11 +1469,7 @@ async fn ingress(
         }
     }
 
-    let uri = match controller_uri(&state.controller_url, request.uri()) {
-        Ok(uri) => uri,
-        Err(response) => return *response,
-    };
-    send(&state.controller_client, request, uri, None, None, None).await
+    forward_controller(&state, request, peer, direct_connection).await
 }
 
 pub fn app(config: ProxyConfig, control: ProxyControl) -> Result<Router, String> {
@@ -1183,6 +1507,42 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rpc_metrics_track_started_and_completed_controller_requests() {
+        let control = ProxyControl::default();
+        let request = Request::builder()
+            .uri("/iris.cluster.ControllerService/ListJobs")
+            .body(Body::empty())
+            .unwrap();
+        let timer = RpcRequestTimer::begin(&control, &request).unwrap();
+
+        let snapshot = control.rpc_metrics().unwrap();
+        let series = snapshot.series.first().unwrap();
+        assert_eq!(series.requests, 1);
+        assert_eq!(series.in_flight, 1);
+        assert_eq!(series.latency_count, 0);
+        assert_eq!(
+            series.latency_buckets.last(),
+            Some(&("+Inf".to_string(), 0))
+        );
+
+        timer.finish(StatusCode::INTERNAL_SERVER_ERROR);
+
+        let snapshot = control.rpc_metrics().unwrap();
+        let series = snapshot.series.first().unwrap();
+        assert_eq!(series.service, "iris.cluster.ControllerService");
+        assert_eq!(series.method, "ListJobs");
+        assert_eq!(series.upstream, "controller");
+        assert_eq!(series.requests, 1);
+        assert_eq!(series.responses.get(&500), Some(&1));
+        assert_eq!(series.in_flight, 0);
+        assert_eq!(series.latency_count, 1);
+        assert_eq!(
+            series.latency_buckets.last(),
+            Some(&("+Inf".to_string(), 1))
+        );
+    }
 
     fn mapping(endpoint_id: &str, name: &str) -> EndpointMapping {
         EndpointMapping {
@@ -1231,6 +1591,47 @@ mod tests {
         assert!(control.resolve("a").unwrap().is_none());
         assert_eq!(control.resolve("b").unwrap().unwrap().endpoint_id, "b");
         assert_eq!(control.resolve("c").unwrap().unwrap().endpoint_id, "c");
+    }
+
+    fn route(path: &str) -> ProxyRoute {
+        parse_proxy_route(&path.parse::<Uri>().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn relay_route_parses_the_cluster_tag_and_keeps_the_capability_path() {
+        let r = route("/proxy/cw-rno2a/t/tok123/serve.model/v1/models");
+        assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
+        assert_eq!(r.token.as_deref(), Some("tok123"));
+        assert_eq!(r.encoded_name, "serve.model");
+        assert_eq!(r.sub_path, "v1/models");
+        assert!(!r.redirect);
+        // The external prefix keeps the cluster tag so a redirect round-trips.
+        assert_eq!(r.proxy_prefix, "/proxy/cw-rno2a/t/tok123/serve.model");
+    }
+
+    #[test]
+    fn relay_route_without_a_subpath_redirects_to_the_slashed_form() {
+        let r = route("/proxy/cw-rno2a/t/tok123/serve.model");
+        assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
+        assert!(r.redirect);
+    }
+
+    #[test]
+    fn a_local_capability_route_is_not_a_relay() {
+        let r = route("/proxy/t/tok123/serve.model/v1");
+        assert_eq!(r.relay_peer, None);
+        assert_eq!(r.token.as_deref(), Some("tok123"));
+        assert_eq!(r.encoded_name, "serve.model");
+    }
+
+    #[test]
+    fn a_tagless_endpoint_route_is_not_a_relay() {
+        // A `<cluster>/<name>` shape with no `t/` marker stays a local endpoint
+        // lookup, so the relay never exposes non-capability access to the child.
+        let r = route("/proxy/cw-rno2a/v1/models");
+        assert_eq!(r.relay_peer, None);
+        assert_eq!(r.encoded_name, "cw-rno2a");
+        assert_eq!(r.sub_path, "v1/models");
     }
 
     #[test]

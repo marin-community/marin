@@ -1,103 +1,146 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The eval-suite registry for the launcher.
-
-Each :class:`EvalSuiteConfig` bundles the lm-eval tasks that run together against one served endpoint,
-plus generation limits. The launcher today drives the ``EVALCHEMY`` mechanism (served OpenAI URL);
-``HARBOR`` is registered as a mechanism but not yet wired -- selecting it raises at launch.
-"""
+"""Evaluation suites available to the shared launcher."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import StrEnum
+from dataclasses import dataclass, replace
+from typing import Protocol
 
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.harbor.runner import HarborExecutor, HarborRunConfig
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.runner import EvalExecutor
+
+_TERMINAL_BENCH_DATASET = "DCAgent2/terminal_bench_2"
+_SWEBENCH_RANDOM_100_DATASET = "DCAgent2/swebench-verified-random-100-folders"
+_AGENTIC_CONCURRENCY = 32
 
 
-class EvalMechanism(StrEnum):
-    """How a suite is executed. ``EVALCHEMY`` serves the model and runs lm-eval against its OpenAI URL;
-    ``HARBOR`` serves the model and runs a Harbor registry dataset's agentic trials against it."""
+class EvaluationDefinition(Protocol):
+    """Experiment-owned record metadata and model adaptation for one evaluation."""
 
-    EVALCHEMY = "evalchemy"
-    HARBOR = "harbor"
+    @property
+    def record_ref(self) -> EvalRef: ...
 
-
-@dataclass(frozen=True)
-class HarborSpec:
-    """A Harbor registry dataset run against the served model.
-
-    ``env`` selects the sandbox backend: ``daytona`` (off-cluster, needs ``DAYTONA_EVAL_API_KEY``),
-    ``local`` (Docker on the worker), or ``iris``. ``agent`` is the Harbor agent that drives each task
-    against the served endpoint (``hosted_vllm/<served-name>``). ``max_output_tokens`` is the litellm
-    generation budget (distinct from lm-eval's ``max_gen_toks``).
-    """
-
-    dataset: str
-    version: str = "1.0"
-    agent: str = "terminus-2"
-    env: str = "daytona"
-    n_concurrent: int = 4
-    max_output_tokens: int = 8192
-    agent_kwargs: dict = field(default_factory=dict)
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor: ...
 
 
 @dataclass(frozen=True)
-class EvalSuiteConfig:
-    """A named eval run: lm-eval tasks for the evalchemy mechanism, or a Harbor dataset for Harbor."""
+class EvalchemyDefinition:
+    config: EvalchemyRunConfig
 
+    @property
+    def record_ref(self) -> EvalRef:
+        return EvalRef(
+            name=self.config.name,
+            mechanism="evalchemy",
+            tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
+        )
+
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+        effective_limit = self.config.max_eval_instances if limit is None else limit
+        config = replace(
+            self.config,
+            apply_chat_template=model.apply_chat_template,
+            max_gen_toks=(
+                model.generation.max_gen_toks if model.generation.max_gen_toks is not None else self.config.max_gen_toks
+            ),
+            max_eval_instances=effective_limit,
+            extra_gen_kwargs={
+                **self.config.extra_gen_kwargs,
+                **model.generation.extra_gen_kwargs,
+            },
+        )
+        return EvalchemyExecutor(config)
+
+
+@dataclass(frozen=True)
+class HarborDefinition:
     name: str
-    mechanism: EvalMechanism
-    tasks: tuple[EvalTaskConfig, ...] = ()
-    harbor: HarborSpec | None = None
-    max_gen_toks: int = 2048
+    config: HarborRunConfig
     max_eval_instances: int | None = None
 
+    @property
+    def record_ref(self) -> EvalRef:
+        return EvalRef(
+            name=self.name,
+            mechanism="harbor",
+            harbor=HarborRef(
+                dataset=self.config.dataset,
+                version=self.config.version,
+                agent=self.config.agent,
+                env=self.config.env,
+            ),
+        )
 
-def _mcq_eval(name: str, task: str, shots: int) -> EvalSuiteConfig:
-    """A single loglikelihood-MCQ benchmark as its own eval (one run, one record, one parquet)."""
-    return EvalSuiteConfig(
-        name=name,
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot"),),
-        max_gen_toks=256,
+    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+        effective_limit = self.max_eval_instances if limit is None else limit
+        config = replace(
+            self.config,
+            task_limit=effective_limit,
+            agent_kwargs={**model.agent.agent_kwargs, **self.config.agent_kwargs},
+        )
+        return HarborExecutor(config=config)
+
+
+def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name=name,
+            tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot"),),
+            max_gen_toks=256,
+        )
     )
 
 
-def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalSuiteConfig:
-    """A single lm-eval-native *generative* benchmark (gsm8k/drop/triviaqa/nq_open).
-
-    ``generation=True`` routes it through the chat API for a chat-template model and the completions
-    API otherwise; the answer is extracted and scored by lm-eval (exact_match / f1).
-    """
-    return EvalSuiteConfig(
-        name=name,
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot", generation=True),),
-        max_gen_toks=max_gen_toks,
+def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name=name,
+            tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot", generation=True),),
+            max_gen_toks=max_gen_toks,
+        )
     )
 
 
-def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalSuiteConfig:
-    """A single evalchemy chat-native benchmark (MATH500/AIME24/HumanEvalPlus/... style).
-
-    These construct chat messages and hard-code their own decoding (greedy for MATH500/AIME24/
-    HumanEvalPlus/MBPPPlus/OlympiadBench), so only the generation budget is set here via
-    ``max_gen_toks`` (passed as ``--max_tokens``). ``unsafe_code`` opts the code benchmarks into
-    executing model-generated code. Every chat benchmark needs a server-side chat template.
-    """
-    return EvalSuiteConfig(
-        name=name,
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
-        max_gen_toks=max_gen_toks,
+def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalchemyDefinition:
+    return EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name=name,
+            tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
+            max_gen_toks=max_gen_toks,
+        )
     )
 
 
-EVALS: dict[str, EvalSuiteConfig] = {
+def _agentic_eval(
+    name: str,
+    hugging_face_dataset: str,
+    *,
+    agent: str = "terminus-2",
+    n_concurrent: int = 8,
+    max_instances: int | None = None,
+) -> HarborDefinition:
+    return HarborDefinition(
+        name=name,
+        config=HarborRunConfig(
+            dataset=f"hf://{hugging_face_dataset}",
+            version="main",
+            agent=agent,
+            env="daytona",
+            n_concurrent=n_concurrent,
+        ),
+        max_eval_instances=max_instances,
+    )
+
+
+EVALS: dict[str, EvaluationDefinition] = {
     # The core benchmarks, one eval per task so every model x task pair is its own run with its own
-    # serve/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
+    # inference/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
     # conventions so scores line up with public leaderboards.
     "mmlu": _mcq_eval("mmlu", "mmlu", 5),
     "arc-challenge": _mcq_eval("arc-challenge", "arc_challenge", 25),
@@ -107,35 +150,38 @@ EVALS: dict[str, EvalSuiteConfig] = {
     "boolq": _mcq_eval("boolq", "boolq", 0),
     "piqa": _mcq_eval("piqa", "piqa", 0),
     "openbookqa": _mcq_eval("openbookqa", "openbookqa", 0),
-    "gsm8k": EvalSuiteConfig(
-        name="gsm8k",
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
-        max_gen_toks=512,
+    "gsm8k": EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name="gsm8k",
+            tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
+            max_gen_toks=512,
+        )
     ),
     # Evalchemy's chat-native MATH500 benchmark (boxed-answer extraction over the HuggingFaceH4
     # MATH-500 split). A messages-based task: it runs through the chat route, so every model needs
     # a server-side chat template (snowball serves one via its vLLM args).
-    "math500": EvalSuiteConfig(
-        name="math500",
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
-        max_gen_toks=8192,
+    "math500": EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name="math500",
+            tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
+            max_gen_toks=8192,
+        )
     ),
-    "humaneval": EvalSuiteConfig(
-        name="humaneval",
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(
-            EvalTaskConfig(
-                "humaneval",
-                0,
-                task_alias="humaneval_0shot",
-                generation=True,
-                unsafe_code=True,
-                completion_only=True,
+    "humaneval": EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name="humaneval",
+            tasks=(
+                EvalTaskConfig(
+                    "humaneval",
+                    0,
+                    task_alias="humaneval_0shot",
+                    generation=True,
+                    unsafe_code=True,
+                    completion_only=True,
+                ),
             ),
-        ),
-        max_gen_toks=1024,
+            max_gen_toks=1024,
+        )
     ),
     # --- Baseline lm-eval-harness NLP tasks ---
     # mmlu/arc-challenge/hellaswag/winogrande/truthfulqa/boolq/piqa/openbookqa above already carry the
@@ -159,34 +205,45 @@ EVALS: dict[str, EvalSuiteConfig] = {
     # their import fails on it; kept defined for when the image carries those deps.
     "humanevalplus": _chat_eval("humanevalplus", "HumanEvalPlus", max_gen_toks=1024, unsafe_code=True),
     "mbppplus": _chat_eval("mbppplus", "MBPPPlus", max_gen_toks=1024, unsafe_code=True),
-    "mmlu-smoke": EvalSuiteConfig(
-        name="mmlu-smoke",
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig("mmlu_abstract_algebra", 0, task_alias="mmlu_abstract_algebra_0shot"),),
-        max_gen_toks=256,
-        max_eval_instances=64,
+    "mmlu-smoke": EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name="mmlu-smoke",
+            tasks=(EvalTaskConfig("mmlu_abstract_algebra", 0, task_alias="mmlu_abstract_algebra_0shot"),),
+            max_gen_toks=256,
+            max_eval_instances=64,
+        )
     ),
-    "gsm8k-smoke": EvalSuiteConfig(
-        name="gsm8k-smoke",
-        mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
-        max_gen_toks=512,
-        max_eval_instances=128,
+    "gsm8k-smoke": EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name="gsm8k-smoke",
+            tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
+            max_gen_toks=512,
+            max_eval_instances=128,
+        )
     ),
     # --- Harbor (agentic registry benchmarks) ---
     # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
     # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
-    "aime-harbor": EvalSuiteConfig(
+    "aime-harbor": HarborDefinition(
         name="aime-harbor",
-        mechanism=EvalMechanism.HARBOR,
-        harbor=HarborSpec(dataset="aime", version="1.0"),
+        config=HarborRunConfig(dataset="aime", version="1.0", agent="terminus-2"),
     ),
-    "aime-smoke": EvalSuiteConfig(
+    "aime-smoke": HarborDefinition(
         name="aime-smoke",
-        mechanism=EvalMechanism.HARBOR,
-        harbor=HarborSpec(dataset="aime", version="1.0", n_concurrent=2),
+        config=HarborRunConfig(dataset="aime", version="1.0", agent="terminus-2", n_concurrent=2),
         max_eval_instances=2,
     ),
+    # Agentic datasets contain Harbor task directories and run with Daytona.
+    "tb2": _agentic_eval("tb2", _TERMINAL_BENCH_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "tb2-lite": _agentic_eval("tb2-lite", _TERMINAL_BENCH_DATASET, n_concurrent=4, max_instances=2),
+    "swebench": _agentic_eval("swebench", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=_AGENTIC_CONCURRENCY),
+    "swebench-lite": _agentic_eval("swebench-lite", _SWEBENCH_RANDOM_100_DATASET, n_concurrent=4, max_instances=2),
+    "swebench-full": _agentic_eval("swebench-full", "DCAgent/swebench-verified", n_concurrent=_AGENTIC_CONCURRENCY),
+    "gaia": _agentic_eval("gaia", "DCAgent/gaia_127", n_concurrent=_AGENTIC_CONCURRENCY),
+    "bfcl": _agentic_eval("bfcl", "DCAgent2/bfcl-parity", n_concurrent=_AGENTIC_CONCURRENCY),
+    "aider": _agentic_eval("aider", "DCAgent2/aider_polyglot", n_concurrent=_AGENTIC_CONCURRENCY),
+    "medagentbench": _agentic_eval("medagentbench", "DCAgent/medagentbench", n_concurrent=_AGENTIC_CONCURRENCY),
+    "financeagent": _agentic_eval("financeagent", "DCAgent/financeagent_terminal", n_concurrent=16),
 }
 
 # A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
@@ -239,6 +296,16 @@ CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
 
+AGENTIC_EVALS: tuple[str, ...] = (
+    "tb2",
+    "swebench",
+    "gaia",
+    "bfcl",
+    "aider",
+    "medagentbench",
+    "financeagent",
+)
+
 # Named suite groups selectable by name on the CLI (``--evals smoke``). Launch NLP and CHAT as
 # separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
 # 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
@@ -249,4 +316,5 @@ SUITES: dict[str, tuple[str, ...]] = {
     "chat": CHAT_EVALS,
     "math": MATH_EVALS,
     "code": CODE_EVALS,
+    "agentic": AGENTIC_EVALS,
 }

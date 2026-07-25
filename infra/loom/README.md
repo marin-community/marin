@@ -31,10 +31,11 @@ The local Docker builder must support `linux/amd64`.
 
 ## Deploy
 
-By default, Pulumi builds the HEAD of Loom's default branch during preview to
-catch image failures without pushing it. `pulumi up` rebuilds and pushes the
-image, places the provider-produced digest in VM metadata, and waits for
-`https://loom.oa.dev/api/ready` after activation.
+By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
+SHA and uses that immutable Git context as the image input. When the resolved
+commit changes, preview reports an image update. `pulumi up` builds and pushes
+the changed image, places the provider-produced digest in VM metadata, and waits
+for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
@@ -79,7 +80,7 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana_alert` profile is restricted to the Google identity of
+activation. The `ops` profile is restricted to the Google identity of
 the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
 account's email and immutable numeric subject; it does not create or copy a Loom
 token.

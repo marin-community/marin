@@ -775,6 +775,12 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Public origin of the federation parent that fronts this cluster (e.g.
+    # "https://iris.oa.dev"). Set on a child whose own origin is not world-visible:
+    # a minted capability URL is then tagged with this cluster's name and routed
+    # through the parent, which relays it here. Empty keeps minted URLs on the local
+    # origin. The parent recognizes the tag from its own ``peers`` map.
+    federation_public_parent: str = ""
     # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.

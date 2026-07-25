@@ -25,6 +25,15 @@ class FederatedEndpointHandoff:
         self._peer_address = peer_address
         self._mint_token = mint_token
 
+    def relay_base(self, peer_id: str) -> str | None:
+        """Peer proxy base for a blind relay of a child-minted capability URL.
+
+        No credential is minted: the child owns and validates its own token, so the
+        parent needs only the peer's reachable proxy address. ``None`` when the peer
+        is not configured, which the caller turns into a 404.
+        """
+        return self._peer_address(peer_id)
+
     def target(
         self,
         *,

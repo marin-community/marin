@@ -411,12 +411,14 @@ class Controller(_message.Message):
         ttl: _time_pb2.Duration
         def __init__(self, endpoint_name: _Optional[str] = ..., ttl: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class MintEndpointTokenResponse(_message.Message):
-        __slots__ = ("token", "expires_at")
+        __slots__ = ("token", "expires_at", "capability_url")
         TOKEN_FIELD_NUMBER: _ClassVar[int]
         EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+        CAPABILITY_URL_FIELD_NUMBER: _ClassVar[int]
         token: str
         expires_at: _time_pb2.Timestamp
-        def __init__(self, token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+        capability_url: str
+        def __init__(self, token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., capability_url: _Optional[str] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
         __slots__ = ("endpoint_id", "lease_duration")
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
