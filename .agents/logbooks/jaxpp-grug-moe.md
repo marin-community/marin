@@ -3043,3 +3043,27 @@ author: dlwh
   - Commits `a724542264`, `9f35f8499f`, and `9284db9761` add an opt-in patched TE overflow policy, a separately named `nccl_ep_drop` backend with aligned capacity `81,920`, and a full-gradient ring-versus-drop parity gate. Exact `nccl_ep` retains pristine TE, trap semantics, and worst-case capacity.
 - Next action:
   - Babysit H100x8 parity job `/dlwh/ncclep-h100-overflow-drop-parity-r1-20260724-1646`. Require finite loss and all gradient groups with relative-L2 error at most `0.002`; report output accumulation-order mismatch separately. Only then run reduced JaxPP `nccl_ep_drop`.
+
+### 2026-07-25 13:23 PDT - bounded NCCL_EP is fast but misses the gradient error ceiling
+- Hypothesis: Bounded 81,920-row NCCL_EP receive buffers will preserve the direct routed-MLP speedup, and moving weighting plus forward combine to FP32 will reduce every gradient's relative-L2 error below the accepted `0.002` ceiling.
+- Commit Hashes:
+  - `9284db9761` adds the bounded-overflow full-MLP gate.
+  - `4a2eb217ff` adds FP32 weighting/combine.
+  - `66a3528cb6` lets the opt-in Transformer Engine patch advertise FP32 payloads and bootstraps the direct gate accordingly.
+- Commands:
+  - BF16 combine r3: one H100x8 Iris task `/dlwh/ncclep-h100-overflow-drop-parity-r3-20260725-0845`, running `NCCLEP_OVERFLOW_POLICY=drop NCCLEP_COMBINE_DTYPE=bf16 PARITY_MODE=diagnostic bash experiments/ncclep_h100/run_full_mlp_ab.sh`.
+  - FP32 bootstrap diagnostic r4: `/dlwh/ncclep-h100-overflow-drop-fp32-parity-r4-20260725-1257`.
+  - FP32 combine r5: `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait --enable-extra-resources --gpu H100x8 --cpu 64 --memory 512GB --disk 256GB --timeout 3600 --max-retries 0 --priority interactive --extra gpu --job-name ncclep-h100-overflow-drop-fp32-parity-r5-20260725-1314 -e NCCLEP_OVERFLOW_POLICY drop -e NCCLEP_COMBINE_DTYPE fp32 -e PARITY_MODE diagnostic -e XLA_PREALLOC_FRACTION 0.65 -- bash experiments/ncclep_h100/run_full_mlp_ab.sh`.
+- Results:
+  - All successful numerical runs used EP8, e64/top-k4, 16,384 tokens/rank, d2560/i1280, exactly 65,536 assignments per destination, receive capacity 81,920, and zero drops.
+  - r3 BF16 combine was finite and `1.4516x` ring (`22.8160ms` versus `15.7178ms`). Loss relative-L2 was `9.94e-06`; token, routing-weight, W13, and W2 gradient relative-L2 errors were `0.004169`, `0.002267`, `0.003061`, and `0.002833`.
+  - r4 built the FP32 kernels but failed before parity because bootstrap registered BF16 as the widest payload: `tokens dtype (4) wider than group max_token_dtype (6)`. All ranks exited and no resource remained live. Commit `66a3528cb6` fixes this only for the opt-in patched path.
+  - r5 succeeded task `1/1`, all eight ranks exit `0`, and no matching pod remains. It was finite and `1.3679x` ring: medians `22.7535ms` versus `16.6338ms`, or `26.90%` lower latency.
+  - r5 loss relative-L2 was `1.4439e-05`. Token, routing-weight, W13, and W2 gradient relative-L2 errors were `0.004238`, `0.002591`, `0.003159`, and `0.002990`. All four exceed `0.002`.
+  - The separately accepted output accumulation signature was unchanged: relative-L2 `0.0029623`, mismatch fraction `0.00203554`, and max absolute error `0.0078125`. Every gradient had zero elementwise mismatches under the existing BF16 `rtol=0.1`, `atol=0.0002` check, but that loose check does not override the explicit relative-L2 gate.
+- Interpretation:
+  - Bounded NCCL_EP has a reproducible `1.37-1.45x` direct full-gradient speed advantage over bulk ring at the target per-microbatch geometry.
+  - FP32 forward combine does not reduce the gradient discrepancy. The remaining difference comes from transport/expert accumulation order rather than BF16 route weighting alone.
+  - Under the explicit `0.2%` loss-and-gradient relative-L2 ceiling, both BF16 and FP32 bounded paths are numerical negatives. Do not integrate `nccl_ep_drop` into reduced or L24 JaxPP training without a new numerical result or an explicit acceptance-policy change.
+- Next action:
+  - Keep exact NCCL_EP and bounded NCCL_EP blocked from L24 scaling. If this path is resumed, compare ring and NCCL_EP against an independent higher-precision combine/gradient reference; ring's BF16 scatter/reduction order is not itself a precision oracle.
