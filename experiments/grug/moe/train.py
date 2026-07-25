@@ -354,8 +354,15 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        (loss, (qb_beta_per_layer, dropped_total)), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss}
+        if os.environ.get("SCALE_REPORT_DROPS") == "1":
+            cfg = qb_params.config
+            total_assignments = (
+                batch.tokens.shape[0] * batch.tokens.shape[1] * cfg.num_experts_per_token * cfg.num_layers
+            )
+            metrics["moe/dropped_assignments"] = dropped_total
+            metrics["moe/drop_fraction"] = dropped_total.astype(jnp.float32) / total_assignments
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
