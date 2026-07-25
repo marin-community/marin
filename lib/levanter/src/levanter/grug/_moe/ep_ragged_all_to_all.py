@@ -238,6 +238,66 @@ def _same_expert_clone_dispatch_metadata(
     return transport_position, receiver_slot, receiver_group_sizes, overflow
 
 
+def _same_expert_pooled_dispatch_metadata(
+    flat_experts: Int[Array, "TK"],
+    all_group_sizes: Int[Array, "S E"],
+    sender_index: Int[Array, ""],
+    *,
+    sender_destination_capacity: int,
+    receiver_capacity: int,
+) -> tuple[Int[Array, "TK"], Int[Array, "TK"], Int[Array, "S E"], Int[Array, ""]]:
+    """Pack an exact global expert stream into fixed receiver-capacity bins.
+
+    Assignments within each expert are interleaved by sender before the stream is
+    split across receivers. Interleaving avoids concentrating a contiguous sender
+    prefix in one receiver while retaining the ragged path's stable sender order.
+    """
+    expert_shards, num_experts = all_group_sizes.shape
+    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    assignment_group_sizes = all_group_sizes[:, flat_experts]
+    completed_round_assignments = jnp.sum(
+        jnp.minimum(assignment_group_sizes, local_rank[None, :]),
+        axis=0,
+        dtype=jnp.int32,
+    )
+    sender_indices = jnp.arange(expert_shards, dtype=jnp.int32)
+    preceding_sender_in_round = jnp.sum(
+        jnp.logical_and(
+            assignment_group_sizes > local_rank[None, :],
+            sender_indices[:, None] < sender_index,
+        ),
+        axis=0,
+        dtype=jnp.int32,
+    )
+    interleaved_expert_rank = completed_round_assignments + preceding_sender_in_round
+
+    global_group_sizes = jnp.sum(all_group_sizes, axis=0, dtype=jnp.int32)
+    global_group_offsets = jnp.cumsum(global_group_sizes, dtype=jnp.int32) - global_group_sizes
+    global_stream_position = global_group_offsets[flat_experts] + interleaved_expert_rank
+    destination = global_stream_position // receiver_capacity
+    receiver_slot = global_stream_position % receiver_capacity
+
+    receiver_start = jnp.arange(expert_shards, dtype=jnp.int32)[:, None] * receiver_capacity
+    receiver_end = receiver_start + receiver_capacity
+    expert_start = global_group_offsets[None, :]
+    expert_end = expert_start + global_group_sizes[None, :]
+    receiver_group_sizes = jnp.maximum(
+        jnp.minimum(receiver_end, expert_end) - jnp.maximum(receiver_start, expert_start),
+        0,
+    )
+
+    destination_rank = _stable_expert_local_rank(destination, num_experts=expert_shards)
+    transport_size = expert_shards * sender_destination_capacity
+    within_capacity = destination_rank < sender_destination_capacity
+    transport_position = jnp.where(
+        within_capacity,
+        destination * sender_destination_capacity + destination_rank,
+        transport_size,
+    )
+    overflow = jnp.sum(jnp.logical_not(within_capacity), dtype=jnp.int32)
+    return transport_position, receiver_slot, receiver_group_sizes, overflow
+
+
 def _same_expert_cloned_fixed_a2a_core(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -266,10 +326,14 @@ def _same_expert_cloned_fixed_a2a_core(
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
     expert_shards = num_experts // local_experts
-    receiver_capacity = max(
-        int(math.ceil(capacity_factor * assignments_per_shard)) + num_experts,
-        num_experts,
-    )
+    pooled_dispatch = os.environ.get("SCALE_A2A_CLONE_POOLED") == "1"
+    if pooled_dispatch:
+        receiver_capacity = assignments_per_shard
+    else:
+        receiver_capacity = max(
+            int(math.ceil(capacity_factor * assignments_per_shard)) + num_experts,
+            num_experts,
+        )
     sender_destination_capacity = int(math.ceil(assignments_per_shard / expert_shards)) + num_experts
     send_size = expert_shards * sender_destination_capacity
 
@@ -281,13 +345,22 @@ def _same_expert_cloned_fixed_a2a_core(
     local_group_sizes = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     all_group_sizes = jax.lax.all_gather(local_group_sizes, "expert")
     receiver_index = jax.lax.axis_index("expert")
-    transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_clone_dispatch_metadata(
-        flat_experts,
-        all_group_sizes,
-        receiver_index,
-        sender_destination_capacity=sender_destination_capacity,
-        receiver_capacity=receiver_capacity,
-    )
+    if pooled_dispatch:
+        transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_pooled_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            receiver_index,
+            sender_destination_capacity=sender_destination_capacity,
+            receiver_capacity=receiver_capacity,
+        )
+    else:
+        transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_clone_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            receiver_index,
+            sender_destination_capacity=sender_destination_capacity,
+            receiver_capacity=receiver_capacity,
+        )
     keep = transport_position < send_size
     dispatch_positions = transport_position.reshape(tokens_per_shard, topk)
     keep_by_token = keep.reshape(tokens_per_shard, topk)

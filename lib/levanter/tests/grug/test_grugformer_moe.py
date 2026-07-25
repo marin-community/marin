@@ -24,6 +24,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _receiver_clipped_dispatch_metadata,
     _round_robin_ppermute_all_to_all,
     _same_expert_clone_dispatch_metadata,
+    _same_expert_pooled_dispatch_metadata,
 )
 from levanter.grug._moe.sonic import (
     sonic_capacity_refill,
@@ -1542,7 +1543,64 @@ def test_same_expert_clone_dispatch_metadata_is_dropless_and_preserves_experts()
             assert start <= slot < end
 
 
-def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(monkeypatch: pytest.MonkeyPatch):
+def test_same_expert_pooled_dispatch_metadata_fills_receivers_exactly():
+    assignments = [
+        jnp.asarray([0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 4], dtype=jnp.int32),
+        jnp.asarray([0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4], dtype=jnp.int32),
+    ]
+    expert_shards = len(assignments)
+    num_experts = 5
+    assignments_per_sender = assignments[0].size
+    all_group_sizes = jnp.stack(
+        [jnp.bincount(sender_assignments, length=num_experts) for sender_assignments in assignments]
+    ).astype(jnp.int32)
+    sender_destination_capacity = assignments_per_sender // expert_shards + num_experts
+
+    received: list[list[tuple[int, int]]] = [[] for _ in range(expert_shards)]
+    expected_receiver_group_sizes = None
+    for sender_index, flat_experts in enumerate(assignments):
+        transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_pooled_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            jnp.asarray(sender_index, dtype=jnp.int32),
+            sender_destination_capacity=sender_destination_capacity,
+            receiver_capacity=assignments_per_sender,
+        )
+        assert int(overflow) == 0
+        assert len(np.unique(np.asarray(transport_position))) == assignments_per_sender
+        expected_receiver_group_sizes = receiver_group_sizes
+        for expert, position, slot in zip(
+            np.asarray(flat_experts),
+            np.asarray(transport_position),
+            np.asarray(receiver_slot),
+            strict=True,
+        ):
+            destination = int(position) // sender_destination_capacity
+            received[destination].append((int(slot), int(expert)))
+
+    assert expected_receiver_group_sizes is not None
+    receiver_group_sizes = np.asarray(expected_receiver_group_sizes)
+    receiver_group_offsets = np.cumsum(receiver_group_sizes, axis=1) - receiver_group_sizes
+    np.testing.assert_array_equal(
+        np.sum(receiver_group_sizes, axis=1),
+        np.full((expert_shards,), assignments_per_sender),
+    )
+    assert int(np.count_nonzero(receiver_group_sizes)) <= num_experts + expert_shards - 1
+    for receiver_index, received_assignments in enumerate(received):
+        slots = [slot for slot, _ in received_assignments]
+        assert sorted(slots) == list(range(assignments_per_sender))
+        for slot, expert in received_assignments:
+            start = int(receiver_group_offsets[receiver_index, expert])
+            end = start + int(receiver_group_sizes[receiver_index, expert])
+            assert start <= slot < end
+
+
+@pytest.mark.parametrize("pooled_dispatch", [False, True])
+def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_dispatch: bool,
+):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -1550,6 +1608,8 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(monkeypatch: 
     monkeypatch.setenv("SCALE_A2A_FIXED", "1")
     monkeypatch.setenv("SCALE_A2A_SAME_EXPERT_CLONES", "1")
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    if pooled_dispatch:
+        monkeypatch.setenv("SCALE_A2A_CLONE_POOLED", "1")
 
     tokens = len(jax.devices()) * 8
     hidden_dim = 8
