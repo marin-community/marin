@@ -487,15 +487,30 @@ class MoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        routed_flat = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=False,
-            w13_pre0=w13_pre0,
-            w2_pre0=w2_pre0,
-        )
+        if os.environ.get("SCALE_REPORT_DROPS") == "1":
+            # A/B drop-fidelity reporting: print the global dropped-assignment count
+            # per MoE layer (non-blocking host callback). Denominator for fractions is
+            # global_batch * seq_len * top_k assignments, computed at analysis time.
+            routed_flat, dropped_tokens = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=True,
+                w13_pre0=w13_pre0,
+                w2_pre0=w2_pre0,
+            )
+            jax.debug.print("A2A_DROP_STAT dropped={}", dropped_tokens, ordered=False)
+        else:
+            routed_flat = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=False,
+                w13_pre0=w13_pre0,
+                w2_pre0=w2_pre0,
+            )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         return reshard(routed, _batch_spec()), qb_beta
 
