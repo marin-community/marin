@@ -4,6 +4,7 @@
 """Recover and validate every archived Zephyr stage row for the dedup A/B."""
 
 import argparse
+import ast
 import contextlib
 import json
 import re
@@ -11,13 +12,17 @@ import subprocess
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from finelog.client import LogClient
+from iris.client import get_iris_ctx
+from iris.rpc import job_pb2
 from rigging.filesystem import StoragePath
 from zephyr.stats import StatsWriter
 
 EXECUTION_ID_PATTERN = re.compile(r"Starting zephyr pipeline: ([0-9]{8}-[0-9]{6}-[0-9a-f]+)")
+FINAL_COUNTERS_PATTERN = re.compile(r"Final counters: (\{.*\})")
 
 
 @dataclass(frozen=True)
@@ -133,7 +138,73 @@ def _archive_stage_query(execution_ids: Iterable[str]) -> str:
 """.strip()
 
 
-def _query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[dict[str, Any]]:
+def _archive_worker_query(execution_ids: Iterable[str]) -> str:
+    ids = ", ".join(_sql_literal(execution_id) for execution_id in execution_ids)
+    return f"""
+    SELECT DISTINCT
+        execution_id,
+        stage_name,
+        shard_idx,
+        status,
+        ts,
+        items,
+        bytes_processed,
+        item_rate,
+        byte_rate,
+        cpu_time_total,
+        cpu_avg_pct,
+        mem_avg_bytes,
+        mem_peak_bytes
+    FROM "zephyr.worker"
+    WHERE execution_id IN ({ids})
+      AND status IN ('START', 'END')
+    ORDER BY execution_id, stage_name, shard_idx, status, ts
+""".strip()
+
+
+def _coordinator_jobs(root_job_ids: Iterable[str]) -> list[dict[str, Any]]:
+    iris = get_iris_ctx()
+    if iris is None or iris.client is None:
+        raise RuntimeError("Iris client is unavailable outside an Iris job")
+    result = []
+    for root_job_id in root_job_ids:
+        prefix = root_job_id.rstrip("/") + "/"
+        jobs = iris.client.list_jobs(prefix=prefix, limit=1_000)
+        result.extend(
+            {
+                "root_job_id": root_job_id,
+                "job_id": job.job_id,
+                "submitted_epoch_ms": int(job.submitted_at.epoch_ms),
+            }
+            for job in jobs
+            if job.state == job_pb2.JOB_STATE_SUCCEEDED
+            and "/" not in job.job_id.removeprefix(prefix)
+            and job.job_id.removeprefix(prefix).startswith("zephyr-")
+        )
+    return sorted(result, key=lambda job: (job["root_job_id"], job["submitted_epoch_ms"], job["job_id"]))
+
+
+def _coordinator_final_query(coordinator_job_ids: Iterable[str]) -> str:
+    keys = ", ".join(_sql_literal(job_id.rstrip("/") + "/0:0") for job_id in coordinator_job_ids)
+    return f"""
+SELECT DISTINCT
+    key,
+    epoch_ms,
+    data
+FROM "log"
+WHERE key IN ({keys})
+  AND data LIKE '%Final counters:%'
+ORDER BY key, epoch_ms
+""".strip()
+
+
+def _query_namespace(
+    *,
+    finelog_config: str,
+    namespace: str,
+    sql: str,
+    max_rows: int = 10_000,
+) -> list[dict[str, Any]]:
     command = [
         "uv",
         "run",
@@ -145,7 +216,7 @@ def _query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[d
         "--format",
         "jsonl",
         "--max-rows",
-        "10000",
+        str(max_rows),
         sql,
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -158,12 +229,12 @@ def _query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[d
     return [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
 
 
-def _query_live(sql: str) -> list[dict[str, Any]]:
+def _query_live(sql: str, *, max_rows: int = 10_000) -> list[dict[str, Any]]:
     url = StatsWriter.resolve_url()
     if url is None:
         raise RuntimeError("Live finelog URL is unavailable outside an Iris job")
     with contextlib.closing(LogClient.connect(url)) as client:
-        return client.query(sql, max_rows=10_000).to_pylist()
+        return client.query(sql, max_rows=max_rows).to_pylist()
 
 
 def _live_roots(root_job_ids: list[str]) -> list[dict[str, Any]]:
@@ -182,6 +253,68 @@ def _live_roots(root_job_ids: list[str]) -> list[dict[str, Any]]:
     return result
 
 
+def _coordinator_stage_rows(
+    roots: list[dict[str, Any]],
+    final_rows: Iterable[dict[str, Any]],
+    *,
+    coordinator_jobs: list[dict[str, Any]],
+    root_job_ids: list[str],
+    execution_ids: set[str],
+) -> list[dict[str, Any]]:
+    starts_by_root: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for root in roots:
+        root_job_id = root["root_key"].removesuffix("/0:0")
+        starts_by_root[root_job_id].append(root)
+
+    final_by_key: dict[str, dict[str, Any]] = {}
+    for row in _unique_rows(final_rows):
+        prior = final_by_key.get(row["key"])
+        if prior is not None and prior != row:
+            raise AssertionError(f"Coordinator key has conflicting final counters: {row['key']}")
+        final_by_key[row["key"]] = row
+
+    recovered = []
+    for root_job_id in root_job_ids:
+        starts = sorted(starts_by_root[root_job_id], key=lambda row: (int(row["epoch_ms"]), row["execution_id"]))
+        jobs = [job for job in coordinator_jobs if job["root_job_id"] == root_job_id]
+        if len(starts) != len(jobs):
+            raise AssertionError(
+                f"Coordinator job coverage mismatch for {root_job_id}: starts={len(starts)}, jobs={len(jobs)}"
+            )
+        for start, job in zip(starts, jobs, strict=True):
+            execution_id = start["execution_id"]
+            if execution_id not in execution_ids:
+                continue
+            final = final_by_key.get(job["job_id"].rstrip("/") + "/0:0")
+            if final is None:
+                continue
+            match = FINAL_COUNTERS_PATTERN.search(final["data"])
+            if match is None:
+                raise AssertionError(f"Coordinator final row has no counters: {final}")
+            final_counters = ast.literal_eval(match.group(1))
+            elapsed = (int(final["epoch_ms"]) - int(start["epoch_ms"])) / 1_000
+            if elapsed < 0:
+                raise AssertionError(f"Coordinator final predates execution start: {execution_id}")
+            recovered.append(
+                {
+                    "execution_id": execution_id,
+                    "stage_name": "coordinator_pipeline_total",
+                    "status": "END",
+                    "elapsed": elapsed,
+                    "items": int(final_counters.get("zephyr/item_count", 0)),
+                    "bytes_processed": int(final_counters.get("zephyr/bytes_processed", 0)),
+                    "total_shards": 0,
+                    "cpu_pct_avg": float(final_counters.get("zephyr/worker/cpu_pct_average", 0)),
+                    "cpu_time_total": float(final_counters.get("zephyr/worker/cpu_time", 0)),
+                    "mem_bytes_avg": float(final_counters.get("zephyr/worker/mem_average_bytes", 0)),
+                    "mem_peak_bytes_max": int(final_counters.get("zephyr/worker/mem_peak_bytes", 0)),
+                    "metric_source": "coordinator_final_counters",
+                    "coordinator_key": final["key"],
+                }
+            )
+    return recovered
+
+
 def _unique_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -192,6 +325,97 @@ def _unique_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(row)
     return result
+
+
+def _timestamp_ms(value: datetime | str | int | float) -> int:
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, str):
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        return int(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return int(timestamp.timestamp() * 1_000)
+
+
+def _worker_rows_with_timestamp(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for row in rows:
+        normalized_row = dict(row)
+        if "ts_ms" in normalized_row:
+            normalized_row["ts_ms"] = int(normalized_row["ts_ms"])
+        else:
+            normalized_row["ts_ms"] = _timestamp_ms(normalized_row.pop("ts"))
+        normalized.append(normalized_row)
+    return normalized
+
+
+def _worker_elapsed(row: dict[str, Any]) -> float:
+    candidates = []
+    for total_key, rate_key in (("items", "item_rate"), ("bytes_processed", "byte_rate")):
+        total = float(row[total_key])
+        rate = float(row.get(rate_key, 0))
+        if total > 0 and rate > 0:
+            candidates.append(total / rate)
+    if not candidates:
+        return 0.0
+    if max(candidates) - min(candidates) > max(candidates) * 1e-6:
+        raise AssertionError(f"Worker item and byte rates imply different elapsed times: {row}")
+    return sum(candidates) / len(candidates)
+
+
+def _recovered_worker_stage_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    execution_ids: set[str],
+) -> list[dict[str, Any]]:
+    by_stage: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in _unique_rows(_worker_rows_with_timestamp(rows)):
+        execution_id = row["execution_id"]
+        if execution_id not in execution_ids:
+            raise AssertionError(f"Unexpected worker execution {execution_id}")
+        by_stage[execution_id, row["stage_name"]].append(row)
+
+    recovered: list[dict[str, Any]] = []
+    for (execution_id, stage_name), stage_rows in sorted(by_stage.items()):
+        starts = [int(row["ts_ms"]) for row in stage_rows if row["status"] == "START"]
+        ends_by_shard: dict[int, dict[str, Any]] = {}
+        for row in stage_rows:
+            if row["status"] != "END":
+                continue
+            shard_idx = int(row["shard_idx"])
+            prior = ends_by_shard.get(shard_idx)
+            if prior is not None and prior != row:
+                raise AssertionError(
+                    f"Execution {execution_id} stage {stage_name} has conflicting END rows for shard {shard_idx}"
+                )
+            ends_by_shard[shard_idx] = row
+        if not ends_by_shard:
+            raise AssertionError(f"Execution {execution_id} stage {stage_name} lacks END worker rows")
+        ends = list(ends_by_shard.values())
+        if not starts:
+            starts = [int(row["ts_ms"] - _worker_elapsed(row) * 1_000) for row in ends]
+        elapsed = (max(int(row["ts_ms"]) for row in ends) - min(starts)) / 1_000
+        if elapsed < 0:
+            raise AssertionError(f"Execution {execution_id} stage {stage_name} has negative worker span")
+        recovered.append(
+            {
+                "execution_id": execution_id,
+                "stage_name": stage_name,
+                "status": "END",
+                "elapsed": elapsed,
+                "items": sum(int(row["items"]) for row in ends),
+                "bytes_processed": sum(int(row["bytes_processed"]) for row in ends),
+                "total_shards": len(ends),
+                "cpu_pct_avg": sum(float(row["cpu_avg_pct"]) for row in ends) / len(ends),
+                "cpu_time_total": sum(float(row["cpu_time_total"]) for row in ends),
+                "mem_bytes_avg": sum(float(row["mem_avg_bytes"]) for row in ends) / len(ends),
+                "mem_peak_bytes_max": max(int(row["mem_peak_bytes"]) for row in ends),
+                "metric_source": "worker_end_rows",
+            }
+        )
+    return recovered
 
 
 def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[str, Any]]:
@@ -210,6 +434,46 @@ def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[
     )
     live_stages = _query_live(_archive_stage_query(execution_ids))
     stage_rows = _unique_rows([*archived_stages, *live_stages])
+    for row in stage_rows:
+        row["metric_source"] = "stage_stat"
+
+    stages_by_execution = _execution_rows(stage_rows)
+    missing_execution_ids = set(execution_ids) - stages_by_execution.keys()
+    if missing_execution_ids:
+        coordinator_jobs = _coordinator_jobs(root_job_ids)
+        coordinator_sql = _coordinator_final_query(job["job_id"] for job in coordinator_jobs)
+        archived_finals = _query_namespace(
+            finelog_config=finelog_config,
+            namespace="log",
+            sql=coordinator_sql,
+            max_rows=1_000,
+        )
+        live_finals = _query_live(coordinator_sql, max_rows=1_000)
+        stage_rows.extend(
+            _coordinator_stage_rows(
+                roots,
+                [*archived_finals, *live_finals],
+                coordinator_jobs=coordinator_jobs,
+                root_job_ids=root_job_ids,
+                execution_ids=missing_execution_ids,
+            )
+        )
+    stages_by_execution = _execution_rows(stage_rows)
+    missing_execution_ids = set(execution_ids) - stages_by_execution.keys()
+    if missing_execution_ids:
+        worker_sql = _archive_worker_query(sorted(missing_execution_ids))
+        archived_workers = _query_namespace(
+            finelog_config=finelog_config,
+            namespace="zephyr.worker",
+            sql=worker_sql,
+            max_rows=100_000,
+        )
+        live_workers = _query_live(worker_sql, max_rows=100_000)
+        recovered = _recovered_worker_stage_rows(
+            [*archived_workers, *live_workers],
+            execution_ids=missing_execution_ids,
+        )
+        stage_rows.extend(recovered)
     stages_by_execution = _execution_rows(stage_rows)
     missing_stage = {
         "stage_name": None,
@@ -248,7 +512,16 @@ def _execution_summary(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if any(row["stage_name"] is None for row in rows):
-        raise AssertionError(f"Execution {execution_id} has no archived stage rows")
+        return {
+            **asdict(expected),
+            "execution_id": execution_id,
+            "epoch_ms": epoch_ms,
+            "stages": [],
+            "non_end_rows": [],
+            "cpu_time_total": None,
+            "mem_peak_bytes_max": None,
+            "resource_metrics_available": False,
+        }
 
     unique_end_rows: dict[str, dict[str, Any]] = {}
     non_end_rows: list[dict[str, Any]] = []
@@ -264,8 +537,9 @@ def _execution_summary(
     if not unique_end_rows:
         raise AssertionError(f"Execution {execution_id} has no successful stage rows")
 
-    stages = [
-        {
+    stages = []
+    for _, row in sorted(unique_end_rows.items()):
+        stage = {
             key: row[key]
             for key in (
                 "stage_name",
@@ -279,8 +553,8 @@ def _execution_summary(
                 "mem_peak_bytes_max",
             )
         }
-        for _, row in sorted(unique_end_rows.items())
-    ]
+        stage["metric_source"] = row.get("metric_source", "stage_stat")
+        stages.append(stage)
     return {
         **asdict(expected),
         "execution_id": execution_id,
@@ -289,16 +563,28 @@ def _execution_summary(
         "non_end_rows": non_end_rows,
         "cpu_time_total": sum(float(stage["cpu_time_total"]) for stage in stages),
         "mem_peak_bytes_max": max(int(stage["mem_peak_bytes_max"]) for stage in stages),
+        "resource_metrics_available": True,
     }
 
 
 def _scenario_summary(executions: Iterable[dict[str, Any]]) -> dict[str, Any]:
     rows = list(executions)
+    available_rows = [execution for execution in rows if execution["resource_metrics_available"]]
+    missing_execution_ids = [
+        execution["execution_id"] for execution in rows if not execution["resource_metrics_available"]
+    ]
     return {
         "executions": len(rows),
         "stages": sum(len(execution["stages"]) for execution in rows),
-        "cpu_time_total": sum(execution["cpu_time_total"] for execution in rows),
-        "mem_peak_bytes_max": max(execution["mem_peak_bytes_max"] for execution in rows),
+        "worker_recovered_stages": sum(
+            stage.get("metric_source", "stage_stat") == "worker_end_rows"
+            for execution in rows
+            for stage in execution["stages"]
+        ),
+        "cpu_time_total_observed": sum(execution["cpu_time_total"] for execution in available_rows),
+        "mem_peak_bytes_max_observed": max(execution["mem_peak_bytes_max"] for execution in available_rows),
+        "resource_metrics_complete": not missing_execution_ids,
+        "resource_metrics_missing_execution_ids": missing_execution_ids,
         "non_end_rows": sum(len(execution["non_end_rows"]) for execution in rows),
     }
 
@@ -390,7 +676,7 @@ def build_report(
     ]
     treatment = [execution for execution in summaries if execution["variant"] == "treatment"]
     return {
-        "version": "v1",
+        "version": "v3",
         "executions": summaries,
         "scenarios": {
             "baseline_cap": _scenario_summary(baseline_cap),

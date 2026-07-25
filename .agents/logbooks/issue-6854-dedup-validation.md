@@ -611,3 +611,26 @@ statistics for performance comparisons.
   `9a0afd4f471c03f07001868f1350f330`. This is a nonconvergence metadata defect,
   not a document-output difference. Artifact:
   `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-cap50-relations-100b-20260725-v2/relation-review.json`.
+
+### 2026-07-25T09:16:00Z — resource audit recovered with one explicit telemetry gap
+
+- The resource audit recovered all 56 baseline executions and 26 of 27
+  treatment executions from archived stage rows or exact coordinator final
+  counters. Baseline cap-50 consumed 442,633.00 observed CPU-seconds; full
+  convergence consumed 459,946.73. Treatment consumed 221,222.15 observed
+  CPU-seconds, excluding treatment connected-components iteration 19
+  (`20260724-122800-b77f4f34`).
+- That missing execution succeeded and its worker logs prove that all shards
+  ran, but both workers and the coordinator logged Finelog timeouts during the
+  run. No stage, worker, or final-counter resource row exists in live or
+  archived stats. The audit reports this execution as unavailable rather than
+  treating it as zero. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-finelog-100b-20260725-v10.json`.
+- The identical-work MinHash comparison is complete: item and byte totals
+  match exactly. Baseline used 84,007.55 CPU-seconds and treatment used
+  24,982.35, a reduction of 59,025.20 CPU-seconds (70.26%). Peak worker memory
+  was 3,859,361,792 bytes versus 3,819,208,704 bytes.
+- All eight H100s remain active at batch priority. The four workers completed
+  605, 141, 118, and 241 inference responses in the latest ten-minute window.
+  The first 128-pair batches include oversized chunked documents, so no
+  completion marker has been published yet; the roots show no runtime error.
