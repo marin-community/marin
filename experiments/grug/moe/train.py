@@ -891,12 +891,73 @@ def _validate_automatic_jaxpp_task_jaxprs(compiled) -> None:
     _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "mpmdify")
 
 
+@contextlib.contextmanager
+def _validate_jaxpp_mpmdify_phases():
+    if jaxpp_core is None:
+        raise ModuleNotFoundError("jaxpp.core is required for automatic JaxPP task phase validation")
+
+    original_bind_meshes = jaxpp_core.bind_meshes
+    original_deduplicate_task_jaxprs = jaxpp_core.deduplicate_task_jaxprs
+    original_maybe_unroll_loop = jaxpp_core.maybe_unroll_loop
+    original_fixup_multidefs = jaxpp_core.fixup_multidefs
+    original_common_passes = jaxpp_core.common_passes
+    original_to_local_jaxprs = jaxpp_core.to_local_jaxprs
+
+    def bind_meshes_with_validation(*args, **kwargs):
+        closed_jaxpr = original_bind_meshes(*args, **kwargs)
+        _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "bind_meshes")
+        return closed_jaxpr
+
+    def deduplicate_task_jaxprs_with_validation(*args, **kwargs):
+        closed_jaxpr = original_deduplicate_task_jaxprs(*args, **kwargs)
+        _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "deduplicate_task_jaxprs")
+        return closed_jaxpr
+
+    def maybe_unroll_loop_with_validation(*args, **kwargs):
+        closed_jaxpr = original_maybe_unroll_loop(*args, **kwargs)
+        _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "maybe_unroll_loop")
+        return closed_jaxpr
+
+    def fixup_multidefs_with_validation(*args, **kwargs):
+        closed_jaxpr, out_placement = original_fixup_multidefs(*args, **kwargs)
+        _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "fixup_multidefs")
+        return closed_jaxpr, out_placement
+
+    def common_passes_with_validation(*args, **kwargs):
+        jaxpr = original_common_passes(*args, **kwargs)
+        _validate_jaxpp_tasks_in_jaxpr(jaxpr, "common_passes")
+        return jaxpr
+
+    def to_local_jaxprs_with_validation(*args, **kwargs):
+        local_jaxprs = original_to_local_jaxprs(*args, **kwargs)
+        for local_jaxpr in local_jaxprs:
+            _validate_jaxpp_tasks_in_jaxpr(local_jaxpr.closed_jaxpr.jaxpr, "to_local_jaxprs")
+        return local_jaxprs
+
+    jaxpp_core.bind_meshes = bind_meshes_with_validation
+    jaxpp_core.deduplicate_task_jaxprs = deduplicate_task_jaxprs_with_validation
+    jaxpp_core.maybe_unroll_loop = maybe_unroll_loop_with_validation
+    jaxpp_core.fixup_multidefs = fixup_multidefs_with_validation
+    jaxpp_core.common_passes = common_passes_with_validation
+    jaxpp_core.to_local_jaxprs = to_local_jaxprs_with_validation
+    try:
+        yield
+    finally:
+        jaxpp_core.bind_meshes = original_bind_meshes
+        jaxpp_core.deduplicate_task_jaxprs = original_deduplicate_task_jaxprs
+        jaxpp_core.maybe_unroll_loop = original_maybe_unroll_loop
+        jaxpp_core.fixup_multidefs = original_fixup_multidefs
+        jaxpp_core.common_passes = original_common_passes
+        jaxpp_core.to_local_jaxprs = original_to_local_jaxprs
+
+
 def _compile_automatic_jaxpp_with_phase_validation(train_step, state, pipeline_batch):
     placed = train_step.trace_and_place(state, pipeline_batch)
     _validate_jaxpp_tasks_in_jaxpr(placed.closed_jaxpr.jaxpr, "trace_and_place")
     inferred = placed.infer_intermediate_shardings()
     _validate_jaxpp_tasks_in_jaxpr(inferred.closed_jaxpr.jaxpr, "infer_intermediate_shardings")
-    return inferred.mpmdify()
+    with _validate_jaxpp_mpmdify_phases():
+        return inferred.mpmdify()
 
 
 def _mpmd_sharding_like(value, mpmd_mesh, stage_index: int):
