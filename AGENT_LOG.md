@@ -218,3 +218,18 @@ RECONCILIATION (d3's 65-68% "drop fraction"; rav cf1.2 capacity_overflow_rate_me
 - VERDICT PENDING MEASUREMENT: treat the fixed path as likely fidelity-OK (~1-3% true drops) but MUST
   confirm with my fixed metric. My in-flight treatment (adj-custom-120-0724-2216) has the OLD broken
   logging -> will not produce the number. Need a run with commit 2d4a87395.
+
+## 1a MATCHED A/B LOCKED (speed half) — 05:22 UTC
+Operating point (d5120/256e-top8/48L/EP64/b1024), 120 steps, back-to-back, DISABLE_CHECKPOINT:
+| leg | p10 | p50 | p90 | loss@119 |
+|---|---|---|---|---|
+| control  gather-dispatch + autodiff backward   | 20.51 | 20.61 | 20.69 | 5.738 |
+| treatment gather-dispatch + CUSTOM ADJOINT      | 23.73 | 24.04 | 24.75 | 5.711 |
+=> custom adjoint = +3.43pp p50 (+16.6% rel), p10/p90 bands FULLY separated. Clean, decisive win from the
+adjoint alone (before leg-batching/rotation). Loss parity: 5.711 vs 5.738 (0.027 apart = known independent-run
+RNG divergence; kernel test proves 1e-5 grad parity). Speed half of 1a is LOCKED.
+
+DROP JOB submitted: /mwittmann/ep25d1-drops-30-0724-2318 (custom adjoint + SCALE_REPORT_DROPS, 30 steps,
+commit 2d4a87395). d4's fp8-wire leg already exercised the metric: 0.755 early -> 0.172 late; hypothesizes
+64x expert-shard overcount => /64 gives 1.18% -> 0.27%, matching my ~0.9% multinomial estimate. Auditing
+the psum scope now.
