@@ -3067,3 +3067,25 @@ author: dlwh
   - Under the explicit `0.2%` loss-and-gradient relative-L2 ceiling, both BF16 and FP32 bounded paths are numerical negatives. Do not integrate `nccl_ep_drop` into reduced or L24 JaxPP training without a new numerical result or an explicit acceptance-policy change.
 - Next action:
   - Keep exact NCCL_EP and bounded NCCL_EP blocked from L24 scaling. If this path is resumed, compare ring and NCCL_EP against an independent higher-precision combine/gradient reference; ring's BF16 scatter/reduction order is not itself a precision oracle.
+
+### 2026-07-25 14:06 PDT - FP32 reference isolates one token-gradient reduction mismatch
+- Hypothesis: Comparing bounded NCCL_EP against an FP32 ring scatter/reduction will remove the production ring's BF16 accumulation-order error; using a token-scaled loss and FP32 token dispatch will then bring every gradient below `0.002` relative-L2.
+- Commit Hashes:
+  - `658325f7ea` adds a diagnostic FP32 ring combine while leaving production ring's default BF16 behavior unchanged.
+  - `3be17a42fe` changes the parity loss from a mean over all token-hidden elements to a mean over tokens after summing hidden dimensions.
+  - `c2768fff3c` adds FP32 NCCL_EP token dispatch with a BF16 cast before expert GEMMs.
+- Commands:
+  - r6 FP32 reference: `/dlwh/ncclep-h100-fp32-oracle-r6-20260725-1331`, with FP32 NCCL_EP combine and FP32 ring combine.
+  - r7 token-scaled reference: `/dlwh/ncclep-h100-tokenloss-fp32-oracle-r7-20260725-1343`, changing only loss scaling.
+  - r8 FP32 dispatch: `/dlwh/ncclep-h100-fp32dispatch-oracle-r8-20260725-1355`, additionally setting `NCCLEP_DISPATCH_DTYPE=fp32`.
+- Results:
+  - r6 made loss, output, W13 gradients, and W2 gradients bitwise equal to the FP32 ring reference. Routing-gradient relative-L2 was `7.94e-05`. Token-gradient relative-L2 remained `0.002912`, with max absolute error `2.91e-11`.
+  - r7's training-representative token-scaled loss changed token-gradient magnitude but not relative error: `0.00290949`, max absolute `1.19209e-7`, mean absolute `3.53064e-9`. Loss, output, W13 gradients, and W2 gradients remained exact; routing-gradient relative-L2 was `8.18e-05`.
+  - r8 generated `payloadu32` forward and backward dispatch variants. Its numerical metrics were identical to r7: token-gradient relative-L2 `0.00290949`, routing `8.18e-05`, and exact loss/output/W13/W2. It remained `1.3288x` faster than the FP32 ring control (`23.4127ms` versus `17.6197ms`).
+  - All three jobs succeeded with all eight ranks exit `0`, balanced 65,536-assignment destination loads, receive capacity 81,920, zero drops, finite outputs and gradients, and no matching pods after termination.
+- Interpretation:
+  - The production ring's BF16 forward combine explains the earlier forward, loss, and parameter-gradient discrepancies. Against FP32 ring, bounded NCCL_EP matches all of those exactly.
+  - The remaining token-gradient difference is isolated to the dispatch-backward reduction order followed by BF16 input-gradient rounding. FP32 forward/backward payload selection does not change it.
+  - Token-gradient relative-L2 is `0.2909%`, above the accepted `0.2%` ceiling despite small absolute error and zero mismatches under the legacy loose BF16 allclose. Bounded NCCL_EP remains blocked from pipeline integration under the current policy.
+- Next action:
+  - Stop bounded NCCL_EP precision experiments. Resume only if the acceptance policy explicitly changes or a different dispatch-backward algorithm produces token-gradient relative-L2 at most `0.002`. Continue target MFU work on exact ring or another numerically accepted backend.
