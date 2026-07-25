@@ -1152,3 +1152,22 @@ statistics for performance comparisons.
 
 - All 12 pods remain Ready with zero restarts, and all four GPU workers
   continue serving requests.
+
+### 2026-07-25T15:48:00Z — semantic review reaches 16,849 verified pairs
+
+- Nine additional baseline checkpoints passed independent validation: 1,152
+  pairs, 781 false positives, 371 true duplicates, and zero unresolved
+  outcomes. They used 2,541 valid first-attempt judgments with no invalid
+  responses or retries; three pairs were chunked and 1,149 were direct.
+- Across the stable 132-checkpoint snapshot, all 15 manual records leave:
+
+  - baseline: 14,394 pairs, 9,545 false positives, 4,849 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 16,849 pairs, 10,829 false positives, 6,020 true duplicates.
+
+- A public heartbeat records the full-run setup, resource result, current
+  semantic coverage, and the order-bias caveat:
+  https://github.com/marin-community/marin/issues/6854#issuecomment-5079122624.
+- At the latest health sample all 12 pods were Ready with zero restarts. The
+  four GPU workers served 5,612 successful responses over the prior 15
+  minutes.
