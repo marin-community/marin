@@ -9,6 +9,7 @@ import pytest
 
 from experiments.datakit.scripts.dedup_ab_machine_labels import decision_for_pair
 from experiments.datakit.scripts.dedup_ab_semantic_batch import load_semantic_cases
+from experiments.datakit.scripts.dedup_ab_semantic_workload import merge_summaries, summarize_pairs
 
 
 def _pair(index: int) -> dict:
@@ -88,3 +89,25 @@ def test_semantic_batch_rejects_missing_row(tmp_path) -> None:
 
     with pytest.raises(IndexError, match="outside"):
         load_semantic_cases([decision], semantic_offset=0, limit=1)
+
+
+def test_semantic_workload_accounts_only_routed_full_text_pairs() -> None:
+    baseline = _pair(0)
+    treatment = {**_pair(1), "variant": "treatment"}
+    exact = _pair(2)
+    exact["canonical_text"] = exact["member_text"]
+    exact["canonical_raw_sha256"] = exact["raw_sha256"]
+    exact["canonical_raw_chars"] = exact["raw_chars"]
+    exact["exact_raw_text"] = True
+
+    first = summarize_pairs([baseline, exact])
+    second = summarize_pairs([treatment])
+    summary = merge_summaries([first, second])
+
+    expected_raw_chars = sum(len(pair["member_text"]) + len(pair["canonical_text"]) for pair in (baseline, treatment))
+    assert summary["pairs"] == 3
+    assert summary["semantic_pairs"] == 2
+    assert summary["semantic_raw_chars"] == expected_raw_chars
+    assert summary["counts"]["baseline/pairs"] == 1
+    assert summary["counts"]["treatment/pairs"] == 1
+    assert summary["counts"]["baseline/cross_source/True"] == 1
