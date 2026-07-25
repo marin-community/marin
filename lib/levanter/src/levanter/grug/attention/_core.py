@@ -260,23 +260,23 @@ def apply_rotary_embedding_fused(
     head_dim: int,
     rotary_dim: int,
     rope: RotaryConfig,
-    angle_scale: jax.Array | float | None = None,
+    disable_rope: jax.Array | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
     """RoPE as a single fused affine ``f1*x + f2*flip(x)`` (interleaved-pair convention).
 
-    Precomputes full-width ``[S, head_dim]`` factor caches with the rotate sign baked into ``f2``,
-    so applying rope to q/k is two multiplies + an add + an adjacent-pair flip -- no split/concat of
-    the (large) activation. ``rotary_dim < head_dim`` gives partial RoPE (tail factors are
-    identity: f1=1, f2=0); ``angle_scale=0`` gives NoPE (cos0=1, sin0=0 -> f1=1, f2=0). Interleaved
-    pairing differs from ``apply_rotary_embedding`` (split-half) -- equivalent for from-scratch
-    training, not checkpoint-compatible across the two.
+    The full-width ``[S, head_dim]`` factor caches are built from static inputs (positions/theta), so
+    XLA constant-folds and hoists them out of the layer scan -- one precomputed buffer, not per-layer
+    trig. Applying rope to q/k is then two multiplies + an add + an adjacent-pair flip, with no
+    split/concat of the (large) activation. ``rotary_dim < head_dim`` gives partial RoPE (tail factors
+    identity). NoPE is a per-layer *factor* select (``disable_rope`` -> f1=1, f2=0 on the flagged
+    layers): a cheap ``[S, head_dim]`` where that keeps the trig constant, rather than scaling the
+    angles (which would make the cache loop-variant and recomputed every layer). Interleaved pairing
+    differs from ``apply_rotary_embedding`` (split-half) -- fine from scratch, not checkpoint-compatible.
     """
     half = rotary_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half, dtype=jnp.float32) / half))
     positions = jnp.arange(seq_len, dtype=jnp.float32)
-    angles = positions[:, None] * inv_freq[None, :]
-    if angle_scale is not None:
-        angles = angles * angle_scale
+    angles = positions[:, None] * inv_freq[None, :]  # static -> folded to a constant buffer
     cos = jnp.cos(angles)
     sin = jnp.sin(angles)
     # Interleave to [S, rotary_dim]: f1 = [cos_i, cos_i, ...], f2 = [-sin_i, +sin_i, ...].
@@ -286,6 +286,11 @@ def apply_rotary_embedding_fused(
         pad = head_dim - rotary_dim
         f1 = jnp.concatenate([f1, jnp.ones((seq_len, pad), f1.dtype)], axis=-1)
         f2 = jnp.concatenate([f2, jnp.zeros((seq_len, pad), f2.dtype)], axis=-1)
+    if disable_rope is not None:
+        # NoPE on the flagged layers: select identity factors (f1=1, f2=0). Small [S, head_dim] where;
+        # the trig above stays a hoisted constant.
+        f1 = jnp.where(disable_rope, 1.0, f1)
+        f2 = jnp.where(disable_rope, 0.0, f2)
     f1 = f1[None, :, None, :]
     f2 = f2[None, :, None, :]
 

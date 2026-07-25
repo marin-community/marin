@@ -378,8 +378,9 @@ class CausalSelfAttention(eqx.Module):
         angle_scale = None if disable_rope is None else (~disable_rope).astype(jnp.float32)
 
         if self.cfg.rope_fused:
-            # Single fused affine form; handles partial rope (rotary_dim) and NoPE (angle_scale) via the
-            # factor caches, so there is no split/concat on q,k.
+            # Single fused affine form. Partial rope (rotary_dim) and NoPE (per-layer factor select) are
+            # handled inside via constant-folded factor caches -- no split/concat on q,k, and the trig
+            # stays a hoisted constant (NoPE selects identity factors rather than scaling angles).
             q, k = apply_rotary_embedding_fused(
                 q,
                 k,
@@ -387,7 +388,7 @@ class CausalSelfAttention(eqx.Module):
                 head_dim=head_dim,
                 rotary_dim=rotary_dim,
                 rope=self.cfg.rope,
-                angle_scale=angle_scale,
+                disable_rope=disable_rope,
             )
         else:
 
