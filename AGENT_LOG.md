@@ -178,3 +178,18 @@ RANKING (contribution >=1pp toward LOCKED 25%, preserving fidelity; post-adjoint
   ranked-comment "do it once" decision now has a batching number: 25.39% p50).
 My 1a A/B control (/mwittmann/ep25d1-adj-control-120-0724-1707) still compiling; background monitor armed
 for drop_fraction + MFU + terminal, then I submit the treatment leg.
+
+## Check-in 00:20 UTC — fidelity framing + handoff candidate
+- 1a A/B REFRAMED (coordinator): raw speed to 25% is ~settled by rav's leg-batching stability-120 (25.39%
+  p50, real run). My A/B's UNIQUE contribution is the FIDELITY verdict — the FIRST drop_fraction ever
+  measured at the fixed path's 64x256 bucket granularity (Larry's explicitly-untested territory; rav's
+  runs have report_capacity_overflow OFF so they log no drops).
+- DECISION RULE for the record: drop_fraction <= ~3% (Larry's known-acceptable ref at 8 buckets)
+  => fixed path fidelity-CLEARED, goal likely met by adjoint(+batching) pending loss parity.
+  drop_fraction materially >3% => goal-relevant NEGATIVE for the fixed transport, elevates d2's
+  ragged/ring arms from "decision quality" to "necessary" (coordinator re-ranks immediately).
+- HANDOFF CANDIDATE: commit 4fbc89152 (SCALE_REPORT_DROPS drop-fraction metric) is exactly what rav
+  will want to gate drops on his fixed-path runs. Flagged for the coordinator to relay; NO direct contact
+  from me.
+- STATUS: control still compiling (monitor iter 2, running). Will report BOTH legs' drop_fraction + p50
+  MFU + loss trajectory side-by-side the moment treatment terminates.
