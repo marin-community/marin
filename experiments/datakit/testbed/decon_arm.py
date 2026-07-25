@@ -35,6 +35,14 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.config import (
+    GLOBAL_DF_COMMON_MIN_ABS,
+    GLOBAL_DF_COMMON_MIN_SOURCES,
+    GLOBAL_DF_SAMPLE_DOCS,
+    SOURCE_DF_COMMON_FRAC,
+    SOURCE_DF_COMMON_MIN_ABS,
+    SOURCE_DF_SAMPLE_DOCS,
+)
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
@@ -53,14 +61,8 @@ OVERLAP_THRESHOLD = 0.5
 # isolated-line coincidences (fewer FPs) and lets short-line / inline-embedded
 # eval text be matched (higher recall). See marin#6852.
 PARAGRAPH_DELIMITER = "\n\n"
-# Per-source common-ngram filter (marin#6852): drop eval ngrams ubiquitous within
-# a source (legal enacting clauses, license headers) from that source's overlap.
-DF_SAMPLE_DOCS = 5000  # docs/source sampled to estimate per-source ngram DF
-DF_COMMON_FRAC = 0.005  # ngram is "common" if present in >= this fraction of them
-DF_COMMON_MIN_ABS = 5  # and in >= this many (small-source floor)
-# DF is a source property, so estimate it from the *largest* materialized sample
-# (the pre-built 1T per-source root) regardless of the decon target — a 100M mark
-# reuses a drop-set estimated over thousands of docs. Layout: <root>/<source>/outputs/main.
+# Estimate local and cross-source DF from the largest materialized sample
+# regardless of the decon target. Layout: <root>/<source>/outputs/main.
 SAMPLE_1T_ROOT = "datakit/sample_1t_733c8c5c"
 # Reservoir-sample this many flagged docs/source into a `_flagged` sidecar at mark
 # time so the viewer scales — it reads the sidecar instead of rescanning the corpus.
@@ -120,17 +122,21 @@ def build_testbed_decon_steps(
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
     )
 
-    # One distributed drop-set step for all deconned sources (zephyr shard/source),
-    # sourcing DF from the large 1T per-source sample; each decon reads its subdir.
+    # One distributed DF pass over the 1T sample produces source-local and
+    # cross-source drop sets for every decon mark.
     drop_sets = all_source_drop_sets_step(
         name="datakit/decon_drop/_combined",
         sources=[(name, f"{marin_prefix()}/{SAMPLE_1T_ROOT}/{name}/outputs/main") for name in sampled],
+        source_dependencies={},
         prebuilt_bloom=bloom,
         ngram_length=NGRAM_LENGTH,
         paragraph_delimiter=PARAGRAPH_DELIMITER,
-        sample_docs=DF_SAMPLE_DOCS,
-        common_frac=DF_COMMON_FRAC,
-        common_min_abs=DF_COMMON_MIN_ABS,
+        sample_docs=SOURCE_DF_SAMPLE_DOCS,
+        common_frac=SOURCE_DF_COMMON_FRAC,
+        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
+        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
+        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
+        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
         worker_resources=WORKER_RESOURCES,
     )
 

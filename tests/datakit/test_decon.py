@@ -1131,7 +1131,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dir=str(drop_dir),
+        drop_set_dirs=[str(drop_dir)],
     )
     rows = _read_attributes(out_dir)
     assert rows["d0"]["contaminated"] is False  # boilerplate-only no longer flags
@@ -1174,7 +1174,7 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dir=str(drop_dir),
+        drop_set_dirs=[str(drop_dir)],
     )
     assert _read_attributes(out_dir)["leak"]["contaminated"] is True
 
@@ -1218,10 +1218,81 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
         sample_docs=1000,
         common_frac=0.5,
         common_min_abs=2,
+        global_sample_docs=1000,
+        global_common_min_abs=100,
+        global_common_min_sources=2,
     )
     assert res.num_sources == 2
     assert len(_load_drop_set(str(out / "srcA"))) > 0  # boilerplate (df=20) dropped
     assert len(_load_drop_set(str(out / "srcB"))) == 0  # distinctive (df=1) kept
+    assert res.n_global_dropped == 0  # high DF in only one source is not global boilerplate
+
+
+def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path):
+    """Global DF removes text spread across sources without erasing a source-local leak."""
+    common = "four score and seven years ago our fathers brought forth on this continent a new nation"
+    leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory at midnight"
+    filler = "ordinary source material whose wording shares no evaluation sequence at all today"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [
+            {"id": "public_quote", "text": common},
+            {"id": "genuine_leak", "text": leak},
+        ],
+    )
+    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    sources = []
+    for source_idx in range(4):
+        source_dir = tmp_path / f"source_{source_idx}"
+        rows = [{"id": f"common_{source_idx}_{i}", "text": common, "partition_id": 0} for i in range(2)]
+        rows.extend(
+            {"id": f"filler_{source_idx}_{i}", "text": f"{filler} {source_idx} {i}", "partition_id": 0} for i in range(8)
+        )
+        if source_idx == 0:
+            rows.append({"id": "leak", "text": leak, "partition_id": 0})
+        _write_input_parquet(source_dir / "part-00000-of-00001.parquet", rows)
+        sources.append((f"source_{source_idx}", str(source_dir)))
+
+    out = tmp_path / "drops"
+    result = build_all_source_drop_sets(
+        sources=sources,
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=ngram,
+        sample_docs=100,
+        common_frac=0.5,
+        common_min_abs=3,
+        global_sample_docs=100,
+        global_common_min_abs=6,
+        global_common_min_sources=3,
+    )
+    assert all(not _load_drop_set(str(out / source_name)) for source_name, _ in sources)
+    assert _load_drop_set(result.global_output_dir)
+    global_rows = pq.read_table(Path(result.global_output_dir) / "drop.parquet").to_pylist()
+    assert {row["document_frequency"] for row in global_rows} == {8}
+    assert {row["source_frequency"] for row in global_rows} == {4}
+
+    marked = tmp_path / "marked"
+    decon_to_parquet(
+        normalized_data=_as_source(Path(sources[0][1])),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(marked),
+        ngram=ngram,
+        drop_set_dirs=[str(out / "source_0"), result.global_output_dir],
+    )
+    rows = _read_attributes(marked)
+    assert rows["common_0_0"]["contaminated"] is False
+    assert rows["leak"]["contaminated"] is True
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):

@@ -225,12 +225,10 @@ def _paragraph_overlap_and_matches(
     ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
     the bloom (in iteration order, with duplicates if the same ngram repeats).
 
-    *drop_hashes* are removed from *both* the numerator and denominator — the
-    per-source common-ngram filter (marin#6852). Boilerplate ubiquitous in a
-    source (a legal enacting clause, a license header) carries no contamination
-    signal, so an all-boilerplate paragraph collapses to zero ngrams and scores
-    0, while a paragraph with a distinctive leak keeps its remaining ngrams and
-    still scores ~1.0 — precision without a recall cost.
+    *drop_hashes* are removed from *both* the numerator and denominator.
+    Corpus-common boilerplate carries no contamination signal, so an
+    all-boilerplate paragraph collapses to zero ngrams and scores 0. A paragraph
+    with a distinctive leak keeps its remaining ngrams and still scores ~1.0.
 
     Paragraphs with fewer than ``ngram_length`` tokens in n-gram mode return
     ``(0.0, [])`` — see :func:`_extract_features` for why we don't fall back
@@ -496,7 +494,7 @@ def decon_to_parquet(
     output_path: str,
     text_field: str = "text",
     ngram: NGramConfig | None = None,
-    drop_set_dir: str | None = None,
+    drop_set_dirs: list[str] | None = None,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
@@ -541,9 +539,10 @@ def decon_to_parquet(
         ngram: Word-ngram matching config. ``None`` = exact whole-paragraph match.
             ``ngram.overlap_threshold`` gates which paragraphs are marked
             contaminated; exact-paragraph mode records any non-zero match.
-        drop_set_dir: Optional directory of per-source common-ngram hashes
-            (:func:`build_source_drop_set`). Those ngrams are excluded from every
-            paragraph overlap — the per-source boilerplate filter (marin#6852).
+        drop_set_dirs: Optional directories of corpus-common ngram hashes.
+            Ngrams from every directory are excluded from each paragraph
+            overlap. :func:`decon_step` passes the source-local and global
+            outputs from :func:`all_source_drop_sets_step`.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters; size
             for expected total *ngram* count across the eval suite (not record
             count). Defaults handle ~1M unique ngrams cleanly. Ignored when
@@ -583,9 +582,9 @@ def decon_to_parquet(
             false_positive_rate=false_positive_rate,
         )
 
-    drop_hashes = _load_drop_set(drop_set_dir) if drop_set_dir else frozenset()
+    drop_hashes = _load_drop_sets(drop_set_dirs) if drop_set_dirs else frozenset()
     if drop_hashes:
-        logger.info("decon: filtering %d source-common ngrams from %s", len(drop_hashes), drop_set_dir)
+        logger.info("decon: filtering %d corpus-common ngrams from %s", len(drop_hashes), drop_set_dirs)
     pipeline = Dataset.from_list(files).map_shard(
         _make_marker(bloom_path, output_path, text_field, ngram, drop_hashes, flagged_sample_size)
     )
@@ -851,9 +850,8 @@ def merge_eval_blooms_step(
 
 
 # ---------------------------------------------------------------------------
-# Per-source common-ngram filter (marin#6852): drop eval ngrams that are
-# ubiquitous within a source (legal enacting clauses, license headers) so they
-# stop producing boilerplate false positives, without a recall cost.
+# Corpus-common ngram filters (marin#6852, marin#7126): remove eval ngrams
+# ubiquitous within one source or repeated across several sources.
 # ---------------------------------------------------------------------------
 
 
@@ -887,6 +885,25 @@ def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
     return frozenset(out)
 
 
+def _load_drop_sets(drop_set_dirs: list[str]) -> frozenset[int]:
+    return frozenset().union(*(_load_drop_set(drop_set_dir) for drop_set_dir in drop_set_dirs))
+
+
+def _document_frequency_counts(
+    df_sample_dir: str,
+    bf: dupekit.Bloom,
+    text_field: str,
+    ngram: NGramConfig | None,
+    sample_docs: int,
+) -> tuple[Counter[int], int]:
+    counts: Counter[int] = Counter()
+    n = 0
+    for text in islice(_iter_normalized_texts(df_sample_dir, text_field), sample_docs):
+        n += 1
+        counts.update({h for feat in _extract_features(text, ngram) if (h := _bloom_hash(feat)) in bf})
+    return counts, n
+
+
 def _drop_set_for_source(
     df_sample_dir: str,
     bf: dupekit.Bloom,
@@ -902,11 +919,7 @@ def _drop_set_for_source(
     so a prefix is representative), counts how many contain each eval ngram
     (membership via the bloom — the only ngrams a drop-set can hold), and keeps
     those in at least ``max(common_min_abs, common_frac * n_sampled)`` docs."""
-    counts: Counter[int] = Counter()
-    n = 0
-    for text in islice(_iter_normalized_texts(df_sample_dir, text_field), sample_docs):
-        n += 1
-        counts.update({h for feat in _extract_features(text, ngram) if (h := _bloom_hash(feat)) in bf})
+    counts, n = _document_frequency_counts(df_sample_dir, bf, text_field, ngram, sample_docs)
     threshold = max(common_min_abs, int(common_frac * n))
     return [h for h, c in counts.items() if c >= threshold], n, threshold
 
@@ -948,15 +961,52 @@ def build_source_drop_set(
 
 
 class AllSourceDropSets(BaseModel):
-    """Outcome of :func:`build_all_source_drop_sets`: per-source drop-sets under one root.
+    """Outcome of :func:`build_all_source_drop_sets`.
 
-    Each source's hashes live at ``<output_dir>/<source>/drop.parquet``; a
-    :func:`decon_step` reads its own source's subdir.
+    Per-source hashes live at ``<output_dir>/<source>/drop.parquet``. Globally
+    common hashes live at ``<global_output_dir>/drop.parquet``.
     """
 
     output_dir: str
+    global_output_dir: str
     num_sources: int
+    n_global_dropped: int
     counters: dict[str, int | float]
+
+
+def _global_drop_row(
+    hash_value: int,
+    items: Iterator[dict[str, int]],
+    *,
+    common_min_abs: int,
+    common_min_sources: int,
+) -> dict[str, int] | None:
+    document_frequency = 0
+    source_frequency = 0
+    for item in items:
+        document_frequency += item["document_frequency"]
+        source_frequency += item["source_frequency"]
+    if document_frequency < common_min_abs or source_frequency < common_min_sources:
+        return None
+    return {
+        "hash": hash_value,
+        "document_frequency": document_frequency,
+        "source_frequency": source_frequency,
+    }
+
+
+def _write_global_drop_set(output_dir: str, rows: list[dict[str, int]]) -> str:
+    StoragePath(output_dir).mkdirs()
+    out_file = f"{output_dir.rstrip('/')}/drop.parquet"
+    schema = pa.schema(
+        [
+            pa.field("hash", pa.uint64()),
+            pa.field("document_frequency", pa.int64()),
+            pa.field("source_frequency", pa.int64()),
+        ]
+    )
+    write_parquet_file(iter(rows), output_path=out_file, schema=schema)
+    return out_file
 
 
 def build_all_source_drop_sets(
@@ -969,71 +1019,156 @@ def build_all_source_drop_sets(
     sample_docs: int,
     common_frac: float,
     common_min_abs: int,
+    global_sample_docs: int,
+    global_common_min_abs: int,
+    global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> AllSourceDropSets:
-    """Distributed per-source drop-set build — one zephyr shard per source.
+    """Build per-source and cross-source common eval-ngram drop sets.
 
-    *sources* is a list of ``(source_name, df_sample_dir)``. Each shard writes
-    ``<output_path>/<source_name>/drop.parquet``; consume with
-    ``decon_step(drop_sets=..., drop_set_source=<source_name>)``.
+    One Zephyr map shard per source writes the source-local drop set and emits
+    document frequencies for matching eval ngrams. A distributed reduce sums
+    those counts across sources. A globally common ngram must meet both the
+    corpus document-frequency threshold and the distinct-source threshold, so
+    a repeated eval item concentrated in one source remains matchable.
     """
+    if not sources:
+        raise ValueError("sources must be non-empty")
+    if len({source_name for source_name, _ in sources}) != len(sources):
+        raise ValueError("source names must be unique")
+    if global_sample_docs < sample_docs:
+        raise ValueError("global_sample_docs must be at least sample_docs")
+    if global_common_min_abs <= 0 or global_common_min_sources <= 0:
+        raise ValueError("global common thresholds must be positive")
+    if len(sources) < global_common_min_sources:
+        logger.warning(
+            "decon global drop-set cannot meet sources>=%d with only %d sources",
+            global_common_min_sources,
+            len(sources),
+        )
+
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
 
-    def build_shard(items: Iterator[tuple[str, str]], _shard: ShardInfo) -> Iterator[dict[str, Any]]:
+    def build_shard(items: Iterator[tuple[str, str]], _shard: ShardInfo) -> Iterator[dict[str, int]]:
         bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
         for source_name, df_sample_dir in items:
             drop, n, threshold = _drop_set_for_source(
                 df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
             )
             _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
+            global_counts, n_global = _document_frequency_counts(
+                df_sample_dir, bf, text_field, ngram, global_sample_docs
+            )
             counters.pipeline.update_counter("decon_drop/sources", 1)
             counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
-            logger.info("decon drop-set %s: %d docs, %d common ngrams (df>=%d)", source_name, n, len(drop), threshold)
-            yield {"source": source_name, "n_sampled": n, "n_dropped": len(drop)}
+            counters.pipeline.update_counter("decon_drop/global_documents_sampled", n_global)
+            counters.pipeline.update_counter("decon_drop/global_candidates", len(global_counts))
+            logger.info(
+                "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
+                source_name,
+                n,
+                len(drop),
+                threshold,
+                n_global,
+                len(global_counts),
+            )
+            for hash_value, document_frequency in global_counts.items():
+                yield {"hash": hash_value, "document_frequency": document_frequency, "source_frequency": 1}
 
-    pipeline = Dataset.from_list(sources).map_shard(build_shard)
+    pipeline = (
+        Dataset.from_list(sources)
+        .map_shard(build_shard)
+        .group_by(
+            key=lambda row: row["hash"],
+            reducer=lambda hash_value, items: _global_drop_row(
+                hash_value,
+                items,
+                common_min_abs=global_common_min_abs,
+                common_min_sources=global_common_min_sources,
+            ),
+        )
+        .filter(lambda row: row is not None)
+    )
     resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
     outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
-    return AllSourceDropSets(output_dir=output_path, num_sources=len(sources), counters=dict(outcome.counters))
+    global_rows = list(outcome.results)
+    global_output_dir = f"{output_path.rstrip('/')}/_global"
+    out_file = _write_global_drop_set(global_output_dir, global_rows)
+    counters_out = dict(outcome.counters)
+    counters_out["decon_drop/global_ngrams_dropped"] = len(global_rows)
+    logger.info(
+        "decon global drop-set: %d ngrams (df>=%d, sources>=%d) → %s",
+        len(global_rows),
+        global_common_min_abs,
+        global_common_min_sources,
+        out_file,
+    )
+    return AllSourceDropSets(
+        output_dir=output_path,
+        global_output_dir=global_output_dir,
+        num_sources=len(sources),
+        n_global_dropped=len(global_rows),
+        counters=counters_out,
+    )
 
 
 def all_source_drop_sets_step(
     *,
     name: str,
     sources: list[tuple[str, str]],
+    source_dependencies: dict[str, StepSpec],
     prebuilt_bloom: StepSpec,
     text_field: str = "text",
     ngram_length: int | None = 13,
     paragraph_delimiter: str = "\n\n",
-    sample_docs: int = 5000,
-    common_frac: float = 0.005,
-    common_min_abs: int = 5,
+    sample_docs: int,
+    common_frac: float,
+    common_min_abs: int,
+    global_sample_docs: int,
+    global_common_min_abs: int,
+    global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
-    """StepSpec for :func:`build_all_source_drop_sets` — every source's common-ngram filter.
+    """StepSpec for corpus-side common-ngram filters.
 
     *sources* is a list of ``(source_name, df_sample_dir)``; each ``df_sample_dir``
-    is a raw directory of that source's normalized parquet used to estimate DF
-    (folded into ``hash_attrs``, not deps — like the eval paths of
-    :func:`build_eval_bloom_step`). Point each at a pool large enough to be stable
-    (~5k docs), independent of the sample being deconned. ``ngram_length`` /
-    ``paragraph_delimiter`` MUST match the consuming :func:`decon_step`. Each
-    ``decon_step`` reads its source's subdir via ``drop_sets=`` + ``drop_set_source=``.
+    is a directory of normalized parquet used to estimate DF. Include any steps
+    that produce those directories in *source_dependencies*, keyed by source
+    name. ``sample_docs`` controls the source-local estimate;
+    ``global_sample_docs`` controls the larger cross-source estimate.
+    ``ngram_length`` / ``paragraph_delimiter`` MUST match the consuming
+    :func:`decon_step`.
     """
     ngram: NGramConfig | None = (
         NGramConfig(ngram_length=ngram_length, paragraph_delimiter=paragraph_delimiter)
         if ngram_length is not None
         else None
     )
+    unknown_dependencies = sorted(set(source_dependencies) - {source_name for source_name, _ in sources})
+    if unknown_dependencies:
+        raise ValueError(f"source_dependencies contains unknown sources: {unknown_dependencies}")
+    raw_sources: list[tuple[str, str]] = []
+    dependent_sources: list[tuple[str, str, str]] = []
+    for source_name, source_path in sources:
+        dependency = source_dependencies.get(source_name)
+        if dependency is None:
+            raw_sources.append((source_name, source_path))
+            continue
+        dependency_path = dependency.output_path.rstrip("/")
+        if source_path != dependency_path and not source_path.startswith(f"{dependency_path}/"):
+            raise ValueError(f"{source_name} path {source_path} is outside dependency output {dependency_path}")
+        dependent_sources.append((source_name, dependency.name_with_hash, source_path.removeprefix(dependency_path)))
+
     hash_attrs: dict[str, Any] = {
-        "sources": tuple(sorted(sources)),
+        "raw_sources": tuple(sorted(raw_sources)),
+        "dependent_sources": tuple(sorted(dependent_sources)),
         "text_field": text_field,
         "ngram_length": ngram_length,
         "paragraph_delimiter": paragraph_delimiter,
@@ -1041,6 +1176,9 @@ def all_source_drop_sets_step(
         "sample_docs": sample_docs,
         "common_frac": common_frac,
         "common_min_abs": common_min_abs,
+        "global_sample_docs": global_sample_docs,
+        "global_common_min_abs": global_common_min_abs,
+        "global_common_min_sources": global_common_min_sources,
     }
     return StepSpec(
         name=name,
@@ -1053,10 +1191,13 @@ def all_source_drop_sets_step(
             sample_docs=sample_docs,
             common_frac=common_frac,
             common_min_abs=common_min_abs,
+            global_sample_docs=global_sample_docs,
+            global_common_min_abs=global_common_min_abs,
+            global_common_min_sources=global_common_min_sources,
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
-        deps=[prebuilt_bloom],
+        deps=[prebuilt_bloom, *source_dependencies.values()],
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
@@ -1106,10 +1247,9 @@ def decon_step(
         prebuilt_bloom: Pre-built bloom StepSpec (output of
             :func:`build_eval_bloom_step` or :func:`merge_eval_blooms_step`).
             Mutually exclusive with ``eval_data_sources``.
-        drop_sets: Optional :func:`all_source_drop_sets_step` output — the
-            per-source common-ngram filters (marin#6852). Combined with
-            *drop_set_source*, the hashes under ``<drop_sets>/<drop_set_source>``
-            are excluded from every paragraph overlap. Feature policy
+        drop_sets: Optional :func:`all_source_drop_sets_step` output. Combined
+            with *drop_set_source*, this excludes both hashes common within the
+            source and hashes common across several sources. Feature policy
             (ngram/delimiter) must match this step's.
         drop_set_source: This source's subdir name under *drop_sets* (e.g.
             ``"cp/usgpo"``). Required when *drop_sets* is set.
@@ -1158,7 +1298,14 @@ def decon_step(
     if drop_sets is not None and drop_set_source is None:
         raise ValueError("drop_set_source is required when drop_sets is set")
     drop_deps = [drop_sets] if drop_sets is not None else []
-    drop_dir = f"{drop_sets.output_path.rstrip('/')}/{drop_set_source}" if drop_sets is not None else None
+    drop_dirs = (
+        [
+            f"{drop_sets.output_path.rstrip('/')}/{drop_set_source}",
+            f"{drop_sets.output_path.rstrip('/')}/_global",
+        ]
+        if drop_sets is not None
+        else None
+    )
     norm_deps = [normalized] if normalized is not None else []
 
     def _read_norm() -> NormalizedData:
@@ -1176,7 +1323,7 @@ def decon_step(
                 output_path=output_path,
                 text_field=text_field,
                 ngram=ngram,
-                drop_set_dir=drop_dir,
+                drop_set_dirs=drop_dirs,
                 flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
@@ -1204,7 +1351,7 @@ def decon_step(
             output_path=output_path,
             text_field=text_field,
             ngram=ngram,
-            drop_set_dir=drop_dir,
+            drop_set_dirs=drop_dirs,
             flagged_sample_size=flagged_sample_size,
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
