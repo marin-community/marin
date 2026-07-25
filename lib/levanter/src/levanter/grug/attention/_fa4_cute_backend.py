@@ -694,6 +694,12 @@ def fa4_cute_attention_forward(
         )
         out = tree_checkpoint_name(out, _CHECKPOINT_FA4_OUT)
         lse = tree_checkpoint_name(lse, _CHECKPOINT_FA4_LSE)
+        # The raw cutlass_call has no transpose rule; the gradient is fully defined
+        # by the custom VJP below (its backward kernel consumes (out, lse) as
+        # non-differentiated residual inputs). Stop gradient here so transposition
+        # never reaches the FFI producer.
+        out = jax.lax.stop_gradient(out)
+        lse = jax.lax.stop_gradient(lse)
         return _fa4_saved_primals_custom_vjp(
             q,
             k,
