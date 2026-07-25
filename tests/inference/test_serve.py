@@ -17,13 +17,15 @@ import click
 import pytest
 import requests
 from click.testing import CliRunner
-from fray.types import ANY_REGION
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    IrisConfig,
     LevanterEngineConfig,
+    ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -35,6 +37,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.iris import _resolved_model
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -141,6 +144,27 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     extra_args = observed["extra_args"]
     assert isinstance(extra_args, list)
     assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+
+
+def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
+    """Resolving weights to a cache path must not change the served id.
+
+    vLLM advertises `--served-model-name` from `model_id`; if resolution leaks the
+    cache path into it, clients addressing the model by the requested id get a 404.
+    """
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, cache_ttl_days, revision=None: "gs://cache/quick-serve/qwen3-0.6b",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
+    )
+
+    resolved, _num_chips = _resolved_model(ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1), iris)
+
+    assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
+    assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
