@@ -57,7 +57,7 @@ cut responses off after the model finished thinking.
 8. Harbor finished with 0 of 2 trials solved. `bn-fit-modify` completed with
    reward 0 and no exception. `adaptive-rejection-sampler` returned
    `AgentTimeoutError` after 900 seconds. The run record correctly used
-   `status=failed`; 41 S3 objects included both trial results, both
+   `status=failed`; 30 files across 41 S3 paths included both trial results, both
    trajectories, normalized samples, and `harbor_result.json`.
 
 # User course corrections
