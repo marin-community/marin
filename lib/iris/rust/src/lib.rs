@@ -303,16 +303,19 @@ fn proxy_metric_key(request: &Request) -> Option<ProxyMetricKey> {
         match parse_proxy_route(request.uri()) {
             Ok(route) => (
                 route.encoded_name,
-                if route.relay_peer.is_some() { "relay" } else { "endpoint" },
+                if route.relay_peer.is_some() {
+                    "relay"
+                } else {
+                    "endpoint"
+                },
             ),
             // A malformed /proxy/ path still forwards a decision and should count;
             // bucket it so the aggregate stays exact without a per-path label.
             Err(_) => ("__unparsed__".to_string(), "endpoint"),
         }
-    } else if let Some(name) = proxy_subdomain(request.headers()) {
-        (name, "endpoint")
     } else {
-        return None;
+        let name = proxy_subdomain(request.headers())?;
+        (name, "endpoint")
     };
     Some(ProxyMetricKey {
         endpoint,
@@ -413,16 +416,20 @@ impl ProxyMetrics {
     fn begin(&mut self, key: ProxyMetricKey, now: Instant) -> ProxyMetricKey {
         self.aggregate.begin(now);
         self.evict_idle(now);
-        let resolved = if self.by_endpoint.contains_key(&key) || self.by_endpoint.len() < PROXY_ENDPOINT_CAP {
-            key
-        } else {
-            ProxyMetricKey {
-                endpoint: PROXY_OTHER_ENDPOINT.to_string(),
-                method: "",
-                route_kind: "",
-            }
-        };
-        self.by_endpoint.entry(resolved.clone()).or_default().begin(now);
+        let resolved =
+            if self.by_endpoint.contains_key(&key) || self.by_endpoint.len() < PROXY_ENDPOINT_CAP {
+                key
+            } else {
+                ProxyMetricKey {
+                    endpoint: PROXY_OTHER_ENDPOINT.to_string(),
+                    method: "",
+                    route_kind: "",
+                }
+            };
+        self.by_endpoint
+            .entry(resolved.clone())
+            .or_default()
+            .begin(now);
         resolved
     }
 
@@ -453,12 +460,18 @@ impl ProxyMetrics {
 
     fn snapshot(&self) -> ProxyMetricsSnapshot {
         ProxyMetricsSnapshot {
-            aggregate: self.aggregate.series(String::new(), String::new(), String::new()),
+            aggregate: self
+                .aggregate
+                .series(String::new(), String::new(), String::new()),
             series: self
                 .by_endpoint
                 .iter()
                 .map(|(key, state)| {
-                    state.series(key.endpoint.clone(), key.method.to_string(), key.route_kind.to_string())
+                    state.series(
+                        key.endpoint.clone(),
+                        key.method.to_string(),
+                        key.route_kind.to_string(),
+                    )
                 })
                 .collect(),
         }
@@ -1988,33 +2001,51 @@ mod tests {
     }
 
     fn proxy_request(method: &str, uri: &str) -> Request {
-        Request::builder().method(method).uri(uri).body(Body::empty()).unwrap()
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
     }
 
     #[test]
     fn proxy_metric_key_attributes_by_typed_route_and_skips_controller_rpcs() {
-        let endpoint = proxy_metric_key(&proxy_request("POST", "/proxy/serve.model/v1/chat")).unwrap();
+        let endpoint =
+            proxy_metric_key(&proxy_request("POST", "/proxy/serve.model/v1/chat")).unwrap();
         assert_eq!(endpoint.endpoint, "serve.model");
         assert_eq!(endpoint.method, "POST");
         assert_eq!(endpoint.route_kind, "endpoint");
 
-        let relay = proxy_metric_key(&proxy_request("GET", "/proxy/cw-rno2a/t/tok/serve.model/v1/models")).unwrap();
+        let relay = proxy_metric_key(&proxy_request(
+            "GET",
+            "/proxy/cw-rno2a/t/tok/serve.model/v1/models",
+        ))
+        .unwrap();
         assert_eq!(relay.endpoint, "serve.model");
         assert_eq!(relay.route_kind, "relay");
 
         // A non-proxy controller RPC is covered by iris_rpc_*, not counted here.
-        assert!(proxy_metric_key(&proxy_request("POST", "/iris.cluster.ControllerService/ListJobs")).is_none());
+        assert!(proxy_metric_key(&proxy_request(
+            "POST",
+            "/iris.cluster.ControllerService/ListJobs"
+        ))
+        .is_none());
     }
 
     #[test]
     fn proxy_metrics_track_requests_and_keep_an_exact_aggregate() {
         let control = ProxyControl::default();
-        let timer = ProxyRequestTimer::begin(&control, &proxy_request("GET", "/proxy/svc/a")).unwrap();
+        let timer =
+            ProxyRequestTimer::begin(&control, &proxy_request("GET", "/proxy/svc/a")).unwrap();
 
         let snapshot = control.proxy_metrics().unwrap();
         assert_eq!(snapshot.aggregate.requests, 1);
         assert_eq!(snapshot.aggregate.in_flight, 1);
-        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        let series = snapshot
+            .series
+            .iter()
+            .find(|s| s.endpoint == "svc")
+            .unwrap();
         assert_eq!(series.method, "GET");
         assert_eq!(series.route_kind, "endpoint");
         assert_eq!(series.in_flight, 1);
@@ -2025,7 +2056,11 @@ mod tests {
         assert_eq!(snapshot.aggregate.requests, 1);
         assert_eq!(snapshot.aggregate.in_flight, 0);
         assert_eq!(snapshot.aggregate.responses.get(&200), Some(&1));
-        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        let series = snapshot
+            .series
+            .iter()
+            .find(|s| s.endpoint == "svc")
+            .unwrap();
         assert_eq!(series.in_flight, 0);
         assert_eq!(series.responses.get(&200), Some(&1));
     }
@@ -2057,7 +2092,11 @@ mod tests {
     #[test]
     fn proxy_metrics_evict_idle_endpoints_without_losing_the_aggregate() {
         let mut metrics = ProxyMetrics::default();
-        let key = ProxyMetricKey { endpoint: "svc".to_string(), method: "GET", route_kind: "endpoint" };
+        let key = ProxyMetricKey {
+            endpoint: "svc".to_string(),
+            method: "GET",
+            route_kind: "endpoint",
+        };
         let resolved = metrics.begin(key.clone(), Instant::now());
         metrics.finish(&resolved, StatusCode::OK, Duration::from_millis(1));
         // Simulate the endpoint going idle past the window (finish leaves it live).
@@ -2065,7 +2104,11 @@ mod tests {
             Some(Instant::now() - PROXY_ENDPOINT_IDLE_EVICTION - Duration::from_secs(1));
         // A later request on a different endpoint triggers eviction of the idle one.
         metrics.begin(
-            ProxyMetricKey { endpoint: "other".to_string(), method: "GET", route_kind: "endpoint" },
+            ProxyMetricKey {
+                endpoint: "other".to_string(),
+                method: "GET",
+                route_kind: "endpoint",
+            },
             Instant::now(),
         );
         assert!(!metrics.by_endpoint.contains_key(&key));
@@ -2086,14 +2129,29 @@ mod tests {
         let read = to_bytes(request.into_body(), usize::MAX).await.unwrap();
         assert_eq!(read.len(), "request-body".len());
 
-        let response = timer.finish(Response::builder().status(200).body(Body::from("response-body")).unwrap());
+        let response = timer.finish(
+            Response::builder()
+                .status(200)
+                .body(Body::from("response-body"))
+                .unwrap(),
+        );
         let delivered = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(delivered.len(), "response-body".len());
 
         let snapshot = control.proxy_metrics().unwrap();
-        assert_eq!(snapshot.aggregate.request_bytes, "request-body".len() as u64);
-        assert_eq!(snapshot.aggregate.response_bytes, "response-body".len() as u64);
-        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        assert_eq!(
+            snapshot.aggregate.request_bytes,
+            "request-body".len() as u64
+        );
+        assert_eq!(
+            snapshot.aggregate.response_bytes,
+            "response-body".len() as u64
+        );
+        let series = snapshot
+            .series
+            .iter()
+            .find(|s| s.endpoint == "svc")
+            .unwrap();
         assert_eq!(series.request_bytes, "request-body".len() as u64);
         assert_eq!(series.response_bytes, "response-body".len() as u64);
     }
