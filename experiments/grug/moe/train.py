@@ -326,6 +326,7 @@ def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
+    model_config: GrugModelConfig,
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
@@ -357,8 +358,17 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        (loss, qb_beta_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        (loss, qb_beta_per_layer, capacity_overflow_per_layer), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            qb_params
+        )
         metrics = {"train/loss": loss}
+        if model_config.report_capacity_overflow:
+            assignments_per_layer = batch.tokens.size * model_config.num_experts_per_token
+            capacity_overflow_rate = capacity_overflow_per_layer.astype(jnp.float32) / assignments_per_layer
+            metrics["train/router/capacity_overflow_rate_mean"] = jnp.mean(capacity_overflow_rate)
+            metrics["train/router/capacity_overflow_rate_max"] = jnp.max(capacity_overflow_rate)
+            for layer_index in range(model_config.num_layers):
+                metrics[f"train/router/layer_{layer_index}/capacity_overflow_rate"] = capacity_overflow_rate[layer_index]
         # Optimizer state is host-resident between steps when offloading; stream it to device
         # only here (after backward) for the update, then send the new state back to host below.
         opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device") if _OFFLOAD_OPT_STATE else state.opt_state
@@ -423,6 +433,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
+        model_config=config.model,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
@@ -567,7 +578,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
-                jax.block_until_ready(metrics["train/loss"])
+                jax.block_until_ready(metrics)
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
@@ -580,6 +591,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                    if config.model.report_capacity_overflow:
+                        levanter.tracker.log(
+                            {key: value for key, value in metrics.items() if key.startswith("train/router/")},
+                            step=step,
+                        )
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

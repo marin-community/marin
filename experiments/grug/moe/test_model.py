@@ -3,10 +3,12 @@
 
 import jax
 import numpy as np
+import pytest
 from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.utils.flop_utils import lm_flops_per_token
 
+from experiments.grug.moe.launch_cw_scale import build_scale_model
 from experiments.grug.moe.model import CausalSelfAttention, DenseMLP, GrugModelConfig
 from experiments.grug.moe.train import _compute_flops
 
@@ -77,3 +79,18 @@ def test_compute_flops_uses_sliding_window_for_attention():
 
     assert summary["throughput/flops_per_token_analytic"] == expected_per_token
     assert flops_per_example == 3 * expected_per_token * config.max_seq_len
+
+
+def test_build_scale_model_reads_capacity_controls(monkeypatch):
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_FACTOR", "1.125")
+    monkeypatch.setenv("SCALE_REPORT_CAPACITY_OVERFLOW", "1")
+
+    config = build_scale_model()
+
+    assert config.moe_capacity_factor == 1.125
+    assert config.report_capacity_overflow is True
+
+
+def test_model_config_rejects_nonpositive_capacity_factor():
+    with pytest.raises(ValueError, match="moe_capacity_factor must be positive"):
+        GrugModelConfig(vocab_size=128, moe_capacity_factor=0.0)

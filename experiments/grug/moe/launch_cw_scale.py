@@ -25,6 +25,11 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_MOE_CAPACITY_FACTOR
+                        static sender/expert capacity relative to the mean assignments
+                        per sender/expert bucket (default 1.0)
+    SCALE_REPORT_CAPACITY_OVERFLOW
+                        1 logs mean, max, and per-layer dropped-assignment rates
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
@@ -141,6 +146,8 @@ def build_scale_model() -> GrugModelConfig:
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
+        moe_capacity_factor=float(os.environ.get("SCALE_MOE_CAPACITY_FACTOR", "1.0")),
+        report_capacity_overflow=os.environ.get("SCALE_REPORT_CAPACITY_OVERFLOW") == "1",
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
