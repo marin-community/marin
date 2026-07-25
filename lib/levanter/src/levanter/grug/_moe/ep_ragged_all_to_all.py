@@ -298,6 +298,101 @@ def _same_expert_pooled_dispatch_metadata(
     return transport_position, receiver_slot, receiver_group_sizes, overflow
 
 
+def _sparse_clone_weight_metadata(
+    receiver_group_sizes: Int[Array, "S E"],
+    receiver_index: Int[Array, ""],
+    *,
+    local_experts: int,
+    topk: int,
+) -> tuple[
+    Int[Array, "Msend"],
+    Int[Array, "S"],
+    Int[Array, "S"],
+    Int[Array, "S"],
+    Int[Array, "S"],
+    Int[Array, "E"],
+    Int[Array, ""],
+]:
+    """Build ragged expert-weight exchange metadata for receiver-pooled clones."""
+    expert_shards, num_experts = receiver_group_sizes.shape
+    needed = receiver_group_sizes > 0
+    local_expert_start = receiver_index * local_experts
+    local_needed = jax.lax.dynamic_slice_in_dim(
+        needed,
+        start_index=local_expert_start,
+        slice_size=local_experts,
+        axis=1,
+    )
+    send_sizes = jnp.sum(local_needed, axis=1, dtype=jnp.int32)
+    input_offsets = jnp.cumsum(send_sizes, dtype=jnp.int32) - send_sizes
+
+    # Top-k has distinct experts, so one expert receives at most one assignment
+    # per global token and can cross at most ceil(S / K) + 1 receiver bins.
+    max_receiver_spans = min(expert_shards, int(math.ceil(expert_shards / topk)) + 1)
+    max_send_segments = local_experts * max_receiver_spans
+    flat_needed = local_needed.reshape(-1)
+    compact_position = jnp.cumsum(flat_needed.astype(jnp.int32), dtype=jnp.int32) - 1
+    compact_position = jnp.where(flat_needed, compact_position, max_send_segments)
+    local_expert_indices = jnp.broadcast_to(
+        jnp.arange(local_experts, dtype=jnp.int32)[None, :],
+        local_needed.shape,
+    ).reshape(-1)
+    packed_local_experts = (
+        jnp.full((max_send_segments,), local_experts, dtype=jnp.int32)
+        .at[compact_position]
+        .set(local_expert_indices, mode="drop")
+    )
+
+    receiver_needed = needed[receiver_index].reshape(expert_shards, local_experts)
+    recv_sizes = jnp.sum(receiver_needed, axis=1, dtype=jnp.int32)
+    output_offsets = jnp.cumsum(recv_sizes, dtype=jnp.int32) - recv_sizes
+
+    receiver_groups = receiver_group_sizes[receiver_index]
+    receiver_group_position = jnp.cumsum((receiver_groups > 0).astype(jnp.int32), dtype=jnp.int32) - 1
+    receiver_group_position = jnp.where(receiver_groups > 0, receiver_group_position, num_experts)
+    compact_group_sizes = (
+        jnp.zeros((num_experts,), dtype=jnp.int32).at[receiver_group_position].set(receiver_groups, mode="drop")
+    )
+    send_overflow = jnp.maximum(jnp.sum(send_sizes, dtype=jnp.int32) - max_send_segments, 0)
+    return (
+        packed_local_experts,
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        compact_group_sizes,
+        send_overflow,
+    )
+
+
+def _sparse_clone_weight_exchange(
+    local_weights: jax.Array,
+    packed_local_experts: Int[Array, "Msend"],
+    input_offsets: Int[Array, "S"],
+    send_sizes: Int[Array, "S"],
+    output_offsets: Int[Array, "S"],
+    recv_sizes: Int[Array, "S"],
+    *,
+    num_experts: int,
+) -> jax.Array:
+    """Move only expert weights needed by this receiver's clone segments."""
+    padded_local_weights = jnp.concatenate(
+        [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
+        axis=0,
+    )
+    send_weights = padded_local_weights[packed_local_experts]
+    output_shape = jnp.zeros((num_experts, *local_weights.shape[1:]), dtype=local_weights.dtype)
+    return jax.lax.ragged_all_to_all(
+        send_weights,
+        output_shape,
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        axis_name="expert",
+    )
+
+
 def _same_expert_cloned_fixed_a2a_core(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -422,21 +517,56 @@ def _same_expert_cloned_fixed_a2a_core(
         expert_inputs = padded_received_x[receiver_sources]
 
     with jax.named_scope("clone_weights"):
-        global_w13 = jax.lax.all_gather(
-            moe_w13_local,
-            "expert",
-            axis=0,
-            tiled=True,
-        )
-        global_w2 = jax.lax.all_gather(
-            moe_w2_local,
-            "expert",
-            axis=0,
-            tiled=True,
-        )
+        if pooled_dispatch and os.environ.get("SCALE_A2A_CLONE_SPARSE_WEIGHTS") == "1":
+            (
+                packed_local_experts,
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                group_sizes,
+                weight_envelope_overflow,
+            ) = _sparse_clone_weight_metadata(
+                receiver_group_sizes,
+                receiver_index,
+                local_experts=local_experts,
+                topk=topk,
+            )
+            global_w13 = _sparse_clone_weight_exchange(
+                moe_w13_local,
+                packed_local_experts,
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                num_experts=num_experts,
+            )
+            global_w2 = _sparse_clone_weight_exchange(
+                moe_w2_local,
+                packed_local_experts,
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                num_experts=num_experts,
+            )
+            overflow = overflow + weight_envelope_overflow
+        else:
+            global_w13 = jax.lax.all_gather(
+                moe_w13_local,
+                "expert",
+                axis=0,
+                tiled=True,
+            )
+            global_w2 = jax.lax.all_gather(
+                moe_w2_local,
+                "expert",
+                axis=0,
+                tiled=True,
+            )
+            group_sizes = receiver_group_sizes[receiver_index]
 
     with jax.named_scope("moe_up_down"):
-        group_sizes = receiver_group_sizes[receiver_index]
         valid_rows = jnp.sum(group_sizes, dtype=jnp.int32)
         group_sizes = group_sizes.at[-1].add(receiver_capacity - valid_rows)
         moe_dim = global_w2.shape[1]

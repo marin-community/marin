@@ -25,6 +25,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _round_robin_ppermute_all_to_all,
     _same_expert_clone_dispatch_metadata,
     _same_expert_pooled_dispatch_metadata,
+    _sparse_clone_weight_metadata,
 )
 from levanter.grug._moe.sonic import (
     sonic_capacity_refill,
@@ -1386,7 +1387,6 @@ def test_receiver_clipped_fixed_a2a_matches_ring_value_and_grad(
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
-
     monkeypatch.setenv("SCALE_A2A_FIXED", "1")
     monkeypatch.setenv("SCALE_A2A_RECEIVER_CLIP", "1")
     monkeypatch.setenv("SCALE_A2A_RECEIVER_SENDER_CAPACITY_FACTOR", "8")
@@ -1596,20 +1596,85 @@ def test_same_expert_pooled_dispatch_metadata_fills_receivers_exactly():
             assert start <= slot < end
 
 
-@pytest.mark.parametrize("pooled_dispatch", [False, True])
+def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
+    receiver_group_sizes = jnp.asarray(
+        [
+            [3, 2, 0, 0, 4, 3],
+            [0, 1, 4, 4, 2, 1],
+            [2, 2, 2, 2, 2, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    expert_shards = receiver_group_sizes.shape[0]
+    local_experts = receiver_group_sizes.shape[1] // expert_shards
+    send_matrix = np.zeros((expert_shards, expert_shards), dtype=np.int32)
+    recv_matrix = np.zeros_like(send_matrix)
+
+    for shard_index in range(expert_shards):
+        (
+            packed_local_experts,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            compact_group_sizes,
+            overflow,
+        ) = _sparse_clone_weight_metadata(
+            receiver_group_sizes,
+            jnp.asarray(shard_index, dtype=jnp.int32),
+            local_experts=local_experts,
+            topk=2,
+        )
+        del input_offsets, output_offsets
+        assert int(overflow) == 0
+        send_matrix[shard_index] = np.asarray(send_sizes)
+        recv_matrix[shard_index] = np.asarray(recv_sizes)
+
+        expected_groups = np.asarray(receiver_group_sizes[shard_index])
+        expected_groups = expected_groups[expected_groups > 0]
+        np.testing.assert_array_equal(
+            np.asarray(compact_group_sizes)[: expected_groups.size],
+            expected_groups,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(compact_group_sizes)[expected_groups.size :],
+            0,
+        )
+
+        local_needed = np.asarray(
+            receiver_group_sizes[:, shard_index * local_experts : (shard_index + 1) * local_experts] > 0
+        )
+        expected_local_experts = np.broadcast_to(np.arange(local_experts)[None, :], local_needed.shape)[local_needed]
+        np.testing.assert_array_equal(
+            np.asarray(packed_local_experts)[: expected_local_experts.size],
+            expected_local_experts,
+        )
+
+    np.testing.assert_array_equal(send_matrix, recv_matrix.T)
+
+
+@pytest.mark.parametrize(
+    ("pooled_dispatch", "sparse_weights"),
+    [(False, False), (True, False), (True, True)],
+)
 def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
     monkeypatch: pytest.MonkeyPatch,
     pooled_dispatch: bool,
+    sparse_weights: bool,
 ):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
+    if sparse_weights and not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("XLA CPU does not implement ragged_all_to_all")
 
     monkeypatch.setenv("SCALE_A2A_FIXED", "1")
     monkeypatch.setenv("SCALE_A2A_SAME_EXPERT_CLONES", "1")
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
     if pooled_dispatch:
         monkeypatch.setenv("SCALE_A2A_CLONE_POOLED", "1")
+    if sparse_weights:
+        monkeypatch.setenv("SCALE_A2A_CLONE_SPARSE_WEIGHTS", "1")
 
     tokens = len(jax.devices()) * 8
     hidden_dim = 8
