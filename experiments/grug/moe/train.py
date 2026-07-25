@@ -26,6 +26,8 @@ from haliax.partitioning import set_mesh
 from haliax.quantization import OverwriteWithGradient, partition_for_grad_overwrite
 from haliax.quantization import apply_updates as apply_quantized_updates
 from jax import core
+from jax import errors as jax_errors
+from jax.extend import core as jax_core
 from jax.interpreters import ad as jax_ad
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -849,6 +851,25 @@ def _localize_automatic_jaxpp_input_shardings(compiled, mpmd_mesh):
             in_shardings=tuple(localize(sharding) for sharding in compiled.in_info.in_shardings),
         ),
     )
+
+
+def _check_jaxpp_task_call_jaxpr(task_name: str, call_jaxpr: jax_core.ClosedJaxpr) -> None:
+    try:
+        jax_core.check_jaxpr(call_jaxpr.jaxpr)
+    except jax_errors.JaxprTypeError as error:
+        raise ValueError(f"JaxPP generated invalid task JAXPR {task_name!r}") from error
+
+
+def _validate_automatic_jaxpp_task_jaxprs(compiled) -> None:
+    """Fail before execution when an automatic JaxPP task omits an operand."""
+    local_jaxpr = compiled.local_jaxpr.jaxpr
+    for equation in local_jaxpr.eqns:
+        if equation.primitive.name != "task":
+            continue
+        _check_jaxpp_task_call_jaxpr(
+            equation.params["task_name"],
+            equation.params["call_jaxpr"],
+        )
 
 
 def _mpmd_sharding_like(value, mpmd_mesh, stage_index: int):
@@ -3148,6 +3169,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         compiled_pipeline_train_step,
                         mpmd_mesh,
                     )
+                    _validate_automatic_jaxpp_task_jaxprs(compiled_pipeline_train_step)
                     args_mpmd_shardings, kwargs_mpmd_shardings = compiled_pipeline_train_step.in_shardings
                     if kwargs_mpmd_shardings:
                         raise ValueError(f"Unexpected JaxPP keyword shardings: {kwargs_mpmd_shardings}")
