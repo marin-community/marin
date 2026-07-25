@@ -186,8 +186,7 @@ def _fixed_a2a_core(
         send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
-    output_parts = []
-    for local_expert_index in range(local_experts):
+    def dispatch_a2a(local_expert_index: int) -> jax.Array:
         with jax.named_scope("dispatch"):
             received = jax.lax.all_to_all(
                 send_x[local_expert_index],
@@ -196,7 +195,23 @@ def _fixed_a2a_core(
                 concat_axis=0,
                 tiled=True,
             )
-            received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+            return tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+
+    # SCALE_A2A_PREFETCH=1 issues local expert le+1's dispatch all_to_all before local
+    # expert le's GEMM. The collective has no data dependency on the GEMM, so the full
+    # a2a kernel for the next round can overlap the current round's compute.
+    prefetch = os.environ.get("SCALE_A2A_PREFETCH") == "1"
+    if prefetch:
+        logger.info("fixed-a2a prefetch active: local_experts=%d expert_shards=%d", local_experts, expert_shards)
+
+    output_parts = []
+    received = dispatch_a2a(0) if prefetch else None
+    for local_expert_index in range(local_experts):
+        if prefetch:
+            next_received = dispatch_a2a(local_expert_index + 1) if local_expert_index + 1 < local_experts else None
+        else:
+            received = dispatch_a2a(local_expert_index)
+        assert received is not None
         with jax.named_scope("moe_up_down"):
             expert_input = received.reshape(bucket_size, hidden_dim)
             hidden = expert_input @ moe_w13_local[local_expert_index]
@@ -211,6 +226,8 @@ def _fixed_a2a_core(
                 tiled=True,
             )
             output_parts.append(returned)
+        if prefetch:
+            received = next_received
 
     with jax.named_scope("combine"):
         send_output = jnp.stack(output_parts, axis=0)
