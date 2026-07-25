@@ -145,14 +145,7 @@ def capability_path(name: str, token: str) -> str:
 
 
 def federated_capability_path(cluster: str, name: str, token: str) -> str:
-    """Capability-URL path for an endpoint on a child cluster, routed via the parent.
-
-    Adds an explicit child ``cluster`` discriminator beneath the existing
-    ``/proxy/t`` capability route. The parent forwards the request to that child
-    without inspecting the token, and the child validates it locally. Used when
-    minting against a cluster that has a public parent configured, so the URL
-    works from outside the child's own origin.
-    """
+    """Build a parent-routable capability path for an endpoint on ``cluster``."""
     return f"/proxy/t/cluster={cluster}/{token}/" + name.strip("/").replace("/", ".")
 
 
