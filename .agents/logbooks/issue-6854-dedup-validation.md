@@ -1515,6 +1515,38 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T21:12:44Z — 50,833 pairs verified
+
+- Eleven additional checkpoints passed independent validation: 1,408 pairs,
+  979 model false positives, 428 model true duplicates, and one unresolved
+  outcome. The block contains 3,980 valid judgments across 3,986 attempts; six
+  invalid responses affected three retried judgments. Thirteen pairs were
+  chunked and 1,395 were direct.
+- Complete character comparison resolves the ambiguity as a true duplicate.
+  The cross-source SFT pair contains the same question, options, full
+  reasoning, and answer. Across 7,572 / 7,565 characters, the only differences
+  are `\text{` and its closing `}` around the final `B`: the member ends in
+  `\boxed{\text{B}}` and the canonical ends in `\boxed{B}`. Character
+  similarity is 0.999538 and line similarity is 0.992647. The member and
+  canonical text SHA-256 values are
+  `41342ac9ceb96862cbe21815c560718d266d4cfe3d337dcf1bd47a3d647632a9`
+  and
+  `857f23088c623ac5d4a2f6744274ab2d7c69b8967e36acafbe2706dfcefe7c41`.
+- The hash-bound manual Parquet record has SHA-256
+  `ad7aacb32700cd0a11132402729e64cbd5c3c3ebf9bc2880d063b31cb2fe8e52`
+  and semantic-judgments SHA-256
+  `ea636e33480a2b861c2a645f72b1d7db676d532ab8e94129e3f3cdd0929be526`.
+  A separate batch-priority Iris process exactly reread the source pair,
+  semantic checkpoint, manual record, and Parquet bytes.
+- Across the stable 399-checkpoint snapshot, all 50 manual records leave:
+
+  - baseline: 42,997 pairs, 27,420 false positives, 15,577 true duplicates;
+  - treatment: 7,836 pairs, 4,150 false positives, 3,686 true duplicates;
+  - combined: 50,833 pairs, 31,570 false positives, 19,263 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:56:02Z — 47,121 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
