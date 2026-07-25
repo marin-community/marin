@@ -244,3 +244,33 @@ Implication: the true token-drop-fraction is whatever MY drop job reads (commit 
 value. Expectation still ~0.9% at the operating point (cf=1.0, capacity==mean per (shard,expert) bucket of
 2048, near-uniform init routing). d4's 0.755 must be fp8-wire-config-specific (different bucket size/capacity)
 or a different metric build, NOT a 64x bug in this metric. Awaiting drop-job numbers to state the final value.
+
+## 1a FULL PACKAGE 05:40 UTC — A/B + drop verdict
+### Matched 120-step A/B (operating point, back-to-back)
+| leg | p10 | p50 | p90 | loss@119 |
+| control  (autodiff backward)  | 20.51 | 20.61 | 20.69 | 5.738 |
+| treatment (CUSTOM ADJOINT)    | 23.73 | 24.04 | 24.75 | 5.711 |
+custom adjoint = +3.43pp p50 (+16.6% rel), bands fully separated. Loss parity within 0.027 (RNG). LOCKED.
+
+### Drop measurement (/mwittmann/ep25d1-drops-30-0724-2318, custom adjoint + SCALE_REPORT_DROPS, commit 2d4a87395)
+Per-step moe/drop_fraction (window steps 23-29): 0.893, 0.881, 0.870, 0.862, 0.855, 0.850, 0.846 (monotone down).
+dropped_assignments @ step23 = 1,438,043,460. Integer cross-check: global assignments = B*S*topk*L =
+1024*4096*8*48 = 1,610,612,736; 1.438043460e9 / 1.610612736e9 = 0.8929 == logged drop_fraction. Self-consistent.
+
+### Metric validation (THE audit)
+Controlled CPU tests of _fixed_a2a_core under REAL shard_map, metric dropped_total vs numpy global-drop reference:
+  nshard=2 -> metric 96 = ref 96 (ratio 1.000);  nshard=4 -> metric 192 = ref 192 (ratio 1.000).
+=> metric is EXACT and does NOT scale/inflate with shard count. d4's 64x-overcount hypothesis DISPROVEN.
+Real untrained-router toy (expert_axis=2, cf=1.0): ne=64 -> 7.2%, ne=256 -> 14-16% (small 64-128 buckets).
+
+### VERDICT
+The metric is mechanically correct, so ~85-89% in this window is the TRUE routed-token-drop-fraction at the
+barebones fixed path (qb_routing OFF => NO load-balancing loss). d4's independent bf16 AND fp8 runs show the
+same trajectory oscillating 0.17-0.79 over a full run. This is >> Larry's 3% bar => the fixed path's routed
+experts drop the MAJORITY of assignments during early training (classic router collapse without load balancing).
+CAVEATS: (1) the always-on SHARED expert processes every token, so loss still descends normally (5.84->5.71);
+(2) drops decrease with training (d4 late ~0.17) - steady-state unknown from 30 steps; (3) my small-scale toy
+maxed at ~16% with untrained random-token routing, so the jump to ~89% is real-scale routing collapse, best
+CONFIRMED by a QB-load-balancing run (expected to crush drops) - that's d4's cf/QB sweep territory.
+=> FIDELITY NOT CLEARED for the barebones fixed path as-configured. Mitigation required (QB load-balancing /
+cf sweep / ragged). Goal-relevant negative for fixed transport fidelity; speed half (24.04% lock) stands.
