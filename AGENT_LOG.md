@@ -434,4 +434,43 @@ Confidence: 3/10 for 4b ≥ +0.5pp.
 
 Confidence: 3/10 for 4b ≥ +0.5pp.
 
-Next: harvest pipeline leg (p50 + identical-window drops + loss), verdict.
+## FINAL — 4b verdict 2026-07-25 ~05:55 UTC: CONFIDENT NEGATIVE (−1.96pp)
+
+Matched A/B at the operating point (d5120 8-of-256 L48 EP64 b1024 seq4096 MuonH,
+fixed a2a + gather dispatch, scan+recompute_all, 120 steps, 119 samples, 2.5 PF/s
+denominator, SCALE_REPORT_DROPS=1 both legs, back-to-back submissions):
+
+| arm | p50 MFU | p10 / p90 | final loss | drops (tail window, per-layer) |
+|---|---:|---:|---:|---:|
+| control K=1 (gather) | **20.543%** | 20.463 / 20.628 | 5.764 | 68.1% median |
+| pipeline K=2 (`SCALE_A2A_CHUNK_PIPELINE=1, CHUNKS=2`) | **18.581%** | 18.423 / 19.385 | 5.724 | 65.4% median |
+
+- **−1.96pp.** The software-pipelined token-chunk decomposition (dispatch chunk k+1
+  issued before FFN k, combine before the loop advances; parity-tested at 1e-5 fwd +
+  all grads, drops identical to plain chunks on CPU EP8) does not recover any of the
+  chunk overhead. Same story as d4's prefetch null (−0.015pp at round granularity):
+  the dataflow freedom is there, the scheduler does not use it. The loss magnitude
+  matches the pre-existing SCALE_A2A_CHUNKS=2<1 overhead — attribution: chunk
+  overhead paid in full, pipelining gain zero (plain-K2 leg skipped as redundant:
+  isolation wouldn't change the adoption verdict; prefetch already measured
+  reorder=null).
+- **Fidelity neutral**: tail-window drops 65.4% vs 68.1% per-layer (same metric
+  artifact caveat both legs — the absolute anomaly from the previous check-in stands
+  flagged for d1); final loss 5.724 vs 5.764, same family; wide p10/p90 spread on
+  the pipeline leg (18.42/19.39 vs 20.46/20.63) — step-time instability on top.
+- **Family verdict (a2a overlap via dataflow restructuring, three matched-draw
+  mechanisms)**: rotation −9.46pp, prefetch −0.015pp, token-chunk pipeline −1.96pp.
+  Closed: overlap on this stack is scheduler/runtime-gated, not dataflow-gated.
+  Recovering the ~26-29% a2a budget needs runtime help (XLA flags / collective-stream
+  work — TE path measured negative at 64 GPUs this round) or cheaper comm (adjoint
+  [d1, ~+5pp in flight], MXFP8 wire, transport choice [d2]).
+- Jobs: control `/mwittmann/ep25d3-cp-ctl-k1-120-v1-20260725`, pipeline
+  `/mwittmann/ep25d3-cp-pipe-k2-120-v1-20260725` (both succeeded, 119 samples each).
+- Code (committed, branch agent/ep25-d3-te-ncclep): 60ffcbb50 (gather port +
+  pipeline + parity test), 7d3c79xxx (drop reporting). The gather-dispatch
+  reconstruction is A/B-validated (control 20.543% vs rav 20.558%) and worth landing
+  per d4's identical note.
+
+**Confidence: 2/10** that 4b contributes toward 25% MFU. Both assigned directions
+(3, 4b) are now measured confident negatives; the evidence favors pool items
+1a (adjoint lock) and 2 (transport bake-off).
