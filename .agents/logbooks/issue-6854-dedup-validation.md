@@ -705,3 +705,20 @@ statistics for performance comparisons.
   positives and 69 true duplicates. The sample remains far too small for the
   final comparative rate; its purpose is to verify the production protocol and
   preserve auditable incremental evidence.
+
+### 2026-07-25T11:45:00Z — three additional checkpoints verified
+
+- Partition p0 completed decision file 0 semantic ranges 256:384, 384:512, and
+  512:640, then advanced to 640:768. Separate object-store rereads verified all
+  three Parquet byte hashes, ordered identity hashes, manifest counters, and
+  configuration hashes.
+- The three batches contain 384 resolved baseline pairs: 262 false positives
+  and 122 true duplicates. They used 1,891 valid first-response judgments with
+  25 targeted tiebreaks, zero retries, and zero invalid outputs. Outcome
+  SHA-256 values:
+  `816901804cb85032d23c0cc2770e1d8bee2e205e903489a1ccee97ae1a4c7bfa`,
+  `16b82e0e89f4d1899637c8675c596ea07e1f111eb46a11d674c652c8b96c94a7`,
+  and `148b9ff725b909ce424437ed4d248f2b9167997893d814be4fdd5a675bfc606a`.
+- Across six durable checkpoints, all 768 baseline pairs resolved: 577 false
+  positives and 191 true duplicates. All 12 run pods remain Ready with zero
+  restarts; the four two-H100 workers continue at batch priority.
