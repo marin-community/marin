@@ -131,7 +131,13 @@ def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[
         "10000",
         _archive_query(root_job_ids),
     ]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    if completed.returncode:
+        raise RuntimeError(
+            f"Finelog archive query failed with exit {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
+        )
     return [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
 
 
