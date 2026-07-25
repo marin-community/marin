@@ -25,7 +25,7 @@ the names don't collide on PyPI, which has no namespaces. The **import name**
 | `marin-zephyr` | `zephyr` | `lib/zephyr` |
 | `marin-finelog` | `finelog` | `lib/finelog` |
 | `marin-dupekit` | `dupekit` | `lib/dupekit` |
-| `marin-dupekit-native` | `dupekit_native` | `lib/dupekit/rust` |
+| `marin-dupekit-native` | `dupekit_native` | `rust/dupekit-pyext` |
 
 All publishing uses **OIDC trusted publishing**. There is no API token stored
 in the repository, in GitHub secrets, or anywhere else. At workflow runtime

@@ -6,6 +6,7 @@
 import textwrap
 from pathlib import Path
 
+from infra.ci import select_tests as st
 from infra.ci.select_tests import (
     MIN_FILES_PER_SHARD,
     SCOPES,
@@ -341,18 +342,34 @@ def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]
 
 def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
     """A rust/ change is invisible to the import graph, so it force-selects its owning scope
-    and marks it for a source build."""
-    result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    and marks it for a source build. A scope owns every crate it ships (finelog: the component
+    lib and the pyext)."""
+    result = classify(["rust/dupekit-pyext/src/lib.rs"], tmp_path)
     assert result.forced == {"dupekit"}
     assert result.native_changed == {"dupekit"}
-    # A Cargo.lock under the crate counts as a native change too.
-    assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
+    assert classify(["rust/finelog/src/lib.rs"], tmp_path).native_changed == {"finelog"}
+    assert classify(["rust/finelog-pyext/src/lib.rs"], tmp_path).native_changed == {"finelog"}
+    assert classify(["rust/iris-proxy/src/lib.rs"], tmp_path).native_changed == {"iris"}
+    assert classify(["rust/iris-pyext/src/lib.rs"], tmp_path).native_changed == {"iris"}
+
+
+def test_shared_crate_change_source_builds_every_consumer(tmp_path: Path, monkeypatch) -> None:
+    """A change to a shared internal crate force-selects every scope that links it. None is
+    extracted yet, so register one to exercise the mechanism."""
+    monkeypatch.setitem(st.SHARED_CRATE_SCOPES, "rust/crates/marin-jwt", ["finelog"])
+    assert classify(["rust/crates/marin-jwt/src/lib.rs"], tmp_path).native_changed == {"finelog"}
+
+
+def test_workspace_root_change_source_builds_all_native_scopes(tmp_path: Path) -> None:
+    """The workspace manifest/lock feed every wheel, so a change there selects all native scopes."""
+    assert classify(["rust/Cargo.lock"], tmp_path).native_changed == {"dupekit", "finelog", "iris"}
+    assert classify(["rust/Cargo.toml"], tmp_path).native_changed == {"dupekit", "finelog", "iris"}
 
 
 def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:
     """A rust-only change runs the owning scope from source; its own tests cover the native,
     and consumers are not pulled in."""
-    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    matrix = select_matrix(["rust/dupekit-pyext/src/lib.rs"], tmp_path)
     assert scopes_in(matrix) == {"dupekit"}
     assert _leg(matrix, "dupekit")["setup"] == "rust"
     assert _leg(matrix, "dupekit")["timeout"] == 30
@@ -365,7 +382,7 @@ def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> No
     write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
     write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
 
-    matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
+    matrix = select_matrix(["rust/finelog-pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
 
     assert _leg(matrix, "finelog")["setup"] == "rust"
     assert _leg(matrix, "iris")["setup"] == ""

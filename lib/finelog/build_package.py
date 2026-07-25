@@ -9,9 +9,9 @@ lib/dupekit/build_package.py: same nightly/stable/manual mode split and the
 same zig-cross-compiled manylinux + native macOS wheel matrix.
 
 finelog ships as TWO dists, released in lockstep at one resolved version:
-  - marin-finelog-server: the native package. lib/finelog/rust/pyproject.toml
-    is a maturin project whose `[tool.maturin] manifest-path` points at the
-    pyext cdylib crate (the in-process server, importable as `finelog_server`).
+  - marin-finelog-server: the native package. rust/finelog-pyext/pyproject.toml
+    is a maturin project whose `[tool.maturin] manifest-path` is the co-located
+    cdylib crate (the in-process server, importable as `finelog_server`).
     Platform wheels are built per-target by the CI matrix.
   - marin-finelog: pure Python (hatchling) — client/deploy/proto. One
     py3-none-any wheel, built on the linux matrix leg only so artifacts never
@@ -57,8 +57,9 @@ import urllib.request
 from pathlib import Path
 
 FINELOG_DIR = Path(__file__).resolve().parent
-SERVER_DIR = FINELOG_DIR / "rust"
 REPO_ROOT = FINELOG_DIR.parent.parent
+# The native server dist is the finelog-pyext crate in the top-level rust/ workspace.
+SERVER_DIR = REPO_ROOT / "rust" / "finelog-pyext"
 # The pure dist's pyproject is the canonical version source; the resolved
 # version is stamped into both files so the wheels agree.
 PYPROJECT_PATH = FINELOG_DIR / "pyproject.toml"
@@ -204,11 +205,11 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from lib/finelog/rust so it reads the server pyproject.toml.
+    """Run maturin from rust/finelog-pyext so it reads the server pyproject.toml.
 
-    The `[tool.maturin] manifest-path` in lib/finelog/rust/pyproject.toml
-    selects the pyext cdylib crate; we deliberately do NOT pass --manifest-path
-    (that would make maturin look for a sibling pyproject next to the crate).
+    The `[tool.maturin] manifest-path` in rust/finelog-pyext/pyproject.toml is
+    the co-located `Cargo.toml` (the pyext cdylib crate); its path dependency on
+    the sibling `finelog` component crate resolves through the workspace.
     """
     cmd = [_ensure_maturin(), *args]
     subprocess.run(cmd, check=True, cwd=SERVER_DIR, env=env)

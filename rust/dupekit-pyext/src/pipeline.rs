@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 
 #[derive(Clone)]
-#[pyclass(module = "dupekit")]
+#[pyclass(module = "dupekit", from_py_object)]
 pub enum Transformation {
     SplitParagraphs {
         text_col: String,

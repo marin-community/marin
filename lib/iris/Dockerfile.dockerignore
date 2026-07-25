@@ -1,6 +1,7 @@
-# The build context is the marin repo root, but the controller/worker images
-# only need lib/iris/, lib/rigging/, lib/finelog/, and the workspace metadata
-# that lets the deps stage resolve against the committed root uv.lock. The pure
+# The build context is the marin repo root, but these images only need lib/iris/,
+# lib/rigging/, lib/finelog/, the top-level rust/ workspace (the iris-native-wheel
+# stage builds marin-iris-native from it), and the workspace metadata that lets
+# the deps stage resolve against the committed root uv.lock. The pure
 # marin-finelog client is a workspace member built from source here; its native
 # companion marin-finelog-server is pulled as a pre-built wheel from the index.
 # Exclude everything, then selectively re-include.
@@ -22,7 +23,6 @@
 !lib/zephyr/pyproject.toml
 
 !lib/iris/pyproject.toml
-!lib/iris/rust/
 !lib/iris/src/
 !lib/iris/config/
 !lib/iris/dashboard/package.json
@@ -47,7 +47,14 @@
 !lib/finelog/src/
 !lib/finelog/config/
 
+# Rust workspace (built by the `iris-native-wheel` stage). The whole rust/ tree
+# is re-included: cargo loads every workspace member manifest before building
+# one, so a partial copy fails at workspace load. Compiled artifacts (target/)
+# are excluded below.
+!rust/
+
 # Exclude build artifacts within included paths
+rust/**/target/
 **/__pycache__
 **/*.pyc
 **/*.pyo
@@ -55,4 +62,3 @@
 **/.mypy_cache
 **/node_modules
 **/.venv
-**/target

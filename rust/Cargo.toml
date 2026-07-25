@@ -1,0 +1,55 @@
+# Marin's native code. One Cargo workspace for every internal crate and PyO3
+# extension. Each `*-pyext` member is the maturin build target for exactly one
+# Python wheel; internal libraries under `crates/` are `publish = false` and
+# compiled from source into whichever wheels depend on them. See
+# .agents/projects/2026-07-23_rust_workspace_consolidation.md.
+[workspace]
+resolver = "2"
+members = [
+    "finelog",         # finelog server lib + `finelog-server` binary
+    "finelog-pyext",   # cdylib -> finelog_server -> marin-finelog-server
+    "dupekit-pyext",   # cdylib -> dupekit_native -> marin-dupekit-native
+    "iris-proxy",      # iris controller endpoint-proxy dataplane lib
+    "iris-pyext",      # cdylib -> iris_native -> marin-iris-native
+    # crates/marin-jwt (shared EdDSA/JWT verify) is added when it is extracted.
+]
+
+# A dependency belongs here only when more than one member uses it: it is declared
+# once and inherited with `<dep>.workspace = true`. pyo3 MUST be one version because
+# it carries `links = "python"`, so a workspace-wide `cargo build`/`cargo test`
+# cannot contain two pyo3 versions (all three `*-pyext` crates build against it).
+# That version is coupled to arrow: dupekit's `pyarrow` feature pulls `arrow-pyarrow`,
+# which pins pyo3 (arrow 58 -> pyo3 0.28). arrow is held at 58 because finelog's
+# datafusion 53 stack requires it and no datafusion release ships arrow 59 yet;
+# pinning dupekit there too keeps the whole workspace on ONE arrow (and one pyo3).
+# When datafusion catches up, arrow and pyo3 move up together.
+#
+# jsonwebtoken/axum/serde are shared by finelog and iris (both terminate authed
+# ingress: finelog/src/server/auth.rs and iris-proxy/src/auth.rs verify EdDSA JWTs
+# with the same jsonwebtoken build). One pin keeps that verification consistent — the
+# groundwork for extracting the shared marin-jwt crate.
+#
+# arrow and parquet stay declared per-member (finelog wants default features while
+# dupekit's wheel wants a minimal `default-features = false` build, which workspace
+# inheritance cannot express both of), but the single lock pins them to one version.
+[workspace.dependencies]
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py312"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+
+# Thin LTO + parallel codegen: within ~1% of fat-LTO runtime at a fraction of the
+# link time. Profiles are only honored at the workspace root, so they live here
+# and apply to every member (the finelog-server binary and every cdylib).
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
+# and opt-level to 2 on top of release's parallel codegen. The finelog deploy
+# Dockerfile passes `--build-arg CARGO_PROFILE=fast`.
+[profile.fast]
+inherits = "release"
+lto = false
+opt-level = 2

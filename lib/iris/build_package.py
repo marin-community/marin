@@ -26,13 +26,17 @@ import urllib.request
 from enum import StrEnum
 from pathlib import Path
 
-RUST_DIR = Path(__file__).resolve().parent
-REPO_ROOT = RUST_DIR.parent.parent.parent
+IRIS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = IRIS_DIR.parent.parent
+# The native ext is the iris-pyext crate in the top-level rust/ workspace; its
+# pyproject's `[tool.maturin] manifest-path` is the co-located Cargo.toml.
+NATIVE_DIR = REPO_ROOT / "rust" / "iris-pyext"
 DIST_DIR = REPO_ROOT / "dist"
+# The wheel version lives in the pyext pyproject ([project] version) and its
+# Cargo.toml; both are stamped so the wheel and crate agree.
 VERSION_PATHS = (
-    RUST_DIR / "pyproject.toml",
-    RUST_DIR / "Cargo.toml",
-    RUST_DIR / "pyext" / "Cargo.toml",
+    NATIVE_DIR / "pyproject.toml",
+    NATIVE_DIR / "Cargo.toml",
 )
 PYPI_JSON_URL = "https://pypi.org/pypi/marin-iris-native/json"
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
@@ -117,9 +121,12 @@ def resolve_version(mode: BuildMode, version: str | None, revision: str | None) 
 
 
 def _maturin(*args: str) -> None:
+    # Run from rust/iris-pyext so maturin reads that pyproject's [tool.maturin]
+    # config; its manifest-path and the pyext's path dep on iris-proxy resolve
+    # through the top-level rust/ workspace.
     subprocess.run(
         ["uvx", "--from", "maturin>=1.5,<2.0", "maturin", *args],
-        cwd=RUST_DIR,
+        cwd=NATIVE_DIR,
         check=True,
     )
 

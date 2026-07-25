@@ -18,7 +18,13 @@ on:
       - "iris-native-v*"
   pull_request:
     paths:
-      - "lib/iris/rust/**"
+      - "rust/iris-proxy/**"
+      - "rust/iris-pyext/**"
+      - "rust/crates/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "lib/iris/pyproject.toml"
+      - "lib/iris/build_package.py"
       - ".github/workflows/iris-native-release-wheels.yaml"
 
 concurrency:
@@ -44,7 +50,7 @@ jobs:
         if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
-          changes=$(git log --since='25 hours ago' --format=%H -- lib/iris/rust/ .github/workflows/iris-native-release-wheels.yaml)
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/iris/ rust/iris-proxy rust/iris-pyext rust/crates rust/Cargo.toml rust/Cargo.lock .github/workflows/iris-native-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no Iris native changes in the last 25h, skipping nightly"
@@ -81,7 +87,7 @@ jobs:
           MODE: ${{ steps.pick.outputs.mode }}
           INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
         run: |
-          python lib/iris/rust/build_package.py \
+          python lib/iris/build_package.py \
             --mode "$MODE" \
             --version "$INPUT_VERSION" \
             --revision "$GITHUB_SHA" \
@@ -102,7 +108,7 @@ jobs:
 
       - name: Build platform wheel
         run: |
-          python lib/iris/rust/build_package.py \
+          python lib/iris/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
             --version "${{ needs.resolve.outputs.version }}" \
             --build wheel
@@ -134,7 +140,7 @@ jobs:
 
       - name: Build source distribution
         run: |
-          python lib/iris/rust/build_package.py \
+          python lib/iris/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
             --version "${{ needs.resolve.outputs.version }}" \
             --build sdist

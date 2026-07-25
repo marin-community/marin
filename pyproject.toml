@@ -23,7 +23,7 @@ dependencies = [
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
-    # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
+    # log-server ext, module `finelog_server`, maturin rust/finelog-pyext) is NOT a
     # member: it ships as a pre-built wheel and reaches us transitively via
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
@@ -35,7 +35,7 @@ dependencies = [
     "watchdog",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
     # (editable source). Its native companion marin-dupekit-native (the Rust
-    # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
+    # kernels, module `dupekit_native`, maturin rust/dupekit-pyext) is NOT a
     # member: it ships as a pre-built platform wheel and reaches us transitively
     # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
     # marin-dupekit-native to a local source build.
@@ -137,14 +137,14 @@ members = [
     "lib/zephyr",
     "infra/pulumi",
 ]
-# Native maturin packages are excluded from uv workspace discovery because each
-# owns its own build backend and package metadata. The path sources below build
-# them from this checkout for development; published packages resolve their
-# companion wheels from PyPI.
-#   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
-#   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
-#   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust"]
+# The native (maturin) companions in the top-level rust/ workspace are NOT uv
+# members: their extensions are consumed as pre-built wheels by default and only
+# built from source under `scripts/rust_mode.py dev` (a path source). Exclude the
+# maturin project dirs so uv treats them as external path deps, not members.
+#   - rust/finelog-pyext -> marin-finelog-server (module `finelog_server`)
+#   - rust/dupekit-pyext -> marin-dupekit-native  (module `dupekit_native`)
+#   - rust/iris-pyext    -> marin-iris-native     (module `iris_native`)
+exclude = ["rust/finelog-pyext", "rust/dupekit-pyext", "rust/iris-pyext"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }

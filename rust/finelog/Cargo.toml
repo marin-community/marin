@@ -1,29 +1,7 @@
-# finelog's own Cargo workspace (no top-level rust/ tree). The root package
-# `finelog` is an implicit member; `pyext` is the PyO3 cdylib that ships in the
-# marin-finelog wheel. dupekit lives in its own workspace under lib/dupekit/rust
-# and shares nothing here.
-[workspace]
-members = ["pyext"]
-resolver = "2"
-
-# Thin LTO + parallel codegen. Within ~1% of fat-LTO runtime, but builds in a
-# fraction of the time: fat LTO + codegen-units=1 is a single-threaded
-# multi-minute link over the whole datafusion/arrow tree. Applies to every
-# workspace member — the finelog-server binary and the finelog/pyext cdylib.
-[profile.release]
-lto = "thin"
-codegen-units = 16
-strip = "symbols"
-
-# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
-# entirely and opt-level to 2 on top of release's parallel codegen. Still
-# optimized enough to be representative. The deploy Dockerfile passes
-# `--build-arg CARGO_PROFILE=fast`.
-[profile.fast]
-inherits = "release"
-lto = false
-opt-level = 2
-
+# finelog server component: the store/query/server library plus the
+# `finelog-server` binary. A member of the top-level rust/ workspace; the PyO3
+# extension lives in the sibling `finelog-pyext` crate, and the shared profiles
+# live in the workspace root Cargo.toml.
 [package]
 name = "finelog"
 version = "0.1.0"
@@ -44,7 +22,7 @@ path = "src/lib.rs"
 connectrpc = { version = "0.6", features = ["axum", "gzip", "zstd"] }
 buffa = { version = "0.6", features = ["json"] }
 buffa-types = { version = "0.6", features = ["json"] }
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 serde_json = "1"
 # EdDSA (Ed25519) JWT verification for the authenticated ingress front. The
 # delegation tokens are asymmetric: a relaying controller signs with its private
@@ -54,9 +32,10 @@ serde_json = "1"
 # avoid pulling the aws-lc C/asm build toolchain, and we do not hand-roll JWS.
 # `use_pem` (the only default feature) keeps the PEM key loaders (`from_ed_pem`).
 # `ring` still reaches the tree via the TLS/object_store stack, so this choice
-# does not add it — nor, now, remove it.
-jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
-axum = "0.7"
+# does not add it — nor, now, remove it. The version/features are the workspace pin
+# (shared with iris-proxy, which verifies the same EdDSA tokens).
+jsonwebtoken.workspace = true
+axum.workspace = true
 # HTTPS transport for the forwarder's outbound client. connectrpc's generated
 # `LogServiceClient` is generic over `ClientTransport`, and `ServiceTransport`
 # adapts any tower service -- including hyper-util's pooled client -- so we supply
@@ -88,11 +67,11 @@ rustls = { version = "0.23", default-features = false, features = [
     "logging",
 ] }
 webpki-roots = "1"
-# Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
-# `fs` feature is the only one needed; tower-http 0.6 is compatible with the
-# crate's axum 0.7 tower::Service contract. `tower` (already in the lock via
-# axum/tower-http) supplies the `Service` trait bound for the SPA catch-all's
-# method-fallback to the connect service.
+# ServeDir static-file service for the Vue SPA `/static` mount. The `fs` feature is
+# the only one needed; tower-http 0.6 is compatible with the crate's axum 0.7
+# tower::Service contract. `tower` (already in the lock via axum/tower-http)
+# supplies the `Service` trait bound for the SPA catch-all's method-fallback to the
+# connect service.
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs"] }
 http-body = "1"
@@ -100,20 +79,21 @@ tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# Phase 1: ColumnType<->Arrow DataType map (datafusion 53 lands in Phase 3; pin
-# arrow 58 now to avoid a mid-stream bump). Phase 2 adds the Arrow IPC decode +
-# the parquet L0 writer/footer reader; the parquet `async`/`object_store`
-# features are declared now (used by Phase 4/6 remote footer reads) so the
-# feature set stays stable across the data-engine phases.
+# ColumnType<->Arrow DataType map, Arrow IPC decode, and the parquet L0
+# writer/footer reader. The parquet `async`/`object_store` features back remote
+# footer reads. arrow/parquet track datafusion below (datafusion 53 -> arrow 58),
+# and this is the version the whole workspace pins to: dupekit's kernels ride the
+# same arrow 58, and arrow-pyarrow 58 fixes the shared pyo3 at 0.28. When a
+# datafusion release ships arrow 59, arrow and pyo3 move up together.
 arrow = "58"
 parquet = { version = "58", features = ["async", "object_store"] }
 bytes = "1"
 futures = "0.3"
-# Phase 3: the DataFusion read engine. DataFusion 53 re-exports arrow/parquet
-# 58 (matching the pins above), so the finelog binary keeps EXACTLY ONE arrow
-# version. `object_store` is the same version datafusion uses internally; the
-# `gcp` feature is for Phase 4/6 remote reads. `async-trait` is required to impl
-# datafusion's `#[async_trait] TableProvider`; `url` is for register_object_store.
+# The DataFusion read engine. DataFusion 53 re-exports arrow/parquet 58 (matching
+# the pins above), so the finelog binary keeps EXACTLY ONE arrow version.
+# `object_store` is the same version datafusion uses internally; the `gcp` feature
+# is for remote reads. `async-trait` is required to impl datafusion's
+# `#[async_trait] TableProvider`; `url` is for register_object_store.
 datafusion = "53"
 # Internal DataFusion crates, reached directly only for the trigram row-group
 # prune: `PartitionedFile`/`ParquetAccessPlan` (the "advanced parquet index"

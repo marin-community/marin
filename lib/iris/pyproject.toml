@@ -121,8 +121,8 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.uv.sources]
-# `scripts/rust_mode.py dev` points marin-iris-native at ./rust here (and at
-# lib/iris/rust in the root pyproject) so the extension builds from source;
-# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# `scripts/rust_mode.py dev` points marin-iris-native at ../../rust/iris-pyext here
+# (and at rust/iris-pyext in the root pyproject) so the extension builds from
+# source; `user` mode clears the block and the pre-built wheel comes from PyPI.
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###

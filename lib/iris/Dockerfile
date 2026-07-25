@@ -31,12 +31,18 @@ FROM rust:1-bookworm AS iris-native-wheel
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
-WORKDIR /build/iris-native
-COPY lib/iris/rust/ ./
+WORKDIR /build/rust
+# The whole rust/ workspace is copied: cargo loads every member manifest before
+# building one, so a partial copy fails at workspace load (same as
+# lib/finelog/deploy/Dockerfile). maturin runs from the iris-pyext project dir so
+# it reads that pyproject's [tool.maturin] config; its manifest-path and the
+# pyext's path dep on iris-proxy resolve through the workspace root here.
+COPY rust/ ./
 # Direct Docker builds use release. Iris CLI builds default to fast, which
 # keeps optimized parallel codegen but skips LTO.
 ARG CARGO_PROFILE=release
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cd iris-pyext && \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
         --profile "${CARGO_PROFILE}" \
         --out /wheels
@@ -95,6 +101,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 # deps (the native marin-finelog-server ships as a published wheel). It never
 # pulls the Rust-built members (marin-core, levanter, …), so `--package
 # marin-iris` never asks the toolchain-free slim base to build them.
+# marin-iris-native is excluded from the uv workspace too (rust/iris-pyext), so
+# it needs no metadata here: the syncs skip it (`--no-install-package`) and the
+# wheel the iris-native-wheel stage builds from rust/ is force-installed below.
 # uv must still discover every workspace member to map the lock, so copy each
 # member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
 # The first sync uses `--no-install-workspace` to install just the external deps
@@ -104,9 +113,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 # from the lock and never invokes a non-installed member's build backend.
 COPY uv.lock pyproject.toml ./
 COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
-COPY lib/iris/rust/pyproject.toml lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock \
-    lib/iris/rust/iris_native.pyi ./lib/iris/rust/
-COPY lib/iris/rust/pyext/Cargo.toml ./lib/iris/rust/pyext/Cargo.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
 COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml

@@ -53,11 +53,12 @@ import urllib.request
 from pathlib import Path
 
 DUPEKIT_DIR = Path(__file__).resolve().parent
-NATIVE_DIR = DUPEKIT_DIR / "rust"
 REPO_ROOT = DUPEKIT_DIR.parent.parent
+# The native dist is the dupekit-pyext crate in the top-level rust/ workspace.
+NATIVE_DIR = REPO_ROOT / "rust" / "dupekit-pyext"
 # The pure dist's pyproject is the canonical version source; the resolved
-# version is stamped into it and into rust/Cargo.toml (which maturin reads for
-# the native dist's dynamic version) so the wheels agree.
+# version is stamped into it and into the crate's Cargo.toml (which maturin reads
+# for the native dist's dynamic version) so the wheels agree.
 PYPROJECT_PATH = DUPEKIT_DIR / "pyproject.toml"
 CARGO_PATH = NATIVE_DIR / "Cargo.toml"
 DIST_DIR = REPO_ROOT / "dist"
@@ -201,11 +202,11 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from lib/dupekit/rust so it reads the native pyproject.toml.
+    """Run maturin from rust/dupekit-pyext so it reads the native pyproject.toml.
 
-    The `[tool.maturin] manifest-path` in lib/dupekit/rust/pyproject.toml selects
-    the cdylib crate; we deliberately do NOT pass --manifest-path (that would
-    make maturin look for a sibling pyproject next to the crate).
+    The `[tool.maturin] manifest-path` in rust/dupekit-pyext/pyproject.toml is the
+    co-located `Cargo.toml` (the cdylib crate); the crate resolves through the
+    top-level rust/ workspace.
     """
     cmd = [_ensure_maturin(), *args]
     subprocess.run(cmd, check=True, cwd=NATIVE_DIR, env=env)

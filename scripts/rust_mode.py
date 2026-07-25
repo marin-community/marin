@@ -40,23 +40,23 @@ TARGETS = [
         pathlib.Path("pyproject.toml"),
         "\n".join(
             [
-                'marin-dupekit-native = { path = "lib/dupekit/rust" }',
-                'marin-finelog-server = { path = "lib/finelog/rust" }',
-                'marin-iris-native = { path = "lib/iris/rust" }',
+                'marin-dupekit-native = { path = "rust/dupekit-pyext" }',
+                'marin-finelog-server = { path = "rust/finelog-pyext" }',
+                'marin-iris-native = { path = "rust/iris-pyext" }',
             ]
         ),
     ),
     (
         pathlib.Path("lib/dupekit/pyproject.toml"),
-        'marin-dupekit-native = { path = "rust" }',
+        'marin-dupekit-native = { path = "../../rust/dupekit-pyext" }',
     ),
     (
         pathlib.Path("lib/finelog/pyproject.toml"),
-        'marin-finelog-server = { path = "rust" }',
+        'marin-finelog-server = { path = "../../rust/finelog-pyext" }',
     ),
     (
         pathlib.Path("lib/iris/pyproject.toml"),
-        'marin-iris-native = { path = "rust" }',
+        'marin-iris-native = { path = "../../rust/iris-pyext" }',
     ),
 ]
 

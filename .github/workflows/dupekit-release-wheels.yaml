@@ -7,7 +7,7 @@ name: "Dupekit - Release Wheels"
 #
 # Builds and publishes both dists of the pair in lockstep at one resolved
 # version (see lib/dupekit/pyproject.toml for how the pure and native packages
-# relate): marin-dupekit-native (platform wheels from lib/dupekit/rust, per
+# relate): marin-dupekit-native (platform wheels from rust/dupekit-pyext, per
 # matrix leg) and marin-dupekit (one pure py3-none-any wheel, linux leg only).
 # PyPI trusted publishing must be configured for BOTH projects against this
 # workflow + the pypi-publish environment.
@@ -34,7 +34,9 @@ on:
     # already covers them. Nightly/tag/dispatch are unaffected by this filter
     # (the stale check below scopes broadly to all of lib/dupekit/).
     paths:
-      - "lib/dupekit/rust/**"
+      - "rust/dupekit-pyext/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
       - "lib/dupekit/pyproject.toml"
       - "lib/dupekit/build_package.py"
       - ".github/workflows/dupekit-release-wheels.yaml"
@@ -70,7 +72,7 @@ jobs:
           set -euo pipefail
           # 25h not 24h: small buffer so a cron that drifts a few minutes late
           # still sees yesterday's commits.
-          changes=$(git log --since='25 hours ago' --format=%H -- lib/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/dupekit/ rust/dupekit-pyext rust/Cargo.toml rust/Cargo.lock .github/workflows/dupekit-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no dupekit changes in the last 25h, skipping nightly"

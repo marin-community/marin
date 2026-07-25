@@ -103,16 +103,39 @@ SHARD_COUNT: dict[str, int] = {"levanter": 4}
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
 MIN_FILES_PER_SHARD = 15
 
-# Native (maturin) packages, keyed by their owning scope. A change under a crate's
-# rust/ tree is invisible to the Python import graph, so classify force-selects the
-# owning scope and builds it from source. Its own tests cover the extension;
-# downstream consumers are selected only by their Python-level changes and run
-# against the prebuilt wheel.
-NATIVE_CRATE_DIR: dict[str, str] = {
-    "dupekit": "lib/dupekit/rust",
-    "finelog": "lib/finelog/rust",
-    "iris": "lib/iris/rust",
+# Native (maturin) crates live in the top-level rust/ workspace. A change under a
+# crate directory is invisible to the Python import graph, so classify force-selects
+# every owning scope and builds it from source; the prebuilt wheel is used otherwise.
+# A scope can own several crates (finelog ships a component lib and a pyext), a shared
+# internal crate under rust/crates/ feeds every scope that links it, and the workspace
+# root manifest/lock feed all of them.
+NATIVE_CRATE_DIRS: dict[str, list[str]] = {
+    "dupekit": ["rust/dupekit-pyext"],
+    "finelog": ["rust/finelog", "rust/finelog-pyext"],
+    "iris": ["rust/iris-proxy", "rust/iris-pyext"],
 }
+# Shared internal crates under rust/crates/ → the scopes that must source-build on a
+# change. Empty until the first shared crate is extracted; e.g. extracting marin-jwt
+# adds {"rust/crates/marin-jwt": ["finelog", "iris"]}.
+SHARED_CRATE_SCOPES: dict[str, list[str]] = {}
+# Workspace-global inputs affect every wheel's build, so they select all native scopes.
+NATIVE_GLOBAL_INPUTS: tuple[str, ...] = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml")
+
+
+def native_scopes_for(filepath: str) -> set[str]:
+    """Native scopes that must source-build for a change to ``filepath`` (empty if none)."""
+    if filepath in NATIVE_GLOBAL_INPUTS:
+        return set(NATIVE_CRATE_DIRS)
+    for crate_dir, scopes in SHARED_CRATE_SCOPES.items():
+        if filepath.startswith(f"{crate_dir}/"):
+            return set(scopes)
+    return {
+        scope
+        for scope, crate_dirs in NATIVE_CRATE_DIRS.items()
+        for crate_dir in crate_dirs
+        if filepath.startswith(f"{crate_dir}/")
+    }
+
 
 # The matrix `setup` tag that unified-unit.yaml maps to the Rust source-build
 # steps (toolchain + cargo cache + scripts/rust_mode.py dev).
@@ -375,15 +398,12 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
-        # import graph, so force-select the owning scope and mark it for a source
-        # build; its own tests exercise the extension.
-        native_scope = next(
-            (scope for scope, crate_dir in NATIVE_CRATE_DIR.items() if filepath.startswith(f"{crate_dir}/")),
-            None,
-        )
-        if native_scope is not None:
-            forced.add(native_scope)
-            native_changed.add(native_scope)
+        # import graph, so force-select every affected scope and mark it for a source
+        # build; a shared internal crate can force several scopes at once.
+        native = native_scopes_for(filepath)
+        if native:
+            forced |= native
+            native_changed |= native
             continue
 
         source_root = next(
@@ -587,7 +607,7 @@ def main() -> None:
     if args.base_ref is None:
         result = {
             "reason": "run-all-tests",
-            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIR)),
+            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIRS)),
             "suites": sorted(EXTRA_SUITE_TRIGGERS),
         }
         print(json.dumps(result, indent=2))

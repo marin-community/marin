@@ -78,12 +78,9 @@ jobs:
         if: matrix.setup == 'rust'
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          workspaces: |
-            lib/dupekit/rust
-            lib/finelog/rust
-            lib/iris/rust
-      # rust_mode.py dev repoints the native packages at their local rust/ trees; the
-      # leg's `uv run` (no --frozen) then re-resolves and builds them from source.
+          workspaces: rust
+      # rust_mode.py dev repoints the native packages at the local rust/ workspace
+      # crates; the leg's `uv run` (no --frozen) then re-resolves and builds them from source.
       - name: Switch native packages to source build
         if: matrix.setup == 'rust'
         run: python3 scripts/rust_mode.py dev
