@@ -124,6 +124,10 @@ class GrugModelConfig:
     # layer) attends the whole document instead of the ``sliding_window``. 0 (default) = disabled
     # (pure sliding window). No-op unless ``sliding_window`` is also set.
     global_every: int = 0
+    # NoPE on the global layers: skip RoPE entirely on the full-causal (global) layers. RoPE's
+    # positional decay hurts a full-context layer, so global layers often generalize better without
+    # it (Llama-4 style). No-op unless ``global_every`` interleaving is active.
+    disable_long_rope: bool = False
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -322,6 +326,7 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        disable_rope: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -349,7 +354,14 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if disable_rope is None:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        else:
+            # NoPE on the flagged (global) layers: keep the pre-rope q,k there, rotate everywhere else.
+            # disable_rope is a per-layer scalar bool threaded from the layer scan.
+            q_rope, k_rope = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+            q = jnp.where(disable_rope, q, q_rope)
+            k = jnp.where(disable_rope, k, k_rope)
         q = q * self.cfg.qk_mult
 
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
@@ -630,7 +642,7 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
+        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, disable_rope: jax.Array | None = None
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
@@ -656,7 +668,7 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        attn_out = self.attn(attn_in, mask)
+        attn_out = self.attn(attn_in, mask, disable_rope)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -767,22 +779,28 @@ class Transformer(eqx.Module):
 
         interleave_global = bool(cfg.global_every) and sliding_window is not None
         if interleave_global:
-            # Full-causal (no window) bounds for the global layers; segment_ids still confine attention
-            # to the current document. Every ``global_every``-th layer (1-indexed) is global.
-            global_lb, global_valid = fa4_cute_segment_bounds(
+            # Only the lower_bounds depend on the window; ``valid`` (segment_ids >= 0) does not, so we
+            # reuse ``sliding_valid`` for both layer types. Global layers drop the window (full causal
+            # within the document). Every ``global_every``-th layer (1-indexed) is global, and the final
+            # layer is forced global so the last block always sees the whole document.
+            global_lb, _ = fa4_cute_segment_bounds(
                 causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
             )
-            global_lb, global_valid = _batch_reshard(global_lb), _batch_reshard(global_valid)
+            global_lb = _batch_reshard(global_lb)
             is_global = ((jnp.arange(cfg.num_layers) + 1) % cfg.global_every) == 0
+            is_global = is_global.at[-1].set(True)
 
             def _scan_layer(
                 carry_hidden: Float[Array, "B S D"], layer_and_flag: tuple[Block, jax.Array]
             ) -> tuple[Float[Array, "B S D"], jax.Array]:
                 layer, layer_is_global = layer_and_flag
                 lower_bounds = jnp.where(layer_is_global, global_lb, sliding_lb)
-                valid = jnp.where(layer_is_global, global_valid, sliding_valid)
-                layer_mask = causal_mask.with_fa4_bounds(lower_bounds, valid)
-                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
+                layer_mask = causal_mask.with_fa4_bounds(lower_bounds, sliding_valid)
+                # NoPE on the global layers when enabled; otherwise rope on every layer (disable_rope=None).
+                disable_rope = layer_is_global if cfg.disable_long_rope else None
+                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, layer_mask, disable_rope
+                )
                 return new_hidden, qb_beta
 
             hidden, qb_beta_per_layer = jax.lax.scan(
