@@ -3,6 +3,7 @@
 
 """Ragged all-to-all expert-parallel Grug MoE backend."""
 
+import logging
 import math
 import os
 from collections.abc import Callable
@@ -26,6 +27,42 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
+
+logger = logging.getLogger(__name__)
+
+
+def _dispatch_rows(
+    x_local: Float[Array, "Tlocal H"],
+    linear_indices: Int[Array, "A"],
+    send_size: int,
+    topk: int,
+) -> Float[Array, "S H"]:
+    """Build the flat fixed-capacity dispatch buffer from local activations.
+
+    With SCALE_A2A_GATHER_DISPATCH=1, scatters int32 assignment indices and gathers
+    activation rows from ``x_local`` (avoids materializing the topk-repeated activation
+    and the full-row random scatter). Otherwise scatters repeated bf16 rows directly.
+    """
+    tokens_per_shard, hidden_dim = x_local.shape
+    assignments_per_shard = linear_indices.shape[0]
+    if os.environ.get("SCALE_A2A_GATHER_DISPATCH") == "1":
+        assignment_sources = (
+            jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32)
+            .at[linear_indices]
+            .set(jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop")
+        )
+        token_sources = jnp.where(
+            assignment_sources < assignments_per_shard,
+            assignment_sources // topk,
+            tokens_per_shard,
+        )
+        padded_x = jnp.concatenate(
+            [x_local, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+            axis=0,
+        )
+        return padded_x[token_sources]
+    repeated_x = jnp.repeat(x_local, topk, axis=0)
+    return jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
 
 
 def _moe_mlp_ep_fixed_a2a_local(
@@ -54,6 +91,18 @@ def _moe_mlp_ep_fixed_a2a_local(
             activation_fn=activation_fn,
             num_experts=num_experts,
             capacity_factor=capacity_factor,
+        )
+    if os.environ.get("SCALE_A2A_CHUNK_PIPELINE") == "1":
+        return _fixed_a2a_chunk_pipeline(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            moe_w13_local,
+            moe_w2_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+            chunks=chunks,
         )
 
     tokens_per_chunk = tokens_per_shard // chunks
@@ -106,7 +155,6 @@ def _fixed_a2a_core(
     if use_barrier:
         x_local, combine_weights_local = jax.lax.optimization_barrier((x_local, combine_weights_local))
 
-    repeated_x = jnp.repeat(x_local, topk, axis=0)
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
 
     order = jnp.argsort(flat_experts, stable=True)
@@ -128,7 +176,7 @@ def _fixed_a2a_core(
 
     moe_dim = moe_w2_local.shape[1]
     with jax.named_scope("dispatch"):
-        send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
+        send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     output_parts = []
@@ -172,6 +220,160 @@ def _fixed_a2a_core(
         ).astype(x_local.dtype)
         dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    if use_barrier:
+        out_local = jax.lax.optimization_barrier(out_local)
+    return out_local, dropped_total
+
+
+def _fixed_a2a_chunk_pipeline(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    chunks: int,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Fixed a2a with software-pipelined token chunks: dispatch chunk k+1 under FFN k.
+
+    Per-chunk math is identical to :func:`_fixed_a2a_core` on the chunk slice (same
+    capacity ratio, gather/scatter dispatch construction, overflow policy), so results
+    match the unpipelined chunked path token-for-token; only the execution structure
+    differs. Chunk k+1's index math, dispatch-buffer build, and dispatch all_to_all
+    are issued before chunk k's expert GEMMs, and chunk k's combine all_to_all is
+    issued before the loop advances, so the collectives have no data dependency on the
+    adjacent chunks' compute. (Direction-4's round-granularity prefetch measured null
+    for this mechanism class inside the shard_map; this is the token-chunk granularity
+    falsification.)
+    """
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
+
+    tokens_per_shard = x_local.shape[0]
+    tokens_per_chunk = tokens_per_shard // chunks
+    expert_shards = num_experts // local_experts
+    topk = selected_experts_local.shape[1]
+    hidden_dim = x_local.shape[1]
+    moe_dim = moe_w2_local.shape[1]
+    assignments_per_chunk = tokens_per_chunk * topk
+    capacity = max(int(math.ceil(capacity_factor * assignments_per_chunk / num_experts)), 1)
+    bucket_size = expert_shards * capacity
+    send_size = local_experts * bucket_size
+
+    use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
+    if use_barrier:
+        x_local, combine_weights_local = jax.lax.optimization_barrier((x_local, combine_weights_local))
+
+    logger.info(
+        "fixed-a2a chunk pipeline active: chunks=%d tokens_per_chunk=%d capacity=%d expert_shards=%d",
+        chunks,
+        tokens_per_chunk,
+        capacity,
+        expert_shards,
+    )
+
+    def prep(chunk_index: int):
+        """Chunk-local index math + dispatch buffer build (depends only on x/routing)."""
+        chunk_start = chunk_index * tokens_per_chunk
+        x_chunk = jax.lax.dynamic_slice_in_dim(x_local, chunk_start, tokens_per_chunk, axis=0)
+        sel_chunk = jax.lax.dynamic_slice_in_dim(selected_experts_local, chunk_start, tokens_per_chunk, axis=0)
+
+        flat_experts = sel_chunk.reshape(-1).astype(jnp.int32)
+        order = jnp.argsort(flat_experts, stable=True)
+        inverse_order = jnp.argsort(order)
+        expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
+        segment_start = jnp.cumsum(expert_counts) - expert_counts
+        sorted_rank = jnp.arange(assignments_per_chunk, dtype=jnp.int32) - segment_start[flat_experts[order]]
+        slot = sorted_rank[inverse_order]
+        keep = slot < capacity
+        local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
+        destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+        linear_indices = jnp.where(
+            keep,
+            local_expert_indices * bucket_size + destination_shards * capacity + slot,
+            send_size,
+        )
+        with jax.named_scope("dispatch"):
+            send_x = _dispatch_rows(x_chunk, linear_indices, send_size, topk)
+            send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
+        return send_x, linear_indices, keep
+
+    def dispatch(send_x) -> list[jax.Array]:
+        received = []
+        for local_expert_index in range(local_experts):
+            with jax.named_scope("dispatch"):
+                recv = jax.lax.all_to_all(
+                    send_x[local_expert_index],
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                received.append(tree_checkpoint_name(recv, _CHECKPOINT_DISPATCH_INPUT))
+        return received
+
+    def gemm_combine(received) -> jax.Array:
+        output_parts = []
+        for local_expert_index in range(local_experts):
+            with jax.named_scope("moe_up_down"):
+                expert_input = received[local_expert_index].reshape(bucket_size, hidden_dim)
+                hidden = expert_input @ moe_w13_local[local_expert_index]
+                gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+                expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
+            with jax.named_scope("combine"):
+                output_parts.append(
+                    jax.lax.all_to_all(
+                        expert_output.reshape(expert_shards, capacity, hidden_dim),
+                        "expert",
+                        split_axis=0,
+                        concat_axis=0,
+                        tiled=True,
+                    )
+                )
+        send_output = jnp.stack(output_parts, axis=0)
+        return tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+
+    def gather_weighted(send_output, linear_indices, keep, chunk_index: int):
+        chunk_start = chunk_index * tokens_per_chunk
+        cw_chunk = jax.lax.dynamic_slice_in_dim(combine_weights_local, chunk_start, tokens_per_chunk, axis=0)
+        with jax.named_scope("combine"):
+            send_output = send_output.reshape(send_size, hidden_dim)
+            gathered = send_output[jnp.minimum(linear_indices, send_size - 1)]
+            gathered = jnp.where(keep[:, None], gathered, 0)
+            gathered = gathered.reshape(tokens_per_chunk, topk, hidden_dim)
+            out_chunk = jnp.einsum(
+                "tkh,tk->th",
+                gathered,
+                cw_chunk.astype(gathered.dtype),
+                preferred_element_type=jnp.float32,
+            )
+            dropped_chunk = assignments_per_chunk - jnp.sum(keep, dtype=jnp.int32)
+        return out_chunk, dropped_chunk
+
+    send_x, linear_indices, keep = prep(0)
+    received = dispatch(send_x)
+    out_chunks = []
+    dropped_local = jnp.zeros((), dtype=jnp.int32)
+    for chunk_index in range(chunks):
+        if chunk_index + 1 < chunks:
+            # Issue chunk k+1's dispatch before chunk k's expert GEMMs: the a2a has no
+            # data dependency on the GEMMs and can overlap them if scheduled.
+            next_send_x, next_linear_indices, next_keep = prep(chunk_index + 1)
+            next_received = dispatch(next_send_x)
+        send_output = gemm_combine(received)
+        out_chunk, dropped_chunk = gather_weighted(send_output, linear_indices, keep, chunk_index)
+        out_chunks.append(out_chunk.astype(x_local.dtype))
+        dropped_local = dropped_local + dropped_chunk
+        if chunk_index + 1 < chunks:
+            received = next_received
+            linear_indices, keep = next_linear_indices, next_keep
+
+    out_local = jnp.concatenate(out_chunks, axis=0)
+    dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     if use_barrier:
         out_local = jax.lax.optimization_barrier(out_local)
     return out_local, dropped_total

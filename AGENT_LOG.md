@@ -507,6 +507,8 @@ Est +~1pp, composes with all comm work. Escape hatch: if LSE isn't exposed throu
 the FFI/cutlass_call and needs >2 focused CuTe DSL surgery attempts, report a scoping
 assessment instead.
 
+Next: read scoping comment 4984144891, fresh branch agent/ep25-d3-fa4lse off fe21ea495,
+locate the fa4 cute integration + remat recompute structure.
 ## Check-in 2026-07-25 ~06:45 UTC — 6a design + implementation
 
 Key finding from code read: **no CuTe DSL surgery needed** — the FA4 FFI already
@@ -563,3 +565,4 @@ Confidence: 6/10 (numerics proven; mechanism next; memory is the swing factor).
 
 Next: 1-replica training smoke with SCALE_FA4_LSE_SAVE=1 (functional at scale),
 then the A/B legs (control + fa4-lse, 120 steps, back-to-back).
+||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)

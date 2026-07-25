@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -566,6 +569,94 @@ def test_fixed_a2a_matches_dense_reference_on_one_expert_shard(monkeypatch: pyte
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(dropped) == 0
+
+
+def test_fixed_a2a_chunk_pipeline_matches_unpipelined_chunks():
+    """Chunk-pipelined fixed a2a (SCALE_A2A_CHUNK_PIPELINE) must match unpipelined chunks.
+
+    The pipeline is an execution-structure change only: forward outputs and all four
+    gradients must match the plain SCALE_A2A_CHUNKS=K path at rtol=atol=1e-5 and drop
+    counts must be identical. Drops vs the monolithic K=1 path are printed, not
+    asserted — chunk-local capacity granularity legitimately changes overflow
+    decisions (the fidelity datum this experiment reports). Runs in a fresh
+    8-CPU-device interpreter because the XLA device count is process-global.
+    """
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["SCALE_A2A_NO_BARRIER"] = "1"
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_fixed_a2a_local
+
+        EP, NUM_EXPERTS, TOKENS, TOPK, HIDDEN, INTER = 8, 16, 128, 2, 16, 12
+        mesh = Mesh(np.array(jax.devices()).reshape(EP), ("expert",), axis_types=(AxisType.Explicit,))
+        kx, ksel, kcw, kw13, kw2 = jax.random.split(jax.random.key(7), 5)
+        x = jax.random.normal(kx, (TOKENS, HIDDEN), dtype=jnp.float32)
+        logits = jax.random.normal(ksel, (TOKENS, NUM_EXPERTS)) + jnp.linspace(0, 2.0, NUM_EXPERTS)
+        _, selected = jax.lax.top_k(logits, TOPK)  # skew forces bucket overflow
+        selected = selected.astype(jnp.int32)
+        combine_w = jax.nn.softmax(jax.random.normal(kcw, (TOKENS, TOPK)), axis=-1)
+        w13 = jax.random.normal(kw13, (NUM_EXPERTS, HIDDEN, 2 * INTER)) * 0.05
+        w2 = jax.random.normal(kw2, (NUM_EXPERTS, INTER, HIDDEN)) * 0.05
+
+        def kernel(x, sel, cw, w13, w2):
+            return _moe_mlp_ep_fixed_a2a_local(
+                x, sel, cw, w13, w2, activation_fn=jax.nn.silu, num_experts=NUM_EXPERTS, capacity_factor=1.0
+            )
+
+        sharded = jax.shard_map(
+            kernel,
+            mesh=mesh,
+            in_specs=(P("expert"),) * 5,
+            out_specs=(P("expert"), P()),
+            check_vma=False,
+        )
+
+        def loss_fn(x, cw, w13, w2, sel):
+            out, dropped = sharded(x, sel, cw, w13, w2)
+            probe = jnp.cos(jnp.arange(out.size, dtype=out.dtype)).reshape(out.shape)
+            return jnp.sum(out * probe), (out, dropped)
+
+        def run():
+            with jax.set_mesh(mesh):
+                args = [
+                    jax.device_put(a, NamedSharding(mesh, P("expert")))
+                    for a in (x, combine_w, w13, w2, selected)
+                ]
+                out = jax.value_and_grad(loss_fn, argnums=(0, 1, 2, 3), has_aux=True)(*args)
+            return jax.device_get(out)
+
+        def run_config(chunks, pipeline, gather):
+            os.environ["SCALE_A2A_CHUNKS"] = str(chunks)
+            os.environ["SCALE_A2A_CHUNK_PIPELINE"] = pipeline
+            os.environ["SCALE_A2A_GATHER_DISPATCH"] = gather
+            jax.clear_caches()
+            (_, (out, dropped)), grads = run()
+            print(f"chunks={chunks} pipeline={pipeline} gather={gather} dropped={int(dropped)}")
+            return out, dropped, grads
+
+        for gather in ("0", "1"):
+            mono_out, mono_dropped, _ = run_config(1, "0", gather)
+            for k in (2, 4):
+                ref_out, ref_dropped, ref_grads = run_config(k, "0", gather)
+                out, dropped, grads = run_config(k, "1", gather)
+                tag = f"gather={gather} pipeline K={k} vs plain chunks K={k}"
+                print(f"REFERENCE gather={gather}: drops mono(K=1)={int(mono_dropped)} chunks(K={k})={int(ref_dropped)}")
+                assert int(dropped) == int(ref_dropped), f"{tag}: drops {int(dropped)} != {int(ref_dropped)}"
+                np.testing.assert_allclose(out, ref_out, rtol=1e-5, atol=1e-5, err_msg=tag)
+                for name, g, rg in zip(("dx", "dcw", "dw13", "dw2"), grads, ref_grads):
+                    np.testing.assert_allclose(g, rg, rtol=1e-5, atol=1e-5, err_msg=f"{tag} grad {name}")
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
