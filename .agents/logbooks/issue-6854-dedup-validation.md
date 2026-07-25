@@ -766,3 +766,31 @@ statistics for performance comparisons.
 - Across 29 durable checkpoints, all 3,712 baseline pairs resolved: 2,431 false
   positives and 1,281 true duplicates. All 12 run pods remain Ready with zero
   restarts.
+
+### 2026-07-25T12:26:00Z — first unresolved cases manually adjudicated
+
+- Independent audits passed for 13 additional checkpoints: 1,664 baseline
+  pairs, 1,022 false positives, 640 true duplicates, and two unresolved model
+  outcomes. Their 3,618 judgments had zero retries or invalid outputs. Across
+  42 checkpoints, the immutable semantic artifacts now cover 5,376 pairs:
+  3,453 false positives, 1,921 true duplicates, and two unresolved.
+- Full-text inspection resolves both ambiguous pairs as true duplicates under
+  the protocol's low-value-template boundary. The Speechelo pair repeats
+  `Amazon Polly vs Ibm Watson` versus `Naturalreader Software Ultimate Crack`
+  as SEO title slots; all 62 member sentences were checked against all 58
+  canonical sentences, and the apparent extra voiceover categories restate
+  canonical marketing, e-learning, and media sections. Pair location:
+  `part-00000-of-00128.parquet:5154`; member/canonical text SHA-256:
+  `244080df4f6cc9272163db407a5e0be1cb6778144904282b602c9609db283aaa` /
+  `2d726138bafade4d2dc6821804dff5386dfe8a54ba9339e376ca21f241cfcffc`.
+- The electronic-cigarette pair has exactly 58 sentences on each side, with
+  every member sentence aligned to its canonical counterpart. Its differences
+  are synonym rewrites plus opposing keyword injections: `JUUL Pods` in the
+  member and `podsmall.com` in the canonical. Pair location:
+  `part-00096-of-00128.parquet:2325`; member/canonical text SHA-256:
+  `a031a1bb7e742078835f8e8e0f4b93d5ac304f2314526c0aa17b404c502dcb74` /
+  `8f169363974838670ef0c2f2aad9e70b194fc361ece865c8229254b7af9a96f7`.
+- Manual-overridden totals are therefore 3,453 false positives and 1,923 true
+  duplicates across all 5,376 pairs. The immutable model shards remain
+  unchanged; the manual decisions will be carried in a separate override
+  artifact for finalization.
