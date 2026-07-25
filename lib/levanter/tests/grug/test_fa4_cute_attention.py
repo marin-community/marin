@@ -279,7 +279,8 @@ def test_real_gpu_fa4_lse_save_path_matches_default_path(monkeypatch):
             softmax_scale=64**-0.5,
             kernel_config=_segmented_kernel_config(64),
         )
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q.astype(jnp.float32), k.astype(jnp.float32)) * 64**-0.5
+    k_full = jnp.repeat(k, q.shape[2] // k.shape[2], axis=2)
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q.astype(jnp.float32), k_full.astype(jnp.float32)) * 64**-0.5
     positions = jnp.arange(64, dtype=jnp.int32)
     causal = (positions[None, :] <= positions[:, None]) & (positions[None, :] >= positions[:, None] - 6)
     scores = jnp.where(causal[None, None], scores, -jnp.inf)
