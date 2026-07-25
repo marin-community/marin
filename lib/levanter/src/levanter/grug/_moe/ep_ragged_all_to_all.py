@@ -576,7 +576,6 @@ def _receiver_clipped_fixed_a2a_core(
             tiled=True,
         )
 
-    moe_dim = moe_w2_local.shape[1]
     with jax.named_scope("moe_up_down"):
         local_clipped_group_sizes = jax.lax.dynamic_slice_in_dim(
             clipped_group_sizes,
@@ -590,29 +589,47 @@ def _receiver_clipped_fixed_a2a_core(
         )
         transport_size = local_experts * bucket_size
         expert_inputs = tree_checkpoint_name(received_by_expert, _CHECKPOINT_DISPATCH_INPUT)
-        expert_inputs = _compact_by_keep_mask(
-            expert_inputs.reshape(transport_size, hidden_dim),
-            received_keep.reshape(transport_size),
-        )[:receiver_capacity]
-        local_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
-        valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
-        local_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
-        hidden = ragged_dot(expert_inputs, moe_w13_local, local_group_sizes)
-        gate, up = jnp.split(hidden, [moe_dim], axis=-1)
-        compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
-        padded_expert_outputs = jnp.pad(
-            compact_expert_outputs,
-            ((0, transport_size - receiver_capacity), (0, 0)),
-        )
-        expert_outputs = _expand_from_keep_mask(
-            padded_expert_outputs,
-            received_keep.reshape(transport_size),
-        ).reshape(
-            local_experts,
-            expert_shards,
-            sender_expert_capacity,
-            hidden_dim,
-        )
+        if os.environ.get("SCALE_A2A_RECEIVER_DENSE_EXPERTS") == "1":
+            # Computing the fixed envelope and masking rejected rows is value/gradient-equivalent
+            # to compacting the keep mask, but preserves dense batched GEMMs.
+            dense_inputs = expert_inputs.reshape(local_experts, bucket_size, hidden_dim)
+            dense_outputs = _fixed_dense_expert_mlp(
+                dense_inputs,
+                moe_w13_local,
+                moe_w2_local,
+                activation_fn=activation_fn,
+            ).reshape(
+                local_experts,
+                expert_shards,
+                sender_expert_capacity,
+                hidden_dim,
+            )
+            expert_outputs = jnp.where(received_keep[:, :, :, None], dense_outputs, 0)
+        else:
+            compact_expert_inputs = _compact_by_keep_mask(
+                expert_inputs.reshape(transport_size, hidden_dim),
+                received_keep.reshape(transport_size),
+            )[:receiver_capacity]
+            local_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
+            valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
+            local_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
+            moe_dim = moe_w2_local.shape[1]
+            hidden = ragged_dot(compact_expert_inputs, moe_w13_local, local_group_sizes)
+            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+            compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+            padded_expert_outputs = jnp.pad(
+                compact_expert_outputs,
+                ((0, transport_size - receiver_capacity), (0, 0)),
+            )
+            expert_outputs = _expand_from_keep_mask(
+                padded_expert_outputs,
+                received_keep.reshape(transport_size),
+            ).reshape(
+                local_experts,
+                expert_shards,
+                sender_expert_capacity,
+                hidden_dim,
+            )
 
     with jax.named_scope("combine"):
         if os.environ.get("SCALE_A2A_CUSTOM_DISTRIBUTED_COMBINE") == "1":

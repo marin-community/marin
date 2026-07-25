@@ -1225,8 +1225,10 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
     assert int(ragged_dropped) == int(ring_dropped)
 
 
+@pytest.mark.parametrize("dense_experts", [False, True])
 def test_receiver_clipped_fixed_a2a_matches_ring_value_and_grad(
     monkeypatch: pytest.MonkeyPatch,
+    dense_experts: bool,
 ):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -1237,6 +1239,8 @@ def test_receiver_clipped_fixed_a2a_matches_ring_value_and_grad(
     monkeypatch.setenv("SCALE_A2A_RECEIVER_SENDER_CAPACITY_FACTOR", "8")
     monkeypatch.setenv("SCALE_A2A_RECEIVER_RAGGED_FALLBACK", "0")
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    if dense_experts:
+        monkeypatch.setenv("SCALE_A2A_RECEIVER_DENSE_EXPERTS", "1")
 
     tokens = len(jax.devices()) * 8
     hidden_dim = 16
