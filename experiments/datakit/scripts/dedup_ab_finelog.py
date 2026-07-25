@@ -74,23 +74,27 @@ def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _archive_query(root_job_ids: Iterable[str]) -> str:
+def _archive_root_query(root_job_ids: Iterable[str]) -> str:
     root_keys = ", ".join(_sql_literal(f"{root_job_id}/0:0") for root_job_id in root_job_ids)
     return f"""
-WITH root_executions AS (
-    SELECT DISTINCT
-        key AS root_key,
-        epoch_ms,
-        regexp_extract(
-            data,
-            'Starting zephyr pipeline: ([0-9]{{8}}-[0-9]{{6}}-[0-9a-f]+)',
-            1
-        ) AS execution_id
-    FROM "log"
-    WHERE key IN ({root_keys})
-      AND data LIKE '%Starting zephyr pipeline:%'
-),
-stage_rows AS (
+SELECT DISTINCT
+    key AS root_key,
+    epoch_ms,
+    regexp_extract(
+        data,
+        'Starting zephyr pipeline: ([0-9]{{8}}-[0-9]{{6}}-[0-9a-f]+)',
+        1
+    ) AS execution_id
+FROM "log"
+WHERE key IN ({root_keys})
+  AND data LIKE '%Starting zephyr pipeline:%'
+ORDER BY root_key, epoch_ms
+""".strip()
+
+
+def _archive_stage_query(execution_ids: Iterable[str]) -> str:
+    ids = ", ".join(_sql_literal(execution_id) for execution_id in execution_ids)
+    return f"""
     SELECT DISTINCT
         execution_id,
         stage_name,
@@ -104,16 +108,12 @@ stage_rows AS (
         mem_bytes_avg,
         mem_peak_bytes_max
     FROM "zephyr.stage"
-)
-SELECT root_executions.*, stage_rows.* EXCLUDE (execution_id)
-FROM root_executions
-LEFT JOIN stage_rows USING (execution_id)
-ORDER BY root_key, epoch_ms, stage_name, status
+    WHERE execution_id IN ({ids})
+    ORDER BY execution_id, stage_name, status
 """.strip()
 
 
-def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[str, Any]]:
-    """Run one in-region DuckDB query over archived log and stage namespaces."""
+def _query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[dict[str, Any]]:
     command = [
         "uv",
         "run",
@@ -121,14 +121,12 @@ def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[
         "gcs-query",
         finelog_config,
         "--namespace",
-        "log",
-        "--namespace",
-        "zephyr.stage",
+        namespace,
         "--format",
         "jsonl",
         "--max-rows",
         "10000",
-        _archive_query(root_job_ids),
+        sql,
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode:
@@ -138,6 +136,43 @@ def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[
             f"stderr:\n{completed.stderr}"
         )
     return [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+
+
+def query_archive(*, finelog_config: str, root_job_ids: list[str]) -> list[dict[str, Any]]:
+    """Recover root execution IDs, then query only their archived stage rows."""
+    roots = _query_namespace(
+        finelog_config=finelog_config,
+        namespace="log",
+        sql=_archive_root_query(root_job_ids),
+    )
+    if not roots:
+        raise FileNotFoundError("No archived root execution rows found")
+    stage_rows = _query_namespace(
+        finelog_config=finelog_config,
+        namespace="zephyr.stage",
+        sql=_archive_stage_query(sorted({row["execution_id"] for row in roots})),
+    )
+    stages_by_execution = _execution_rows(stage_rows)
+    missing_stage = {
+        "stage_name": None,
+        "status": None,
+        "elapsed": None,
+        "items": None,
+        "bytes_processed": None,
+        "total_shards": None,
+        "cpu_pct_avg": None,
+        "cpu_time_total": None,
+        "mem_bytes_avg": None,
+        "mem_peak_bytes_max": None,
+    }
+    return [
+        {
+            **root,
+            **stage,
+        }
+        for root in roots
+        for stage in stages_by_execution.get(root["execution_id"], [missing_stage])
+    ]
 
 
 def _execution_rows(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

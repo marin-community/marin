@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import experiments.datakit.scripts.dedup_ab_finelog as finelog
 from experiments.datakit.scripts.dedup_ab_finelog import (
     build_report,
     expected_executions,
+    query_archive,
 )
 
 
@@ -88,3 +90,26 @@ def test_report_accounts_for_every_execution_and_compares_identical_minhash_work
     assert report["scenarios"]["treatment"]["cpu_time_total"] == 13.0
     assert report["minhash_comparison"]["cpu_delta_fraction"] == 0.0
     assert report["minhash_comparison"]["items_match"] is True
+
+
+def test_archive_query_fetches_roots_before_exact_stage_ids(monkeypatch) -> None:
+    calls = []
+
+    def fake_query_namespace(*, finelog_config: str, namespace: str, sql: str) -> list[dict]:
+        calls.append((finelog_config, namespace, sql))
+        if namespace == "log":
+            return [{"root_key": "/baseline/0:0", "epoch_ms": 1, "execution_id": "execution-1"}]
+        assert "execution-1" in sql
+        stage = _row("/ignored", 0, "execution-1", 5.0)
+        stage.pop("root_key")
+        stage.pop("epoch_ms")
+        return [stage]
+
+    monkeypatch.setattr(finelog, "_query_namespace", fake_query_namespace)
+
+    rows = query_archive(finelog_config="config.yaml", root_job_ids=["/baseline"])
+
+    assert len(rows) == 1
+    assert rows[0]["root_key"] == "/baseline/0:0"
+    assert rows[0]["cpu_time_total"] == 5.0
+    assert [namespace for _, namespace, _ in calls] == ["log", "zephyr.stage"]
