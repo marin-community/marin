@@ -36,6 +36,17 @@ the shipped branch diverges from it.
   the local-cluster filter `(cluster IS NULL OR cluster = '')`, with `cluster`
   added to the `QUALIFY PARTITION BY`. The window is what retires the stale
   duplicate rows; dropping the shim alone would leave them.
+- **WS4 keeps the ControllerService endpoint shims for now; only the clients
+  migrate.** Removing the shims in this PR would 404 a pre-migration worker or
+  task (notably an already-running `logship.py` log shipper) the moment the
+  controller updates, since it still calls `ControllerService.ListEndpoints`. So
+  the three RPCs stay as deprecated forwarding shims to `EndpointService`, every
+  shipping client is moved to `EndpointService` (verified: resolver, logship,
+  worker second client, CLI list, benchmark, e2e helpers, and the
+  `RemoteClusterClient` facade — no shipping caller hits the ControllerService
+  endpoint methods), and the panel freshness window is what removes the visible
+  duplicate rows regardless. The dashboard route tests run against both services
+  so the shim keeps working. Shim removal is a follow-up once old callers drain.
 
 The Iris controller dashboard's **RPC Methods** panel
 (`lib/iris/dashboard/src/components/controller/RpcStatsPanel.vue`) is built from
