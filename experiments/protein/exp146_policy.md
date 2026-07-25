@@ -136,12 +136,16 @@ targets:
 - Training is deterministic; duplicate logical trials accomplish nothing.
 - A SIGSEGV on a multi-host slice is treated as a preempted gang cosibling:
   retry in place, not as a code fault to investigate, absent a specific reason.
-- **Liveness = the W&B run `state`.** `state=running` if and only if the trial
-  is training. In Iris, parent and child `running` states are only scheduling
-  gates; neither shows that training has started. Only the child's individual
-  tasks running as a complete coscheduled gang provide meaningful Iris-side
-  evidence. Use `iris job summary` to drill from parent to child to tasks when
-  debugging a specific run; never infer liveness from parent or child state.
+- **Liveness = the W&B run `state` (favored default).** `state=running` iff the
+  trial is training; count/report "active" only from `state=running`.
+  `crashed`/`failed`/`finished` mean NOT active — investigate and recover; do not
+  casually reclassify a `crashed` run as a transient "flap." In Iris, parent and
+  child `running` states are only scheduling gates; neither shows that training
+  has started. Only the child's individual tasks running as a complete
+  coscheduled gang provide meaningful Iris-side evidence. Use `iris job summary`
+  to drill from parent to child to tasks when a specific run genuinely needs
+  deeper debugging; never infer liveness from parent or child job state, and
+  favor W&B over reaching for the task-level gang view.
 - **Heartbeats report two placement spans:** chips, regions, and slices (a)
   **submitted** to Iris in any state and (b) **running per W&B**
   (`state=running`).
