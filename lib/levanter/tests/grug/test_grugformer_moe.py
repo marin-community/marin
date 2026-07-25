@@ -15,6 +15,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_common import _compact_by_keep_mask_to_size
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _fixed_a2a_core,
     _fixed_dispatch_gather_reference,
@@ -1482,6 +1483,26 @@ def test_compact_and_expand_from_keep_mask_roundtrip():
         rtol=0,
         atol=0,
     )
+
+
+def test_bounded_compaction_and_expansion_value_and_grad():
+    inputs = jnp.arange(12, dtype=jnp.float32).reshape(6, 2)
+    keep_mask = jnp.array([False, True, True, False, True, True])
+    output_cotangent = jnp.arange(12, 24, dtype=jnp.float32).reshape(6, 2)
+
+    def loss(inputs):
+        compacted = _compact_by_keep_mask_to_size(inputs, keep_mask, output_size=3)
+        expanded = _expand_from_keep_mask(compacted, keep_mask)
+        return jnp.sum(expanded * output_cotangent), (compacted, expanded)
+
+    (_, (compacted, expanded)), input_grad = jax.value_and_grad(loss, has_aux=True)(inputs)
+
+    expected_compacted = jnp.stack([inputs[1], inputs[2], inputs[4]])
+    expected_expanded = jnp.zeros_like(inputs).at[jnp.array([1, 2, 4])].set(expected_compacted)
+    expected_grad = jnp.zeros_like(inputs).at[jnp.array([1, 2, 4])].set(output_cotangent[jnp.array([1, 2, 4])])
+    np.testing.assert_array_equal(np.asarray(compacted), np.asarray(expected_compacted))
+    np.testing.assert_array_equal(np.asarray(expanded), np.asarray(expected_expanded))
+    np.testing.assert_array_equal(np.asarray(input_grad), np.asarray(expected_grad))
     np.testing.assert_allclose(
         np.asarray(expanded)[~np.asarray(keep_mask)],
         np.zeros((2, 2), dtype=np.float32),

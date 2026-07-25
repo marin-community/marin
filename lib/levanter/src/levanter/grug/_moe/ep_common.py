@@ -175,17 +175,81 @@ def _expert_prefix_keep_mask(
     return local_rank < accepted
 
 
+def _keep_mask_compaction_indices(
+    keep_mask: Bool[Array, "N"],
+    *,
+    output_size: int,
+) -> tuple[Int[Array, "M"], Int[Array, "N"]]:
+    """Build the two directions of a stable, bounded mask compaction."""
+    input_size = keep_mask.shape[0]
+    input_positions = jnp.arange(input_size, dtype=jnp.int32)
+    compact_positions = jnp.cumsum(keep_mask.astype(jnp.int32), dtype=jnp.int32) - 1
+    keep_within_output = jnp.logical_and(keep_mask, compact_positions < output_size)
+    input_to_output = jnp.where(keep_within_output, compact_positions, output_size)
+    output_to_input = (
+        jnp.full((output_size,), input_size, dtype=jnp.int32).at[input_to_output].set(input_positions, mode="drop")
+    )
+    return output_to_input, input_to_output
+
+
+def _one_to_one_gather_impl(
+    inputs: Float[Array, "N *tail"],
+    source_indices: Int[Array, "M"],
+) -> Float[Array, "M *tail"]:
+    padded_inputs = jnp.concatenate(
+        [inputs, jnp.zeros((1, *inputs.shape[1:]), dtype=inputs.dtype)],
+        axis=0,
+    )
+    return padded_inputs[source_indices]
+
+
+@jax.custom_vjp
+def _one_to_one_gather(
+    inputs: Float[Array, "N *tail"],
+    source_indices: Int[Array, "M"],
+    reverse_indices: Int[Array, "N"],
+) -> Float[Array, "M *tail"]:
+    """Gather a partial bijection whose adjoint is the reverse gather."""
+    return _one_to_one_gather_impl(inputs, source_indices)
+
+
+def _one_to_one_gather_fwd(
+    inputs: Float[Array, "N *tail"],
+    source_indices: Int[Array, "M"],
+    reverse_indices: Int[Array, "N"],
+) -> tuple[Float[Array, "M *tail"], tuple[Int[Array, "M"], Int[Array, "N"]]]:
+    return _one_to_one_gather_impl(inputs, source_indices), (source_indices, reverse_indices)
+
+
+def _one_to_one_gather_bwd(
+    residuals: tuple[Int[Array, "M"], Int[Array, "N"]],
+    output_cotangent: Float[Array, "M *tail"],
+) -> tuple[Float[Array, "N *tail"], None, None]:
+    source_indices, reverse_indices = residuals
+    del source_indices
+    return _one_to_one_gather_impl(output_cotangent, reverse_indices), None, None
+
+
+_one_to_one_gather.defvjp(_one_to_one_gather_fwd, _one_to_one_gather_bwd)
+
+
+def _compact_by_keep_mask_to_size(
+    inputs: Float[Array, "N *tail"],
+    keep_mask: Bool[Array, "N"],
+    *,
+    output_size: int,
+) -> Float[Array, "M *tail"]:
+    output_to_input, input_to_output = _keep_mask_compaction_indices(keep_mask, output_size=output_size)
+    return _one_to_one_gather(inputs, output_to_input, input_to_output)
+
+
 def _compact_by_keep_mask(inputs: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
-    total_size = inputs.shape[0]
-    positions = jnp.arange(total_size, dtype=jnp.int32)
-    sort_key = jnp.where(keep_mask, positions, positions + total_size)
-    compacted = _sort_activations(inputs, jnp.argsort(sort_key))
-    valid = positions < jnp.sum(keep_mask.astype(jnp.int32), dtype=jnp.int32)
-    return jnp.where(valid[:, None], compacted, 0)
+    return _compact_by_keep_mask_to_size(inputs, keep_mask, output_size=inputs.shape[0])
 
 
 def _expand_from_keep_mask(compacted: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
-    keep_i32 = keep_mask.astype(jnp.int32)
-    compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
-    gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)
-    return jnp.where(keep_mask[:, None], gathered, 0)
+    compact_to_output, output_to_compact = _keep_mask_compaction_indices(
+        keep_mask,
+        output_size=compacted.shape[0],
+    )
+    return _one_to_one_gather(compacted, output_to_compact, compact_to_output)

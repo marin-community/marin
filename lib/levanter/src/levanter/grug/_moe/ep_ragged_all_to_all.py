@@ -18,6 +18,7 @@ from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MO
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
     _compact_by_keep_mask,
+    _compact_by_keep_mask_to_size,
     _expand_from_keep_mask,
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
@@ -606,10 +607,11 @@ def _receiver_clipped_fixed_a2a_core(
             )
             expert_outputs = jnp.where(received_keep[:, :, :, None], dense_outputs, 0)
         else:
-            compact_expert_inputs = _compact_by_keep_mask(
+            compact_expert_inputs = _compact_by_keep_mask_to_size(
                 expert_inputs.reshape(transport_size, hidden_dim),
                 received_keep.reshape(transport_size),
-            )[:receiver_capacity]
+                output_size=receiver_capacity,
+            )
             local_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
             valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
             local_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
@@ -617,12 +619,8 @@ def _receiver_clipped_fixed_a2a_core(
             hidden = ragged_dot(compact_expert_inputs, moe_w13_local, local_group_sizes)
             gate, up = jnp.split(hidden, [moe_dim], axis=-1)
             compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
-            padded_expert_outputs = jnp.pad(
-                compact_expert_outputs,
-                ((0, transport_size - receiver_capacity), (0, 0)),
-            )
             expert_outputs = _expand_from_keep_mask(
-                padded_expert_outputs,
+                compact_expert_outputs,
                 received_keep.reshape(transport_size),
             ).reshape(
                 local_experts,
