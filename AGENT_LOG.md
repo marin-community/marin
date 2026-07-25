@@ -598,5 +598,23 @@ Confidence: 6/10.
 
 Confidence: 5/10 (mechanism unproven until the treatment runs; memory cost confirmed).
 
-Next: submit control@0.90, then treatment@0.90; harvest the pair.
+## Check-in 2026-07-25 ~10:35 UTC — treatment OOM confirmed; control@0.90 v1 hung at boot
+
+- Treatment failure detail (v1, default 0.75 fraction): XLA remat floor 133.17 GiB,
+  reduced temp 137.61 GiB; runtime BFC OOM on a 101.73 GiB alloc. Confirms the
+  +32.7 GiB saved-activation cost breaks the default arena. (Also worth noting: the
+  OOM means XLA's remat DID try to fit — the save policy engaged, so the mechanism
+  itself is wired correctly; it just doesn't fit at 0.75.)
+- Control@0.90 v1 (`/mwittmann/ep25d3-fa4lse-ctl-m90-120-v1-20260725`) FAILED
+  environmentally: 30-min silence at NCCL clique init → coordination
+  DEADLINE_EXCEEDED (the brief's boot-hang class; no compile cache configured, so
+  likely a sick allocation draw). Resubmitted as v2
+  (`/mwittmann/ep25d3-fa4lse-ctl-m90-120-v2-20260725`) — failed-state resubmission,
+  not a PENDING resubmit. Job mutations this check-in: submissions only.
+- Standing: control legs done — 20.543% (4b morning draw), 20.368% (6a draw);
+  control@0.90 v2 in flight; treatment@0.90 next after it.
+
+Confidence: 5/10.
+
+Next: babysit v2 (~50 min), then treatment@0.90.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
