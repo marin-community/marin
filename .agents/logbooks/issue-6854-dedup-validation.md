@@ -1483,6 +1483,41 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T20:49:22Z — 44,817 pairs verified
+
+- Eighteen additional baseline checkpoints passed independent validation:
+  2,304 pairs, 1,075 model false positives, 1,225 model true duplicates,
+  and four unresolved outcomes. They contain 5,414 valid judgments across
+  5,414 attempts, with no invalid responses or retries. Ten pairs were
+  chunked and 2,294 were direct.
+- Complete-text review resolves three ambiguities as false positives:
+
+  - a college/career SEO page retains member-only ACT browsing instructions,
+    medical-engineering degree details, and corporate-internship advice;
+  - a shared article has member-only PaySprint, Fratelli Wines, Tinna Trade,
+    and Abler Nordic news payloads;
+  - a Melio SEO page retains a complete credit-card remittance explanation
+    absent from the corrupted canonical.
+
+- The fourth ambiguity is a true duplicate: the complete kitchen-renovation
+  pages contain the same builder-selection advice, with only location and
+  postcode slots, synonym spinning, and paragraph corruption changed.
+- The four hash-bound manual records have Parquet SHA-256 values
+  `82fd63ea465bc7e36f5fbf9a7b318a82d06bdc7681c8ce14935844201538efef`,
+  `a88081d4b4668597968f28b28e360d5eb0e25378c6612c13eb24f4558c8f379a`,
+  `77237d1de7601ea6d8d1cb748d1560abdb29ffbc44be456673922a529b1eb340`,
+  and `0221af855232707c72e15f20258e6217465a631d892f665845c65db5cbc602fb`.
+  A separate batch-priority Iris process exactly reread the source cases,
+  semantic checkpoints, manual records, Parquet bytes, and completion markers.
+- Across the stable 352-checkpoint snapshot, all 42 manual records leave:
+
+  - baseline: 37,497 pairs, 23,749 false positives, 13,748 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 44,817 pairs, 27,575 false positives, 17,242 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:09:01Z — 38,545 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
