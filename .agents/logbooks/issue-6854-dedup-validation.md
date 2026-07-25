@@ -407,3 +407,28 @@ statistics for performance comparisons.
   Its score pass reads all 768 co-partitioned normalized, marker, and MinHash
   shard sets. The 34 focused audit, census, full-text, coverage, cap-diff, and
   archived-metrics tests pass.
+
+### 2026-07-25T00:28:00Z — exhaustive adjudication routing and final gate
+
+- The hash-verifying machine pass completed on the current-schema smoke review
+  corpus. It accounted for all ten pairs and conservatively routed all ten to
+  semantic review, matching the existing full-text judgments. It did not
+  auto-label any truncated or ambiguous pair.
+- Added a distributed final-adjudication gate. It rehashes every persisted
+  member and canonical text before shuffling compact evidence, requires one
+  exact machine decision per pair, requires a bound semantic decision exactly
+  when the machine pass requested one, and rejects tampered identities,
+  hashes, labels, methods, or evidence.
+- A second distributed join independently requires every scored drop to occur
+  once as a labeled member and every scored canonical to be referenced by at
+  least one labeled member. Global and per-arm marker, drop, pair, semantic,
+  and canonical-reference counters must match the immutable audit artifacts.
+  The 35 focused audit, materialization, routing, review, and finalization tests
+  pass. Snapshot: `66b30796b`.
+- The full score pass is at 127/128 reduce shards. The remaining shard is a
+  genuine data-skew case, not a stalled worker: a thread profile repeatedly
+  shows the subprocess active with the GIL in exact shingle construction.
+  CPU usage increased from 1,027 to 1,378 seconds during monitoring, while
+  current memory stayed near 15.9 GB and peak memory stayed at 19.7 GB under
+  the 24 GiB allocation. The shard remains in the audit rather than being
+  sampled or skipped.
