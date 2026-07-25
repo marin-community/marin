@@ -271,7 +271,10 @@ class ShortConv(eqx.Module):
         # reaches back into a previous document is zeroed, so the conv never mixes across a document
         # boundary -- matching the segment-masked attention. The lag-0 (current-token) tap is always kept.
         seq_len = x.shape[1]
-        out = self.weight[0] * x
+        # Gather the (possibly FSDP-sharded) weight to replicated for the per-channel multiply; a
+        # no-op when SCALE_SCONV_SHARD is off. Sharded storage -> grad reduce-scatters; here we all-gather.
+        weight = reshard(self.weight, P(None, None))
+        out = weight[0] * x
         for lag in range(1, self.kernel_size):
             shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
             if segment_ids is not None:
@@ -279,7 +282,7 @@ class ShortConv(eqx.Module):
                 # with no in-document history are zeroed too.
                 seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
                 shifted = jnp.where((seg_shifted == segment_ids)[..., None], shifted, 0.0)
-            out = out + self.weight[lag] * shifted
+            out = out + weight[lag] * shifted
         return out
 
 
