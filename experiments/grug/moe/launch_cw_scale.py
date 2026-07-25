@@ -35,8 +35,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         1 balances each sender's current routing scores before
                         top-k, rerouting overload instead of dropping it
     SCALE_MOE_CAPACITY_BALANCE_ITERATIONS / SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE
-                        dual-balancing iterations (default 4) and entropy
-                        temperature (default 0.05)
+                        dual-balancing iterations (default 2) and entropy
+                        temperature on standardized logits (default 1.0)
     SCALE_REPORT_CAPACITY_OVERFLOW
                         1 logs mean, max, and per-layer dropped-assignment rates
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
@@ -168,8 +168,8 @@ def build_scale_model() -> GrugModelConfig:
         qb_routing=os.environ.get("SCALE_MOE_QB") == "1",
         qb_bias_update_rate=float(os.environ.get("SCALE_MOE_QB_BIAS_UPDATE_RATE", "1e-3")),
         capacity_balanced_routing=os.environ.get("SCALE_MOE_CAPACITY_BALANCED_ROUTING") == "1",
-        capacity_balance_iterations=env_int("SCALE_MOE_CAPACITY_BALANCE_ITERATIONS", 4),
-        capacity_balance_temperature=float(os.environ.get("SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE", "0.05")),
+        capacity_balance_iterations=env_int("SCALE_MOE_CAPACITY_BALANCE_ITERATIONS", 2),
+        capacity_balance_temperature=float(os.environ.get("SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE", "1.0")),
         scan_unroll=env_int("SCALE_SCAN_UNROLL", 1),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,

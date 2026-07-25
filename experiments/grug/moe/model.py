@@ -141,8 +141,8 @@ class GrugModelConfig:
     # This reroutes overloaded assignments to high-scoring alternatives in the same batch, keeping
     # the fixed EP transport within capacity without dropping assignments.
     capacity_balanced_routing: bool = False
-    capacity_balance_iterations: int = 4
-    capacity_balance_temperature: float = 0.05
+    capacity_balance_iterations: int = 2
+    capacity_balance_temperature: float = 1.0
     # ``unroll`` for the layer scan. >1 unrolls that many layers per scan step, letting XLA overlap
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
@@ -434,17 +434,19 @@ def _compute_expert_load(
 
 
 def _capacity_balanced_top_k_local(
-    routing_scores: Float[Array, "T E"],
+    router_logits: Float[Array, "T E"],
     *,
     topk: int,
     iterations: int,
     temperature: float,
 ) -> Int[Array, "T K"]:
     """Choose top-k experts after solving for approximately uniform local expert demand."""
-    routing_scores = jax.lax.stop_gradient(routing_scores)
-    num_tokens, num_experts = routing_scores.shape
+    router_logits = jax.lax.stop_gradient(router_logits)
+    num_tokens, num_experts = router_logits.shape
     target_load = jnp.asarray(num_tokens * topk / num_experts, dtype=jnp.float32)
-    scaled_scores = routing_scores / temperature
+    centered_logits = router_logits - jnp.mean(router_logits, axis=-1, keepdims=True)
+    logit_scale = jax.lax.rsqrt(jnp.mean(jnp.square(centered_logits), axis=-1, keepdims=True) + 1e-6)
+    scaled_scores = centered_logits * (logit_scale / temperature)
     expert_dual = jnp.zeros((num_experts,), dtype=jnp.float32)
     for _ in range(iterations):
         soft_assignments = jax.nn.softmax(scaled_scores + expert_dual, axis=-1) * topk
@@ -454,16 +456,16 @@ def _capacity_balanced_top_k_local(
 
 
 def _capacity_balanced_top_k(
-    routing_scores: Float[Array, "T E"],
+    router_logits: Float[Array, "T E"],
     cfg: "GrugModelConfig",
 ) -> Int[Array, "T K"]:
     """Balance expert demand independently on every fixed-A2A sender shard."""
     mesh = get_abstract_mesh()
-    routing_scores = reshard(routing_scores, P(_BATCH_AXES, None))
+    router_logits = reshard(router_logits, P(_BATCH_AXES, None))
 
-    def _local(local_routing_scores):
+    def _local(local_router_logits):
         return _capacity_balanced_top_k_local(
-            local_routing_scores,
+            local_router_logits,
             topk=cfg.num_experts_per_token,
             iterations=cfg.capacity_balance_iterations,
             temperature=cfg.capacity_balance_temperature,
@@ -474,7 +476,7 @@ def _capacity_balanced_top_k(
         mesh=mesh,
         in_specs=(P(_BATCH_AXES, None),),
         out_specs=P(_BATCH_AXES, None),
-    )(routing_scores)
+    )(router_logits)
 
 
 class MoEMLP(eqx.Module):
@@ -523,7 +525,7 @@ class MoEMLP(eqx.Module):
         # Keep the router path in fp32 before top-k and the sigmoid combine.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         if self.cfg.capacity_balanced_routing:
-            selected_experts = _capacity_balanced_top_k(jax.nn.sigmoid(router_logits), self.cfg)
+            selected_experts = _capacity_balanced_top_k(router_logits, self.cfg)
             topk_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         elif self.cfg.qb_routing:
             # Bias only the sigmoid routing scores used for top-k selection. Combine weights stay

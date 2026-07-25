@@ -124,18 +124,18 @@ def test_capacity_balanced_top_k_limits_local_overflow():
     num_tokens = 512
     num_experts = 32
     topk = 4
-    scores = jax.nn.sigmoid(jax.random.normal(jax.random.key(0), (num_tokens, num_experts)).at[:, :4].add(4.0))
+    router_logits = jax.random.normal(jax.random.key(0), (num_tokens, num_experts)).at[:, :4].add(4.0)
 
-    raw_selected = jax.lax.top_k(scores, topk)[1]
+    raw_selected = jax.lax.top_k(router_logits, topk)[1]
     raw_load = jnp.bincount(raw_selected.reshape(-1), length=num_experts)
     selected = _capacity_balanced_top_k_local(
-        scores,
+        router_logits,
         topk=topk,
-        iterations=4,
-        temperature=0.05,
+        iterations=2,
+        temperature=1.0,
     )
     load = jnp.bincount(selected.reshape(-1), length=num_experts)
-    capacity = math.ceil(1.2 * num_tokens * topk / num_experts)
+    capacity = math.ceil(1.05 * num_tokens * topk / num_experts)
     raw_overflow = jnp.sum(jnp.maximum(raw_load - capacity, 0)) / raw_load.sum()
     overflow = jnp.sum(jnp.maximum(load - capacity, 0)) / load.sum()
 
