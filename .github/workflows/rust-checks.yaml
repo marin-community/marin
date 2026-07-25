@@ -12,6 +12,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
 # cargo fmt/clippy/test for the dupekit, finelog, and Iris native crates, plus a guard that
 # no rust dev-mode source leaked into a committed pyproject. The `changes` job always
 # runs so the downstream jobs report a status on every PR (a workflow-level `paths:`
@@ -35,12 +38,15 @@ jobs:
           filters: |
             dupekit:
               - 'lib/dupekit/rust/**'
+              - '.cargo/config.toml'
               - '.github/workflows/rust-checks.yaml'
             finelog:
               - 'lib/finelog/rust/**'
+              - '.cargo/config.toml'
               - '.github/workflows/rust-checks.yaml'
             iris:
               - 'lib/iris/rust/**'
+              - '.cargo/config.toml'
               - '.github/workflows/rust-checks.yaml'
             # The dev-mode guard inspects the pyprojects a leaked rust path source
             # lands in, plus the script that writes it.
@@ -78,6 +84,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           workspaces: lib/dupekit/rust
@@ -98,6 +105,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           workspaces: lib/finelog/rust
@@ -118,6 +126,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           workspaces: lib/iris/rust

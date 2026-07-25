@@ -126,6 +126,9 @@ no Rust toolchain needed. `uv sync` fetches the wheels from PyPI automatically.
 To switch to **source builds** (requires Cargo), use the Makefile targets:
 
 ```bash
+# Cargo builds use sccache; install it separately before enabling dev mode.
+cargo install sccache --locked
+
 # Check current mode and Cargo availability
 make rust-status
 
