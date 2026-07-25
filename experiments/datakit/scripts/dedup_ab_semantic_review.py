@@ -704,8 +704,9 @@ def run_semantic_review(
     decision_file_stop: int | None,
     batch_size: int,
     instances: int,
+    validate_only: bool = False,
 ) -> SemanticReviewData:
-    """Review a deterministic decision-file range, resuming verified batches."""
+    """Review or revalidate a deterministic decision-file range."""
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
     if instances <= 0:
@@ -717,40 +718,65 @@ def run_semantic_review(
     if not 0 <= decision_file_start < stop <= len(decision_files):
         raise ValueError(f"Decision-file range {decision_file_start}:{stop} outside 0:{len(decision_files)}")
 
-    served_model, engine, iris, broker = _inference_config(model)
     counters: Counter[str] = Counter()
     marker_paths = []
     expected_pairs = 0
-    with remote_inference(served_model, engine, iris, instances=instances, broker=broker) as session:
-        client = AsyncOpenAI(
-            base_url=session.model.endpoint.base_url,
-            api_key=session.model.endpoint.api_key or "local",
-        )
 
-        async def review_all() -> None:
-            nonlocal expected_pairs
-            try:
-                for decision_file_index in range(decision_file_start, stop):
-                    decision_file = decision_files[decision_file_index]
-                    cases, total_semantic = load_semantic_cases(
-                        _records(decision_file),
-                        semantic_offset=0,
-                        limit=2**63 - 1,
+    async def review_all(client: AsyncOpenAI | None, served_model_name: str | None) -> None:
+        nonlocal expected_pairs
+        try:
+            for decision_file_index in range(decision_file_start, stop):
+                decision_file = decision_files[decision_file_index]
+                cases, total_semantic = load_semantic_cases(
+                    _records(decision_file),
+                    semantic_offset=0,
+                    limit=2**63 - 1,
+                )
+                if len(cases) != total_semantic:
+                    raise AssertionError(
+                        f"Loaded semantic count differs for {decision_file}: " f"{len(cases)}/{total_semantic}"
                     )
-                    if len(cases) != total_semantic:
-                        raise AssertionError(
-                            f"Loaded semantic count differs for {decision_file}: " f"{len(cases)}/{total_semantic}"
+                expected_pairs += total_semantic
+                logger.info(
+                    "Loaded decision file %d/%d with %d semantic pairs",
+                    decision_file_index + 1,
+                    stop,
+                    total_semantic,
+                )
+                for semantic_offset in range(0, total_semantic, batch_size):
+                    batch_cases = cases[semantic_offset : semantic_offset + batch_size]
+                    prior = completed_batch(
+                        model=model,
+                        machine_labels_path=machine_labels_path,
+                        decision_file=decision_file,
+                        decision_file_index=decision_file_index,
+                        semantic_offset=semantic_offset,
+                        total_semantic_in_file=total_semantic,
+                        cases=batch_cases,
+                        output_root=output_root,
+                    )
+                    if prior is None:
+                        if validate_only:
+                            _, marker_path = batch_paths(
+                                output_root,
+                                decision_file_index=decision_file_index,
+                                semantic_offset=semantic_offset,
+                            )
+                            raise FileNotFoundError(f"Missing semantic completion marker: {marker_path}")
+                        if client is None or served_model_name is None:
+                            raise AssertionError("Semantic inference client is unavailable")
+                        logger.info(
+                            "Reviewing decision file %d semantic range %d:%d",
+                            decision_file_index,
+                            semantic_offset,
+                            semantic_offset + len(batch_cases),
                         )
-                    expected_pairs += total_semantic
-                    logger.info(
-                        "Loaded decision file %d/%d with %d semantic pairs",
-                        decision_file_index + 1,
-                        stop,
-                        total_semantic,
-                    )
-                    for semantic_offset in range(0, total_semantic, batch_size):
-                        batch_cases = cases[semantic_offset : semantic_offset + batch_size]
-                        prior = completed_batch(
+                        outcomes = await review_cases(
+                            client,
+                            model=served_model_name,
+                            cases=batch_cases,
+                        )
+                        manifest, marker_path = write_completed_batch(
                             model=model,
                             machine_labels_path=machine_labels_path,
                             decision_file=decision_file,
@@ -758,51 +784,39 @@ def run_semantic_review(
                             semantic_offset=semantic_offset,
                             total_semantic_in_file=total_semantic,
                             cases=batch_cases,
+                            outcomes=outcomes,
                             output_root=output_root,
                         )
-                        if prior is None:
-                            logger.info(
-                                "Reviewing decision file %d semantic range %d:%d",
-                                decision_file_index,
-                                semantic_offset,
-                                semantic_offset + len(batch_cases),
-                            )
-                            outcomes = await review_cases(
-                                client,
-                                model=session.model.endpoint.model,
-                                cases=batch_cases,
-                            )
-                            manifest, marker_path = write_completed_batch(
-                                model=model,
-                                machine_labels_path=machine_labels_path,
-                                decision_file=decision_file,
-                                decision_file_index=decision_file_index,
-                                semantic_offset=semantic_offset,
-                                total_semantic_in_file=total_semantic,
-                                cases=batch_cases,
-                                outcomes=outcomes,
-                                output_root=output_root,
-                            )
-                        else:
-                            manifest, _, marker_path = prior
-                            logger.info(
-                                "Resumed verified decision file %d semantic range %d:%d",
-                                decision_file_index,
-                                semantic_offset,
-                                semantic_offset + len(batch_cases),
-                            )
-                        _add_manifest_counters(counters, manifest)
-                        marker_paths.append(marker_path)
+                    else:
+                        manifest, _, marker_path = prior
                         logger.info(
-                            "Semantic progress pairs=%d resolved=%d unresolved=%d",
-                            counters["pairs"],
-                            counters["resolved"],
-                            counters["unresolved"],
+                            "Resumed verified decision file %d semantic range %d:%d",
+                            decision_file_index,
+                            semantic_offset,
+                            semantic_offset + len(batch_cases),
                         )
-            finally:
+                    _add_manifest_counters(counters, manifest)
+                    marker_paths.append(marker_path)
+                    logger.info(
+                        "Semantic progress pairs=%d resolved=%d unresolved=%d",
+                        counters["pairs"],
+                        counters["resolved"],
+                        counters["unresolved"],
+                    )
+        finally:
+            if client is not None:
                 await client.close()
 
-        asyncio.run(review_all())
+    if validate_only:
+        asyncio.run(review_all(None, None))
+    else:
+        served_model, engine, iris, broker = _inference_config(model)
+        with remote_inference(served_model, engine, iris, instances=instances, broker=broker) as session:
+            client = AsyncOpenAI(
+                base_url=session.model.endpoint.base_url,
+                api_key=session.model.endpoint.api_key or "local",
+            )
+            asyncio.run(review_all(client, session.model.endpoint.model))
 
     if counters["pairs"] != expected_pairs:
         raise AssertionError(f"Semantic range coverage differs: {counters['pairs']}/{expected_pairs}")
@@ -818,10 +832,11 @@ def run_semantic_review(
         batch_manifests=marker_paths,
         counters=dict(sorted(counters.items())),
     )
+    summary_stem = "semantic-review-validation" if validate_only else "semantic-review"
     summary_name = (
-        "semantic-review.json"
+        f"{summary_stem}.json"
         if decision_file_start == 0 and stop == len(decision_files)
-        else f"semantic-review-{decision_file_start:05d}-{stop:05d}.json"
+        else f"{summary_stem}-{decision_file_start:05d}-{stop:05d}.json"
     )
     summary_path = StoragePath(output_root) / summary_name
     summary_path.write_text(result.model_dump_json(indent=2))
@@ -837,6 +852,11 @@ def main() -> None:
     parser.add_argument("--decision-file-stop", type=int)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--instances", type=int, required=True)
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Require and fully revalidate every existing completion without starting inference.",
+    )
     args = parser.parse_args()
     configure_logging()
 
@@ -848,6 +868,7 @@ def main() -> None:
         decision_file_stop=args.decision_file_stop,
         batch_size=args.batch_size,
         instances=args.instances,
+        validate_only=args.validate_only,
     )
     print(result.model_dump_json(indent=2))
 

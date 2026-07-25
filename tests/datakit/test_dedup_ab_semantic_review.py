@@ -6,12 +6,17 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData, decision_for_pair
+from experiments.datakit.scripts.dedup_ab_semantic_batch import _records, load_semantic_cases
 from experiments.datakit.scripts.dedup_ab_semantic_review import (
     completed_batch,
     outcome_from_evidence,
     review_cases,
+    run_semantic_review,
     validate_outcome,
     write_completed_batch,
 )
@@ -34,6 +39,36 @@ def _case(*, member_text: str = "distinct member payload", canonical_text: str =
         "pair_row_index": 7,
         "member_text": member_text,
         "canonical_text": canonical_text,
+    }
+
+
+def _pair() -> dict:
+    pair = _case(canonical_text="different canonical payload")
+    member_text = pair.pop("member_text")
+    canonical_text = pair.pop("canonical_text")
+    return {
+        **pair,
+        "member_text": member_text,
+        "canonical_text": canonical_text,
+        "exact_raw_text": False,
+        "evidence_class": "ambiguous",
+        "cross_source": False,
+        "raw_chars": len(member_text),
+        "canonical_raw_chars": len(canonical_text),
+        "length_ratio": len(member_text) / len(canonical_text),
+        "member_is_longer": False,
+        "member_text_truncated_for_minhash": False,
+        "canonical_text_truncated_for_minhash": False,
+        "exact_clean_text": False,
+        "member_clean_text_contained": False,
+        "char_5gram_jaccard": 0.2,
+        "char_5gram_canonical_containment": 0.3,
+        "char_5gram_member_containment": 0.3,
+        "word_5gram_jaccard": 0.2,
+        "word_5gram_canonical_containment": 0.3,
+        "word_5gram_member_containment": 0.3,
+        "baseline_shared_buckets": 1,
+        "treatment_shared_buckets": 0,
     }
 
 
@@ -355,6 +390,82 @@ def test_completed_batch_revalidates_checksum_identity_and_evidence(tmp_path) ->
             cases=[case],
             output_root=output_root,
         )
+
+
+def test_validate_only_rechecks_complete_range_without_starting_inference(tmp_path, monkeypatch) -> None:
+    pair = _pair()
+    pairs_path = tmp_path / "pairs.parquet"
+    pq.write_table(pa.Table.from_pylist([pair]), pairs_path)
+    decision = {
+        **decision_for_pair(pair),
+        "pair_path": str(pairs_path),
+        "pair_row_index": 0,
+    }
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+    decision_path = decisions_dir / "part.parquet"
+    pq.write_table(pa.Table.from_pylist([decision]), decision_path)
+    machine_path = tmp_path / "machine-labels.json"
+    machine_path.write_text(
+        DedupMachineLabelsData(
+            review_path="review.json",
+            pairs_dir=str(tmp_path),
+            decisions_dir=str(decisions_dir),
+            counters={"machine_labels/pairs": 1},
+        ).model_dump_json()
+    )
+
+    cases, total_semantic = load_semantic_cases(
+        _records(str(decision_path)),
+        semantic_offset=0,
+        limit=1,
+    )
+    output_root = str(tmp_path / "semantic")
+    outcome = outcome_from_evidence(
+        cases[0],
+        _direct_evidence(deletion_loses_substantive_content=True),
+    )
+    write_completed_batch(
+        model="model",
+        machine_labels_path=str(machine_path),
+        decision_file=str(decision_path),
+        decision_file_index=0,
+        semantic_offset=0,
+        total_semantic_in_file=total_semantic,
+        cases=cases,
+        outcomes=[outcome],
+        output_root=output_root,
+    )
+
+    def unexpected_inference_config(model: str):
+        raise AssertionError(f"validate-only started inference for {model}")
+
+    monkeypatch.setattr(
+        "experiments.datakit.scripts.dedup_ab_semantic_review._inference_config",
+        unexpected_inference_config,
+    )
+    result = run_semantic_review(
+        machine_labels_path=str(machine_path),
+        output_root=output_root,
+        model="model",
+        decision_file_start=0,
+        decision_file_stop=1,
+        batch_size=1,
+        instances=1,
+        validate_only=True,
+    )
+
+    assert result.expected_pairs == 1
+    assert result.completed_pairs == 1
+    assert result.counters == {
+        "chunked": 0,
+        "direct": 1,
+        "pairs": 1,
+        "request_attempts": 2,
+        "resolved": 1,
+        "unresolved": 0,
+    }
+    assert (tmp_path / "semantic" / "semantic-review-validation.json").exists()
 
 
 def test_chunk_calibration_requires_resolved_expected_labels() -> None:
