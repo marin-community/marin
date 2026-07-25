@@ -177,7 +177,9 @@ def all_sources() -> dict[str, DatakitSource]:
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
         ("numinamath-tir", numinamath_tir_normalize_steps, 0.08),
         ("sec-edgar", sec_edgar_normalize_steps, 334.90),
-        ("stack-v3", stack_v3_normalize_steps, 4900.0),
+        # Exact count measured with marin-community/marin-tokenizer:
+        # 4,568,429,666,429 tokens / 172,898,790 docs.
+        ("stack-v3", stack_v3_normalize_steps, 4568.429666429),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-contree", swe_rebench_contree_normalize_steps, 182.60),
