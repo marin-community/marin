@@ -451,7 +451,9 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                # SCALE_CAPACITY_FACTOR sweeps the fixed-a2a per-(sender, expert) bucket
+                # capacity: capacity = ceil(cf * assignments_per_shard / num_experts).
+                capacity_factor=float(os.environ.get("SCALE_CAPACITY_FACTOR", "") or _DEFAULT_EP_CAPACITY_FACTOR),
             ),
             cfg=cfg,
         )

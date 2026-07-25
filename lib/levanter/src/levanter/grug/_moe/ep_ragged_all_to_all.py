@@ -94,6 +94,84 @@ def _fp8_wire_a2a_bwd(_res, ct: jax.Array):
 _fp8_wire_all_to_all.defvjp(_fp8_wire_a2a_fwd, _fp8_wire_a2a_bwd)
 
 
+@jax.custom_vjp
+def _dispatch_gather(
+    x_local: Float[Array, "Tlocal H"],
+    token_sources: Int[Array, " send"],
+    linear_indices: Int[Array, " assignments"],
+    keep: Array,
+) -> Float[Array, "send H"]:
+    """Gather token rows into the fixed-capacity send buffer.
+
+    Forward is the plain gather ``padded_x[token_sources]``. The custom VJP replaces XLA's
+    generic scatter-add transpose with a structured gather-then-segment-sum over the top-k
+    assignments, reusing the forward's ``linear_indices`` composition. ``token_sources``,
+    ``linear_indices`` and ``keep`` are integer/bool and carry no cotangent.
+    """
+    hidden_dim = x_local.shape[1]
+    padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), x_local.dtype)], axis=0)
+    return padded_x[token_sources]
+
+
+def _dispatch_gather_fwd(x_local, token_sources, linear_indices, keep):
+    send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
+    # send_x shares x_local's dtype, so the incoming cotangent carries it too; only static shape
+    # (tokens_per_shard) and the integer index arrays need to survive into the backward.
+    return send_x, (linear_indices, keep, x_local.shape[0])
+
+
+def _dispatch_gather_bwd(residual, cotangent):
+    linear_indices, keep, tokens_per_shard = residual
+    send_size = cotangent.shape[0]
+    hidden_dim = cotangent.shape[1]
+    topk = linear_indices.shape[0] // tokens_per_shard
+    # d_x_local[t] = sum over token t's kept assignments of cotangent at their send slot.
+    grad_rows = cotangent[jnp.minimum(linear_indices, send_size - 1)]
+    grad_rows = jnp.where(keep[:, None], grad_rows, 0).astype(jnp.float32)
+    grad_rows = grad_rows.reshape(tokens_per_shard, topk, hidden_dim)
+    d_x_local = grad_rows.sum(axis=1).astype(cotangent.dtype)
+    return d_x_local, None, None, None
+
+
+_dispatch_gather.defvjp(_dispatch_gather_fwd, _dispatch_gather_bwd)
+
+
+@jax.custom_vjp
+def _combine_gather(
+    send_output: Float[Array, "send H"],
+    gather_indices: Int[Array, " assignments"],
+    keep: Array,
+    assignment_sources: Int[Array, " send"],
+) -> Float[Array, "assignments H"]:
+    """Gather expert outputs from the send buffer back into assignment order.
+
+    Forward is ``send_output[gather_indices]`` with dropped assignments zeroed. The index map is
+    injective on kept assignments, so the true transpose is a gather along the slot->assignment
+    inverse (``assignment_sources``) rather than XLA's scatter-add. ``gather_indices``, ``keep``
+    and ``assignment_sources`` are integer/bool and carry no cotangent.
+    """
+    gathered = send_output[gather_indices]
+    return jnp.where(keep[:, None], gathered, 0)
+
+
+def _combine_gather_fwd(send_output, gather_indices, keep, assignment_sources):
+    gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)
+    return gathered, (assignment_sources,)
+
+
+def _combine_gather_bwd(residual, cotangent):
+    (assignment_sources,) = residual
+    assignments_per_shard = cotangent.shape[0]
+    # slot j was read by assignment assignment_sources[j] (or is unfilled -> assignments_per_shard).
+    valid = assignment_sources < assignments_per_shard
+    src = jnp.minimum(assignment_sources, assignments_per_shard - 1)
+    d_send_output = jnp.where(valid[:, None], cotangent[src], 0).astype(cotangent.dtype)
+    return d_send_output, None, None, None
+
+
+_combine_gather.defvjp(_combine_gather_fwd, _combine_gather_bwd)
+
+
 def _dispatch_rows(
     x_local: Float[Array, "Tlocal H"],
     linear_indices: Int[Array, "A"],
@@ -244,9 +322,40 @@ def _fixed_a2a_core(
         send_size,
     )
 
+    gather_dispatch = os.environ.get("SCALE_A2A_GATHER_DISPATCH") == "1"
+    custom_adjoint = os.environ.get("SCALE_A2A_CUSTOM_ADJOINT") == "1"
+    if custom_adjoint and not gather_dispatch:
+        raise ValueError("SCALE_A2A_CUSTOM_ADJOINT=1 requires SCALE_A2A_GATHER_DISPATCH=1")
+    if custom_adjoint:
+        logger.info("fixed-a2a custom adjoint active: structured dispatch/combine gather VJPs")
+
+    # slot -> assignment inverse of linear_indices (assignments_per_shard marks an unfilled slot).
+    # Shared by the gather-dispatch forward and the combine gather's structured backward.
+    assignment_sources = None
+    if gather_dispatch:
+        assignment_sources = (
+            jnp.full((send_size,), assignments_per_shard, dtype=jnp.int32)
+            .at[linear_indices]
+            .set(jnp.arange(assignments_per_shard, dtype=jnp.int32), mode="drop")
+        )
+
     moe_dim = moe_w2_local.shape[1]
     with jax.named_scope("dispatch"):
-        send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
+        if gather_dispatch:
+            assert assignment_sources is not None
+            token_sources = jnp.where(
+                assignment_sources < assignments_per_shard,
+                assignment_sources // topk,
+                tokens_per_shard,
+            )
+            if custom_adjoint:
+                send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
+            else:
+                padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), x_local.dtype)], axis=0)
+                send_x = padded_x[token_sources]
+        else:
+            repeated_x = jnp.repeat(x_local, topk, axis=0)
+            send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     # SCALE_A2A_FP8_WIRE=1 quantizes ONLY the two permutation collectives (dispatch and
@@ -301,8 +410,11 @@ def _fixed_a2a_core(
         send_output = jnp.stack(output_parts, axis=0)
         send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
         send_output = send_output.reshape(send_size, hidden_dim)
-        gathered = send_output[jnp.minimum(linear_indices, send_size - 1)]
-        gathered = jnp.where(keep[:, None], gathered, 0)
+        gather_indices = jnp.minimum(linear_indices, send_size - 1)
+        if custom_adjoint:
+            gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)
+        else:
+            gathered = jnp.where(keep[:, None], send_output[gather_indices], 0)
         gathered = gathered.reshape(tokens_per_shard, topk, hidden_dim)
         out_local = jnp.einsum(
             "tkh,tk->th",
