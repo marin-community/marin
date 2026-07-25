@@ -539,6 +539,27 @@ offload-policy variant (name-save with host offload over Grace C2G ~900 GB/s:
 Confidence: 5/10 (mechanism is real and cheap to test; the memory cost is the
 swing factor — the comment's est is +~1pp).
 
-Next: GPU parity-test job (1 replica), then 1-replica training smoke, then the
-120-step A/B (control already measured this morning: 20.543% p50 — will re-run
-back-to-back anyway per protocol).
+## Check-in 2026-07-25 ~07:15 UTC — 6a GPU parity green
+
+- **All 5 real_gpu FA4 tests PASS** (`/mwittmann/ep25d3-fa4lse-test8-20260725`),
+  including `test_real_gpu_fa4_lse_save_path_matches_default_path`: out + dq/dk/dv
+  vs the default path at 2e-3 (same kernels), lse vs reference logsumexp at 7e-2.
+- Iteration log (4 GPU test jobs): (1) pre-existing harness rot — the whole real_gpu
+  suite was stale on this jax (PartitionSpec reshard outside mesh context; repaired
+  with a 1-device Explicit mesh helper — the 4 pre-existing tests now pass too);
+  (2) pytest-xdist workers × 75% prealloc OOM — `-n 0`; (3) `cutlass_call does not
+  support VJP` — the raw FFI call must be kept out of the differentiated graph:
+  output-side stop_gradient insufficient (linearization still needs JVP with live
+  q/k/v inputs) → **stop_gradient the raw call's INPUTS** (all-SymbolicZero tangent
+  → pruned); (4)-(5) two trivial test bugs (signature, GQA head alignment).
+- Numerics of the design, restated: raw FFI forward computes (out, lse) with
+  stop-gradient inputs; `tree_checkpoint_name` marks both; thin custom_vjp
+  (identity fwd) defines the gradient via the same backward kernel as the default
+  path. Under `SCALE_FA4_LSE_SAVE=1` the block remat policy becomes
+  save_only_these_names(FA4_LSE_SAVE_NAMES) → the block re-execution skips the
+  attention kernel (its outputs are saved) instead of re-running it.
+
+Confidence: 6/10 (numerics proven; mechanism next; memory is the swing factor).
+
+Next: 1-replica training smoke with SCALE_FA4_LSE_SAVE=1 (functional at scale),
+then the A/B legs (control + fa4-lse, 120 steps, back-to-back).
