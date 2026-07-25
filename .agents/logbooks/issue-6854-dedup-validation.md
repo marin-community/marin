@@ -1632,6 +1632,45 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T21:39:11Z — 55,789 pairs verified
+
+- Seven additional checkpoints passed independent validation: 862 pairs, 399
+  model false positives, 459 model true duplicates, and four unresolved
+  outcomes. The block contains 1,952 valid judgments across 1,971 attempts; 19
+  invalid responses affected seven retried judgments. Two pairs were chunked
+  and 860 were direct.
+- Complete-text review resolves the baseline ambiguity as a true duplicate.
+  Both single-paragraph documents are the same low-value synthetic error
+  response: the provided input is incomplete, has no meaningful information,
+  and cannot be rewritten. `Anderson` versus `N2AB` is a placeholder slot with
+  no standalone fact or distinct training example. Character similarity is
+  0.725067. Pair location: `part-00033-of-00128.parquet:3065`;
+  member/canonical text SHA-256 values are
+  `9527dcf7aac9ac2b782d97c5d8b83aec60aa57a960a99bc3740018a641d1df50` /
+  `402d69e85a0c15dd4ec2709b943fb04fc1c9f296a8478fdce1e3cfce9657a53d`.
+- Complete character comparison resolves all three treatment ambiguities as
+  true duplicates. Each cross-source SFT pair has identical questions,
+  choices, reasoning, and answer. Its only two changed spans add or remove
+  `\text{` and its closing `}` around the same boxed answer. The pairs cover
+  renewable-energy answer D, soft-power answer B, and ribosome answer E;
+  character similarities are 0.999646, 0.999503, and 0.999540.
+- The four hash-bound manual Parquet records have SHA-256
+  `07dd82ad161b68fc875aff23309cf988618dbd1c79938759c8f12999d7452542`,
+  `fed59af27ffcf0423472683af7620e27f5c1885f006538415987eda34436cfc9`,
+  `09f14760817a69520d60da73f682f18d0d514cc4ad8e6d4b4ce5c39552171fde`,
+  and
+  `de90010461fa91c2b66058abe1c0cd20e14cfab88c225880a757302d778c1169`.
+  A separate batch-priority Iris process exactly reread all four source pairs,
+  semantic checkpoints, manual records, Parquet bytes, and completion markers.
+- Across the stable 438-checkpoint snapshot, all 60 manual records leave:
+
+  - baseline: 44,941 pairs, 28,603 false positives, 16,338 true duplicates;
+  - treatment: 10,848 pairs, 5,687 false positives, 5,161 true duplicates;
+  - combined: 55,789 pairs, 34,290 false positives, 21,499 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:56:02Z — 47,121 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
