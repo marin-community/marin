@@ -567,3 +567,25 @@ statistics for performance comparisons.
   pass `./infra/pre-commit.py`, and `uv run pyrefly` reports zero errors. The
   remaining launch gate is a live production-runner smoke that writes and
   revalidates its Parquet/checkpoint contract on object storage.
+
+### 2026-07-25T08:01:00Z — production checkpoint and resume gate passed
+
+- The production runner processed all ten semantic smoke pairs from all 16
+  machine-decision files. It wrote one deterministic Parquet outcome shard and
+  one completion marker per nonempty semantic batch. The root Iris job
+  `/rav/datakit-6854-semantic-production-smoke-qwen35-35b-a3b-v1`
+  succeeded with 10 expected pairs, 10 completed pairs, 10 resolved pairs, and
+  zero unresolved pairs. Output:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-production-smoke-qwen35-35b-a3b-20260725-v1`.
+- Commit `83a4f2e8a` adds a validation-only execution path that never starts an
+  inference service. The separate CPU job
+  `/rav/datakit-6854-semantic-production-smoke-validate-v1` reread all source
+  decisions, referenced pair rows, completion markers, and Parquet outcomes.
+  It verified byte counts and SHA-256 hashes, rebuilt each decision from its
+  persisted model evidence, and reproduced 10 expected/completed/resolved with
+  zero unresolved. Validation summary:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-production-smoke-qwen35-35b-a3b-20260725-v1/semantic-review-validation.json`.
+- The focused semantic suite now passes 30 tests. Repository pre-commit checks
+  pass for both changed files, and the production script reports zero pyrefly
+  errors. The checkpoint/resume gate is clear for the full 755,281-pair
+  semantic pass.
