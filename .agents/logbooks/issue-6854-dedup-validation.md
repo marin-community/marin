@@ -959,3 +959,24 @@ statistics for performance comparisons.
 - A global reread verified every semantic shard and all 13 manual records,
   including review-key, full-text-hash, and semantic-evidence-hash bindings.
   No unresolved semantic record in the snapshot lacks a manual decision.
+
+### 2026-07-25T13:13:00Z — semantic review reaches 11,622 verified pairs
+
+- Seven additional partition-p3 checkpoints passed independent validation:
+  896 pairs, 483 false positives, 413 true duplicates, zero unresolved
+  outcomes, 1,895 first-attempt-valid judgments, and 57 tiebreaks. One pair
+  required chunked review; the remaining 895 were direct.
+- The first checkpoint straddled the variant boundary: its 39 baseline pairs
+  contain 36 false positives and three true duplicates, while its 89 treatment
+  pairs contain 48 false positives and 41 true duplicates. The remaining 768
+  pairs are treatment, with 399 false positives and 369 true duplicates.
+- Across the stable 91-checkpoint snapshot, the 13 prior manual records leave:
+
+  - baseline: 9,530 pairs, 6,181 false positives, 3,349 true duplicates;
+  - treatment: 2,092 pairs, 1,083 false positives, 1,009 true duplicates;
+  - combined: 11,622 pairs, 7,264 false positives, 4,358 true duplicates.
+
+- All 12 root, broker, and worker pods remain Ready with zero restarts. Partition
+  p0 is processing the chunk-heavy first batch of decision file 1; partition
+  p1 is processing the second batch of decision file 32; partition p2 remains
+  active on the largest initial batch.
