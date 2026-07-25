@@ -1103,3 +1103,24 @@ statistics for performance comparisons.
   - combined: 13,137 pairs, 8,328 false positives, 4,809 true duplicates.
 
 - All 12 pods remained Ready with zero restarts at the latest health sample.
+
+### 2026-07-25T15:28:00Z — semantic review reaches 14,289 verified pairs
+
+- Nine additional baseline checkpoints passed independent validation: 1,152
+  pairs, 878 false positives, 274 true duplicates, and zero unresolved
+  outcomes. They used 4,621 valid first-attempt judgments with no invalid
+  responses or retries; 26 pairs were chunked and 1,126 were direct.
+- Every checkpoint passed marker and Parquet byte-hash validation, ordered
+  case-key reconstruction, identity and configuration checks, manifest-counter
+  reconstruction, complete member-coverage checks for chunked cases, and
+  deterministic outcome reconstruction from persisted evidence.
+- Across the stable 112-checkpoint snapshot, all 14 manual records remain
+  exactly bound and leave:
+
+  - baseline: 11,834 pairs, 7,922 false positives, 3,912 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 14,289 pairs, 9,206 false positives, 5,083 true duplicates.
+
+- At the latest health sample, all 12 pods were Ready with zero restarts.
+  Partition p0 was processing decision-file-1 offset 256, p1 offset 1,536, p2
+  decision-file-64 offset 512, and p3 decision-file-97 offset 128.
