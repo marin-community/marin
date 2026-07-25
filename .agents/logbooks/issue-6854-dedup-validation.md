@@ -1289,3 +1289,20 @@ statistics for performance comparisons.
 - Partition 3 remains healthy. The failed partitions can resume from their
   immutable, hash-verified checkpoint frontiers without repeating completed
   work.
+
+### 2026-07-25T16:45:27Z — eight H100s restored; 28,241 pairs verified
+
+- Partitions 0, 1, and 2 were resubmitted as `v3` batch-priority jobs from the
+  tested context-overflow fix. All four 2-H100 workers and their coordinators
+  are Ready with zero Kubernetes restarts.
+- Nineteen additional checkpoints passed independent validation: 2,432 pairs,
+  1,438 false positives, 994 true duplicates, and zero unresolved outcomes.
+  Their 5,545 judgments were valid on the first attempt, with no invalid
+  responses or retries; ten pairs were chunked and 2,422 were direct.
+- The new set contains 2,430 baseline pairs and two treatment pairs. Both
+  treatment pairs are false positives. Across the stable 221-checkpoint
+  snapshot, all 19 manual records leave:
+
+  - baseline: 25,784 pairs, 16,273 false positives, 9,511 true duplicates;
+  - treatment: 2,457 pairs, 1,286 false positives, 1,171 true duplicates;
+  - combined: 28,241 pairs, 17,559 false positives, 10,682 true duplicates.
