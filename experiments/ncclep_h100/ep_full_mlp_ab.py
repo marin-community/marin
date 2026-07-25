@@ -220,6 +220,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--overflow-policy", choices=OVERFLOW_POLICIES, default="trap")
     parser.add_argument("--combine-dtype", choices=COMBINE_DTYPES, default="bf16")
+    parser.add_argument("--ring-combine-dtype", choices=COMBINE_DTYPES, default="bf16")
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -313,7 +314,13 @@ def _make_inputs(jax: Any, jnp: Any, mesh: Any, routes: np.ndarray) -> tuple[Any
     return tokens, topk_indices, topk_weights, w13, w2
 
 
-def _compiled_ring_forward(jax: Any, mesh: Any, ring_local: Callable[..., Any]) -> Callable[..., Any]:
+def _compiled_ring_forward(
+    jax: Any,
+    mesh: Any,
+    ring_local: Callable[..., Any],
+    *,
+    combine_dtype: str,
+) -> Callable[..., Any]:
     P = jax.sharding.PartitionSpec
     batch_spec = P(("replica_dcn", "data", "expert"), None)
     expert_spec = P("expert", None, None)
@@ -323,6 +330,7 @@ def _compiled_ring_forward(jax: Any, mesh: Any, ring_local: Callable[..., Any]) 
             activation_fn=jax.nn.silu,
             num_experts=NUM_EXPERTS,
             capacity_factor=CAPACITY_FACTOR,
+            combine_dtype=combine_dtype,
         ),
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec, expert_spec, expert_spec),
@@ -581,7 +589,7 @@ def run_ab(args: argparse.Namespace) -> int:
             dispatch_output_per_expert_alignment=DISPATCH_ALIGNMENT,
         )
         inputs = _make_inputs(jax, jnp, mesh, routes)
-        ring_forward = _compiled_ring_forward(jax, mesh, ring_local)
+        ring_forward = _compiled_ring_forward(jax, mesh, ring_local, combine_dtype=args.ring_combine_dtype)
         te_forward = _compiled_te_forward(
             jax,
             jnp,
@@ -662,6 +670,7 @@ def run_ab(args: argparse.Namespace) -> int:
         "parity_mode": args.parity_mode,
         "overflow_policy": args.overflow_policy,
         "combine_dtype": args.combine_dtype,
+        "ring_combine_dtype": args.ring_combine_dtype,
     }
     summary = build_summary(
         timings=timings,

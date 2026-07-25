@@ -124,3 +124,5 @@ def test_overflow_policy_is_explicit() -> None:
 def test_combine_dtype_is_explicit() -> None:
     assert parse_args(["--combine-dtype", "bf16"]).combine_dtype == "bf16"
     assert parse_args(["--combine-dtype", "fp32"]).combine_dtype == "fp32"
+    assert parse_args(["--ring-combine-dtype", "bf16"]).ring_combine_dtype == "bf16"
+    assert parse_args(["--ring-combine-dtype", "fp32"]).ring_combine_dtype == "fp32"

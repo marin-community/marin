@@ -5,7 +5,7 @@
 
 import math
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -106,13 +106,19 @@ def _bulk_ring_from_routing(
     ops: MoeRaggedDotOps | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
 ) -> Float[Array, "Tlocal H"]:
     with jax.named_scope("gather"):
         x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
         weight_flat = combine_weights_global.reshape(-1)
         token_global = jnp.floor_divide(routing.assignment_indices, routing.topk)
-        weight = jnp.take(weight_flat, routing.assignment_indices, axis=0).astype(x_local.dtype)
+        if combine_dtype == "bf16":
+            weight = jnp.take(weight_flat, routing.assignment_indices, axis=0).astype(x_local.dtype)
+        elif combine_dtype == "fp32":
+            weight = jnp.take(weight_flat, routing.assignment_indices, axis=0).astype(jnp.float32)
+        else:
+            raise ValueError(f"unknown bulk-ring combine dtype: {combine_dtype!r}")
         x_take = jnp.take(x_global, token_global, axis=0)
         x_dispatch = jnp.where(routing.valid[:, None], x_take, jnp.zeros_like(x_take))
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
@@ -130,10 +136,14 @@ def _bulk_ring_from_routing(
         )
 
     with jax.named_scope("scatter"):
-        out_global = (
-            jnp.zeros_like(x_global).at[token_global].add(out_dispatch * weight_dispatch[:, None], mode="drop")
-        )
-        return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        if combine_dtype == "bf16":
+            out_global = (
+                jnp.zeros_like(x_global).at[token_global].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+            )
+        else:
+            weighted = out_dispatch.astype(jnp.float32) * weight_dispatch[:, None]
+            out_global = jnp.zeros(x_global.shape, dtype=jnp.float32).at[token_global].add(weighted, mode="drop")
+        return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True).astype(x_local.dtype)
 
 
 def _validate_quack_bulk_ring_contract(
@@ -342,6 +352,7 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     routing = _ring_routing_prepass(
@@ -358,6 +369,7 @@ def _moe_mlp_ep_ring_local(
         routing,
         ops,
         activation_fn=activation_fn,
+        combine_dtype=combine_dtype,
     )
     dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
