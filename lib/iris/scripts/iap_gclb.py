@@ -1098,7 +1098,11 @@ def _token_proxy_match_templates(rule: dict) -> frozenset[str]:
 
 
 def _reconcile_token_proxy_rule(matcher: dict, proxy_link: str) -> bool:
-    """Add the capability route rule and migrate the former local-only path rule."""
+    """Add the capability route and migrate its former path rule.
+
+    Returns:
+        True when the matcher changed.
+    """
     path_rules = matcher.get("pathRules", [])
     unrelated_path_rules = [rule for rule in path_rules if frozenset(rule.get("paths", [])) != LEGACY_TOKEN_PROXY_PATHS]
     if unrelated_path_rules:
@@ -1147,6 +1151,11 @@ def _reconcile_token_proxy_rule(matcher: dict, proxy_link: str) -> bool:
 
 
 def _reconcile_url_map_test(doc: dict, *, host: str, path: str, service: str) -> bool:
+    """Reconcile one expected URL-map route.
+
+    Returns:
+        True when the test was added or updated.
+    """
     tests = doc.setdefault("tests", [])
     existing = next((test for test in tests if test.get("host") == host and test.get("path") == path), None)
     desired = {"host": host, "path": path, "service": service}
@@ -1161,6 +1170,11 @@ def _reconcile_url_map_test(doc: dict, *, host: str, path: str, service: str) ->
 
 
 def _remove_url_map_tests(doc: dict, *, host: str, paths: Sequence[str]) -> bool:
+    """Remove URL-map tests for the given host and paths.
+
+    Returns:
+        True when at least one test was removed.
+    """
     tests = doc.get("tests", [])
     removed_paths = set(paths)
     kept = [test for test in tests if test.get("host") != host or test.get("path") not in removed_paths]
