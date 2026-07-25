@@ -648,6 +648,109 @@ def test_fixed_a2a_rotation_and_gather_dispatch_match_monolithic():
     assert "OK" in result.stdout
 
 
+def test_fixed_a2a_fp8_wire_parity():
+    """SCALE_A2A_FP8_WIRE quantizes only the two permutation collectives.
+
+    Wrapper level: exact fwd and bwd parity vs the bf16 a2a on rows that are exactly
+    representable after per-row scaling (e4m3 forward, e5m2 cotangent). Kernel level:
+    identical (nonzero) dropped-token counts by construction, and relative Frobenius
+    error within fp8 quantization bounds for the forward and all four gradients.
+    Runs in a fresh 8-CPU-device interpreter (XLA device count is process-global).
+    """
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["SCALE_A2A_NO_BARRIER"] = "1"
+        os.environ["SCALE_A2A_GATHER_DISPATCH"] = "1"
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core, _fp8_wire_all_to_all
+
+        EP = 8
+        mesh = Mesh(np.array(jax.devices()).reshape(EP), ("expert",), axis_types=(AxisType.Explicit,))
+
+        def relfrob(a, b):
+            a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+            return np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30)
+
+        # wrapper-level exact parity on representable rows
+        C, H = 4, 8
+        vals = jnp.array([0.0, 0.5, -0.5, 1.0, -1.0], dtype=jnp.bfloat16)
+        x = vals[jax.random.randint(jax.random.key(3), (EP * EP, C, H), 0, len(vals))]
+        x = x.at[..., 0].set(jnp.bfloat16(1.0))  # amax 1 per row -> exact scaling
+        probe = vals[jax.random.randint(jax.random.key(5), (EP * EP, C, H), 0, len(vals))].astype(jnp.float32)
+        probe = probe.at[..., 0].set(1.0)
+
+        def wire_loss(x, p):
+            return jnp.sum(_fp8_wire_all_to_all(x).astype(jnp.float32) * p)
+
+        def bf16_loss(x, p):
+            out = jax.lax.all_to_all(x, "expert", split_axis=0, concat_axis=0, tiled=True)
+            return jnp.sum(out.astype(jnp.float32) * p)
+
+        results = []
+        with jax.set_mesh(mesh):
+            xs = jax.device_put(x, NamedSharding(mesh, P("expert")))
+            ps = jax.device_put(probe, NamedSharding(mesh, P("expert")))
+            for fn in (wire_loss, bf16_loss):
+                sh = jax.shard_map(
+                    jax.value_and_grad(fn), mesh=mesh, in_specs=(P("expert"), P("expert")),
+                    out_specs=(P(), P("expert")), check_vma=False,
+                )
+                v, g = sh(xs, ps)
+                results.append((np.asarray(v), np.asarray(g)))
+        assert np.array_equal(results[0][0], results[1][0]), "wrapper fwd differs"
+        assert np.array_equal(results[0][1], results[1][1]), "wrapper bwd differs"
+
+        # kernel-level: relfrob bounds + identical nonzero drops
+        NE, T, K, HID, I = 16, 128, 2, 16, 12
+        kx, ks, kc, k1, k2 = jax.random.split(jax.random.key(7), 5)
+        xg = jax.random.normal(kx, (T, HID))
+        logits = jax.random.normal(ks, (T, NE)) + jnp.linspace(0, 2.0, NE)
+        _, sel = jax.lax.top_k(logits, K)
+        sel = sel.astype(jnp.int32)
+        cw = jax.nn.softmax(jax.random.normal(kc, (T, K)), -1)
+        w13 = jax.random.normal(k1, (NE, HID, 2 * I)) * 0.05
+        w2 = jax.random.normal(k2, (NE, I, HID)) * 0.05
+
+        def kern(x, sel, cw, w13, w2):
+            return _fixed_a2a_core(
+                x, sel, cw, w13, w2, activation_fn=jax.nn.silu, num_experts=NE, capacity_factor=1.0
+            )
+
+        sh = jax.shard_map(kern, mesh=mesh, in_specs=(P("expert"),) * 5, out_specs=(P("expert"), P()), check_vma=False)
+
+        def loss(x, cw, w13, w2, sel):
+            out, dropped = sh(x, sel, cw, w13, w2)
+            pr = jnp.cos(jnp.arange(out.size, dtype=out.dtype)).reshape(out.shape)
+            return jnp.sum(out * pr), (out, dropped)
+
+        def run():
+            with jax.set_mesh(mesh):
+                args = [jax.device_put(a, NamedSharding(mesh, P("expert"))) for a in (xg, cw, w13, w2, sel)]
+                return jax.device_get(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(*args))
+
+        os.environ["SCALE_A2A_FP8_WIRE"] = "0"
+        (_, (ref_out, ref_drop)), ref_grads = run()
+        os.environ["SCALE_A2A_FP8_WIRE"] = "1"
+        jax.clear_caches()
+        (_, (out, drop)), grads = run()
+        assert int(drop) == int(ref_drop) > 0, (int(drop), int(ref_drop))
+        assert relfrob(out, ref_out) < 0.05, relfrob(out, ref_out)
+        for name, g, rg in zip(("dx", "dcw", "dw13", "dw2"), grads, ref_grads):
+            assert relfrob(g, rg) < 0.20, (name, relfrob(g, rg))
+        print("OK")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [

@@ -30,6 +30,69 @@ from levanter.grug.sharding import _batch_axes
 
 logger = logging.getLogger(__name__)
 
+_FP8_WIRE_MAX = {
+    jnp.float8_e4m3fn: 448.0,
+    jnp.float8_e5m2: 57344.0,
+}
+_WIRE_EPS = 1e-12
+
+
+def _wire_quantize(x: jax.Array, fp8_dtype) -> tuple[jax.Array, jax.Array]:
+    """Quantize each row (token slot) with its own current scale over the hidden dim.
+
+    Per-token scaling only: sharing a scale across token rows would couple tokens along
+    the sequence axis, which is causally unsafe. Zero padding rows quantize to exact zero.
+    """
+    xf = x.astype(jnp.float32)
+    amax = jnp.max(jnp.abs(xf), axis=-1)
+    scale = jnp.maximum(amax, _WIRE_EPS) / _FP8_WIRE_MAX[jnp.dtype(fp8_dtype).type]
+    q = (xf / scale[..., None]).astype(fp8_dtype)
+    return q, scale
+
+
+def _fp8_a2a_impl(x: jax.Array, fp8_dtype) -> jax.Array:
+    """Fixed-capacity tiled all_to_all with the payload quantized to FP8 on the wire.
+
+    The payload crosses bitcast to uint8 (independent of backend FP8 collective
+    support); per-token scales ride a second tiny all_to_all (4 bytes per row vs.
+    hidden_dim bytes of payload) with the same routing, so each received row
+    dequantizes with its sender's scale.
+    """
+    q, scale = _wire_quantize(x, fp8_dtype)
+    bits = jax.lax.all_to_all(
+        jax.lax.bitcast_convert_type(q, jnp.uint8),
+        "expert",
+        split_axis=0,
+        concat_axis=0,
+        tiled=True,
+    )
+    scales = jax.lax.all_to_all(scale[..., None], "expert", split_axis=0, concat_axis=0, tiled=True)
+    deq = jax.lax.bitcast_convert_type(bits, fp8_dtype).astype(jnp.float32) * scales
+    return deq.astype(x.dtype)
+
+
+@jax.custom_vjp
+def _fp8_wire_all_to_all(x: jax.Array) -> jax.Array:
+    """Fixed-capacity a2a carrying E4M3 forward / E5M2 cotangents over the wire.
+
+    Only the permutation legs are quantized (FP8 reductions lose to NCCL hierarchical
+    reduce-scatter); the tiled a2a with split_axis=concat_axis=0 is its own transpose,
+    so the backward is the same collective with the cotangent quantized to E5M2 and a
+    straight-through gradient across the QDQ pair.
+    """
+    return _fp8_a2a_impl(x, jnp.float8_e4m3fn)
+
+
+def _fp8_wire_a2a_fwd(x: jax.Array):
+    return _fp8_wire_all_to_all(x), None
+
+
+def _fp8_wire_a2a_bwd(_res, ct: jax.Array):
+    return (_fp8_a2a_impl(ct, jnp.float8_e5m2),)
+
+
+_fp8_wire_all_to_all.defvjp(_fp8_wire_a2a_fwd, _fp8_wire_a2a_bwd)
+
 
 def _dispatch_rows(
     x_local: Float[Array, "Tlocal H"],
@@ -186,15 +249,26 @@ def _fixed_a2a_core(
         send_x = _dispatch_rows(x_local, linear_indices, send_size, topk)
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
+    # SCALE_A2A_FP8_WIRE=1 quantizes ONLY the two permutation collectives (dispatch and
+    # combine a2a) to FP8 on the wire. Routing, keep mask, capacity, and the drop count
+    # are computed before quantization, so drop parity with the bf16 wire holds by
+    # construction.
+    fp8_wire = os.environ.get("SCALE_A2A_FP8_WIRE") == "1"
+    if fp8_wire:
+        logger.info(
+            "fixed-a2a fp8 wire active: e4m3 fwd / e5m2 bwd, per-token scales, local_experts=%d expert_shards=%d",
+            local_experts,
+            expert_shards,
+        )
+
+    def wire_a2a(block: jax.Array) -> jax.Array:
+        if fp8_wire:
+            return _fp8_wire_all_to_all(block)
+        return jax.lax.all_to_all(block, "expert", split_axis=0, concat_axis=0, tiled=True)
+
     def dispatch_a2a(local_expert_index: int) -> jax.Array:
         with jax.named_scope("dispatch"):
-            received = jax.lax.all_to_all(
-                send_x[local_expert_index],
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
+            received = wire_a2a(send_x[local_expert_index])
             return tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
 
     # SCALE_A2A_PREFETCH=1 issues local expert le+1's dispatch all_to_all before local
@@ -218,13 +292,7 @@ def _fixed_a2a_core(
             gate, up = jnp.split(hidden, [moe_dim], axis=-1)
             expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
         with jax.named_scope("combine"):
-            returned = jax.lax.all_to_all(
-                expert_output.reshape(expert_shards, capacity, hidden_dim),
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
+            returned = wire_a2a(expert_output.reshape(expert_shards, capacity, hidden_dim))
             output_parts.append(returned)
         if prefetch:
             received = next_received
