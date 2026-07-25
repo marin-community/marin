@@ -35,6 +35,7 @@ PARENT_ORIGIN = "https://iris-dev.oa.dev"
 CHILD_CLUSTER = "cw-us-west-04a"
 MODEL = "Qwen/Qwen3-0.6B-Base"
 REQUEST_TIMEOUT_SECONDS = 60
+CURL_CLIENT = "curl"
 CURL_METADATA_MARKER = "\n__IRIS_CURL_METADATA__"
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ def main() -> None:
 
         response = subprocess.run(
             [
-                "curl",
+                CURL_CLIENT,
                 "--fail-with-body",
                 "--location",
                 "--max-time",
@@ -128,7 +129,7 @@ def main() -> None:
             json.dumps(
                 {
                     "capability_url": _redacted_url(base_url),
-                    "client": "curl",
+                    "client": CURL_CLIENT,
                     "inference_job": str(session.jobs[0].job_id),
                     "model": payload["data"][0]["id"],
                     "status_code": status_code,
