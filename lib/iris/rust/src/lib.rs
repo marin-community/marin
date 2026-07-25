@@ -153,13 +153,43 @@ struct RpcMetricKey {
     upstream: &'static str,
 }
 
+/// Cumulative latency buckets shared by the RPC and proxy metric families.
+/// `record` folds one observation into every bucket whose upper bound it meets
+/// (Prometheus `le` semantics); `buckets` renders the cumulative list with a
+/// trailing `+Inf` bucket carrying the series' total count.
+#[derive(Default)]
+struct LatencyHistogram {
+    bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
+    sum_seconds: f64,
+}
+
+impl LatencyHistogram {
+    fn record(&mut self, elapsed: Duration) {
+        let seconds = elapsed.as_secs_f64();
+        self.sum_seconds += seconds;
+        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
+            if seconds <= *upper_bound {
+                self.bucket_counts[index] += 1;
+            }
+        }
+    }
+
+    fn buckets(&self, total: u64) -> Vec<(String, u64)> {
+        RPC_LATENCY_BUCKETS_SECONDS
+            .iter()
+            .zip(self.bucket_counts)
+            .map(|(bound, count)| (bound.to_string(), count))
+            .chain(std::iter::once(("+Inf".to_string(), total)))
+            .collect()
+    }
+}
+
 #[derive(Default)]
 struct RpcMetricState {
     requests: u64,
     responses: BTreeMap<u16, u64>,
     in_flight: u64,
-    latency_bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
-    latency_sum_seconds: f64,
+    latency: LatencyHistogram,
 }
 
 #[derive(Default)]
@@ -180,13 +210,7 @@ impl RpcMetrics {
         };
         state.in_flight = state.in_flight.saturating_sub(1);
         *state.responses.entry(status.as_u16()).or_default() += 1;
-        let seconds = elapsed.as_secs_f64();
-        state.latency_sum_seconds += seconds;
-        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
-            if seconds <= *upper_bound {
-                state.latency_bucket_counts[index] += 1;
-            }
-        }
+        state.latency.record(elapsed);
     }
 
     fn snapshot(&self) -> RpcMetricsSnapshot {
@@ -203,14 +227,9 @@ impl RpcMetrics {
                         requests: state.requests,
                         responses: state.responses.clone(),
                         in_flight: state.in_flight,
-                        latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
-                            .iter()
-                            .zip(state.latency_bucket_counts)
-                            .map(|(bound, count)| (bound.to_string(), count))
-                            .chain(std::iter::once(("+Inf".to_string(), latency_count)))
-                            .collect(),
+                        latency_buckets: state.latency.buckets(latency_count),
                         latency_count,
-                        latency_sum_seconds: state.latency_sum_seconds,
+                        latency_sum_seconds: state.latency.sum_seconds,
                     }
                 })
                 .collect(),
@@ -335,8 +354,7 @@ struct ProxyMetricState {
     requests: u64,
     responses: BTreeMap<u16, u64>,
     in_flight: u64,
-    latency_bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
-    latency_sum_seconds: f64,
+    latency: LatencyHistogram,
     request_bytes: u64,
     response_bytes: u64,
     last_activity: Option<Instant>,
@@ -352,13 +370,7 @@ impl ProxyMetricState {
     fn finish(&mut self, status: StatusCode, elapsed: Duration, now: Instant) {
         self.in_flight = self.in_flight.saturating_sub(1);
         *self.responses.entry(status.as_u16()).or_default() += 1;
-        let seconds = elapsed.as_secs_f64();
-        self.latency_sum_seconds += seconds;
-        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
-            if seconds <= *upper_bound {
-                self.latency_bucket_counts[index] += 1;
-            }
-        }
+        self.latency.record(elapsed);
         self.last_activity = Some(now);
     }
 
@@ -379,14 +391,9 @@ impl ProxyMetricState {
             requests: self.requests,
             responses: self.responses.clone(),
             in_flight: self.in_flight,
-            latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
-                .iter()
-                .zip(self.latency_bucket_counts)
-                .map(|(bound, count)| (bound.to_string(), count))
-                .chain(std::iter::once(("+Inf".to_string(), latency_count)))
-                .collect(),
+            latency_buckets: self.latency.buckets(latency_count),
             latency_count,
-            latency_sum_seconds: self.latency_sum_seconds,
+            latency_sum_seconds: self.latency.sum_seconds,
             request_bytes: self.request_bytes,
             response_bytes: self.response_bytes,
         }

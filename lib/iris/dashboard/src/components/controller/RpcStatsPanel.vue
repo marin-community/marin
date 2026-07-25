@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { formatRelativeTime } from '@/utils/formatting'
+import { formatRelativeTime, formatBytes } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
 
@@ -283,16 +283,9 @@ function fmtMs(value: number): string {
   return (value / 1000).toFixed(value < 10000 ? 2 : 1) + 's'
 }
 
+// Reuse the shared byte formatter; keep the table's em-dash for zero/absent.
 function fmtBytes(value: number): string {
-  if (!value) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let scaled = value
-  let unit = 0
-  while (scaled >= 1024 && unit < units.length - 1) {
-    scaled /= 1024
-    unit += 1
-  }
-  return `${unit > 0 && scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)}${units[unit]}`
+  return value ? formatBytes(value) : '—'
 }
 
 function fmtBound(ms: number): string {

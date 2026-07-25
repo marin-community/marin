@@ -53,14 +53,7 @@ class _AggregatedRpcMetricSeries:
     latency_sum_seconds: float = 0.0
 
     def add(self, series: _RpcMetricSeries) -> None:
-        self.requests += series.requests
-        self.in_flight += series.in_flight
-        self.latency_count += series.latency_count
-        self.latency_sum_seconds += series.latency_sum_seconds
-        for status, count in series.responses.items():
-            self.responses[status] = self.responses.get(status, 0) + count
-        for bound, count in series.latency_buckets:
-            self.latency_buckets[bound] = self.latency_buckets.get(bound, 0) + count
+        _merge_shared_counters(self, series)
 
 
 PROXY_IN_FLIGHT_METRIC_NAME = "iris_proxy_in_flight"
@@ -100,16 +93,27 @@ class _AggregatedProxyMetricSeries:
     response_bytes: int = 0
 
     def add(self, series: _ProxyMetricSeries) -> None:
-        self.requests += series.requests
-        self.in_flight += series.in_flight
-        self.latency_count += series.latency_count
-        self.latency_sum_seconds += series.latency_sum_seconds
+        _merge_shared_counters(self, series)
         self.request_bytes += series.request_bytes
         self.response_bytes += series.response_bytes
-        for status, count in series.responses.items():
-            self.responses[status] = self.responses.get(status, 0) + count
-        for bound, count in series.latency_buckets:
-            self.latency_buckets[bound] = self.latency_buckets.get(bound, 0) + count
+
+
+def _merge_shared_counters(
+    agg: _AggregatedRpcMetricSeries | _AggregatedProxyMetricSeries,
+    series: _RpcMetricSeries | _ProxyMetricSeries,
+) -> None:
+    """Fold the counters shared by the RPC and proxy families into ``agg``.
+
+    Proxy-only byte counters are merged by the caller.
+    """
+    agg.requests += series.requests
+    agg.in_flight += series.in_flight
+    agg.latency_count += series.latency_count
+    agg.latency_sum_seconds += series.latency_sum_seconds
+    for status, count in series.responses.items():
+        agg.responses[status] = agg.responses.get(status, 0) + count
+    for bound, count in series.latency_buckets:
+        agg.latency_buckets[bound] = agg.latency_buckets.get(bound, 0) + count
 
 
 class NativeProxyMetricsCollector(Collector):

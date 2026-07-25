@@ -321,7 +321,8 @@ mod tests {
         // no caller-supplied cluster at all, so a spoofed origin in the batch cannot
         // influence the stamp — `stamp_cluster_column` then overwrites the batch column
         // with this value. That is what makes attribution independent of whether the
-        // sender's local schema even held the origin column (the #138 federation gap).
+        // sender's local schema even held the origin column (the cross-cluster
+        // forwarding gap, where a forwarded batch arrives without the column).
         assert_eq!(
             write_origin_cluster(&jwt("cw-rno2a")).unwrap(),
             Some("cw-rno2a".to_string())
