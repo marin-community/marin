@@ -492,7 +492,7 @@ class VllmEnvironment:
         timeout_seconds: int = 3600,
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
-        compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+        compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
@@ -502,7 +502,7 @@ class VllmEnvironment:
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
         # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
         self.launcher: VllmLauncher = launcher or WorkspaceVllm()
-        self.compilation_cache = compilation_cache
+        self.compilation_cache_mode = compilation_cache_mode
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -525,7 +525,7 @@ class VllmEnvironment:
                     timeout_seconds=self.timeout_seconds,
                     extra_cli_args=self.extra_cli_args,
                     launcher=self.launcher,
-                    compilation_cache=self.compilation_cache,
+                    compilation_cache_mode=self.compilation_cache_mode,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -713,7 +713,7 @@ def _start_vllm_native_server(
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
     launcher: VllmLauncher | None = None,
-    compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+    compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
 ) -> VllmServerHandle:
     """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
@@ -739,7 +739,7 @@ def _start_vllm_native_server(
         model_name_or_path=model_name_or_path,
         extra_cli_args=extra_cli_args,
         launcher=launcher,
-        mode=compilation_cache,
+        mode=compilation_cache_mode,
     )
     logger.info(
         "Starting vLLM native server (output streams to the job log). "

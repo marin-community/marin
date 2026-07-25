@@ -25,7 +25,7 @@ def run_one_query(
     max_model_len: int | None,
     port: int | None,
     use_completions: bool,
-    compilation_cache: VllmCompilationCacheMode,
+    compilation_cache_mode: VllmCompilationCacheMode,
 ) -> str:
     parsed = urlparse(model_name_or_path)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -45,7 +45,7 @@ def run_one_query(
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,
-        compilation_cache=compilation_cache,
+        compilation_cache_mode=compilation_cache_mode,
     )
     try:
         with env:
@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
         env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
         env_vars["JAX_ENABLE_COMPILATION_CACHE"] = "1"
-    compilation_cache = (
+    compilation_cache_mode = (
         VllmCompilationCacheMode.CALLER_MANAGED if args.local_cache_dir is not None else VllmCompilationCacheMode.MANAGED
     )
 
@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_model_len=args.max_model_len,
                 port=args.port,
                 use_completions=args.use_completions,
-                compilation_cache=compilation_cache,
+                compilation_cache_mode=compilation_cache_mode,
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_model_len=args.max_model_len,
                     port=args.port,
                     use_completions=args.use_completions,
-                    compilation_cache=compilation_cache,
+                    compilation_cache_mode=compilation_cache_mode,
                 )
             except Exception:
                 traceback.print_exc()

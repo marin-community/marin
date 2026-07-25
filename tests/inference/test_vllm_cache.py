@@ -26,6 +26,7 @@ _CACHE_DIR_ENVIRONMENT_VARIABLES = (
     "TRITON_CACHE_DIR",
     "CUDA_CACHE_PATH",
 )
+_REMOTE_CACHE_PREFIX = Path("tmp") / "vllm-compilation-cache"
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def _local_cache_dir(cache: VllmCompilationCache) -> Path:
 
 
 def _only_remote_cache_dir(local_marin_prefix: Path) -> Path:
-    cache_dirs = list((local_marin_prefix / "tmp" / "vllm-compilation-cache").glob("v*/*"))
+    cache_dirs = list((local_marin_prefix / _REMOTE_CACHE_PREFIX).glob("v*/*"))
     assert len(cache_dirs) == 1
     return cache_dirs[0]
 
@@ -95,7 +96,7 @@ def test_caller_managed_cache_preserves_environment(local_marin_prefix: Path) ->
     cache.publish()
     cache.close()
 
-    assert not (local_marin_prefix / "tmp" / "vllm-compilation-cache").exists()
+    assert not (local_marin_prefix / _REMOTE_CACHE_PREFIX).exists()
 
 
 def test_cache_round_trip_restores_every_compiler_cache(local_marin_prefix: Path) -> None:
@@ -264,4 +265,4 @@ def test_invalid_cache_entry_skips_publication(
     cache.publish()
     cache.close()
 
-    assert not list((local_marin_prefix / "tmp" / "vllm-compilation-cache").rglob(LATEST_FILENAME))
+    assert not list((local_marin_prefix / _REMOTE_CACHE_PREFIX).rglob(LATEST_FILENAME))

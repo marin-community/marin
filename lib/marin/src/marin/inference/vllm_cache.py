@@ -57,10 +57,6 @@ _ExtractedSize = Annotated[int, Field(strict=True, ge=0, le=_MAX_EXTRACTED_BYTES
 _EntryCount = Annotated[int, Field(strict=True, ge=0, le=_MAX_ENTRIES)]
 
 
-class _CacheMiss(Exception):
-    pass
-
-
 class _TransferStatus(StrEnum):
     OK = "ok"
     MISS = "miss"
@@ -302,19 +298,19 @@ def _extract_archive(archive_path: Path, destination: Path) -> _Extraction:
         for member in archive.infolist():
             path = PurePosixPath(member.filename)
             if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
-                raise _CacheMiss(f"unsafe archive path: {member.filename}")
+                raise ValueError(f"unsafe archive path: {member.filename}")
             if member.filename in names:
-                raise _CacheMiss(f"duplicate archive path: {member.filename}")
+                raise ValueError(f"duplicate archive path: {member.filename}")
             names.add(member.filename)
             mode = member.external_attr >> 16
             if member.is_dir() or (stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
-                raise _CacheMiss(f"unsupported archive entry: {member.filename}")
+                raise ValueError(f"unsupported archive entry: {member.filename}")
             entry_count += 1
             if entry_count > _MAX_ENTRIES:
-                raise _CacheMiss(f"archive contains more than {_MAX_ENTRIES} entries")
+                raise ValueError(f"archive contains more than {_MAX_ENTRIES} entries")
             extracted_size += member.file_size
             if extracted_size > _MAX_EXTRACTED_BYTES:
-                raise _CacheMiss(f"archive expands past {_MAX_EXTRACTED_BYTES} bytes")
+                raise ValueError(f"archive expands past {_MAX_EXTRACTED_BYTES} bytes")
 
             target = destination.joinpath(*path.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -468,17 +464,17 @@ def _validate_manifest(
     archive_path: Path,
 ) -> None:
     if manifest.cache_identity != expected_identity:
-        raise _CacheMiss("cache identity mismatch")
+        raise ValueError("cache identity mismatch")
     if manifest.generation_id != expected_generation_id:
-        raise _CacheMiss("generation manifest does not match the latest pointer")
+        raise ValueError("generation manifest does not match the latest pointer")
     if manifest.generation_id != manifest.archive_sha256:
-        raise _CacheMiss("generation id does not match the archive digest")
+        raise ValueError("generation id does not match the archive digest")
     actual_size = archive_path.stat().st_size
     if actual_size != manifest.archive_size_bytes:
-        raise _CacheMiss(f"archive size mismatch: expected {manifest.archive_size_bytes}, got {actual_size}")
+        raise ValueError(f"archive size mismatch: expected {manifest.archive_size_bytes}, got {actual_size}")
     actual_sha256 = sha256_for_path(archive_path)
     if actual_sha256 != manifest.archive_sha256:
-        raise _CacheMiss(f"archive digest mismatch: expected {manifest.archive_sha256}, got {actual_sha256}")
+        raise ValueError(f"archive digest mismatch: expected {manifest.archive_sha256}, got {actual_sha256}")
 
 
 class VllmCompilationCache:
@@ -659,11 +655,11 @@ class VllmCompilationCache:
                 )
                 return
             if result.status is not _TransferStatus.OK:
-                raise _CacheMiss(result.reason or "unknown transfer failure")
+                raise ValueError(result.reason or "unknown transfer failure")
 
             manifest = result.manifest
             if manifest is None or result.generation_id is None:
-                raise _CacheMiss("generation manifest is not an object")
+                raise ValueError("generation manifest is not an object")
             _validate_manifest(
                 manifest,
                 expected_identity=managed.identity,
@@ -673,16 +669,16 @@ class VllmCompilationCache:
 
             required_space = archive_path.stat().st_size + manifest.source_size_bytes
             if shutil.disk_usage(managed.local_temp_dir).free < required_space:
-                raise _CacheMiss(f"insufficient local disk for {required_space} cache bytes")
+                raise ValueError(f"insufficient local disk for {required_space} cache bytes")
 
             restored_cache_dir.mkdir()
             extraction = _extract_archive(archive_path, restored_cache_dir)
             if extraction.entry_count != manifest.entry_count:
-                raise _CacheMiss(
+                raise ValueError(
                     f"archive entry count mismatch: expected {manifest.entry_count}, got {extraction.entry_count}"
                 )
             if extraction.size != manifest.source_size_bytes:
-                raise _CacheMiss(
+                raise ValueError(
                     f"extracted cache size mismatch: expected {manifest.source_size_bytes}, got {extraction.size}"
                 )
             managed.local_cache_dir.rmdir()
