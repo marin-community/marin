@@ -616,5 +616,26 @@ Confidence: 5/10 (mechanism unproven until the treatment runs; memory cost confi
 
 Confidence: 5/10.
 
-Next: babysit v2 (~50 min), then treatment@0.90.
+## Check-in 2026-07-25 ~12:20 UTC — 0.90 breaks the CONTROL too; ladder to 0.85
+
+- Control@0.90 attempts: v1 boot hang → DEADLINE_EXCEEDED; v2 leader died (same
+  class); v3 (fresh JAX_COMPILATION_CACHE_DIR) booted fine but **crashed at first
+  execution: `ncclAlltoAll ... Cuda failure 2 'out of memory'` on all 16 tasks** —
+  the same NCCL-headroom signature as round 1's tip wheel: at 0.90, XLA's 167 GiB
+  arena leaves ~19 GiB for NCCL/driver, insufficient for the production EP64
+  fixed-a2a config's comm buffers. **The EP64 operating point cannot run at 0.90** —
+  the 20.558 baseline runs at the jax default 0.75 (~46 GiB NCCL headroom).
+- Arithmetic for the treatment: temp arena 137.61 GiB (XLA remat-reduced) + fp32
+  master weights ~15.6 + workspace ≈ 156 GiB. 0.75 (139.5) OOMs; 0.90 breaks NCCL.
+  **0.85 (158.1 arena, ~28 GiB NCCL headroom) is the only viable window** — trying
+  control@0.85 next (treatment@0.85 after), unique compile-cache dirs throughout.
+  If 0.85's NCCL headroom also fails, the arena family is closed for this config
+  and the report becomes: +~1pp est win requires +32.7 GiB the operating point
+  cannot spare at any workable fraction (with the host-offload variant as the noted
+  follow-up).
+- Job mutations this check-in: submissions only (v2, v3).
+
+Confidence: 4/10 (memory squeeze on both sides narrows the path).
+
+Next: control@0.85 v4.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
