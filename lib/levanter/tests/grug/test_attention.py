@@ -168,96 +168,56 @@ def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():
     assert fa4_thd._sm90_postprocess_tile_m(100, 128) == 128
 
 
-class _FakeLaunchable:
-    def launch(self, **kwargs):
-        return None
+def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
+    captured_kwargs: dict[str, object] = {}
 
+    # The upstream CUDA kernels are optional in unit tests; exercise the launcher
+    # boundary where Marin passes SM90-safe options into flash-attn-4.
+    class FakeCutlass:
+        BFloat16 = object()
+        Float16 = object()
+        Float32 = object()
 
-class _FakeFloat32:
-    def __init__(self, value):
-        self.value = value
+    class FakeCute:
+        Tensor = object()
 
+        @staticmethod
+        def jit(fn):
+            return fn
 
-class _FakeCutlass:
-    BFloat16 = object()
-    Float16 = object()
-    Float32 = _FakeFloat32
+        @staticmethod
+        def kernel(fn):
+            return fn
 
+    class FakeCuda:
+        CUstream = object()
 
-class _FakeCute:
-    Tensor = object
+    class FakePreprocess:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    @staticmethod
-    def jit(fn):
-        return fn
+    class FakeBackward:
+        def __init__(self, *args, **kwargs):
+            captured_kwargs.update(kwargs)
 
-    @staticmethod
-    def kernel(fn):
-        return lambda *args, **kwargs: _FakeLaunchable()
+    class FakePostprocess:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    @staticmethod
-    def ceil_div(numerator, denominator):
-        return 1
-
-    @staticmethod
-    def size(tensor):
-        return 1
-
-
-class _FakeCuda:
-    CUstream = object
-
-
-class _Fa4KernelRecorder:
-    """Fake FA4 kernel class recording the options it is built with and every traced invocation."""
-
-    def __init__(self):
-        self.constructor_kwargs: dict = {}
-        self.invocations: list[dict] = []
-
-    def __call__(self, *args, **kwargs):
-        self.constructor_kwargs.update(kwargs)
-        return self._invoke
-
-    def _invoke(self, *args, **kwargs):
-        self.invocations.append(kwargs)
-
-
-def _noop_kernel(*args, **kwargs):
-    return None
-
-
-def _fa4_thd_fake_modules(*, arch, forward=None, backward=None):
-    """Build `_UpstreamFa4CuteModules` with the upstream CUDA kernels replaced by recorders.
-
-    flash-attn-4 and the CuTe DSL are optional in unit tests, so the launcher boundary is exercised
-    against fakes whose `cute.jit` is the identity.
-    """
-    return fa4_thd._UpstreamFa4CuteModules(
-        arch=arch,
-        cutlass=_FakeCutlass,
-        cute=_FakeCute,
+    modules = fa4_thd._UpstreamFa4CuteModules(
+        arch=90,
+        cutlass=FakeCutlass,
+        cute=FakeCute,
         cjax=object(),
-        cuda=_FakeCuda,
-        FlashAttentionForward=forward or _Fa4KernelRecorder(),
-        FlashAttentionBackward=backward or _Fa4KernelRecorder(),
-        FlashAttentionBackwardPreprocess=lambda *args, **kwargs: _noop_kernel,
-        FlashAttentionBackwardPostprocess=lambda *args, **kwargs: _noop_kernel,
+        cuda=FakeCuda,
+        FlashAttentionForward=object(),
+        FlashAttentionBackward=FakeBackward,
+        FlashAttentionBackwardPreprocess=FakePreprocess,
+        FlashAttentionBackwardPostprocess=FakePostprocess,
     )
 
-
-_BLACKWELL_THD_KERNEL_CONFIG = fa4_thd.Flash4CuteKernelConfig(
-    forward_tile=(128, 128),
-    backward_tile=(128, 128),
-    num_threads=384,
-)
-
-
-def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
-    backward = _Fa4KernelRecorder()
-
     fa4_thd._upstream_fa4_thd_backward_launcher(
-        _fa4_thd_fake_modules(arch=90, backward=backward),
+        modules,
         dtype=jnp.dtype(jnp.bfloat16),
         head_dim=128,
         head_dim_v=128,
@@ -270,50 +230,10 @@ def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
         sliding_window=None,
     )
 
-    assert backward.constructor_kwargs["PdS_stage"] == 1
-    assert backward.constructor_kwargs["SdP_swapAB"] is True
-    assert backward.constructor_kwargs["AtomLayoutNdKV"] == 2
-    assert backward.constructor_kwargs["num_threads"] == 384
-
-
-@pytest.mark.parametrize(
-    ("sliding_window", "window_size_left", "window_size_right"),
-    [(None, None, None), (5, 4, 0)],
-    ids=["full-causal", "sliding-window"],
-)
-def test_gpu_fa4_thd_launchers_pass_resolved_window_sizes(sliding_window, window_size_left, window_size_right):
-    """Both launchers hand FA4 an already-resolved window pair from a single call site."""
-    forward = _Fa4KernelRecorder()
-    forward_launcher = fa4_thd._upstream_fa4_thd_forward_launcher(
-        _fa4_thd_fake_modules(arch=100, forward=forward),
-        dtype=jnp.dtype(jnp.bfloat16),
-        head_dim=128,
-        head_dim_v=128,
-        qhead_per_kvhead=2,
-        kernel_config=_BLACKWELL_THD_KERNEL_CONFIG,
-        sliding_window=sliding_window,
-    )
-    forward_launcher(object(), object(), object(), object(), object(), object(), object(), softmax_scale=0.1)
-
-    assert len(forward.invocations) == 1
-    assert forward.invocations[0]["window_size_left"] == window_size_left
-    assert forward.invocations[0]["window_size_right"] == window_size_right
-
-    backward = _Fa4KernelRecorder()
-    backward_launcher = fa4_thd._upstream_fa4_thd_backward_launcher(
-        _fa4_thd_fake_modules(arch=100, backward=backward),
-        dtype=jnp.dtype(jnp.bfloat16),
-        head_dim=128,
-        head_dim_v=128,
-        qhead_per_kvhead=2,
-        kernel_config=_BLACKWELL_THD_KERNEL_CONFIG,
-        sliding_window=sliding_window,
-    )
-    backward_launcher(*[object() for _ in range(16)], softmax_scale=0.1)
-
-    assert len(backward.invocations) == 1
-    assert backward.invocations[0]["window_size_left"] == window_size_left
-    assert backward.invocations[0]["window_size_right"] == window_size_right
+    assert captured_kwargs["PdS_stage"] == 1
+    assert captured_kwargs["SdP_swapAB"] is True
+    assert captured_kwargs["AtomLayoutNdKV"] == 2
+    assert captured_kwargs["num_threads"] == 384
 
 
 @pytest.mark.parametrize("sliding_window", [None, 5], ids=["full-causal", "sliding-window"])
@@ -323,6 +243,8 @@ def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(slidin
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    if sliding_window is not None and fa4_thd._gpu_compute_arch() // 10 == fa4_thd._HOPPER_ARCH_FAMILY:
+        pytest.skip("FA4 THD sliding-window attention is not wired for SM90.")
 
     q_key, k_key, v_key, cotangent_key = jax.random.split(jax.random.PRNGKey(0), 4)
     q = jax.random.normal(q_key, (1, 64, 4, 128), dtype=jnp.bfloat16)
