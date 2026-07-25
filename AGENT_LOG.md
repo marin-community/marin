@@ -60,3 +60,27 @@ Next: build arm 2 (SCALE_QB_INTEGRAL) + CPU test while arm 1 runs; babysit arm 1
 
 Confidence: 4/10 g=0.5, 3/10 integral (gamma horizon concern above)
 Next: babysit smoke (~15 min) + arm 1; harvest smoke; arm 1 series at ~22:30.
+
+## Check-in 2026-07-25 21:42 UTC — smoke GREEN; log-server ingestion gap noted
+
+- EP4 SMOKE SUCCEEDED (/mwittmann/ep25d3-qbint-smoke-ep4-20260725): step completed in
+  8:13, exit clean. Provenance confirms base_commit 3f10dcc6a (my arm-2 commit),
+  SCALE_QB_INTEGRAL=0.001. Mechanics validated on the real stack (scan+recompute_all+
+  muonh+fa4_cute, QB integral trace + 20 steps). Sentinel/loss lines not yet readable —
+  see the log gap below.
+- INFRA NOTE: since ~20:40 UTC the central log server is not serving logs for ANY new
+  Fray-dispatched grug-train child tasks (mine, d4's sqb smoke, rav's hybridep smoke all
+  return 0 lines; parent executor logs serve fine; this morning's completed jobs serve
+  fine). Peers equally affected — global ingestion lag, not my jobs. Backup harvest paths
+  probed: in-container stdout is a pipe (no local file); per-task telltale endpoints exist
+  but the minted capability token 403s on app paths (/metrics, /health). Plan: poll job
+  logs on a delay; morning evidence says served logs eventually appear.
+- ARM 1 alive and stepping: 16/16 tasks running, all 4 GPUs at 100% util / ~170 GiB on
+  task 0 (checked via task exec + nvidia-smi). ~27 min into the train task at 21:25.
+  ETA ~22:25-22:35.
+- No job mutations beyond my two submissions (arm 1 rack leg, arm 2 smoke).
+
+Confidence: 4/10 g=0.5, 3/10 integral
+Next: poll arm-1 logs from ~22:00; harvest smoke metrics when the log server backfills;
+prepare the arm-2 rack submit command (identical to arm 1 minus SCALE_QB_GAIN, plus
+SCALE_QB_INTEGRAL=0.001) so it fires the moment arm 1 exits.
