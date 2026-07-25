@@ -328,3 +328,13 @@ honest production config (QB-on cf1.0) = 22.60%; >=25% honest needs leg-batching
 24.04/25.39 are bench artifacts. Added rav emission-bug note (drops computed, never logged; fix 2d4a87395).
 TL;DR updated to honest framing. ai-writing-donts pass done. TWO TODO slots remain: d4 300-step steady-state
 drop series (in flight), d3 fa4-lse A/B. Draft committed locally, NOT pushed/posted.
+
+## Milestone draft: fidelity resolved 01:30 UTC
+Filled d4's 350-step steady-state (/mwittmann/ep25d4-qb-cf100-drops-350-v1): p50 22.00% (~22.6 within draw
+variance), loss to 3.335, drops 0.885(5)->0.271(60)->0.175(119)->0.089(250)->0.064(349), tail-100 mean 7.3%,
+halving time growing past ~150 steps. VERDICT: cf1.0 QB-on levels ~6%, does NOT cross 3% - the 120-step <3%
+extrapolation is FALSIFIED. Step-119 drop is draw-variable (0.175 vs 0.083). Strict-3% compliant config =
+QB+cf1.15 @ 20.85%. Ledger: throughput frontier 24.04 vs strict-fidelity 20.85 = ~3.2pp gap; closing it
+(faster/tuned QB balancing) flagged as the top open fidelity direction alongside leg-batching + fa4-lse. TL;DR,
+§2, §5 updated; coherence fix on the 30-step cross-reference; final scrub done. ONE TODO remains: d3 fa4-lse.
+Draft committed locally, NOT pushed/posted.

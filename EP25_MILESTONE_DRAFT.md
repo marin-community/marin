@@ -11,8 +11,9 @@ GPUs, EP64) at the d5120 / 8-of-256 / 48-layer / seq-4096 / batch-1024 operating
   It composes with leg-batched expert GEMMs, which reach 25.39% p50 on a separate 120-step run.
 - Those numbers route with load balancing off, where the routed experts drop 85-89% of assignments
   early in training (real router collapse, verified exact, not a metric artifact). QB load-balancing
-  takes drops to 0.083 by step 119 and costs -1.44pp; the honest production config (QB on, cf1.0)
-  measures 22.60% p50. Reaching >=25% at honest fidelity needs leg-batching and fa4-lse on top.
+  costs -1.44pp and settles at ~6% drops at cf1.0 (22.60% p50); the only measured 3%-compliant
+  config is QB + cf1.15 at 20.85%. The throughput frontier (24.04) and strict fidelity (20.85) sit
+  ~3.2pp apart; closing that gap is the top open fidelity direction.
 - Headline MFU is drop-insensitive: the fixed path's expert GEMMs run on capacity-sized buffers
   regardless of how many tokens drop, so the drop fraction is a fidelity metric, not a speed one.
   The -1.44pp QB cost is the router aux-loss, not the drops.
@@ -77,20 +78,23 @@ The QB cost is a router cost, not a drop cost: the fixed-path expert GEMMs run o
 buffers regardless of drops.
 
 A separate 30-step run measures the early trajectory: at matched steps 23-29 the fraction falls
-0.85 -> 0.25 QB-on against 0.89 -> 0.85 QB-off (3.4x), consistent with the frontier's 0.083 by step
-119. The always-on shared expert processes every token, so loss descends normally (5.84 -> 5.71)
-even under QB-off collapse.
+0.85 -> 0.25 QB-on against 0.89 -> 0.85 QB-off (3.4x); the longer runs below continue that decline.
+The always-on shared expert processes every token, so loss descends normally (5.84 -> 5.71) even
+under QB-off collapse.
 
-Neither QB-on leg is under the ~3% reference at 120 steps (0.083 at cf1.0, 0.037 at cf1.15; the ~3%
-is the known-acceptable rate at 8 buckets from a prior 1e23 run). Both are still falling, so the
-steady-state crossing is unresolved.
+A 350-step QB-on cf1.0 run resolves the steady state (loss healthy to 3.335): drops 0.885 at step
+5, 0.271 at 60, 0.175 at 119, 0.089 at 250, 0.064 at 349, tail-100 mean 7.3%, with a halving time
+that grows past ~150 steps. cf1.0 QB-on levels toward ~6% and does not cross the 3% bar; the
+120-step extrapolation toward <3% is falsified. Step-119 drop is draw-variable (0.175 here vs 0.083
+in the frontier leg), so the steady-state ~6% is the reliable figure, not any single step-119 point.
+The only measured config under a strict 3% bar is QB + cf1.15 (0.037 at step 119, 20.85% p50); cf1.0
+carries ~6% steady drops at 22.60% (the ~3% reference is the known-acceptable rate at 8 buckets from
+a prior 1e23 run).
 
 rav's drop-report jobs currently log no drop metric: the per-layer count is computed but never
 emitted, because the grug training loop logs `train/loss` through callbacks and never logs the
 returned metrics dict. The fix (`2d4a87395`, explicit `tracker.log`) exists in two worktrees and
 should land so his runs report drops.
-
-> TODO: <3% steady-state crossing, from d4's 300-step QB-on drop series (in flight).
 
 ## 3. Sealed negatives
 
@@ -121,18 +125,20 @@ number is a cumulative mean against the p50 used for the fixed path, one draw ea
 
 ## 5. Goal ledger
 
-The honest production config is QB-on cf1.0, which measures 22.60% p50. The QB-off numbers (24.04
-adjoint, 25.39 with leg-batching) are bench artifacts: they route under router collapse and only
-look good because MFU ignores drops. Reaching >=25% at honest fidelity therefore needs the
-compositions on top of 22.60: leg-batching (rav, ~+1.3pp) and fa4-lse (d3, pending). Absent those,
-25% at the operating point holds only if the QB-off bench numbers are accepted as such.
+The QB-off numbers (24.04 adjoint, 25.39 with leg-batching) are bench artifacts: they route under
+router collapse and only look good because MFU ignores drops. QB-on cf1.0 is 22.60% p50 but settles
+at ~6% drops, above a strict 3% bar. The only measured 3%-compliant config is QB + cf1.15 at 20.85%.
+So the throughput frontier (24.04) and the strict-fidelity config (20.85) sit ~3.2pp apart, and
+closing that gap with faster or better-tuned QB balancing is the highest-leverage remaining fidelity
+work, alongside leg-batching composition and fa4-lse.
 
 - Speed, QB-off bench: adjoint 24.04, +leg-batching 25.39.
-- Speed, honest (QB-on cf1.0): 22.60; path to 25% is +leg-batching and fa4-lse.
-- Fidelity: QB-on required; 0.083 drops at cf1.0 / 0.037 at cf1.15 by step 119, both still falling,
-  <3% steady-state pending d4's 300-step run.
+- Speed, QB-on cf1.0: 22.60, ~6% steady drops (not 3%-compliant).
+- Speed, strict 3%-fidelity (QB cf1.15): 20.85, drops 0.037.
+- Path to >=25% at strict fidelity: close the ~3.2pp gap (faster QB balancing) plus leg-batching and
+  fa4-lse.
 
-> TODO: fa4-lse A/B (d3) for the remaining path-to-25% pp on top of the honest 22.60.
+> TODO: fa4-lse A/B (d3) for the remaining path-to-25% pp.
 
 ## 6. Reproduction
 
