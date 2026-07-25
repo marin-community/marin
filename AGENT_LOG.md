@@ -193,3 +193,28 @@ for drop_fraction + MFU + terminal, then I submit the treatment leg.
   from me.
 - STATUS: control still compiling (monitor iter 2, running). Will report BOTH legs' drop_fraction + p50
   MFU + loss trajectory side-by-side the moment treatment terminates.
+
+## Check-in 05:20 UTC — CONTROL results + DROP-METRIC BUG + reconciliation
+CONTROL /mwittmann/ep25d1-adj-control-120-0724-1707 SUCCEEDED (34 min):
+  p50 MFU 20.61% (p10 20.51 / p90 20.69, 119 samples) — reproduces the 20.558% gather-dispatch baseline.
+  loss descending 5.836 -> 5.738 over 120 steps. Healthy.
+  BUT moe/drop_fraction logged NOTHING -> found the bug (below).
+
+DROP-METRIC LOGGING BUG (FIXED, commit 2d4a87395): the grug loop logs train/loss via state_callbacks,
+NOT the returned `metrics` dict, so my moe/ keys were never emitted. Fix: explicit levanter.tracker.log
+of moe/dropped_assignments + moe/drop_fraction in the loop. pyrefly clean, formatted.
+
+RECONCILIATION (d3's 65-68% "drop fraction"; rav cf1.2 capacity_overflow_rate_mean 0.77-0.92):
+- My metric is dimensionally CORRECT: dropped_total = psum over (replica_dcn,data,expert) => GLOBAL per
+  layer; denominator B*S*topk*num_layers = GLOBAL. So mine reads the true token-drop-fraction.
+- Hand estimate at the operating point: tokens_per_shard=65,536 (4.19M tokens / 64 batch-shards),
+  assignments_per_shard=524,288, capacity=ceil(1.0*524288/256)=2048 == MEAN load per (shard,expert).
+  Capacity==mean => at ~random routing each expert bucket ~ N(2048, ~45), E[(X-2048)+] ~= 45*0.399 ~= 18
+  per expert => ~256*18/524288 ~= 0.9% TOKEN-drop-fraction. NOT 65%.
+- Key insight: capacity==mean means ~half of experts/buckets overflow their tail -> a "fraction of
+  buckets that overflow" metric reads ~50-90% (matches rav's 0.77-0.92 and layer_0 0.22-0.52), while the
+  actual TOKEN-drop-fraction (dropped tail / total) is single-digit %. d3's 65% is most consistent with
+  either that overflow-rate semantics OR a global-numerator/per-shard-denominator (64x) scope mismatch.
+- VERDICT PENDING MEASUREMENT: treat the fixed path as likely fidelity-OK (~1-3% true drops) but MUST
+  confirm with my fixed metric. My in-flight treatment (adj-custom-120-0724-2216) has the OLD broken
+  logging -> will not produce the number. Need a run with commit 2d4a87395.
