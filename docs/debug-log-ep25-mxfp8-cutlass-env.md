@@ -66,4 +66,40 @@ passed and 6 skipped in 37.47 seconds.
 
 ## Future work
 
-- [ ] Rerun the GB200 numerical ladder after the corrected bundle is shipped.
+- [ ] Recover the g8 job metadata or approve new 4.5.2-isolation/4.6.0-port
+      work before another GB200 submission.
+
+## Attempt 3 result
+
+`ep25d2-mxfp8-numerics-20260725-v2` failed after 12.29 seconds with the same
+libNVVM failure for `sm_100a`. Excluding the 4.6.0 CUDA 12 payload did not
+clear the compiler gate. The job did not print the loaded CUTLASS extension
+or libNVVM path, so the original payload-selection hypothesis is not proven
+for the shipped bundle.
+
+## Final reconstruction audit
+
+The first 2.2 PF/s green run was `/mwittmann/mxfp8-002-g8` at commit
+`42f7d9fa2`. Its record identifies CUTLASS DSL 4.5.2, the one-GB200 submit
+shape, and the mutable `ghcr.io/marin-community/iris-task:latest` default. It
+does not identify the pulled image digest, expanded toolkit environment,
+libNVVM path, or installed wheel hashes. No explicit `CUDA_TOOLKIT_PATH` or
+manual wheel-install step was recorded.
+
+The current Levanter GPU environment cannot directly resolve that dependency
+set because QuACK 0.6.1 pins CUTLASS DSL 4.6.0. Creating an isolated 4.5.2
+environment or porting the kernel/toolchain to 4.6.0 would be new integration
+work.
+
+The numerical entry point now emits `CUTLASS_ENV_SENTINEL` before compilation.
+The JSON record identifies the imported CUTLASS module, loaded `_cutlass_ir`
+extension and its owning distribution, CUTLASS dist-info directories,
+`CUDA_TOOLKIT_PATH`, `LD_LIBRARY_PATH`, and the libNVVM selected by
+`cuda.pathfinder`.
+
+## Stop decision
+
+No v3 job is emitted because copying the green environment verbatim is not
+possible from the retained record. `EP25_D2_MXFP8_SCOPING.md` lists the
+missing artifacts and recovery estimates. The stale EP4 and rack commands
+were removed from `EP25_D2_RELAY_COMMANDS.md`.

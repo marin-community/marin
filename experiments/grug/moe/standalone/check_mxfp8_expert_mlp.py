@@ -4,12 +4,109 @@
 """Validate the fused MXFP8 expert MLP against an independent f32 reference."""
 
 import argparse
+import base64
+import hashlib
+import importlib
+import importlib.metadata
 import json
+import os
+import sys
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from levanter.grug._moe.mxfp8 import mxfp8_expert_mlp
+
+CUTLASS_DISTRIBUTIONS = (
+    "nvidia-cutlass-dsl",
+    "nvidia-cutlass-dsl-libs-base",
+    "nvidia-cutlass-dsl-libs-core",
+    "nvidia-cutlass-dsl-libs-cu12",
+    "nvidia-cutlass-dsl-libs-cu13",
+)
+
+
+def _distribution_file_matches(distribution: importlib.metadata.Distribution, path: Path) -> bool:
+    for package_path in distribution.files or ():
+        installed_path = Path(distribution.locate_file(package_path)).resolve()
+        if installed_path != path:
+            continue
+        file_hash = package_path.hash
+        if file_hash is None or file_hash.mode != "sha256":
+            return False
+        digest = hashlib.sha256(path.read_bytes()).digest()
+        encoded_digest = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+        return encoded_digest == file_hash.value
+    return False
+
+
+def cutlass_environment_sentinel() -> dict:
+    """Describe the exact CUTLASS DSL payload and NVVM path selected by this process."""
+    distributions = {}
+    installed_distributions = {}
+    for name in CUTLASS_DISTRIBUTIONS:
+        try:
+            distribution = importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            distributions[name] = None
+            continue
+        installed_distributions[name] = distribution
+        distributions[name] = {
+            "version": distribution.version,
+            "dist_info": str(getattr(distribution, "_path", "")),
+        }
+
+    cutlass_module_path = None
+    cutlass_extension_path = None
+    cutlass_import_error = None
+    try:
+        cutlass = importlib.import_module("cutlass")
+        cutlass_module_path = str(Path(cutlass.__file__).resolve())
+        importlib.import_module("cutlass.cute")
+        importlib.import_module("cutlass._mlir._mlir_libs")
+    except Exception as error:
+        cutlass_import_error = f"{type(error).__name__}: {error}"
+    for module_name, module in sys.modules.items():
+        if module_name.endswith("._cutlass_ir") and getattr(module, "__file__", None):
+            cutlass_extension_path = str(Path(module.__file__).resolve())
+            break
+
+    cutlass_payload = None
+    payload_owners = []
+    if cutlass_extension_path is not None:
+        extension_path = Path(cutlass_extension_path)
+        if ".cu13." in extension_path.name:
+            cutlass_payload = "nvidia-cutlass-dsl-libs-cu13"
+        elif ".cu12." in extension_path.name:
+            cutlass_payload = "nvidia-cutlass-dsl-libs-cu12"
+        for name, distribution in installed_distributions.items():
+            if _distribution_file_matches(distribution, extension_path):
+                payload_owners.append(name)
+        if cutlass_payload is None and len(payload_owners) == 1:
+            cutlass_payload = payload_owners[0]
+
+    libnvvm_path = None
+    libnvvm_error = None
+    try:
+        pathfinder = importlib.import_module("cuda.pathfinder")
+        libnvvm_path = str(pathfinder.load_nvidia_dynamic_lib("nvvm").abs_path)
+    except Exception as error:
+        libnvvm_error = f"{type(error).__name__}: {error}"
+
+    return {
+        "cuda_toolkit_path": os.environ.get("CUDA_TOOLKIT_PATH"),
+        "cutlass_extension_path": cutlass_extension_path,
+        "cutlass_import_error": cutlass_import_error,
+        "cutlass_module_path": cutlass_module_path,
+        "cutlass_payload": cutlass_payload,
+        "cutlass_payload_record_owners": payload_owners,
+        "distributions": distributions,
+        "ld_library_path": os.environ.get("LD_LIBRARY_PATH"),
+        "libnvvm_error": libnvvm_error,
+        "libnvvm_path": libnvvm_path,
+        "nvidia_cutlass_dsl_module_path": cutlass_module_path,
+    }
 
 
 def _relative_frobenius(actual: jax.Array, expected: jax.Array) -> float:
@@ -146,7 +243,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--error-gate", type=float, default=0.1)
     parser.add_argument("--out", default="/tmp/ep25d2-mxfp8-numerics.json")
+    parser.add_argument("--sentinel-only", action="store_true")
     args = parser.parse_args()
+
+    sentinel = cutlass_environment_sentinel()
+    print("CUTLASS_ENV_SENTINEL " + json.dumps(sentinel, sort_keys=True), flush=True)
+    if args.sentinel_only:
+        return
 
     result = run(args)
     with open(args.out, "w") as output_file:

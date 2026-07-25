@@ -398,3 +398,55 @@ GB200 compiler gate, pending the `-v2` numerical relay.
 Next: stop for coordinator execution of
 `ep25d2-mxfp8-numerics-20260725-v2`. Do not submit the EP4 or rack jobs unless
 the preceding numerical/drop-parity gate passes.
+
+## Check-in 2026-07-25 22:20 UTC
+
+`ep25d2-mxfp8-numerics-20260725-v2` failed after 12.29 seconds with the same
+libNVVM `sm_100a` diagnostic. The 4.6.0 CUDA 12 payload exclusion did not clear
+the compiler gate. Because v2 predates the new sentinel, it does not reveal
+the loaded `_cutlass_ir` extension or libNVVM path.
+
+The 7282 record identifies `/mwittmann/mxfp8-002-g8` as the first 2.2 PF/s
+green job at commit `42f7d9fa2`. It used the stock aarch64 CUTLASS DSL 4.5.2
+wheel through a one-GB200 `--extra gpu` submit. The record has no explicit
+`CUDA_TOOLKIT_PATH` or wheel-install step. Its configured task image was the
+mutable `ghcr.io/marin-community/iris-task:latest`; the pulled digest, expanded
+environment, libNVVM path, setup log, and installed wheel hashes are not
+retained. GitHub API access to issue comments also failed in this sandbox.
+
+The current Levanter GPU extra pins QuACK 0.6.1 and CUTLASS DSL 4.6.0, so the
+known-green 4.5.2 dependency set cannot be copied into the bundled environment
+without new isolation work. `EP25_D2_MXFP8_SCOPING.md` records the exact
+missing artifacts and estimates 1–2 hours if the archived g8 job metadata is
+available, or 4–8 hours plus queue time for a new 4.5.2 isolation or 4.6.0
+port.
+
+The numerical script now emits a machine-readable `CUTLASS_ENV_SENTINEL`
+before compilation. It reports module and loaded extension paths, CUTLASS
+dist-info names and versions, payload ownership from wheel `RECORD` hashes,
+`CUDA_TOOLKIT_PATH`, `LD_LIBRARY_PATH`, and the libNVVM path selected by
+`cuda.pathfinder`. The CPU regression reports 52 passed and 6 accelerator or
+multi-device skips in 37.39 seconds. Targeted Ruff lint and formatting,
+`git diff --check`, and `uv lock --check --offline` also pass.
+
+No v3 command was emitted. `EP25_D2_RELAY_COMMANDS.md` now explicitly blocks
+the stale v2 EP4/rack ladder and points to the scoping assessment. No cluster
+job was submitted or mutated from this sandbox.
+
+The coordinator must commit exactly:
+
+```text
+AGENT_LOG.md
+EP25_D2_MXFP8_SCOPING.md
+EP25_D2_RELAY_COMMANDS.md
+docs/debug-log-ep25-mxfp8-cutlass-env.md
+experiments/grug/moe/standalone/check_mxfp8_expert_mlp.py
+experiments/grug/moe/standalone/test_check_mxfp8_expert_mlp.py
+```
+
+Confidence: 9/10 that the retained record is insufficient for a verbatim
+green-environment reconstruction; 8/10 that the sentinel will identify the
+next environment mismatch before compiler output.
+
+Next: stop under the round-6 fourth-attempt rule. Resume only with the archived
+g8 image/job metadata or approval for new 4.5.2-isolation/4.6.0-port work.
