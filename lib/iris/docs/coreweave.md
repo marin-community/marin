@@ -787,18 +787,16 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
-- **A controller restart can CrashLoop on a stale node-local state DB.** The
-  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
-  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
-  different CPU node. If that node holds a corrupt leftover state DB from an earlier
-  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
-  trusts it (skips the checkpoint restore) and crashes with `database disk image is
-  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
-  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
-  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
-  checkpoint makes a stale node restore the clean checkpoint, and landing back on
-  the current controller node reuses its good DB. A persistently bad node needs its
-  `local_state_dir/db` wiped so startup falls back to the checkpoint.
+- **Controller state is node-local.** The controller keeps SQLite state on
+  node-local NVMe (`storage.local_state_dir`, a hostPath), and
+  `cluster controller restart` may reschedule the replacement onto another CPU
+  node. Startup runs `PRAGMA quick_check` on both local databases and only reuses
+  them when their `last_checkpoint_epoch_ms` marker matches the selected remote
+  checkpoint. Otherwise it stages and validates a clean checkpoint directory
+  before replacing the local directory, which also discards stale WAL/SHM files.
+  A corrupt local directory is retained as `db.corrupt-<epoch_ms>` for diagnosis.
+  The readiness endpoint also reads the task-attempt and federation tables, so a
+  static HTTP response cannot mask a broken database.
 
 Cold-start timings:
 
@@ -1034,7 +1032,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
-| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded endpoint, addressing, timeout, and retry config |
 | `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
@@ -1225,12 +1223,29 @@ If `Valid` is `False`, the instance type or configuration is rejected.
 ### Pod stuck in Pending
 
 ```bash
-kubectl describe pod <name> -n iris      # Check Events section
-kubectl get events -n iris --sort-by='.lastTimestamp'
+iris --cluster=<cluster> task describe <task-id>
+kubectl get pod <name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.status=="False")]}{.reason}{": "}{.message}{"\n"}{end}'
+kubectl get workload -n iris
+kubectl get workload <workload-name> -n iris \
+  -o jsonpath='{range .status.conditions[?(@.type=="QuotaReserved")]}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
 ```
 
-Common causes: node not yet provisioned (wait for autoscaler), resource limits
-exceeded, or missing tolerations.
+`SchedulingGated` means Kueue has not admitted the Workload. The
+`QuotaReserved` message reports quota or topology fit failures such as
+`excluded: resource "memory"`. Iris copies that verdict into the task's backend
+status, including for singleton Pods whose generated Workload is linked by Pod
+UID.
+
+Common causes are node capacity fragmented across running Pods, resource limits
+exceeded, missing tolerations, or a node still provisioning. Kueue preempts only
+the priorities allowed by the ClusterQueue policy; equal-priority work remains
+in place.
+
+Avoid `kubectl describe pod` when a task carries credentials in literal
+environment variables. It prints those values. Use the JSONPath commands above
+for scheduling state, and rotate any credential printed into a terminal or
+transcript.
 
 ### Image pull errors
 

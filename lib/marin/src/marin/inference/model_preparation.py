@@ -38,10 +38,10 @@ def _kv_heads_compatible(num_key_value_heads: int | None, tensor_parallel_size: 
     return num_key_value_heads % tensor_parallel_size == 0 or tensor_parallel_size % num_key_value_heads == 0
 
 
-def read_attention_heads(model: str) -> tuple[int, int | None]:
+def read_attention_heads(model: str, revision: str | None = None) -> tuple[int, int | None]:
     """Return attention and KV head counts from an HF or object-store config."""
 
-    config_dict = _read_model_config_dict(model)
+    config_dict = _read_model_config_dict(model, revision)
     for scope in (config_dict, config_dict.get("text_config"), config_dict.get("llm_config")):
         if not isinstance(scope, dict):
             continue
@@ -52,13 +52,22 @@ def read_attention_heads(model: str) -> tuple[int, int | None]:
     raise ValueError(f"Could not find num_attention_heads in the model config for {model!r}.")
 
 
-def _read_model_config_dict(model: str) -> dict:
+def _read_model_config_dict(model: str, revision: str | None = None) -> dict:
     if _is_object_store_path(model):
         return json.loads((StoragePath(model) / "config.json").read_text())
-    return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
+    return AutoConfig.from_pretrained(model, revision=revision, trust_remote_code=True).to_dict()
 
 
-def resolve_model_path(model: str, cache_ttl_days: int) -> str:
+def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = None) -> str:
     """Resolve and optionally mirror an HF model to the region-local cache."""
 
-    return resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+    if revision is None or _is_object_store_path(model):
+        return resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+    pinned_model = f"{model}@{revision}"
+    resolved = resolve_cached_model_path(
+        pinned_model,
+        cache_ttl_days=cache_ttl_days,
+        cache_prefix=_MODEL_CACHE_PREFIX,
+    )
+    # With caching disabled, vLLM receives the bare model plus its separate revision argument.
+    return model if resolved == pinned_model else resolved

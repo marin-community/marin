@@ -9,6 +9,7 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
 
@@ -32,10 +33,16 @@ class VllmSource(StrEnum):
     MARIN_FORK = "marin_fork"
 
 
+class VllmCompilationCacheMode(StrEnum):
+    MANAGED = "managed"
+    CALLER_MANAGED = "caller_managed"
+
+
 @dataclass(frozen=True)
 class ServedModelConfig:
-    model: str
-    model_path: str | None = None
+    weights: str
+    revision: str | None = None
+    api_model: str | None = None
     tokenizer: str | None = None
     dtype: str = "bfloat16"
     max_model_len: int | None = None
@@ -43,12 +50,28 @@ class ServedModelConfig:
     chat_template_content: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.model:
-            raise ValueError("model must not be empty")
+        if not self.weights:
+            raise ValueError("weights must not be empty")
+        if self.api_model == "":
+            raise ValueError("api_model must not be empty")
         if self.max_model_len is not None and self.max_model_len <= 0:
             raise ValueError("max_model_len must be positive")
         if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
             raise ValueError("tensor_parallel_size must be positive")
+
+    @property
+    def model_id(self) -> str:
+        """Model identifier accepted by the served OpenAI endpoint."""
+        return self.api_model or self.weights
+
+
+@dataclass
+class InferenceModelConfig:
+    """Model and engine arguments consumed by an in-process vLLM server."""
+
+    name: str
+    path: str | None
+    engine_kwargs: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -56,6 +79,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.WORKSPACE
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
     extra_args: tuple[str, ...] = ()
@@ -192,3 +216,19 @@ class IrisConfig:
             raise ValueError("Inference workers require an accelerator")
         if isinstance(device, TpuConfig) and device.vm_count() != 1:
             raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
+
+
+@dataclass(frozen=True)
+class RemoteInferenceConfig:
+    """Model, engine, and Iris inputs for one remote inference context."""
+
+    model: ServedModelConfig
+    engine: InferenceEngineConfig
+    iris: IrisConfig
+    instances: int = 1
+    broker: BrokerConfig | None = None
+    capability_origin: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instances <= 0:
+            raise ValueError("instances must be positive")

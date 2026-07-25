@@ -13,6 +13,9 @@ import { useSamplePager, type SampleFilter } from '@/composables/useSamplePager'
 import type { SampleRow, SampleTasksResponse } from '@/types/api'
 import McqSample from '@/components/samples/McqSample.vue'
 import GenerativeSample from '@/components/samples/GenerativeSample.vue'
+import AgenticSample from '@/components/samples/AgenticSample.vue'
+import GradingPanel from '@/components/samples/GradingPanel.vue'
+import EmptyState from '@/components/shared/EmptyState.vue'
 
 const props = defineProps<{ runId: string }>()
 const route = useRoute()
@@ -139,8 +142,8 @@ function metricEntries(row: SampleRow): [string, number][] {
       <p v-if="tasksError" class="text-sm text-status-danger">{{ tasksError }}</p>
       <p v-else-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">{{ error }}</p>
       <p v-else-if="loading && !row" class="text-sm text-text-muted py-12 text-center">Loading samples…</p>
-      <p v-else-if="!task" class="text-sm text-text-muted py-12 text-center">No task selected.</p>
-      <p v-else-if="total === 0" class="text-sm text-text-muted py-12 text-center">No samples for this task/filter.</p>
+      <EmptyState v-else-if="!task" message="No task selected." icon="○" />
+      <EmptyState v-else-if="total === 0" message="No samples for this task and filter." icon="○" />
       <template v-else-if="row">
         <div class="flex items-center gap-2 flex-wrap mb-6">
           <span class="font-mono text-sm text-text-secondary">doc {{ row.doc_id }}</span>
@@ -160,8 +163,12 @@ function metricEntries(row: SampleRow): [string, number][] {
           >{{ name }} {{ value ?? '—' }}</span>
         </div>
 
-        <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
-        <GenerativeSample v-else :sample="row" />
+        <div class="space-y-6">
+          <GradingPanel :grading="row.grading" />
+          <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
+          <GenerativeSample v-else-if="row.kind === 'generation'" :sample="row" />
+          <AgenticSample v-else :sample="row" :run-id="runId" />
+        </div>
       </template>
     </div>
   </div>

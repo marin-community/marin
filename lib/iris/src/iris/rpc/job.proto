@@ -258,6 +258,17 @@ message TaskAttempt {
   // Controller-minted 16-hex-char routing key for this attempt. Surfaced to
   // operators (dashboard) for traceability.
   string attempt_uid = 9;
+
+  // Backend object identity, persisted when the pod is observed so a past attempt
+  // can be described after its pod is gone. Empty for pre-persistence rows and for
+  // the RPC-worker backend (which identifies an attempt by worker_id).
+  string pod_name = 10;
+  string pod_uid = 11;   // Kubernetes object UID — the stable identity a reused name is not.
+  string node_name = 12;
+  // Bounded terminal-cause string for a failed attempt, preferring an
+  // init-container failure (e.g. a stage-workdir bundle fetch 404) over the task
+  // container's own reason. Empty unless the attempt failed.
+  string terminal_reason = 13;
 }
 
 message ResourceUsage {

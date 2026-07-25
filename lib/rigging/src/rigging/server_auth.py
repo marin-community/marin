@@ -157,7 +157,8 @@ class TokenVerifier(Protocol):
 # backend-service resource path and it is signed with IAP's own (ES256) keys,
 # published at the URL below.
 IAP_ASSERTION_HEADER = "x-goog-iap-jwt-assertion"
-_IAP_PUBLIC_KEYS_URL = "https://www.gstatic.com/iap/verify/public_key"
+IAP_PUBLIC_KEYS_URL = "https://www.gstatic.com/iap/verify/public_key"
+IAP_ISSUER = "https://cloud.google.com/iap"
 _IAP_CERTS_CACHE_TTL_SECONDS = 3600.0
 
 
@@ -221,7 +222,7 @@ class IapAssertionVerifier:
                 assertion,
                 self._request,
                 audience=self._audience,
-                certs_url=_IAP_PUBLIC_KEYS_URL,
+                certs_url=IAP_PUBLIC_KEYS_URL,
             )
         except (ValueError, GoogleAuthError) as exc:
             raise ValueError(f"IAP assertion verification failed: {exc}") from exc

@@ -1,0 +1,144 @@
+name: "Iris Native - Release Wheels"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, stable, manual]
+        default: manual
+      version:
+        description: "Version (required for stable mode, e.g. 0.1.1)"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC daily nightly
+  push:
+    tags:
+      - "iris-native-v*"
+  pull_request:
+    paths:
+      - "lib/iris/rust/**"
+      - ".github/workflows/iris-native-release-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.resolved.outputs.version }}
+      skip: ${{ steps.stale.outputs.skip || 'false' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+
+      - id: stale
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/iris/rust/ .github/workflows/iris-native-release-wheels.yaml)
+          if [[ -z "$changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no Iris native changes in the last 25h, skipping nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Iris native changes since yesterday:"
+            echo "$changes"
+          fi
+
+      - id: pick
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/iris-native-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "input_version=${GITHUB_REF_NAME#iris-native-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: resolved
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "$MODE" \
+            --version "$INPUT_VERSION" \
+            --revision "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --build resolve
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build platform wheel
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build wheel
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: iris-native-${{ matrix.os }}
+          path: dist/*
+
+  publish:
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+      && needs.resolve.outputs.skip != 'true'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build source distribution
+        run: |
+          python lib/iris/rust/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build sdist
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist/

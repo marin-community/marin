@@ -19,7 +19,7 @@ Example:
 
 import logging
 from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,6 +256,15 @@ class Job:
         task_statuses = self._client._cluster_client.list_tasks(self._job_id)
         return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
 
+    def logs(self, *, max_lines: int = 0, tail: bool = False) -> list[TaskLogEntry]:
+        """Fetch globally timestamp-ordered logs across this job's tasks.
+
+        Args:
+            max_lines: Global maximum number of lines to return. Zero uses the server default.
+            tail: Return the most recent lines instead of the earliest lines.
+        """
+        return self._client.fetch_task_logs(self._job_id, max_lines=max_lines, tail=tail)
+
     def wait(
         self,
         timeout: float = 300.0,
@@ -341,6 +350,16 @@ class EndpointRegistry(Protocol):
         """
         ...
 
+    def registered(
+        self,
+        name: str,
+        address: str,
+        metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+    ) -> AbstractContextManager[str]:
+        """Own one renewable endpoint registration for a context lifetime."""
+        ...
+
 
 class NamespacedEndpointRegistry:
     """Endpoint registry that auto-prefixes names with a namespace."""
@@ -394,6 +413,24 @@ class NamespacedEndpointRegistry:
         """
         self._cluster.unregister_endpoint(endpoint_id)
 
+    @contextmanager
+    def registered(
+        self,
+        name: str,
+        address: str,
+        metadata: dict[str, str] | None = None,
+        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+    ) -> Generator[str, None, None]:
+        """Register and renew an endpoint, then remove it promptly on clean exit."""
+        endpoint_id = self.register(name, address, metadata, access)
+        try:
+            yield endpoint_id
+        finally:
+            try:
+                self.unregister(endpoint_id)
+            except Exception:
+                logger.warning("Failed to unregister endpoint id=%s", endpoint_id, exc_info=True)
+
 
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace."""
@@ -421,7 +458,7 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
+        matches = self._cluster.list_endpoint_instances(prefixed_name)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
@@ -894,6 +931,23 @@ class IrisClient:
     def resolve_endpoint(self, url: str) -> str:
         """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
         return self._cluster_client.resolve_endpoint(url)
+
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List registered endpoints matching a name prefix."""
+        return self._cluster_client.list_endpoints(prefix)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List registered instances with the exact endpoint name."""
+        return self._cluster_client.list_endpoint_instances(name)
+
+    def mint_endpoint_token(
+        self,
+        endpoint_name: str,
+        *,
+        ttl: Duration | None = None,
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
+        """Mint a scoped token for a link-accessible endpoint."""
+        return self._cluster_client.mint_endpoint_token(endpoint_name, ttl=ttl)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

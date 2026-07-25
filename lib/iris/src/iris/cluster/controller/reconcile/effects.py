@@ -59,6 +59,12 @@ class AttemptRowDelta:
     finished_at: Timestamp | None = None
     exit_code: int | None = None
     error: str | None = None
+    # Backend object identity + terminal cause, folded last-non-null (see
+    # snapshot.TaskUpdate). None leaves the column unchanged.
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    node_name: str | None = None
+    terminal_reason: str | None = None
 
 
 @dataclass

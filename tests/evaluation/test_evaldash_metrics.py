@@ -33,7 +33,7 @@ def _record(model: str, eval_name: str, version: str | None, created_at: str, va
         metrics={eval_name: {"acc,none": value, "acc_stderr,none": 0.01}} if succeeded else {},
         jobs={},
         log_tails={},
-        provenance=Provenance(git_sha="s", evalchemy_image="i", launch_host="h"),
+        provenance=Provenance(git_sha="s", eval_image="i", launch_host="h"),
     )
 
 

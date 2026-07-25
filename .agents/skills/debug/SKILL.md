@@ -1,13 +1,18 @@
 ---
 name: debug
-description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured debug log.
+description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured incident record.
 ---
 
 # Skill: Debug
 
 Systematic debugging for code-level bugs and Marin infrastructure faults.
-For infrastructure symptoms, route to the right `OPS.md` section first; for
-code bugs, keep a structured debug log.
+For infrastructure symptoms, route to the right `OPS.md` section first. Keep
+durable investigation records in `.agents/ops/YYYY-MM-DD-<slug>.md`.
+
+Use the incident's investigation date and a 3-6-word kebab-case slug. Do not
+write `docs/debug-log-*` files or create another debug-log directory. Extend an
+existing record when it covers the same event. Use `write-ops-log` to finish an
+infrastructure or other multi-step incident as a standalone postmortem.
 
 ## Infrastructure faults
 
@@ -29,11 +34,13 @@ loop (`babysit-job` or `babysit-zephyr`).
 
 ## Code bugs
 
-For code-level bugs that are not infrastructure faults, maintain a debug log
-at `docs/debug-log-<task-name>.md`:
+For code-level bugs that are not infrastructure faults, maintain the same
+record at `.agents/ops/YYYY-MM-DD-<slug>.md`. A contained fix may use the
+lightweight structure below; preserve it and complete the `write-ops-log`
+structure when the investigation exposes an operational lesson:
 
 ```
-# Debugging log for <task>
+# <System or component>: <symptom>
 
 <goal>
 

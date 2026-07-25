@@ -434,6 +434,13 @@ task_attempts_table = Table(
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
     Column("backend_id", String, nullable=False, server_default=""),
+    # Backend object identity, captured when the pod is observed so a past attempt
+    # is describable after its pod is gone. terminal_reason is the bounded failure
+    # cause (init-container or task-container). See migration 0047.
+    Column("pod_name", String, nullable=False, server_default=""),
+    Column("pod_uid", String, nullable=False, server_default=""),
+    Column("node_name", String, nullable=False, server_default=""),
+    Column("terminal_reason", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(
@@ -500,9 +507,15 @@ endpoints_table = Table(
     metadata,
     Column("endpoint_id", String, primary_key=True),
     Column("name", String, nullable=False),
+    # job_id/task_id carry no FK to jobs/tasks. A local endpoint's ids reference a
+    # real job (cleaned up explicitly in delete_job, not by CASCADE); an endpoint
+    # absorbed from a federation child (peer_id set, mirrored by
+    # replace_remote_for_peer for a job the parent never received) has ids that name
+    # a job on the child with no row here — the mint path reads only the endpoint row
+    # and parses the owner from the task_id string. See migration 0048.
     Column("address", String, nullable=False),
-    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
-    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
+    Column("job_id", JobNameType, nullable=False),
+    Column("task_id", JobNameType),
     Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
     # Lease expiry. Registration grants a lease; re-registering renews it. A row

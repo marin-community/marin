@@ -74,6 +74,12 @@ class ServiceSpec:
     """Environment values resolved at submit time from secret references
     (``gcp-secret://`` / ``env:`` / ``file:``, see :mod:`rigging.secrets`)."""
 
+    pip_packages: tuple[str, ...] = ()
+    """Additional pinned packages installed by Iris before the service starts."""
+
+    sync_packages: tuple[str, ...] = ()
+    """Optional workspace packages that scope the service's ``uv sync``."""
+
     wait: int = DEFAULT_READY_WAIT
     """Readiness wait in seconds. Expiry warns and exits 0: the submit already
     happened and Iris's retry budgets converge once capacity frees, so a capacity
@@ -138,7 +144,14 @@ class ServiceSpec:
         unknown = set(raw) - known
         if unknown:
             raise ValueError(f"unknown spec fields: {sorted(unknown)}")
-        for field_name in ("entrypoint", "regions", "build_commands", "extra_bundle_includes"):
+        for field_name in (
+            "entrypoint",
+            "regions",
+            "pip_packages",
+            "sync_packages",
+            "build_commands",
+            "extra_bundle_includes",
+        ):
             if field_name in raw:
                 raw[field_name] = tuple(raw[field_name])
         return cls(**raw)

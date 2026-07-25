@@ -33,6 +33,8 @@ from .conftest import (
     imagepull_pod,
     make_batch,
     make_kueue_provider,
+    singleton_gated_pod,
+    singleton_unadmitted_workload,
     unadmitted_workload,
     unevaluated_workload,
 )
@@ -150,10 +152,7 @@ def test_event_log_retain_forgets_gone_attempts():
 # --- end-to-end through sync() -------------------------------------------------
 
 
-def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
-    """Seed a SchedulingGated, Kueue-unadmitted pod + its Workload, discoverable by sync()."""
-    pod_group = _pod_group_name(task_id, attempt_id)
-    pod = gated_pod(name=_pod_name(task_id, attempt_id), pod_group=pod_group)
+def _seed_gated_resources(k8s, task_id: JobName, attempt_id: int, pod: dict, workload: dict) -> None:
     pod["kind"] = "Pod"
     pod["metadata"]["labels"].update(
         {
@@ -164,7 +163,21 @@ def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
         }
     )
     k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
-    k8s.seed_resource(K8sResource.WORKLOADS, pod_group, unadmitted_workload(pod_group))
+    k8s.seed_resource(K8sResource.WORKLOADS, workload["metadata"]["name"], workload)
+
+
+def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
+    """Seed a SchedulingGated, Kueue-unadmitted pod + its Workload, discoverable by sync()."""
+    pod_group = _pod_group_name(task_id, attempt_id)
+    pod = gated_pod(name=_pod_name(task_id, attempt_id), pod_group=pod_group)
+    _seed_gated_resources(k8s, task_id, attempt_id, pod, unadmitted_workload(pod_group))
+
+
+def _seed_singleton_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
+    """Seed the Pod-owned Workload shape Kueue creates for a non-gang task."""
+    pod = singleton_gated_pod(name=_pod_name(task_id, attempt_id))
+    workload = singleton_unadmitted_workload(pod_name=pod["metadata"]["name"], pod_uid=pod["metadata"]["uid"])
+    _seed_gated_resources(k8s, task_id, attempt_id, pod, workload)
 
 
 def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
@@ -193,5 +206,24 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
         provider.sync(make_batch(running_tasks=[entry]))
         rows = [r for w in event_table.writes for r in w]
         assert len(rows) == 1
+    finally:
+        provider.close()
+
+
+def test_sync_singleton_surfaces_kueue_verdict_on_task_and_event(k8s):
+    event_table = FakeStatsTable()
+    provider = make_kueue_provider(k8s, task_event_table=event_table)
+    try:
+        task_id = JobName.from_wire("/job/0")
+        _seed_singleton_gated_task(k8s, task_id)
+
+        updates = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))
+
+        assert len(updates) == 1
+        assert "couldn't assign flavors" in (updates[0].status_message or "")
+        rows = [row for write in event_table.writes for row in write]
+        assert len(rows) == 1
+        assert rows[0].source == _EVENT_SOURCE_KUEUE
+        assert rows[0].type == "Warning"
     finally:
         provider.close()

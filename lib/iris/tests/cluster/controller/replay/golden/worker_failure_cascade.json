@@ -73,9 +73,13 @@
       "error": "Worker w-doomed failed: node lost",
       "exit_code": null,
       "finished_at_ms": 1704067200001,
+      "node_name": "",
+      "pod_name": "",
+      "pod_uid": "",
       "started_at_ms": null,
       "state": 7,
       "task_id": "/test-user/cascade-job/0",
+      "terminal_reason": "",
       "worker_id": null
     }
   ],

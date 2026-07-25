@@ -5,9 +5,11 @@
 
 CoreWeave AI Object Storage (and R2) speak the S3 protocol but need three things plain AWS
 environment variables cannot fully express together: a custom endpoint, virtual-hosted
-addressing, and region-less signing. This module owns that setup: it writes the standard
-``AWS_*`` variables plus the ``FSSPEC_S3`` config block that :mod:`rigging.filesystem.factory`
-and every plain ``fsspec`` caller read, then flushes fsspec's caches so the settings take.
+addressing, and region-less signing. Their connections also need finite request bounds so a
+wedged object-store call can fail into the task retry path. This module owns that setup: it
+writes the standard ``AWS_*`` variables plus the ``FSSPEC_S3`` config block that
+:mod:`rigging.filesystem.factory` and every plain ``fsspec`` caller read, then flushes fsspec's
+caches so the settings take.
 
 Processes inside a cluster usually arrive with ``FSSPEC_S3`` already exported by the runtime;
 every function here is a no-op in that case.
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 from urllib.parse import urlparse
 
 import fsspec
@@ -29,6 +32,24 @@ CW_ENDPOINT_URL = "https://cwobject.com"
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
+_S3_CONNECT_TIMEOUT = 30
+_S3_READ_TIMEOUT = 120
+_S3_RETRY_MAX_ATTEMPTS = 5
+
+
+def s3_request_bounds_config_kwargs() -> dict[str, Any]:
+    """Return finite botocore timeouts and retries for fsspec S3 filesystems.
+
+    s3fs/aiobotocore otherwise permit upload requests to wait indefinitely when a
+    connection wedges. Finite bounds turn that stall into an error handled by the
+    task retry path (#6487).
+    """
+    return {
+        "connect_timeout": _S3_CONNECT_TIMEOUT,
+        "read_timeout": _S3_READ_TIMEOUT,
+        "retries": {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
+    }
+
 
 def needs_virtual_host_addressing(endpoint_url: str) -> bool:
     """True when *endpoint_url* is served by a domain that only accepts virtual-hosted requests."""
@@ -38,16 +59,20 @@ def needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 def fsspec_s3_conf(endpoint: str) -> dict:
     """The ``FSSPEC_S3`` config block for *endpoint*: virtual-hosted addressing where the domain
-    demands it, and region-less ("auto") signing.
+    demands it, region-less ("auto") signing, and finite request bounds.
 
     Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage) don't honor the AWS region
     scheme; signing with the wrong region surfaces as 400 Bad Request. "auto" tells boto3 to skip
     region validation and let the endpoint route the request itself.
     """
-    conf: dict = {"endpoint_url": endpoint, "client_kwargs": {"region_name": "auto"}}
+    config_kwargs = s3_request_bounds_config_kwargs()
     if needs_virtual_host_addressing(endpoint):
-        conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-    return conf
+        config_kwargs["s3"] = {"addressing_style": "virtual"}
+    return {
+        "endpoint_url": endpoint,
+        "client_kwargs": {"region_name": "auto"},
+        "config_kwargs": config_kwargs,
+    }
 
 
 def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | None = None) -> None:

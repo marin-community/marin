@@ -2,17 +2,20 @@ config:
   marin-permissions:project: hai-gcp-models
   marin-permissions:project_number: "748532799086"
   marin-permissions:workload_identity_pool: github-pool
-  marin-permissions:github_subject: repo:marin-community/marin:ref:refs/heads/main
   marin-permissions:state_bucket: marin-iac-state
   marin-permissions:kms_location: us-central1
   marin-permissions:kms_key_ring: marin-iac-keyring
   marin-permissions:kms_key: marin-iac-key
   marin-permissions:deploy_accounts:
     - service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+      github_subjects:
+        - &main_subject repo:marin-community/marin:ref:refs/heads/main
       mint_id_tokens: true
       secret_access_secrets:
         - iris-cw-us-west-04a-signing-key
     - service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+      github_subjects:
+        - *main_subject
       secret_metadata_viewer: true
       # Keep this permission allowlist explicit: a new runtime secret should fail closed
       # until its deploy-account IAM management is reviewed here.
@@ -26,5 +29,19 @@ config:
           repositories:
             - marin-grafana
       iap_iam_manager: true
+    # Used for posting `pulumi preview` as a PR comment.
+    - service_account: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+      github_subjects:
+        - repo:marin-community/marin:pull_request
+        - *main_subject
+      kms_access: decrypt_only
+      state_access: preview
+      gcp_resource_previewer: true
+      create_account: true
+      display_name: "Pulumi CI preview (read-only)"
+      # CoreWeave stacks with provisioning.coreweave.federation_dns read this at preview time
+      # (infra/pulumi/README.md's Cloudflare credential prerequisite).
+      secret_access_secrets:
+        - cloudflare-oa-dns-token
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6QvsjVzr0PISU10T8p7CBI0p31YV97owWqgbmeAU4wUSSQCdtF6ivDSFDEI7pl9JQ4dMHYbmdE2rjMYZjjF9S6S3BiIx2j9acg0JGF88fZT8lDPrScl/KjBkTV76oECYPg18C/ry5YsXaAE=

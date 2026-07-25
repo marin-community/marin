@@ -31,21 +31,28 @@ The local Docker builder must support `linux/amd64`.
 
 ## Deploy
 
-Set `LOOM_SOURCE` to the Loom worktree to build. Pulumi builds that tree during
-preview to catch image failures without pushing it. `pulumi up` rebuilds and
-pushes the image, places the provider-produced digest in VM metadata, and waits
+By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
+SHA and uses that immutable Git context as the image input. When the resolved
+commit changes, preview reports an image update. `pulumi up` builds and pushes
+the changed image, places the provider-produced digest in VM metadata, and waits
 for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
-cd /path/to/loom
-export LOOM_SOURCE="$(git rev-parse --show-toplevel)"
 pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
 pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
 curl -fsS https://loom.oa.dev/api/ready
 ```
 
-The build includes tracked and untracked files allowed by the Loom worktree's
-`.dockerignore`. Review the local diff before deployment.
+Set `buildContext` to a Loom worktree to deploy local changes instead. The local
+build includes tracked and untracked files allowed by that worktree's
+`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
+the stack configuration, so remove the override to return to the remote HEAD.
+
+```sh
+pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
+  -c buildContext=/path/to/loom
+pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
+```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
 startup unit mounts the persistent disk, reads one numbered `LOOM_DOTENV`
@@ -73,10 +80,18 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana_alert` profile is restricted to the Google identity of
-the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
-account's email and immutable numeric subject; it does not create or copy a Loom
-token.
+activation. The `grafana-alerts` federation mapping authorizes the Google
+identity of the existing `marin-grafana` Cloud Run service account to select
+only the `ops` profile. Pulumi resolves that account's email and immutable
+numeric subject; it does not create or copy a Loom token.
+
+The Pulumi declaration is authoritative at activation time. An unchanged
+profile keeps its database revision; a changed declaration overwrites the
+current row and advances the revision. UI or API edits persist only until the
+next activation. Deployment pruning is enabled, so a profile or federation
+removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
+activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
+not deployment-managed and are not pruned.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting

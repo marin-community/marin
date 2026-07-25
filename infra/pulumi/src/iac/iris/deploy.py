@@ -118,7 +118,11 @@ def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, st
         name=spec.name,
         user=spec.user,
         resources=resources_from_spec(spec),
-        environment=EnvironmentSpec(env_vars=env_vars),
+        environment=EnvironmentSpec(
+            env_vars=env_vars,
+            pip_packages=spec.pip_packages,
+            sync_packages=spec.sync_packages,
+        ),
         ports=[spec.port],
         constraints=[region_constraint(list(spec.regions))],
         max_retries_preemption=spec.max_retries_preemption,

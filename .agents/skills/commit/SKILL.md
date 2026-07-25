@@ -32,7 +32,7 @@ the whole list before you open or update a PR.
 3. Tests & docs checks, when relevant.
 4. Stage the specific files for this work.
 5. Commit. ← natural checkpoint; the working tree is now clean.
-6. Lint-catalog review — `./infra/pre-commit.py --review`; fix or answer every finding.
+6. Lint-catalog review — run `./infra/pre-commit.py --review` once; fix or answer every finding.
 7. Push (maybe).
 8. Open or update the PR.
 
@@ -121,6 +121,12 @@ reporting your actions to the user, and land any fixes as a **new** commit. Sear
 the `infra/lint` files for the rule behind each `ml-...` code. Treat findings as
 guidelines — apply them when they make the code *better*; the goal is
 high-quality code, not blind adherence.
+
+Do not recursively rerun `--review` after small, targeted touch-ups made in
+response to its findings. Validate those edits with the normal mechanical checks
+and relevant tests, then continue the workflow. Rerun the advisory review only
+when the follow-up materially changes the branch's design or scope, or when the
+user asks for another pass.
 
 Each run writes the raw per-arm prompts and outputs, the combined findings, and a
 summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
@@ -245,8 +251,8 @@ pauses for the answer; it does not end monitoring.
 ## Rules
 
 - `./infra/pre-commit.py` is the only pre-commit entry point.
-- Commit before you run `--review`; the review never commits, pushes, or edits.
+- Commit before the initial `--review`; do not rerun it for minor findings-only touch-ups.
 - Never amend a commit unless the user explicitly asks.
 - If there are no changes to commit, say so and stop.
-- `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
+- `.agents/skills/fix-issue/SKILL.md` — end-to-end issue-fix workflow.
 - `AGENTS.md` — coding guidelines.

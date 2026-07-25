@@ -610,12 +610,10 @@ class Trainer:
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
-                levanter.callbacks.profile(
+                profiler.build(
                     str(self.config.log_dir / self.run_id / "profiler"),
-                    profiler.start_step,
-                    total_prof_steps,
-                    profiler.perfetto_link,
-                    profiler_options=profiler.build_jax_profile_options(),
+                    run_id=self.run_id,
+                    num_steps=total_prof_steps,
                 ),
                 every=1,
             )

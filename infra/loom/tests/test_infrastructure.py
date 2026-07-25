@@ -56,7 +56,7 @@ def deployment_config() -> DeploymentConfig:
         domain="loom.example.com",
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
-        source_path="/tmp/loom-source",
+        build_context="/tmp/loom-source",
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",
@@ -145,15 +145,30 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
                 "ops",
                 {
                     "agent": "codex",
+                    "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
                 },
             ),
         )
     )
+    assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+@pytest.mark.parametrize(
+    "mcp_access",
+    [
+        {"mode": "groups", "groups": []},
+        {"mode": "all", "groups": ["messaging"]},
+        {"mode": "unknown", "groups": []},
+    ],
+)
+def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="mcpAccess"):
+        ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
 
 
 @pulumi.runtime.test

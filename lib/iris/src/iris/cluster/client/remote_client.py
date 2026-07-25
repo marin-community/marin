@@ -424,8 +424,11 @@ class RemoteClusterClient:
             f"mint_endpoint_token({endpoint_name})", lambda: self._client.mint_endpoint_token(request)
         )
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        return self._endpoint_client.list_endpoints(prefix, exact=exact)
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+        return self._endpoint_client.list_endpoints(prefix)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        return self._endpoint_client.list_endpoint_instances(name)
 
     def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
@@ -437,7 +440,7 @@ class RemoteClusterClient:
         """
         if self._use_controller_proxy:
             return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
-        endpoints = self.list_endpoints(endpoint_name, exact=True)
+        endpoints = self.list_endpoint_instances(endpoint_name)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address

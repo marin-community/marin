@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -19,10 +18,14 @@ import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
+import pulumi_github as github
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DISK_TYPE = "pd-balanced"
-REPOSITORY_URL = "https://github.com/marin-community/loom.git"
+REPOSITORY_OWNER = "marin-community"
+REPOSITORY_NAME = "loom"
+REPOSITORY_BRANCH = "main"
+REPOSITORY_URL = f"https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}.git"
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
@@ -33,9 +36,14 @@ LOG_WRITER_ROLE = "roles/logging.logWriter"
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
+GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
+MCP_ACCESS_NONE = "none"
+MCP_ACCESS_ALL = "all"
+MCP_ACCESS_GROUPS = "groups"
+MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -53,6 +61,12 @@ def _validated_image_reference(value: str, project: str, region: str) -> str:
     if not re.fullmatch(rf"{image_path}(?::[^@]+)?@sha256:[0-9a-f]{{64}}", value):
         raise ValueError("Docker did not produce the expected Loom image digest")
     return value
+
+
+def _git_context_at_revision(revision: str) -> str:
+    if not GIT_COMMIT.fullmatch(revision):
+        raise ValueError(f"GitHub returned an invalid Loom revision: {revision!r}")
+    return f"{REPOSITORY_URL}#{revision}"
 
 
 SECRET_REF = re.compile(
@@ -126,6 +140,29 @@ def _optional_int(value: object, field: str, profile: str) -> int | None:
 
 
 @dataclass(frozen=True)
+class McpAccessConfig:
+    mode: str
+    groups: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, value: object, profile: str) -> McpAccessConfig:
+        if not isinstance(value, dict):
+            raise ValueError(f"profile {profile!r} mcpAccess must be an object")
+        mode = str(value.get("mode", MCP_ACCESS_NONE)).strip()
+        groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", profile)
+        if mode not in MCP_ACCESS_MODES:
+            raise ValueError(f"profile {profile!r} mcpAccess.mode must be none, all, or groups")
+        if mode != MCP_ACCESS_GROUPS and groups:
+            raise ValueError(f"profile {profile!r} mcpAccess.groups requires mode groups")
+        if mode == MCP_ACCESS_GROUPS and not groups:
+            raise ValueError(f"profile {profile!r} mcpAccess mode groups requires at least one group")
+        return cls(mode, groups)
+
+    def manifest(self) -> dict[str, object]:
+        return {"mode": self.mode, "groups": list(self.groups)}
+
+
+@dataclass(frozen=True)
 class ProfileConfig:
     name: str
     agent: str
@@ -144,6 +181,7 @@ class ProfileConfig:
     prelude: str
     restricted: bool
     allowed_tools: tuple[str, ...]
+    mcp_access: McpAccessConfig
     env: tuple[ProfileSecretConfig, ...]
 
     @classmethod
@@ -175,6 +213,7 @@ class ProfileConfig:
             prelude=str(value.get("prelude", "weaver")),
             restricted=bool(value.get("restricted", False)),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
+            mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
         )
 
@@ -197,6 +236,7 @@ class ProfileConfig:
             "prelude": self.prelude,
             "restricted": self.restricted,
             "allowed_tools": list(self.allowed_tools),
+            "mcp_access": self.mcp_access.manifest(),
         }
 
 
@@ -285,7 +325,7 @@ class DeploymentConfig:
     domain: str
     operator_cidr: str
     dns_zone_id: str
-    source_path: str
+    build_context: str
     network: str
     instance_name: str
     vm_service_account_name: str
@@ -330,12 +370,13 @@ class DeploymentConfig:
         config = pulumi.Config()
         gcp_config = pulumi.Config("gcp")
         project = gcp_config.require("project")
-        source_path = os.environ.get("LOOM_SOURCE")
-        if source_path is None:
-            raise ValueError("LOOM_SOURCE must point to the Loom worktree to build")
-        source = Path(source_path).expanduser().resolve()
-        if not (source / "Dockerfile").is_file():
-            raise ValueError(f"LOOM_SOURCE does not contain a Dockerfile: {source}")
+        source_path = config.get("buildContext")
+        source = REPOSITORY_URL
+        if source_path is not None:
+            local_source = Path(source_path).expanduser().resolve()
+            if not (local_source / "Dockerfile").is_file():
+                raise ValueError(f"buildContext does not contain a Dockerfile: {local_source}")
+            source = str(local_source)
         region = config.require("region")
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
@@ -368,7 +409,7 @@ class DeploymentConfig:
             domain=config.require("domain"),
             operator_cidr=config.require("operatorCidr"),
             dns_zone_id=config.require("dnsZoneId"),
-            source_path=str(source),
+            build_context=source,
             network=config.require("network"),
             instance_name=config.require("instanceName"),
             vm_service_account_name=config.require("vmServiceAccountName"),
@@ -529,6 +570,19 @@ class ImageResources:
     vm_reader: gcp.artifactregistry.RepositoryIamMember
 
 
+def _resolved_build_context(config: DeploymentConfig) -> str:
+    if config.build_context != REPOSITORY_URL:
+        return config.build_context
+
+    source_provider = github.Provider("loom-source", owner=REPOSITORY_OWNER)
+    branch = github.get_branch(
+        repository=REPOSITORY_NAME,
+        branch=REPOSITORY_BRANCH,
+        opts=pulumi.InvokeOptions(provider=source_provider),
+    )
+    return _git_context_at_revision(branch.sha)
+
+
 def _create_image(
     config: DeploymentConfig,
     apis: list[gcp.projects.Service],
@@ -554,7 +608,7 @@ def _create_image(
     image_tag = f"{_artifact_image_path(config.project, config.region)}:latest"
     image = docker_build.Image(
         "loom-release-image",
-        context=docker_build.BuildContextArgs(location=config.source_path),
+        context=docker_build.BuildContextArgs(location=_resolved_build_context(config)),
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],

@@ -117,6 +117,10 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             and d.finished_at is None
             and d.exit_code is None
             and d.error is None
+            and d.pod_name is None
+            and d.pod_uid is None
+            and d.node_name is None
+            and d.terminal_reason is None
         ):
             continue
         params.append(
@@ -128,6 +132,10 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
                 "b_finished_at": d.finished_at.epoch_ms() if d.finished_at is not None else None,
                 "b_exit_code": d.exit_code,
                 "b_error": d.error,
+                "b_pod_name": d.pod_name,
+                "b_pod_uid": d.pod_uid,
+                "b_node_name": d.node_name,
+                "b_terminal_reason": d.terminal_reason,
             }
         )
     if not params:
@@ -142,6 +150,10 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             finished_at_ms=func.coalesce(c.finished_at_ms, bindparam("b_finished_at")),
             exit_code=func.coalesce(bindparam("b_exit_code"), c.exit_code),
             error=func.coalesce(bindparam("b_error"), c.error),
+            pod_name=func.coalesce(bindparam("b_pod_name"), c.pod_name),
+            pod_uid=func.coalesce(bindparam("b_pod_uid"), c.pod_uid),
+            node_name=func.coalesce(bindparam("b_node_name"), c.node_name),
+            terminal_reason=func.coalesce(bindparam("b_terminal_reason"), c.terminal_reason),
         ),
         params,
     )
