@@ -524,10 +524,13 @@ def _install_jaxpp_bind_meshes_patch() -> None:
         def replace_captured_meshes(cjaxpr, new_mesh):
             return _replace_jaxpp_captured_meshes(cjaxpr, new_mesh, jaxpp_core)
 
-        replace_captured_meshes._grug_abstract_mesh_patch = True
         cached_replace_captured_meshes = jaxpp_core.jc.weakref_lru_cache(replace_captured_meshes)
-        cached_replace_captured_meshes._grug_abstract_mesh_patch = True
-        jaxpp_core.replace_captured_meshes = cached_replace_captured_meshes
+
+        def replace_captured_meshes_cached(cjaxpr, new_mesh):
+            return cached_replace_captured_meshes(cjaxpr, new_mesh)
+
+        replace_captured_meshes_cached._grug_abstract_mesh_patch = True
+        jaxpp_core.replace_captured_meshes = replace_captured_meshes_cached
 
     original_bind_meshes = jaxpp_core.bind_meshes
     if not getattr(original_bind_meshes, "_grug_shallow_bind_meshes_patch", False):
