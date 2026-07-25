@@ -8,7 +8,7 @@ cw-us-west-04a CI cluster:
 
     uv run iris --cluster=marin-dev job run --target-cluster cw-us-west-04a \
       --job-name federated-inference-proxy-demo --cpu 2 --memory 8g --disk 20g \
-      --extra cpu --priority interactive --no-wait \
+      --enable-extra-resources --extra cpu --priority interactive --no-wait \
       -- python -m experiments.evals.federated_inference_proxy_demo
 
 The coordinator starts a one-H100 vLLM child, asks the child controller to mint
@@ -42,9 +42,10 @@ logger = logging.getLogger(__name__)
 def _redacted_url(url: str) -> str:
     parsed = urlsplit(url)
     segments = parsed.path.split("/")
-    token_index = segments.index("t") + 1
-    segments[token_index] = "<redacted>"
-    return urlunsplit((parsed.scheme, parsed.netloc, "/".join(segments), parsed.query, parsed.fragment))
+    if "t" in segments:
+        token_index = segments.index("t") + 1
+        segments[token_index] = "<redacted>"
+    return urlunsplit((parsed.scheme, parsed.netloc, "/".join(segments), "", ""))
 
 
 def main() -> None:
@@ -83,6 +84,19 @@ def main() -> None:
 
         response = requests.get(session.model.endpoint.url("models"), timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        diagnostics = {
+            "bytes": len(response.content),
+            "content_type": content_type,
+            "final_url": _redacted_url(response.url),
+            "redirects": [
+                {"status_code": redirect.status_code, "url": _redacted_url(redirect.url)}
+                for redirect in response.history
+            ],
+            "status_code": response.status_code,
+        }
+        if not response.content or "application/json" not in content_type:
+            raise RuntimeError(f"Federated inference returned a non-JSON response: {json.dumps(diagnostics)}")
         payload = response.json()
         logger.info(
             "FEDERATED_INFERENCE_PROXY_DEMO %s",
