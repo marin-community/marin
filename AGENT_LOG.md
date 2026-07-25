@@ -398,7 +398,21 @@ chunking (Larry's fidelity concern) at K=2.
 Confidence: 3/10 for 4b ≥ +0.5pp (d4's prefetch null says the mechanism class is
 scheduler-gated; my leg closes the family + delivers the drop-granularity number).
 
-Next: smoke verdict, then the two 120-step operating-point legs back-to-back:
-control (gather K=1, exact 5073017396 submission + SCALE_DISABLE_CHECKPOINT +
-SCALE_REPORT_DROPS) vs pipeline (same + SCALE_A2A_CHUNK_PIPELINE=1 +
-SCALE_A2A_CHUNKS=2).
+## Check-in 2026-07-25 ~05:05 UTC — smoke green, control leg submitted
+
+- **Smoke PASSED** (`/mwittmann/ep25d3-chunkpipe-smoke-20260725`, 1-replica EP4 L4
+  b32 6 steps, exit 0): sentinel "fixed-a2a chunk pipeline active: chunks=2
+  tokens_per_chunk=16384 capacity=512 expert_shards=4" on all tasks; A2A_DROP_STAT
+  lines flow per layer/step (dropped 161k-324k of 1,048,576 assignments at random
+  init — skewed-init routing; functional validation only).
+- **A/B leg 1 submitted**: `/mwittmann/ep25d3-cp-ctl-k1-120-v1-20260725` — CONTROL:
+  exact 5073017396 gather config (K=1) + SCALE_DISABLE_CHECKPOINT=1 +
+  SCALE_REPORT_DROPS=1, 120 steps. Treatment legs to follow sequentially (one rack
+  job at a time): pipeline-K2, and plain-K2 only if the first two leave ambiguity
+  (pipelining is isolated by pipeline-K2 vs plain-K2; K=1 anchors the adoption bar
+  and the drop baseline; rav/d4's three recent matched K=1 draws 20.558-20.594%
+  corroborate).
+
+Confidence: 3/10 for 4b ≥ +0.5pp.
+
+Next: babysit control leg (~40 min), then submit pipeline-K2.
