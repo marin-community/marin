@@ -1483,6 +1483,23 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T22:26:01Z — 59,094 pairs verified
+
+- The final three treatment checkpoints in decision file 33 passed independent
+  validation: 361 pairs, 195 false positives, 166 true duplicates, and no
+  unresolved outcomes. They contain 739 judgments and 741 request attempts:
+  739 valid responses and two invalid responses in one retried judgment. All
+  361 pairs used direct review.
+- Across the stable 464-checkpoint snapshot, all 62 manual records leave:
+
+  - baseline: 47,057 pairs, 29,925 false positives, 17,132 true duplicates;
+  - treatment: 12,037 pairs, 6,274 false positives, 5,763 true duplicates;
+  - combined: 59,094 pairs, 36,199 false positives, 22,895 true duplicates.
+
+- Partition p1 advanced to decision file 34. All four batch-priority 2-H100
+  workers continue serving requests, and their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T22:20:58Z — 58,733 pairs verified
 
 - Four additional treatment checkpoints passed independent validation: 512
