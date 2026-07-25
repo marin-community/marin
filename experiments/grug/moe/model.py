@@ -407,15 +407,26 @@ class GatedNorm(eqx.Module):
     @staticmethod
     def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
         k_down, k_up = random.split(key)
+        # SCALE_GATED_NORM_SHARD: FSDP-shard the hidden dim (D=6144) over data so the weight grads
+        # reduce-scatter (coalesced) instead of standalone replicated all-reduces; forward gathers.
+        # Under scan these stack to 3D [L, D, r] / [L, r, D] and route to muonh's padded-stack-sharded
+        # Newton-Schulz, which reshards to its own layout -- storage sharding is transparent to NS.
+        shard = os.environ.get("SCALE_GATED_NORM_SHARD") == "1"
+        down_spec = P("data", None) if shard else P(None, None)
+        up_spec = P(None, "data") if shard else P(None, None)
         return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), down_spec),
+            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), up_spec),
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", x, self.w_down))
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        # Gather the (possibly FSDP-sharded) weights to replicated for the local low-rank gating;
+        # a no-op when SCALE_GATED_NORM_SHARD is off. Sharded storage -> grad reduce-scatters.
+        w_down = reshard(self.w_down, P(None, None))
+        w_up = reshard(self.w_up, P(None, None))
+        gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", x, w_down))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
         return x * gate.astype(x.dtype)
 
 
