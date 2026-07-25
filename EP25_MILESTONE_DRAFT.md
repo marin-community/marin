@@ -4,6 +4,13 @@ Draft for review. Not posted. All MFU figures use the 2.5 PFLOP/s per-GB200 bf16
 denominator; p50 is over the measured steps of a 120-step run on one GB200 rack (16 nodes x 4
 GPUs, EP64) at the d5120 / 8-of-256 / 48-layer / seq-4096 / batch-1024 operating point.
 
+Measurement caveat: at fixed step accounting a run that drops more assignments reads higher MFU,
+because dropped assignments gather the zero pad row and do less real work. The g=2 gain probe below
+posted 23.4% while dropping 68%. MFU is comparable only within a matched drop regime. The section 1
+adjoint A/B is matched (both legs QB off, identical routing and drop counts), so its +3.43pp holds;
+the QB-off vs QB-on MFU gap is cross-regime, so the -1.44pp QB cost is an upper bound on the router
+overhead, not a clean measurement.
+
 ## TL;DR
 
 - A custom scatter-add adjoint for the fixed-a2a gather dispatch and combine gathers raises p50
@@ -91,6 +98,17 @@ The only measured config under a strict 3% bar is QB + cf1.15 (0.037 at step 119
 carries ~6% steady drops at 22.60% (the ~3% reference is the known-acceptable rate at 8 buckets from
 a prior 1e23 run).
 
+grug's QB is an implicit proportional controller: it applies a 1x router-bias residual per step, not
+DeepSeek's +/-gamma integral accumulation. Doubling the gain (g=2, `SCALE_QB_GAIN`, commit
+`58c9a19eb`) is a categorical negative: drops sit at 0.67-0.72 for all 350 steps (an overshoot limit
+cycle) and loss ends +0.091 worse, far outside draw variance. g=1 plateaus at ~6% and g=2 diverges,
+so the ~6% residual is not global-bias under-correction. The leading hypothesis is sender-local
+bucket hotspots: at 64 senders x 256 experts the per-bucket capacity is enforced sender-locally, and
+global router bias cannot see or fix a single sender overloading one expert. That also explains
+cf1.15 roughly halving the drops (more sender-local headroom). Unprobed follow-ups: damped gain
+(g<1), DeepSeek-style integral accumulation, and per-sender bias -- the last is kernel-level and the
+only one aimed at the hypothesized cause.
+
 rav's drop-report jobs currently log no drop metric: the per-layer count is computed but never
 emitted, because the grug training loop logs `train/loss` through callbacks and never logs the
 returned metrics dict. The fix (`2d4a87395`, explicit `tracker.log`) exists in two worktrees and
@@ -126,16 +144,18 @@ number is a cumulative mean against the p50 used for the fixed path, one draw ea
 ## 5. Goal ledger
 
 The QB-off numbers (24.04 adjoint, 25.39 with leg-batching) are bench artifacts: they route under
-router collapse and only look good because MFU ignores drops. QB-on cf1.0 is 22.60% p50 but settles
-at ~6% drops, above a strict 3% bar. The only measured 3%-compliant config is QB + cf1.15 at 20.85%.
-So the throughput frontier (24.04) and the strict-fidelity config (20.85) sit ~3.2pp apart, and
-closing that gap with faster or better-tuned QB balancing is the highest-leverage remaining fidelity
-work, alongside leg-batching composition and fa4-lse.
+router collapse and read high partly because dropped assignments do less real work (see the
+measurement caveat). QB-on cf1.0 is 22.60% p50 but settles at ~6% drops, above a strict 3% bar. The
+only measured 3%-compliant config is QB + cf1.15 at 20.85%. So the throughput frontier (24.04) and
+the strict-fidelity config (20.85) sit ~3.2pp apart. Closing that gap is the highest-leverage
+remaining fidelity work, and the gain probe points it at sender-local bucket hotspots (per-sender
+bias, kernel-level) rather than global-bias tuning, which is falsified. Leg-batching composition and
+fa4-lse are the parallel levers.
 
 - Speed, QB-off bench: adjoint 24.04, +leg-batching 25.39.
 - Speed, QB-on cf1.0: 22.60, ~6% steady drops (not 3%-compliant).
 - Speed, strict 3%-fidelity (QB cf1.15): 20.85, drops 0.037.
-- Path to >=25% at strict fidelity: close the ~3.2pp gap (faster QB balancing) plus leg-batching and
+- Path to >=25% at strict fidelity: close the ~3.2pp gap (sender-local balancing) plus leg-batching and
   fa4-lse.
 
 > TODO: fa4-lse A/B (d3) for the remaining path-to-25% pp.
@@ -153,3 +173,6 @@ work, alongside leg-batching composition and fa4-lse.
 - Jobs: speed A/B `ep25d1-adj-control-120-0724-1707` (autodiff) and `ep25d1-adj-custom-120-0724-2216`
   (custom adjoint); drops `ep25d1-drops-30-0724-2318` (QB off) and `ep25d1-qbon-drops-30-0725-0027`
   (QB on); leg-batching `rav/ep64-batched-expert-stability-120-v1-20260724-2353`.
+- Fidelity frontier and gain probe (d4): 350-step steady state
+  `ep25d4-qb-cf100-drops-350-v1`; QB gain g=2 `ep25d4-qbgain2-cf100-350-v1` (`SCALE_QB_GAIN`, commit
+  `58c9a19eb`).

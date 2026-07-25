@@ -338,3 +338,15 @@ QB+cf1.15 @ 20.85%. Ledger: throughput frontier 24.04 vs strict-fidelity 20.85 =
 (faster/tuned QB balancing) flagged as the top open fidelity direction alongside leg-batching + fa4-lse. TL;DR,
 §2, §5 updated; coherence fix on the 30-step cross-reference; final scrub done. ONE TODO remains: d3 fa4-lse.
 Draft committed locally, NOT pushed/posted.
+
+## Milestone draft: QB-gain probe + MFU caveat 01:50 UTC
+Added (1) measurement-methodology caveat near top: heavy-drop runs read HIGHER MFU (dropped assignments gather
+the zero pad row = less real work at same step accounting); g=2 posted 23.4% while dropping 68%; MFU comparable
+only within a matched drop regime. Protected the §1 adjoint A/B (matched: both QB-off, identical drops -> +3.43pp
+valid) and flagged QB-off-vs-QB-on -1.44pp as a cross-regime UPPER BOUND. (2) QB-gain probe in §2: grug QB =
+implicit proportional controller (1x residual/step, not DeepSeek integral); g=2 (SCALE_QB_GAIN, 58c9a19eb)
+diverges (drops 0.67-0.72 x350, loss +0.091) => residual ~6% is NOT global-bias under-correction; leading
+hypothesis = sender-local bucket hotspots (64x256, invisible to global bias; explains cf1.15 halving). Follow-ups
+listed: damped g<1, DeepSeek integral, per-sender bias (kernel-level, only one aimed at the cause). §5 updated:
+gap-closing targets sender-local balancing (global gain tuning falsified). §6 repro: added d4 fidelity + gain
+jobs. Scrubbed (removed emphasis asterisks). ONLY fa4-lse TODO remains; whole-doc final pass on its landing.
