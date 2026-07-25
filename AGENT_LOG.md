@@ -487,3 +487,87 @@ vs baseline /mwittmann/ep25d4-qb-cf100-drops-350-v1 (g=1):
 
 Commit: 58c9a19eb (SCALE_QB_GAIN knob; g=1 byte-identical). Jobs this assignment: 1 smoke
 + 1 rack probe, submissions only. Standing down — final.
+
+## Check-in 2026-07-25 20:50 UTC — R6-3 accepted; sender-local QB DESIGNED, BUILT, closed-loop validated
+
+- ROUND6_BRIEF.md read; protocol acknowledged (QB-on + drops + adjoint everywhere; matched-regime MFU only; 2 draws before <0.5pp claims).
+- DESIGN (mechanism a, one controller two granularities): the existing QB quantile computed per-device BEFORE the pmean is EXACTLY the per-(sender, expert) bucket-capacity threshold (qb_count = local_tokens*K/E = 2048 = capacity at cf1.0). SCALE_QB_SENDER=1 widens router_bias [E] -> [S, E] (S = batch-axis devices = fixed-a2a senders), keeps each device's own quantile, and DROPS the pmean — one FEWER collective per layer (the docstring flags that pmean as a critical-path staller). Bias applied per sender via shard_map; the [L,S,E] leaf rides the existing stacked-params scan (no scan plumbing); pending betas sized from the leaf; kernel/capacity/bucket layout untouched; composes with adjoint + gather + SCALE_QB_GAIN blending (shape-generic). Commit 50748b995.
+- CLOSED-LOOP CPU VALIDATION (8 devices, sender-correlated hot experts — the localized cause — through the real fixed-a2a gather+adjoint kernel): global QB drop fraction STUCK at 0.773 across 12 iterations; sender QB converges 0.758 -> 0.136 -> 0.058 -> 0.016. Iteration-0 (zero-bias) drops identical across modes = forward parity where semantics unchanged. Caveat: static synthetic x, no router learning — the rack leg is the verdict.
+- EP4 smoke submitted: /mwittmann/ep25d4-sqb-smoke-ep4-20260725 (SCALE_QB_SENDER=1 + full protocol env).
+Confidence: 6/10 that sender QB gets cf1.0 under 3% steady state at <=0.5pp MFU cost (mechanism validated on the hypothesized cause; real-router dynamics and loss parity are the open risks)
+Next: smoke -> 350-step rack leg vs the g=1 350-step baseline.
+
+## Check-in 2026-07-25 21:15 UTC
+
+- EP4 sender-QB smoke SUCCEEDED (1/1 tasks, exit 0, no failures; crash_on_nan armed, so numerics held for 20 steps). Caveat: the iris log-server is not returning this child job's log lines right now, so the smoke's loss/drop values are unharvested — job state + the CPU closed loop carry the mechanics validation; all decision numbers come from the rack leg.
+- RACK LEG SUBMITTED: /mwittmann/ep25d4-sqb-cf100-350-v1-20260725 (SCALE_QB_SENDER=1, cf1.0, adjoint, drops, 350 steps). Verdict vs g=1 350-step baseline (0.064@349, tail-100 7.3%, 22.002%): does sender QB take cf1.0 under 3% steady at <=0.5pp MFU cost with sane loss. ETA ~15:45 local (~22:45Z).
+Confidence: 6/10
+Next: babysit rack leg.
+
+## Check-in 2026-07-25 21:55 UTC
+
+- Session resumed after a transient API 529; verified: working tree clean vs 50748b995 (no partial edits), sqb rack leg in flight since 21:14 (/mwittmann/ep25d4-sqb-cf100-350-v1-20260725).
+- ISSUE: the iris log-server returns ZERO lines for the sqb smoke child and now the sqb rack leg (all my earlier jobs still fetch fine). Job states are healthy (running / smoke succeeded exit 0). If logs stay dark, the fallback verification for sender-mode activation is the drop trajectory itself (sender-mode collapses drops within ~10 steps in the closed loop vs g=1's 0.89 peak + slow decline — unmistakably different shapes). Retrying log fetch every poll; NOT resubmitting (job is healthy).
+- Note to self for reproducibility: add an explicit sender-mode sentinel log line in the next code commit (the current commit logs nothing sender-specific at trace time).
+Confidence: 6/10
+Next: poll state + logs; harvest at completion (~22:45Z).
+
+## Check-in 2026-07-25 23:00 UTC
+
+- RACK LEG SUCCEEDED (/mwittmann/ep25d4-sqb-cf100-350-v1-20260725, clean exit ~22:30 = full 350 steps, no failures/retries).
+- Log situation: ingestion is backfilling — the sqb smoke's PARENT logs now fetch (270 lines) but grug-train CHILD logs (which carry all metrics) are still dark for both sqb jobs; other users jobs fetch fine; my pre-20:48 jobs fetch fine. Not resubmitting anything — waiting for backfill and retrying every ~10 min. If child logs never surface, options: (a) rerun the leg (~80 min rack slot) once whatever broke ingestion on those workers is confirmed fixed, (b) coordinator-side s3 finelog archive read (this sandbox has no s3 creds).
+Confidence: 6/10 (mechanism unchanged; harvest is the only blocker)
+Next: poll for child-log backfill.
+
+## Check-in 2026-07-25 23:35 UTC — INFRA FLAG: grug-train child logs dark cluster-wide since ~20:48Z
+
+- Diagnosis: ALL grug-train child-job logs (the fray-dispatched training tasks on GB200 workers) return 0 lines from the batch log API for jobs submitted after ~20:48Z — mine (sqb smoke + rack) AND rav's fresh receiver-destpool smoke (23:05). Parent/controller-side task logs and all pre-20:48 jobs fetch fine. Worker-side finelog ingestion incident, NOT job failures (states all healthy). Coordinator: worth an ops poke; I will NOT touch cluster infra per standing rules.
+- Impact: my completed 350-step sender-QB verdict leg's metric series is unharvestable until ingestion/backfill recovers. Job itself succeeded cleanly (full 350 steps, no retries). If logs are lost rather than delayed, I will rerun the leg once a canary child job shows logs flowing again.
+- Coordination note: rav's new arm is RECEIVER-side (destpool, cf1.25) — complementary to my SENDER-side bias, no duplication.
+Confidence: 6/10 (mechanism validated; harvest gated on infra)
+Next: poll rav's smoke12 child logs as the recovery canary every ~10 min.
+
+## Check-in 2026-07-26 00:00 UTC — standing orders applied; sender-QB writeup + rerun package
+
+Coordinator infra verdict absorbed: log-shipper sidecar amd64-only since PR #7583 + 16:07Z
+rollout -> zero finelog rows for all GB200 jobs after ~16:07Z (my sqb legs' metrics
+PERMANENTLY LOST; job itself completed cleanly). HOLDING all rack submissions; will rerun
+the verdict leg the moment the canary flips (fresh GB200 pod 2/2 Running, shipper
+restartCount 0, new grug-train finelog rows).
+
+### Sender-QB design record (for the rerun and for review)
+
+Mechanism (SCALE_QB_SENDER=1, commits 50748b995 + 5bf934717, requires SCALE_MOE_QB=1):
+- Insight: the QB quantile computed per device BEFORE the pmean is exactly the
+  per-(sender, expert) bucket-capacity threshold (qb_count = local_tokens*K/E = capacity
+  at cf1.0). The pmean is what erases sender-local information.
+- Change: router_bias [E] -> [S, E] (S = batch-axis devices = fixed-a2a senders); each
+  device keeps its own quantile (pmean REMOVED -> one fewer per-layer collective); bias
+  applied per sender via shard_map on the biased-selection path only (combine weights
+  still from unbiased logits, stop_gradient unchanged). The [L, S, E] leaf rides the
+  existing stacked-params scan; pending betas sized from the leaf; _apply_qb_betas and
+  SCALE_QB_GAIN are shape-generic. Kernel/capacity/bucket layout untouched. Default path
+  byte-identical.
+- Fixed point: balanced-per-sender selection gives local beta_s = -bias_s (same implicit
+  gain-1 proportional controller as global QB, now at the granularity where the drops
+  actually occur).
+- Closed-loop CPU evidence (8 devices, sender-correlated hot experts, real fixed-a2a
+  gather+adjoint kernel): global QB STUCK at 0.773 for 12 iterations; sender QB 0.758 ->
+  0.136 -> 0.058 -> 0.016. Iteration-0 parity exact. Trace-time sentinel added:
+  "QB sender-local bias active: senders=%d experts=%d".
+
+### One-keystroke rerun (after canary flips)
+
+Exact command = the lost leg with -v2: job-name/RUN_ID/JSON_LOGGER
+ep25d4-sqb-cf100-350-v2-20260725, env: baseline operating point + SCALE_A2A_GATHER_DISPATCH 1,
+SCALE_A2A_CUSTOM_ADJOINT 1, SCALE_MOE_QB 1, SCALE_QB_SENDER 1, SCALE_REPORT_DROPS 1,
+SCALE_STEPS 350, SCALE_DISABLE_CHECKPOINT 1, json_logger. Compare vs g=1 350-step baseline
+(22.002% p50, drops 0.064@349, tail-100 mean 7.3%, loss 3.3434): verdict = drops <3%
+steady by ~step 300 at <=0.5pp MFU cost in the MATCHED (low-drop) regime, loss tail sane.
+Expected if the sender hypothesis holds: drops collapse toward the ~0.9% binomial floor
+within tens of steps; MFU may read LOWER than 22.0 because the heavy-drop speed artifact
+disappears — compare against the low-drop regime expectation, not the raw baseline p50.
+
+Confidence: 6/10
+Next: idle on racks; poll the canary condition via job list + a small log probe when the
+coordinator signals the fix shipped.
