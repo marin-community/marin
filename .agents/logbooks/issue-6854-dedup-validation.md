@@ -1500,6 +1500,43 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T18:53:41Z — 35,857 pairs verified
+
+- One additional baseline checkpoint passed independent validation: 128
+  pairs, 111 model false positives, 16 model true duplicates, and one
+  unresolved outcome. It contains 2,309 valid judgments across 2,309 request
+  attempts, with no invalid responses or retries. Twenty-two pairs were
+  chunked and 106 were direct. The outcome Parquet SHA-256 is
+  `c7fa87d38879e0d9ff82bb9852ae7055e3886a15f6d58fe5f274e39ed9111aa5`.
+- Complete line and character comparison resolves the ambiguity as a false
+  positive. The member's complete eight-line numeric sequence is
+  `6,1,2,2,0,1,0,0`; the canonical's complete eleven-line sequence is
+  `9,2,2,2,0,1,0,0,0,1,1`. The first two aligned values differ and the
+  canonical has the distinct suffix `0,1,1`; neither text contains the other.
+  Character similarity is 0.736842 and line similarity is 0.631579. The
+  member/canonical text SHA-256 values are
+  `8cf7b251d1ee84a118a3cd40a444c263013f10a00cf6d27e20d246831999a56c` /
+  `2c3ef9c9a5a079ae9ce7eeb9d62a54706a9c1b11d766ff380832155adca2fede`.
+  Pair location: `part-00065-of-00128.parquet:112`.
+- The loss pass incorrectly called the member a represented prefix despite
+  identifying the leading-value mismatch. The duplication pass returned a
+  low-confidence duplicate verdict, and the high-confidence tiebreak correctly
+  identified a distinct numeric example. The hash-bound manual false-positive
+  record has Parquet SHA-256
+  `d6865fb3a49e9f2e88f10e19e93633a9354c78e56a7fe78443918c14db6d0478`
+  and semantic-judgments SHA-256
+  `0238ffe0f51b48fb9543fa6fe91cf8832ce26f5f5b15541f131440e0596a6b56`.
+  A separate batch-priority Iris process exactly reread the source cases,
+  semantic checkpoint, manual record, Parquet bytes, and completion marker.
+- Across the stable 282-checkpoint snapshot, all 37 manual records leave:
+
+  - baseline: 28,537 pairs, 18,318 false positives, 10,219 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 35,857 pairs, 22,144 false positives, 13,713 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T18:06:35Z — 35,601 pairs verified
 
 - Four additional treatment checkpoints passed independent validation: 481
