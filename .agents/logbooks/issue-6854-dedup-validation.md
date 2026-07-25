@@ -722,3 +722,19 @@ statistics for performance comparisons.
 - Across six durable checkpoints, all 768 baseline pairs resolved: 577 false
   positives and 191 true duplicates. All 12 run pods remain Ready with zero
   restarts; the four two-H100 workers continue at batch priority.
+
+### 2026-07-25T11:55:00Z — semantic review reaches 1,664 verified pairs
+
+- Partition p0 completed six additional ranges through 1280:1408 and advanced
+  to 1408:1536. Partition p3 completed range 128:256 and advanced to 256:384.
+  Separate object-store rereads verified the seven new Parquet byte hashes,
+  ordered identity hashes, manifest counters, and configuration hashes.
+- The seven checkpoints contain 896 resolved baseline pairs: 700 false
+  positives and 196 true duplicates. They used 4,806 valid first-response
+  judgments, with zero retries, zero invalid outputs, and zero unresolved
+  outcomes. The six short p0 batches were nearly all direct review; p3's batch
+  contained 24 chunked pairs and accounted for 3,187 judgments.
+- Across 13 durable checkpoints, all 1,664 baseline pairs resolved: 1,277 false
+  positives and 387 true duplicates. All 12 run pods remain Ready with zero
+  restarts. The artifact prefix remains
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-review-100b-qwen35-35b-a3b-20260725-v1/batches/`.
