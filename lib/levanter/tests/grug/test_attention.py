@@ -236,6 +236,166 @@ def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
     assert captured_kwargs["num_threads"] == 384
 
 
+class _FakeLaunchable:
+    def launch(self, **kwargs):
+        return None
+
+
+class _FakeFloat32:
+    def __init__(self, value):
+        self.value = value
+
+
+class _FakeCutlass:
+    BFloat16 = object()
+    Float16 = object()
+    Float32 = _FakeFloat32
+
+
+class _FakeCute:
+    Tensor = object
+
+    @staticmethod
+    def jit(fn):
+        return fn
+
+    @staticmethod
+    def kernel(fn):
+        return lambda *args, **kwargs: _FakeLaunchable()
+
+    @staticmethod
+    def ceil_div(numerator, denominator):
+        return 1
+
+    @staticmethod
+    def size(tensor):
+        return 1
+
+
+class _FakeCuda:
+    CUstream = object
+
+
+class _RecordingKernel:
+    """Stands in for an upstream FA4 kernel and records every traced invocation."""
+
+    def __init__(self, invocations):
+        self._invocations = invocations
+
+    def __call__(self, *args, **kwargs):
+        self._invocations.append(kwargs)
+
+
+class _NoOpKernel:
+    def __call__(self, *args, **kwargs):
+        return None
+
+
+def _fa4_thd_fake_modules(invocations):
+    def recording_factory(*args, **kwargs):
+        return _RecordingKernel(invocations)
+
+    def noop_factory(*args, **kwargs):
+        return _NoOpKernel()
+
+    return fa4_thd._UpstreamFa4CuteModules(
+        arch=100,
+        cutlass=_FakeCutlass,
+        cute=_FakeCute,
+        cjax=object(),
+        cuda=_FakeCuda,
+        FlashAttentionForward=recording_factory,
+        FlashAttentionBackward=recording_factory,
+        FlashAttentionBackwardPreprocess=noop_factory,
+        FlashAttentionBackwardPostprocess=noop_factory,
+    )
+
+
+_BLACKWELL_THD_KERNEL_CONFIG = fa4_thd.Flash4CuteKernelConfig(
+    forward_tile=(128, 128),
+    backward_tile=(128, 128),
+    num_threads=384,
+)
+
+
+@pytest.mark.parametrize(
+    ("sliding_window", "window_size_left", "window_size_right"),
+    [(None, None, None), (5, 4, 0)],
+    ids=["full-causal", "sliding-window"],
+)
+def test_gpu_fa4_thd_launchers_pass_resolved_window_sizes(sliding_window, window_size_left, window_size_right):
+    """Both launchers must hand FA4 an already-resolved window pair.
+
+    The CuTe DSL turns a plain ``if`` inside a ``@cute.jit`` body into an ``scf.if`` and traces both
+    regions, so a launcher that branches on ``sliding_window`` evaluates the dead arm too. Resolving
+    the window sizes before tracing is what keeps a single kernel invocation in the launcher.
+    """
+    forward_invocations: list[dict] = []
+    forward_launcher = fa4_thd._upstream_fa4_thd_forward_launcher(
+        _fa4_thd_fake_modules(forward_invocations),
+        dtype=jnp.dtype(jnp.bfloat16),
+        head_dim=128,
+        head_dim_v=128,
+        qhead_per_kvhead=2,
+        kernel_config=_BLACKWELL_THD_KERNEL_CONFIG,
+        sliding_window=sliding_window,
+    )
+    forward_launcher(object(), object(), object(), object(), object(), object(), object(), softmax_scale=0.1)
+
+    assert len(forward_invocations) == 1
+    assert forward_invocations[0]["window_size_left"] == window_size_left
+    assert forward_invocations[0]["window_size_right"] == window_size_right
+
+    backward_invocations: list[dict] = []
+    backward_launcher = fa4_thd._upstream_fa4_thd_backward_launcher(
+        _fa4_thd_fake_modules(backward_invocations),
+        dtype=jnp.dtype(jnp.bfloat16),
+        head_dim=128,
+        head_dim_v=128,
+        qhead_per_kvhead=2,
+        kernel_config=_BLACKWELL_THD_KERNEL_CONFIG,
+        sliding_window=sliding_window,
+    )
+    backward_launcher(*[object() for _ in range(16)], softmax_scale=0.1)
+
+    assert len(backward_invocations) == 1
+    assert backward_invocations[0]["window_size_left"] == window_size_left
+    assert backward_invocations[0]["window_size_right"] == window_size_right
+
+
+@pytest.mark.parametrize("sliding_window", [None, 5], ids=["full-causal", "sliding-window"])
+def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(sliding_window):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4 THD correctness requires a GPU backend.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+
+    q_key, k_key, v_key, cotangent_key = jax.random.split(jax.random.PRNGKey(0), 4)
+    q = jax.random.normal(q_key, (1, 64, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 64, 2, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    segment_ids = jnp.array([[3] * 31 + [8] * 33], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(segment_ids, max_segments=2)
+
+    def fa4(q_arg, k_arg, v_arg):
+        return attention(q_arg, k_arg, v_arg, mask, implementation="gpu_fa4_thd")
+
+    def reference(q_arg, k_arg, v_arg):
+        return reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+
+    def weighted_sum(fn):
+        return lambda *args: jnp.sum(fn(*args).astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    np.testing.assert_allclose(jax.jit(fa4)(q, k, v), jax.jit(reference)(q, k, v), atol=7e-2, rtol=7e-2)
+
+    actual_grads = jax.jit(jax.grad(weighted_sum(fa4), argnums=(0, 1, 2)))(q, k, v)
+    expected_grads = jax.jit(jax.grad(weighted_sum(reference), argnums=(0, 1, 2)))(q, k, v)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+
+
 def test_attention_rejects_unknown_implementation():
     q, k, v = _make_qkv()
 
