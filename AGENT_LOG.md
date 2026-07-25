@@ -385,3 +385,16 @@ Draft committed locally, NOT pushed/posted. Ready for human.
   QB-on cf1.0 draws 22.595 / 22.002. Will submit +batching treatment back-to-back after control terminates
   (one rack in flight). Both legs report the drop series for matched-regime comparison.
 - Confidence: 6/10 (unchanged) on batching's +1.35pp transferring to QB-on.
+
+## R6-1 INFRA HOLD 16:00Z — control leg data LOST, treatment held
+- Log-shipper sidecar amd64-only since #7583 rollout (16:07Z): no metrics ship for GB200 jobs.
+- My control /mwittmann/ep25d1-qbon-adj-control-120-0725-1454 = JOB_STATE_SUCCEEDED (completed, NOT still
+  running). Data LOST: iris logs returns 0 metric rows; salvage agent has NO dir for it (find for
+  qbon-adj-control / 1454 empty), though it IS actively capturing peers (ep25d2-mxfp8, ep25d3-qbint01).
+  My control's pods completed+deleted without capture. => goes on the RERUN list.
+- HOLDING per standing orders: NOT submitting the +batching treatment leg until the multi-arch fix ships,
+  controller restarts, and the canary flips (fresh GB200 pod 2/2, new grug-train rows in finelog).
+- Treatment STAGED (exact cmd below): rerun BOTH legs back-to-back for same-draw comparison —
+  control = QB-on cf1.0 adjoint (SCALE_MOE_QB=1 SCALE_REPORT_DROPS=1 SCALE_A2A_GATHER_DISPATCH=1
+  SCALE_A2A_CUSTOM_ADJOINT=1), treatment = + SCALE_A2A_BATCH_EXPERTS=1. 120 steps, cf1.0, DISABLE_CHECKPOINT.
+- Code is committed and parity-proven (65e3ca50d bit-exact); no code work blocked, only the rack measurement.
