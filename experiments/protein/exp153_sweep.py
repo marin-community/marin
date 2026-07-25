@@ -107,8 +107,10 @@ CHECKPOINT_ROOT: str = "checkpoints"
 
 SMOKE_RUN_PREFIX: str = "prot-exp153-smoke"
 SMOKE_WANDB_GROUP: str = "exp153-smoke"
-# Manual smoke identity token. Bump to fork a clean smoke run after a recipe/library change.
-SMOKE_VERSION: str = "v1"
+# Manual smoke identity token. Bump to fork a clean smoke run after a recipe/library change,
+# otherwise the executor prunes the step as already-succeeded and the "run" is a cache hit.
+# v2: main merged in (229 commits) 2026-07-25.
+SMOKE_VERSION: str = "v2"
 SMOKE_STEPS_DEFAULT: int = 20
 # Lifecycle window for smoke/calibration output only. Production checkpoints are
 # permanent and live under STORAGE_PREFIX; they are never routed through temp storage.
