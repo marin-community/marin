@@ -1179,6 +1179,22 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
     assert _read_attributes(out_dir)["leak"]["contaminated"] is True
 
 
+def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path: Path):
+    with pytest.raises(ValueError):
+        build_all_source_drop_sets(
+            sources=[("_global", str(tmp_path / "input"))],
+            prebuilt_bloom_dir=str(tmp_path / "bloom"),
+            output_path=str(tmp_path / "drops"),
+            ngram=NGramConfig(ngram_length=4),
+            sample_docs=100,
+            common_frac=0.5,
+            common_min_abs=3,
+            global_sample_docs=100,
+            global_common_min_abs=6,
+            global_common_min_sources=3,
+        )
+
+
 def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
     """Nested source names load only their exact local drop set."""
     eval_dir = tmp_path / "eval"

@@ -121,6 +121,7 @@ class DeconAttributes(BaseModel):
 
 _BLOOM_FILENAME = "filter.bin"
 _INDEX_FILENAME = "eval_hash_index.parquet"
+_GLOBAL_DROP_SET_DIRECTORY = "_global"
 
 
 def bloom_paths(bloom_dir: str) -> tuple[str, str]:
@@ -227,8 +228,9 @@ def _paragraph_overlap_and_matches(
 
     *drop_hashes* are removed from *both* the numerator and denominator.
     Corpus-common boilerplate carries no contamination signal, so an
-    all-boilerplate paragraph collapses to zero ngrams and scores 0. A paragraph
-    with a distinctive leak keeps its remaining ngrams and still scores ~1.0.
+    all-boilerplate paragraph collapses to zero ngrams and scores 0. Remaining
+    distinctive leak ngrams stay matchable; a leak made entirely of dropped
+    ngrams is intentionally suppressed.
 
     Paragraphs with fewer than ``ngram_length`` tokens in n-gram mode return
     ``(0.0, [])`` — see :func:`_extract_features` for why we don't fall back
@@ -963,7 +965,8 @@ class AllSourceDropSets(BaseModel):
     """Outcome of :func:`build_all_source_drop_sets`.
 
     Per-source hashes live at ``<output_dir>/<source>/drop.parquet``. Globally
-    common hashes live at ``<global_output_dir>/drop.parquet``.
+    common hashes live at ``<global_output_dir>/drop.parquet`` with document
+    and source frequencies retained for threshold audits.
     """
 
     output_dir: str
@@ -1034,8 +1037,11 @@ def build_all_source_drop_sets(
     """
     if not sources:
         raise ValueError("sources must be non-empty")
-    if len({source_name for source_name, _ in sources}) != len(sources):
+    source_names = {source_name for source_name, _ in sources}
+    if len(source_names) != len(sources):
         raise ValueError("source names must be unique")
+    if _GLOBAL_DROP_SET_DIRECTORY in source_names:
+        raise ValueError(f"{_GLOBAL_DROP_SET_DIRECTORY!r} is reserved for the global drop set")
     if global_sample_docs < sample_docs:
         raise ValueError("global_sample_docs must be at least sample_docs")
     if global_common_min_abs <= 0 or global_common_min_sources <= 0:
@@ -1095,7 +1101,7 @@ def build_all_source_drop_sets(
         ctx_kwargs["max_workers"] = max_workers
     outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
     global_rows = list(outcome.results)
-    global_output_dir = f"{output_path.rstrip('/')}/_global"
+    global_output_dir = f"{output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}"
     out_file = _write_global_drop_set(global_output_dir, global_rows)
     counters_out = dict(outcome.counters)
     counters_out["decon_drop/global_ngrams_dropped"] = len(global_rows)
@@ -1300,7 +1306,7 @@ def decon_step(
     drop_dirs = (
         [
             f"{drop_sets.output_path.rstrip('/')}/{drop_set_source}",
-            f"{drop_sets.output_path.rstrip('/')}/_global",
+            f"{drop_sets.output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}",
         ]
         if drop_sets is not None
         else None
