@@ -1483,6 +1483,40 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T20:09:01Z — 38,545 pairs verified
+
+- Eighteen additional baseline checkpoints passed independent validation:
+  2,304 pairs, 1,590 model false positives, 713 model true duplicates, and one
+  unresolved outcome. They contain 13,772 valid judgments across 13,772
+  request attempts, with no invalid responses or retries. Eighty-three pairs
+  were chunked and 2,221 were direct.
+- Complete-text review resolves the ambiguity as a true duplicate. Both
+  four-line records are the same generic wiki welcome template. Every
+  difference is a recipient username, signer, timestamp, punctuation, or the
+  superficial phrase `recognize you as` versus `recognize`. The member and
+  canonical are 230 and 227 characters with similarity 0.844639; their
+  SHA-256 values are
+  `428a7bcad94d721c250299a9ace507e54033d9b521351d74427f7c67b38efbd6` and
+  `b95af225d148376dd31bc65afece5332219c1b623b789aa5abaf463e4463a47f`.
+  Pair location: `part-00098-of-00128.parquet:346`.
+- The immutable manual Parquet record has SHA-256
+  `a760123a7ea1cd92f5b2f9ea6d59e7e7ce2dadc748d1f647bafb37907f0e97bd`
+  and semantic-judgments SHA-256
+  `f4a54f05f487ae2f94b244117195a38fd2fdc65b146a79663dfc0a0c0d4aed18`.
+  It records all 15 changed spans and binds semantic outcome
+  `3b1f29089d2337a72ec5886f83b79cd24b6beab7bc1362d259da82eee9660a6e`.
+  A separate batch-priority Iris process exactly reread the complete source
+  texts, semantic checkpoint, manual record, Parquet bytes, and completion
+  marker.
+- Across the stable 303-checkpoint snapshot, all 38 manual records leave:
+
+  - baseline: 31,225 pairs, 20,192 false positives, 11,033 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 38,545 pairs, 24,018 false positives, 14,527 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T19:51:24Z — 36,241 pairs verified
 
 - One additional baseline checkpoint passed independent validation: 128
