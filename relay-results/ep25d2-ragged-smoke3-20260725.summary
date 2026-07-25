@@ -1,0 +1,46 @@
+I20260724 22:52:36 134784237111104 iris.cli.main Resolved cluster 'marin' to config: /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260724 22:52:36 134784237111104 iris.cluster.config Loading config from /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+Job: /mwittmann/ep25d2-ragged-smoke3-20260725 (/mwittmann/ep25d2-ragged-smoke3-20260725)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: ing to allocate 75.00GiB. [executable_name='jit__init_state'] [tf-allocator-allocation-error='']
+W0725 05:51:43.365861    2052 pjrt_client.cc:1613] WatchTasksAsync failed for task 0: CANCELLED: CANCELLED
+Additional GRPC error information from remote target coordination_service while calling /xla.coordination.CoordinationService/WatchTasks:
+:UNKNOWN:Error received from peer  {grpc_status:1, grpc_message:"CANCELLED"} [type.googleapis.com/tensorflow.DerivedStatus='']
+
+
+The above exception was the direct cause of the following exception:
+
+RuntimeError: Step failed: users/marin/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e256-r1-ep25d2-ragged-smoke3-20260725_e4c0404d
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/app/experiments/grug/moe/launch_cw_scale.py", line 334, in <module>
+    experiment_main(build_scale_checkpoint)()
+  File "/app/.venv/lib/python3.12/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/lib/marin/src/marin/experiment/cli.py", line 169, in wrapper
+    run(*handles, max_concurrent=max_concurrent)
+  File "/app/lib/marin/src/marin/execution/lazy.py", line 407, in run
+    StepRunner().run(
+  File "/app/lib/marin/src/marin/execution/step_runner.py", line 350, in run
+    raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
+RuntimeError: 1 step(s) failed
+
+
+  TASK  STATE      EXIT  DURATION                     PEAK MEM    CUR MEM    ERROR
+     0  failed        1  7 minutes and 47.15 seconds  -           -          ing to allocate 75.00GiB. [executable_name='jit__i...

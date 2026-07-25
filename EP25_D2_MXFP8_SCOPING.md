@@ -1,10 +1,17 @@
 # R6-4 MXFP8 toolchain scoping assessment
 
-## Decision
+## Superseded checkpoint
 
-No `ep25d2-mxfp8-*-v3` job is emitted. The record does not contain enough
-information to reproduce the 2.2 PF/s GB200 environment without guessing. The
-EP4 and rack ladder remains stopped.
+This assessment predates the coordinator's comparison against the known-green
+`research/mcwitt/7282-uniform-mxfp8` worktree. That comparison recovered the
+exact CUTLASS dependency graph: DSL 4.5.2, the NVIDIA package index, and an
+impossible-platform override for `nvidia-cutlass-dsl-libs-base==4.5.2`.
+The worktree now carries that graph, and
+`EP25_D2_RELAY_COMMANDS.md` contains a numerics-only v3 submission.
+
+The direction remains open under the amended round-6 fleet policy regardless
+of the v3 result. The historical reconstruction below is retained to explain
+the earlier checkpoint.
 
 ## What the record establishes
 

@@ -83,10 +83,13 @@ override-dependencies = [
     "multipart>=1.3.1",
     "nltk>=3.9.4",
     "notebook>=7.5.6",
-    # CUTLASS DSL 4.6 installs libs-cu12 by default and [cu13] adds libs-cu13.
-    # Keep the shared libs-base/core wheel, but exclude the CUDA 12 payload so
-    # libNVVM selection cannot depend on uv's link order.
-    "nvidia-cutlass-dsl-libs-cu12==4.6.0 ; sys_platform == 'never'",
+    # nvidia-cutlass-dsl requires libs-base unconditionally and [cu13] merely
+    # ADDS libs-cu13; the two wheels ship 99 identical paths with different
+    # (CUDA-12 vs CUDA-13) contents, so installing both lets one silently
+    # clobber the other per `uv sync` — a coin flip that broke CuTe DSL
+    # compilation in roughly half of all GPU pods (NVVM "unsupported
+    # operation"). Our stack is CUDA 13; exclude the base variant entirely.
+    "nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",

@@ -1,0 +1,9 @@
+I20260724 23:17:09 139799443932992 iris.cli.main Resolved cluster 'marin' to config: /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260724 23:17:09 139799443932992 iris.cluster.config Loading config from /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+Job: /mwittmann/ep25d2-ragged-smoke4-20260725 (/mwittmann/ep25d2-ragged-smoke4-20260725)
+State: succeeded  exit=0  failures=0  preemptions=0
+Tasks: 1/1 completed  succeeded=1
+
+  TASK  STATE        EXIT  DURATION                     PEAK MEM    CUR MEM    ERROR
+     0  succeeded       0  8 minutes and 16.93 seconds  -           -

@@ -1,0 +1,14 @@
+I20260725 15:10:45 125534274660160 iris.cli.main Resolved cluster 'marin' to config: /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260725 15:10:45 125534274660160 iris.cluster.config Loading config from /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260725 15:10:45 125534274660160 iris.cli.job Submitting job: ep25d2-mxfp8-numerics-20260725-v2
+I20260725 15:10:45 125534274660160 iris.cli.job Command: python experiments/grug/moe/standalone/check_mxfp8_expert_mlp.py --out /tmp/ep25d2-mxfp8-numerics-20260725-v2.json
+I20260725 15:10:45 125534274660160 iris.cli.job Resources: cpu=16, memory=96GB, disk=5GB
+I20260725 15:10:45 125534274660160 iris.cli.job GPU: 1x GB200
+I20260725 15:10:45 125534274660160 iris.cli.job Federating to peer cluster: cw-us-east-08a
+I20260725 15:10:45 125534274660160 iris.cli.job Using controller: https://iris.oa.dev
+I20260725 15:10:45 125534274660160 iris.cli.job Priority band: interactive
+I20260725 15:10:46 125534274660160 iris.cluster.client.remote_client Workspace bundle size: 9.1 MB
+Not all requested scopes were granted by the authorization server, missing scopes email.
+I20260725 15:10:47 125534274660160 iris.cli.job Job submitted: /mwittmann/ep25d2-mxfp8-numerics-20260725-v2
+I20260725 15:10:47 125534274660160 iris.cli.job Dashboard: https://iris.oa.dev/#/job/%2Fmwittmann%2Fep25d2-mxfp8-numerics-20260725-v2
+/mwittmann/ep25d2-mxfp8-numerics-20260725-v2

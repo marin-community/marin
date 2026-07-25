@@ -450,3 +450,58 @@ next environment mismatch before compiler output.
 
 Next: stop under the round-6 fourth-attempt rule. Resume only with the archived
 g8 image/job metadata or approval for new 4.5.2-isolation/4.6.0-port work.
+
+## Check-in 2026-07-25 22:41 UTC
+
+The coordinator's known-green worktree comparison superseded the prior
+scoping stop. The root UV override now matches
+`research/mcwitt/7282-uniform-mxfp8` exactly:
+`nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'`, sourced from
+`https://pypi.nvidia.com/`. Both Marin and Levanter GPU extras constrain
+`nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6`. The direct QuACK 0.6.1 dependency was
+removed because it forces CUTLASS DSL 4.6.0; the green graph resolves
+transitive QuACK 0.5.0.
+
+The regenerated lock resolves 606 packages. Its DSL/base/cu13 blocks are
+identical to the known-green branch. A frozen Levanter GPU export contains
+CUTLASS DSL 4.5.2, `libs-cu13` 4.5.2, and QuACK 0.5.0; it excludes
+`libs-base`, `libs-core`, and `libs-cu12` from the Linux GPU environment.
+`uv lock --check --offline` and a full offline `uv lock` both pass.
+
+The CPU regression reports 52 passed and 6 accelerator or multi-device skips
+in 37.51 seconds. Targeted Ruff lint and formatting, TOML parsing, and
+`git diff --check` pass. Importing the vendored adapter against the cached
+CUTLASS 4.5.2/cu13 payload also passes. The kernels needed no import changes;
+they originated from the 4.5.2 lineage and retain its generic-address-space
+fix.
+
+`EP25_D2_RELAY_COMMANDS.md` now contains only
+`ep25d2-mxfp8-numerics-20260725-v3`. The numerical script prints the
+machine-readable CUTLASS environment sentinel before compilation. The stale
+EP4 and rack submissions remain blocked until numerics is green. No cluster
+job was submitted or mutated from this sandbox.
+
+The linked-worktree index remains read-only:
+`/home/marin/projects/marin/.git/worktrees/ep25-d2-bakeoff/index.lock` cannot
+be created. The coordinator must commit exactly:
+
+```text
+AGENT_LOG.md
+EP25_D2_MXFP8_SCOPING.md
+EP25_D2_RELAY_COMMANDS.md
+docs/debug-log-ep25-mxfp8-cutlass-env.md
+experiments/grug/moe/standalone/test_check_mxfp8_expert_mlp.py
+lib/levanter/pyproject.toml
+lib/marin/pyproject.toml
+pyproject.toml
+uv.lock
+```
+
+Confidence: 10/10 that the shipped bundle now reproduces the known-green
+CUTLASS 4.5.2 dependency resolution; 8/10 that v3 clears the GB200 compiler
+gate, pending the relay.
+
+Next: stop for coordinator execution of
+`ep25d2-mxfp8-numerics-20260725-v3`. Regardless of its result, operational
+friction is a checkpoint escalation and does not close the MXFP8 direction
+under the amended round-6 fleet policy.

@@ -1,0 +1,14 @@
+I20260724 22:44:20 135235986503488 iris.cli.main Resolved cluster 'marin' to config: /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260724 22:44:20 135235986503488 iris.cluster.config Loading config from /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260724 22:44:20 135235986503488 iris.cli.job Executor heuristic: auto-tagging job as non-preemptible
+I20260724 22:44:20 135235986503488 iris.cli.job Submitting job: ep25d2-ragged-smoke3-20260725
+I20260724 22:44:20 135235986503488 iris.cli.job Command: python -m experiments.grug.moe.launch_cw_scale --version ep25d2-ngc2606-dev --run
+I20260724 22:44:20 135235986503488 iris.cli.job Resources: cpu=0.1, memory=1GB, disk=5GB
+I20260724 22:44:20 135235986503488 iris.cli.job Federating to peer cluster: cw-us-east-08a
+I20260724 22:44:20 135235986503488 iris.cli.job Using controller: https://iris.oa.dev
+I20260724 22:44:20 135235986503488 iris.cli.job Priority band: interactive
+I20260724 22:44:21 135235986503488 iris.cluster.client.remote_client Workspace bundle size: 8.9 MB
+Not all requested scopes were granted by the authorization server, missing scopes email.
+I20260724 22:44:23 135235986503488 iris.cli.job Job submitted: /mwittmann/ep25d2-ragged-smoke3-20260725
+I20260724 22:44:23 135235986503488 iris.cli.job Dashboard: https://iris.oa.dev/#/job/%2Fmwittmann%2Fep25d2-ragged-smoke3-20260725
+/mwittmann/ep25d2-ragged-smoke3-20260725

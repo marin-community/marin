@@ -1,0 +1,40 @@
+I20260725 14:56:06 123524999042880 iris.cli.main Resolved cluster 'marin' to config: /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+I20260725 14:56:06 123524999042880 iris.cluster.config Loading config from /home/marin/projects/marin/.worktrees/ep25-d2-bakeoff/lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+Job: /mwittmann/ep25d2-mxfp8-numerics-20260725 (/mwittmann/ep25d2-mxfp8-numerics-20260725)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: on = self.compile_and_cache(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/cutlass_dsl/cutlass.py", line 925, in compile_and_cache
+    return super().compile_and_cache(  # type: ignore[return-value]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py", line 2033, in compile_and_cache
+    engine = self.compile_and_jit(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py", line 1553, in compile_and_jit
+    kernel = self.compiler_provider.compile_and_jit(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/compiler.py", line 203, in compile_and_jit
+    self.compile(
+  File "/app/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/compiler.py", line 160, in compile
+    raise CompilerDiagnosticError(
+cutlass.base_dsl.compiler.CompilerDiagnosticError: error: NVVM backend compilation failed
+  error: libNVVM failed while compiling generated device IR.
+  note: target architecture: sm_100a
+  note: backend log:
+        NVVM backend compilation failed
+  suggestion: check that CUDA_TOOLKIT_PATH is set correctly and that the CUDA toolkit supports
+              target architecture sm_100a; rerun with IR dump flags if backend context is needed
+error: NVVM backend compilation failed
+  error: libNVVM failed while compiling generated device IR.
+  note: target architecture: sm_100a
+  note: backend log:
+        NVVM backend compilation failed
+  suggestion: check that CUDA_TOOLKIT_PATH is set correctly and that the CUDA toolkit supports
+              target architecture sm_100a; rerun with IR dump flags if backend context is needed
+
+
+  TASK  STATE      EXIT  DURATION       PEAK MEM    CUR MEM    ERROR
+     0  failed        1  21.21 seconds  -           -          on = self.compile_and_cache(
+                                                                                  ^^...

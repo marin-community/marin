@@ -103,3 +103,29 @@ No v3 job is emitted because copying the green environment verbatim is not
 possible from the retained record. `EP25_D2_MXFP8_SCOPING.md` lists the
 missing artifacts and recovery estimates. The stale EP4 and rack commands
 were removed from `EP25_D2_RELAY_COMMANDS.md`.
+
+## Checkpoint escalation: exact 4.5.2 graph recovered
+
+The coordinator compared this worktree with the known-green
+`research/mcwitt/7282-uniform-mxfp8` worktree and recovered the missing
+dependency resolution. The green bundle used:
+
+```text
+nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6
+nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'
+```
+
+Both CUTLASS packages use the explicit `https://pypi.nvidia.com/` index. The
+green graph also resolves transitive `quack-kernels==0.5.0`; the later direct
+QuACK 0.6.1 pin was removed because it forces CUTLASS DSL 4.6.0.
+
+The root, Levanter, and Marin dependency declarations now match the green
+constraints. The CUTLASS DSL/base/cu13 and QuACK sections of `uv.lock` were
+regenerated to the green 4.5.2 resolution. `uv lock --check --offline`
+resolves 606 packages, and the CPU regression reports 52 passed and 6 skipped
+in 37.51 seconds. The vendored adapter also imports successfully against the
+cached CUTLASS 4.5.2/cu13 payload.
+
+`EP25_D2_RELAY_COMMANDS.md` now emits only the sentinel-enabled v3 numerical
+job. A failed v3 remains a checkpoint escalation and does not close the MXFP8
+direction under the amended round-6 fleet policy.
