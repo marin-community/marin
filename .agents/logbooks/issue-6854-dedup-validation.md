@@ -1212,3 +1212,46 @@ statistics for performance comparisons.
 
 - All 12 pods remain Ready with zero restarts. The four GPU workers served
   8,012 successful responses over the prior 15 minutes.
+
+### 2026-07-25T16:17:00Z — 23,377 pairs verified; three ambiguities resolved
+
+- Nineteen additional baseline checkpoints passed independent validation:
+  2,432 pairs, 1,395 model false positives, 1,034 model true duplicates, and
+  three unresolved model outcomes. They used 5,674 valid first-attempt
+  judgments with no invalid responses or retries; 13 pairs were chunked and
+  2,419 were direct.
+- Complete sentence alignment resolves the surname-history pair as a true
+  duplicate. All 28 member units are represented by the same 50-unit
+  genealogy SEO template; differences are the surname slot, headings,
+  illustrative occupation or religious-phrase substitutions, and an
+  incomplete `Famous People` heading. Pair location:
+  `part-00001-of-00128.parquet:4724`; member/canonical text SHA-256:
+  `a538c95d274280bc1336a815cce478229dc9e66d1e68786a8933ac97e829a0a0` /
+  `601a3dde5681f75a466ffb662db60199e2247144c9597fa901cf865f914fa2ec`.
+- Complete sentence alignment resolves the college/career pair as a false
+  positive. The 10-unit member contains four substantive sentences absent
+  from the six-unit canonical: an online-course recruiting advantage,
+  registration deadlines and program requirements, an admissions-information
+  request, and a bachelor's degree requirement listing five disciplines.
+  Pair location: `part-00032-of-00128.parquet:5882`;
+  member/canonical text SHA-256:
+  `6787e628a041043e2fbf65358652d4b49ff351c808edbd355e2817143b339a4c` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- Complete sentence alignment resolves the template-advice article as a true
+  duplicate. All 29 member units align to the 29-unit canonical; differences
+  are the incongruous medical-assistant versus Bootstrap title, synonym
+  substitutions, and two garbled numeric insertions. Pair location:
+  `part-00064-of-00128.parquet:4680`; member/canonical text SHA-256:
+  `440a3a99f79b6c9196b989e717ed63f7728cb62ef927416c34faf208e6f8b284` /
+  `11ad38e8986f596f9d60954a49db12024f47beb555aa4318c3adf096db31ebd5`.
+- Three manual Parquet shards and markers were written, reread, and
+  hash-verified. Across the stable 183-checkpoint snapshot, all 19 manual
+  records leave:
+
+  - baseline: 20,922 pairs, 13,289 false positives, 7,633 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 23,377 pairs, 14,573 false positives, 8,804 true duplicates.
+
+- All 12 pods remain Ready with zero restarts. Partition p1's latest
+  15-minute response-log count was truncated despite four advancing
+  checkpoints, so it is excluded from throughput aggregation.
