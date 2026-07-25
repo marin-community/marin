@@ -17,9 +17,9 @@ a capability URL, and calls ``/v1/models`` through marin-dev's public proxy.
 
 import json
 import logging
+import subprocess
 from urllib.parse import urlsplit, urlunsplit
 
-import requests
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from marin.inference.config import (
     IrisConfig,
@@ -35,6 +35,7 @@ PARENT_ORIGIN = "https://iris-dev.oa.dev"
 CHILD_CLUSTER = "cw-us-west-04a"
 MODEL = "Qwen/Qwen3-0.6B-Base"
 REQUEST_TIMEOUT_SECONDS = 60
+CURL_METADATA_MARKER = "\n__IRIS_CURL_METADATA__"
 
 logger = logging.getLogger(__name__)
 
@@ -76,36 +77,59 @@ def main() -> None:
 
     with remote_inference(config) as session:
         base_url = session.model.endpoint.base_url
-        expected_prefix = f"{PARENT_ORIGIN}/proxy/{CHILD_CLUSTER}/t/"
+        expected_prefix = f"{PARENT_ORIGIN}/proxy/t/cluster={CHILD_CLUSTER}/"
         if not base_url.startswith(expected_prefix):
             raise RuntimeError(
                 f"Minted capability URL did not use the federated parent route: {_redacted_url(base_url)}"
             )
 
-        response = requests.get(session.model.endpoint.url("models"), timeout=REQUEST_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "")
-        diagnostics = {
-            "bytes": len(response.content),
-            "content_type": content_type,
-            "final_url": _redacted_url(response.url),
-            "redirects": [
-                {"status_code": redirect.status_code, "url": _redacted_url(redirect.url)}
-                for redirect in response.history
+        response = subprocess.run(
+            [
+                "curl",
+                "--fail-with-body",
+                "--location",
+                "--max-time",
+                str(REQUEST_TIMEOUT_SECONDS),
+                "--request",
+                "GET",
+                "--show-error",
+                "--silent",
+                "--write-out",
+                f"{CURL_METADATA_MARKER}%{{http_code}}\t%{{content_type}}\t%{{url_effective}}",
+                session.model.endpoint.url("models"),
             ],
-            "status_code": response.status_code,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        body, marker, metadata = response.stdout.rpartition(CURL_METADATA_MARKER)
+        if not marker:
+            raise RuntimeError(f"curl returned no response metadata: {response.stderr.strip()}")
+        status_text, content_type, final_url = metadata.split("\t", maxsplit=2)
+        status_code = int(status_text)
+        diagnostics = {
+            "bytes": len(body.encode()),
+            "content_type": content_type,
+            "curl_exit_code": response.returncode,
+            "final_url": _redacted_url(final_url),
+            "status_code": status_code,
         }
-        if not response.content or "application/json" not in content_type:
+        if response.returncode != 0:
+            raise RuntimeError(
+                f"Unauthenticated curl failed: {json.dumps(diagnostics)}; stderr={response.stderr.strip()}"
+            )
+        if not body or "application/json" not in content_type:
             raise RuntimeError(f"Federated inference returned a non-JSON response: {json.dumps(diagnostics)}")
-        payload = response.json()
+        payload = json.loads(body)
         logger.info(
             "FEDERATED_INFERENCE_PROXY_DEMO %s",
             json.dumps(
                 {
                     "capability_url": _redacted_url(base_url),
+                    "client": "curl",
                     "inference_job": str(session.jobs[0].job_id),
                     "model": payload["data"][0]["id"],
-                    "status_code": response.status_code,
+                    "status_code": status_code,
                 },
                 sort_keys=True,
             ),
