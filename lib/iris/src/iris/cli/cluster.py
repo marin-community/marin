@@ -35,7 +35,7 @@ from iris.cli.build import (
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import clear_remote_state, make_local_config
+from iris.cluster.config import KUBERNETES_WORKER_RUNTIME, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
     build_worker_config_for_group,
@@ -206,7 +206,7 @@ def _build_cluster_images(
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> dict[str, str]:
     built: dict[str, str] = {}
-    kubernetes = config.defaults.worker.runtime == "kubernetes"
+    kubernetes = config.defaults.worker.runtime == KUBERNETES_WORKER_RUNTIME
 
     worker_tag = config.defaults.worker.docker_image
     if worker_tag and not kubernetes:

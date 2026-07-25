@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
+DOCKER_WORKER_RUNTIME = "docker"
+KUBERNETES_WORKER_RUNTIME = "kubernetes"
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -955,8 +957,11 @@ def _validate_worker_defaults(config: IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime not in ("docker", "kubernetes"):
-        raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
+    if runtime and runtime not in (DOCKER_WORKER_RUNTIME, KUBERNETES_WORKER_RUNTIME):
+        raise ValueError(
+            f"defaults.worker.runtime must be {DOCKER_WORKER_RUNTIME!r} or {KUBERNETES_WORKER_RUNTIME!r}, "
+            f"got {runtime!r}."
+        )
 
 
 def _validate_gcp_service_accounts(config: IrisClusterConfig) -> None:

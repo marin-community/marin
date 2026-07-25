@@ -100,7 +100,7 @@ jobs:
             --tag ghcr.io/marin-community/${{ matrix.name }}:${{ needs.iris-tags.outputs.hash }}-${{ matrix.arch }} \
             .
 
-  # Merge the per-arch tags into the multi-arch tags that clusters actually pull.
+  # Publish final tags from each image's available architecture-specific tags.
   iris-manifests:
     if: |
       github.event_name == 'workflow_dispatch' ||
