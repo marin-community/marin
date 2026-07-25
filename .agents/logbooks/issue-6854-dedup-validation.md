@@ -1000,3 +1000,22 @@ statistics for performance comparisons.
 - Partition p3 advanced to decision file 97. All 12 root, broker, and worker
   pods remain Ready with zero restarts, retaining the requested eight H100s at
   batch priority.
+
+### 2026-07-25T13:42:00Z — partition 2 completes its first large batch
+
+- The first checkpoint in baseline decision file 64 passed independent
+  validation: 128 pairs, 120 false positives, eight true duplicates, and zero
+  unresolved outcomes.
+- This batch contained 31 chunked pairs and 97 direct pairs. All 4,014 model
+  judgments were valid on their first attempt. The audit verified the
+  completion marker, outcome bytes and SHA-256, ordered case-key SHA-256, row
+  identities, configuration hash, counters, and deterministic outcome
+  reconstruction from every persisted judgment.
+- Across the stable 95-checkpoint snapshot, the 13 prior manual records leave:
+
+  - baseline: 9,658 pairs, 6,301 false positives, 3,357 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 12,113 pairs, 7,585 false positives, 4,528 true duplicates.
+
+- Partition p2 moved to semantic range 128:256. All four GPU workers continue
+  serving requests with all 12 pods Ready and zero restarts.
