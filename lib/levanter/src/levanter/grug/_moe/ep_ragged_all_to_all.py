@@ -45,6 +45,11 @@ def _custom_adjoint_enabled() -> bool:
     return os.environ.get("SCALE_A2A_CUSTOM_ADJOINT") == "1"
 
 
+def _batch_experts_enabled() -> bool:
+    """Batch the per-local-expert loop into one dispatch a2a, one grouped GEMM, one combine a2a."""
+    return os.environ.get("SCALE_A2A_BATCH_EXPERTS") == "1"
+
+
 @jax.custom_vjp
 def _dispatch_gather(
     x_local: Float[Array, "Tlocal H"],
@@ -252,36 +257,60 @@ def _fixed_a2a_core(
             send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
-    output_parts = []
-    for local_expert_index in range(local_experts):
+    if _batch_experts_enabled():
+        # One dispatch a2a, one grouped up/down GEMM, one combine a2a over all local experts. The
+        # local-expert axis is a batch dim the a2a passes through, so results match the per-expert
+        # loop; split/concat move the expert-shard axis (1) instead of axis 0.
         with jax.named_scope("dispatch"):
-            received = jax.lax.all_to_all(
-                send_x[local_expert_index],
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
+            received = jax.lax.all_to_all(send_x, "expert", split_axis=1, concat_axis=1, tiled=True)
             received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
         with jax.named_scope("moe_up_down"):
-            expert_input = received.reshape(bucket_size, hidden_dim)
-            hidden = expert_input @ moe_w13_local[local_expert_index]
+            expert_input = received.reshape(local_experts, bucket_size, hidden_dim)
+            hidden = jnp.einsum("nbh,nhi->nbi", expert_input, moe_w13_local)
             gate, up = jnp.split(hidden, [moe_dim], axis=-1)
-            expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
+            expert_output = jnp.einsum("nbi,nih->nbh", activation_fn(gate) * up, moe_w2_local)
         with jax.named_scope("combine"):
-            returned = jax.lax.all_to_all(
-                expert_output.reshape(expert_shards, capacity, hidden_dim),
+            send_output = jax.lax.all_to_all(
+                expert_output.reshape(local_experts, expert_shards, capacity, hidden_dim),
                 "expert",
-                split_axis=0,
-                concat_axis=0,
+                split_axis=1,
+                concat_axis=1,
                 tiled=True,
             )
-            output_parts.append(returned)
+            send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+            send_output = send_output.reshape(send_size, hidden_dim)
+    else:
+        output_parts = []
+        for local_expert_index in range(local_experts):
+            with jax.named_scope("dispatch"):
+                received = jax.lax.all_to_all(
+                    send_x[local_expert_index],
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+            with jax.named_scope("moe_up_down"):
+                expert_input = received.reshape(bucket_size, hidden_dim)
+                hidden = expert_input @ moe_w13_local[local_expert_index]
+                gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+                expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
+            with jax.named_scope("combine"):
+                returned = jax.lax.all_to_all(
+                    expert_output.reshape(expert_shards, capacity, hidden_dim),
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                output_parts.append(returned)
+        with jax.named_scope("combine"):
+            send_output = jnp.stack(output_parts, axis=0)
+            send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+            send_output = send_output.reshape(send_size, hidden_dim)
 
     with jax.named_scope("combine"):
-        send_output = jnp.stack(output_parts, axis=0)
-        send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
-        send_output = send_output.reshape(send_size, hidden_dim)
         gather_indices = jnp.minimum(linear_indices, send_size - 1)
         if custom_adjoint:
             gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)

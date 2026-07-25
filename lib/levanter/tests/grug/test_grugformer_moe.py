@@ -705,6 +705,52 @@ def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPat
         np.testing.assert_allclose(np.asarray(custom_g), np.asarray(auto_g), rtol=1e-5, atol=1e-5)
 
 
+def test_batch_experts_matches_loop_forward_and_gradients(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(17),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.delenv("SCALE_A2A_BATCH_EXPERTS", raising=False)
+    loop_out, loop_dropped, loop_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_BATCH_EXPERTS", "1")
+    batch_out, batch_dropped, batch_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    np.testing.assert_allclose(np.asarray(batch_out), np.asarray(loop_out), rtol=1e-5, atol=1e-5)
+    assert batch_dropped == loop_dropped
+    assert batch_dropped > 0
+    for loop_g, batch_g in zip(loop_grads, batch_grads):
+        np.testing.assert_allclose(np.asarray(batch_g), np.asarray(loop_g), rtol=1e-5, atol=1e-5)
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [
