@@ -505,3 +505,55 @@ Next: stop for coordinator execution of
 `ep25d2-mxfp8-numerics-20260725-v3`. Regardless of its result, operational
 friction is a checkpoint escalation and does not close the MXFP8 direction
 under the amended round-6 fleet policy.
+
+## Check-in 2026-07-25 22:49 UTC
+
+`/mwittmann/ep25d2-mxfp8-numerics-20260725-v3` succeeded on one GB200 with
+exit 0, zero failures, and zero preemptions in 1 minute 2.44 seconds. The
+coordinator reports that the numerical checks passed. This clears the
+libNVVM `sm_100a` compiler gate for the CUTLASS DSL 4.5.2/cu13 resolution.
+
+Log-server ingestion is degraded for new GB200 jobs. The v3 Iris summary
+contains the terminal job state but no task logs, so the
+`CUTLASS_ENV_SENTINEL` line is not currently harvestable.
+
+`SCALE_JSON_LOGGER` is passed to `JsonLoggerConfig(logger_name=...)`.
+`JsonLoggerTracker` sends its JSON records through `logger.info`; the value is
+not a file or S3 path. Levanter has a separate `JsonFileTracker` backed by
+`StoragePath`, but `launch_cw_scale.py` does not expose or compose that tracker.
+The remaining commands therefore retain stdout JSON metrics. EP4 and rack
+metric harvests may need to wait for log-shipping recovery.
+
+`EP25_D2_RELAY_COMMANDS.md` contains the four remaining v3 jobs:
+
+```text
+ep25d2-mxfp8-ep4-bf16-20260725-v3
+ep25d2-mxfp8-ep4-treatment-20260725-v3
+ep25d2-mxfp8-rack-bf16-120-20260725-v3
+ep25d2-mxfp8-rack-treatment-120-20260725-v3
+```
+
+The EP4 pair uses QB-on, fixed gather dispatch, the custom adjoint, capacity
+factor 1.0, and drop reporting. The matched 120-step rack pair uses the same
+protocol at d5120, 48 layers, 8-of-256, EP64, batch 1024, and sequence length
+4096. Only the treatment legs enable `SCALE_MOE_MXFP8=1`. The rack pair
+remains gated on terminal EP4 jobs with harvested drop parity.
+
+No cluster job was submitted or mutated from this sandbox.
+
+The linked-worktree index remains read-only:
+`/home/marin/projects/marin/.git/worktrees/ep25-d2-bakeoff/index.lock` cannot
+be created. The coordinator must commit exactly:
+
+```text
+AGENT_LOG.md
+EP25_D2_RELAY_COMMANDS.md
+```
+
+Confidence: 10/10 that CUTLASS DSL 4.5.2/cu13 clears the GB200 numerical
+compiler gate; 9/10 that the remaining commands reproduce the matched
+round-6 protocol.
+
+Next: stop for coordinator submission of the EP4 pair. Submit one rack job at
+a time only after EP4 drop parity is confirmed. If metrics are unavailable,
+wait for log-shipping recovery before advancing.
