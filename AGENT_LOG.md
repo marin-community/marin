@@ -579,6 +579,24 @@ Confidence: 6/10 (numerics proven; mechanism next; memory is the swing factor).
 
 Confidence: 6/10.
 
-Next: control completes (~40 min) → submit treatment → harvest p50/loss/drops both
-legs. Watch on treatment: the +32.7 GiB saved-activation cost (OOM = verdict too).
+## Check-in 2026-07-25 ~08:45 UTC — control 20.368%; treatment OOM at default mem fraction
+
+- **6a CONTROL (`/mwittmann/ep25d3-fa4lse-ctl-120-v1-20260725`): p50 MFU 20.368%**
+  (p10 20.278 / p90 20.435), final loss 5.732. (Morning draw was 20.543% — placement
+  band ±0.2pp across these two.)
+- **TREATMENT (SCALE_FA4_LSE_SAVE=1) OOM'd** at the default jax mem fraction (0.75,
+  no override in launch_cw_scale): XLA remat reduced the temp arena to 137.61 GiB
+  (floor 133.17; control fits under 139.5), then runtime BFC OOM on a 101.73 GiB
+  allocation. The +32.7 GiB saved-activation cost breaks the 0.75 arena — the
+  predicted memory risk is real, and "the win needs headroom the incumbent config
+  doesn't have" is now part of the story.
+- Retry plan (matched pair at the SAME fraction): control@0.90 then treatment@0.90,
+  back-to-back. Treatment math at 0.90 (167.4 GiB arena): temp 137.61 +
+  weights/opt ~15-20 ≈ 153-158 → should fit. Prior evidence says mem fraction is
+  perf-neutral within noise on this stack (a2a 0.85≈0.90), so the 0.90 pair is the
+  honest A/B; the 0.75-control 20.368% stays as a secondary reference.
+
+Confidence: 5/10 (mechanism unproven until the treatment runs; memory cost confirmed).
+
+Next: submit control@0.90, then treatment@0.90; harvest the pair.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
