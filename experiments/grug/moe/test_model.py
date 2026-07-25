@@ -125,6 +125,11 @@ def test_model_config_rejects_multiple_load_balancers():
         GrugModelConfig(vocab_size=128, qb_routing=True, capacity_balanced_routing=True)
 
 
+def test_model_config_rejects_refill_below_full_capacity():
+    with pytest.raises(ValueError, match=r"requires moe_capacity_factor >= 1.0"):
+        GrugModelConfig(vocab_size=128, capacity_refill_routing=True, moe_capacity_factor=0.99)
+
+
 def test_capacity_balanced_top_k_limits_local_overflow():
     num_tokens = 512
     num_experts = 32

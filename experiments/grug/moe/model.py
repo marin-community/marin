@@ -192,6 +192,8 @@ class GrugModelConfig:
             raise ValueError("capacity_balance_hard_iterations must be non-negative")
         if self.capacity_balance_hard_update_rate <= 0:
             raise ValueError("capacity_balance_hard_update_rate must be positive")
+        if self.capacity_refill_routing and self.moe_capacity_factor < 1.0:
+            raise ValueError("capacity_refill_routing requires moe_capacity_factor >= 1.0")
         enabled_load_balancers = sum((self.qb_routing, self.capacity_balanced_routing, self.capacity_refill_routing))
         if enabled_load_balancers > 1:
             raise ValueError("qb_routing, capacity_balanced_routing, and capacity_refill_routing are mutually exclusive")

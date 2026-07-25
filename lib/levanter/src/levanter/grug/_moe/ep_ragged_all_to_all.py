@@ -447,6 +447,8 @@ def _stable_expert_local_rank(
     expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     segment_start = jnp.cumsum(expert_counts) - expert_counts
     sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[flat_experts[order]]
+    if os.environ.get("SCALE_A2A_SONIC_SLOT_UNPERMUTE") == "1":
+        return sonic_unpermute_i32(sorted_rank, order.astype(jnp.int32))
     inverse_order = jnp.argsort(order)
     return sorted_rank[inverse_order]
 
