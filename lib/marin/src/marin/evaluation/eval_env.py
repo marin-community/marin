@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch-environment variables forwarded to evaluation jobs.
-
-An eval job (the group orchestrator, an evalchemy client, a Harbor runner) runs on a cluster worker
-with none of the launcher's ambient credentials. The launcher forwards a fixed allowlist of variables
-from its own environment into the job's :class:`EnvironmentSpec`; this module is that allowlist.
-"""
+"""Allowlisted launch-environment variables supplied to evaluation jobs."""
 
 import os
 
@@ -25,7 +20,6 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "OPENAI_API_KEY",
     "E2B_API_KEY",
     "MODAL_API_KEY",
-    "DAYTONA_API_KEY",
     "TPU_CI",
     "MARIN_PREFIX",
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN",

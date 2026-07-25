@@ -33,6 +33,7 @@ from marin.evaluation.runner import (
 )
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem import prefix_join
+from rigging.secrets import SecretSpec
 
 from experiments.evaluation.evals import EVALS
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
@@ -111,8 +112,13 @@ def build_evaluation_batch(
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
+    secret_env: dict[str, SecretSpec] = {}
     for eval_key in spec.evals:
         definition = EVALS[eval_key]
+        for name, spec_value in definition.secret_env.items():
+            if name in secret_env and secret_env[name] != spec_value:
+                raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
+            secret_env[name] = spec_value
         run_id = _run_id(spec.model, eval_key)
         output_dir = prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
@@ -124,6 +130,7 @@ def build_evaluation_batch(
                     eval_ref=definition.record_ref,
                 ),
                 executor=definition.executor_for(model, spec.limit),
+                secret_env_keys=tuple(definition.secret_env),
             )
         )
 
@@ -140,6 +147,7 @@ def build_evaluation_batch(
         api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
         provenance=provenance,
+        secret_env=secret_env,
     )
 
 

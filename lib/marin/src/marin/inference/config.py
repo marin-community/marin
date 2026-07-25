@@ -82,6 +82,7 @@ class VllmEngineConfig:
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
+    max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -89,6 +90,8 @@ class VllmEngineConfig:
             raise ValueError("startup_timeout_seconds must be positive")
         if self.max_num_batched_tokens is not None and self.max_num_batched_tokens <= 0:
             raise ValueError("max_num_batched_tokens must be positive")
+        if self.max_num_seqs is not None and self.max_num_seqs <= 0:
+            raise ValueError("max_num_seqs must be positive")
         if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
 

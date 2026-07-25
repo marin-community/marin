@@ -50,10 +50,7 @@ from marin.inference.levanter_backend import (
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.model_preparation import (
-    resolve_model_path,
-    select_tensor_parallel_size,
-)
+from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
