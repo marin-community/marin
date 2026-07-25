@@ -438,6 +438,61 @@ def _install_jaxpp_const_sharding_patch() -> None:
     jaxpp_core.extract_params = extract_params_with_const_shardings
 
 
+def _bind_jaxpp_meshes_shallow(cjaxpr, mpmd_mesh, core_module):
+    def bind_sharding_to_mesh(sharding, *, name: str):
+        mpmd_index = core_module._require_single_mpmd_index(mpmd_mesh, sharding.mesh, name=name)
+        (bound,) = core_module.updated_named_sharding_mesh((sharding,), mpmd_mesh.unstack[mpmd_index])
+        return bound
+
+    new_equations = []
+    for equation in cjaxpr.eqns:
+        if equation.primitive is core_module.task_p:
+            _, new_mesh = core_module._resolve_placement(
+                mpmd_mesh,
+                equation.params["mpmd_idx"],
+                name="task mpmd_idx",
+            )
+            new_equations.append(core_module._bind_task_eqn_to_mesh(equation, new_mesh))
+        elif equation.primitive is core_module.dax_pscan_p:
+            loop_cjaxpr = _bind_jaxpp_meshes_shallow(equation.params["jaxpr"], mpmd_mesh, core_module)
+            new_equations.append(
+                equation.replace(
+                    params=equation.params | {"jaxpr": loop_cjaxpr},
+                    effects=loop_cjaxpr.effects,
+                )
+            )
+        elif equation.primitive is core_module.transfer_p:
+            param_update = {
+                "src_shardings": tuple(
+                    bind_sharding_to_mesh(sharding, name="src_sharding") for sharding in equation.params["src_shardings"]
+                ),
+                "tgt_shardings": tuple(
+                    bind_sharding_to_mesh(sharding, name="tgt_sharding") for sharding in equation.params["tgt_shardings"]
+                ),
+            }
+            new_equations.append(equation.replace(params=equation.params | param_update))
+        else:
+            new_equations.append(equation)
+
+    return cjaxpr.replace(jaxpr=cjaxpr.jaxpr.replace(eqns=new_equations))
+
+
+def _install_jaxpp_bind_meshes_patch() -> None:
+    """Keep automatic JaxPP mesh binding from replacing nested task equations."""
+    _require_jaxpp()
+    if jaxpp_core is None:
+        raise ModuleNotFoundError("jaxpp.core is required for automatic JaxPP mesh binding")
+    original_bind_meshes = jaxpp_core.bind_meshes
+    if getattr(original_bind_meshes, "_grug_shallow_bind_meshes_patch", False):
+        return
+
+    def bind_meshes_shallow(cjaxpr, mpmd_mesh):
+        return _bind_jaxpp_meshes_shallow(cjaxpr, mpmd_mesh, jaxpp_core)
+
+    bind_meshes_shallow._grug_shallow_bind_meshes_patch = True
+    jaxpp_core.bind_meshes = bind_meshes_shallow
+
+
 def _pipeline_schedule(pipeline: GrugJaxPPConfig):
     pp = _require_jaxpp()
     schedules = __import__("jaxpp.schedules", fromlist=["schedules"])
@@ -2960,10 +3015,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mpmd_mesh = None
     if config.trainer.pipeline is not None:
         mpmd_mesh = _require_jaxpp().MpmdMesh(mesh, config.trainer.pipeline.stage_axis_name)
-        if config.trainer.pipeline.implementation == "auto" and os.environ.get(
-            "GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false"
-        ).lower() in ("1", "true", "yes", "on"):
-            _install_jaxpp_const_sharding_patch()
+        if config.trainer.pipeline.implementation == "auto":
+            _install_jaxpp_bind_meshes_patch()
+            if os.environ.get("GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false").lower() in ("1", "true", "yes", "on"):
+                _install_jaxpp_const_sharding_patch()
 
     explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
     if explicit_mpmd:
