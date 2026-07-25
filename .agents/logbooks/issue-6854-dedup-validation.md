@@ -821,3 +821,18 @@ statistics for performance comparisons.
   2,509 true duplicates, and four unresolved. Applying the four separately
   reviewed overrides yields 4,399 false positives and 2,513 true duplicates
   across all 6,912 pairs.
+
+### 2026-07-25T12:41:00Z — manual overrides made machine-verifiable
+
+- Commit `c542630ef` extends the finalizer with a separate manual-decision input.
+  An override is accepted only for an unresolved semantic record, must match
+  every pair identity and full-text hash, and must bind the exact persisted
+  `judgments_json` SHA-256. A manual record cannot replace a resolved semantic
+  decision. Twelve focused finalizer tests pass; lint and implementation
+  type-check pass.
+- The four reviewed decisions are now immutable one-row Parquet shards with
+  JSON completion markers under
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-manual-overrides-100b-qwen35-35b-a3b-20260725-v1/decisions/`.
+  Each marker binds the review key, label, semantic-evidence hash, Parquet byte
+  length, and Parquet SHA-256. Writes were reread and checked for exact record
+  equality before the markers were published.
