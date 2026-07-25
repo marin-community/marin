@@ -88,11 +88,11 @@ def test_persisted_complete_text_hashes_are_reverified() -> None:
 
 def test_pair_decisions_retain_exact_parquet_row_reference(tmp_path) -> None:
     path = tmp_path / "pairs.parquet"
-    pairs = [_pair("same", "same"), _pair("member", "canonical")]
+    pairs = [{**_pair(f"same-{index}", f"same-{index}"), "review_key": f"pair-{index}"} for index in range(17)]
     pq.write_table(pa.Table.from_pylist(pairs), path)
 
     decisions = list(_pair_decisions({"path": str(path)}))
 
-    assert [decision["pair_path"] for decision in decisions] == [str(path), str(path)]
-    assert [decision["pair_row_index"] for decision in decisions] == [0, 1]
+    assert [decision["pair_path"] for decision in decisions] == [str(path)] * 17
+    assert [decision["pair_row_index"] for decision in decisions] == list(range(17))
     assert [decision["review_key"] for decision in decisions] == [pair["review_key"] for pair in pairs]
