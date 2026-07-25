@@ -293,3 +293,55 @@ impl StatsService for StatsServiceImpl {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Extensions, HeaderMap};
+
+    use super::*;
+
+    fn ctx_with(identity: Option<AuthIdentity>) -> RequestContext {
+        let mut extensions = Extensions::new();
+        if let Some(identity) = identity {
+            extensions.insert(identity);
+        }
+        RequestContext::new(HeaderMap::new()).with_extensions(extensions)
+    }
+
+    fn jwt(cluster: &str) -> RequestContext {
+        ctx_with(Some(AuthIdentity::Jwt {
+            cluster: cluster.to_string(),
+        }))
+    }
+
+    #[test]
+    fn a_forwarding_jwt_stamps_the_cluster_its_key_authenticates() {
+        // The stats-plane twin of the log path's `authorized_cluster`: a WriteRows
+        // batch's origin is bound to the credential that carried it. The function reads
+        // no caller-supplied cluster at all, so a spoofed origin in the batch cannot
+        // influence the stamp — `stamp_cluster_column` then overwrites the batch column
+        // with this value. That is what makes attribution independent of whether the
+        // sender's local schema even held the origin column (the #138 federation gap).
+        assert_eq!(
+            write_origin_cluster(&jwt("cw-rno2a")).unwrap(),
+            Some("cw-rno2a".to_string())
+        );
+    }
+
+    #[test]
+    fn a_trusted_network_writer_stamps_nothing() {
+        // A local write (admitted by the loopback/VPC cidr rule) carries no per-writer
+        // identity, so its batch is left as supplied — empty for a store writing its own
+        // rows. Nothing is stamped, so an empty/NULL origin denotes the local cluster.
+        let network = ctx_with(Some(AuthIdentity::Network));
+        assert_eq!(write_origin_cluster(&network).unwrap(), None);
+    }
+
+    #[test]
+    fn a_write_with_no_auth_identity_is_refused() {
+        // Unreachable through the interceptor, which admits nothing without recording an
+        // identity. Refusing rather than defaulting fails closed: an unauthenticated
+        // write can never silently become a hub-local row.
+        assert!(write_origin_cluster(&ctx_with(None)).is_err());
+    }
+}

@@ -2447,41 +2447,6 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
-    #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
-
-    def register_endpoint(
-        self,
-        request: controller_pb2.Controller.RegisterEndpointRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.RegisterEndpointResponse:
-        """Register a service endpoint (forwards to EndpointService).
-
-        The lease is dropped from the response so this surface stays
-        wire-identical to its lease-less callers, which do not renew.
-        """
-        response = self._endpoint_service.register_endpoint(request, ctx)
-        return controller_pb2.Controller.RegisterEndpointResponse(endpoint_id=response.endpoint_id)
-
-    def unregister_endpoint(
-        self,
-        request: controller_pb2.Controller.UnregisterEndpointRequest,
-        ctx: Any,
-    ) -> job_pb2.Empty:
-        """Unregister a service endpoint (forwards to EndpointService). Idempotent."""
-        return self._endpoint_service.unregister_endpoint(request, ctx)
-
-    def list_endpoints(
-        self,
-        request: controller_pb2.Controller.ListEndpointsRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix (forwards to EndpointService)."""
-        return self._endpoint_service.list_endpoints(request, ctx)
-
     @property
     def provider(self) -> TaskBackend:
         """The live execution backend (read-only handle for dashboard descriptors)."""

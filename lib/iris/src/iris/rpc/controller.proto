@@ -865,11 +865,8 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  // Endpoint registry (generic service discovery)
-  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
-  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
-  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
   // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
+  // Registering, unregistering, and listing endpoints live on EndpointService.
   rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
 
   // Autoscaler
@@ -932,9 +929,8 @@ service ControllerService {
 // the owning task's row lifetime. RegisterEndpoint returns the granted
 // lease_duration so the client can pace its renewals off the server's policy.
 //
-// The ControllerService.{RegisterEndpoint,UnregisterEndpoint,ListEndpoints}
-// RPCs forward here so clients that call the old surface keep working; clients
-// that want to renew call this service directly to learn their lease.
+// This is the sole endpoint-registry surface. MintEndpointToken (scoped proxy
+// tokens) stays on ControllerService.
 service EndpointService {
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);

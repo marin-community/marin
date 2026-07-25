@@ -300,10 +300,14 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
     )
 
 
-def rpc_post(client: TestClient, method: str, body: dict | None = None):
-    """Helper to call RPC endpoint and return JSON response."""
+def rpc_post(client: TestClient, method: str, body: dict | None = None, *, service: str = "ControllerService"):
+    """Helper to call an RPC method and return the JSON response.
+
+    Endpoint-registry methods (register/list/unregister) live on EndpointService;
+    pass ``service="EndpointService"`` for those.
+    """
     resp = client.post(
-        f"/iris.cluster.ControllerService/{method}",
+        f"/iris.cluster.{service}/{method}",
         json=body or {},
         headers={"Content-Type": "application/json"},
     )
@@ -429,7 +433,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -456,7 +460,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -495,7 +499,7 @@ def test_list_endpoints_filters_by_task_ids(client, state):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]})
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"

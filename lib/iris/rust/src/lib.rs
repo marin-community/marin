@@ -50,6 +50,12 @@ const MAX_DECISION_BODY_BYTES: usize = 64 * 1024;
 const PROXY_PATH_PREFIX: &str = "/proxy/";
 const REGISTRY_LOCK_POISONED: &str = "native proxy registry lock is poisoned";
 const RPC_METRICS_LOCK_POISONED: &str = "native proxy RPC metrics lock is poisoned";
+const PROXY_METRICS_LOCK_POISONED: &str = "native proxy transport metrics lock is poisoned";
+// Bound on distinct proxy endpoints tracked at once; overflow folds into
+// PROXY_OTHER_ENDPOINT and idle endpoints are evicted after the window below.
+const PROXY_ENDPOINT_CAP: usize = 128;
+const PROXY_ENDPOINT_IDLE_EVICTION: Duration = Duration::from_secs(3600);
+const PROXY_OTHER_ENDPOINT: &str = "__other__";
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOUT_SECONDS);
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
@@ -108,6 +114,7 @@ pub struct ProxyControl {
     ready: Arc<AtomicBool>,
     stats: Arc<CacheStats>,
     rpc_metrics: Arc<std::sync::Mutex<RpcMetrics>>,
+    proxy_metrics: Arc<std::sync::Mutex<ProxyMetrics>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -240,6 +247,307 @@ impl RpcRequestTimer {
     }
 }
 
+// --- Proxy transport metrics (`iris_proxy_*`) ---
+//
+// Distinct from the `iris_rpc_*` Connect metrics: these count every request the
+// native proxy forwards to an endpoint or relays to a peer — plain HTTP included
+// (vLLM/OpenAI upstreams, capability URLs, relays) — keyed by the resolved
+// endpoint name, normalized HTTP method, and route kind, plus the request and
+// response byte volume streamed through. A proxied Connect call contributes to
+// both views (transport here, semantics in `iris_rpc_*`); they are not summable.
+//
+// Per-endpoint series are bounded: at most `PROXY_ENDPOINT_CAP` distinct
+// endpoints, idle ones (no activity for `PROXY_ENDPOINT_IDLE_EVICTION` and no
+// in-flight request) evicted, and any overflow folded into `PROXY_OTHER_ENDPOINT`
+// so an adversarial path cannot grow the label set without bound. The aggregate
+// is exact and never evicted, so the true total survives eviction.
+
+fn normalize_method(method: &Method) -> &'static str {
+    match method.as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "PATCH" => "PATCH",
+        "DELETE" => "DELETE",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "OTHER",
+    }
+}
+
+/// Attribute a request to a proxy series, or `None` when it is not a proxy
+/// request (controller RPCs are covered by `iris_rpc_*`). Attribution comes from
+/// the typed proxy route, never a raw path scan, so tokens and cluster tags never
+/// leak into labels.
+fn proxy_metric_key(request: &Request) -> Option<ProxyMetricKey> {
+    let (endpoint, route_kind) = if request.uri().path().starts_with(PROXY_PATH_PREFIX) {
+        match parse_proxy_route(request.uri()) {
+            Ok(route) => (
+                route.encoded_name,
+                if route.relay_peer.is_some() { "relay" } else { "endpoint" },
+            ),
+            // A malformed /proxy/ path still forwards a decision and should count;
+            // bucket it so the aggregate stays exact without a per-path label.
+            Err(_) => ("__unparsed__".to_string(), "endpoint"),
+        }
+    } else if let Some(name) = proxy_subdomain(request.headers()) {
+        (name, "endpoint")
+    } else {
+        return None;
+    };
+    Some(ProxyMetricKey {
+        endpoint,
+        method: normalize_method(request.method()),
+        route_kind,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ProxyByteDirection {
+    Request,
+    Response,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProxyMetricKey {
+    endpoint: String,
+    method: &'static str,
+    route_kind: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProxyMetricSeries {
+    pub endpoint: String,
+    pub method: String,
+    pub route_kind: String,
+    pub requests: u64,
+    pub responses: BTreeMap<u16, u64>,
+    pub in_flight: u64,
+    pub latency_buckets: Vec<(String, u64)>,
+    pub latency_count: u64,
+    pub latency_sum_seconds: f64,
+    pub request_bytes: u64,
+    pub response_bytes: u64,
+}
+
+#[derive(Default)]
+struct ProxyMetricState {
+    requests: u64,
+    responses: BTreeMap<u16, u64>,
+    in_flight: u64,
+    latency_bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
+    latency_sum_seconds: f64,
+    request_bytes: u64,
+    response_bytes: u64,
+    last_activity: Option<Instant>,
+}
+
+impl ProxyMetricState {
+    fn begin(&mut self, now: Instant) {
+        self.requests += 1;
+        self.in_flight += 1;
+        self.last_activity = Some(now);
+    }
+
+    fn finish(&mut self, status: StatusCode, elapsed: Duration, now: Instant) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        *self.responses.entry(status.as_u16()).or_default() += 1;
+        let seconds = elapsed.as_secs_f64();
+        self.latency_sum_seconds += seconds;
+        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
+            if seconds <= *upper_bound {
+                self.latency_bucket_counts[index] += 1;
+            }
+        }
+        self.last_activity = Some(now);
+    }
+
+    fn add_bytes(&mut self, direction: ProxyByteDirection, bytes: u64, now: Instant) {
+        match direction {
+            ProxyByteDirection::Request => self.request_bytes += bytes,
+            ProxyByteDirection::Response => self.response_bytes += bytes,
+        }
+        self.last_activity = Some(now);
+    }
+
+    fn series(&self, endpoint: String, method: String, route_kind: String) -> ProxyMetricSeries {
+        let latency_count = self.responses.values().sum();
+        ProxyMetricSeries {
+            endpoint,
+            method,
+            route_kind,
+            requests: self.requests,
+            responses: self.responses.clone(),
+            in_flight: self.in_flight,
+            latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
+                .iter()
+                .zip(self.latency_bucket_counts)
+                .map(|(bound, count)| (bound.to_string(), count))
+                .chain(std::iter::once(("+Inf".to_string(), latency_count)))
+                .collect(),
+            latency_count,
+            latency_sum_seconds: self.latency_sum_seconds,
+            request_bytes: self.request_bytes,
+            response_bytes: self.response_bytes,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ProxyMetrics {
+    aggregate: ProxyMetricState,
+    by_endpoint: BTreeMap<ProxyMetricKey, ProxyMetricState>,
+}
+
+impl ProxyMetrics {
+    /// Record a request start and return the key it landed on (the caller's key,
+    /// or the overflow bucket when the endpoint cap is full). `finish`/`add_bytes`
+    /// must use the returned key so a request accounts to one series throughout.
+    fn begin(&mut self, key: ProxyMetricKey, now: Instant) -> ProxyMetricKey {
+        self.aggregate.begin(now);
+        self.evict_idle(now);
+        let resolved = if self.by_endpoint.contains_key(&key) || self.by_endpoint.len() < PROXY_ENDPOINT_CAP {
+            key
+        } else {
+            ProxyMetricKey {
+                endpoint: PROXY_OTHER_ENDPOINT.to_string(),
+                method: "",
+                route_kind: "",
+            }
+        };
+        self.by_endpoint.entry(resolved.clone()).or_default().begin(now);
+        resolved
+    }
+
+    fn finish(&mut self, key: &ProxyMetricKey, status: StatusCode, elapsed: Duration) {
+        let now = Instant::now();
+        self.aggregate.finish(status, elapsed, now);
+        if let Some(state) = self.by_endpoint.get_mut(key) {
+            state.finish(status, elapsed, now);
+        }
+    }
+
+    fn add_bytes(&mut self, key: &ProxyMetricKey, direction: ProxyByteDirection, bytes: u64) {
+        let now = Instant::now();
+        self.aggregate.add_bytes(direction, bytes, now);
+        if let Some(state) = self.by_endpoint.get_mut(key) {
+            state.add_bytes(direction, bytes, now);
+        }
+    }
+
+    fn evict_idle(&mut self, now: Instant) {
+        self.by_endpoint.retain(|_, state| {
+            state.in_flight > 0
+                || state
+                    .last_activity
+                    .is_none_or(|last| now.duration_since(last) < PROXY_ENDPOINT_IDLE_EVICTION)
+        });
+    }
+
+    fn snapshot(&self) -> ProxyMetricsSnapshot {
+        ProxyMetricsSnapshot {
+            aggregate: self.aggregate.series(String::new(), String::new(), String::new()),
+            series: self
+                .by_endpoint
+                .iter()
+                .map(|(key, state)| {
+                    state.series(key.endpoint.clone(), key.method.to_string(), key.route_kind.to_string())
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Lifetime proxy-transport counters from the native listener. `aggregate` is the
+/// exact total across all proxied traffic; `series` is the bounded per-endpoint
+/// breakdown. Counters reset with the proxy process.
+#[derive(Debug, Serialize)]
+pub struct ProxyMetricsSnapshot {
+    pub aggregate: ProxyMetricSeries,
+    pub series: Vec<ProxyMetricSeries>,
+}
+
+/// Records streamed body bytes into a proxy series on drop, so a client abort or
+/// stream error still books the bytes transferred before it (counted as data
+/// frames are polled, never buffered).
+struct ProxyByteFlush {
+    counter: Arc<std::sync::atomic::AtomicU64>,
+    metrics: Arc<std::sync::Mutex<ProxyMetrics>>,
+    key: ProxyMetricKey,
+    direction: ProxyByteDirection,
+}
+
+impl Drop for ProxyByteFlush {
+    fn drop(&mut self) {
+        let bytes = self.counter.load(Ordering::Relaxed);
+        if bytes == 0 {
+            return;
+        }
+        if let Ok(mut metrics) = self.metrics.lock() {
+            metrics.add_bytes(&self.key, self.direction, bytes);
+        }
+    }
+}
+
+struct ProxyRequestTimer {
+    key: ProxyMetricKey,
+    metrics: Arc<std::sync::Mutex<ProxyMetrics>>,
+    started: Instant,
+}
+
+impl ProxyRequestTimer {
+    fn begin(control: &ProxyControl, request: &Request) -> Option<Self> {
+        let key = proxy_metric_key(request)?;
+        let resolved = control
+            .proxy_metrics
+            .lock()
+            .expect(PROXY_METRICS_LOCK_POISONED)
+            .begin(key, Instant::now());
+        Some(Self {
+            key: resolved,
+            metrics: Arc::clone(&control.proxy_metrics),
+            started: Instant::now(),
+        })
+    }
+
+    fn wrap_request_body(&self, request: Request) -> Request {
+        let (parts, body) = request.into_parts();
+        Request::from_parts(parts, self.counting_body(body, ProxyByteDirection::Request))
+    }
+
+    fn finish(self, response: Response<Body>) -> Response<Body> {
+        let (parts, body) = response.into_parts();
+        self.metrics
+            .lock()
+            .expect(PROXY_METRICS_LOCK_POISONED)
+            .finish(&self.key, parts.status, self.started.elapsed());
+        let body = self.counting_body(body, ProxyByteDirection::Response);
+        Response::from_parts(parts, body)
+    }
+
+    /// Wrap a body so each polled data frame's length accrues to `counter`, which
+    /// the held `ProxyByteFlush` books to the series when the stream is dropped.
+    fn counting_body(&self, body: Body, direction: ProxyByteDirection) -> Body {
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let flush = ProxyByteFlush {
+            counter: Arc::clone(&counter),
+            metrics: Arc::clone(&self.metrics),
+            key: self.key.clone(),
+            direction,
+        };
+        let stream = Body::new(body).into_data_stream().map(move |item| {
+            // Force the move closure to own `flush` so it drops (and books bytes)
+            // exactly when the wrapped stream is dropped.
+            let _flush = &flush;
+            if let Ok(bytes) = &item {
+                counter.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            }
+            item
+        });
+        Body::from_stream(stream)
+    }
+}
+
 impl ProxyControl {
     pub fn stats(&self) -> Result<ProxyStats, String> {
         let registry = self
@@ -260,6 +568,13 @@ impl ProxyControl {
             .lock()
             .map(|metrics| metrics.snapshot())
             .map_err(|_| RPC_METRICS_LOCK_POISONED.to_string())
+    }
+
+    pub fn proxy_metrics(&self) -> Result<ProxyMetricsSnapshot, String> {
+        self.proxy_metrics
+            .lock()
+            .map(|metrics| metrics.snapshot())
+            .map_err(|_| PROXY_METRICS_LOCK_POISONED.to_string())
     }
 
     pub fn pause_registry(&self) {
@@ -1398,12 +1713,22 @@ async fn ingress(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response<Body> {
-    let timer = RpcRequestTimer::begin(&state.control, &request);
+    let rpc_timer = RpcRequestTimer::begin(&state.control, &request);
+    let proxy_timer = ProxyRequestTimer::begin(&state.control, &request);
+    // Count request bytes as the upstream reads the wrapped body.
+    let request = match &proxy_timer {
+        Some(timer) => timer.wrap_request_body(request),
+        None => request,
+    };
     let response = ingress_inner(state, peer, request).await;
-    if let Some(timer) = timer {
+    if let Some(timer) = rpc_timer {
         timer.finish(response.status());
     }
-    response
+    // Record status/latency and wrap the response body to count response bytes.
+    match proxy_timer {
+        Some(timer) => timer.finish(response),
+        None => response,
+    }
 }
 
 async fn ingress_inner(
@@ -1653,5 +1978,116 @@ mod tests {
             .unwrap_err();
         assert_eq!(control.stats().unwrap().registry_generation, 1);
         assert_eq!(control.resolve("a").unwrap().unwrap().name, "/a");
+    }
+
+    fn proxy_request(method: &str, uri: &str) -> Request {
+        Request::builder().method(method).uri(uri).body(Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn proxy_metric_key_attributes_by_typed_route_and_skips_controller_rpcs() {
+        let endpoint = proxy_metric_key(&proxy_request("POST", "/proxy/serve.model/v1/chat")).unwrap();
+        assert_eq!(endpoint.endpoint, "serve.model");
+        assert_eq!(endpoint.method, "POST");
+        assert_eq!(endpoint.route_kind, "endpoint");
+
+        let relay = proxy_metric_key(&proxy_request("GET", "/proxy/cw-rno2a/t/tok/serve.model/v1/models")).unwrap();
+        assert_eq!(relay.endpoint, "serve.model");
+        assert_eq!(relay.route_kind, "relay");
+
+        // A non-proxy controller RPC is covered by iris_rpc_*, not counted here.
+        assert!(proxy_metric_key(&proxy_request("POST", "/iris.cluster.ControllerService/ListJobs")).is_none());
+    }
+
+    #[test]
+    fn proxy_metrics_track_requests_and_keep_an_exact_aggregate() {
+        let control = ProxyControl::default();
+        let timer = ProxyRequestTimer::begin(&control, &proxy_request("GET", "/proxy/svc/a")).unwrap();
+
+        let snapshot = control.proxy_metrics().unwrap();
+        assert_eq!(snapshot.aggregate.requests, 1);
+        assert_eq!(snapshot.aggregate.in_flight, 1);
+        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        assert_eq!(series.method, "GET");
+        assert_eq!(series.route_kind, "endpoint");
+        assert_eq!(series.in_flight, 1);
+
+        timer.finish(Response::builder().status(200).body(Body::empty()).unwrap());
+
+        let snapshot = control.proxy_metrics().unwrap();
+        assert_eq!(snapshot.aggregate.requests, 1);
+        assert_eq!(snapshot.aggregate.in_flight, 0);
+        assert_eq!(snapshot.aggregate.responses.get(&200), Some(&1));
+        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        assert_eq!(series.in_flight, 0);
+        assert_eq!(series.responses.get(&200), Some(&1));
+    }
+
+    #[test]
+    fn proxy_endpoint_cap_folds_overflow_into_other() {
+        let mut metrics = ProxyMetrics::default();
+        let now = Instant::now();
+        for index in 0..(PROXY_ENDPOINT_CAP + 5) {
+            metrics.begin(
+                ProxyMetricKey {
+                    endpoint: format!("svc-{index}"),
+                    method: "GET",
+                    route_kind: "endpoint",
+                },
+                now,
+            );
+        }
+        // Cap distinct endpoints; the overflow lands in the __other__ bucket, and
+        // the aggregate still counts every request.
+        assert!(metrics.by_endpoint.len() <= PROXY_ENDPOINT_CAP + 1);
+        assert!(metrics
+            .by_endpoint
+            .keys()
+            .any(|key| key.endpoint == PROXY_OTHER_ENDPOINT));
+        assert_eq!(metrics.aggregate.requests, (PROXY_ENDPOINT_CAP + 5) as u64);
+    }
+
+    #[test]
+    fn proxy_metrics_evict_idle_endpoints_without_losing_the_aggregate() {
+        let mut metrics = ProxyMetrics::default();
+        let key = ProxyMetricKey { endpoint: "svc".to_string(), method: "GET", route_kind: "endpoint" };
+        let resolved = metrics.begin(key.clone(), Instant::now());
+        metrics.finish(&resolved, StatusCode::OK, Duration::from_millis(1));
+        // Simulate the endpoint going idle past the window (finish leaves it live).
+        metrics.by_endpoint.get_mut(&key).unwrap().last_activity =
+            Some(Instant::now() - PROXY_ENDPOINT_IDLE_EVICTION - Duration::from_secs(1));
+        // A later request on a different endpoint triggers eviction of the idle one.
+        metrics.begin(
+            ProxyMetricKey { endpoint: "other".to_string(), method: "GET", route_kind: "endpoint" },
+            Instant::now(),
+        );
+        assert!(!metrics.by_endpoint.contains_key(&key));
+        assert_eq!(metrics.aggregate.requests, 2);
+    }
+
+    #[tokio::test]
+    async fn proxy_counting_body_books_streamed_request_and_response_bytes() {
+        let control = ProxyControl::default();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/proxy/svc/echo")
+            .body(Body::from("request-body"))
+            .unwrap();
+        let timer = ProxyRequestTimer::begin(&control, &request).unwrap();
+
+        let request = timer.wrap_request_body(request);
+        let read = to_bytes(request.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(read.len(), "request-body".len());
+
+        let response = timer.finish(Response::builder().status(200).body(Body::from("response-body")).unwrap());
+        let delivered = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(delivered.len(), "response-body".len());
+
+        let snapshot = control.proxy_metrics().unwrap();
+        assert_eq!(snapshot.aggregate.request_bytes, "request-body".len() as u64);
+        assert_eq!(snapshot.aggregate.response_bytes, "response-body".len() as u64);
+        let series = snapshot.series.iter().find(|s| s.endpoint == "svc").unwrap();
+        assert_eq!(series.request_bytes, "request-body".len() as u64);
+        assert_eq!(series.response_bytes, "response-body".len() as u64);
     }
 }

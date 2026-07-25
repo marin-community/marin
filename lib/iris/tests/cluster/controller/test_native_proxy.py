@@ -196,6 +196,62 @@ def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller
     assert sample_value("iris_rpc_duration_seconds_count") == 2
 
 
+def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller) -> None:
+    """A forwarded endpoint request lands in `iris_proxy_*`, byte-exact; a controller
+    RPC does not. This also pins the Rust snapshot JSON to the collector's contract:
+    a shape drift would raise when the collector unpacks the snapshot."""
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads)
+        controller = make_controller(
+            host="127.0.0.1",
+            port=0,
+            endpoints={_ENDPOINT_NAME: upstream},
+        )
+        controller.start()
+
+        payload = b"native request body" * 4096
+        with httpx.Client(base_url=controller.url, follow_redirects=False) as client:
+            response = client.post(f"/proxy/{_ENCODED_NAME}/echo", content=payload)
+            # A controller RPC terminates at the controller; it is RPC load, not
+            # proxied transport, so it must not appear in the proxy family.
+            assert client.post("/iris.cluster.ControllerService/ListJobs", json={}).status_code == 200
+        assert response.status_code == 200
+
+        def sample(name: str, labels: dict[str, str]) -> float:
+            matching = [
+                family_sample.sample.value
+                for family_sample in telltale.samples()
+                if family_sample.sample.name == name and family_sample.sample.labels == labels
+            ]
+            assert len(matching) == 1, f"{name}{labels}: {matching}"
+            return matching[0]
+
+        total = {"scope": "total", "endpoint": "", "method": "", "route_kind": ""}
+        assert sample("iris_proxy_requests_total", total) == 1
+        assert sample("iris_proxy_request_bytes_total", total) == len(payload)
+        assert sample("iris_proxy_response_bytes_total", total) > 0
+        assert sample("iris_proxy_responses_total", {**total, "status": "200"}) == 1
+
+        # The bounded per-endpoint breakdown attributes the same request to its
+        # endpoint, and no ControllerService route leaks into the proxy family.
+        endpoint_requests = [
+            family_sample.sample
+            for family_sample in telltale.samples()
+            if family_sample.sample.name == "iris_proxy_requests_total"
+            and family_sample.sample.labels.get("scope") == "endpoint"
+        ]
+        assert len(endpoint_requests) == 1
+        assert endpoint_requests[0].labels["endpoint"] == _ENCODED_NAME
+        assert endpoint_requests[0].value == 1
+        assert sample(
+            "iris_proxy_request_bytes_total",
+            {"scope": "endpoint", "endpoint": _ENCODED_NAME, "method": "POST", "route_kind": "endpoint"},
+        ) == len(payload)
+    finally:
+        threads.stop()
+
+
 def test_native_listener_caches_verified_jwt(make_controller) -> None:
     threads = ThreadContainer()
     try:
