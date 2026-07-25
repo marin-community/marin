@@ -1197,3 +1197,18 @@ statistics for performance comparisons.
 - All 12 pods remain Ready with zero restarts. Transient Finelog send timeouts
   affected telemetry only; Kubernetes and 7,571 successful model responses in
   the prior 15 minutes confirmed reviewer liveness.
+
+### 2026-07-25T16:06:00Z — semantic review reaches 20,945 verified pairs
+
+- Fifteen additional baseline checkpoints passed independent validation:
+  1,920 pairs, 971 false positives, 949 true duplicates, and zero unresolved
+  outcomes. They used 5,318 valid first-attempt judgments with no invalid
+  responses or retries; 15 pairs were chunked and 1,905 were direct.
+- Across the stable 164-checkpoint snapshot, all 16 manual records leave:
+
+  - baseline: 18,490 pairs, 11,893 false positives, 6,597 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 20,945 pairs, 13,177 false positives, 7,768 true duplicates.
+
+- All 12 pods remain Ready with zero restarts. The four GPU workers served
+  8,012 successful responses over the prior 15 minutes.
