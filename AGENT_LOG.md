@@ -683,5 +683,50 @@ Confidence: 5/10 that 6a lands a *real but small* (<0.5pp) gain; 2/10 that it
 reaches the ~1pp estimate. The on-device variant is dead (memory); offload is the
 only viable form at this operating point.
 
-Next: v5 → treatment v2 → final verdict with the drop/loss lines.
+## FINAL — 6a verdict 2026-07-25 ~15:45 UTC: real but small (+0.18pp), offload-only at this operating point
+
+Matched A/B at the operating point (d5120 8-of-256 L48 EP64 b1024 seq4096 MuonH,
+fixed a2a + gather dispatch, recompute_all, 120 steps, 119 samples, 2.5 PF/s
+denominator, baseline 0.75 mem fraction, fresh compile caches, back-to-back):
+
+| leg | p50 MFU | p10 / p90 | final loss |
+|---|---:|---:|---:|
+| control (3 draws) | 20.543 / 20.368 / 20.485 (mean **20.465%**) | — | 5.764 / 5.732 / 5.688 |
+| fa4-lse + host offload (2 draws) | 20.650 / 20.646 (mean **20.648%**) | 20.59 / 20.75 | 5.747 / 5.745 |
+
+- **Delta +0.18pp, reproduced across two treatment draws vs three control draws.**
+  Below the ~0.5pp claim bar; the treatment's p10 exceeds 2 of 3 control p50s.
+  Honest framing: small, consistent, composable compute-side gain — NOT the +~1pp
+  the d2560 anatomy estimated (6.7% of kernel time there; the attention fwd re-run
+  is a far smaller slice of this comm/MoE-dominated EP64 step — ~70 ms of 13.2s).
+- **On-device save variant is DEAD at EP64** (first-class negative): the +32.7 GiB
+  saved-activation cost fits no workable mem fraction — 0.75 XLA-OOMs (temp arena
+  137.6 GiB), 0.85 and 0.90 NCCL-OOM at clique init (EP64 NCCL needs >28 GiB
+  non-XLA headroom; the 0.75 baseline's ~46 GiB is why the incumbent lives there).
+  The windows don't overlap (need ≥0.84 for the arena, ≤~0.82 for NCCL).
+- **Host-offload variant is the only viable form at this operating point**
+  (`SCALE_FA4_LSE_SAVE=1` + `SCALE_FA4_LSE_OFFLOAD=1`, policy
+  save_and_offload_only_these_names → pinned_host): fits at the baseline 0.75
+  fraction, no NCCL interaction, reproduces 20.646-20.650%.
+- Numerics/fidelity: GPU parity test vs default path at 2e-3 (out + all grads),
+  lse vs reference logsumexp at 7e-2 (5/5 real_gpu tests pass, incl. 4 repaired
+  pre-existing ones); smoke loss parity on-device vs offload to 1e-3; A/B losses in
+  family (5.69-5.76 band); tail-window drops 68.1% vs 63.2% median per-layer —
+  within the artifact metric's cross-leg spread all day (63-69%), and the mechanism
+  cannot touch routing/capacity. The absolute drop-metric anomaly stays flagged
+  for d1.
+- Code (branch agent/ep25-d3-fa4lse, all committed): the stop-gradient-inputs
+  FFI/vjp split + FA4_LSE_SAVE_NAMES + policy wiring (env-gated, default off),
+  offload policy option, GPU parity test + repaired real_gpu harness. Plus
+  cherry-picks: gather-dispatch port (A/B-validated again: 3 control draws
+  20.368-20.543% vs rav 20.558%), drop reporting.
+- Process notes: boot-hang hazard hit twice (v1/v2 at 0.90) — unique
+  JAX_COMPILATION_CACHE_DIR on every 16-node submission fixed it (v3+); xdist
+  workers × 75% prealloc OOMs GPU pytest jobs (-n 0); one job stop (own hung v4).
+
+**Confidence: 5/10** that 6a-as-measured contributes (~+0.2pp, below the win bar,
+composes with everything); **2/10** it reaches the original ~1pp estimate at this
+shape. Recommendation: adopt behind the env flag as a free ~0.2pp if the offload
+policy proves robust at d6144 (memory pressure worse there → offload-only form);
+do NOT count it toward the 25% bridge.
 ||||||| parent of 60ffcbb50 (ep25-d3 (4b): gather-dispatch port + token-chunk-pipelined fixed a2a behind SCALE_A2A_CHUNK_PIPELINE; CPU EP8 parity)
