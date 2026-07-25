@@ -467,7 +467,7 @@ denominator, SCALE_REPORT_DROPS=1 both legs, back-to-back submissions):
 - Jobs: control `/mwittmann/ep25d3-cp-ctl-k1-120-v1-20260725`, pipeline
   `/mwittmann/ep25d3-cp-pipe-k2-120-v1-20260725` (both succeeded, 119 samples each).
 - Code (committed, branch agent/ep25-d3-te-ncclep): 60ffcbb50 (gather port +
-  pipeline + parity test), 7d3c79xxx (drop reporting). The gather-dispatch
+  pipeline + parity test), ecfaa873b (drop reporting). The gather-dispatch
   reconstruction is A/B-validated (control 20.543% vs rav 20.558%) and worth landing
   per d4's identical note.
 
