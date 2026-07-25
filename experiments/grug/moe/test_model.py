@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -11,7 +13,14 @@ from jax.sharding import PartitionSpec as P
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.launch_cw_scale import build_scale_model
-from experiments.grug.moe.model import CausalSelfAttention, DenseMLP, GrugModelConfig, MoEMLP, _compute_expert_load
+from experiments.grug.moe.model import (
+    CausalSelfAttention,
+    DenseMLP,
+    GrugModelConfig,
+    MoEMLP,
+    _capacity_balanced_top_k_local,
+    _compute_expert_load,
+)
 from experiments.grug.moe.train import _compute_flops, _receiver_capacity_overflow_rate, _updated_router_bias
 
 
@@ -87,17 +96,52 @@ def test_build_scale_model_reads_capacity_controls(monkeypatch):
     monkeypatch.setenv("SCALE_MOE_CAPACITY_FACTOR", "1.125")
     monkeypatch.setenv("SCALE_REPORT_CAPACITY_OVERFLOW", "1")
     monkeypatch.setenv("SCALE_MOE_QB_BIAS_UPDATE_RATE", "0.002")
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCED_ROUTING", "1")
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_ITERATIONS", "6")
+    monkeypatch.setenv("SCALE_MOE_CAPACITY_BALANCE_TEMPERATURE", "0.025")
 
     config = build_scale_model()
 
     assert config.moe_capacity_factor == 1.125
     assert config.report_capacity_overflow is True
     assert config.qb_bias_update_rate == 0.002
+    assert config.capacity_balanced_routing is True
+    assert config.capacity_balance_iterations == 6
+    assert config.capacity_balance_temperature == 0.025
 
 
 def test_model_config_rejects_nonpositive_capacity_factor():
     with pytest.raises(ValueError, match="moe_capacity_factor must be positive"):
         GrugModelConfig(vocab_size=128, moe_capacity_factor=0.0)
+
+
+def test_model_config_rejects_multiple_load_balancers():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        GrugModelConfig(vocab_size=128, qb_routing=True, capacity_balanced_routing=True)
+
+
+def test_capacity_balanced_top_k_limits_local_overflow():
+    num_tokens = 512
+    num_experts = 32
+    topk = 4
+    scores = jax.nn.sigmoid(jax.random.normal(jax.random.key(0), (num_tokens, num_experts)).at[:, :4].add(4.0))
+
+    raw_selected = jax.lax.top_k(scores, topk)[1]
+    raw_load = jnp.bincount(raw_selected.reshape(-1), length=num_experts)
+    selected = _capacity_balanced_top_k_local(
+        scores,
+        topk=topk,
+        iterations=4,
+        temperature=0.05,
+    )
+    load = jnp.bincount(selected.reshape(-1), length=num_experts)
+    capacity = math.ceil(1.2 * num_tokens * topk / num_experts)
+    raw_overflow = jnp.sum(jnp.maximum(raw_load - capacity, 0)) / raw_load.sum()
+    overflow = jnp.sum(jnp.maximum(load - capacity, 0)) / load.sum()
+
+    assert float(raw_overflow) > 0.3
+    assert float(overflow) < 0.03
+    assert np.all(np.diff(np.sort(np.asarray(selected), axis=-1), axis=-1) > 0)
 
 
 def test_loss_free_bias_update_penalizes_overloaded_experts():
