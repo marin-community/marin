@@ -41,7 +41,8 @@ from experiments.datakit.scripts.dedup_ab_semantic_judge import (
 )
 
 REVIEW_PROTOCOL_VERSION = "v1"
-PAIR_PASSES = ("loss", "duplication")
+INITIAL_PASSES = ("loss", "duplication")
+TIEBREAK_PASS = "tiebreak"
 OUTCOME_STATUSES = frozenset({"resolved", "unresolved"})
 LABELS = frozenset({"false_positive", "true_duplicate"})
 IDENTITY_FIELDS = (
@@ -119,12 +120,14 @@ def review_config_sha256(
         "system_prompt": SYSTEM_PROMPT,
         "verdict_schema": VERDICT_SCHEMA,
         "max_direct_chars": MAX_DIRECT_CHARS,
-        "pair_passes": PAIR_PASSES,
+        "initial_passes": INITIAL_PASSES,
+        "tiebreak_pass": TIEBREAK_PASS,
         "chunk_chars": chunk_chars,
         "overlap_chars": overlap_chars,
         "canonical_chunks_per_member": canonical_chunks_per_member,
         "low_confidence_is_unresolved": True,
         "direct_prompt_source": inspect.getsource(direct_pair_prompt),
+        "direct_review_prompt_source": inspect.getsource(_direct_prompt),
         "chunk_plan_source": inspect.getsource(chunk_review_units),
         "chunk_prompt_source": inspect.getsource(_chunk_prompt),
         "aggregation_source": inspect.getsource(outcome_from_evidence),
@@ -144,15 +147,33 @@ def _chunk_prompt(unit: dict[str, Any], *, pass_name: str) -> str:
             "represented by the supplied CANONICAL candidates, then reject that "
             "claim if any distinct payload remains."
         )
+    elif pass_name == TIEBREAK_PASS:
+        instruction = (
+            "Independently decide the directional deletion question for this chunk. "
+            "Apply every audit boundary exactly, and use low confidence only when "
+            "the supplied canonical candidates are insufficient."
+        )
     else:
         raise ValueError(f"Unknown semantic pass {pass_name!r}")
     return f"{instruction}\n\n{unit['prompt']}"
 
 
+def _direct_prompt(case: dict[str, Any], *, pass_name: str) -> str:
+    if pass_name in INITIAL_PASSES:
+        return direct_pair_prompt(case, pass_name=pass_name)
+    if pass_name != TIEBREAK_PASS:
+        raise ValueError(f"Unknown semantic pass {pass_name!r}")
+    return (
+        "Independently decide whether deleting MEMBER while keeping CANONICAL loses "
+        "substantive content. Apply every audit boundary exactly, and use low "
+        "confidence only if the complete texts are genuinely insufficient.\n\n"
+        + direct_pair_prompt(case, pass_name="loss")
+    )
+
+
 def _judgment_label(judgments: list[dict[str, Any]]) -> str | None:
-    if len(judgments) != len(PAIR_PASSES):
-        return None
-    if tuple(judgment.get("pass") for judgment in judgments) != PAIR_PASSES:
+    pass_names = tuple(judgment.get("pass") for judgment in judgments)
+    if pass_names not in {INITIAL_PASSES, (*INITIAL_PASSES, TIEBREAK_PASS)}:
         return None
     verdicts: list[dict[str, Any]] = []
     for judgment in judgments:
@@ -164,12 +185,11 @@ def _judgment_label(judgments: list[dict[str, Any]]) -> str | None:
         model_verdict = ModelVerdict.model_validate(verdict)
         if normalized_verdict(model_verdict) != verdict:
             raise AssertionError("Persisted semantic verdict does not match its deletion-loss decision")
-    if any(verdict["confidence"] == "low" for verdict in verdicts):
+    votes = Counter(verdict["label"] for verdict in verdicts if verdict["confidence"] != "low")
+    winners = [label for label, count in votes.items() if count >= 2]
+    if len(winners) != 1:
         return None
-    labels = {verdict["label"] for verdict in verdicts}
-    if len(labels) != 1:
-        return None
-    return labels.pop()
+    return winners[0]
 
 
 def _covered_chars(ranges: list[tuple[int, int]], text_chars: int) -> int:
@@ -302,14 +322,23 @@ async def _review_case(
             _judge_prompt(
                 client,
                 model=model,
-                prompt=direct_pair_prompt(case, pass_name=pass_name),
+                prompt=_direct_prompt(case, pass_name=pass_name),
                 semaphore=semaphore,
             )
-            for pass_name in PAIR_PASSES
+            for pass_name in INITIAL_PASSES
         ]
         judgments = list(await asyncio.gather(*tasks))
-        for pass_name, judgment in zip(PAIR_PASSES, judgments, strict=True):
+        for pass_name, judgment in zip(INITIAL_PASSES, judgments, strict=True):
             judgment["pass"] = pass_name
+        if _judgment_label(judgments) is None:
+            tiebreak = await _judge_prompt(
+                client,
+                model=model,
+                prompt=_direct_prompt(case, pass_name=TIEBREAK_PASS),
+                semaphore=semaphore,
+            )
+            tiebreak["pass"] = TIEBREAK_PASS
+            judgments.append(tiebreak)
         evidence = {
             "mode": "direct",
             "chunk_chars": chunk_chars,
@@ -333,13 +362,14 @@ async def _review_case(
             semaphore=semaphore,
         )
         for unit in units
-        for pass_name in PAIR_PASSES
+        for pass_name in INITIAL_PASSES
     ]
     raw_judgments = list(await asyncio.gather(*tasks))
     evidence_units = []
+    pass_count = len(INITIAL_PASSES)
     for unit_index, unit in enumerate(units):
-        judgments = raw_judgments[unit_index * 2 : unit_index * 2 + 2]
-        for pass_name, judgment in zip(PAIR_PASSES, judgments, strict=True):
+        judgments = raw_judgments[unit_index * pass_count : unit_index * pass_count + pass_count]
+        for pass_name, judgment in zip(INITIAL_PASSES, judgments, strict=True):
             judgment["pass"] = pass_name
         evidence_units.append(
             {
@@ -350,6 +380,25 @@ async def _review_case(
                 "judgments": judgments,
             }
         )
+    unresolved_unit_indices = [
+        unit_index for unit_index, unit in enumerate(evidence_units) if _judgment_label(unit["judgments"]) is None
+    ]
+    tiebreaks = list(
+        await asyncio.gather(
+            *[
+                _judge_prompt(
+                    client,
+                    model=model,
+                    prompt=_chunk_prompt(units[unit_index], pass_name=TIEBREAK_PASS),
+                    semaphore=semaphore,
+                )
+                for unit_index in unresolved_unit_indices
+            ]
+        )
+    )
+    for unit_index, tiebreak in zip(unresolved_unit_indices, tiebreaks, strict=True):
+        tiebreak["pass"] = TIEBREAK_PASS
+        evidence_units[unit_index]["judgments"].append(tiebreak)
     evidence = {
         "mode": "chunked",
         "chunk_chars": chunk_chars,

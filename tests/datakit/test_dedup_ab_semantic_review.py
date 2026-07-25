@@ -228,6 +228,53 @@ class _FakeCompletions:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")])
 
 
+class _TiebreakCompletions:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        decisions = (
+            (False, "high"),
+            (True, "low"),
+            (False, "high"),
+        )
+        deletion_loses_substantive_content, confidence = decisions[self.calls]
+        self.calls += 1
+        content = json.dumps(
+            {
+                "member_unique_content": "Distinct payload." if deletion_loses_substantive_content else "NONE",
+                "basis": "Independent directional review.",
+                "deletion_loses_substantive_content": deletion_loses_substantive_content,
+                "confidence": confidence,
+            }
+        )
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason="stop",
+                )
+            ]
+        )
+
+
+def test_review_requests_tiebreak_until_two_non_low_votes_agree() -> None:
+    completions = _TiebreakCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    outcomes = asyncio.run(review_cases(client, model="model", cases=[_case()]))
+
+    evidence = json.loads(outcomes[0]["judgments_json"])
+    assert completions.calls == 3
+    assert [judgment["pass"] for judgment in evidence["judgments"]] == [
+        "loss",
+        "duplication",
+        "tiebreak",
+    ]
+    assert outcomes[0]["status"] == "resolved"
+    assert outcomes[0]["label"] == "true_duplicate"
+
+
 def test_forced_chunk_review_persists_two_pass_evidence_for_every_chunk() -> None:
     case = _case(member_text="alpha beta gamma delta " * 4, canonical_text="other content " * 4)
     client = SimpleNamespace(chat=SimpleNamespace(completions=_FakeCompletions()))
