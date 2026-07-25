@@ -1432,3 +1432,53 @@ statistics for performance comparisons.
 - Partition 3 recovered through its immutable frontier and resumed new work.
   All four batch-priority 2-H100 workers, coordinators, and brokers remain
   Ready with zero Kubernetes restarts.
+
+### 2026-07-25T17:57:39Z — 35,120 pairs verified
+
+- Eight additional checkpoints passed independent validation: 977 pairs, 595
+  model false positives, 379 model true duplicates, and three unresolved
+  outcomes. They contain 2,038 valid judgments across 2,051 request attempts;
+  13 invalid responses affected five retried judgments. Two pairs were
+  chunked and 975 were direct.
+- Complete character comparison resolves two treatment SFT ambiguities as true
+  duplicates. Every character of the shorter document is unchanged in the
+  longer; the only two changed spans add or remove `\text{` and `}` around the
+  same boxed answer:
+
+  - `part-00064-of-00128.parquet:9204`, 5,794 / 5,801 characters,
+    similarity 0.999396; member/canonical text SHA-256
+    `05ce37ad035da9d5ed0489685db6785f74bbbf252d5da3de8e6ae7cbd2ecebc6` /
+    `85c46f4f373506fea675e64ebb4706fe7d54bf596fffa9ce51ba4d4f9d88a6e6`;
+  - `part-00064-of-00128.parquet:9225`, 5,593 / 5,586 characters,
+    similarity 0.999374; member/canonical text SHA-256
+    `0f25896f8140c7d1f0990de1bff63f477ca8b05a0d235ddec1ad8d8178f71697` /
+    `e13974fbfbbd1eefb03f786a2029db968d4e4a9234fb6edfef6349e0b8e300c9`.
+
+- Complete forum-post alignment resolves the third treatment ambiguity as a
+  false positive. The member has 20 posts and the canonical has 19. Member
+  Post #11 by `andywheels` is a 388-character account of NVflash/CWM
+  installation concerns, a plan to try the android-hilfe CWM build, and a
+  question about the main-ROM installation hack. It is absent from every
+  canonical post; its best lexical match is only 0.299465. The other 19 member
+  posts align one-to-one with canonical posts at similarities from 0.832 to
+  1.000. Pair location: `part-00097-of-00128.parquet:8074`;
+  member/canonical text SHA-256:
+  `4fd3b67d39e87ea1797a6b7ff2f75d6b205e6df40d2a22f44e4ebca64dcdb721` /
+  `11ccbe82d7f4c9e9914199144a089440c7dd1bbe93565f3736824c1e173660d6`;
+  missing-post SHA-256:
+  `c10ed782b8a1f6032a15cda102be55742c1557e270dad0bbd1a82252e34d8566`.
+- The three manual Parquet records have SHA-256
+  `d0656255dc5d672a7e5c09788fd6d7158023eea9c1f6cea78f972f9f17f256a6`,
+  `14d864523c4c10cb26cc648e01e014e1795db0eaabf2f0b4af53b0e44836d318`,
+  and `dafca05f188e7ce7beea2da7fafdd1c32f508682de93694a80adee4bb1734577`.
+  A separate batch-priority Iris job reread and exactly checked the source
+  cases, semantic checkpoints, judgment hashes, manual rows, Parquet bytes,
+  and markers.
+- Across the stable 276-checkpoint snapshot, all 34 manual records leave:
+
+  - baseline: 28,281 pairs, 18,089 false positives, 10,192 true duplicates;
+  - treatment: 6,839 pairs, 3,605 false positives, 3,234 true duplicates;
+  - combined: 35,120 pairs, 21,694 false positives, 13,426 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
