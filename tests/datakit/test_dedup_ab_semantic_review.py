@@ -9,9 +9,11 @@ from types import SimpleNamespace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from iris.rpc import job_pb2
 
 from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData, decision_for_pair
 from experiments.datakit.scripts.dedup_ab_semantic_batch import _records, load_semantic_cases
+from experiments.datakit.scripts.dedup_ab_semantic_judge import _inference_config
 from experiments.datakit.scripts.dedup_ab_semantic_review import (
     completed_batch,
     outcome_from_evidence,
@@ -21,6 +23,15 @@ from experiments.datakit.scripts.dedup_ab_semantic_review import (
     write_completed_batch,
 )
 from experiments.datakit.scripts.dedup_ab_semantic_review_calibrate import calibration_result
+
+
+def test_inference_config_propagates_batch_priority_to_child_jobs() -> None:
+    _, _, iris, _ = _inference_config(
+        "Qwen/Qwen3.5-35B-A3B",
+        priority=job_pb2.PRIORITY_BAND_BATCH,
+    )
+
+    assert iris.priority == job_pb2.PRIORITY_BAND_BATCH
 
 
 def _case(*, member_text: str = "distinct member payload", canonical_text: str = "canonical payload") -> dict:
@@ -452,6 +463,7 @@ def test_validate_only_rechecks_complete_range_without_starting_inference(tmp_pa
         decision_file_stop=1,
         batch_size=1,
         instances=1,
+        priority=0,
         validate_only=True,
     )
 

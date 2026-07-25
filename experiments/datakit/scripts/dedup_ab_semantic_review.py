@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from iris.rpc import job_pb2
 from marin.inference.iris import remote_inference
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -45,6 +46,10 @@ INITIAL_PASSES = ("loss", "duplication")
 TIEBREAK_PASS = "tiebreak"
 OUTCOME_STATUSES = frozenset({"resolved", "unresolved"})
 LABELS = frozenset({"false_positive", "true_duplicate"})
+PRIORITIES = {
+    "batch": job_pb2.PRIORITY_BAND_BATCH,
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+}
 IDENTITY_FIELDS = (
     "review_key",
     "variant",
@@ -704,6 +709,7 @@ def run_semantic_review(
     decision_file_stop: int | None,
     batch_size: int,
     instances: int,
+    priority: int,
     validate_only: bool = False,
 ) -> SemanticReviewData:
     """Review or revalidate a deterministic decision-file range."""
@@ -810,7 +816,7 @@ def run_semantic_review(
     if validate_only:
         asyncio.run(review_all(None, None))
     else:
-        served_model, engine, iris, broker = _inference_config(model)
+        served_model, engine, iris, broker = _inference_config(model, priority=priority)
         with remote_inference(served_model, engine, iris, instances=instances, broker=broker) as session:
             client = AsyncOpenAI(
                 base_url=session.model.endpoint.base_url,
@@ -852,6 +858,7 @@ def main() -> None:
     parser.add_argument("--decision-file-stop", type=int)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--instances", type=int, required=True)
+    parser.add_argument("--priority", choices=sorted(PRIORITIES), required=True)
     parser.add_argument(
         "--validate-only",
         action="store_true",
@@ -868,6 +875,7 @@ def main() -> None:
         decision_file_stop=args.decision_file_stop,
         batch_size=args.batch_size,
         instances=args.instances,
+        priority=PRIORITIES[args.priority],
         validate_only=args.validate_only,
     )
     print(result.model_dump_json(indent=2))

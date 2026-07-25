@@ -15,6 +15,7 @@ from typing import Any, Literal
 import pyarrow.parquet as pq
 import xxhash
 from fray.types import ResourceConfig, create_environment
+from iris.rpc import job_pb2
 from marin.inference.config import (
     BrokerConfig,
     InferenceProxyConfig,
@@ -503,7 +504,11 @@ async def judge_calibration_cases(
     return results
 
 
-def _inference_config(model: str) -> tuple[ServedModelConfig, VllmEngineConfig, IrisConfig, BrokerConfig]:
+def _inference_config(
+    model: str,
+    *,
+    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+) -> tuple[ServedModelConfig, VllmEngineConfig, IrisConfig, BrokerConfig]:
     worker_resources = ResourceConfig.with_gpu(
         "H100",
         count=2,
@@ -541,6 +546,7 @@ def _inference_config(model: str) -> tuple[ServedModelConfig, VllmEngineConfig, 
         worker_resources=worker_resources,
         worker_environment=worker_environment,
         endpoint_ready_timeout_seconds=1_800,
+        priority=priority,
     )
     broker = BrokerConfig(
         worker=InferenceWorkerConfig(
