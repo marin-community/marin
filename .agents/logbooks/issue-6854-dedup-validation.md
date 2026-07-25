@@ -980,3 +980,23 @@ statistics for performance comparisons.
   p0 is processing the chunk-heavy first batch of decision file 1; partition
   p1 is processing the second batch of decision file 32; partition p2 remains
   active on the largest initial batch.
+
+### 2026-07-25T13:24:00Z — treatment decision file 96 completes
+
+- The final three checkpoints in treatment decision file 96 passed independent
+  validation: 363 pairs, 201 false positives, 162 true duplicates, and zero
+  unresolved outcomes. All 754 model judgments were valid on their first
+  attempt; 49 pairs required a tiebreak.
+- The audit reread each completion marker and Parquet shard, verified byte
+  length and SHA-256, reconstructed the ordered case-key SHA-256, validated all
+  row identities and configuration hashes, and recomputed every outcome from
+  its complete persisted evidence.
+- Across the stable 94-checkpoint snapshot, the 13 prior manual records leave:
+
+  - baseline: 9,530 pairs, 6,181 false positives, 3,349 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 11,985 pairs, 7,465 false positives, 4,520 true duplicates.
+
+- Partition p3 advanced to decision file 97. All 12 root, broker, and worker
+  pods remain Ready with zero restarts, retaining the requested eight H100s at
+  batch priority.
