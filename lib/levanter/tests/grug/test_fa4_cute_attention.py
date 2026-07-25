@@ -269,7 +269,7 @@ def test_real_gpu_fa4_lse_save_path_matches_default_path(monkeypatch):
         grads_saved = jax.jit(jax.grad(loss_fn, argnums=(0, 1, 2)))(q, k, v)
 
         # lse sanity: the raw forward's lse matches a reference logsumexp over the windowed scores.
-        lower_bounds, valid = _self_attention_lower_bounds(q, k, v, mask, backend_name="test")
+        lower_bounds, valid = _self_attention_lower_bounds(q, k, mask, backend_name="test")
         _, lse = segmented_flash_attention_forward(
             q,
             k,
