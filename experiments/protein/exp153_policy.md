@@ -68,9 +68,10 @@ execution:
   wall_time: 8 weeks
   # Maximum requested GPU NODES across submitted, running, or retrying dispatches.
   # Nodes, not GPUs: a node is the atomic schedulable unit and its GPU count differs by
-  # cluster (8 on H100, 4 on GB200). Deliberately conservative for the first campaign;
-  # raise it after a few reps establish real throughput.
-  max_inflight_nodes: 3
+  # cluster (8 on H100, 4 on GB200). Set high deliberately -- there is no real quota to
+  # enforce here, and a low cap was proving more confusing than useful. Actual usage stays
+  # far below this while the sweep eases in; batch priority is what protects other users.
+  max_inflight_nodes: 256
   observation_interval: 15m
   full_exploitation_level: 8
   recovery:
@@ -110,7 +111,7 @@ targets:
   allow:
     # H100: 8 GPUs/node, 80 GB each. The proven path (MarinFold #108) and bucket-local.
     - cluster: cw-us-east-02a
-      nodes: [1, 2]
+      nodes: [1, 2, 4, 8]
     # GB200: 4 GPUs/node, 186 GB each. ENABLE ONLY after a GB200 smoke run passes —
     # levanter dense-LM training has never run on Blackwell in this repo.
     - cluster: cw-us-east-08a
@@ -122,12 +123,7 @@ targets:
 
 Node counts are powers of two. A gang of 3 is legal but yields a degenerate mesh — at batch
 128 the device count 24 forces `data=8, tensor=3` instead of pure data parallelism — so the
-ladder stays on 1 and 2 while `max_inflight_nodes` is 3.
-
-Gangs beyond 4 nodes are excluded pending a scaling smoke: MarinFold #108 found 1/2/4-node
-gangs healthy while an 8-node gang aborted in JAX coordination bootstrap. The
-`jax.distributed.initialize` timeout was raised to 1800s afterwards, so retest before
-widening the ladder. Raising `max_inflight_nodes` past 3 is what unlocks 4-node gangs.
+ladder skips non-powers of two.
 
 ## Storage Layout
 

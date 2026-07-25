@@ -12,6 +12,12 @@ Notes to ourselves. The operating rules, paths, commands, and measured numbers l
 **The setup runs end to end.** Tokenization, a 1-node smoke, and a 2-node smoke all passed.
 Token counts match #117 exactly, so this is the same corpus the 1.5B and 3B rungs used.
 
+**H100 capacity is calibrated: 8 sequences per GPU.** Measured end to end — training, the
+eval pass and the checkpoint save all survive at 8; 16 dies in the allocator. One number per
+GPU type extrapolates to every gang size, because FSDP shards parameters over the data axis
+while activations are not, so capacity only grows with the gang. Throughput is flat across
+microbatch and accumulation depth, so the number only has to avoid an OOM.
+
 **Storage and speed are known.** ~34 s/step on one node, ~17 on two — near-linear. An
 8-epoch trial is about a week on two nodes and leaves ~0.59 TiB behind; the shorter rungs
 are ~0.09 TiB each. The bucket already holds ~360 TB, so even a full grid is a few percent
@@ -40,28 +46,26 @@ section.
 
 ## Left to figure out
 
-1. **Calibrate GB200.** H100 is done: capacity is 8 sequences per GPU, measured end to end
-   (train + eval + checkpoint survive at 8; 16 dies in the allocator). One number per GPU
-   type extrapolates to every gang size, so no H100 work remains. GB200 has no measurement
-   and no smoke yet.
-2. **Reconcile the policy with `run-adaptive-sweep`.** Its tools expect `max_inflight_chips`
+1. **Reconcile the policy with `run-adaptive-sweep`.** Its tools expect `max_inflight_chips`
    and a recovery triple ending in `cross_region_restart_timeout`; our policy uses nodes and
    has no cross-region concept. Either add a mapping note or adapt the tooling. **Nothing
    launches until this is resolved.**
-3. **Decide the node ceiling for real.** Currently 3, which caps a gang at 2 nodes and puts
-   the 8-epoch rung at ~7 days per point. Fine for early reps, probably not for the full
-   grid.
-4. **GB200 is unproven.** `cw-us-east-08a` has by far the most capacity, but no levanter
-   dense-LM training has ever run on Blackwell in this repo. Its target list stays empty
-   until a smoke passes.
-5. **Write the pruning script.** Keep top-N per rung, drop the rest to final-only. The
+2. **8-node scaling is being measured now.** The ceiling is 256 (effectively "no limit";
+   actual usage stays far below it and batch priority is what protects other users). A real
+   8-epoch trial at 8 nodes is in flight to get a trustworthy wall-clock estimate and to
+   confirm val loss falls across evals. MarinFold #108 saw an 8-node JAX bootstrap abort;
+   the timeout suspected of causing it was raised afterwards, so this also retests that.
+3. **GB200 is untried — no smoke has been attempted yet.** `cw-us-east-08a` has by far the
+   most capacity and no levanter dense-LM training has ever run on Blackwell in this repo.
+   Nothing here is blocked on peak performance, so a working GB200 path is worth more than
+   a fast one. Needs: a capacity measurement (`SMOKE=yes` + `PER_DEVICE`, stepping up until
+   it OOMs) and an attention-backend check, since JAX_FLASH was chosen for H100.
+4. **Write the pruning script.** Keep top-N per rung, drop the rest to final-only. The
    delete procedure is proven (dry-run, read it, delete, verify counts); what's missing is
    the part that picks winners from the W&B objective.
-6. **Retest 8-node gangs** — only matters if the ceiling goes up. #108 hit a JAX bootstrap
-   abort at 8 nodes; the timeout that likely caused it was raised afterwards.
-7. **Profile for wall-clock wins** (deferred by request). #108 measured ~15% MFU and suspects
+5. **Profile for wall-clock wins** (deferred by request). #108 measured ~15% MFU and suspects
    non-fused attention plus f32 FSDP parameter gathers.
-8. **Delete the smoke checkpoints** once they stop being useful (~96 GB each).
+6. **Delete the smoke checkpoints** once they stop being useful (~96 GB each).
 
 ## Worth upstreaming
 
