@@ -51,12 +51,22 @@ def _verified_pair(pair: dict) -> dict:
         "expected_label": decision["label"],
         "expected_method": decision["method"],
         "expected_basis": decision["basis"],
+        "pair_path": "pairs.parquet",
+        "pair_row_index": 0,
+    }
+
+
+def _machine(pair: dict) -> dict:
+    return {
+        **decision_for_pair(pair),
+        "pair_path": "pairs.parquet",
+        "pair_row_index": 0,
     }
 
 
 def test_final_decision_accepts_hash_verified_machine_label() -> None:
     pair = _pair(exact=True)
-    machine = decision_for_pair(pair)
+    machine = _machine(pair)
 
     result = final_decision(pair["review_key"], iter([_input("pair", _verified_pair(pair)), _input("machine", machine)]))
 
@@ -67,7 +77,7 @@ def test_final_decision_accepts_hash_verified_machine_label() -> None:
 
 def test_final_decision_requires_one_bound_semantic_label_when_routed() -> None:
     pair = _pair(ambiguous=True)
-    machine = decision_for_pair(pair)
+    machine = _machine(pair)
     semantic = {
         **{
             key: machine[key]
@@ -82,6 +92,8 @@ def test_final_decision_requires_one_bound_semantic_label_when_routed() -> None:
                 "canonical_id",
                 "raw_sha256",
                 "canonical_raw_sha256",
+                "pair_path",
+                "pair_row_index",
             )
         },
         "label": "false_positive",
@@ -100,15 +112,23 @@ def test_final_decision_requires_one_bound_semantic_label_when_routed() -> None:
 
 def test_final_decision_rejects_tampered_machine_label() -> None:
     pair = _pair(exact=True)
-    machine = {**decision_for_pair(pair), "label": "false_positive"}
+    machine = {**_machine(pair), "label": "false_positive"}
 
     with pytest.raises(AssertionError, match="Machine label differs"):
         final_decision(pair["review_key"], iter([_input("pair", _verified_pair(pair)), _input("machine", machine)]))
 
 
+def test_final_decision_rejects_tampered_pair_reference() -> None:
+    pair = _pair(exact=True)
+    machine = {**_machine(pair), "pair_row_index": 1}
+
+    with pytest.raises(AssertionError, match="Identity mismatch"):
+        final_decision(pair["review_key"], iter([_input("pair", _verified_pair(pair)), _input("machine", machine)]))
+
+
 def test_final_decision_rejects_semantic_label_for_machine_resolved_pair() -> None:
     pair = _pair(exact=True)
-    machine = decision_for_pair(pair)
+    machine = _machine(pair)
 
     with pytest.raises(AssertionError, match="Unexpected semantic record"):
         final_decision(

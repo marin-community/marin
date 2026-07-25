@@ -66,8 +66,15 @@ def _compact_verified_pair(pair: dict[str, Any]) -> dict[str, Any]:
 
 
 def _adjudication_input_records(entry: dict[str, str]) -> Iterator[dict[str, str]]:
-    for record in _parquet_records(entry["path"]):
-        payload = _compact_verified_pair(record) if entry["kind"] == "pair" else record
+    for row_index, record in enumerate(_parquet_records(entry["path"])):
+        if entry["kind"] == "pair":
+            payload = {
+                **_compact_verified_pair(record),
+                "pair_path": entry["path"],
+                "pair_row_index": row_index,
+            }
+        else:
+            payload = record
         review_key = payload["review_key"]
         yield {
             "review_key": review_key,
@@ -95,6 +102,8 @@ def _matching_identity_fields(left: dict[str, Any], right: dict[str, Any], revie
         "canonical_id",
         "raw_sha256",
         "canonical_raw_sha256",
+        "pair_path",
+        "pair_row_index",
     )
     mismatches = [field for field in fields if left.get(field) != right.get(field)]
     if mismatches:
