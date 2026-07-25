@@ -1483,6 +1483,38 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T21:05:56Z — 49,425 pairs verified
+
+- Eighteen additional baseline checkpoints passed independent validation:
+  2,304 pairs, 1,729 model false positives, 569 model true duplicates, and six
+  unresolved outcomes. They contain 6,795 valid judgments across 6,828
+  attempts; 33 invalid responses affected 13 retried judgments. Twenty pairs
+  were chunked and 2,284 were direct.
+- Complete full-text comparison resolves all six ambiguities as true
+  duplicates. One pair is the same local water-heater service template with
+  only the city and state changed. The other five are cross-source SFT pairs
+  whose complete answers differ only by `\boxed{B}` versus
+  `\boxed{\text{B}}`, or the equivalent formatting around `H` and `F`.
+- The six hash-bound manual Parquet records have SHA-256
+  `729293dbcb3a24cebeef640a517aecc9c706ea1c28c3db430061616617a2150e`,
+  `f2749566b7ef6591052c10d34a78fa9d3358f90641eba135737f1d31fbf12772`,
+  `694ddb21c5177471f9fd0f80ef9a4d4ff12c2534294cd33c43a3792e4db7cb31`,
+  `16d774183614ad09aea80d29492a64559e786636d69b4e4785406dca51938abe`,
+  `2a492bb9e375f0e717fccd5268aacdb9dc0dc9964de8025ba28c2bb51f1f2e95`,
+  and
+  `c2ec0e86d451966698792a5147481f6180c8056966df919c4a58810cec7f1206`.
+  A separate batch-priority Iris process exactly reread all six source pairs,
+  semantic checkpoints, manual records, Parquet hashes, and completion
+  markers.
+- Across the stable 388-checkpoint snapshot, all 49 manual records leave:
+
+  - baseline: 42,105 pairs, 26,765 false positives, 15,340 true duplicates;
+  - treatment: 7,320 pairs, 3,826 false positives, 3,494 true duplicates;
+  - combined: 49,425 pairs, 30,591 false positives, 18,834 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T20:56:02Z — 47,121 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
