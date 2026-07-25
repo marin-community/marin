@@ -11,7 +11,10 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
+from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import VllmServerHandle, _engine_kwargs_to_cli_args, _LogPump, _native_logs_tail
 
 
@@ -95,7 +98,7 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
     pump.close()
 
 
-def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
+def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
     # The child logs a line, then blocks; stop() must terminate it, drain that line to the
     # on-disk log, and be safe to call again.
     proc = _spawn("import sys, time; print('SERVE_READY'); sys.stdout.flush(); time.sleep(30)", start_new_session=True)
@@ -105,6 +108,14 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
         process_group_id = os.getpgid(proc.pid)
     except ProcessLookupError:
         process_group_id = None
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
+    compilation_cache = VllmCompilationCache.prepare(
+        launcher_identity="test",
+        compile_identity=VllmCompileIdentity(model_name_or_path="test/model", extra_cli_args=()),
+        environment={},
+        mode=VllmCompilationCacheMode.MANAGED,
+    )
+    compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
     handle = VllmServerHandle(
         server_url="http://127.0.0.1:0/v1",
         port=0,
@@ -112,6 +123,7 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
         process_group_id=process_group_id,
         log_dir=str(tmp_path),
         log_pump=pump,
+        compilation_cache=compilation_cache,
     )
 
     # Wait until the child has started Python and its line is pumped to disk, so teardown below
@@ -126,5 +138,6 @@ def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
     assert proc.poll() is not None  # terminated
     # Teardown flushed and closed the on-disk logs, so the tail still reads the child's output.
     assert "SERVE_READY" in _native_logs_tail(str(tmp_path))
+    assert not compilation_cache_root.exists()
 
     handle.stop(timeout_seconds=5)  # second call must not raise

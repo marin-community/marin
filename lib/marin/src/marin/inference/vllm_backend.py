@@ -110,6 +110,7 @@ class VllmBackend:
                     *self.config.extra_args,
                 ],
                 launcher=vllm_launcher(self.config),
+                compilation_cache_mode=self.config.compilation_cache,
             ) as environment:
                 if environment.model_id is None:
                     raise RuntimeError("vLLM server did not report a model id")

@@ -33,6 +33,11 @@ class VllmSource(StrEnum):
     MARIN_FORK = "marin_fork"
 
 
+class VllmCompilationCacheMode(StrEnum):
+    MANAGED = "managed"
+    CALLER_MANAGED = "caller_managed"
+
+
 @dataclass(frozen=True)
 class ServedModelConfig:
     weights: str
@@ -74,6 +79,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.WORKSPACE
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
     extra_args: tuple[str, ...] = ()
