@@ -8,11 +8,12 @@ import asyncio
 import hashlib
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import pyarrow.parquet as pq
+import xxhash
 from fray.types import ResourceConfig, create_environment
 from marin.inference.config import (
     BrokerConfig,
@@ -131,6 +132,14 @@ class TextChunk:
     text: str
 
 
+@dataclass(frozen=True)
+class CanonicalChunkIndex:
+    """Deterministic lexical index over every chunk of one canonical document."""
+
+    chunks: tuple[TextChunk, ...]
+    postings: dict[int, tuple[int, ...]]
+
+
 class CalibrationData(BaseModel):
     """Exact results of the human-label calibration gate."""
 
@@ -176,14 +185,29 @@ def text_chunks(
     return result
 
 
-def _word_ngrams(text: str, n: int = 5) -> set[tuple[str, ...]]:
+def _word_ngram_hashes(text: str, n: int = 5) -> set[int]:
     words = re.findall(r"\w+", text.casefold())
-    return {tuple(words[index : index + n]) for index in range(max(0, len(words) - n + 1))}
+    return {xxhash.xxh3_64_intdigest("\0".join(words[index : index + n])) for index in range(max(0, len(words) - n + 1))}
+
+
+def canonical_chunk_index(chunks: list[TextChunk]) -> CanonicalChunkIndex:
+    """Scan every canonical chunk once and index its exact word 5-grams."""
+    if not chunks:
+        raise ValueError("chunks must not be empty")
+
+    postings: dict[int, list[int]] = defaultdict(list)
+    for chunk in chunks:
+        for feature in _word_ngram_hashes(chunk.text):
+            postings[feature].append(chunk.index)
+    return CanonicalChunkIndex(
+        chunks=tuple(chunks),
+        postings={feature: tuple(indices) for feature, indices in postings.items()},
+    )
 
 
 def canonical_chunk_matches(
     member: TextChunk,
-    canonical_chunks: list[TextChunk],
+    canonical: CanonicalChunkIndex,
     *,
     member_text_chars: int,
     canonical_text_chars: int,
@@ -192,34 +216,52 @@ def canonical_chunk_matches(
     """Scan every canonical chunk and return the strongest lexical and positional matches."""
     if limit <= 0:
         raise ValueError(f"limit must be positive, got {limit}")
-    if not canonical_chunks:
-        raise ValueError("canonical_chunks must not be empty")
 
-    member_ngrams = _word_ngrams(member.text)
+    overlap_by_index: Counter[int] = Counter()
+    for feature in _word_ngram_hashes(member.text):
+        overlap_by_index.update(canonical.postings.get(feature, ()))
     position = member.start / max(1, member_text_chars)
     expected_start = int(position * canonical_text_chars)
-    ranked = []
-    for canonical in canonical_chunks:
-        overlap = len(member_ngrams & _word_ngrams(canonical.text))
-        positional_distance = abs(canonical.start - expected_start)
-        ranked.append((overlap, -positional_distance, -canonical.index, canonical))
+    nearest_indices = sorted(
+        range(len(canonical.chunks)),
+        key=lambda index: (abs(canonical.chunks[index].start - expected_start), index),
+    )[:limit]
+    candidate_indices = set(overlap_by_index)
+    candidate_indices.update(nearest_indices)
+    ranked = [
+        (
+            overlap_by_index[index],
+            -abs(canonical.chunks[index].start - expected_start),
+            -index,
+            canonical.chunks[index],
+        )
+        for index in candidate_indices
+    ]
     ranked.sort(reverse=True)
     return [entry[-1] for entry in ranked[:limit]]
 
 
-def chunk_review_units(case: dict[str, Any]) -> list[dict[str, Any]]:
+def chunk_review_units(
+    case: dict[str, Any],
+    *,
+    chunk_chars: int = CHUNK_CHARS,
+    overlap_chars: int = CHUNK_OVERLAP_CHARS,
+    canonical_chunks_per_member: int = CANONICAL_CHUNKS_PER_MEMBER,
+) -> list[dict[str, Any]]:
     """Build exhaustive member coverage with canonical context selected from a full scan."""
     member_text = case["member_text"]
     canonical_text = case["canonical_text"]
-    members = text_chunks(member_text)
-    canonicals = text_chunks(canonical_text)
+    members = text_chunks(member_text, chunk_chars=chunk_chars, overlap_chars=overlap_chars)
+    canonicals = text_chunks(canonical_text, chunk_chars=chunk_chars, overlap_chars=overlap_chars)
+    canonical = canonical_chunk_index(canonicals)
     units = []
     for member in members:
         matches = canonical_chunk_matches(
             member,
-            canonicals,
+            canonical,
             member_text_chars=len(member_text),
             canonical_text_chars=len(canonical_text),
+            limit=canonical_chunks_per_member,
         )
         canonical_sections = "\n\n".join(
             f'<CANONICAL_CHUNK index="{chunk.index}" start="{chunk.start}" end="{chunk.end}">\n'
@@ -232,12 +274,14 @@ def chunk_review_units(case: dict[str, Any]) -> list[dict[str, Any]]:
                 "member_chunk_index": member.index,
                 "member_start": member.start,
                 "member_end": member.end,
+                "canonical_chunks_scanned": len(canonicals),
                 "canonical_chunk_indices": [chunk.index for chunk in matches],
                 "prompt": (
                     "Determine whether every substantive part of this MEMBER chunk is represented "
                     "by one or more candidate CANONICAL chunks. The complete canonical was scanned "
-                    "lexically to select these candidates. Return uncertainty if the supplied "
-                    "canonical context is insufficient.\n\n"
+                    "lexically to select these candidates. If the supplied canonical context is "
+                    "insufficient, set deletion_loses_substantive_content to true with low "
+                    "confidence rather than assuming the member content is duplicated.\n\n"
                     f'<MEMBER_CHUNK index="{member.index}" start="{member.start}" end="{member.end}">\n'
                     f"{member.text}\n"
                     "</MEMBER_CHUNK>\n\n"

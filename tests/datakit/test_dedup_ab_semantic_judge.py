@@ -15,6 +15,7 @@ from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabe
 from experiments.datakit.scripts.dedup_ab_semantic_judge import (
     MAX_DIRECT_CHARS,
     ModelVerdict,
+    canonical_chunk_index,
     canonical_chunk_matches,
     chunk_review_units,
     direct_pair_prompt,
@@ -152,10 +153,11 @@ def test_canonical_retrieval_scans_all_chunks_and_finds_shared_payload() -> None
         + "unrelated last chunk " * 10
     )
     canonical = text_chunks(canonical_text, chunk_chars=80, overlap_chars=30)
+    index = canonical_chunk_index(canonical)
 
     matches = canonical_chunk_matches(
         member,
-        canonical,
+        index,
         member_text_chars=len(member.text),
         canonical_text_chars=len(canonical_text),
         limit=2,
