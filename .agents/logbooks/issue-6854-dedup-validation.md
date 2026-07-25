@@ -1124,3 +1124,31 @@ statistics for performance comparisons.
 - At the latest health sample, all 12 pods were Ready with zero restarts.
   Partition p0 was processing decision-file-1 offset 256, p1 offset 1,536, p2
   decision-file-64 offset 512, and p3 decision-file-97 offset 128.
+
+### 2026-07-25T15:39:00Z — 15,697 pairs verified; SQL ambiguity resolved
+
+- Eleven additional baseline checkpoints passed independent validation: 1,408
+  pairs, 842 false positives after manual review, 566 true duplicates after
+  manual review, and zero remaining unresolved outcomes. They used 3,903 valid
+  first-attempt judgments with no invalid responses or retries; 17 pairs were
+  chunked and 1,391 were direct.
+- Complete-text inspection resolves the one model ambiguity as a true
+  duplicate. Both sides have exactly 10 SQL blocks, and normalized comparison
+  confirms that every block is identical and appears in the same order. Every
+  exercise and table row is represented by the canonical. The member-only
+  units are the `Using Null` title, `From SQLZOO` attribution, structural
+  headings, `CAPTION` prefixes, and a repeated NULL-propagation explanation
+  already present in the canonical. Pair location:
+  `part-00064-of-00128.parquet:1392`; member/canonical text SHA-256:
+  `42e74e0c1362413d992f406ed319506e5fb532345eac47f5e71d36126e45044f` /
+  `f95f687a1cf6953e59919222475fd0d0e26787434988b80c886658478b82095b`.
+- The new manual Parquet shard and marker were written, reread, and
+  hash-verified against the exact semantic evidence and source identities.
+- Across the stable 123-checkpoint snapshot, all 15 manual records leave:
+
+  - baseline: 13,242 pairs, 8,764 false positives, 4,478 true duplicates;
+  - treatment: 2,455 pairs, 1,284 false positives, 1,171 true duplicates;
+  - combined: 15,697 pairs, 10,048 false positives, 5,649 true duplicates.
+
+- All 12 pods remain Ready with zero restarts, and all four GPU workers
+  continue serving requests.
