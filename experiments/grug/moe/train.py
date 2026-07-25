@@ -860,16 +860,43 @@ def _check_jaxpp_task_call_jaxpr(task_name: str, call_jaxpr: jax_core.ClosedJaxp
         raise ValueError(f"JaxPP generated invalid task JAXPR {task_name!r}") from error
 
 
+def _validate_jaxpp_tasks_in_jaxpr(jaxpr: jax_core.Jaxpr, phase: str) -> None:
+    for equation in jaxpr.eqns:
+        if equation.primitive.name != "task":
+            nested_jaxpr = equation.params.get("jaxpr")
+            if isinstance(nested_jaxpr, jax_core.ClosedJaxpr):
+                _validate_jaxpp_tasks_in_jaxpr(nested_jaxpr.jaxpr, phase)
+            elif isinstance(nested_jaxpr, jax_core.Jaxpr):
+                _validate_jaxpp_tasks_in_jaxpr(nested_jaxpr, phase)
+            continue
+        try:
+            _check_jaxpp_task_call_jaxpr(
+                equation.params["task_name"],
+                equation.params["call_jaxpr"],
+            )
+        except ValueError as error:
+            raise ValueError(f"{error} after JaxPP phase {phase!r}") from error
+
+
 def _validate_automatic_jaxpp_task_jaxprs(compiled) -> None:
     """Fail before execution when an automatic JaxPP task omits an operand."""
-    local_jaxpr = compiled.local_jaxpr.jaxpr
-    for equation in local_jaxpr.eqns:
-        if equation.primitive.name != "task":
-            continue
-        _check_jaxpp_task_call_jaxpr(
-            equation.params["task_name"],
-            equation.params["call_jaxpr"],
-        )
+    if jaxpp_core is None:
+        raise ModuleNotFoundError("jaxpp.core is required for automatic JaxPP task validation")
+    if isinstance(compiled, jaxpp_core.ScalarMpmdFunction):
+        closed_jaxpr = compiled.local_jaxpr
+    elif isinstance(compiled, jaxpp_core.GlobalMpmdFunction):
+        closed_jaxpr = compiled.closed_jaxpr
+    else:
+        raise TypeError(f"unexpected compiled automatic JaxPP function: {type(compiled).__name__}")
+    _validate_jaxpp_tasks_in_jaxpr(closed_jaxpr.jaxpr, "mpmdify")
+
+
+def _compile_automatic_jaxpp_with_phase_validation(train_step, state, pipeline_batch):
+    placed = train_step.trace_and_place(state, pipeline_batch)
+    _validate_jaxpp_tasks_in_jaxpr(placed.closed_jaxpr.jaxpr, "trace_and_place")
+    inferred = placed.infer_intermediate_shardings()
+    _validate_jaxpp_tasks_in_jaxpr(inferred.closed_jaxpr.jaxpr, "infer_intermediate_shardings")
+    return inferred.mpmdify()
 
 
 def _mpmd_sharding_like(value, mpmd_mesh, stage_index: int):
@@ -3161,10 +3188,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             ),
                             watch_config=watch_config if watch_config.is_enabled else None,
                         )
-                    compiled_pipeline_train_step = train_step.compile(
-                        state,
-                        pipeline_batch,
+                    validate_task_phases = os.environ.get("GRUG_JAXPP_VALIDATE_TASK_PHASES", "false").lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
                     )
+                    if validate_task_phases:
+                        compiled_pipeline_train_step = _compile_automatic_jaxpp_with_phase_validation(
+                            train_step,
+                            state,
+                            pipeline_batch,
+                        )
+                    else:
+                        compiled_pipeline_train_step = train_step.compile(
+                            state,
+                            pipeline_batch,
+                        )
                     compiled_pipeline_train_step = _localize_automatic_jaxpp_input_shardings(
                         compiled_pipeline_train_step,
                         mpmd_mesh,
