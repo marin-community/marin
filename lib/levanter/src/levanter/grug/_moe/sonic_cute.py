@@ -18,8 +18,6 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jax import shard_map
-from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -77,52 +75,6 @@ def _expert_mlp_bwd(res, dy):
 
 
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
-
-
-def shared_expert_sonic_cute(
-    x_flat: Float[Array, "T H"],
-    w_gate: Float[Array, "H I"],
-    w_up: Float[Array, "H I"],
-    w_down: Float[Array, "I H"],
-    *,
-    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
-    token_spec: P,
-    gate_up_spec: P,
-    down_spec: P,
-    data_axis_name: str = "data",
-) -> Float[Array, "T H"]:
-    """Dense (all-token) SwiGLU expert via the QuACK SM100 kernel, as a single expert group.
-
-    Reuses the routed-expert fused-SwiGLU forward and custom-VJP backward (:func:`_expert_mlp`)
-    with ``E=1`` and ``cu=[0, T_local]`` — the gate/up GEMM fuses ``silu(gate) * up`` in its
-    epilogue instead of materializing the ``[T, I]`` activation like the plain-einsum dense path.
-
-    Runs inside a ``shard_map`` so the token axis is *local* inside the body (both the QuACK kernel
-    and the ``ragged_dot`` weight-grad slice rows by expert group, legal only on an unsharded axis).
-    The weights arrive **still FSDP-sharded** (``gate_up_spec``/``down_spec``, H over ``data``); each
-    is ``all_gather``-ed over the data axis inside the region — a just-in-time gather that XLA frees
-    after the region (its backward is the FSDP reduce-scatter to sharded grads), rather than a
-    full up-front replication held across the whole block.
-    """
-    moe_dim = w_gate.shape[1]
-
-    def _local(x_l, wg_l, wu_l, wd_l):
-        wg = jax.lax.all_gather(wg_l, data_axis_name, axis=0, tiled=True)  # [H, I]
-        wu = jax.lax.all_gather(wu_l, data_axis_name, axis=0, tiled=True)  # [H, I]
-        wd = jax.lax.all_gather(wd_l, data_axis_name, axis=1, tiled=True)  # [I, H]
-        w13_il = _interleave_gate_up(jnp.concatenate([wg, wu], axis=-1)[None], moe_dim)  # [1,H,2I]
-        t = x_l.shape[0]
-        group_sizes = jnp.asarray([t], dtype=jnp.int32)
-        cu = jnp.asarray([0, t], dtype=jnp.int32)
-        return _expert_mlp(x_l, w13_il, wd[None], group_sizes, cu)
-
-    return shard_map(
-        _local,
-        mesh=mesh,
-        in_specs=(token_spec, gate_up_spec, gate_up_spec, down_spec),
-        out_specs=token_spec,
-        check_vma=False,
-    )(x_flat, w_gate, w_up, w_down)
 
 
 def _moe_mlp_local_sonic_cute(

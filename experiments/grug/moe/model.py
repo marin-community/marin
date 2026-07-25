@@ -369,7 +369,6 @@ class DenseMLP(eqx.Module):
         x: Float[Array, "B S D"],
         *,
         activation: MoeActivation = ActivationFunctionEnum.silu,
-        use_quack: bool = False,
     ) -> Float[Array, "B S D"]:
         if isinstance(activation, ActivationFunctionEnum):
             activation_fn = activation.to_jax_fn()
@@ -377,27 +376,7 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _batch_spec())
-        if use_quack:
-            # Fused-SwiGLU QuACK kernel (single expert group), run under a shard_map so the token
-            # axis is local. Weights stay FSDP-sharded (canonical DenseMLP specs) and are gathered
-            # over the data axis inside the region (just-in-time, freed after). Guarded import:
-            # quack is B200-only.
-            from levanter.grug._moe.sonic_cute import shared_expert_sonic_cute  # noqa: PLC0415
-
-            gate_up_spec = P("data", "model")
-            down_spec = P("model", "data")
-            out_flat = shared_expert_sonic_cute(
-                x_flat,
-                reshard(self.w_gate, gate_up_spec),
-                reshard(self.w_up, gate_up_spec),
-                reshard(self.w_down, down_spec),
-                mesh=get_abstract_mesh(),
-                token_spec=_batch_spec(),
-                gate_up_spec=gate_up_spec,
-                down_spec=down_spec,
-            )
-            return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        x_flat = rearrange(x, "b s d -> (b s) d")
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
@@ -588,15 +567,8 @@ class Block(eqx.Module):
             mlp_in = self.mlp_gated_norm(mlp_in)
         mlp_out, qb_beta = self.mlp(mlp_in, w13_pre0, w2_pre0)
         if self.shared is not None:
-            # SCALE_SHARED_QUACK: run each dense shared expert through the QuACK fused-SwiGLU kernel
-            # (single expert group) instead of the plain-einsum path. Only valid on the sonic_cute
-            # (B200) backend, which supplies the kernel.
-            use_quack = (
-                os.environ.get("SCALE_SHARED_QUACK") == "1"
-                and resolve_moe_implementation(self.mlp.cfg.moe_implementation) == "sonic_cute"
-            )
             for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu, use_quack=use_quack)
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         return x + mlp_out, qb_beta
 
 

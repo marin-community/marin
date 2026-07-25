@@ -9,7 +9,6 @@ SM90 fa4 kernels), then runs one fwd+bwd. Run on an allocated GB200 node with qu
 installed. Prints ``SONIC_CUTE_SMOKE_OK`` on success.
 """
 
-import os
 import traceback
 
 import jax
@@ -19,55 +18,6 @@ import numpy as np
 from jax.sharding import AxisType, Mesh
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-
-
-def _check_shared_expert_quack() -> None:
-    """Assert the QuACK single-group shared-expert path matches the einsum reference (fwd + grads).
-
-    Runs replicated (no mesh sharding) so it isolates kernel numerics from FSDP resharding. QuACK's
-    GemmGatedSm100 is bf16-compute, so compare against a bf16 einsum reference at a bf16-appropriate
-    tolerance, not fp32.
-    """
-    # Test the fused-SwiGLU kernel directly (single group, replicated) — decoupled from the
-    # shard_map/FSDP gather, which the flagged model run under the mesh exercises separately.
-    from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
-
-    h, i, t = 512, 256, 384
-    key = jax.random.PRNGKey(1)
-    kx, kg, ku, kd = jax.random.split(key, 4)
-    x = (jax.random.normal(kx, (t, h)) * 0.1).astype(jnp.bfloat16)
-    w_gate = (jax.random.normal(kg, (h, i)) * 0.05).astype(jnp.bfloat16)
-    w_up = (jax.random.normal(ku, (h, i)) * 0.05).astype(jnp.bfloat16)
-    w_down = (jax.random.normal(kd, (i, h)) * 0.05).astype(jnp.bfloat16)
-
-    def ref(x_, wg, wu, wd):
-        gate = jnp.einsum("td,dm->tm", x_, wg)
-        up = jnp.einsum("td,dm->tm", x_, wu)
-        return jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, wd)
-
-    def quack(x_, wg, wu, wd):
-        w13_il = _interleave_gate_up(jnp.concatenate([wg, wu], axis=-1)[None], i)
-        cu = jnp.asarray([0, t], dtype=jnp.int32)
-        return _expert_mlp(x_, w13_il, wd[None], jnp.asarray([t], jnp.int32), cu)
-
-    y_ref, vjp_ref = jax.vjp(ref, x, w_gate, w_up, w_down)
-    y_q, vjp_q = jax.vjp(quack, x, w_gate, w_up, w_down)
-    cot = jax.random.normal(jax.random.PRNGKey(2), y_ref.shape).astype(jnp.bfloat16)
-    g_ref = vjp_ref(cot)
-    g_q = vjp_q(cot)
-
-    def _rel(a, b):
-        a, b = a.astype(jnp.float32), b.astype(jnp.float32)
-        return float(jnp.max(jnp.abs(a - b)) / (jnp.max(jnp.abs(a)) + 1e-6))
-
-    rtol = 3e-2  # bf16 matmul accumulation across K
-    fwd_err = _rel(y_ref, y_q)
-    grad_errs = [_rel(a, b) for a, b in zip(g_ref, g_q, strict=True)]
-    print(f"shared-quack fwd_rel={fwd_err:.4f} grad_rel={[f'{e:.4f}' for e in grad_errs]}", flush=True)
-    worst = max([fwd_err, *grad_errs])
-    if worst > rtol:
-        raise AssertionError(f"shared_expert_sonic_cute mismatch vs einsum ref: worst rel {worst:.4f} > {rtol}")
-    print("SHARED_QUACK_MATCH_OK", flush=True)
 
 
 def main() -> None:
@@ -110,19 +60,6 @@ def main() -> None:
         loss, grads = jax.value_and_grad(loss_fn)(model)
         jax.block_until_ready(grads)
         print(f"SONIC_CUTE_SMOKE_OK loss={float(loss):.4f}", flush=True)
-
-        # Exercise the sharded shared-expert QuACK path (SCALE_SHARED_QUACK) end-to-end under the
-        # mesh: the shard_map/token-sharding is what the replicated kernel check below cannot cover.
-        os.environ["SCALE_SHARED_QUACK"] = "1"
-        try:
-            loss_q, grads_q = jax.value_and_grad(loss_fn)(model)
-            jax.block_until_ready(grads_q)
-            print(f"SHARED_QUACK_MODEL_OK loss={float(loss_q):.4f}", flush=True)
-        finally:
-            del os.environ["SCALE_SHARED_QUACK"]
-
-    # Kernel-numerics check for the QuACK shared-expert path (replicated, outside the mesh).
-    _check_shared_expert_quack()
 
 
 if __name__ == "__main__":
