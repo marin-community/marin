@@ -169,3 +169,12 @@ RANKING (contribution >=1pp toward LOCKED 25%, preserving fidelity; post-adjoint
   json_logger, operating point (d5120/256e-top8/48L/EP64/b1024). Will babysit to terminal, THEN submit
   treatment (+SCALE_A2A_CUSTOM_ADJOINT=1) back-to-back. NOT resubmitting on PENDING (rack at capacity).
 - JOB-STATE MUTATIONS BY ME THIS CHECK-IN: none (only my own submission).
+
+## Watcher harvest 00:14 UTC — rav leg-batching stability-120 (d4-rotation comparator)
+/rav/ep64-batched-expert-stability-120-v1-20260724-2353 (RUNNING, step 59/120, real 120-step, not grad-only):
+  p50 MFU 25.39% (p10 25.02 / p90 26.00, 57 samples), loss 6.823 descending. Operating point
+  (d5120/256e-top8/48L/EP64/b1024). => leg-batching (on top of the custom adjoint) clears 25% on a REAL
+  run; this is the empirical bar d4's rotation must beat/match. Both restructure the a2a loop once (the
+  ranked-comment "do it once" decision now has a batching number: 25.39% p50).
+My 1a A/B control (/mwittmann/ep25d1-adj-control-120-0724-1707) still compiling; background monitor armed
+for drop_fraction + MFU + terminal, then I submit the treatment leg.
