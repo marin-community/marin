@@ -97,8 +97,23 @@ land in evaldash like every other eval.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals tb2-lite
 ```
 
-A Daytona-backed Harbor launch needs `DAYTONA_API_KEY` in the launch environment. Harbor runs as an
-isolated `uv` subprocess outside the Marin lock.
+Daytona-backed definitions declare one experiment-owned credential specification. A launch first
+uses `DAYTONA_API_KEY` from its environment, then falls back to the `DAYTONA_EVAL_API_KEY` secret in
+the `hai-gcp-models` Google Secret Manager project. `DAYTONA_API_KEY` is the only supported
+environment override; the old `DAYTONA_EVAL_API_KEY` environment alias is not read. The generic
+launcher resolves the declaration immediately before Iris submission, and the isolated Harbor
+subprocess receives that key without inheriting the orchestrator's other credentials.
+
+The Grug OpenCode profile keeps its model and Harbor policy on the unified path:
+
+```bash
+# One OpenCode trial with the step-1903 Grug SFT on H100x8.
+uv run python -m experiments.evaluation.cli launch \
+  --model grug-agentic-s3-step1903 --evals grug-opencode-id --limit 1
+```
+
+The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
+task directories to Harbor.
 
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.
@@ -121,7 +136,9 @@ Set `resource_hint.hbm_gb` to a portable serving footprint, or set
 `resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
 that requirement to a cluster. Set `resource_hint.memory` for exports whose shard staging needs more
 host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
-its tokenizer through Hugging Face.
+its tokenizer through Hugging Face. `serve.object_store_load_mode: local` copies an object-store
+export to the inference worker's ephemeral disk before vLLM starts; the default `stream` mode uses
+the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.

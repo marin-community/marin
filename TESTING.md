@@ -72,6 +72,9 @@ Delete or rewrite tests with negative value:
   are valid when the failure is externally observable.
 - Tests for Python language semantics.
 - Registration tests: Tests that check that specific items are registered in global registries.
+- Configuration projections: assertions that a lowered or constructed field equals the same value
+  supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
+  or a real external wire translation instead.
 - Permanently skipped tests or empty test files.
 - Screenshot-only tests without behavioral assertions.
 - "Does not raise" tests without a comment explaining why that is the contract.

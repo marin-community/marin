@@ -38,18 +38,13 @@ Use `--limit N` to cap the number of trials and `--no-wait` to return after subm
 
 ## Credentials
 
-Daytona runs require `DAYTONA_API_KEY` in the launch environment.
+Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
+They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
+Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
 
-The sandbox receives only the credentials needed by the selected agent. Depending on the benchmark
-and agent, this can include:
-
-- `HF_TOKEN`
-- `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
-- `E2B_API_KEY`
-- `MODAL_API_KEY`
-
-Do not put credentials in model YAMLs or runner definitions.
+The generic launcher resolves declared references immediately before Iris submission. The isolated
+Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
+Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
 
 ## Endpoint lifecycle
 
@@ -65,14 +60,19 @@ registrations, and a retried task attempt atomically replaces its own same-name 
 A `HarborExecutor` contains a `HarborRunConfig`:
 
 ```python
-from marin.evaluation.harbor.runner import HarborExecutor, HarborRunConfig
+from marin.evaluation.harbor.driver_config import (
+    HarborAgentConfig,
+    HarborEnvironmentConfig,
+    HarborRunConfig,
+)
+from marin.evaluation.harbor.runner import HarborExecutor
 
 executor = HarborExecutor(
     config=HarborRunConfig(
         dataset="hf://DCAgent2/terminal_bench_2",
-        version="main",
-        agent="terminus-2",
-        env="daytona",
+        revision="main",
+        agent=HarborAgentConfig(name="terminus-2"),
+        environment=HarborEnvironmentConfig(environment_type="daytona"),
         n_concurrent=4,
         task_limit=2,
     ),

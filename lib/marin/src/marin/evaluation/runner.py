@@ -13,6 +13,7 @@ from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
@@ -86,6 +87,7 @@ class EvaluationIdentity:
 class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
+    secret_env_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class EvaluationBatch:
     api_model: str | None
     evaluations: tuple[Evaluation, ...]
     provenance: Provenance
+    secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -236,7 +239,9 @@ def _run_one_evaluation(
     inference_failure: Exception | None = None
     try:
         session.check_alive()
-        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, env_vars)
+        allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
+        evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
+        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:
@@ -309,6 +314,10 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         raise ValueError("an evaluation batch requires at least one evaluation")
     orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
+    evaluation_env = {
+        **runtime_env,
+        **env_vars_from_keys(tuple(batch.secret_env)),
+    }
     inference = inference_config_for_model(
         batch.model,
         batch.accelerator,
@@ -322,7 +331,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
                 batch,
                 session,
                 orchestrator_job_id=orchestrator_job_id,
-                env_vars=runtime_env,
+                env_vars=evaluation_env,
             )
     except RemoteInferenceStartupError as exc:
         inference_jobs, tails = _startup_diagnostics(exc)
@@ -346,6 +355,9 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         ]
     elif batch.accelerator.region:
         constraints = [region_constraint([batch.accelerator.region])]
+    launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
+    for name, spec in sorted(batch.secret_env.items()):
+        launch_env[name] = resolve_secret_spec(spec).value
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_batch, batch),
         name=f"eval-{batch.group_id}",
@@ -354,7 +366,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
             memory=_ORCHESTRATOR_MEMORY,
             disk=_ORCHESTRATOR_DISK,
         ),
-        environment=EnvironmentSpec(env_vars=env_vars_from_keys(EVAL_ENV_KEYS)),
+        environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         max_retries_failure=0,
     )

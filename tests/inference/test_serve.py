@@ -53,6 +53,7 @@ from marin.inference.levanter_backend import (
 from marin.inference.model_preparation import (
     resolve_model_path,
     select_tensor_parallel_size,
+    stage_object_store_model_locally,
 )
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
@@ -94,7 +95,7 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 @pytest.mark.parametrize(
     ("model", "ttl_days"),
     [
-        ("gs://bucket/ckpt", 14),  # object-store paths are served directly, never mirrored
+        ("gs://bucket/ckpt", 14),  # resolution leaves staging policy to the inference engine
         ("s3://bucket/ckpt", 14),
         ("Qwen/Qwen3-0.6B", 0),  # caching disabled
     ],
@@ -115,6 +116,39 @@ def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
 
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
     assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
+
+
+def test_stage_object_store_model_locally_resumes_complete_files(monkeypatch, tmp_path):
+    class ObjectStore:
+        def __init__(self) -> None:
+            self.files = {
+                "bucket/checkpoint/config.json": b'{"architectures": ["Test"]}',
+                "bucket/checkpoint/model.safetensors": b"weights",
+            }
+            self.copies = 0
+
+        def find(self, root: str, *, detail: bool):
+            assert root == "bucket/checkpoint"
+            assert detail
+            return {name: {"type": "file", "size": len(contents)} for name, contents in self.files.items()}
+
+        def get_file(self, remote_file: str, local_file: str) -> None:
+            self.copies += 1
+            Path(local_file).write_bytes(self.files[remote_file])
+
+    store = ObjectStore()
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.url_to_fs",
+        lambda _path: (store, "bucket/checkpoint"),
+    )
+
+    first = Path(stage_object_store_model_locally("s3://bucket/checkpoint", tmp_path))
+    second = Path(stage_object_store_model_locally("s3://bucket/checkpoint", tmp_path))
+
+    assert first == second
+    assert (first / "config.json").read_bytes() == store.files["bucket/checkpoint/config.json"]
+    assert (first / "model.safetensors").read_bytes() == store.files["bucket/checkpoint/model.safetensors"]
+    assert store.copies == 2
 
 
 def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
@@ -161,7 +195,11 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
         worker_environment=create_environment(extras=["tpu", "vllm"]),
     )
 
-    resolved, _num_chips = _resolved_model(ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1), iris)
+    resolved, _num_chips = _resolved_model(
+        ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1),
+        VllmEngineConfig(),
+        iris,
+    )
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"

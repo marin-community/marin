@@ -13,7 +13,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem import StoragePath
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ModelConfig, ServeBackend, has_vllm_option, serve_config_vllm_args
+from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -94,6 +94,29 @@ def auto_serve_overrides(
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 
+def _vllm_engine_config(
+    serve: ServeConfig,
+    platform: Platform,
+    extra_args: tuple[str, ...],
+) -> VllmEngineConfig:
+    """Build the evaluation engine settings shared by GPU and TPU workers."""
+    launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.WORKSPACE
+    source = VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM
+    return VllmEngineConfig(
+        launcher=launcher,
+        source=source,
+        startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+        max_num_batched_tokens=(
+            serve.max_num_batched_tokens
+            if serve.max_num_batched_tokens is not None
+            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
+        ),
+        max_num_seqs=serve.max_num_seqs,
+        object_store_load_mode=serve.object_store_load_mode,
+        extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+    )
+
+
 def inference_config_for_model(
     model: ModelConfig,
     accelerator: AcceleratorChoice,
@@ -132,12 +155,8 @@ def inference_config_for_model(
             regions=regions,
         )
         if serve.backend is ServeBackend.VLLM:
-            engine: VllmEngineConfig | LevanterEngineConfig = VllmEngineConfig(
-                launcher=VllmLauncherType.CUDA,
-                source=VllmSource.MARIN_FORK,
-                startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
-                max_num_batched_tokens=EVAL_SERVE_MAX_NUM_BATCHED_TOKENS,
-                extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+            engine: VllmEngineConfig | LevanterEngineConfig = _vllm_engine_config(
+                serve, accelerator.platform, extra_args
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -157,11 +176,7 @@ def inference_config_for_model(
             regions=regions,
         )
         if serve.backend is ServeBackend.VLLM:
-            engine = VllmEngineConfig(
-                startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
-                max_num_batched_tokens=EVAL_SERVE_MAX_NUM_BATCHED_TOKENS,
-                extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
-            )
+            engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
             environment = create_environment(extras=["tpu", "vllm"], env_vars=dict(env_vars))
         else:
             engine = LevanterEngineConfig()

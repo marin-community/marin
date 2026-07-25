@@ -5,7 +5,7 @@
 
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
 Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
-sandbox environment (Daytona by default), and normalizes each finished trial into the shared eval
+sandbox environment, and normalizes each finished trial into the shared eval
 contract: one agentic :class:`~marin.evaluation.samples.EvalSample` per task (its reward, its grading,
 and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
 back for the record's metrics. Harbor's own per-trial resume is preserved by restoring completed
@@ -20,12 +20,17 @@ import logging
 import re
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
 
+from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.driver_config import (
+    HarborDriverConfig,
+    HarborRunConfig,
+)
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
@@ -35,36 +40,33 @@ logger = logging.getLogger(__name__)
 
 # Harbor is run as an external tool in an isolated uv environment (its Daytona SDK carries pre-release
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
-_HARBOR_SPEC = "harbor>=0.8.0"
-_DAYTONA_SPEC = "daytona>=0.200.1"
+_HARBOR_SPEC = "harbor==0.20.1.dev202607240136"
+_DAYTONA_SPEC = "daytona==0.200.2"
 _DRIVER = str(Path(__file__).with_name("trial_driver.py"))
+_DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_DRIVER_SYSTEM_ENV_KEYS = (
+    "CURL_CA_BUNDLE",
+    "HOME",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "PATH",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TMPDIR",
+    "UV_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+)
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
 
 _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-
-_DEFAULT_MODEL_INFO = {
-    "max_input_tokens": 32768,
-    "max_output_tokens": 8192,
-    "input_cost_per_token": 0.0,
-    "output_cost_per_token": 0.0,
-}
-
-
-@dataclass(frozen=True)
-class HarborRunConfig:
-    """One Harbor eval of one served model."""
-
-    dataset: str
-    version: str
-    agent: str
-    env: str = "daytona"
-    n_concurrent: int = 4
-    max_output_tokens: int = 8192
-    task_limit: int | None = None
-    agent_kwargs: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,7 @@ def canonical_served_name(name: str) -> str:
 
 def _job_name(model: RunningModel, config: HarborRunConfig) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
-    key = f"{config.dataset}|{config.version}|{model.endpoint.model}|{config.agent}|{config.task_limit}"
+    key = f"{config.dataset}|{config.revision}|{model.endpoint.model}|{config.agent.name}|{config.task_limit}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", config.dataset)[:32]
     return f"harbor_{safe}_{digest}"
@@ -216,7 +218,7 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
     )
 
 
-def _run_driver(config_file: Path) -> None:
+def _run_driver(config_file: Path, driver_env: Mapping[str, str]) -> None:
     """Run the Harbor trial driver in an isolated uv env (Harbor + Daytona, no marin project)."""
     cmd = [
         "uv",
@@ -233,7 +235,10 @@ def _run_driver(config_file: Path) -> None:
         str(config_file),
     ]
     logger.info("running Harbor driver: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    process_env = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS)
+    process_env.update(driver_env)
+    process_env["PYTHONPATH"] = _DRIVER_PYTHONPATH
+    subprocess.run(cmd, check=True, env=process_env)
 
 
 def _upload_trials(job_dir: Path, out_path: str) -> None:
@@ -250,6 +255,7 @@ def run_harbor(
     output_dir: str,
     *,
     hf_token: str | None,
+    driver_env: Mapping[str, str],
 ) -> HarborRunResult:
     """Run ``config``'s Harbor dataset against the served model and write the normalized outputs.
 
@@ -264,7 +270,7 @@ def run_harbor(
     job_dir = results_dir / job_name
     dataset_path = materialize_harbor_dataset(
         config.dataset,
-        config.version,
+        config.revision,
         workdir,
         hf_token=hf_token,
     )
@@ -274,27 +280,25 @@ def run_harbor(
         if restored:
             logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
 
-    agent_kwargs = dict(config.agent_kwargs)
-    agent_kwargs.setdefault("api_base", model.endpoint.base_url)
-    agent_kwargs.setdefault("model_info", {**_DEFAULT_MODEL_INFO, "max_output_tokens": config.max_output_tokens})
-    driver_config = {
-        "job_name": job_name,
-        "jobs_dir": str(results_dir),
-        "dataset": config.dataset,
-        "version": config.version,
-        "dataset_path": str(dataset_path) if dataset_path is not None else None,
-        "n_tasks": config.task_limit,
-        "agent": config.agent,
-        "model_name": f"hosted_vllm/{model.endpoint.model}",
-        "agent_kwargs": agent_kwargs,
-        "n_concurrent": config.n_concurrent,
-        "env": config.env,
-    }
+    driver_config = HarborDriverConfig(
+        job_name=job_name,
+        jobs_dir=str(results_dir),
+        dataset_path=str(dataset_path) if dataset_path is not None else None,
+        endpoint_url=model.endpoint.base_url,
+        served_model=model.endpoint.model,
+        run=config,
+    )
     config_file = workdir / "driver_config.json"
-    config_file.write_text(json.dumps(driver_config))
+    config_file.write_text(json.dumps(asdict(driver_config)))
+    config_file.chmod(0o600)
 
-    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, config.dataset, config.env)
-    _run_driver(config_file)
+    logger.info(
+        "starting Harbor job %s (dataset=%s env=%s)",
+        job_name,
+        config.dataset,
+        config.environment.environment_type,
+    )
+    _run_driver(config_file, driver_env)
 
     trials = _read_trials(job_dir)
     if is_remote_path(output_dir):
@@ -330,6 +334,7 @@ class HarborExecutor:
     """Run one resolved Harbor configuration."""
 
     config: HarborRunConfig
+    secret_env_keys: tuple[str, ...] = ()
 
     def __call__(
         self,
@@ -343,6 +348,7 @@ class HarborExecutor:
                 self.config,
                 output_dir,
                 hf_token=env_vars.get("HF_TOKEN"),
+                driver_env={key: env_vars[key] for key in self.secret_env_keys},
             )
         except Exception as exc:
             raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
