@@ -398,6 +398,19 @@ def _make_train_step(
         if _OFFLOAD_OPT_STATE:
             opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host")
 
+        # SCALE_QB_GAIN over-relaxes the QB bias update. The stock rule (gain 1) replaces the
+        # beta state outright, which — because beta is measured against the *biased* threshold
+        # and satisfies beta_i = -bias_i at the balanced fixed point — is an implicit
+        # proportional controller applying exactly 1x the residual imbalance per step. Blending
+        # beta states with gain g applies g x the residual (g=2 doubles the bias update rate;
+        # g<1 damps). This scheme differs from DeepSeek-V3's aux-loss-free rule, which
+        # accumulates fixed +-gamma sign updates (gamma=0.001) — integral control — rather than
+        # recomputing an equalizing quantile each step.
+        qb_gain = float(os.environ.get("SCALE_QB_GAIN", "1") or "1")
+        if qb_gain != 1.0:
+            logger.info("QB over-relaxation active: SCALE_QB_GAIN=%s", qb_gain)
+            qb_beta_per_layer = qb_gain * qb_beta_per_layer + (1.0 - qb_gain) * state.pending_qb_betas
+
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
