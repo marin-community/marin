@@ -47,7 +47,7 @@ def test_token_proxy_rule_does_not_replace_unrelated_proxy_routes() -> None:
         "pathRules": [{"paths": ["/proxy/private/*"], "service": "iap-backend"}],
     }
 
-    with pytest.raises(click.ClickException):
+    with pytest.raises(click.ClickException, match="cannot combine pathRules and routeRules"):
         _reconcile_token_proxy_rule(matcher, "proxy-backend")
 
     assert matcher["pathRules"] == [{"paths": ["/proxy/private/*"], "service": "iap-backend"}]
