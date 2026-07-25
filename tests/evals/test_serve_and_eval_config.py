@@ -189,8 +189,8 @@ def test_client_forwards_seed_and_extra_generation_kwargs():
 
 def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving(monkeypatch):
     """Grug must use one immutable checkpoint revision for both vLLM metadata paths."""
-    model = "penfever/grug-67b-a2b-sft-s2-thinking-step630"
-    revision = "e671a2fd4ded0cadbae27a72956c3220c886b26f"
+    model = "marin-community/grug-67b-a2b-sft-s2-thinking-step630"
+    revision = "6808fe5c219471517bd51df35addefd38ebebf89"
     profile = _grug_profile(model)
     args = profile["vllm_extra_args"]
 
@@ -213,6 +213,16 @@ def test_grug_profile_pins_repaired_checkpoint_metadata_for_local_weight_serving
     monkeypatch.setattr(gpu_driver, "_auto_serve_overrides", lambda *_: ((), 32768))
     config = gpu_driver.build_config(model, profile["tokenizer"], tier=2)
     assert config.serve.chat_template_content is None
+
+
+def test_grug_source_and_canonical_copies_have_distinct_pinned_revisions():
+    """A fresh canonical repo must not accidentally reuse the source cache identity."""
+    assert _grug_profile("penfever/grug-67b-a2b-sft-s2-thinking-step630")["revision"] == (
+        "b1941773d0a1469ba3c316853aa5f3f8c2b9d715"
+    )
+    assert _grug_profile("marin-community/grug-67b-a2b-sft-s2-thinking-step630")["revision"] == (
+        "6808fe5c219471517bd51df35addefd38ebebf89"
+    )
 
 
 def test_aime_defaults_to_the_three_canonical_campaign_seeds():

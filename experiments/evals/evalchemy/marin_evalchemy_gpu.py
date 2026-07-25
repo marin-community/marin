@@ -168,7 +168,16 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
 # the Delphi chat_template (NOT the generic `main` /think template), and the answer-channel loop curbed.
 # Every value below is a DEFAULT — the matching EVAL_* env var still overrides it.
 PROMPT_HEADROOM = 4096  # Min context reserved for the prompt; default gen budget = max_model_len - this.
-GRUG_THINKING_MODELS = {"penfever/grug-67b-a2b-sft-s2-thinking-step630"}
+# The canonical HF copy deliberately has a *different repository identity* from
+# the repaired source checkpoint.  Marin's cache historically keyed snapshots
+# by repository name, so using this fresh public copy prevents a pod from
+# reusing the pre-repair source snapshot.  Keep its immutable commit here too:
+# normal launches must never silently follow a later mutable ``main`` update.
+GRUG_THINKING_REVISIONS = {
+    "penfever/grug-67b-a2b-sft-s2-thinking-step630": "b1941773d0a1469ba3c316853aa5f3f8c2b9d715",
+    "marin-community/grug-67b-a2b-sft-s2-thinking-step630": "6808fe5c219471517bd51df35addefd38ebebf89",
+}
+GRUG_THINKING_MODELS = set(GRUG_THINKING_REVISIONS)
 CANONICAL_AIME_SEEDS = (42, 43, 44)
 
 
@@ -188,6 +197,12 @@ def _grug_profile(model: str) -> dict:
     """Baked eval defaults for the Delphi grug thinking checkpoint ({} for any other model)."""
     if not _is_grug_thinking(model):
         return {}
+    revision = GRUG_THINKING_REVISIONS.get(model)
+    if revision is None:
+        raise ValueError(
+            f"Grug thinking model {model!r} has no approved immutable revision; "
+            "add it to GRUG_THINKING_REVISIONS before launching."
+        )
     return {
         "tp": 1,  # 256-expert MoE: experts shard via data + expert parallelism, NOT tensor parallelism
         # ``main`` was repaired at this exact commit to carry the byte-identical
@@ -195,7 +210,7 @@ def _grug_profile(model: str) -> dict:
         # Transformers fast-tokenizer class. Pinning the immutable model *and
         # tokenizer* revision lets vLLM and Evalchemy consume one metadata source;
         # do not keep a separately fetched template as a second drift-prone source.
-        "revision": "e671a2fd4ded0cadbae27a72956c3220c886b26f",
+        "revision": revision,
         # Keep the tokenizer in the model repository.  The tokenizer-only
         # companion repo has a different commit history, so a model metadata
         # revision is not a valid --tokenizer-revision there.
@@ -209,9 +224,9 @@ def _grug_profile(model: str) -> dict:
             "8",
             "--enable-expert-parallel",
             "--revision",
-            "e671a2fd4ded0cadbae27a72956c3220c886b26f",
+            revision,
             "--tokenizer-revision",
-            "e671a2fd4ded0cadbae27a72956c3220c886b26f",
+            revision,
         ),
         # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
         # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
