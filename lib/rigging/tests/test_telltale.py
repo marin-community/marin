@@ -77,6 +77,7 @@ class _StaticCollector:
 class _MetricRow:
     cells: tuple[str, ...]
     titles: tuple[str, ...]
+    histogram_states: tuple[str, ...]
 
 
 class _MetricTableParser(HTMLParser):
@@ -86,11 +87,13 @@ class _MetricTableParser(HTMLParser):
         self._cells: list[str] | None = None
         self._cell_text: list[str] | None = None
         self._titles: list[str] = []
+        self._histogram_states: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "tr":
             self._cells = []
             self._titles = []
+            self._histogram_states = []
         elif tag == "td" and self._cells is not None:
             self._cell_text = []
 
@@ -98,6 +101,8 @@ class _MetricTableParser(HTMLParser):
             attributes = dict(attrs)
             if title := attributes.get("title"):
                 self._titles.append(title)
+            if state := attributes.get("data-histogram-state"):
+                self._histogram_states.append(state)
 
     def handle_data(self, data: str) -> None:
         if self._cell_text is not None:
@@ -109,7 +114,13 @@ class _MetricTableParser(HTMLParser):
             self._cell_text = None
         elif tag == "tr":
             if self._cells:
-                self.rows.append(_MetricRow(cells=tuple(self._cells), titles=tuple(self._titles)))
+                self.rows.append(
+                    _MetricRow(
+                        cells=tuple(self._cells),
+                        titles=tuple(self._titles),
+                        histogram_states=tuple(self._histogram_states),
+                    )
+                )
             self._cells = None
 
 
@@ -332,7 +343,7 @@ def test_index_marks_invalid_histograms_malformed(name, client, publish_metric, 
 
     row = _metric_row(client.get("/").text, name)
 
-    assert row.cells[3] == "malformed histogram"
+    assert row.histogram_states == ("malformed",)
     assert row.titles == ()
 
 
