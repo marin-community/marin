@@ -314,8 +314,9 @@ def initial_state(
         params=params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
-        # Every grug layer is MoE, so this is [num_layers, num_experts]; zero == no bias at step 0.
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        # Every grug layer is MoE; matches the stacked router_bias leaf — [num_layers, num_experts],
+        # or [num_layers, senders, num_experts] under SCALE_QB_SENDER. Zero == no bias at step 0.
+        pending_qb_betas=jnp.zeros(params.stacked_blocks.stacked.mlp.router_bias.shape),
     )
 
 

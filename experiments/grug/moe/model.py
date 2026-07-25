@@ -409,16 +409,23 @@ def _compute_qb_beta(router_logits: jax.Array, qb_alpha: jax.Array, cfg: "GrugMo
     local_tokens = s_minus_alpha.shape[0] // num_devices
     qb_count = max(1, local_tokens * cfg.num_experts_per_token // cfg.num_experts)
 
+    sender_mode = os.environ.get("SCALE_QB_SENDER") == "1"
+
     def _local_qb_beta(s_ma):
         topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
         beta = topk_vals[:, -1]
+        if sender_mode:
+            # Per-sender betas: keep each device's own quantile (the local qb_count-th
+            # margin IS the bucket-capacity threshold for that sender's buckets). No
+            # pmean — sender mode removes the per-layer f32 collective entirely.
+            return beta[None, :]
         return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
     return shard_map(
         _local_qb_beta,
         mesh=mesh,
         in_specs=(P(_BATCH_AXES, None),),
-        out_specs=P(),
+        out_specs=P(_BATCH_AXES, None) if sender_mode else P(),
     )(s_minus_alpha)
 
 
@@ -440,9 +447,23 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # SCALE_QB_SENDER widens the QB router bias from a global [E] vector to a per-sender
+        # [S, E] matrix (S = devices along the batch axes = fixed-a2a sender shards). The
+        # per-sender quantile at qb_count is exactly the per-(sender, expert) bucket-capacity
+        # threshold, so the sender-mode controller targets the bucket overflows the global
+        # bias cannot see. Requires qb_routing.
+        if os.environ.get("SCALE_QB_SENDER") == "1":
+            if not cfg.qb_routing:
+                raise ValueError("SCALE_QB_SENDER=1 requires qb_routing=True")
+            senders = 1
+            for a in _BATCH_AXES:
+                senders *= _mesh_axis_size(mesh, a)
+            bias_shape: tuple[int, ...] = (senders, e)
+        else:
+            bias_shape = (e,)
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((e,)),
+            router_bias=jnp.zeros(bias_shape),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -474,7 +495,19 @@ class MoEMLP(eqx.Module):
             # but form combine weights from the UNBIASED logits. Select top-(K+1); the (K+1)-th biased
             # logit is the QB threshold alpha, and qb_beta (returned up the stack) feeds NEXT step's
             # router_bias (train.py:_apply_qb_betas).
-            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            if self.router_bias.ndim == 2:
+                # Per-sender bias [S, E]: each device adds its own row to its local tokens.
+                def _add_sender_bias(logits_local, bias_local):
+                    return logits_local + jax.lax.stop_gradient(bias_local[0])
+
+                biased_logits = shard_map(
+                    _add_sender_bias,
+                    mesh=get_abstract_mesh(),
+                    in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+                    out_specs=P(_BATCH_AXES, None),
+                )(reshard(router_logits, P(_BATCH_AXES, None)), reshard(self.router_bias, P(_BATCH_AXES, None)))
+            else:
+                biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
             topk_biased, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
             qb_alpha = topk_biased[:, -1:]
             selected_experts = selected_experts[:, :-1]
@@ -571,7 +604,7 @@ class Block(eqx.Module):
         if os.environ.get("SCALE_ATTN_ONLY") == "1":
             # Isolation probe: attention block only, no MoE/MLP. Loss is meaningless; used to profile
             # the attention weight-gather behavior with the MoE (memory hog + competing gathers) removed.
-            return x, jnp.zeros((self.mlp.cfg.num_experts,), jnp.float32), jnp.zeros((), jnp.int32)
+            return x, jnp.zeros(self.mlp.router_bias.shape, jnp.float32), jnp.zeros((), jnp.int32)
         mlp_in = self.rms_mlp(x)
         if self.mlp_gated_norm is not None:
             mlp_in = self.mlp_gated_norm(mlp_in)
