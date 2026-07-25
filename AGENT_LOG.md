@@ -133,3 +133,54 @@ Next: stop here for coordinator execution of the three smoke3 commands. If all s
 The fixed-layout ceiling weighs more heavily after the all-gather: rotation and token-chunk pipelining both require stable fixed-capacity slices. A small ragged parity win would not displace fixed capacity unless its lower drop fraction or a repeated throughput margin covers that lost composition option.
 
 Relay-ready smoke commands are in `EP25_D2_RELAY_COMMANDS.md`. They use EP4 on one four-GPU replica, NGC JAX 26.06, and the hash-verified #7421 plugin. Rack commands will be written after all three smokes reach a terminal state.
+
+## Check-in 2026-07-25 06:37 UTC
+
+All three smoke4 arms completed four training steps on NGC JAX 26.06 with the hash-verified #7421 plugin. The reduced d2048/L4/e256/top-8/b64 shape fit one four-GPU replica. Each log confirms CUTLASS DSL 4.6.0 from the venv, preserved NGC JAX/JAXLIB, the replacement plugin loaded, finite loss, and a tracker finish event.
+
+| Arm | Draw | p10 MFU | p50 MFU | p90 MFU | p50 tok/s | Drop count | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| fixed A2A + gather | smoke4 | 7.072% | 7.072% | 7.151% | 174.3K | not reported | succeeded |
+| ragged A2A, one-shot off | smoke4 | 6.591% | 7.019% | 7.019% | 173.0K | not reported | succeeded |
+| ring_cute EP4 | smoke4 | 8.864% | 8.873% | 8.873% | 218.7K | not reported | succeeded |
+
+The smoke4 throughput ordering is exploratory because the model, layer count, batch, and expert-axis size differ from the rack operating point. It proves the backend and environment paths only.
+
+Commits `4fbc89152` and `2d4a87395` from `agent/ep25-d1-adjoint` are ported into the working tree without a conflict with the NGC overlay. `SCALE_REPORT_DROPS=1` now requests the backend's dropped-assignment count, sums it across 48 scanned layers, divides by global `batch * sequence * top-k * layers`, and explicitly logs `moe/dropped_assignments` and `moe/drop_fraction`.
+
+The largest supported ring expert axis is EP64. With 16 processes, four local GPUs, one replica axis, and 256 experts, the launcher resolves the mesh to `(replica=1, data=1, expert=64, model=1)` and assigns four experts to each shard. `EP25_D2_RELAY_COMMANDS.md` now contains exactly two 120-step rack commands:
+
+- `ep25d2-rack-ragged-120-20260725`: ragged all-to-all, one-shot disabled, EP64.
+- `ep25d2-rack-ring-ep64-120-20260725`: `ring_cute`, EP64.
+
+Both commands use d5120/L48/e256/top-8/b1024/seq4096, MuonH, 16 GB200 replicas, NGC JAX 26.06, the #7421 plugin, `json_logger`, `SCALE_REPORT_DROPS=1`, and `SCALE_DISABLE_CHECKPOINT=1`. The shell syntax checks and the launcher accepts the 64-device mesh. No fixed arm is included.
+
+The comparison bar is d1's matched fixed path: 20.61% p50 with autodiff and 24.04% with the custom adjoint, a 3.43-point gain. Rav's custom-adjoint plus leg-batching run reached 25.39% p50. Ragged or ring must beat 24.04% to displace the fixed adjoint on current throughput. A materially lower drop fraction can still select ragged on fidelity even below that speed.
+
+Local verification:
+
+- 26 passed and 6 GPU-only skipped across `test_model.py`, `test_dispatch.py`, and `test_grugformer_moe.py`.
+- 7/7 MoE-relevant Grug variant contracts passed, including the cross-process EP mesh and one-step lowering.
+- The new CPU test confirms drop reporting leaves loss and every gradient unchanged.
+- Pyrefly 1.0.0, Ruff 0.14.3, Black 25.9.0, `git diff --check`, relay-command `bash -n`, and `uv lock --check` passed.
+- The repository pre-commit wrapper could not fetch PyYAML because sandbox DNS is unavailable; the cached direct checks above cover the changed files.
+- The broader variant-contract file has two unrelated `base`-variant failures because its debug mesh omits the `expert` axis while shared sharding now names it. The `moe` parameterizations pass.
+
+No job was submitted, stopped, killed, or otherwise mutated from this session.
+
+The sandbox still cannot create `/home/marin/projects/marin/.git/worktrees/ep25-d2-bakeoff/index.lock`; the coordinator must commit `experiments/grug/moe/model.py`, `experiments/grug/moe/train.py`, `experiments/grug/moe/test_model.py`, `EP25_D2_RELAY_COMMANDS.md`, and `AGENT_LOG.md`.
+
+### Rack decision table
+
+| Arm | Draw | p10 MFU | p50 MFU | p90 MFU | p50 tok/s | Drop count/fraction | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| fixed A2A + gather, autodiff | d1 reference | 20.51% | 20.61% | 20.69% | not harvested | pending d1 fidelity run | succeeded |
+| fixed A2A + gather, custom adjoint | d1 reference | 23.73% | 24.04% | 24.75% | not harvested | pending d1 fidelity run | succeeded |
+| ragged A2A, one-shot off, EP64 | rack draw | pending | pending | pending | pending | pending | relay command ready |
+| ring_cute EP64 | rack draw | pending | pending | pending | pending | pending | relay command ready |
+
+Provisional ranking: fixed+adjoint leads on production-shape throughput at 24.04%. Ragged and `ring_cute` remain unranked at the rack shape. The reduced smoke favors `ring_cute`, but it does not narrow the expected ±2–4 point placement spread or establish a production-shape win.
+
+Confidence: 9/10 that the two rack arms settle a transport or fidelity decision; 4/10 that `ring_cute` beats the 24.04% fixed-adjoint bar.
+
+Next: stop for coordinator execution of the two rack commands, one at a time.
