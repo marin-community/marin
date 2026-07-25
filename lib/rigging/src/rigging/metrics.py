@@ -165,7 +165,7 @@ def _spark_character(population: float, maximum: float) -> str:
 
 def _render_histogram_value(summary: _HistogramSummary) -> str:
     if summary.malformed:
-        return '<span data-histogram-state="malformed">malformed histogram</span>'
+        return "malformed histogram"
 
     parts: list[str] = []
     if summary.count is not None:
