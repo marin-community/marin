@@ -3,18 +3,15 @@
 
 """Drop the ``endpoints`` foreign keys to ``jobs``/``tasks``.
 
-A federation parent now mirrors a child's link-access endpoints even for a job it
-never received as a handoff (see ``live_local_link_endpoints`` and
-``replace_remote_for_peer``). Such an "absorbed" endpoint has no backing
-``jobs``/``tasks`` row on the parent — the mint path reads only the endpoint row and
-parses the owner from its ``task_id`` string — so the row must be insertable without
-an FK target.
-
-The FKs only ever provided ``ON DELETE CASCADE`` cleanup. That is now done
-explicitly at the single ``delete_job`` chokepoint (which also keeps the in-memory
-endpoint cache in sync, which CASCADE never did), so dropping them changes no
-cleanup behavior for local rows. ``endpoints`` is referenced by no other table, so
-the rebuild needs no ``foreign_keys`` toggling.
+An endpoint's lifecycle is governed by its lease, not by its owning task row:
+reads hide an expired lease, the pruner's ``sweep_expired`` reclaims it, and
+``EndpointsProjection.add`` refuses to register or renew once the task row is gone
+or terminal. The FKs only ever provided ``ON DELETE CASCADE`` cleanup, which is now
+done explicitly at the single ``delete_job`` chokepoint (also keeping the in-memory
+endpoint cache in sync, which CASCADE never did). Dropping the FKs decouples an
+endpoint row from a live ``jobs``/``tasks`` target and changes no cleanup behavior.
+``endpoints`` is referenced by no other table, so the rebuild needs no
+``foreign_keys`` toggling.
 
 Idempotent: a no-op once the FKs are gone, so a crash mid-run is safe to retry.
 """

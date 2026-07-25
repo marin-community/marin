@@ -36,10 +36,17 @@ from iris.cluster.controller.auth import (
     JwtTokenManager,
     NativeProxyAuthConfig,
     NativeProxyAuthMode,
+    create_controller_auth,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
-from iris.cluster.controller.native_proxy import NativeProxy
+from iris.cluster.controller.native_proxy import (
+    DECISION_SECRET_HEADER,
+    PROXY_DECISION_PATH,
+    UPSTREAM_URL_HEADER,
+    NativeProxy,
+)
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
@@ -51,14 +58,15 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
+from starlette.testclient import TestClient
 
-from .conftest import promote_queued_federation, submit_direct_job
+from ._test_support import ControllerTestState
+from .conftest import promote_queued_federation, query_task
 from .test_federation_handoff import (
     _attach_federation,
     _cluster_pinned_request,
     _InProcessPeerConnection,
     _make_service,
-    register_endpoint_on_task,
 )
 
 # The parent cluster's id: the requester stamped on the handoff, the federation
@@ -135,6 +143,27 @@ def _federation_auth(requester: str = PARENT_ID):
     return mint_token, FederationTokenVerifier({requester: key.public_pem}), key.public_pem
 
 
+def _register_endpoint(
+    peer_service: ControllerServiceImpl,
+    peer_state: ControllerTestState,
+    job_id: JobName,
+    address: str,
+) -> str:
+    """Register a LINK endpoint on the peer's received-job task; return its id."""
+    task = job_id.task(0)
+    response = peer_service.endpoint_service.register_endpoint(
+        controller_pb2.Controller.RegisterEndpointRequest(
+            name=ENDPOINT_NAME,
+            address=address,
+            task_id=task.to_wire(),
+            attempt_id=query_task(peer_state, task).current_attempt_id,
+            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+        ),
+        None,
+    )
+    return response.endpoint_id
+
+
 @pytest.fixture
 def threads() -> Iterator[ThreadContainer]:
     container = ThreadContainer()
@@ -142,123 +171,6 @@ def threads() -> Iterator[ThreadContainer]:
         yield container
     finally:
         container.stop()
-
-
-def _register_link_endpoint(peer_service: ControllerServiceImpl, peer_state, task_id: JobName, address: str) -> str:
-    """Register this module's LINK endpoint on ``task_id`` at ``address``; return its id."""
-    return register_endpoint_on_task(
-        peer_service, peer_state, task_id, ENDPOINT_NAME, EndpointAccess.ENDPOINT_ACCESS_LINK, address
-    )
-
-
-def test_absorbed_local_link_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path, log_client, threads):
-    """A serving job started directly on the peer — never handed off, so the peer holds
-    no RECEIVED handle for the parent — is still reachable through the parent's public
-    proxy: the peer absorbs its link endpoint over sync, the parent mirrors it, and the
-    peer's inbound check admits the forward on the endpoint's link access alone."""
-    with ExitStack() as stack:
-        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
-
-        upstream = UpstreamObservation()
-        upstream_url = _serve(threads, _build_upstream_app(upstream), name="upstream")
-
-        # A local job on the peer (not a handoff): the peer materializes its own task
-        # and registers a link endpoint on it. There is no RECEIVED handle.
-        [local_task] = submit_direct_job(peer_state, "local-serve")
-        _register_link_endpoint(peer_service, peer_state, local_task, upstream_url)
-
-        # The peer's received-handle check returns False for this job — so if the
-        # forward is authorized, it is authorized by the link-access relaxation alone.
-        def peer_owns(root_job: JobName, peer_id: str) -> bool:
-            with peer_state._db.read_snapshot() as q:
-                return reads.has_received_job_from_peer(q, peer_id, root_job)
-
-        assert peer_owns(local_task.root_job, PARENT_ID) is False
-
-        mint_token, peer_verifier, parent_public_key = _federation_auth(PARENT_ID)
-        decision_secret = "federation-native-proxy-test"
-        peer_dashboard = ControllerDashboard(
-            peer_service,
-            auth_policy=RequestAuthPolicy.enforcing(verifier=peer_verifier),
-            federation_owner_check=peer_owns,
-            proxy_decision_secret=decision_secret,
-        )
-        peer_private_url = _serve(threads, peer_dashboard.app, name="peer-dashboard")
-        peer_proxy = NativeProxy(
-            "127.0.0.1",
-            0,
-            peer_private_url,
-            decision_secret,
-            json.dumps(
-                asdict(
-                    NativeProxyAuthConfig(
-                        mode=NativeProxyAuthMode.ENFORCING,
-                        issuers=(),
-                        jwks={"keys": []},
-                        leeway_seconds=60,
-                        cache_capacity=16,
-                        cache_ttl_seconds=60,
-                        trusted_cidrs=(),
-                        federation_keys={PARENT_ID: parent_public_key},
-                    )
-                )
-            ),
-        )
-        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
-        stack.callback(peer_proxy.stop)
-        peer_url = peer_proxy.address
-
-        parent_decision_secret = "parent-federation-native-proxy-test"
-        parent_dashboard = ControllerDashboard(
-            parent_service,
-            auth_policy=RequestAuthPolicy.permissive(),
-            federated_handoff=FederatedEndpointHandoff(
-                lambda pid: peer_url if pid == PEER_ID else None,
-                mint_token,
-            ),
-            proxy_decision_secret=parent_decision_secret,
-        )
-        parent_private_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
-
-        # Sync absorbs the peer's local link endpoint onto the parent as a remote row,
-        # with no backing job/task on the parent.
-        manager.sync_once()
-        with parent_state._db.read_snapshot() as q:
-            mirrored = parent_service.endpoint_service.resolve_task_endpoint(ENDPOINT_NAME)
-            assert mirrored is not None and mirrored.peer_id == PEER_ID
-            assert reads.get_job_state(q, local_task.root_job) is None
-
-        parent_proxy = NativeProxy(
-            "127.0.0.1",
-            0,
-            parent_private_url,
-            parent_decision_secret,
-            json.dumps(
-                asdict(
-                    NativeProxyAuthConfig(
-                        mode=NativeProxyAuthMode.PERMISSIVE,
-                        issuers=(),
-                        jwks={"keys": []},
-                        leeway_seconds=60,
-                        cache_capacity=16,
-                        cache_ttl_seconds=60,
-                        trusted_cidrs=(),
-                    )
-                )
-            ),
-        )
-        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
-        stack.callback(parent_proxy.stop)
-        parent_url = parent_proxy.address
-
-        with httpx.Client() as client:
-            resp = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet", params={"q": "1"})
-
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["marker"] == UPSTREAM_MARKER
-        assert upstream.paths[-1] == "/greet?q=1"
 
 
 def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path, log_client, threads):
@@ -275,7 +187,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
         # the endpoint on it.
         job_id = JobName.from_wire(parent_service.launch_job(_cluster_pinned_request("fed-serve"), None).job_id)
         promote_queued_federation(manager, parent_state)
-        endpoint_id = _register_link_endpoint(peer_service, peer_state, job_id.task(0), upstream_url)
+        endpoint_id = _register_endpoint(peer_service, peer_state, job_id, upstream_url)
 
         # Peer dashboard: enforces real federation auth on the inbound /proxy and
         # authorizes it by the RECEIVED handle the handoff created on the peer.
@@ -388,3 +300,185 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")
         assert gone.status_code == 404
+
+
+# The child cluster's id: the tag a minted URL carries and the peer_id the parent
+# resolves it against.
+CHILD_CLUSTER = "cw"
+
+
+def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, str]:
+    """A child native proxy that owns ``/serve/foo`` as a link endpoint and validates
+    its own capability token. Returns ``(proxy_url, capability_token)``.
+
+    This is the child exactly as it serves a direct capability URL — the relay adds
+    nothing to it; the parent forwards the same ``/proxy/t/<token>/<name>`` request.
+    """
+    auth = create_controller_auth(None, cluster_name=CHILD_CLUSTER)
+    assert auth.jwt_manager is not None
+    issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+    proxy = NativeProxy(
+        "127.0.0.1",
+        0,
+        "http://127.0.0.1:9",  # unused: a local capability request posts no decision
+        "child-relay-decision",
+        json.dumps(
+            asdict(
+                NativeProxyAuthConfig(
+                    mode=NativeProxyAuthMode.ENFORCING,
+                    issuers=issuers,
+                    jwks=jwks,
+                    leeway_seconds=60,
+                    cache_capacity=16,
+                    cache_ttl_seconds=60,
+                    trusted_cidrs=(),
+                )
+            )
+        ),
+    )
+    proxy.replace_registry(
+        json.dumps(
+            asdict(
+                ProxyRegistrySnapshot(
+                    generation=1,
+                    endpoints=(
+                        ProxyEndpointMapping(
+                            endpoint_id="child-serve",
+                            name=ENDPOINT_NAME,
+                            address=upstream_url,
+                            link_access=True,
+                            peer_id=None,
+                            task_id=None,
+                            timeout_seconds=None,
+                            lease_deadline_epoch_ms=None,
+                        ),
+                    ),
+                )
+            )
+        )
+    )
+    stack.callback(proxy.stop)
+    return proxy.address, auth.jwt_manager.create_endpoint_token(ENDPOINT_NAME, "iris_ket_relay")
+
+
+def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log_client, threads):
+    with ExitStack() as stack:
+        upstream = UpstreamObservation()
+        upstream_url = _serve(threads, _build_upstream_app(upstream), name="upstream")
+
+        # The child owns the endpoint and mints its own capability token.
+        child_url, token = _child_capability_proxy(stack, upstream_url)
+        # The token works against the child's own origin — the relay changes nothing here.
+        with httpx.Client() as client:
+            direct = client.get(f"{child_url}/proxy/t/{token}/{ENDPOINT_PROXY_NAME}/greet")
+        assert direct.status_code == 200, direct.text
+
+        # The parent knows the child as a peer but mirrors none of its endpoints; a
+        # relay mints no bearer, so the token minter is never called.
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        parent_decision_secret = "parent-relay-decision"
+        parent_dashboard = ControllerDashboard(
+            parent_service,
+            auth_policy=RequestAuthPolicy.permissive(),
+            federated_handoff=FederatedEndpointHandoff(
+                lambda pid: child_url if pid == CHILD_CLUSTER else None,
+                lambda: "relay-mints-no-bearer",
+            ),
+            proxy_decision_secret=parent_decision_secret,
+        )
+        parent_private_url = _serve(threads, parent_dashboard.app, name="parent-dashboard")
+        # The parent enforces its own auth material, which cannot validate the
+        # child's token — reproducing the production iris.oa.dev 403. A 200 below
+        # therefore proves the relay short-circuits before the parent verifies.
+        parent_auth = create_controller_auth(None, cluster_name="parent")
+        assert parent_auth.jwt_manager is not None
+        parent_issuers, parent_jwks = parent_auth.jwt_manager.native_proxy_verification_material()
+        parent_proxy = NativeProxy(
+            "127.0.0.1",
+            0,
+            parent_private_url,
+            parent_decision_secret,
+            json.dumps(
+                asdict(
+                    NativeProxyAuthConfig(
+                        mode=NativeProxyAuthMode.ENFORCING,
+                        issuers=parent_issuers,
+                        jwks=parent_jwks,
+                        leeway_seconds=60,
+                        cache_capacity=16,
+                        cache_ttl_seconds=60,
+                        trusted_cidrs=(),
+                    )
+                )
+            ),
+        )
+        # A relay consults no local registry, but the proxy still gates proxy traffic
+        # on a ready registry, so install an empty one.
+        parent_proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(generation=1, endpoints=()))))
+        stack.callback(parent_proxy.stop)
+
+        with httpx.Client() as client:
+            relayed = client.get(
+                f"{parent_proxy.address}/proxy/{CHILD_CLUSTER}/t/{token}/{ENDPOINT_PROXY_NAME}/greet",
+                params={"q": "1"},
+                headers={"cookie": "session=secret", "authorization": "Bearer browser-user-token"},
+            )
+            unknown = client.get(f"{parent_proxy.address}/proxy/nope/t/{token}/{ENDPOINT_PROXY_NAME}/greet")
+
+        assert relayed.status_code == 200, relayed.text
+        assert relayed.json()["marker"] == UPSTREAM_MARKER
+        # The child served the sub-path and query verbatim on its own /proxy/t path.
+        assert upstream.paths[-1] == "/greet?q=1"
+        # The browser's own credentials never crossed to the serving process.
+        served = upstream.headers[-1]
+        assert "cookie" not in served
+        assert served.get("authorization") != "Bearer browser-user-token"
+        # A cluster tag the parent has no peer for is refused, not forwarded.
+        assert unknown.status_code == 404
+
+
+def _relay_decision_payload(**overrides) -> dict:
+    payload = {
+        "direction": "relay",
+        "encoded_name": ENDPOINT_PROXY_NAME,
+        "sub_path": "v1/models",
+        "query": "q=1",
+        "proxy_prefix": f"/proxy/{CHILD_CLUSTER}/t/tok/{ENDPOINT_PROXY_NAME}",
+        "peer_id": CHILD_CLUSTER,
+        "task_id": None,
+        "token": "tok",
+        "local_upstream": None,
+        "timeout_seconds": None,
+    }
+    return {**payload, **overrides}
+
+
+def test_relay_decision_builds_the_child_upstream_and_rejects_an_unknown_peer(tmp_path, log_client):
+    """The relay branch of the decision handler, without the native proxy: a
+    configured peer yields the child /proxy/t upstream and no credential; an
+    unconfigured tag is a 404 so the parent never relays it."""
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        secret = "relay-decision-secret"
+        dashboard = ControllerDashboard(
+            parent_service,
+            auth_policy=RequestAuthPolicy.permissive(),
+            federated_handoff=FederatedEndpointHandoff(
+                lambda pid: "https://iris-cw.oa.dev" if pid == CHILD_CLUSTER else None,
+                lambda: "relay-mints-no-bearer",
+            ),
+            proxy_decision_secret=secret,
+        )
+        client = TestClient(dashboard.app)
+
+        ok = client.post(PROXY_DECISION_PATH, json=_relay_decision_payload(), headers={DECISION_SECRET_HEADER: secret})
+        assert ok.status_code == 204
+        assert (
+            ok.headers[UPSTREAM_URL_HEADER] == f"https://iris-cw.oa.dev/proxy/t/tok/{ENDPOINT_PROXY_NAME}/v1/models?q=1"
+        )
+        assert "x-iris-upstream-authorization" not in ok.headers
+
+        unknown = client.post(
+            PROXY_DECISION_PATH, json=_relay_decision_payload(peer_id="nope"), headers={DECISION_SECRET_HEADER: secret}
+        )
+        assert unknown.status_code == 404

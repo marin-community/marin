@@ -2268,50 +2268,23 @@ def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> l
             federated_jobs_table.c.peer_id == requester_id,
         )
     ).all()
-    return [_received_endpoint_row(r) for r in rows if not _lease_expired(r.lease_deadline_ms, now)]
-
-
-def live_local_link_endpoints(tx: Tx, now: Timestamp) -> list[ReceivedEndpointRow]:
-    """Every live, locally-owned link-access endpoint on this cluster.
-
-    Reported to a syncing federation parent alongside its handed-off endpoints, so
-    the parent can mint a capability URL for a serving job started directly here
-    without a handoff. Scoped two ways: to link access, so a private endpoint never
-    leaves the cluster; and to locally-owned rows (``peer_id IS NULL``), so an
-    endpoint this cluster itself mirrored from another peer is never re-exported.
-    Expired leases are excluded, matching the endpoint registry's own reads.
-    """
-    rows = tx.execute(
-        select(
-            endpoints_table.c.endpoint_id,
-            endpoints_table.c.name,
-            endpoints_table.c.address,
-            endpoints_table.c.task_id,
-            endpoints_table.c.access,
-            endpoints_table.c.metadata_json,
-            endpoints_table.c.lease_deadline_ms,
-        ).where(
-            endpoints_table.c.peer_id.is_(None),
-            endpoints_table.c.access == int(EndpointAccess.ENDPOINT_ACCESS_LINK),
+    result: list[ReceivedEndpointRow] = []
+    for r in rows:
+        deadline = r.lease_deadline_ms
+        if deadline is not None and deadline <= now:
+            continue
+        result.append(
+            ReceivedEndpointRow(
+                endpoint_id=r.endpoint_id,
+                name=r.name,
+                address=r.address,
+                task_id=r.task_id,
+                access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE if r.access is None else int(r.access),
+                metadata=r.metadata_json,
+                lease_deadline=deadline,
+            )
         )
-    ).all()
-    return [_received_endpoint_row(r) for r in rows if not _lease_expired(r.lease_deadline_ms, now)]
-
-
-def _lease_expired(deadline: Timestamp | None, now: Timestamp) -> bool:
-    return deadline is not None and deadline <= now
-
-
-def _received_endpoint_row(r) -> ReceivedEndpointRow:
-    return ReceivedEndpointRow(
-        endpoint_id=r.endpoint_id,
-        name=r.name,
-        address=r.address,
-        task_id=r.task_id,
-        access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE if r.access is None else int(r.access),
-        metadata=r.metadata_json,
-        lease_deadline=r.lease_deadline_ms,
-    )
+    return result
 
 
 def changelog_rows_since(tx: Tx, requester_id: str, cursor_seq: int) -> list[ChangelogRow]:

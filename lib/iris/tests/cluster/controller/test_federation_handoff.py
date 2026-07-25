@@ -36,14 +36,7 @@ from iris.cluster.controller.service import (
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import (
-    LOCAL_ADMIN_SUBMITTER,
-    LOCAL_CLUSTER,
-    AttemptUid,
-    EndpointAccess,
-    JobName,
-    WellKnownAttribute,
-)
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName, WellKnownAttribute
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -62,7 +55,6 @@ from .conftest import (
     query_task,
     query_tasks_for_job,
     register_worker,
-    submit_direct_job,
     transition_task,
 )
 from .transition_driver import commit_dispatch_updates
@@ -479,56 +471,6 @@ def test_federation_sync_binds_the_requester_to_the_authenticated_peer(tmp_path,
             peer_service.federation_sync(
                 controller_pb2.Controller.FederationSyncRequest(requester_id="parent-cluster"), None
             )
-
-
-def register_endpoint_on_task(
-    peer_service: ControllerServiceImpl,
-    peer_state: ControllerTestState,
-    task_id: JobName,
-    name: str,
-    access: int,
-    address: str = "http://10.0.0.5:8000",
-) -> str:
-    """Register an endpoint of ``access`` on ``task_id``; return its id.
-
-    Works for a task on a handed-off (received) job or a locally-owned one — the
-    registry does not distinguish. Shared with the federation-proxy e2e tests.
-    """
-    response = peer_service.endpoint_service.register_endpoint(
-        controller_pb2.Controller.RegisterEndpointRequest(
-            name=name,
-            address=address,
-            task_id=task_id.to_wire(),
-            attempt_id=query_task(peer_state, task_id).current_attempt_id,
-            access=access,
-        ),
-        None,
-    )
-    return response.endpoint_id
-
-
-def test_federation_sync_absorbs_local_link_endpoints_but_not_private(tmp_path, log_client):
-    """A syncing parent absorbs this cluster's own link-access endpoints — a serving
-    job started here directly, never handed off — but never its private ones, and
-    without any accompanying job delta (only the endpoint crosses)."""
-    with ExitStack() as stack:
-        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        [task_id] = submit_direct_job(peer_state, "local-serve")
-        register_endpoint_on_task(peer_service, peer_state, task_id, "/serve/link", EndpointAccess.ENDPOINT_ACCESS_LINK)
-        register_endpoint_on_task(
-            peer_service, peer_state, task_id, "/serve/private", EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-        )
-
-        with identity_scope(VerifiedIdentity("parent", FEDERATION_PEER_ROLE)):
-            resp = peer_service.federation_sync(
-                controller_pb2.Controller.FederationSyncRequest(requester_id="parent"), None
-            )
-
-        names = {e.name for e in resp.endpoints}
-        assert "/serve/link" in names
-        assert "/serve/private" not in names
-        # Only the endpoint is absorbed; the local job itself is not reported.
-        assert [d.job_id for d in resp.deltas] == []
 
 
 def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):

@@ -267,6 +267,8 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
+        dashboard_url=cluster_config.dashboard_url,
+        federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,
     )
 

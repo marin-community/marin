@@ -364,18 +364,6 @@ class EndpointServiceImpl:
                 return row
         return None
 
-    def advertises_link_endpoint(self, name: str) -> bool:
-        """Whether ``name`` resolves to a live, locally-owned link-access endpoint.
-
-        Authorizes a federation parent's forwarded ``/proxy`` for a link endpoint
-        this cluster serves but never received as a handoff (see the inbound proxy
-        decision in the dashboard). A private endpoint, a mirrored (peer-owned) row,
-        or an expired lease is not a match, so a parent reaches only what a link
-        endpoint's "the URL is the credential" already exposes.
-        """
-        row = self.resolve_task_endpoint(name)
-        return row is not None and row.peer_id is None and row.access == EndpointAccess.ENDPOINT_ACCESS_LINK
-
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""
         results: list[controller_pb2.Controller.Endpoint] = []

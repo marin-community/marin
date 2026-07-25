@@ -435,6 +435,10 @@ message Controller {
   message MintEndpointTokenResponse {
     string token = 1;
     iris.time.Timestamp expires_at = 2;
+    // Fully-qualified capability URL the controller assembled for this token:
+    // a cluster-tagged parent URL when a public parent is configured, else the
+    // local origin. Empty when the controller has no public origin configured.
+    string capability_url = 3;
   }
 
   message RegisterEndpointResponse {

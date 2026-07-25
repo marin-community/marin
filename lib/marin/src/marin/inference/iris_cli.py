@@ -270,13 +270,17 @@ def _mint_and_print_capability_url(
     """
     resp = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
     hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    # The controller assembles the origin (a cluster-tagged parent URL when it has a
+    # public parent, else its local origin); fall back to a passed dashboard origin.
+    origin_url = resp.capability_url or (
+        f"{dashboard_url.rstrip('/')}{capability_path(endpoint, resp.token)}" if dashboard_url else ""
+    )
     click.echo("  Shared capability URL (token in the path — anyone with the URL can call it):")
-    if dashboard_url:
-        base_url = f"{dashboard_url.rstrip('/')}{capability_path(endpoint, resp.token)}/v1"
-        click.echo(f"    base_url   {base_url}")
+    if origin_url:
+        click.echo(f"    base_url   {origin_url}/v1")
         click.echo("    api_key    <any non-empty string>   (the URL already carries the credential)")
         click.echo(f"    expires    in {hours_left:.1f}h")
-        click.echo(f"    example    curl {base_url}/models")
+        click.echo(f"    example    curl {origin_url}/v1/models")
     else:
         # No public origin known (bare --controller); front the controller's
         # /proxy/t route for this to be reachable off-cluster.

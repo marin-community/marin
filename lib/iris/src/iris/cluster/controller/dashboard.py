@@ -94,6 +94,10 @@ class _FederationDecision:
     task_id: str | None
     local_upstream: str | None
     timeout_seconds: float | None
+    # The capability token, carried only on a relay so the parent can rebuild the
+    # child-side /proxy/t/<token>/<name> path. Absent from a native that predates
+    # the relay, and None on inbound/outbound.
+    token: str | None = None
 
 
 def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bool:
@@ -253,22 +257,33 @@ class ControllerDashboard:
                 PROXY_TIMEOUT_HEADER: str(decision.timeout_seconds or DEFAULT_PROXY_TIMEOUT_SECONDS),
             }
             if decision.direction == "inbound":
-                if decision.task_id is None or decision.local_upstream is None:
-                    return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
-                # A configured parent (already authenticated as a federation peer
-                # before this decision is reached) may forward to either an endpoint
-                # on a job it handed here — any access mode, gated on the received
-                # handle — or a link-access endpoint this cluster serves locally,
-                # even one it never received. A link endpoint already means "the URL
-                # is the credential", so admitting the forward adds no reach; a
-                # private endpoint stays gated on the handoff.
-                root = JobName.from_wire(decision.task_id).root_job
-                handoff_owned = self._federation_owner_check is not None and self._federation_owner_check(
-                    root, decision.peer_id
-                )
-                if not handoff_owned and not self._endpoint_service.advertises_link_endpoint(decision.encoded_name):
+                if (
+                    decision.task_id is None
+                    or decision.local_upstream is None
+                    or self._federation_owner_check is None
+                    or not self._federation_owner_check(
+                        JobName.from_wire(decision.task_id).root_job,
+                        decision.peer_id,
+                    )
+                ):
                     return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
                 headers[UPSTREAM_URL_HEADER] = decision.local_upstream
+                return Response(status_code=204, headers=headers)
+
+            if decision.direction == "relay":
+                # A child-minted capability URL routed through this public parent.
+                # Forward it verbatim to the child's proxy with no credential: the
+                # child owns and validates the token. relay_base is None for an
+                # unconfigured peer, so the relay only reaches a declared peer.
+                if self._federated_handoff is None or decision.token is None:
+                    return JSONResponse({"error": "federation relay unavailable"}, status_code=502)
+                base = self._federated_handoff.relay_base(decision.peer_id)
+                if base is None:
+                    return JSONResponse({"error": f"Peer '{decision.peer_id}' unavailable"}, status_code=404)
+                upstream = f"{base.rstrip('/')}/proxy/t/{decision.token}/{decision.encoded_name}/{decision.sub_path}"
+                if decision.query:
+                    upstream = f"{upstream}?{decision.query}"
+                headers[UPSTREAM_URL_HEADER] = upstream
                 return Response(status_code=204, headers=headers)
 
             if decision.direction != "outbound" or self._federated_handoff is None:

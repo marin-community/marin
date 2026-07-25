@@ -107,7 +107,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
@@ -301,7 +301,18 @@ class ControllerConfig:
     """This cluster's real federation identity (from the cluster config ``name``).
 
     Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
-    hands jobs off; unused otherwise."""
+    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
+    federation parent can relay it back here."""
+
+    dashboard_url: str = ""
+    """This cluster's public origin (cluster config ``dashboard_url``); the local origin
+    a minted capability URL uses when no public parent is configured."""
+
+    federation_public_parent: str = ""
+    """Public origin of the federation parent that fronts this cluster (cluster config
+    ``federation_public_parent``). Set on a child whose own origin is not world-visible:
+    a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
+    which relays it back here."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
@@ -494,6 +505,11 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            capability_url_config=CapabilityUrlConfig(
+                cluster_name=config.cluster_id,
+                local_origin=config.dashboard_url,
+                parent_origin=config.federation_public_parent,
+            ),
         )
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.

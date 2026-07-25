@@ -303,49 +303,6 @@ def test_register_terminal_task_raises(state):
     assert excinfo.value.code is Code.FAILED_PRECONDITION
 
 
-def test_advertises_link_endpoint_only_for_live_local_link(state):
-    """The inbound-forward authorization (a federation parent reaching an endpoint on
-    a job it never handed here) admits a live, locally-owned link endpoint and refuses
-    a private one, an endpoint merely mirrored from another peer, or an absent name."""
-    service = _service(state)
-    task, attempt = _live_task(state)
-    for name, access in (
-        ("/serve/link", EndpointAccess.ENDPOINT_ACCESS_LINK),
-        ("/serve/private", EndpointAccess.ENDPOINT_ACCESS_PRIVATE),
-    ):
-        service.register_endpoint(
-            controller_pb2.Controller.RegisterEndpointRequest(
-                name=name, address="h:1", task_id=task.to_wire(), attempt_id=attempt, access=access
-            ),
-            None,
-        )
-    with state._db.transaction() as cur:
-        cur.caches[EndpointsProjection].replace_remote_for_peer(
-            cur,
-            "otherpeer",
-            [
-                EndpointRow(
-                    endpoint_id="mirrored-1",
-                    name="/serve/mirrored",
-                    address="h:9",
-                    task_id=JobName.from_wire("/otheruser/otherjob/0"),
-                    metadata={},
-                    registered_at=Timestamp.now(),
-                    lease_deadline=Timestamp.now().add(Duration.from_minutes(10)),
-                    access=EndpointAccess.ENDPOINT_ACCESS_LINK,
-                )
-            ],
-        )
-
-    assert service.advertises_link_endpoint("/serve/link") is True
-    # The proxy-encoded form (``.`` for ``/``) resolves the same endpoint.
-    assert service.advertises_link_endpoint("serve.link") is True
-    assert service.advertises_link_endpoint("/serve/private") is False
-    # A mirrored link endpoint is not re-advertised — no transitive re-export.
-    assert service.advertises_link_endpoint("/serve/mirrored") is False
-    assert service.advertises_link_endpoint("/serve/absent") is False
-
-
 def test_system_endpoints_resolve_and_list(state):
     svc = _service(state)
     svc.register_system_endpoint("/system/log-server", "logs:9000")
@@ -462,39 +419,6 @@ def test_mint_endpoint_token_by_owner(state, mock_controller, log_client, tmp_pa
     identity = auth.jwt_manager.verify(resp.token)
     assert identity.audience == "/serve/foo"
     assert resp.HasField("expires_at")
-
-
-def test_mint_endpoint_token_for_absorbed_remote_endpoint(state, mock_controller, log_client, tmp_path):
-    """The parent mints a capability token for a link endpoint absorbed from a child —
-    a job it never ran, so there is no backing job/task row — authorized by the child
-    endpoint's owner and bound to the endpoint's wire name for the parent's proxy."""
-    service, _endpoint_service, auth = _mint_service(state, mock_controller, log_client, tmp_path)
-    remote_task = JobName.from_wire("/alice/serve-job/0")
-    with state._db.transaction() as cur:
-        cur.caches[EndpointsProjection].replace_remote_for_peer(
-            cur,
-            "cw",
-            [
-                EndpointRow(
-                    endpoint_id="absorbed-1",
-                    name="/serve/foo",
-                    address="10.1.2.3:8000",
-                    task_id=remote_task,
-                    metadata={},
-                    registered_at=Timestamp.now(),
-                    lease_deadline=Timestamp.now().add(Duration.from_minutes(10)),
-                    access=EndpointAccess.ENDPOINT_ACCESS_LINK,
-                )
-            ],
-        )
-    # The absorbed endpoint has no backing job/task row on the parent.
-    assert query_task(state, remote_task) is None
-
-    with identity_scope(VerifiedIdentity(user_id=remote_task.user, role="user")):
-        resp = service.mint_endpoint_token(_mint_request("/serve/foo"), None)
-
-    identity = auth.jwt_manager.verify(resp.token)
-    assert identity.audience == "/serve/foo"
 
 
 def test_mint_endpoint_token_denies_non_owner(state, mock_controller, log_client, tmp_path):

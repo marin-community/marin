@@ -5,8 +5,8 @@
 
 Builds a pre-migration ``endpoints`` table carrying the foreign keys to
 ``jobs``/``tasks`` and asserts the migration rebuilds it without them — preserving
-rows and every index — so a federation parent can store an endpoint absorbed from a
-child (whose job/task rows do not exist locally). Also asserts idempotency and a
+rows and every index — so an endpoint row no longer needs a live ``jobs``/``tasks``
+target and its lifecycle is governed by its lease. Also asserts idempotency and a
 no-op on a DB already without the FKs.
 """
 
@@ -114,8 +114,8 @@ def test_migration_0048_drops_the_job_fk_and_keeps_rows_and_indexes():
         "idx_endpoints_peer_id",
     }
 
-    # An endpoint absorbed from a child — job/task ids that name no local row — now
-    # inserts even with FK enforcement on, which the old FK would have rejected.
+    # An endpoint whose job/task ids name no live local row now inserts even with FK
+    # enforcement on, which the old FK would have rejected.
     _insert_endpoint(conn, "e2", "/serve/remote", "/child/job", "/child/job/0", "cw")
     conn.commit()
     assert conn.execute("SELECT COUNT(*) FROM endpoints").fetchone()[0] == 2

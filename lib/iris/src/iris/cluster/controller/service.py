@@ -21,6 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
@@ -1029,6 +1030,28 @@ class PendingKick:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins for fully-qualifying a minted endpoint's capability URL.
+
+    With ``parent_origin`` and ``cluster_name`` set (a child fronted by a public
+    parent), a minted URL is the cluster-tagged parent form the parent relays; with
+    only ``local_origin`` set, the plain local form; with neither, the response
+    carries no URL and the caller prints just the path.
+    """
+
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
+
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
+
+
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
@@ -1124,6 +1147,7 @@ class ControllerServiceImpl:
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        capability_url_config: CapabilityUrlConfig | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
@@ -1138,6 +1162,7 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
@@ -2947,6 +2972,7 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token,
             expires_at=timestamp_to_proto(expires_at),
+            capability_url=self._capability_url_config.build(row.name, token),
         )
 
     def get_current_user(
@@ -3437,26 +3463,15 @@ class ControllerServiceImpl:
     def _federation_endpoint_snapshot(
         self, q, requester_id: str, now: Timestamp
     ) -> list[controller_pb2.Controller.FederationEndpoint]:
-        """The requester's full current endpoint set: its RECEIVED-job endpoints plus
-        this cluster's locally-owned link-access endpoints.
+        """The requester's full current endpoint set across its RECEIVED jobs.
 
-        The RECEIVED set carries any access mode (the requester owns those jobs); the
-        local set is link-access only, so a parent can mint a capability URL for a
-        job started directly here without a handoff, and no private endpoint leaves
-        the cluster. Both are sent every sync so the parent set-replaces; a
-        re-register, access change, or lease expiry self-heals within one sync
-        interval. Lease time is reported as remaining duration (parent adds it to its
-        own clock), avoiding cross-cluster skew. A link endpoint under a received
-        root appears in both reads and is emitted once (deduped by endpoint_id).
+        Sent every sync so the parent set-replaces; a re-register, access change, or
+        lease expiry on this peer self-heals within one sync interval. Lease time is
+        reported as remaining duration (parent adds it to its own clock), avoiding
+        cross-cluster skew.
         """
         endpoints: list[controller_pb2.Controller.FederationEndpoint] = []
-        seen: set[str] = set()
-        received = reads.live_endpoints_for_requester(q, requester_id, now)
-        local_links = reads.live_local_link_endpoints(q, now)
-        for e in [*received, *local_links]:
-            if e.endpoint_id in seen:
-                continue
-            seen.add(e.endpoint_id)
+        for e in reads.live_endpoints_for_requester(q, requester_id, now):
             ep = controller_pb2.Controller.FederationEndpoint(
                 endpoint_id=e.endpoint_id,
                 name=e.name,
