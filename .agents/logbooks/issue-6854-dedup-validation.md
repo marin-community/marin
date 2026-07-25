@@ -524,3 +524,46 @@ statistics for performance comparisons.
 - This passes the direct-pair semantic gate only. The 755,281-pair production
   review remains unlaunched until its restart-safe output shards, exact
   coverage checks, and oversized-document path are tested and calibrated.
+
+### 2026-07-25T07:50:00Z — restart-safe and chunked semantic gates passed
+
+- Commit `2c9e78132` adds deterministic decision-range batches, outcome
+  Parquet files, completion markers written last, and strict resume
+  validation. A completed batch is accepted only after rechecking its model,
+  input, range, case-key hash, configuration hash, byte size, SHA-256,
+  evidence-derived outcomes, identity, and coverage. Direct pairs and
+  oversized pairs share the same outcome schema.
+- Oversized pairs are reviewed by overlapping 24,000-character member chunks.
+  Every member character is covered. The canonical is completely indexed in
+  24,000-character chunks, and exact five-gram retrieval plus positional
+  fallbacks select four candidate chunks for each member chunk. A local
+  pathological-pair probe indexed 77 canonical chunks and matched 77 member
+  chunks for 1,753,339 versus 1,767,339 characters in 4.414 seconds, with
+  21.0 MiB peak traced memory.
+- Chunk calibration v1 resolved and classified 7/10 manual pairs correctly.
+  The three unresolved expected false positives all contained one or more
+  independent, unanimous false-positive chunks. Commit `f1c7f26d6` corrected
+  aggregation so any unanimously distinct member chunk proves deletion loss;
+  a true-duplicate label still requires every member chunk to resolve as
+  represented. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-chunk-calibration-qwen35-35b-a3b-20260725-v1/calibration.json`.
+- Chunk calibration v2 then reached 9/10 correct and resolved. Its sole
+  unresolved pair was the known low-value college/career template: the
+  loss-oriented pass returned a high-confidence true duplicate, while the
+  duplication-oriented pass returned a low-confidence false positive despite
+  describing the slot substitutions as nonsubstantive. Commit `097ad75b3`
+  adds exactly one independently framed tiebreak only for unresolved units;
+  consensus still requires two non-low-confidence votes with the same label.
+  Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-chunk-calibration-qwen35-35b-a3b-20260725-v2/calibration.json`.
+- Chunk calibration v3 passed all ten manually labeled pairs: 10/10 correct,
+  10/10 resolved, and complete coverage of 24 member chunks. It made 51 model
+  requests: 48 initial independent judgments and three targeted tiebreaks.
+  The root Iris job
+  `/rav/datakit-6854-semantic-chunk-calibration-qwen35-35b-a3b-v3`
+  succeeded. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-chunk-calibration-qwen35-35b-a3b-20260725-v3/calibration.json`.
+- The four semantic test modules pass all 29 focused tests. The touched files
+  pass `./infra/pre-commit.py`, and `uv run pyrefly` reports zero errors. The
+  remaining launch gate is a live production-runner smoke that writes and
+  revalidates its Parquet/checkpoint contract on object storage.
