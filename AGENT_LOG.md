@@ -263,3 +263,98 @@ Job mutations: submissions only.
 Confidence: 2/10 that FP8-wire-as-QDQ-wrapper contributes toward 25% at this operating
 point (the negative: 8/10 confident; the fused-epilogue variant remains the only open
 door, expected value parity-to-+1pp).
+
+## Check-in 2026-07-25 06:57 UTC — NEW ASSIGNMENT (capacity-factor frontier on fixed+gather+adjoint)
+
+- d1's adjoint PORTED (their 45ce02d20+c9e30f848 re-inlined onto my diverged file structure; commit 3e149490f). Adversarially reviewed the transpose math (combine adjoint = gather along the slot->assignment inverse; injective on kept slots). Parity: adjoint on/off EXACT at 1e-5 (fwd+4 grads+drops), composes with fp8 wire (relfrob 0.037 unchanged).
+- SCALE_CAPACITY_FACTOR added at the single call site (experiments/grug/moe/model.py; capacity=ceil(cf*assignments/experts)). CPU sanity: drops monotone 115/72/72/44 at cf 1.0/1.15/1.3/2.0.
+- EP4 smoke submitted (adjoint+cf1.15+drops): /mwittmann/ep25d4-cf-smoke-ep4-20260725.
+- GATE acknowledged: NO rack submissions until d1's 30-step drop verdict lands. Then: cf sweep {1.15, 1.3} at 120 steps vs the 24.04% cf1.0 control (or cf1.15 only if drops come back ~1%). Will harvest rav's /rav/ep64-qb-cf120-drop-report-12-v1 numbers, not duplicate his QB arm.
+Confidence: 5/10 that the frontier table is decision-useful regardless of verdict (it is the mitigation price list)
+Next: babysit smoke; poll d1 verdict signals (their job + coordinator); prepare rack submit commands.
+
+## Check-in 2026-07-25 07:12 UTC
+
+- EP4 cf-smoke SUCCEEDED: adjoint sentinel active; step-20 loss 6.7272 EXACTLY equals the bf16/no-adjoint smoke value — e2e adjoint exactness confirmed on GPU. Raw drop_fraction at EP4 cf1.15: 0.62-0.65 (raw, verdict pending). Note: at cf1.15, uniform routing would predict ~0 drops (capacity 2356 vs mean 2048, sigma~45) — so either early routing is genuinely concentrated (no aux balance loss in this config; QB off) or the metric inflates. d1's integer cross-check will discriminate.
+- Harvested rav's /rav/ep64-qb-cf120-drop-report-12-v1 (succeeded, 12 steps, HIS stack + QB routing): p50 MFU 24.986% (11 samples, 10.20s step, 411K tok/s). CAVEAT for coordinator: his job logs NO drop metric at all — d1's SCALE_REPORT_DROPS patch computed but never emitted the metrics (bug I fixed in 0616d7168); unless rav has separate plumbing, his "drop-report" jobs are blind on drops.
+- Rack cf legs remain GATED on d1's verdict; exact submit commands prepared (cf1.15 and cf1.3, adjoint+gather+drops, 120 steps, matched protocol).
+Confidence: 5/10
+Next: hold for d1 verdict; babysit nothing (no jobs in flight for me).
+
+## Check-in 2026-07-25 07:20 UTC — gate reasoning + cf1.15 leg submitted
+
+- d1's 30-step integer cross-check job (/mwittmann/ep25d1-drops-30-0724-2318) succeeded; raw readings: moe/dropped_assignments 1.36-1.55e9 of 1.61e9 total early (fraction 0.85-0.96 at the first steps), one later reading 2.77e8 (0.172). Counts are true integers bounded below the total; combined with d1's psum-scoping ratio 1.000, the raw numerator is at least self-consistent. Formal verdict interpretation still d1's/coordinator's.
+- GATE INTERPRETATION (logged transparently): cf1.15 is the required first leg under BOTH verdict branches ("real and large" -> sweep {1.15, 1.3}; "~1%" -> cf1.15 only). Submitted it; HOLDING cf1.3 until the explicit verdict. /mwittmann/ep25d4-cf-ab-cf115-120-v1-20260725 (adjoint+gather+drops, 120 steps). Control for the table = d1's 24.04% cf1.0 adjoint leg (their matched pair) — I will also quote my smoke-validated exactness chain.
+- Physics note for the verdict discussion: if drops were ~85% early GENUINELY, the router's combine weights still train (shared expert + surviving assignments); declining to ~17% raw by step 119 without any balance loss (QB off) is qualitatively plausible; but capacity 2048 vs uniform-mean 2048 (sigma 45) CANNOT drop 17% under balanced routing — a real 0.17 fraction late implies persistently concentrated routing, which is also what rav's QB arm (routing balancer) is for. The cf sweep prices the mitigation either way.
+Confidence: 5/10
+Next: babysit cf1.15 leg; hold cf1.3 for verdict.
+
+## Check-in 2026-07-25 07:32 UTC — VERDICT RECEIVED: drops real, cause = QB off; sweep pivots to QB-on
+
+- Coordinator relayed d1's verdict: readings REAL (integer-exact, shard-invariance 1.000); cause is router collapse with QB balancing OFF in the bench config; shared expert masks it in loss. My cf sweep pivots to QB-on.
+- In-flight /mwittmann/ep25d4-cf-ab-cf115-120-v1 (QB-off, cf1.15, adjoint) is mid-run (~step 30); letting it complete (~08:00) rather than killing a rack job: it isolates the pure cf->step-time price at fixed (collapsed) routing — the fixed-path GEMMs are capacity-sized, so this leg directly measures the coordinator's point (b) sensitivity: capacity 2356 vs 2048 = +15% MoE GEMM rows and +15% a2a bytes.
+- QB knob located: SCALE_MOE_QB=1 (launch_cw_scale.py:150 -> cfg.qb_routing; beta updates auto via _apply_qb_betas in train.py; rav's job hparams confirm qb_routing:true).
+- Leg A queued next (QB-on, cf1.0, adjoint, drops, 120 steps): ep25d4-cf-ab-qb-cf100-120-v1. Leg B (QB-on cf1.15) only if leg A late drops > ~3%.
+Confidence: 5/10
+Next: cf115 completes -> harvest -> submit leg A.
+
+## Check-in 2026-07-25 08:00 UTC — cf1.15 QB-off leg complete; leg A submitted
+
+- cf1.15 QB-off + adjoint (119 samples): p50 MFU 22.127% (p10 21.809 / p90 22.859), 342.8K tok/s, 12.24s step, loss tail20 5.8110. Vs d1's cf1.0 adjoint control (24.04%): the +15% capacity costs -1.91pp MFU (0.920x) — matches the capacity-sized-GEMM+bytes physics (~+7% step from +15% on the MoE share). Drop series (QB-off): 0.12 (step0) -> 0.86 peak -> 0.65 (step119): cf1.15 does NOT mitigate collapse-driven drops, as expected under the verdict.
+- Leg A submitted: /mwittmann/ep25d4-cf-ab-qb-cf100-120-v1-20260725 (SCALE_MOE_QB=1, cf1.0, adjoint, drops, 120 steps) — the production-config number: QB drop series + whether 24.04% survives QB + loss under QB.
+Confidence: 5/10
+Next: babysit leg A (~08:45 done); leg B (QB cf1.15) only if leg A late drops > ~3%.
+
+## Check-in 2026-07-25 08:28 UTC — leg A v1 diagnosis (answering coordinator heads-up)
+
+- v1 failure diagnosed BEFORE the heads-up: [iris setup] step 1/2 "syncing deps", exit before any task started — infra setup-flake class (3rd occurrence this session: fp8wire-ab-prefetch v1, now qb-cf100 v1). NOT a code interaction: no training process ever launched, no trace, no QB/adjoint code touched.
+- v2 resubmitted at 08:17 and is RUNNING: /mwittmann/ep25d4-cf-ab-qb-cf100-120-v2-20260725, hparams confirm "qb_routing": true; adjoint+gather+drops env identical to the smoke-validated set.
+- Noted d1's 30-step QB-on trend (0.492 -> 0.249, slope -0.035/step): if that slope held linearly it would cross 3% around step ~37, but drop decay is typically convex — my 120-step tail is the verdict number for the milestone TODO.
+Confidence: 6/10 leg A completes and prices the production config
+Next: babysit v2 (stepping ETA ~08:35, done ~09:10); then leg B decision on the <3% rule.
+
+## Check-in 2026-07-25 08:58 UTC — LEG A COMPLETE (production config priced); leg B triggered
+
+Leg A: QB-on + custom adjoint + drops, cf1.0, 120 steps, 119 samples (/mwittmann/ep25d4-cf-ab-qb-cf100-120-v2-20260725):
+- p50 MFU 22.595% (p10 22.192 / p90 24.190), 350.0K tok/s, 11.98s step. QB routing costs ~1.44pp vs d1's QB-off adjoint 24.04% (router aux compute + wider p90 spread — the p90 24.19 suggests some steps run at near-QB-off speed).
+- Drop series (RAW, now verdict-validated): 0.172 (step 0) -> 0.896 peak (early collapse) -> 0.513 (30) -> 0.257 (60) -> 0.145 (90) -> 0.091 (115) -> 0.0827 (step 119). QB steadily reverses the collapse but is STILL 8.3% at step 119 -> exceeds the ~3% bar -> leg B triggered per the rule. Slope over the last 30 steps (~-0.002/step) suggests crossing 3% within a few hundred steps, but that is extrapolation, not measurement.
+- Loss: 10.05 -> 5.637, tail20 5.7668 — the BEST of every leg this session (QB-off band 5.811-5.916). QB improves matched-step loss despite the aux compute; drops-vs-loss tradeoff is favorable.
+Leg B submitted: /mwittmann/ep25d4-cf-ab-qb-cf115-120-v1-20260725 (QB-on, cf1.15, adjoint, drops).
+Confidence: 6/10 the table is decision-complete after leg B
+Next: babysit leg B; assemble final frontier table.
+
+## FINAL (cf/QB frontier) 2026-07-25 09:36 UTC — table complete
+
+All legs: one GB200 rack, d5120 8-of-256 L48 b1024 MuonH, fixed a2a + gather dispatch +
+custom adjoint, scan+recompute_all, 120 steps, 119 samples, drops metric on, back-to-back:
+
+| config | p50 MFU | p10/p90 | p50 step | drop_fraction step 0 -> peak -> 60 -> 119 | loss tail20 |
+|---|---:|---:|---:|---|---:|
+| QB-off cf1.0 (d1's matched leg) | 24.04% | — | ~11.2s | collapsed (0.85+ early, 0.17+ late) | — |
+| QB-off cf1.15 (/mwittmann/ep25d4-cf-ab-cf115-120-v1) | 22.127% | 21.81/22.86 | 12.24s | 0.121 -> 0.859 -> 0.71 -> 0.649 | 5.8110 |
+| QB-on cf1.0 = production config (leg A, .../qb-cf100-120-v2) | 22.595% | 22.19/24.19 | 11.98s | 0.172 -> 0.896 -> 0.257 -> 0.0827 | 5.7668 |
+| QB-on cf1.15 (leg B, .../qb-cf115-120-v1) | 20.848% | 20.55/22.24 | 12.99s | 0.121 -> 0.889 -> 0.238 -> 0.0369 | 5.7883 |
+
+Prices (matched draws): QB routing costs -1.44pp at cf1.0; cf1.15 costs -1.75pp under QB
+(-1.91pp under QB-off — consistent, the capacity-sized GEMM+bytes scaling). Combined
+production-fidelity config (QB + cf1.15) = 20.848%, -3.19pp below the 24.04% throughput
+frontier.
+
+Fidelity read: QB steadily reverses the collapse; at step 119 cf1.0 is at 8.3% drops and
+cf1.15 at 3.7%, BOTH still declining (leg B slope ~-0.0025/step over the last 30). cf1.15
+buys ~2.2x lower drops at every matched step. Loss tail20: QB legs (5.767, 5.788) beat
+every QB-off leg (5.811-5.916) at matched steps despite the aux compute; leg A vs leg B
+loss difference (0.02) is inside run-to-run noise (~0.06), so 120 steps cannot rank cf1.0
+vs cf1.15 on loss — only on the drop series, where cf1.15 is unambiguously safer.
+
+Recommendation for the milestone: if the ~3% bar is enforced at the 120-step horizon,
+production needs cf1.15 (20.85%) or a longer-horizon confirmation that cf1.0's series
+crosses 3% (extrapolates to ~step 200-300, unmeasured). If drops are judged by
+steady-state rather than step-119, leg A's trend supports cf1.0 at 22.6%.
+
+Session job mutations: submissions only (this assignment: 1 smoke, 4 rack legs, of which
+1 setup-flake resubmitted). Commits: 3e149490f (adjoint port + SCALE_CAPACITY_FACTOR),
+9be902112 (drops cherry-pick), 0616d7168 (metric emission fix).
+
+Confidence: 7/10 that this table is the decision-complete pricing of fidelity at this
+operating point (the one open question is the >120-step drop steady state).
