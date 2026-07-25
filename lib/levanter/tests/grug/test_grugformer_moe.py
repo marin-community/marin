@@ -635,19 +635,23 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
 
 @pytest.mark.parametrize(
-    ("implementation", "fixed_a2a"),
+    ("implementation", "fixed_a2a", "precomputed_slots"),
     [
-        ("ring", False),
-        ("ragged_all_to_all", False),
-        ("ragged_all_to_all", True),
+        ("ring", False, False),
+        ("ragged_all_to_all", False, False),
+        ("ragged_all_to_all", True, False),
+        ("ragged_all_to_all", True, True),
     ],
 )
 def test_moe_ep_path_lowers_on_abstract_mesh(
-    implementation: MoeImplementation, fixed_a2a: bool, monkeypatch: pytest.MonkeyPatch
+    implementation: MoeImplementation,
+    fixed_a2a: bool,
+    precomputed_slots: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     if fixed_a2a:
         monkeypatch.setenv("SCALE_A2A_FIXED", "1")
-        monkeypatch.setenv("SCALE_A2A_CHUNKS", "2")
+        monkeypatch.setenv("SCALE_A2A_CHUNKS", "1" if precomputed_slots else "2")
         monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
 
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
@@ -674,6 +678,11 @@ def test_moe_ep_path_lowers_on_abstract_mesh(
             dtype=jnp.float32,
             sharding=NamedSharding(mesh, P(("data", "expert"), None)),
         )
+        dispatch_slots = jax.ShapeDtypeStruct(
+            shape=(tokens, topk),
+            dtype=jnp.int32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
         w_up_gate = jax.ShapeDtypeStruct(
             shape=(num_experts, hidden_dim, 2 * intermediate_dim),
             dtype=jnp.float32,
@@ -685,7 +694,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(
             sharding=NamedSharding(mesh, P("expert", None, None)),
         )
 
-        def f(x, sel, cw, up_gate, down):
+        def f(x, sel, cw, up_gate, down, slots):
             return moe_mlp(
                 x,
                 sel,
@@ -695,12 +704,13 @@ def test_moe_ep_path_lowers_on_abstract_mesh(
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
                 mesh=mesh,
+                dispatch_slots=slots if precomputed_slots else None,
             )
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
         lowered = (
             jax.jit(f)
-            .trace(x, selected_experts, combine_weights, w_up_gate, w_down)
+            .trace(x, selected_experts, combine_weights, w_up_gate, w_down, dispatch_slots)
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
