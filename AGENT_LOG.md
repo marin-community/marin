@@ -358,3 +358,71 @@ Session job mutations: submissions only (this assignment: 1 smoke, 4 rack legs, 
 
 Confidence: 7/10 that this table is the decision-complete pricing of fidelity at this
 operating point (the one open question is the >120-step drop steady state).
+
+## Check-in 2026-07-25 09:40 UTC — final leg submitted (350-step QB cf1.0 drop series)
+
+- /mwittmann/ep25d4-qb-cf100-drops-350-v1-20260725: QB-on, cf1.0, adjoint, drops, 350 steps, DISABLE_CHECKPOINT, operating point. Settles cf1.0-vs-cf1.15: does the drop series cross 3% by steady state, and where does it level off. ETA ~85-90 min (setup+compile+350x~12s).
+- After it lands: tail series (250-350), p50 MFU (expect ~22.6), loss; then final session wrap and stand down.
+Confidence: 7/10
+Next: babysit final leg.
+
+## Check-in 2026-07-25 10:20 UTC
+
+- Final leg mid-run (window stats): p50 MFU 22.045%, 12.28s step, loss down to 5.05 (window is roughly steps 200-260). Current drop_fraction reading 0.1254 — NOTE: higher than leg A's step-119 value (0.083); if this holds in the step-indexed series, the decline is NOT monotone across runs/draws and the 3%-by-300 extrapolation is in doubt. Will report the exact step-indexed 250-350 tail at completion.
+Confidence: 7/10 (measurement completing regardless of which way the answer goes)
+Next: continue babysitting (~11:05 ETA).
+
+## FINAL LEG RESULT 2026-07-25 11:10 UTC — 350-step QB cf1.0 drop series: does NOT cross 3%
+
+/mwittmann/ep25d4-qb-cf100-drops-350-v1-20260725 (succeeded, 349 measured samples):
+- p50 MFU 22.002% (p10 21.827 / p90 22.931), 340.8K tok/s, 12.31s step — reproduces the
+  22.6% leg-A number within run/draw variance (-0.6pp on this draw).
+- Loss 10.07 -> 3.335 (tail20 3.3434), descending healthily throughout.
+- Step-indexed drop_fraction: 0.172(0) 0.885(5, peak) 0.524(30) 0.271(60) 0.233(90)
+  0.175(119) 0.125(150) 0.126(200) 0.089(250) 0.077(275) 0.070(300) 0.066(325) 0.064(349).
+  Tail 250-349: mean 0.0732, last-10 mean 0.0649, still declining but DECELERATING
+  (~-0.001/step at the end; halving time ~150 steps and growing).
+- VERDICT: cf1.0 under QB levels toward ~6% and does NOT cross the ~3% bar by step 350;
+  the "crossing at step 200-300" extrapolation from the 120-step leg is falsified. Also
+  note QB run-to-run variance: this draw sat at 0.175 at step 119 where leg A sat at
+  0.083 — leg A was a favorable draw, this one is slower to balance.
+- Production recommendation: under the ~3% fidelity bar, take QB + cf1.15 (20.85% p50;
+  3.7% drops at step 119 on a mid-speed draw and declining faster than cf1.0) — or invest
+  in QB tuning/faster balancing before betting on cf1.0's 22.6%.
+
+## SESSION WRAP (ep25-d4, all three directions) 2026-07-25 11:12 UTC
+
+Directions worked, in order, all at the GB200 EP64 operating point (d5120 8-of-256 L48
+b1024 MuonH, fixed a2a, 2.5 PF/s denominator, 119+ samples per leg, matched draws):
+
+1. STRUCTURAL OVERLAP (pipelined decomposition of the fixed a2a) — CONFIDENT NEGATIVE.
+   Rotation (63 round-robin ppermutes, SCALE_A2A_ROTATE): 11.138% vs 20.594% control
+   (-9.46pp; sequential pairwise permutes forfeit NCCL a2a's concurrent exchanges;
+   group-size-invariant). Prefetch reorder (SCALE_A2A_PREFETCH): 20.579% (exact null —
+   XLA does not exploit freed dataflow). With d3's token-chunk -1.96pp, dataflow
+   restructuring is closed three ways: overlap on this stack is scheduler-gated.
+2. FP8 WIRE on the permutation legs (SCALE_A2A_FP8_WIRE, e4m3/e5m2, per-token scales) —
+   CONFIDENT NEGATIVE on speed, clean on numerics: 18.609% vs 20.627% (-2.02pp; QDQ
+   overhead ~2x the maximum possible byte saving in-rack; the H100 1.53x win was an
+   IB-regime result). Loss parity clean; drop parity by construction. Only open door:
+   fused quantize/dequant epilogues, expected parity-to-+1pp.
+3. CF/QB FRONTIER on fixed+gather+adjoint (ported d1's adjoint; SCALE_CAPACITY_FACTOR;
+   SCALE_MOE_QB): QB-off cf1.0 24.04% (collapsed routing, up to 0.86 drops) / QB cf1.0
+   22.595% / QB cf1.15 20.848% / QB-off cf1.15 22.127%. QB costs -1.44pp and fixes
+   collapse; cf1.15 costs -1.75pp and halves drops. 350-step extension: QB cf1.0 levels
+   at ~6.4% drops (does NOT reach 3%), so the fidelity-compliant operating point is
+   QB + cf1.15 at ~20.8%, leaving ~4.2pp between the honest production config and 25%.
+
+Durable code on agent/ep25-d4-pipelined (9 commits, never pushed): gather-dispatch
+reconstruction, rotation, prefetch, fp8 wire, adjoint port, SCALE_CAPACITY_FACTOR,
+SCALE_REPORT_DROPS emission fix, kernel parity tests for every gate (all passing at 1e-5
+or documented fp8 tolerances, all with forced-nonzero drop-parity checks).
+
+Net contribution to the 25% goal: three rigorous negatives that close the a2a-overlap and
+wire-dtype avenues, the fidelity price list (QB, cf) with the 350-step steady-state
+measurement, and the finding that the throughput frontier (24.04%) and the fidelity bar
+(~3% drops) are currently ~3.2pp apart — closing THAT gap (faster QB balancing, or
+drop-tolerant training evidence) is now the highest-leverage fidelity work.
+
+Job mutations across the session: submissions only (4 smokes/probes, 9 rack legs, 3 iris
+setup flakes resubmitted); zero stops/kills/kicks. Standing down.
