@@ -738,3 +738,17 @@ statistics for performance comparisons.
   positives and 387 true duplicates. All 12 run pods remain Ready with zero
   restarts. The artifact prefix remains
   `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-review-100b-qwen35-35b-a3b-20260725-v1/batches/`.
+
+### 2026-07-25T12:04:00Z — semantic review reaches 2,432 verified pairs
+
+- Partition p0 completed five additional ranges through 1920:2048 and
+  advanced to 2048:2176. Partition p3 completed range 256:384 and advanced to
+  384:512. Independent object-store audits passed for all six new shards.
+- The new 768 baseline pairs contain 447 false positives and 321 true
+  duplicates. Their 2,645 model judgments were all valid first responses, with
+  zero retries, zero invalid outputs, and zero unresolved outcomes. The five
+  p0 batches were nearly all direct review; p3's batch contained 14 chunked
+  pairs and accounted for 1,204 judgments.
+- Across 19 durable checkpoints, all 2,432 baseline pairs resolved: 1,724 false
+  positives and 708 true duplicates. All run components remain Ready with zero
+  restarts.
