@@ -283,43 +283,50 @@ access is carved out (allow the RFC1918 ranges at a higher priority) or confirme
 unused. Without any deny rule the port is still not internet-reachable (no public
 allow rule exists); the deny only makes that guarantee explicit.
 
-## Capability-URL proxy (open only `/proxy/t/*` off-cluster)
+## Capability-URL proxy
 
 By default the whole controller sits behind IAP, so an off-cluster caller (e.g. a
 Daytona/Modal sandbox running an agent harness) cannot reach a registered
 endpoint through the controller proxy. IAP is all-or-nothing per backend — it
 authenticates *every* request to a backend or none — so it can't "attach the
 caller's identity when present, else pass through anonymous" on a single path.
-The `token-proxy` stage works around that by opening only the *capability-URL*
-path `/proxy/t/*` past IAP, leaving the dashboard, `/auth/*`, the RPC mounts, and
-every identity-gated `/proxy` path (including the dashboard's own
-`/proxy/system.log-server/…` log fetch) IAP-gated:
+The `token-proxy` stage works around that by opening only the local and
+federated *capability-URL* shapes past IAP:
+
+- `/proxy/t/**`
+- `/proxy/*/t/**`, where `*` is one federated child-cluster segment
+
+The dashboard, `/auth/*`, the RPC mounts, and every identity-gated `/proxy` path
+(including the dashboard's own `/proxy/system.log-server/…` log fetch) remain
+IAP-gated:
 
 ```
-                       ┌─ path /proxy/t/*  → iris-<cluster>-proxy-be  (IAP OFF) ─┐
+                       ┌─ capability route → iris-<cluster>-proxy-be  (IAP OFF) ─┐
 client → GCLB (:443) → URL map                                                    ├→ same NEG → controller VM:10000
-                       └─ default          → iris-<cluster>-be        (IAP ON) ──┘
+                       └─ default           → iris-<cluster>-be        (IAP ON) ──┘
 ```
 
 A **capability URL** carries a scoped endpoint token in its path —
 `/proxy/t/<token>/<endpoint>/<sub_path>` — so possession of the URL *is* the
-credential (gist-style: if you have the link, it works). No auth header or cookie
-is needed. The native Iris listener lifts the token from the path and verifies
-that it is scoped to that endpoint and unexpired before forwarding. Mint one
-with `iris endpoints mint <name>` (or let `marin-serve
---access link` print the ready-to-use URL at launch).
+credential (gist-style: if you have the link, it works). A federated parent adds
+one child-cluster segment before the capability marker:
+`/proxy/<cluster>/t/<token>/<endpoint>/<sub_path>`. The route template requires
+the `t` marker in both forms. No auth header or cookie is needed; the native
+Iris listener verifies that the token is scoped to that endpoint and unexpired
+before forwarding. Mint one with `iris endpoints mint <name>` (or let
+`marin-serve --access link` print the ready-to-use URL at launch).
 
 The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP disabled)
-on the same NEG and health check the `backend` stage already created — no new NEG,
-no new controller — and a URL-map path rule routing `/proxy/t` and `/proxy/t/*` to
-it. Everything else on the host keeps flowing to the IAP-gated backend, so the
-browser's IAP identity still reaches PRIVATE endpoints and the dashboard's log
-viewer. The controller's native listener is the sole gate for the capability
-path; it needs no firewall or IAP-admin authority, and this admin-run stage is
+on the same NEG and health check the `backend` stage already created—no new NEG,
+no new controller—and a URL-map path-template route for the two capability
+shapes. Everything else on the host keeps flowing to the IAP-gated backend, so
+the browser's IAP identity still reaches PRIVATE endpoints and the dashboard's
+log viewer. The controller's native listener is the sole gate for the capability
+route; it needs no firewall or IAP-admin authority, and this admin-run stage is
 the only thing that touches the LB.
 
 `deploy` runs `token-proxy` by default (it reuses the cluster's existing NEG +
-health check), so a plain deploy or re-deploy stands up the `/proxy/t` opening
+health check), so a plain deploy or re-deploy stands up the capability opening
 idempotently:
 
 ```bash
@@ -334,18 +341,19 @@ uv run lib/iris/scripts/iap_gclb.py deploy marin-dev --domain iris-dev.oa.dev \
 uv run lib/iris/scripts/iap_gclb.py token-proxy marin-dev --domain iris-dev.oa.dev
 ```
 
-`token-proxy` is idempotent (a no-op once the backend + path rule exist).
-`teardown` removes the IAP-free backend and its `/proxy/t/*` rule along with the
+`token-proxy` is idempotent. It also migrates the former local-only
+`/proxy/t/*` path rule to the path-template route.
+`teardown` removes the IAP-free backend and its capability route along with the
 rest of the cluster's stack; `status` reports whether the token-proxy backend
 exists.
 
 The firewall allow-rule still admits only the Google LB ranges, so nothing
-bypasses the LB; opening `/proxy/t/*` only changes *which* GCLB backend that path
-lands on, and the controller's native listener remains the sole gate.
+bypasses the LB; opening the capability routes only changes *which* GCLB backend
+those paths land on, and the controller's native listener remains the sole gate.
 
 On CoreWeave/k8s clusters there is no IAP layer: the controller Service is
 ClusterIP-internal and a single Traefik ingress already routes all of `/proxy`
-(including `/proxy/t/*`) to it with no edge auth, so the controller's own
+(including both capability shapes) to it with no edge auth, so the controller's own
 native per-endpoint auth is the sole gate there and no equivalent stage is
 needed.
 

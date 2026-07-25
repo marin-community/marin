@@ -48,14 +48,15 @@ The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 check, but its deny-public rule can cut internal task->controller traffic, so it
 stays an explicit, deliberate step.
 
-The ``token-proxy`` stage opens only the capability-URL path ``/proxy/t/*`` past
-IAP (an IAP-free backend on the same controller NEG plus a URL-map path rule) so
-off-cluster callers can reach a shared endpoint through a gist-style URL that
-carries its scoped token in the path — possession of the URL is the credential.
-Everything else under ``/proxy`` stays IAP-gated, so the dashboard's own log
-viewer and any PRIVATE endpoint keep the browser's IAP identity. It runs by
-default as part of ``deploy`` (idempotent); pass ``--no-token-proxy`` to keep the
-controller fully IAP-gated, or run the ``token-proxy`` subcommand standalone.
+The ``token-proxy`` stage opens only the local and federated capability-URL paths
+``/proxy/t/**`` and ``/proxy/*/t/**`` past IAP (an IAP-free backend on the same
+controller NEG plus a URL-map route rule) so off-cluster callers can reach a
+shared endpoint through a gist-style URL that carries its scoped token in the
+path — possession of the URL is the credential. Everything else under ``/proxy``
+stays IAP-gated, so the dashboard's own log viewer and any PRIVATE endpoint keep
+the browser's IAP identity. It runs by default as part of ``deploy`` (idempotent);
+pass ``--no-token-proxy`` to keep the controller fully IAP-gated, or run the
+``token-proxy`` subcommand standalone.
 
 The ``finelog`` stage puts a cluster's finelog VM behind the same frontend, on its
 own IAP-free backend, so a federated cluster's finelog has a TLS endpoint to forward
@@ -100,13 +101,18 @@ DEFAULT_PROJECT = "hai-gcp-models"
 DEFAULT_ZONE = "us-central1-a"
 CONTROLLER_PORT = 10000
 
-# Path prefix opened past IAP by the token-proxy stage. Only capability URLs
-# (``/proxy/t/<token>/<endpoint>/...``, carrying the scoped token in the path)
-# route to the IAP-free backend. Everything else under ``/proxy`` — the
-# dashboard's own system endpoints (``/proxy/system.log-server/...``), PRIVATE
-# endpoints, in-browser access — stays IAP-gated, so the dashboard keeps its IAP
-# identity. The controller verifies the path token before forwarding.
-TOKEN_PROXY_PATHS = ["/proxy/t", "/proxy/t/*"]
+# Path templates opened past IAP by the token-proxy stage. The second template's
+# single-segment wildcard is the federated child cluster tag. In both forms,
+# ``t`` is the capability marker and the remaining path carries the scoped token
+# and endpoint name. Everything else under ``/proxy`` stays IAP-gated.
+TOKEN_PROXY_PATH_TEMPLATES = ("/proxy/t/**", "/proxy/*/t/**")
+TOKEN_PROXY_ROUTE_DESCRIPTION = "Iris capability URLs"
+LEGACY_TOKEN_PROXY_PATHS = frozenset({"/proxy/t", "/proxy/t/*"})
+TOKEN_PROXY_TEST_PATHS = (
+    "/proxy/t/test-token/test-endpoint",
+    "/proxy/test-peer/t/test-token/test-endpoint",
+)
+PRIVATE_PROXY_TEST_PATH = "/proxy/system.log-server/"
 
 # The cluster that owns the shared LB frontend (static IP, URL map, HTTPS proxy,
 # forwarding rule). Its backend service is the URL map's default route.
@@ -226,9 +232,9 @@ class Backend:
     def proxy_service(self) -> str:
         """IAP-free backend service (token-proxy stage) on the same NEG.
 
-        Fronts only the ``/proxy/t/*`` capability path, routed here by a URL-map
-        path rule; the controller's native listener verifies the path-carried
-        token before forwarding.
+        Fronts only local and federated capability paths, routed here by a
+        URL-map route rule; the controller's native listener verifies the
+        path-carried token before forwarding.
         """
         return f"{self.prefix}-proxy-be"
 
@@ -985,10 +991,10 @@ def ensure_frontend(frontend: Frontend, backend: Backend, *, dry_run: bool) -> s
 
 
 # --------------------------------------------------------------------------- #
-# token-proxy stage: open the capability-URL route (/proxy/t/*) to the controller
-# without IAP. Callers reach a shared endpoint through a URL that carries its
-# scoped token in the path; the Iris controller verifies that token before
-# forwarding. Everything else under /proxy stays IAP-gated.
+# token-proxy stage: open local and federated capability-URL routes to the
+# controller without IAP. Callers reach a shared endpoint through a URL that
+# carries its scoped token in the path; the Iris controller verifies that token
+# before forwarding. Everything else under /proxy stays IAP-gated.
 # --------------------------------------------------------------------------- #
 
 
@@ -1061,11 +1067,22 @@ def _export_url_map(frontend: Frontend) -> dict:
 
 
 def _import_url_map(frontend: Frontend, doc: dict, *, dry_run: bool) -> None:
-    """Write *doc* back to the shared URL map (atomic, fingerprint-guarded)."""
+    """Validate and write *doc* back to the shared URL map."""
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         yaml.safe_dump(doc, fh, sort_keys=False)
         path = fh.name
     try:
+        _run(
+            _compute(
+                frontend.project,
+                "url-maps",
+                "validate",
+                "--global",
+                f"--source={path}",
+                "--load-balancing-scheme=EXTERNAL_MANAGED",
+            ),
+            dry_run=dry_run,
+        )
         _run(
             _compute(
                 frontend.project, "url-maps", "import", frontend.url_map, "--global", f"--source={path}", "--quiet"
@@ -1076,12 +1093,91 @@ def _import_url_map(frontend: Frontend, doc: dict, *, dry_run: bool) -> None:
         os.unlink(path)
 
 
-def ensure_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
-    """Route ``<domain>/proxy/t/*`` to the IAP-free backend, leaving the rest IAP-gated.
+def _token_proxy_match_templates(rule: dict) -> frozenset[str]:
+    return frozenset(match["pathTemplateMatch"] for match in rule.get("matchRules", []) if "pathTemplateMatch" in match)
 
-    Idempotent; touches only this cluster's host rule and its ``/proxy/t/*`` path
-    rule. Only capability URLs (``/proxy/t/...``) stay unauthenticated; the
-    dashboard keeps its IAP identity on every other ``/proxy`` path.
+
+def _reconcile_token_proxy_rule(matcher: dict, proxy_link: str) -> bool:
+    """Add the capability route rule and migrate the former local-only path rule."""
+    path_rules = matcher.get("pathRules", [])
+    unrelated_path_rules = [rule for rule in path_rules if frozenset(rule.get("paths", [])) != LEGACY_TOKEN_PROXY_PATHS]
+    if unrelated_path_rules:
+        raise click.ClickException(
+            f"path matcher {matcher['name']} has unrelated path rules; "
+            "GCLB cannot combine pathRules and routeRules, so migrate them before opening federated capability URLs"
+        )
+
+    changed = "pathRules" in matcher
+    matcher.pop("pathRules", None)
+    route_rules = matcher.setdefault("routeRules", [])
+    templates = frozenset(TOKEN_PROXY_PATH_TEMPLATES)
+    existing = next(
+        (
+            rule
+            for rule in route_rules
+            if rule.get("description") == TOKEN_PROXY_ROUTE_DESCRIPTION
+            or _token_proxy_match_templates(rule) == templates
+        ),
+        None,
+    )
+    if existing is None:
+        used_priorities = {rule["priority"] for rule in route_rules}
+        priority = next(priority for priority in range(len(route_rules) + 1) if priority not in used_priorities)
+        route_rules.append(
+            {
+                "description": TOKEN_PROXY_ROUTE_DESCRIPTION,
+                "priority": priority,
+                "matchRules": [{"pathTemplateMatch": template} for template in TOKEN_PROXY_PATH_TEMPLATES],
+                "service": proxy_link,
+            }
+        )
+        return True
+
+    desired = {
+        "description": TOKEN_PROXY_ROUTE_DESCRIPTION,
+        "priority": existing["priority"],
+        "matchRules": [{"pathTemplateMatch": template} for template in TOKEN_PROXY_PATH_TEMPLATES],
+        "service": proxy_link,
+    }
+    if existing != desired:
+        existing.clear()
+        existing.update(desired)
+        changed = True
+    return changed
+
+
+def _reconcile_url_map_test(doc: dict, *, host: str, path: str, service: str) -> bool:
+    tests = doc.setdefault("tests", [])
+    existing = next((test for test in tests if test.get("host") == host and test.get("path") == path), None)
+    desired = {"host": host, "path": path, "service": service}
+    if existing == desired:
+        return False
+    if existing is None:
+        tests.append(desired)
+    else:
+        existing.clear()
+        existing.update(desired)
+    return True
+
+
+def _remove_url_map_tests(doc: dict, *, host: str, paths: Sequence[str]) -> bool:
+    tests = doc.get("tests", [])
+    removed_paths = set(paths)
+    kept = [test for test in tests if test.get("host") != host or test.get("path") not in removed_paths]
+    if len(kept) == len(tests):
+        return False
+    if kept:
+        doc["tests"] = kept
+    else:
+        doc.pop("tests", None)
+    return True
+
+
+def ensure_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
+    """Route local and federated capability URLs past IAP.
+
+    Idempotent; touches only this cluster's host rule and its capability route.
+    The dashboard keeps its IAP identity on every other ``/proxy`` path.
     """
     if not backend.domain:
         raise click.ClickException(f"--domain is required to open the token proxy route for {backend.cluster}")
@@ -1097,24 +1193,21 @@ def ensure_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
     if host_rule is None:
         # Frontend-owning cluster serves off the map default; give it a host
         # rule whose default stays the IAP backend.
-        matcher = {"name": backend.path_matcher, "defaultService": iap_link, "pathRules": []}
+        matcher = {"name": backend.path_matcher, "defaultService": iap_link}
         doc["hostRules"].append({"hosts": [backend.domain], "pathMatcher": backend.path_matcher})
         doc["pathMatchers"].append(matcher)
     else:
         matcher = next(m for m in doc["pathMatchers"] if m["name"] == host_rule["pathMatcher"])
-        matcher.setdefault("pathRules", [])
 
-    rules = matcher["pathRules"]
-    existing = next((r for r in rules if set(r.get("paths", [])) == set(TOKEN_PROXY_PATHS)), None)
-    if existing is not None and existing.get("service") == proxy_link:
-        logger.info("✓ /proxy/t/* already routes to %s for %s", backend.proxy_service, backend.domain)
+    changed = _reconcile_token_proxy_rule(matcher, proxy_link)
+    for path in TOKEN_PROXY_TEST_PATHS:
+        changed |= _reconcile_url_map_test(doc, host=backend.domain, path=path, service=proxy_link)
+    changed |= _reconcile_url_map_test(doc, host=backend.domain, path=PRIVATE_PROXY_TEST_PATH, service=iap_link)
+    if not changed:
+        logger.info("✓ capability URLs already route to %s for %s", backend.proxy_service, backend.domain)
         return
-    if existing is not None:
-        existing["service"] = proxy_link
-    else:
-        rules.append({"paths": list(TOKEN_PROXY_PATHS), "service": proxy_link})
     logger.info(
-        "→ routing %s/proxy/t/* -> %s (IAP-free capability URLs); everything else stays IAP-gated",
+        "→ routing local and federated capability URLs on %s -> %s (IAP-free); everything else stays IAP-gated",
         backend.domain,
         backend.proxy_service,
     )
@@ -1122,7 +1215,7 @@ def ensure_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
 
 
 def remove_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
-    """Remove this cluster's ``/proxy/t/*`` capability path rule from the shared URL map (best-effort)."""
+    """Remove this cluster's capability route from the shared URL map (best-effort)."""
     if not backend.domain:
         return
     doc = _export_url_map(frontend)
@@ -1132,12 +1225,32 @@ def remove_token_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: b
     matcher = next((m for m in doc.get("pathMatchers", []) if m["name"] == host_rule["pathMatcher"]), None)
     if matcher is None:
         return
-    before = matcher.get("pathRules", [])
-    kept = [r for r in before if set(r.get("paths", [])) != set(TOKEN_PROXY_PATHS)]
-    if len(kept) == len(before):
+    path_rules = matcher.get("pathRules", [])
+    kept_path_rules = [rule for rule in path_rules if frozenset(rule.get("paths", [])) != LEGACY_TOKEN_PROXY_PATHS]
+    route_rules = matcher.get("routeRules", [])
+    templates = frozenset(TOKEN_PROXY_PATH_TEMPLATES)
+    kept_route_rules = [
+        rule
+        for rule in route_rules
+        if rule.get("description") != TOKEN_PROXY_ROUTE_DESCRIPTION and _token_proxy_match_templates(rule) != templates
+    ]
+    routes_changed = len(kept_path_rules) != len(path_rules) or len(kept_route_rules) != len(route_rules)
+    tests_changed = _remove_url_map_tests(
+        doc,
+        host=backend.domain,
+        paths=(*TOKEN_PROXY_TEST_PATHS, PRIVATE_PROXY_TEST_PATH),
+    )
+    if not routes_changed and not tests_changed:
         return
-    matcher["pathRules"] = kept
-    logger.info("→ removing /proxy route(s) for %s from %s", backend.domain, frontend.url_map)
+    if kept_path_rules:
+        matcher["pathRules"] = kept_path_rules
+    else:
+        matcher.pop("pathRules", None)
+    if kept_route_rules:
+        matcher["routeRules"] = kept_route_rules
+    else:
+        matcher.pop("routeRules", None)
+    logger.info("→ removing capability route(s) for %s from %s", backend.domain, frontend.url_map)
     _import_url_map(frontend, doc, dry_run=dry_run)
 
 
@@ -1600,7 +1713,7 @@ def deploy(
         click.echo(f"  uv run {sys.argv[0]} token-proxy {cluster} --domain {domain}")
     else:
         click.echo(
-            f"Opened https://{domain}/proxy/t/* (IAP-free capability URLs) -> {backend.proxy_service}; "
+            f"Opened capability URLs on https://{domain} (IAP-free) -> {backend.proxy_service}; "
             "the controller verifies the path token."
         )
     signed_header_audience = discover_signed_header_audience(backend, dry_run=dry_run)
@@ -1707,25 +1820,24 @@ def grant(cluster: str, project: str, zone: str, dry_run: bool, member: str) -> 
 @cli.command("token-proxy")
 @_common_options
 @_frontend_option
-@click.option(
-    "--domain", required=True, help="Cluster domain whose /proxy/t/* capability path should be opened past IAP"
-)
+@click.option("--domain", required=True, help="Cluster domain whose capability routes should be opened past IAP")
 def token_proxy(cluster: str, project: str, zone: str, dry_run: bool, frontend_name: str, domain: str) -> None:
-    """Open ONLY ``<domain>/proxy/t/*`` (capability URLs) off-cluster via an IAP-free backend.
+    """Open only local and federated capability URLs through an IAP-free backend.
 
     Adds a second backend service (IAP disabled) on the same controller NEG and a
-    URL-map path rule routing ``/proxy/t/*`` to it, leaving the dashboard, RPC
-    surface, and all identity-gated ``/proxy`` traffic IAP-gated. A capability URL
-    carries its scoped token in the path, so the controller verifies that token
-    before forwarding — possession of the URL is the credential. Run after
-    ``deploy``/``backend`` (it reuses the NEG + health check).
+    URL-map route rule for ``/proxy/t/**`` and ``/proxy/*/t/**``, leaving the
+    dashboard, RPC surface, and all other ``/proxy`` traffic IAP-gated. A
+    capability URL carries its scoped token in the path, so the controller
+    verifies that token before forwarding—possession of the URL is the
+    credential. Run after ``deploy``/``backend`` (it reuses the NEG + health
+    check).
     """
     fe = Frontend(name=frontend_name, project=project)
     backend = Backend(cluster=cluster, project=project, zone=zone, domain=domain)
     ensure_token_proxy_backend(backend, dry_run=dry_run)
     ensure_token_proxy_route(fe, backend, dry_run=dry_run)
     click.echo()
-    click.echo(f"Opened https://{domain}/proxy/t/* (IAP-free capability URLs) -> {backend.proxy_service}.")
+    click.echo(f"Opened capability URLs on https://{domain} (IAP-free) -> {backend.proxy_service}.")
     click.echo("  The scoped token rides in the path; the controller verifies it before forwarding.")
     click.echo("  Everything else under /proxy stays IAP-gated (dashboard identity preserved).")
 
