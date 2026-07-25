@@ -171,3 +171,95 @@ Job mutations this session: submissions only (2 smokes [1 setup-failed], 3 rack 
 
 Confidence: 2/10 that this direction contributes a significant step toward 25% MFU
 (the negative itself: 9/10 confident, two mechanisms, matched draws, numerics clean).
+
+## Check-in 2026-07-25 02:35 UTC — NEW ASSIGNMENT (direction 7: FP8 wire on a2a permutation legs)
+
+Coordinator reassignment received after the direction-4 confident negative. Plan:
+1. Cherry-pick d1's SCALE_REPORT_DROPS=1 (4fbc89152); treat absolute drop numbers as provisional per d1's artifact investigation, rely on relative parity.
+2. Mine research/grug-fp8-h100 (H100 prior art: fp8 permutation legs 1.53x layer / 1.134x step at EP16; reductions must stay NCCL; per-token scaling only; e4m3 fwd / e5m2 bwd wire).
+3. Implement quantize-before/dequant-after around ONLY the two a2a collectives (dispatch + combine) in ep_ragged_all_to_all.py, custom_vjp so the backward wire legs are e5m2, per-token (per-row) scales traveling with the payload; gate SCALE_A2A_FP8_WIRE=1 on the gather-dispatch path. Routing/keep/drops computed BEFORE quantization -> drop parity by construction.
+4. Kernel grad-parity test at fp8 tolerances + identical drop counts; EP4 smoke; then matched rack legs bf16-wire vs fp8-wire, 120 steps, drops metric on, loss-trajectory parity as the primary fidelity verdict.
+Confidence: 4/10 (+1-2pp plausible from halving the 22.4%-of-step SendRecv bytes; loss risk is the open question)
+Next: locate 4fbc89152 and the H100 fp8 wire code.
+
+## Check-in 2026-07-25 05:23 UTC
+
+Findings so far (direction 7, FP8 wire):
+- Prior art mined: origin/research/fp8-moe-comms + origin/fp8-moe-mlp-comms carry fp8_wire.py (per-token rewrite) — design law confirmed: permutation legs only, e4m3 fwd / e5m2 bwd, per-token current scaling, scales ride a tiny second collective, payload bitcast uint8, reductions stay bf16.
+- IMPLEMENTED for the fixed-capacity path: `_fp8_wire_all_to_all` custom_vjp in ep_ragged_all_to_all.py (the tiled fixed a2a is its own transpose, so bwd = same collective at e5m2). Gate SCALE_A2A_FP8_WIRE=1, applied to both dispatch and combine legs of the monolithic gather-dispatch path. Quantization strictly AFTER routing/keep/capacity -> drop parity by construction. Committed 6fcffcbb9 with subprocess pytest.
+- Numerics (8-CPU EP8 kernel A/B): wrapper-level EXACT fwd+bwd equality on representable rows; full kernel vs bf16 wire relfrob: fwd 0.037, dx 0.073, dcw 0.043, dw13 0.062, dw2 0.051; drop counts identical (115, forced nonzero). dx matches the H100 reference (~8.8e-2).
+- d1's SCALE_REPORT_DROPS cherry-picked (9be902112; metrics moe/dropped_assignments + moe/drop_fraction; absolute values provisional per d1's artifact investigation — relying on relative parity).
+- EP4 smoke submitted with fp8 wire + drops on: /mwittmann/ep25d4-fp8wire-smoke-ep4-20260725.
+
+Confidence: 4/10 (+1-2pp if SendRecv bytes halve cleanly; loss-trajectory parity is the open verdict, and run-to-run loss noise ~0.06 at this config limits resolution)
+Next: babysit smoke; then matched rack legs bf16-wire control vs fp8-wire, both with SCALE_REPORT_DROPS=1.
+
+## Check-in 2026-07-25 05:55 UTC
+
+Findings so far (fp8 wire rack leg, in flight ~step 110/120):
+- EP4 smoke succeeded earlier (loss 6.84->6.73, matches bf16 smoke within 0.0005 at step 20).
+- Rack interim (window, 138 dup samples): p50 MFU 18.606%, 288.2K tok/s, 14.55s step — fp8 wire is ~2pp SLOWER than the 20.594% bf16 control. On NVL72 in-rack, QDQ overhead (amax+cast+dequant on ~5.4GB/GPU per direction per layer + the tiny scale a2a) apparently exceeds the halved-byte savings; the H100 1.53x win was cross-node IB where bytes are ~5x more expensive.
+- Loss parity looks clean so far: 6.556 (fp8, ~step 100 window) vs 6.548 (control same window) — fp8 wire is not visibly hurting the trajectory at this resolution.
+- moe/drop_fraction reads 0.7551 — consistent with d1's suspected per-layer artifact (64x overcount would put the true fraction at ~1.18%, plausible for capacity 1.0 at 64x256 buckets; a real 75% drop rate would destroy the loss, which is normal). Treating absolute value as an artifact; flagging the /64 hypothesis to d1 via log.
+- Caveat: the 20.594 control did not carry SCALE_REPORT_DROPS; the control leg I submit next will, making the pair fully matched (also isolates the metric's own cost).
+Confidence: 3/10 (trending negative on MFU at this operating point; numerics fine)
+Next: fp8 leg finishes -> submit matched bf16 control with SCALE_REPORT_DROPS=1.
+
+## Check-in 2026-07-25 06:15 UTC
+
+Findings so far:
+- fp8 wire leg COMPLETE (119 samples): p50 MFU 18.609% (p10 18.530 / p90 18.705), 288.3K tok/s, 14.55s step, loss 10.06->5.708, tail20 5.8240 (bf16 controls span 5.813-5.916 across this session's runs — fp8 is inside the run-to-run band). Numerically healthy, ~2.0pp SLOWER than the bf16 wire.
+- moe/drop_fraction declines over training: 0.755 early -> 0.172 by end. Under the /64 artifact hypothesis (metric appears to overcount by the expert-shard factor; d1 reconciling): real ~1.18% -> 0.27%, consistent with Larry's <=3% reference band and with routing balancing over time. Loss normality rules out a genuine 75% drop rate.
+- Matched bf16 control (with SCALE_REPORT_DROPS=1) submitted: /mwittmann/ep25d4-fp8wire-ab-bf16-120-v1-20260725. It closes both open confounds: same drop-metric cost, same draw window.
+Confidence: 3/10 (fp8-wire-as-QDQ-wrapper trending confident-negative on GB200 in-rack; will report the wire-vs-QDQ-cost decomposition)
+Next: babysit control; then final A/B and (if time allows) a variance check on the QDQ cost hypothesis via the profile-less step-time delta.
+
+## Check-in 2026-07-25 06:33 UTC — coordinator correction applied (drop metric)
+
+- RETRACTING my /64 artifact hypothesis per d1's controlled CPU test (psum scoping correct, ratio 1.000, no expert-axis double-count). fp8-leg drop readings quoted RAW from here on: moe/drop_fraction 0.755 early -> 0.172 late, interpretation HELD pending d1's 30-step integer cross-check (dropped_assignments vs global assignment count).
+- Note for the record: at NEAR-UNIFORM routing, binomial overflow at cf=1.0 with per-(sender,expert) capacity 2048 predicts ~0.9% drops (sigma~45 rows on mean 2048), so a genuine 0.755 early reading would imply strongly concentrated early routing (router collapse before the balance signal bites) improving to 0.17 — still far above Larry's ~3% bar if real. This is a fixed-path fidelity question independent of the wire dtype; BOTH my legs share it, and my loss trajectories (fp8 5.824 / bf16 controls 5.813-5.916 tail20) are indistinguishable across the wire change.
+- bf16 control (with drops metric) mid-run: p50 20.617%, 13.13s step — fp8-wire delta confirming at ~-2.0pp. Drop-metric cost also answered: 20.617 with metric vs 20.594 without = free.
+Confidence: 3/10
+Next: control completes ~06:45 -> final matched A/B + drop-series comparison (raw), then final report.
+
+## FINAL (direction 7) 2026-07-25 06:52 UTC — FP8 wire on fixed-a2a permutation legs: CONFIDENT NEGATIVE on GB200 in-rack MFU; numerics clean
+
+Matched back-to-back 120-step legs, identical config except SCALE_A2A_FP8_WIRE, both with
+SCALE_REPORT_DROPS=1, 119 samples, 2.5 PF/s denominator:
+
+| arm | p50 MFU | p10 / p90 | p50 tok/s | p50 step | loss tail20 |
+|---|---:|---:|---:|---:|---:|
+| bf16 wire control | **20.627%** | 20.564 / 20.712 | 319.5K | 13.13s | 5.8649 |
+| fp8 wire (e4m3/e5m2, per-token scales) | **18.609%** | 18.530 / 18.705 | 288.3K | 14.55s | 5.8240 |
+
+- MFU: fp8 wire is **-2.02pp / 0.902x** — the QDQ overhead (amax+cast+dequant over ~5.4GB/GPU
+  per direction per layer, x2 legs x48 layers x fwd/recompute/bwd, plus the tiny scale a2a)
+  exceeds the byte savings on NVL72 in-rack bandwidth. Step delta +1.42s vs a maximum
+  possible wire saving of ~1.5s (half of the ~2.9-3.4s SendRecv budget): even a FREE QDQ
+  would only have reached ~+2pp, and this wrapper's QDQ costs ~2.9s. The H100 1.53x prior
+  art won where cross-node IB made bytes 5-10x more expensive relative to flops; that
+  regime does not hold inside a GB200 rack. A fused variant (dequant as GEMM epilogue,
+  quantize folded into the dispatch gather build) could plausibly reach parity-to-+1pp but
+  is not a wrapper-level change; not pursued.
+- Loss: tail20 fp8 5.8240 vs bf16 5.8649 (fp8 slightly LOWER); both inside the session's
+  bf16 control band (5.813-5.916). At this resolution the lossy wire does NOT hurt the
+  trajectory. Kernel numerics: exact wrapper fwd+bwd parity on representable rows; full
+  kernel relfrob fwd 0.037 / dx 0.073 / dcw 0.043 / dw13 0.062 / dw2 0.051; drop counts
+  identical (committed test).
+- Drops (RAW, interpretation held pending d1's integer cross-check): fraction series
+  oscillates 0.17-0.79 in BOTH arms; at matched early positions bf16 0.17213 vs fp8
+  0.17212 — no systematic increase from the fp8 wire (relative parity holds regardless of
+  the absolute-scale question). The absolute readings are a fixed-path question shared by
+  both arms, not a wire effect.
+- Drop-metric cost: control with metric 20.627 vs without 20.594 (earlier leg) — free
+  within noise.
+
+Commits: 6fcffcbb9 (fp8 wire + parity test), 9be902112 (cherry-pick SCALE_REPORT_DROPS),
+0616d7168 (fix: actually log the drop metrics — d1's patch computed but never emitted them).
+Jobs: smoke /mwittmann/ep25d4-fp8wire-smoke-ep4-20260725; legs
+/mwittmann/ep25d4-fp8wire-ab-fp8-120-v1-20260725, /mwittmann/ep25d4-fp8wire-ab-bf16-120-v1-20260725.
+Job mutations: submissions only.
+
+Confidence: 2/10 that FP8-wire-as-QDQ-wrapper contributes toward 25% at this operating
+point (the negative: 8/10 confident; the fused-epilogue variant remains the only open
+door, expected value parity-to-+1pp).
