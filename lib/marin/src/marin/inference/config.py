@@ -33,13 +33,6 @@ class VllmSource(StrEnum):
     MARIN_FORK = "marin_fork"
 
 
-class ObjectStoreLoadMode(StrEnum):
-    """How vLLM loads an object-store model snapshot."""
-
-    STREAM = "stream"
-    LOCAL = "local"
-
-
 class VllmCompilationCacheMode(StrEnum):
     MANAGED = "managed"
     CALLER_MANAGED = "caller_managed"
@@ -90,7 +83,6 @@ class VllmEngineConfig:
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
-    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     extra_args: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:

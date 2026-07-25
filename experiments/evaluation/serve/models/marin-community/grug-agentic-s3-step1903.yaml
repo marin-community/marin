@@ -6,14 +6,12 @@ resource_hint:
   gpu:
     H100: 8
   memory: 512g
-  disk: 512g
 serve:
   tensor_parallel_size: 1
   data_parallel_size: 8
   max_model_len: 65536
   max_num_batched_tokens: 7168
   max_num_seqs: 32
-  object_store_load_mode: local
   tool_call_parser: hermes
   auto_overrides: false
   vllm_extra_args:

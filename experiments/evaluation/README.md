@@ -134,11 +134,9 @@ cached `models()` registry in `models.py`:
 
 Set `resource_hint.hbm_gb` to a portable serving footprint, or set
 `resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
-that requirement to a cluster. Set `resource_hint.memory` for exports whose shard staging needs more
+that requirement to a cluster. Set `resource_hint.memory` when serving needs more than the default
 host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
-its tokenizer through Hugging Face. `serve.object_store_load_mode: local` copies an object-store
-export to the inference worker's ephemeral disk before vLLM starts; the default `stream` mode uses
-the RunAI loader.
+its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
