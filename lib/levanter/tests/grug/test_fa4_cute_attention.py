@@ -164,7 +164,7 @@ def _one_device_mesh():
     """FA4's lower-bounds helpers reshard with PartitionSpec, which requires a mesh
     context on current jax. Production always calls under a mesh; tests enter a
     trivial one-device mesh here."""
-    return jax.sharding.Mesh(np.array(jax.devices()[:1]), ("data",))
+    return jax.sharding.Mesh(np.array(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
 
 
 def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, valid_tokens=None):
