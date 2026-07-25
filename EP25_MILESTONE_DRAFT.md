@@ -89,8 +89,17 @@ steady state is not measured here.
 
 ## 4. Transport comparison
 
-> TODO: fixed+gather vs ragged (one-shot kernel off) vs ring_cute at the operating-point shape,
-> from d2's rack harvest (drop fraction + p50 MFU per transport).
+Ragged all-to-all with the one-shot kernel off, at the operating-point shape, QB off, single draw
+(job `ep25d2-rack-ragged-120`): mean MFU ~12.38% (cumulative mean, not p50), final loss 5.708,
+`drop_fraction` 0.433 at end of run. That is roughly half of fixed+adjoint's 24.04% p50 on speed,
+and ragged's receiver-side capacity still drops 43% of assignments under the same QB-off router
+collapse, so it is not a fidelity refuge either. QB load-balancing is the drop lever on every
+transport, not the transport choice. Caveats: cumulative mean vs the p50 used elsewhere, one
+allocation draw, QB off; the 0.433 is end-of-run (~step 119) against the fixed path's step-29
+0.846, so the transports are not compared at matched steps here.
+
+> TODO: ring_cute EP64 arm (running); fill the fixed / ragged / ring table at matched steps before
+> the final pass.
 
 ## 5. Goal ledger
 
