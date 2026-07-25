@@ -634,3 +634,20 @@ statistics for performance comparisons.
   605, 141, 118, and 241 inference responses in the latest ten-minute window.
   The first 128-pair batches include oversized chunked documents, so no
   completion marker has been published yet; the roots show no runtime error.
+
+### 2026-07-25T09:28:00Z — exact semantic request census
+
+- The distributed workload census scanned all 128 decision shards and
+  succeeded as Iris job
+  `/rav/datakit-6854-semantic-workload-100b-v3`. The 755,281 semantic pairs
+  expand to 1,101,833 complete-text review units: 746,797 pairs are direct and
+  8,484 require chunked coverage.
+- Two independent initial judgments per unit require exactly 2,203,666 model
+  requests. At most 3,305,499 requests are needed if every unit invokes the
+  targeted tiebreak. Baseline contributes 939,026 review units and treatment
+  contributes 162,807. The reviewed semantic text totals 33,190,693,023
+  characters; the largest pair totals 19,412,892 characters.
+- The four two-H100 semantic jobs remain active at batch priority. At 09:27Z,
+  their workers had returned 1,660, 754, 725, and 1,079 successful response
+  batches with no runtime error. Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-workload-100b-20260725-v2/workload.json`.

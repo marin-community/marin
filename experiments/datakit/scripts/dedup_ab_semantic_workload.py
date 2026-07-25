@@ -19,16 +19,26 @@ from zephyr.execution import ZephyrContext
 
 from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData, decision_for_pair
 from experiments.datakit.scripts.dedup_ab_materialize import DedupReviewData
+from experiments.datakit.scripts.dedup_ab_semantic_judge import MAX_DIRECT_CHARS, chunk_review_units
 from experiments.datakit.scripts.dedup_ab_summarize import _fraction_bin, _length_bin
 
-SUM_FIELDS = ("pairs", "semantic_pairs", "semantic_raw_chars")
+SUM_FIELDS = (
+    "pairs",
+    "semantic_pairs",
+    "semantic_raw_chars",
+    "semantic_review_units",
+    "minimum_model_requests",
+    "maximum_model_requests",
+    "direct_pairs",
+    "chunked_pairs",
+)
 MAX_FIELDS = ("max_member_raw_chars", "max_canonical_raw_chars", "max_combined_raw_chars")
 
 
 class SemanticWorkloadData(BaseModel):
     """Exact aggregate size and composition of the semantic-review queue."""
 
-    version: str = "v1"
+    version: str = "v2"
     review_path: str
     machine_labels_path: str
     summaries_dir: str
@@ -41,6 +51,9 @@ def summarize_pairs(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     pairs = 0
     semantic_pairs = 0
     semantic_raw_chars = 0
+    semantic_review_units = 0
+    direct_pairs = 0
+    chunked_pairs = 0
     max_member_raw_chars = 0
     max_canonical_raw_chars = 0
     max_combined_raw_chars = 0
@@ -59,13 +72,23 @@ def summarize_pairs(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
         variant = pair["variant"]
         combined_raw_chars = member_raw_chars + canonical_raw_chars
+        if combined_raw_chars <= MAX_DIRECT_CHARS:
+            review_units = 1
+            direct_pairs += 1
+            counts[f"{variant}/direct_pairs"] += 1
+        else:
+            review_units = len(chunk_review_units(pair))
+            chunked_pairs += 1
+            counts[f"{variant}/chunked_pairs"] += 1
         semantic_pairs += 1
         semantic_raw_chars += combined_raw_chars
+        semantic_review_units += review_units
         max_member_raw_chars = max(max_member_raw_chars, member_raw_chars)
         max_canonical_raw_chars = max(max_canonical_raw_chars, canonical_raw_chars)
         max_combined_raw_chars = max(max_combined_raw_chars, combined_raw_chars)
         counts[f"{variant}/pairs"] += 1
         counts[f"{variant}/raw_chars"] += combined_raw_chars
+        counts[f"{variant}/review_units"] += review_units
         counts[f"{variant}/combined_raw_chars/{_length_bin(combined_raw_chars)}"] += 1
         counts[f"{variant}/word_5gram_jaccard/{_fraction_bin(float(pair['word_5gram_jaccard']))}"] += 1
         counts[
@@ -86,6 +109,11 @@ def summarize_pairs(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "pairs": pairs,
         "semantic_pairs": semantic_pairs,
         "semantic_raw_chars": semantic_raw_chars,
+        "semantic_review_units": semantic_review_units,
+        "minimum_model_requests": semantic_review_units * 2,
+        "maximum_model_requests": semantic_review_units * 3,
+        "direct_pairs": direct_pairs,
+        "chunked_pairs": chunked_pairs,
         "max_member_raw_chars": max_member_raw_chars,
         "max_canonical_raw_chars": max_canonical_raw_chars,
         "max_combined_raw_chars": max_combined_raw_chars,

@@ -108,6 +108,13 @@ def test_semantic_workload_accounts_only_routed_full_text_pairs() -> None:
     assert summary["pairs"] == 3
     assert summary["semantic_pairs"] == 2
     assert summary["semantic_raw_chars"] == expected_raw_chars
+    assert summary["semantic_review_units"] == 2
+    assert summary["minimum_model_requests"] == 4
+    assert summary["maximum_model_requests"] == 6
+    assert summary["direct_pairs"] == 2
+    assert summary["chunked_pairs"] == 0
     assert summary["counts"]["baseline/pairs"] == 1
     assert summary["counts"]["treatment/pairs"] == 1
+    assert summary["counts"]["baseline/review_units"] == 1
+    assert summary["counts"]["treatment/review_units"] == 1
     assert summary["counts"]["baseline/cross_source/True"] == 1
