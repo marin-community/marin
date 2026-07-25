@@ -85,6 +85,46 @@ class PreemptionCandidate:
 
 
 @dataclass(frozen=True)
+class PreemptionPlan:
+    """Outcome of the preemption pass.
+
+    ``evictions`` pairs each victim task with the preemptor task that triggered
+    it (the audit reason string names the preemptor). ``placements`` binds each
+    preemptor task to the worker its victim frees; the caller commits it as
+    ASSIGNED in the same transaction as the victim's PREEMPT.
+    """
+
+    evictions: list[tuple[JobName, JobName]]
+    placements: list[tuple[JobName, WorkerId]]
+
+
+@dataclass(frozen=True)
+class _Eviction:
+    """One satisfied preemptor's eviction: the victim tasks to stop and the
+    workers the preemptor occupies once they free.
+
+    ``claimed_workers`` holds exactly one worker per preemptor task, so the pass
+    zips it against the preemptor's pending tasks to bind each task to a slot.
+    """
+
+    victims: list[JobName]
+    claimed_workers: list[WorkerId]
+
+
+def _sorted_by_tpu_worker_id(worker_ids: list[WorkerId], context: SchedulingContext) -> list[WorkerId]:
+    """Order workers by their ``tpu-worker-id`` so a co-assigned gang maps tasks
+    to slots the same way ``_find_coscheduled_assignments`` does."""
+    return sorted(
+        worker_ids,
+        key=lambda w: (
+            context.capacities[w].attributes.get(WellKnownAttribute.TPU_WORKER_ID, AttributeValue(0)).value
+            if w in context.capacities
+            else 0
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class GatedCandidates:
     """Tasks that passed deadline and per-job-cap gates."""
 
@@ -365,11 +405,11 @@ def _preempt_solo(
     wanted_variant: str | None,
     solo_victims: list[RunningTaskInfo],
     context: SchedulingContext,
-) -> tuple[JobName, JobName] | None:
+) -> _Eviction | None:
     """Find a single solo victim whose eviction would free enough capacity for
     a non-coscheduled preemptor. Mutates the chosen victim's already_preempted
-    flag so subsequent candidates skip it. Returns the (preemptor, victim) pair
-    or None if no victim qualifies.
+    flag so subsequent candidates skip it. Returns the eviction (the victim to
+    stop and the worker the preemptor claims) or None if no victim qualifies.
 
     The same-variant gate ensures the freed slot shape matches the preemptor;
     the hypothetical-capacity check covers partial-worker tenancy (e.g. a
@@ -413,7 +453,7 @@ def _preempt_solo(
         )
         if hypothetical.can_fit(req) is None:
             victim.already_preempted = True
-            return (candidate.job_name, victim.task_id)
+            return _Eviction(victims=[victim.task_id], claimed_workers=[victim.worker_id])
     return None
 
 
@@ -423,18 +463,19 @@ def _preempt_coscheduled(
     n_required: int,
     sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]],
     context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
+) -> _Eviction | None:
     """Find a victim slice (all running tasks of one coscheduled job) whose
-    eviction satisfies a coscheduled preemptor. Returns one (preemptor, victim)
-    pair per slice member, or [] if no slice qualifies. Mutates already_preempted
-    on every member of the chosen slice.
+    eviction satisfies a coscheduled preemptor. Returns the eviction — every
+    slice member as a victim plus the ``n_required`` workers the preemptor gang
+    claims — or None if no slice qualifies. Mutates already_preempted on every
+    member of the chosen slice.
 
     Coscheduled tasks own their workers whole, so once variant matches and the
     slice is at least as large as the preemptor, freeing it yields exactly the
     shape the preemptor needs — no per-worker capacity arithmetic required.
     """
     if wanted_variant is None:
-        return []
+        return None
     # Gate on hard constraints (mirrors _preempt_solo): the device variant alone
     # does not prove the preemptor can land on the freed slice — region/zone/
     # attribute constraints must hold on every member's worker too. Without this
@@ -456,11 +497,13 @@ def _preempt_coscheduled(
             for m in members
         ):
             continue
-        pairs = [(candidate.job_name, m.task_id) for m in members]
         for m in members:
             m.already_preempted = True
-        return pairs
-    return []
+        return _Eviction(
+            victims=[m.task_id for m in members],
+            claimed_workers=_sorted_by_tpu_worker_id([m.worker_id for m in members], context)[:n_required],
+        )
+    return None
 
 
 def _solo_victims_freeing_host(
@@ -515,9 +558,11 @@ def _preempt_coscheduled_partial_hosts(
     solo_victims_by_worker: Mapping[WorkerId, list[RunningTaskInfo]],
     reserved_workers: set[WorkerId],
     context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
+) -> _Eviction | None:
     """Free a blocked gang by evicting lower-band solo co-tenants on its hosts,
-    returning (preemptor, victim) pairs or [] if the gang cannot be placed.
+    returning the eviction (co-tenant victims + the ``n_required`` hosts the gang
+    claims — already-free hosts plus the ones just freed) or None if the gang
+    cannot be placed.
 
     Fallback for when no whole victim slice qualifies but the gang is short a few
     hosts whose only blocker is a solo task squatting on per-host CPU/RAM. Evicts
@@ -549,7 +594,7 @@ def _preempt_coscheduled_partial_hosts(
 
         needed = n_required - len(fitting)
         if needed <= 0:
-            return []  # group already has room for the gang; no preemption needed
+            return None  # group already has room for the gang; no preemption needed
         if len(recoverable) < needed:
             continue  # cannot free enough hosts in this group; try the next
 
@@ -557,23 +602,27 @@ def _preempt_coscheduled_partial_hosts(
         # resource) to bound blast radius; reserve every host the gang will use.
         recoverable.sort(key=lambda item: (len(item[1]), sum(v.resource_value for v in item[1])))
         used_hosts: set[WorkerId] = set(fitting)
-        pairs: list[tuple[JobName, JobName]] = []
+        victims_evicted: list[JobName] = []
         for wid, victims in recoverable[:needed]:
             used_hosts.add(wid)
             for victim in victims:
                 victim.already_preempted = True
-                pairs.append((candidate.job_name, victim.task_id))
+                victims_evicted.append(victim.task_id)
         reserved_workers |= used_hosts
-        return pairs
-    return []
+        return _Eviction(
+            victims=victims_evicted,
+            claimed_workers=_sorted_by_tpu_worker_id(list(used_hosts), context),
+        )
+    return None
 
 
 def run_preemption_pass(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
     context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
-    """Find tasks to preempt for higher-priority unscheduled work.
+) -> PreemptionPlan:
+    """Find tasks to preempt for higher-priority unscheduled work, and bind each
+    preemptor to the worker(s) its victims free.
 
     Rules:
     - PRODUCTION preempts INTERACTIVE and BATCH.
@@ -587,8 +636,24 @@ def run_preemption_pass(
       preemptor's task count. A non-coscheduled preemptor never tears down a
       slice. Same-variant + slice-shaped guarantees the freed capacity matches
       the request, which avoids large/small thrashing.
+
+    Each satisfied preemptor's pending tasks are zipped onto the workers it
+    frees (:class:`PreemptionPlan.placements`), so the caller can commit the
+    preemptor as ASSIGNED alongside the victims' PREEMPT — the preemptor never
+    re-competes for its own freed slot on a later tick.
     """
-    preemptions: list[tuple[JobName, JobName]] = []
+    evictions: list[tuple[JobName, JobName]] = []
+    placements: list[tuple[JobName, WorkerId]] = []
+
+    # Preemptor tasks pending per parent, index-ordered — zipped onto a gang's
+    # freed workers the same way ``_find_coscheduled_assignments`` maps tasks.
+    pending_tasks_by_parent: dict[JobName, list[JobName]] = defaultdict(list)
+    for c in unscheduled_tasks:
+        cparent = c.job_name.parent
+        if cparent is not None:
+            pending_tasks_by_parent[cparent].append(c.job_name)
+    for cparent in pending_tasks_by_parent:
+        pending_tasks_by_parent[cparent].sort(key=lambda t: t.require_task()[1])
 
     # Solo victims: existing per-worker preemption path (same-variant gated).
     solo_victims = sorted(
@@ -653,9 +718,10 @@ def run_preemption_pass(
         wanted_variant = candidate.requirements.device_variant
 
         if not candidate.requirements.is_coscheduled:
-            pair = _preempt_solo(candidate, wanted_variant, solo_victims, context)
-            if pair is not None:
-                preemptions.append(pair)
+            eviction = _preempt_solo(candidate, wanted_variant, solo_victims, context)
+            if eviction is not None:
+                evictions.extend((candidate.job_name, v) for v in eviction.victims)
+                placements.extend(zip([candidate.job_name], eviction.claimed_workers, strict=False))
             continue
 
         # Attempt a gang's coscheduled preemption once per gang, not per sibling.
@@ -665,19 +731,23 @@ def run_preemption_pass(
             attempted_coscheduled_jobs.add(parent)
 
         n_required = sibling_count.get(parent, 1) if parent is not None else 1
-        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
-        if not pairs:
+        eviction = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
+        if eviction is None:
             # No whole victim slice qualified; try freeing the gang's blocking
             # hosts by evicting lower-band solo co-tenants squatting on them.
-            pairs = _preempt_coscheduled_partial_hosts(
+            eviction = _preempt_coscheduled_partial_hosts(
                 candidate, n_required, solo_victims_by_worker, reserved_workers, context
             )
-        if pairs:
-            preemptions.extend(pairs)
+        if eviction is not None:
+            evictions.extend((candidate.job_name, v) for v in eviction.victims)
+            preemptor_tasks = (
+                pending_tasks_by_parent.get(parent, [candidate.job_name]) if parent else [candidate.job_name]
+            )
+            placements.extend(zip(preemptor_tasks, eviction.claimed_workers, strict=False))
             if parent is not None:
                 satisfied_preemptor_jobs.add(parent)
 
-    return preemptions
+    return PreemptionPlan(evictions=evictions, placements=placements)
 
 
 def _sort_pending_tasks_by_resolved_band(

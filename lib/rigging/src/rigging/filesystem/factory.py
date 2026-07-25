@@ -7,11 +7,13 @@
 ``fsspec.core.url_to_fs``, ``fsspec.open``, and ``fsspec.filesystem`` that
 automatically wrap GCS filesystems in a :class:`CrossRegionGuardedFS` and inject
 finite botocore timeouts into S3/R2 filesystems (#6487). ``atomic_rename``
-provides write-and-rename semantics via a sibling temp key.
+provides write-and-rename semantics via a sibling temp key, and
+``fetch_file_atomic`` downloads a remote file to a local path the same way.
 """
 
 import contextlib
 import logging
+import os
 import uuid
 from collections.abc import Generator
 from typing import Any, cast
@@ -25,26 +27,17 @@ from rigging.filesystem.cross_region import (
     _is_gcs_protocol,
     _is_gcs_url,
 )
+from rigging.filesystem.s3_compat import s3_request_bounds_config_kwargs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
-
-# Finite botocore timeouts/retries for every S3/R2 filesystem we build.
-# s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
-# R2 connection wedges ``upload_part`` forever (#6487): the blocked socket never
-# raises, the shard never completes, and the sequential stage barrier stalls the
-# whole job. With finite timeouts the wedge becomes a retryable error that fails
-# the shard, which the coordinator then re-queues.
-_S3_CONNECT_TIMEOUT = 30
-_S3_READ_TIMEOUT = 120
-_S3_RETRY_MAX_ATTEMPTS = 5
 
 
 def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Inject finite botocore timeouts/retries into S3 filesystem kwargs.
 
     Caller-supplied ``config_kwargs`` values win; we only fill in keys the
-    caller did not set. See :data:`_S3_READ_TIMEOUT` and #6487.
+    caller did not set. See #6487.
 
     We seed ``config_kwargs`` from the ``FSSPEC_S3`` config block first. fsspec
     builds the filesystem by shallow-merging ``{**conf, **kwargs}``, so a bare
@@ -55,9 +48,8 @@ def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     """
     conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
-    config_kwargs.setdefault("connect_timeout", _S3_CONNECT_TIMEOUT)
-    config_kwargs.setdefault("read_timeout", _S3_READ_TIMEOUT)
-    config_kwargs.setdefault("retries", {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"})
+    for key, value in s3_request_bounds_config_kwargs().items():
+        config_kwargs.setdefault(key, value)
     return {**kwargs, "config_kwargs": config_kwargs}
 
 
@@ -199,4 +191,31 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
         # creating it) so we tolerate any rm error and re-raise the original.
         with contextlib.suppress(Exception):
             fs.rm(temp_path)
+        raise
+
+
+def fetch_file_atomic(src_url: str, dest_path: str) -> bool:
+    """Fetch ``src_url`` down to local ``dest_path`` atomically via a unique temp sibling.
+
+    ``dest_path`` never holds a partial file — a concurrent reader sees the previous
+    complete file or the new one, and a fetch killed midway leaves only an orphaned temp
+    file instead of poisoning the destination (e.g. a shared cache). The unique temp name
+    keeps concurrent fetches of the same destination from clobbering each other's
+    in-flight files.
+
+    Returns ``False`` if the source does not exist; re-raises all other errors.
+    """
+    tmp = unique_temp_path(dest_path)
+    try:
+        with open_url(src_url, "rb") as src:
+            data = src.read()
+        with open(tmp, "wb") as dst:
+            dst.write(data)
+        os.replace(tmp, dest_path)
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
         raise

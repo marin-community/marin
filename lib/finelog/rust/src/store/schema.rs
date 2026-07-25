@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayRef, RecordBatch};
+use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch, StringArray};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use buffa::MessageField;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,13 @@ pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
 /// every namespace's parquet segments and visible to SQL queries; never
 /// transmitted on the wire and never declared by callers.
 pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
+
+/// Origin-cluster column, added to every registered table that does not declare
+/// one (see [`with_implicit_cluster`]). Local writers leave it empty; the
+/// cross-cluster forwarder stamps it with the origin cluster on the way to a hub
+/// finelog, so a hub that collects rows from many federated clusters can filter or
+/// group them by the cluster that produced them.
+pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
 
 /// Max bytes per WriteRows request body.
 pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
@@ -100,6 +107,43 @@ impl Schema {
 // ColumnType <-> Arrow DataType.
 // ---------------------------------------------------------------------------
 
+/// The Arrow `DataType` for `COLUMN_TYPE_MAP`: a `Map<Utf8,Utf8>` with a
+/// non-nullable string key and a nullable string value.
+///
+/// The entries/key/value field names and the unsorted flag match pyarrow's
+/// `pa.map_(pa.string(), pa.string())` exactly, so a batch a client sends is
+/// bit-identical to this declared type and the write path accepts it cast-free.
+/// arrow-rs's default parquet writer round-trips a map with these names
+/// losslessly (it keeps the entries field name and rehydrates the key/value
+/// names from the embedded Arrow schema), so on-disk segments read back as the
+/// same type.
+pub fn map_utf8_utf8_type() -> DataType {
+    DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        )),
+        false,
+    )
+}
+
+/// Whether a map's entries `DataType` is a `Struct` of a string key and a
+/// string value (the shape `COLUMN_TYPE_MAP` accepts), regardless of the field
+/// names or their nullability.
+fn is_utf8_utf8_entries(entries: &DataType) -> bool {
+    matches!(
+        entries,
+        DataType::Struct(fields)
+            if fields.len() == 2
+                && fields[0].data_type() == &DataType::Utf8
+                && fields[1].data_type() == &DataType::Utf8
+    )
+}
+
 /// Map a `ColumnType` to its **storage** Arrow `DataType`.
 ///
 /// The storage canonical unit for `COLUMN_TYPE_TIMESTAMP_MS` is MICROSECOND,
@@ -123,6 +167,7 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
             Some(DataType::Timestamp(TimeUnit::Microsecond, None))
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
+        ColumnType::COLUMN_TYPE_MAP => Some(map_utf8_utf8_type()),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
     }
 }
@@ -240,6 +285,7 @@ fn column_type_name(t: ColumnType) -> &'static str {
         ColumnType::COLUMN_TYPE_TIMESTAMP_MS => "COLUMN_TYPE_TIMESTAMP_MS",
         ColumnType::COLUMN_TYPE_BYTES => "COLUMN_TYPE_BYTES",
         ColumnType::COLUMN_TYPE_INT32 => "COLUMN_TYPE_INT32",
+        ColumnType::COLUMN_TYPE_MAP => "COLUMN_TYPE_MAP",
     }
 }
 
@@ -254,6 +300,7 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "bool" => Some(ColumnType::COLUMN_TYPE_BOOL),
         "timestamp_ms" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "bytes" => Some(ColumnType::COLUMN_TYPE_BYTES),
+        "map" => Some(ColumnType::COLUMN_TYPE_MAP),
         "COLUMN_TYPE_UNKNOWN" => Some(ColumnType::COLUMN_TYPE_UNKNOWN),
         "COLUMN_TYPE_STRING" => Some(ColumnType::COLUMN_TYPE_STRING),
         "COLUMN_TYPE_INT64" => Some(ColumnType::COLUMN_TYPE_INT64),
@@ -262,6 +309,7 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "COLUMN_TYPE_TIMESTAMP_MS" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "COLUMN_TYPE_BYTES" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "COLUMN_TYPE_INT32" => Some(ColumnType::COLUMN_TYPE_INT32),
+        "COLUMN_TYPE_MAP" => Some(ColumnType::COLUMN_TYPE_MAP),
         _ => None,
     };
     resolved.ok_or_else(|| {
@@ -322,27 +370,59 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
     Schema::new(columns, schema.key_column)
 }
 
-/// Resolve the ordering key column name (presence-only), raising if invalid.
+/// Return `schema` with the implicit nullable STRING `cluster` column appended.
+/// No-op if a `cluster` column is already declared.
+pub fn with_implicit_cluster(schema: Schema) -> Schema {
+    if schema
+        .columns
+        .iter()
+        .any(|c| c.name == IMPLICIT_CLUSTER_COLUMN)
+    {
+        return schema;
+    }
+    let Schema {
+        mut columns,
+        key_column,
+    } = schema;
+    columns.push(Column::new(
+        IMPLICIT_CLUSTER_COLUMN,
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
+    Schema::new(columns, key_column)
+}
+
+/// Resolve the ordering key column name, raising if invalid.
 ///
 /// If `key_column` is set it must name an existing column; otherwise the schema
-/// must contain a `timestamp_ms` column. Deliberately does NOT enforce the
-/// proto comment's INT64/TIMESTAMP_MS type rule — presence is the only check.
+/// must contain a `timestamp_ms` column. The only type rule enforced is that the
+/// key may not be a `MAP` column: compaction sorts the key through
+/// `RowConverter`/`lexsort`, which cannot order a nested map, so a map key would
+/// wedge every compaction. The proto comment's INT64/TIMESTAMP_MS rule is
+/// otherwise deliberately not enforced (a STRING key is accepted).
 pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
-    if !schema.key_column.is_empty() {
+    let resolved = if !schema.key_column.is_empty() {
         if schema.column(&schema.key_column).is_none() {
             return Err(StatsError::SchemaValidation(format!(
                 "key_column={:?} is not present in the schema columns",
                 schema.key_column
             )));
         }
-        return Ok(schema.key_column.clone());
-    }
-    if schema.column(IMPLICIT_KEY_COLUMN).is_none() {
+        schema.key_column.clone()
+    } else {
+        if schema.column(IMPLICIT_KEY_COLUMN).is_none() {
+            return Err(StatsError::SchemaValidation(format!(
+                "schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column"
+            )));
+        }
+        IMPLICIT_KEY_COLUMN.to_string()
+    };
+    if schema.column(&resolved).map(|c| c.r#type) == Some(ColumnType::COLUMN_TYPE_MAP) {
         return Err(StatsError::SchemaValidation(format!(
-            "schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column"
+            "key_column={resolved:?} is a MAP column, which cannot be an ordering key"
         )));
     }
-    Ok(IMPLICIT_KEY_COLUMN.to_string())
+    Ok(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,14 +508,20 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 // ---------------------------------------------------------------------------
 
 /// Map an Arrow `DataType` back to a `ColumnType`, decoding dictionary types to
-/// their value type and rejecting nested/union/map types.
+/// their value type and rejecting unsupported nested/union types.
 ///
 /// Dictionary-encoded columns are accepted transparently (the *value* type is
-/// reported); list/large-list/struct/union/map and any other unsupported type
-/// are rejected.
+/// reported). A `Map<Utf8,Utf8>` maps to `COLUMN_TYPE_MAP` regardless of its
+/// entries/key/value field names or sorted flag (so a parquet-round-tripped or
+/// non-pyarrow map still decodes); a map with any other key/value type is
+/// rejected. list/large-list/struct/union and any other unsupported type are
+/// rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
+        DataType::Map(field, _) if is_utf8_utf8_entries(field.data_type()) => {
+            Ok(ColumnType::COLUMN_TYPE_MAP)
+        }
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::FixedSizeList(_, _)
@@ -515,8 +601,17 @@ pub struct AlignedBatch {
     pub byte_size: i64,
 }
 
+/// Sum the raw buffer bytes an array occupies, recursing into child data so a
+/// nested column (e.g. a `Map`'s key/value buffers) is counted in full rather
+/// than only its top-level offset/validity buffers. A monotone approximation
+/// feeding the flush-trigger accounting.
 fn array_buffer_size(arr: &ArrayRef) -> i64 {
-    arr.to_data().buffers().iter().map(|b| b.len() as i64).sum()
+    fn data_buffer_size(data: &ArrayData) -> i64 {
+        let own: i64 = data.buffers().iter().map(|b| b.len() as i64).sum();
+        let children: i64 = data.child_data().iter().map(data_buffer_size).sum();
+        own + children
+    }
+    data_buffer_size(&arr.to_data())
 }
 
 /// Validate an incoming `RecordBatch` against a registered schema.
@@ -629,6 +724,34 @@ pub fn validate_and_align_batch(
     })
 }
 
+/// Overwrite the aligned batch's implicit origin `cluster` column with `origin`
+/// for every row. No-op when the namespace's schema has no cluster column.
+///
+/// This is the stats-plane analogue of the log plane's `authorized_cluster`
+/// (`server/log_service.rs`): a WriteRows admitted under a forwarding JWT names
+/// exactly one origin cluster, so the hub binds the rows to it here rather than
+/// trusting the sender to have stamped the column. That closes the finelog
+/// federation gap where a namespace whose schema on the sending finelog predates
+/// the implicit `cluster` column forwards its rows unstamped (the forwarder only
+/// stamps when its local schema carries the column). Overwriting — rather than
+/// filling blanks or rejecting a mismatch — is both simpler and safer: the
+/// forwarder only ever ships local (null/empty-cluster) rows, so the batch's
+/// cluster carries nothing to preserve, and a JWT writer can then only ever
+/// attribute rows to its own cluster.
+pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
+    let Some(i) = aligned
+        .fields
+        .iter()
+        .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+    else {
+        return;
+    };
+    let old_size = array_buffer_size(&aligned.arrays[i]);
+    let stamped: ArrayRef = Arc::new(StringArray::from(vec![origin; aligned.num_rows]));
+    aligned.byte_size += array_buffer_size(&stamped) - old_size;
+    aligned.arrays[i] = stamped;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn arrow_type_map_covers_all_seven_types() {
+    fn arrow_type_map_covers_all_column_types() {
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_STRING),
             Some(DataType::Utf8)
@@ -680,7 +803,39 @@ mod tests {
             arrow_type_for(ColumnType::COLUMN_TYPE_BYTES),
             Some(DataType::Binary)
         );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_MAP),
+            Some(map_utf8_utf8_type())
+        );
         assert_eq!(arrow_type_for(ColumnType::COLUMN_TYPE_UNKNOWN), None);
+    }
+
+    /// The canonical `Map<Utf8,Utf8>` storage type is byte-identical to pyarrow's
+    /// `pa.map_(pa.string(), pa.string())` wire form: entries/key/value field
+    /// names, a non-nullable key, a nullable value, and the unsorted flag. Any
+    /// drift here forces a cast (or an outright reject) at the write and
+    /// compaction DataType-equality gates, so pin the exact shape.
+    #[test]
+    fn map_type_matches_pyarrow_wire_form() {
+        let DataType::Map(entries, sorted) = map_utf8_utf8_type() else {
+            panic!("COLUMN_TYPE_MAP must be a Map DataType");
+        };
+        assert!(!sorted, "the map is unsorted (pyarrow keysSorted=false)");
+        assert_eq!(entries.name(), "entries");
+        assert!(
+            !entries.is_nullable(),
+            "the entries struct field is non-null"
+        );
+        let DataType::Struct(fields) = entries.data_type() else {
+            panic!("map entries must be a Struct");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name(), "key");
+        assert_eq!(fields[0].data_type(), &DataType::Utf8);
+        assert!(!fields[0].is_nullable(), "the key is non-null");
+        assert_eq!(fields[1].name(), "value");
+        assert_eq!(fields[1].data_type(), &DataType::Utf8);
+        assert!(fields[1].is_nullable(), "the value is nullable");
     }
 
     #[test]
@@ -703,6 +858,37 @@ mod tests {
         assert!(!stored.columns[0].nullable);
         let again = with_implicit_seq(stored.clone());
         assert_eq!(again, stored);
+    }
+
+    #[test]
+    fn with_implicit_cluster_appends_nullable_string_cluster_and_is_idempotent() {
+        let stored = with_implicit_cluster(worker_schema());
+        let last = stored.columns.last().unwrap();
+        assert_eq!(last.name, "cluster");
+        assert_eq!(last.r#type, ColumnType::COLUMN_TYPE_STRING);
+        assert!(last.nullable, "the implicit cluster column is nullable");
+        // The rest of the schema is untouched, and the key column is preserved.
+        assert_eq!(
+            stored.column_names(),
+            vec!["worker_id", "mem_bytes", "timestamp_ms", "cluster"]
+        );
+        let again = with_implicit_cluster(stored.clone());
+        assert_eq!(again, stored, "re-applying it does not add a second column");
+    }
+
+    #[test]
+    fn with_implicit_cluster_keeps_a_declared_cluster_column_as_is() {
+        // A schema that already declares `cluster` (e.g. the privileged `log`
+        // namespace, whose writer supplies it) is left exactly as it is — the
+        // column is not moved, duplicated, or re-typed.
+        let declared = Schema::new(
+            vec![
+                col("cluster", ColumnType::COLUMN_TYPE_STRING, false),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "",
+        );
+        assert_eq!(with_implicit_cluster(declared.clone()), declared);
     }
 
     #[test]
@@ -753,6 +939,22 @@ mod tests {
             "k",
         );
         assert_eq!(resolve_key_column(&s).unwrap(), "k");
+    }
+
+    #[test]
+    fn resolve_key_column_rejects_a_map_key() {
+        // A MAP column cannot be the ordering key (compaction can't sort a map).
+        let s = Schema::new(
+            vec![
+                col("labels", ColumnType::COLUMN_TYPE_MAP, false),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "labels",
+        );
+        assert!(matches!(
+            resolve_key_column(&s),
+            Err(StatsError::SchemaValidation(_))
+        ));
     }
 
     #[test]
@@ -890,7 +1092,71 @@ mod tests {
     }
 
     #[test]
-    fn arrow_to_column_type_round_trips_all_seven() {
+    fn stamp_cluster_column_fills_a_forwarded_batch_missing_the_origin_column() {
+        // A hub namespace carries the implicit `cluster` column, but a forwarder
+        // whose local schema predates that column ships a batch without it
+        // (has_origin=false). Alignment NULL-fills the column; the hub then
+        // stamps it from the forwarding credential so the rows are attributable.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1", "e2"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        assert_eq!(
+            aligned.arrays[ci].null_count(),
+            2,
+            "before stamping the aligned cluster column is all-null"
+        );
+
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "every row is bound to the forwarding cluster"
+        );
+    }
+
+    #[test]
+    fn stamp_cluster_column_is_a_noop_without_a_cluster_column() {
+        // A namespace whose schema has no cluster column must not gain one from
+        // stamping — an extra array would not match the engine's schema on append.
+        let registered = with_implicit_seq(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        ));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let before = aligned.fields.len();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        assert_eq!(aligned.fields.len(), before);
+        assert!(
+            aligned
+                .fields
+                .iter()
+                .all(|f| f.name() != IMPLICIT_CLUSTER_COLUMN),
+            "no cluster column is invented"
+        );
+    }
+
+    #[test]
+    fn arrow_to_column_type_round_trips_all_types() {
         for t in [
             ColumnType::COLUMN_TYPE_STRING,
             ColumnType::COLUMN_TYPE_INT64,
@@ -899,6 +1165,7 @@ mod tests {
             ColumnType::COLUMN_TYPE_BOOL,
             ColumnType::COLUMN_TYPE_TIMESTAMP_MS,
             ColumnType::COLUMN_TYPE_BYTES,
+            ColumnType::COLUMN_TYPE_MAP,
         ] {
             let dt = arrow_type_for(t).unwrap();
             assert_eq!(arrow_to_column_type(&dt).unwrap(), t);
@@ -1185,5 +1452,187 @@ mod tests {
         );
         let aligned = validate_and_align_batch(&b, &registered).unwrap();
         assert_eq!(aligned.arrays[0].data_type(), &DataType::Boolean);
+    }
+
+    // -----------------------------------------------------------------------
+    // COLUMN_TYPE_MAP (Map<Utf8,Utf8>).
+    // -----------------------------------------------------------------------
+
+    /// A `Map<Utf8,Utf8>` array in the canonical (pyarrow) shape: entries/key/
+    /// value field names, a non-null key and a nullable value. Each row is a list
+    /// of `(key, Option<value>)` pairs.
+    fn canonical_map_array(rows: Vec<Vec<(&str, Option<&str>)>>) -> ArrayRef {
+        use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut b = MapBuilder::new(Some(names), StringBuilder::new(), StringBuilder::new());
+        for row in rows {
+            for (k, v) in row {
+                b.keys().append_value(k);
+                b.values().append_option(v);
+            }
+            b.append(true).unwrap();
+        }
+        let map = b.finish();
+        // The builder must produce exactly the declared storage type.
+        assert_eq!(map.data_type(), &map_utf8_utf8_type());
+        Arc::new(map)
+    }
+
+    #[test]
+    fn arrow_to_column_type_accepts_any_utf8_map_and_rejects_others() {
+        use arrow::datatypes::Int64Type;
+        // arrow-rs's default MapBuilder names ("entries"/"keys"/"values") and
+        // parquet's native ("key_value"/"key"/"value") both decode to MAP —
+        // arrow_to_column_type is field-name and nullability agnostic.
+        for (entry, key, value) in [("entries", "keys", "values"), ("key_value", "key", "value")] {
+            let dt = DataType::Map(
+                Arc::new(Field::new(
+                    entry,
+                    DataType::Struct(Fields::from(vec![
+                        Field::new(key, DataType::Utf8, false),
+                        Field::new(value, DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            );
+            assert_eq!(
+                arrow_to_column_type(&dt).unwrap(),
+                ColumnType::COLUMN_TYPE_MAP
+            );
+        }
+        // A map whose value is not a string is unsupported.
+        let int_valued = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int64, true),
+                ])),
+                false,
+            )),
+            false,
+        );
+        assert!(arrow_to_column_type(&int_valued).is_err());
+        // A list is still rejected (proves the Map arm didn't widen the reject).
+        let _ = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![Some(1_i64)])]);
+    }
+
+    #[test]
+    fn array_buffer_size_counts_map_child_buffers() {
+        // The byte estimate must recurse into a map's key/value child buffers,
+        // not just its top-level offset/validity buffers (otherwise the RAM
+        // flush-trigger under-accounts map columns). One row with keys
+        // "scope"/"region" and values "fleet"/"us-east" = 23 bytes of string
+        // data alone, above the ~8-byte top-level map offset buffer.
+        let map = canonical_map_array(vec![vec![
+            ("scope", Some("fleet")),
+            ("region", Some("us-east")),
+        ]]);
+        assert!(
+            array_buffer_size(&map) >= 23,
+            "map byte size must include child key/value bytes"
+        );
+    }
+
+    #[test]
+    fn map_column_survives_parquet_round_trip() {
+        // Writing the canonical map with arrow-rs's parquet writer and reading it
+        // back yields a byte-identical DataType (the writer embeds the Arrow
+        // schema, so entries/key/value names, key/value nullability, and the
+        // sorted flag round-trip). This is what keeps the compaction
+        // `project_to_schema` full-DataType-equality gate from rejecting a
+        // re-read segment.
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use parquet::arrow::ArrowWriter;
+
+        let field = Field::new("labels", map_utf8_utf8_type(), true);
+        let schema = Arc::new(ArrowSchema::new(vec![field]));
+        let map = canonical_map_array(vec![
+            vec![("scope", Some("fleet")), ("region", Some("us-east"))],
+            vec![],
+        ]);
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![map]).unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut w = ArrowWriter::try_new(&mut buf, Arc::clone(&schema), None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(buf))
+            .unwrap()
+            .build()
+            .unwrap();
+        let back: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        let read_type = back[0].schema().field(0).data_type().clone();
+        assert_eq!(read_type, map_utf8_utf8_type());
+        assert_eq!(
+            arrow_to_column_type(&read_type).unwrap(),
+            ColumnType::COLUMN_TYPE_MAP
+        );
+    }
+
+    #[test]
+    fn align_accepts_native_map_column() {
+        // A registered nullable MAP column accepts a canonical MapArray batch and
+        // passes it through as the canonical storage type (no cast).
+        let registered = with_implicit_seq(Schema::new(
+            vec![
+                Column::new("labels", ColumnType::COLUMN_TYPE_MAP, true),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "",
+        ));
+        let map = canonical_map_array(vec![vec![("scope", Some("fleet"))], vec![("region", None)]]);
+        let b = batch(
+            vec![
+                Field::new("labels", map_utf8_utf8_type(), true),
+                Field::new("timestamp_ms", DataType::Int64, false),
+            ],
+            vec![map, Arc::new(Int64Array::from(vec![1_i64, 2]))],
+        );
+        let aligned = validate_and_align_batch(&b, &registered).unwrap();
+        assert_eq!(aligned.arrays[0].data_type(), &map_utf8_utf8_type());
+        assert_eq!(aligned.num_rows, 2);
+    }
+
+    #[test]
+    fn align_missing_nullable_map_null_fills() {
+        // A nullable MAP column absent from the batch is NULL-filled with a
+        // typed empty MapArray (exercises new_null_array over a Map DataType).
+        let registered = with_implicit_seq(Schema::new(
+            vec![
+                Column::new("labels", ColumnType::COLUMN_TYPE_MAP, true),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "",
+        ));
+        let b = batch(
+            vec![Field::new("timestamp_ms", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(vec![1_i64]))],
+        );
+        let aligned = validate_and_align_batch(&b, &registered).unwrap();
+        let labels = &aligned.arrays[0];
+        assert_eq!(labels.data_type(), &map_utf8_utf8_type());
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels.null_count(), 1);
+    }
+
+    #[test]
+    fn map_column_json_round_trips() {
+        let stored = with_implicit_seq(Schema::new(
+            vec![
+                col("labels", ColumnType::COLUMN_TYPE_MAP, true),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "",
+        ));
+        let json = schema_to_json(&stored);
+        assert!(json.contains("COLUMN_TYPE_MAP"));
+        assert_eq!(schema_from_json(&json).unwrap(), stored);
     }
 }

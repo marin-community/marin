@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import time
 
 import pytest
 from ducky.config import DuckyConfig
@@ -45,6 +44,9 @@ class _FakeRunner:
             raise self._error
         assert self._result is not None
         return self._result
+
+    def lookup_persistent(self, sql: str) -> QueryResult | None:
+        return None  # no restart-survivable sidecar by default
 
 
 def _client(runner) -> TestClient:
@@ -162,15 +164,22 @@ def test_query_result_delivered_via_result_endpoint():
 
 
 class _CountingRunner(_FakeRunner):
-    """A _FakeRunner that counts how many times it actually executed (to tell cache hits apart)."""
+    """Counts real executions and simulates the scratch-bucket cache: run_query 'writes a sidecar'
+    that a later lookup_persistent reads back, so a repeated query is served without re-running."""
 
     def __init__(self, result):
         super().__init__(result=result)
         self.calls = 0
+        self._persisted: dict[str, QueryResult] = {}
 
     def run_query(self, sql, query_id):
         self.calls += 1
-        return super().run_query(sql, query_id)
+        result = super().run_query(sql, query_id)
+        self._persisted[sql] = result
+        return result
+
+    def lookup_persistent(self, sql):
+        return self._persisted.get(sql)
 
 
 def test_identical_sql_served_from_cache():
@@ -197,6 +206,46 @@ def test_use_cache_false_forces_fresh_run():
     assert runner.calls == 1
     manager.submit("SELECT 1", use_cache=False)  # forced fresh run
     assert runner.calls == 2
+
+
+class _PersistentRunner(_FakeRunner):
+    """Serves every SQL from a restart-survivable sidecar; counts lookups and executions."""
+
+    def __init__(self, result):
+        super().__init__(result=result)
+        self._persistent = result
+        self.run_calls = 0
+        self.lookup_calls = 0
+
+    def run_query(self, sql, query_id):
+        self.run_calls += 1
+        return super().run_query(sql, query_id)
+
+    def lookup_persistent(self, sql):
+        self.lookup_calls += 1
+        return self._persistent
+
+
+def test_persistent_cache_hit_serves_without_executing():
+    """On an in-memory miss, a sidecar hit returns cached=True without running the query —
+    the path that survives the restarts that drop the in-memory cache."""
+    runner = _PersistentRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/prior.parquet", 42, 7))
+    payload = _run(_client(runner), "SELECT 1")
+
+    assert payload["status"] == "done"
+    assert payload["cached"] is True
+    assert payload["result_path"] == "gs://b/ducky/prior.parquet"
+    assert runner.lookup_calls == 1 and runner.run_calls == 0  # served from the sidecar, not executed
+
+
+def test_use_cache_false_bypasses_persistent_cache():
+    """A forced fresh run skips the persistent tier too, then executes."""
+    runner = _PersistentRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor())
+
+    manager.submit("SELECT 1", use_cache=False)
+    assert runner.lookup_calls == 0  # persistent tier not consulted
+    assert runner.run_calls == 1  # ran fresh
 
 
 def test_query_error_surfaces_in_result():
@@ -228,24 +277,6 @@ def test_retained_states_are_bounded_lru():
     assert all(manager.get(qid) is not None for qid in ids[2:])  # newest three kept
 
 
-def test_cache_is_bounded_lru():
-    runner = _FakeRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
-    manager = QueryManager(runner, executor=_InlineExecutor(), max_cache_entries=2)
-    for i in range(4):
-        manager.submit(f"SELECT {i}")
-    assert len(manager._cache) == 2  # capped
-
-
-def test_cache_entry_expires_after_ttl():
-    """A cached result older than the TTL is dropped (its spilled parquet may be gone)."""
-    manager = QueryManager(_FakeRunner(), executor=_InlineExecutor(), cache_ttl=10)
-    result = QueryResult(["a"], [[1]], 1, False, "gs://b/x.parquet", 1, 1)
-    manager._cache["SELECT 1"] = (result, time.monotonic() - 100)  # stale
-    manager._cache["SELECT 2"] = (result, time.monotonic())  # fresh
-    assert manager._cached_result("SELECT 1") is None
-    assert manager._cached_result("SELECT 2") is result
-
-
 class _RecordingQueryLog:
     """Captures the rows a QueryManager would persist to finelog (duck-types QueryLog.record)."""
 
@@ -257,19 +288,26 @@ class _RecordingQueryLog:
 
 
 class _ScriptedRunner:
-    """Returns a result or raises, chosen by the SQL text; counts real executions."""
+    """Returns a result or raises, chosen by the SQL text; counts real executions and simulates
+    the scratch-bucket cache so a repeated successful query is served without re-running."""
 
     def __init__(self, results: dict, errors: dict):
         self._results = results
         self._errors = errors
         self.created_view_names: frozenset[str] = frozenset()
         self.calls = 0
+        self._persisted: dict[str, QueryResult] = {}
 
     def run_query(self, sql: str, query_id: str) -> QueryResult:
         self.calls += 1
         if sql in self._errors:
             raise self._errors[sql]
-        return self._results[sql]
+        result = self._results[sql]
+        self._persisted[sql] = result
+        return result
+
+    def lookup_persistent(self, sql: str) -> QueryResult | None:
+        return self._persisted.get(sql)
 
 
 def test_every_submission_is_recorded():

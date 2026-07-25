@@ -103,7 +103,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
-    """Extra multiplier on ``qk_mult`` applied ONLY on the long-attention branch
+    """Extra multiplier on ``qk_mult`` applied only on the long-attention branch
     (every-4th-and-last layer, full causal). Short (sliding-window) layers are
     unaffected. Intended for YaRN-style attention-temperature scaling at long
     context extension, where softmax logits sharpen with sequence length but
@@ -119,6 +119,11 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    ce_implementation: str | None = None
+    """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
+    backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
+    (cut) CE that avoids materializing the [tokens, vocab] logits tile -- large HBM saving at long
+    context. None is byte-identical to the prior behaviour."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -126,7 +131,7 @@ class GrugModelConfig:
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
-    per layer per chip after FSDP), so replicating them is cheap on HBM but
+    per layer per chip after FSDP), so replicating them costs little HBM but
     eliminates the per-layer FSDP all-gather for the QKVO matmuls. MFU probe
     knob to isolate whether attention collectives matter."""
     split_w_gate_up: bool = True
@@ -248,9 +253,21 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        # Split the flattened head dim (num_heads * head_dim) into (heads, head_dim).
+        # Under tensor/model parallelism the projection output's last dim is sharded over the
+        # ``model`` axis, and JAX's explicit-mesh reshape cannot infer which output axis carries
+        # that sharding on a split -> pass out_sharding explicitly (model on the head axis,
+        # head_dim replicated). At model_axis==1 this is byte-identical to the old einops rearrange.
+        _qkv_head_spec = P(_BATCH_AXES, None, "model", None)
+        q = jnp.einsum("bsh,hd->bsd", x, self.w_q).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=_qkv_head_spec
+        )
+        k = jnp.einsum("bsh,hd->bsd", x, self.w_k).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=_qkv_head_spec
+        )
+        v = jnp.einsum("bsh,hd->bsd", x, self.w_v).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=_qkv_head_spec
+        )
 
         # Shift the second half of K's head_dim back by one position so the
         # query at position i sees K[i] on head_dim[:half] but K[i-1] on
@@ -311,7 +328,12 @@ class CausalSelfAttention(eqx.Module):
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        # Merge (heads, head_dim) back to a flat head dim. The head axis is sharded over ``model``
+        # (tensor parallel), so pin the merged dim's sharding explicitly rather than relying on
+        # explicit-mesh reshape inference. At model_axis==1 this equals the old einops rearrange.
+        attn_out = attn_out.reshape(
+            (attn_out.shape[0], attn_out.shape[1], -1), out_sharding=P(_BATCH_AXES, None, "model")
+        )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
@@ -806,6 +828,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.ce_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]

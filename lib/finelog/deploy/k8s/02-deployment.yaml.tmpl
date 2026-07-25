@@ -27,6 +27,11 @@ spec:
         app: {{ name }}
     spec:
 {{ priority_class_block }}
+      # Finelog's native dependencies and rollback images are not uniformly
+      # multi-architecture. Keep the stateful server on the amd64 control nodes
+      # even when a cluster also offers arm64 task capacity.
+      nodeSelector:
+        kubernetes.io/arch: amd64
       # The container runs as UID 1000 (finelog). fsGroup makes kubelet
       # chown the mounted PV to GID 1000 so writes succeed; without this
       # the PV root inherits root:root and parquet flushes EACCES.
@@ -74,24 +79,36 @@ spec:
               mountPath: /var/cache/finelog
           resources:
             requests:
-              cpu: "500m"
-              memory: "4Gi"
+              cpu: "{{ cpu_request }}"
+              memory: "{{ memory_request }}"
             limits:
-              cpu: "2"
-              memory: "32Gi"
+              cpu: "{{ cpu_limit }}"
+              memory: "{{ memory_limit }}"
+          # Opening an existing store can take over a minute on a network-backed
+          # PVC. Gate liveness and readiness until startup succeeds so recovery
+          # work cannot trigger a self-sustaining liveness restart loop.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ port }}
+            periodSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 30
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 15
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ port }}
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 15
             failureThreshold: 3
       volumes:
         - name: cache

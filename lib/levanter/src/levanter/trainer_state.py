@@ -138,7 +138,7 @@ class TrainerState(eqx.Module, Generic[M]):
         loss: float | None = None,
         key: PRNGKeyArray,
     ) -> tuple[S, M]:
-        assert isinstance(self, TrainerState)  # make mypy happy
+        assert isinstance(self, TrainerState)  # make pyrefly happy
         model, opt_state, updates = take_train_step(
             self.optimizer,
             self.model,

@@ -167,6 +167,8 @@ TpuType = Literal[
     "v6e-256",
 ]
 
+TpuFamily = Literal["v4", "v5e", "v5p", "v6e"]
+
 GpuType = Literal[
     "A10",
     "A100-40G",
@@ -235,7 +237,11 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
 
 _BYTES_PER_GIB = 1024**3
 
-# Per-chip HBM capacities from the Google Cloud TPU specifications.
+# Per-chip HBM capacities from the Google Cloud TPU specifications:
+# v4: https://cloud.google.com/tpu/docs/v4
+# v5e: https://cloud.google.com/tpu/docs/v5e
+# v5p: https://cloud.google.com/tpu/docs/v5p
+# v6e: https://cloud.google.com/tpu/docs/v6e
 TPU_HBM_BYTES_PER_CHIP: Mapping[str, int] = MappingProxyType(
     {
         "v4": 32 * _BYTES_PER_GIB,
@@ -294,7 +300,7 @@ TPU_HOST_RESOURCES: dict[str, TpuHostResources] = {
 DEFAULT_TPU_HOST_FRACTION = 0.5
 
 
-def tpu_family(tpu_type: str) -> str:
+def tpu_family(tpu_type: str) -> TpuFamily:
     """Return the TPU family (e.g. ``"v5e"``, ``"v5p"``) for a TPU type name."""
     if tpu_type.startswith("v4-"):
         return "v4"
@@ -435,6 +441,9 @@ class ResourceConfig:
     the backend uses its cluster-configured default. Used for jobs that need
     a custom runtime (e.g. an image with runsc/skopeo for sandboxing
     untrusted child workloads).
+
+    `target_cluster` routes an Iris job to a named peer cluster. Other backends
+    may ignore it.
     """
 
     cpu: float = 1
@@ -447,6 +456,7 @@ class ResourceConfig:
     # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
+    target_cluster: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None
@@ -707,8 +717,8 @@ class JobRequest:
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         processes_per_task: GPU processes to run inside each task (default 1). When
-            > 1, each task fans out into that many JAX processes (one per GPU group)
-            via the iris.runtime.multigpu supervisor. ``1`` is a no-op.
+            > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
+            (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
         max_task_failures: Cumulative failed task attempts the job tolerates before it

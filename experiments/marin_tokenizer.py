@@ -197,12 +197,16 @@ MARIN_CUSTOM_SPECIAL_TOKENS = {
 }
 
 
-def _inject_special_tokens(
+def inject_special_tokens(
     tokenizer: PreTrainedTokenizer,
     new_tokens: dict[int, str],
 ) -> PreTrainedTokenizer:
     """
-    Inject special tokens into the tokenizer config.
+    Rename existing vocabulary slots to new special-token strings.
+
+    Rewrites ``added_tokens_decoder`` (``tokenizer_config.json``) and the fast tokenizer's
+    ``added_tokens`` (``tokenizer.json``) so each ``token_id`` decodes to ``token_str`` and the
+    string round-trips to that single id. A slot that does not exist yet is added.
 
     Args:
         tokenizer: The tokenizer to modify
@@ -284,7 +288,7 @@ def create_marin_tokenizer(
         A new tokenizer instance
     """
     # Inject special tokens
-    marin_tokenizer = _inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
+    marin_tokenizer = inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
 
     # Assign marin template
     marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE

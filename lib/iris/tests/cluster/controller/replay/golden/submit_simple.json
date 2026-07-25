@@ -85,6 +85,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": null,
       "state": 1,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/simple-job/0",
       "task_index": 0

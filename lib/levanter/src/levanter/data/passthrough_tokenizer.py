@@ -77,6 +77,9 @@ class PassthroughTokenizer:
     def chat_template(self) -> str | None:
         return None
 
+    def with_chat_template(self, chat_template: str) -> "PassthroughTokenizer":
+        raise ValueError("PassthroughTokenizer does not support chat templates")
+
     def apply_chat_template(
         self,
         conversation: list[dict[str, str]],

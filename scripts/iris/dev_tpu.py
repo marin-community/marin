@@ -714,6 +714,9 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
 @click.option("--setup-env/--no-setup-env", default=True, help="Install/update the remote uv environment after sync.")
 @click.option("--zone", type=str, default=None, help="Restrict the holder job to a specific zone.")
+@click.option("--cpu", type=float, default=0.5, show_default=True, help="Host CPU cores reserved by the holder job.")
+@click.option("--ram", default="1GB", show_default=True, help="Host RAM reserved by the holder job.")
+@click.option("--disk", default="5GB", show_default=True, help="Host disk reserved by the holder job.")
 @click.option("--timeout", type=int, default=900, show_default=True, help="Seconds to wait for workers to come up.")
 @click.pass_context
 def allocate(
@@ -724,6 +727,9 @@ def allocate(
     no_sync: bool,
     setup_env: bool,
     zone: str | None,
+    cpu: float,
+    ram: str,
+    disk: str,
     timeout: int,
 ) -> None:
     """Allocate a dev TPU session and hold it until Ctrl-C."""
@@ -751,7 +757,7 @@ def allocate(
     try:
         client_cm = controller_client(ctx.obj.config_file)
         client = client_cm.__enter__()
-        resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=tpu_device(tpu_type))
+        resources = ResourceSpec(cpu=cpu, memory=ram, disk=disk, device=tpu_device(tpu_type))
         priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED if priority is None else priority_band_value(priority)
         constraints = []
         if zone:
@@ -769,7 +775,15 @@ def allocate(
 
         workers = wait_for_workers(job, client, timeout=timeout, project=project)
         for worker in workers:
-            ensure_ssh_access(worker.node)
+            try:
+                ensure_ssh_access(worker.node)
+            except subprocess.CalledProcessError as exc:
+                raise click.ClickException(
+                    f"Direct SSH is unavailable for {worker.node.name}. The dev TPU helper requires SSH for "
+                    "sync, connect, setup_env, execute, and watch, even when allocation uses --no-sync. "
+                    "Fix GCP SSH/OS Login access and retry; external identities may require the organization-level "
+                    "roles/compute.osLoginExternalUser role. The holder will be released."
+                ) from exc
 
         state = DevTpuState(
             session_name=session_name,

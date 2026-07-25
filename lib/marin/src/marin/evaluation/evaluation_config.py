@@ -1,113 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Task configuration shared by Evalchemy and Levanter evaluation."""
+
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from fray.cluster import ResourceConfig
 from levanter.eval_harness import TaskConfig
 
-# Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
+    """One lm-eval task and its prompt/scoring behavior."""
+
     name: str
-    """Name of the evaluation task."""
-
     num_fewshot: int
-    """Number of few-shot examples to evaluate on."""
-
     task_alias: str | None = None
-    """Alias for the task name."""
-
     task_kwargs: dict | None = None
-    """Additional keyword arguments specifically for this task."""
-
-
-@dataclass(frozen=True)
-class EvaluationConfig:
-    evaluator: str
-    """Name of the evaluator to run."""
-
-    resource_config: ResourceConfig
-    """
-    Resources to allocate for the eval step (passed to @remote).
-    """
-
-    model_name: str | None
-    """
-    Can be a name of the model in Hugging Face (e.g, google/gemma-2b) or
-    a name given to the model checkpoint (e.g., $RUN/$CHECKPOINT).
-
-    If None, the model_path should be provided and the name will be imputed from the path,
-     using Levanter's path conventions. (i.e. $RUN/hf/step-$STEP --> $RUN-$STEP)
-    """
-
-    evaluation_path: str = "tmp/output"
-    """
-    Where to write results to. Can be a local path (e.g., /path/to/output) or
-    a path on GCS (e.g., gs://bucket/path/to/output).
-    """
-
-    evals: list[EvalTaskConfig] = field(default_factory=list)
-    """
-    List of specific evals within an evaluation harness to run. This would be a list of
-    tasks in for EleutherAI's lm-evaluation-harness or a list of evals from HELM (e.g., mmlu, lite, etc.).
-    See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation, or
-    https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks
-    for the full list.
-    """
-
-    model_path: str | None = None
-    """
-    Optional: Path to the model. Can be a path on GCS.
-    """
-
-    discover_latest_checkpoint: bool = False
-    """
-    Whether to discover the latest HF checkpoint in the model path.
-    """
-
-    max_eval_instances: int | None = None
-    """
-    Maximum number of evaluation instances to run.
-    """
-
-    engine_kwargs: dict | None = None
-    """
-    Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    generation_params: dict | None = None
-    """
-    Additional keyword arguments passed to the vLLM sampling params engine
-    """
-
-    apply_chat_template: bool = False
-    """
-    Whether or not this model was trained with a Chat Template in the tokenizer
-    """
-
-    wandb_tags: list[str] | None = None
-    """
-    Tags to add to the wandb run.
-    """
-
-    base_eval_run_name: str | None = None
-    """Custom base name for wandb runs. If set, wandb runs will be named
-    evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
+    generation: bool = False
+    """Whether the task scores generated text rather than prompt loglikelihoods."""
+    unsafe_code: bool = False
+    """Whether scoring executes model-generated code."""
+    completion_only: bool = False
+    """Whether generation must use the completions API even for chat-template models."""
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
-
-    ``task_kwargs`` is spread into the TaskConfig so callers can pass inline task-spec fields
-    (``dataset_path``, ``output_type``, ``metric_list``, …) for tasks whose registered YAML has
-    bugs or when defining a fully-inline task under a fresh name.
-    """
     return [
         TaskConfig(
             task=task.name,

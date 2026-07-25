@@ -1,0 +1,20 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dashboards are code: they ship in the image under /etc/grafana/dashboards and
+# are reloaded from disk. UI edits do not persist — Grafana's SQLite is ephemeral
+# on Cloud Run, so anything not in git is lost at the next revision anyway.
+# Making that explicit here is kinder than letting someone discover it.
+apiVersion: 1
+
+providers:
+  - name: marin
+    orgId: 1
+    folder: Marin
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: true

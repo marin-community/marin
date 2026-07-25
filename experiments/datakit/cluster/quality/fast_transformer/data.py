@@ -8,6 +8,7 @@ training split (mirroring fasttext's ``minCount`` pruning so every embedding row
 actually trained and the table stays small), and packs into dense padded arrays.
 """
 
+import functools
 import logging
 from collections import Counter
 from dataclasses import dataclass
@@ -16,6 +17,18 @@ import numpy as np
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=8)
+def load_tokenizer(tokenizer_name: str):
+    """Load a HuggingFace tokenizer, memoized per process.
+
+    ``AutoTokenizer.from_pretrained`` re-runs the slow→fast conversion of the
+    250K-vocab tokenizer on every call; scoring calls this once per batch, so
+    without the cache a many-batch shard reloads the tokenizer hundreds of times.
+    """
+    return AutoTokenizer.from_pretrained(tokenizer_name)
+
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
 PAD_ID = 0
@@ -90,8 +103,7 @@ def _pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, m
 
 def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
     """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    return _encode(tokenizer, texts, max_tokens)
+    return _encode(load_tokenizer(tokenizer_name), texts, max_tokens)
 
 
 def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:

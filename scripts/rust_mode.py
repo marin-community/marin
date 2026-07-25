@@ -5,17 +5,18 @@
 """Switch the native (maturin) packages between dev mode (source build) and
 user mode (pre-built wheel).
 
-Covers the native packages marin-dupekit and marin-finelog-server. The
-pure-Python marin-finelog client is a permanent workspace member (always built
-from source, see the root pyproject), so it is not toggled here. Operates on
-each target pyproject.toml by replacing the block between RUST-DEV markers:
+Covers the native packages marin-dupekit-native, marin-finelog-server, and
+marin-iris-native. Their pure-Python fronts are permanent workspace members
+(always built from source, see the root pyproject), so they are not toggled
+here. Operates on each target pyproject.toml by replacing the block between
+RUST-DEV markers:
     # ### BEGIN RUST-DEV SOURCES ###
     ...
     # ### END RUST-DEV SOURCES ###
 
-Two files carry markers: the repo-root pyproject.toml (governs the root
-workspace venv) and lib/finelog/pyproject.toml (governs in-dir `uv run` in
-lib/finelog, which is its own standalone project).
+Four files carry markers: the repo-root pyproject.toml (governs the root
+workspace venv) and each pure package's pyproject.toml — lib/dupekit,
+lib/finelog, and lib/iris — which govern in-dir `uv run` in those members.
 
 Usage:
     python scripts/rust_mode.py dev    # insert path sources (build from source)
@@ -30,24 +31,32 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-# Path sources injected in dev mode, per pyproject. marin-dupekit is editable so
-# source edits land without reinstalling; marin-finelog-server is a plain path
-# source — its [tool.uv] cache-keys cover the Rust sources, so `uv sync` rebuilds
-# the extension when they change. The pure marin-finelog client is omitted: it is
-# a permanent workspace member and always resolves from source.
+# Path sources injected in dev mode, per pyproject. All native packages are
+# plain path sources — their [tool.uv] cache-keys cover the Rust sources, so
+# `uv sync` rebuilds the extensions when they change. The pure packages remain
+# permanent workspace members and always resolve from source.
 TARGETS = [
     (
         pathlib.Path("pyproject.toml"),
         "\n".join(
             [
-                'marin-dupekit = { path = "lib/dupekit", editable = true }',
+                'marin-dupekit-native = { path = "lib/dupekit/rust" }',
                 'marin-finelog-server = { path = "lib/finelog/rust" }',
+                'marin-iris-native = { path = "lib/iris/rust" }',
             ]
         ),
     ),
     (
+        pathlib.Path("lib/dupekit/pyproject.toml"),
+        'marin-dupekit-native = { path = "rust" }',
+    ),
+    (
         pathlib.Path("lib/finelog/pyproject.toml"),
         'marin-finelog-server = { path = "rust" }',
+    ),
+    (
+        pathlib.Path("lib/iris/pyproject.toml"),
+        'marin-iris-native = { path = "rust" }',
     ),
 ]
 
@@ -85,9 +94,9 @@ def main() -> None:
         overall = "dev" if "dev" in modes.values() else "user"
         print(f"Rust build mode: {overall}")
         if overall == "dev":
-            print("  dupekit/finelog are built from source (lib/dupekit, lib/finelog)")
+            print("  dupekit/finelog/iris native packages are built from source")
         else:
-            print("  dupekit/finelog are installed from pre-built wheels")
+            print("  dupekit/finelog/iris native packages are installed from pre-built wheels")
         if len(set(modes.values())) > 1:
             for path, m in modes.items():
                 print(f"  WARNING: mixed state — {path} is in {m} mode")
@@ -98,10 +107,11 @@ def main() -> None:
         path.write_text(_replace_block(texts[path], inner))
 
     if mode == "dev":
-        print("Switched to dev mode: dupekit/finelog will build from source.")
-        print("Do NOT commit pyproject.toml or lib/finelog/pyproject.toml in this state.")
+        print("Switched to dev mode: dupekit/finelog/iris native packages will build from source.")
+        marker_files = ", ".join(str(path) for path, _ in TARGETS)
+        print(f"Do NOT commit these in this state: {marker_files}")
     else:
-        print("Switched to user mode: dupekit/finelog from pre-built wheels.")
+        print("Switched to user mode: dupekit/finelog/iris native packages from pre-built wheels.")
 
 
 if __name__ == "__main__":

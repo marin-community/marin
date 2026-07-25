@@ -63,10 +63,8 @@ def _prune_terminal_jobs(
         if job_name is None:
             break
         with db.transaction() as cur:
-            # Invalidate endpoint cache BEFORE the CASCADE so the cache
-            # drops rows SQLite is about to delete for us. delete_job then drops
-            # the derived-count and run-template memos its CASCADE would strand.
-            cur.caches[EndpointsProjection].remove_by_job_ids(cur, [job_name])
+            # delete_job removes the job's endpoints (cache + DB) and drops the
+            # derived-count and run-template memos its CASCADE would strand.
             writes.delete_job(cur, job_name)
         log_event("job_pruned", job_name.to_wire())
         deleted += 1

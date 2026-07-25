@@ -23,7 +23,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime
+from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -499,33 +499,6 @@ def test_list_endpoints_filters_by_task_ids(client, state):
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
-
-
-def test_proxy_refuses_ambiguous_endpoint_name(client, state, job_request):
-    """A /proxy name that resolves to disagreeing rows — a local and a remote one —
-    is refused with 404 rather than forwarded to an arbitrarily-picked row. Guards
-    against falling back to EndpointProxy's single-row re-resolution when
-    resolve_proxy_target fails closed on the ambiguity.
-    """
-    job_id = submit_job(state, "amb", job_request)
-    task = job_id.task(0)
-    with state._db.transaction() as cur:
-        for endpoint_id, peer in (("local-row", None), ("remote-row", "cw")):
-            state._endpoints.add(
-                cur,
-                EndpointRow(
-                    endpoint_id=endpoint_id,
-                    name="/serve/amb",
-                    address="10.0.0.9:8000",
-                    task_id=task,
-                    metadata={},
-                    registered_at=Timestamp.now(),
-                    peer_id=peer,
-                ),
-            )
-
-    resp = client.get("/proxy/serve.amb/")
-    assert resp.status_code == 404
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
@@ -1278,30 +1251,30 @@ def test_get_worker_status_unknown_id_returns_error(client):
     assert resp.status_code != 200
 
 
-def test_health_endpoint_returns_ok(client):
-    """Health endpoint returns a trivial ok response without querying state."""
+def test_health_endpoint_probes_database(client):
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {
+        "status": "ok",
+        "database": "ok",
+        "checkpoint_epoch_ms": None,
+    }
+
+
+def test_health_endpoint_returns_unhealthy_when_database_is_unreadable(client, state):
+    state._db.close()
+    state._db.db_path.unlink()
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "unhealthy", "database": "error"}
 
 
 # =============================================================================
 # Task Logs Proxy Tests
 # =============================================================================
-
-
-def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """The endpoint proxy forwards FetchLogs to the registered log server."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/proxy/system.log-server/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
 
 
 @pytest.mark.parametrize(
@@ -1713,7 +1686,7 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     # Default: this backend supplies no federation availability metric (UNSET). Tests
     # exercising the metric override the return value explicitly.
-    backend.available_resources.return_value = None
+    backend.resource_capacity.return_value = None
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
@@ -1955,7 +1928,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.available_resources.return_value = {"v6e-16": 32}  # supplies the federation metric
+    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1987,6 +1960,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # The federation availability metric is populated for a supplying backend and left
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
+    assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
     assert summaries["gcp"]["availability"]["version"] == 1
     assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.

@@ -11,6 +11,7 @@ on the ``FederationStore`` protocol.
 """
 
 import logging
+import uuid
 
 from rigging.timing import Duration, Timestamp
 
@@ -26,6 +27,7 @@ from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
     CancelTarget,
@@ -155,6 +157,8 @@ class ControllerFederationStore:
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.QUEUED_HANDOFF),
+                # Each admission is a new incarnation; every re-drive repeats its nonce.
+                handoff_nonce=uuid.uuid4().hex,
             )
         return HandoffAdmission.ADMITTED
 
@@ -190,6 +194,7 @@ class ControllerFederationStore:
                         request=reconstruct_launch_job_request(
                             job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
                         ),
+                        handoff_nonce=handle.handoff_nonce,
                     )
                 )
         return pending
@@ -268,10 +273,7 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
-                    # Drop the job's mirrored endpoints through the projection first;
-                    # delete_job CASCADEs the rows in SQL but would leave the in-memory
-                    # endpoint cache serving them (mirrors the pruner's ordering).
-                    cur.caches[EndpointsProjection].remove_by_job_ids(cur, [local_job_id])
+                    # delete_job drops the job's mirrored endpoints (cache + DB) too.
                     writes.delete_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)
@@ -327,6 +329,7 @@ class ControllerFederationStore:
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
+                status_message=task.status_message or None,
             )
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
             # The parent derives the federated task's counts from these mirrored
@@ -334,7 +337,7 @@ class ControllerFederationStore:
             cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [local_task_id])
 
     def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
-        """Create the local mirror row for a child a peer spawned under a received root.
+        """Create the local mirror rows for a child a peer spawned under a received root.
 
         The whole federated subtree shares the root's submitter and root submit time,
         read from the (already-present) parent; the row is stamped with the peer
@@ -342,6 +345,11 @@ class ControllerFederationStore:
         ``False`` (and skips) if the parent is not mirrored yet — deltas arrive in
         changelog order, so the parent's creation precedes the child's and this is
         only a defensive guard; the child is re-created on its next delta.
+
+        Writes the ``job_config`` companion the dashboard reads join against, so the
+        child renders like any other job. Only the peer-reported resources are known
+        here — the parent never authored a request for this job and never runs it —
+        so the rest of the config keeps its column defaults.
         """
         parent = local_job_id.parent
         if parent is None:
@@ -360,7 +368,7 @@ class ControllerFederationStore:
             root_job_id=local_job_id.root_job.to_wire(),
             depth=local_job_id.depth,
             state=summary.state,
-            submitted_at_ms=root_submitted_ms,
+            submitted_at_ms=_proto_ms(summary.HasField("submitted_at"), summary.submitted_at) or root_submitted_ms,
             root_submitted_at_ms=root_submitted_ms,
             started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
             finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
@@ -371,6 +379,15 @@ class ControllerFederationStore:
             name=local_job_id.name,
             cluster=peer_id,
         )
+        writes.insert_mirrored_job_config(
+            cur,
+            job_id=local_job_id,
+            name=local_job_id.name,
+            resources=summary.resources,
+        )
+        # job_config backs RunTemplatesProjection; invalidate post-commit per its
+        # watch contract, as ops.job.submit does for a locally-submitted job.
+        cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         return True
 
     def _set_replace(self, cur: Tx, peer_id: str, deltas) -> None:

@@ -21,7 +21,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.loader import DataLoader
 from levanter.data.text.datasets import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
@@ -82,7 +82,7 @@ def main(config: VizLmConfig):
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
 
-            activations = model.activations(example.tokens, example.attn_mask, key=key)
+            activations, _ = split_activations(model.activations(example.tokens, example.attn_mask, key=key))
             logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
             loss = next_token_loss(

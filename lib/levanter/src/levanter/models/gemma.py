@@ -272,7 +272,7 @@ class GemmaConfig(HFCompatConfig):
         )
         return config
 
-    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     @property
     def model_type(self) -> type["GemmaLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return GemmaLMHeadModel

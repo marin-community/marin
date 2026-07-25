@@ -18,9 +18,13 @@ from zephyr.writers import (
     _pyarrow_filesystem,
     _s3_filesystem_kwargs,
     infer_arrow_schema,
+    write_jsonl_file,
     write_parquet_file,
     write_vortex_file,
 )
+
+# zstandard frame magic number: the first four bytes of any zstd-compressed stream.
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def test_write_vortex_file_basic():
@@ -83,6 +87,23 @@ def test_write_vortex_file_single_record():
         table = reader.read_all()
         assert len(table) == 1
         assert table.column("name").to_pylist() == ["Alice"]
+
+
+@pytest.mark.parametrize("ext", [".jsonl.zst", ".jsonl.zstd"])
+def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
+    """Both ``.zst`` and ``.zstd`` must produce a genuinely zstd-compressed file.
+
+    Asserting the on-disk magic bytes (rather than only a round-trip) catches the
+    silent case where the extension is unrecognized and records are written raw.
+    """
+    output_path = str(Path(tmp_path) / f"data{ext}")
+    records = [{"id": i, "name": f"row{i}"} for i in range(5)]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result["count"] == 5
+    with open(output_path, "rb") as f:
+        assert f.read(4) == _ZSTD_MAGIC
 
 
 def test_write_parquet_file_basic():

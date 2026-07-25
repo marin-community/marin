@@ -132,14 +132,20 @@ class EndpointClient:
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        """List endpoints by name prefix (or exact name when ``exact`` is set)."""
-
+    def _list_endpoints(self, prefix: str, *, exact: bool) -> list[controller_pb2.Controller.Endpoint]:
         def _call() -> list[controller_pb2.Controller.Endpoint]:
             request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
             return list(self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS).endpoints)
 
         return call_with_retry("list_endpoints", _call)
+
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List endpoints whose names start with ``prefix``."""
+        return self._list_endpoints(prefix, exact=False)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List every registered instance with the exact endpoint ``name``."""
+        return self._list_endpoints(name, exact=True)
 
     def close(self) -> None:
         """Stop renewing and best-effort unregister everything still registered.

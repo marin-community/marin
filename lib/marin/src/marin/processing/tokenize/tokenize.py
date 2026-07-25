@@ -48,6 +48,7 @@ from marin.processing.tokenize._core import (
     parquet_window_hint,
     tokenize_pipeline,
 )
+from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,11 @@ class TokenizedCache(Artifact):
     def tags(self) -> list[str]:
         tags = self._config.get("tags")
         return list(tags) if isinstance(tags, list) else []
+
+    @property
+    def num_train_tokens(self) -> int:
+        """Total number of tokens in the training split (from the cache's ``.stats.json``)."""
+        return read_tokenized_cache_stats(self.cache_dir, "train").total_tokens
 
     def as_component(self) -> DatasetComponent:
         """A Levanter mixture component pointing at this built cache.

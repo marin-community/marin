@@ -6,6 +6,25 @@ numerical tolerances, and integration-test boundaries. Before writing or
 reviewing tests, read root `AGENTS.md`, this file, the nearest module
 `AGENTS.md`, and any testing docs referenced there.
 
+## Running Tests Locally
+
+Run the safe default suite with:
+
+```bash
+uv run pytest
+```
+
+The repository defaults exclude `slow`, `integration`, `data_integration`,
+`cluster`, `requires_cluster`, `docker`, and `manual` tests. The same exclusions
+apply when passing a test path, for example `uv run pytest tests/foo/` or
+`uv run pytest lib/iris/tests/`.
+
+Do not pass a partial marker expression such as `-m "not slow"` for routine
+local testing. Pytest replaces the configured expression instead of combining
+with it, which can select live-cluster or integration tests. Dedicated CI jobs
+run the excluded suites; opt into one locally only when the user or the relevant
+module guide explicitly requests it.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an

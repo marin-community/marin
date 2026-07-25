@@ -1060,6 +1060,7 @@ def _tpu_splash_attention(
             is_causal=mask.is_causal,
             causal_offset=mask.causal_offset,
             sliding_window=mask.sliding_window,
+            bidirectional_window=mask.bidirectional_window,
             has_explicit_mask=mask.explicit_mask is not None,
         )
     elif isinstance(mask, NamedArray):

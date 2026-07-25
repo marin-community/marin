@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 STAGING_PREFIX = "gs://marin-us-central1"
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
-# Bloom sizing mirrors experiments/datakit/decontam/all_sources_decon.py.
+# Bloom sizing mirrors experiments/datakit/reference_pipeline.py.
 ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
 NGRAM_LENGTH = 13

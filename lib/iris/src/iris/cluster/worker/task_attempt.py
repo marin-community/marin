@@ -28,7 +28,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -37,14 +37,12 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    MountKind,
-    MountSpec,
     RuntimeLogReader,
 )
+from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.types import AttemptUid, JobName, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
@@ -370,9 +368,7 @@ class TaskAttempt:
             log_reader = handle.log_reader()
             self._monitor_loop(handle, log_reader)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Monitoring failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -627,13 +623,9 @@ class TaskAttempt:
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Infrastructure error:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_WORKER_FAILED, "Infrastructure error", e)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Task failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Task failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -742,14 +734,6 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        mounts = [
-            MountSpec("/app", kind=MountKind.WORKDIR),
-            MountSpec("/tmp", kind=MountKind.TMPFS),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
-        ]
-
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -757,7 +741,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=mounts,
+            mounts=list(STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
@@ -991,6 +975,17 @@ class TaskAttempt:
     def _append_log(self, *, source: str, data: str) -> None:
         """Push a single log entry (for rare events like errors)."""
         self._push_logs([self._make_log_entry(source=source, data=data)])
+
+    def _fail_from_exception(self, state: TaskState, summary: str, exc: Exception) -> None:
+        """Log ``exc``'s traceback as an injected error and move to a terminal ``state``.
+
+        ``summary`` heads the log line (e.g. "Task failed"); the formatted
+        traceback becomes both the log body and the terminal error stored on
+        the attempt.
+        """
+        error_msg = format_exception_with_traceback(exc)
+        self._append_log(source=INJECTED_ERROR_SOURCE, data=f"{summary}:\n{error_msg}")
+        self.transition_to(state, error=error_msg)
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
         """Fetch new logs from container and push as a batch."""

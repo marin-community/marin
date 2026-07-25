@@ -1,0 +1,31 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One Infinity datasource per cluster, pointed at the bridge's live-Iris path on
+# loopback. Panels append the fixed endpoint (`/jobs`, `/workers`, `/health`); the
+# bridge owns the query and returns flat JSON rows. `/query?sql=` is also served for
+# ad-hoc SELECTs but no committed panel uses it (it is admin/null-auth-scoped).
+#
+# allowedHosts pins each datasource to the bridge; port 8081 is config.BRIDGE_PORT.
+apiVersion: 1
+
+datasources:
+  - name: iris-marin
+    uid: iris-marin
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/iris/marin
+
+  - name: iris-marin-dev
+    uid: iris-marin-dev
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/iris/marin-dev

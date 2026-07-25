@@ -82,7 +82,9 @@ class ClusterClient(Protocol):
         self, endpoint_name: str, ttl: Duration | None = None
     ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]: ...
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]: ...
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]: ...
 
     def list_workers(
         self,
@@ -93,6 +95,7 @@ class ClusterClient(Protocol):
         self,
         *,
         query: controller_pb2.Controller.JobQuery | None = None,
+        limit: int | None = None,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]: ...
 

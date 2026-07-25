@@ -4,87 +4,84 @@
 """End-to-end reference DAG: Datakit sources → (cluster x quality) store.
 
 This wires the existing per-stage building blocks into a single
-StepRunner-walkable graph. The source set is a parameter
-(:func:`select_sources` / ``--sources``), and all resource / K / fan-out
-sizing lives in a :class:`PipelineScale` (``--scale full|smoke``), so the
-*same* DAG runs at full-fleet scale or as a quick e2e smoke on a few small
-sources without forking the pipeline. Per source (default: every entry from
-:func:`marin.datakit.sources.all_sources` — no carve-outs):
+StepRunner-walkable graph. Two modes (``--mode``), same DAG:
+
+- ``full``: sources from :func:`marin.datakit.sources.all_sources`, K=5000.
+- ``sample``: a pre-built testbed sample registered as already-normalized
+  sources (``--sample-prefix``), K=64 -- a true end-to-end run on real data.
+
+Per source::
 
     normalize → tokenize
               → embed (luxical-one)   → assign (domain v0, given centroids)
-              → classify_quality       (quality v0, given .bin)
+              → quality                (pooled fast-transformer, given model dir)
               → decontam               (shared eval bloom)
               → minhash
 
 Then:
     fuzzy_dups([<minhash per source>])
     build_clustered_store(tokenize, decontam, cluster_assign, quality, dedup)
+    one ``datakit/report/<stage>`` step per stage -- a single self-contained
+    HTML page built from that stage's counters + site/sample outputs
+    (:mod:`experiments.datakit.reports`)
+
+Every stage keeps one step per source with its own output dir; only dedup and
+the store combine sources, by design.
+
+Worker fleet: every stage runs its pipeline on its own dedicated Zephyr
+coordinator + workers (vanilla ``ZephyrContext``, built inside the stage
+functions), sized by one :class:`PoolConfig` (``n_workers`` x ``worker``) shared
+across the stages -- so the *only* resource knob is that fleet.
+``--max-concurrent`` bounds how many stages the StepRunner walks at once.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
-normalize_step}`` mapping) and either a path or a pre-built StepSpec for each
-model. Each model accepts ``None`` to train inline -- supported today only
-for the domain centroids; ``quality_model=None`` raises until v0 quality
-training is wrapped as StepSpecs.
+normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
+domain centroids (``None`` trains them inline).
 
-CLI flags map to those parameters:
+Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
+resolved by :func:`rigging.filesystem.marin_prefix` -- unset (the normal iris-
+worker case) it falls back to the in-region bucket, so source artifacts, the
+eval corpus (``EVAL_ROOT``), and every output land in-region. Override via
+``iris job run -e MARIN_PREFIX <bucket>``.
 
-  ``--domain-centroids``    Optional. Directory containing K-means output:
-                            ``centroids_<k_train>.npy`` plus
-                            ``lookup_<k_train>_to_<k>.npy`` for every K view
-                            (``k_train`` / views come from ``scale.cluster``;
-                            the layout produced by
-                            :mod:`experiments.datakit.cluster.domain.v0.exp_full_clusters`).
-                            If omitted, the CLI lets
-                            :func:`reference_datakit_steps` build the
-                            inline-training subgraph via
-                            :func:`build_train_centroids_step`.
+Submit the sample-mode end-to-end run on iris::
 
-  ``--quality-model``       Required. Trained fasttext quality ``.bin`` from
-                            :mod:`experiments.datakit.cluster.quality.v0.train`.
-                            The CLI requires a path because the v0 quality
-                            training flow (sample → LLM-score → fasttext-train)
-                            is not yet wrapped as StepSpecs. Programmatic
-                            callers can still pass a pre-built StepSpec
-                            producing a ``FastTextModel`` artifact.
-
-Region-agnostic: every worker resource is unpinned, so iris's ``--region``
-flag drives scheduling. ``MARIN_PREFIX`` is resolved by
-:func:`rigging.filesystem.marin_prefix` -- when unset (the normal iris-
-worker case) it falls back to ``gs://marin-<region>`` from GCS metadata,
-so the upstream source artifacts, the eval-corpus path
-(``EVAL_ROOT`` in :mod:`decontam.all_sources_decon`, also derived from
-``marin_prefix()``), and every step's output land in-region automatically.
-Override by exporting ``MARIN_PREFIX`` or passing it via
-``iris job run --env-vars MARIN_PREFIX <bucket>``.
-``EVAL_ROOT`` is hardcoded to ``gs://marin-eu-west4/.../evals``: the eval
-corpus is read once to build the decontam bloom, after which workers read
-the bloom in-region -- the cross-region cost is one bloom build, not
-per-shard.
-
-Submit on iris (full)::
-
-    uv run iris --cluster=marin job run --region <region> --extra=cpu \\
-        --priority production --cpu 2 --memory 8GB \\
+    uv run iris --cluster=cw-rno2a job run --priority interactive --cpu 2 --memory 8GB \\
+        --enable-extra-resources -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python -m experiments.datakit.reference_pipeline \\
-            --domain-centroids gs://.../cluster/train_centroids_<hash> \\
-            --quality-model gs://.../quality/model.bin
+            --mode sample --sample-prefix s3://.../datakit/sample_100b_8ae7a94f \\
+            --sources all --pool-workers 512 \\
+            --quality-model-version pooled-junkgate2 \\
+            --domain-centroids-version <run-id>
 
-Smoke (a few small sources, K=64, inline-trained centroids)::
+Reproducibility contract
+------------------------
+A step's ``hash_attrs`` is its cross-region identity: it must contain every
+parameter its fn reads, and no region-specific ``gs://`` path (else byte-identical
+data gets a different output path per region). Two consequences:
 
-    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
-        --priority interactive --cpu 2 --memory 8GB \\
-        -- python -m experiments.datakit.reference_pipeline \\
-            --scale smoke --sources cp/peps,cp/foodista,nsf_awards \\
-            --quality-model gs://.../quality/model.bin
+* External inputs enter the hash as a caller-supplied *version tag*, never their
+  absolute path -- ``quality_model_version`` for the quality model dir and
+  ``centroids_version`` for pre-staged centroids. The HF luxical weights and the
+  tokenizer are pinned to immutable commits (``LUXICAL_REVISION`` /
+  ``TOKENIZER_REVISION``).
+* ``embed`` and ``train_centroids`` are *train-once / replicate* artifacts, not
+  per-region recomputes: luxical inference (float + int8 quantization on
+  heterogeneous CPUs) and faiss K-means (seeded but not bit-stable across machine
+  types / thread counts) can differ bit-for-bit between regions. To reproduce a
+  store exactly, replicate those bytes (pass the trained centroids as
+  ``domain_centroids``) rather than recomputing inline.
 
-or via the curated wrapper :mod:`experiments.datakit.reference_pipeline_smoke`,
-which pins the source list and ``SMOKE_SCALE`` for you.
+Known gap: ``EVAL_ROOT`` (the decontam bloom's eval corpus) is still hashed as a
+``marin_prefix()``-derived path via ``build_eval_bloom_step``, so the bloom (and
+its decontam consumers) re-key per region -- tracked as a follow-up to give the
+eval corpus a version tag.
 """
 
 import argparse
 import logging
-from dataclasses import dataclass, field
+import posixpath
+from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
@@ -111,6 +108,7 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
+from rigging.filesystem import StoragePath, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.domain.v0.assign import (
@@ -119,36 +117,53 @@ from experiments.datakit.cluster.domain.v0.assign import (
 )
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.cluster.domain.v0.train import train_centroids
-from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import (
-    LlmQualityOutput,
-    _register_model_step,
-    classify_llm_quality_step,
-)
-from experiments.datakit.decontam.all_sources_decon import (
-    ESTIMATED_DOC_COUNT,
-    EVAL_ROOT,
-    FALSE_POSITIVE_RATE,
-    NGRAM_LENGTH,
-    OVERLAP_THRESHOLD,
-)
+from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
+from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
     LUXICAL_REPO,
+    LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
 )
-from experiments.datakit.store.datakit_store import (
-    ClusteredStoreData,
-    build_clustered_store,
-)
+from experiments.datakit.reports.decontam import decontam_report
+from experiments.datakit.reports.dedup import dedup_report
+from experiments.datakit.reports.domain import assign_report
+from experiments.datakit.reports.normalize import normalize_report
+from experiments.datakit.reports.quality import quality_report
+from experiments.datakit.reports.store import store_report
+from experiments.datakit.reports.tokenize import tokenize_report
+from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
 
 logger = logging.getLogger(__name__)
 
 
 # Tokenize: canonical Marin tokenizer. Not scale-sensitive.
 TOKENIZER = "marin-community/marin-tokenizer"
+# Immutable HF commit for the tokenizer. Hashed into the tokenize step so a silent
+# upstream retag invalidates the cache instead of changing token ids under a fixed
+# hash. NOTE: ``levanter.tokenizers.load_tokenizer`` does not yet accept a revision
+# (it stages from a Marin GCS mirror, then HF), so this pins the *recipe identity*;
+# byte-level enforcement is tracked in a follow-up to thread ``revision`` through the
+# loader.
+TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
+
+# Decontam. The combined eval corpus written by decontam/prepare_eval_corpus.py,
+# staged per-region (``aa/<eval>/<split>.parquet`` + ``lmh/<task>/eval.parquet``).
+EVAL_ROOT = f"{marin_prefix()}/datakit/decontam/evals"
+# Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
+# hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
+# ~270 MB filter.
+ESTIMATED_DOC_COUNT = 50_000_000
+FALSE_POSITIVE_RATE = 1e-9
+NGRAM_LENGTH = 13
+OVERLAP_THRESHOLD = 0.5
+# Contaminated docs reservoir-sampled per shard into the flagged side output
+# the decontam stage report reads.
+FLAGGED_SAMPLE_SIZE = 8
 
 
 @dataclass(frozen=True)
@@ -159,11 +174,21 @@ class ClusterConfig:
     and must be ``k_train`` or one of ``k_views`` -- the assign stage only
     materializes a ``cluster_<K>`` column for those. ``k_train`` must not exceed
     the centroid-training sample size, so shrink it for small inline runs.
+
+    The ``*_seed`` / ``train_n_*`` fields pin the centroid-training recipe so it enters
+    the sample/train hashes. faiss K-means is seeded but not bit-reproducible across
+    machine types / thread counts, so identical bytes across regions require
+    *replicating* the trained centroids (pass them as ``domain_centroids``), not
+    recomputing inline -- see the module docstring's reproducibility note.
     """
 
     k_train: int = 5000
     k_views: tuple[int, ...] = (40, 1000)
     cluster_view: int = 40
+    sample_seed: int = 42
+    train_seed: int = 42
+    train_n_iter: int = 20
+    train_n_redo: int = 3
 
     def __post_init__(self) -> None:
         if self.cluster_view not in (self.k_train, *self.k_views):
@@ -172,56 +197,66 @@ class ClusterConfig:
             )
 
 
+# Remote stage-driver jobs (embed / quality / assign / centroid-sample) submit a
+# pipeline to their own dedicated coordinator and block, so they need almost
+# nothing themselves.
+DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="2g")
+
+
+@dataclass(frozen=True)
+class PoolConfig:
+    """The dedicated Zephyr worker fleet each stage runs on.
+
+    ``n_workers`` workers, each sized ``worker`` (cpu / ram / disk). Every stage
+    spins up its own coordinator with this fleet and takes one whole worker per
+    task, so ``n_workers`` is the per-stage task concurrency and ``worker`` must
+    be large enough for the heaviest per-shard stage (embed model load, minhash /
+    dedup / store buffers).
+    """
+
+    n_workers: int = 512
+    worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+
+
+@dataclass(frozen=True)
+class MinhashConfig:
+    """Content-determining MinHash / LSH knobs for the fuzzy-dedup stage.
+
+    Not scale-sensitive (a smoke and a full run must agree), but every field shapes
+    the emitted signatures and buckets, so all are hashed into the minhash step -- and
+    thereby, via the minhash deps, into dedup and the store.
+    """
+
+    num_perms: int = 286
+    num_bands: int = 26
+    ngram_size: int = 5
+    text_cap_chars: int | None = 500_000
+    seed: int = 42
+
+
 @dataclass(frozen=True)
 class PipelineScale:
-    """All scale-sensitive knobs for :func:`reference_datakit_steps`.
+    """Non-resource sizing for :func:`reference_datakit_steps`.
 
-    ``DEFAULT_SCALE`` reproduces the production full-fleet sizing; ``SMOKE_SCALE``
-    shrinks K, sample size, worker resources, and fan-out so the same DAG runs
-    end-to-end on a handful of small sources. Resource/worker fields are
-    deliberately excluded from every step's ``hash_attrs`` (they are execution
-    policy, not content), so a smoke run shares the per-source embed / tokenize /
-    decontam / minhash / quality caches with a full run -- only the K-dependent
-    steps (sample / train / assign / store / dedup) get distinct output paths.
+    Worker CPU/RAM lives in one :class:`PoolConfig` (:attr:`pool`); the rest is
+    content-shaping (cluster K, batch sizes, dedup fan-out). ``DEFAULT_SCALE`` is
+    production K=5000; ``SMOKE_SCALE`` is K=64 for a quick end-to-end run.
     """
 
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
+    pool: PoolConfig = field(default_factory=PoolConfig)
+    minhash: MinhashConfig = field(default_factory=MinhashConfig)
     embed_batch_size: int = 4096
     assign_batch_size: int = 4096
-
-    # Inline domain training (when the caller does not pre-stage centroids).
-    # ~100 sources x 100k = ~10M-row centroid sample, matching exp_full_clusters.
+    # Inline domain training: ~100 sources x 100k = ~10M-row centroid sample.
     n_per_source_for_sample: int = 100_000
-    sample_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="4g"))
-    sample_max_workers: int = 256
-    # FAISS K=5000 on 10M x 192 wants every core it can get.
-    train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
-
-    # Embed / assign mirror exp_full_clusters defaults (region unpinned).
-    embed_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=8, ram="64g"))
-    assign_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=4, ram="32g"))
-    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="4g"))
-    embed_max_workers_per_source: int = 512
-    assign_max_workers_per_source: int = 512
-
-    # Tokenize.
-    tokenize_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
-    tokenize_max_workers: int = 1024
-
-    # Minhash / dedup mirror all_sources_fuzzy defaults.
-    minhash_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=5, ram="32g", disk="5g"))
+    # Concurrent per-source sampler pipelines run inside the centroid-sample
+    # stage's coordinator; kept modest so it isn't overwhelmed.
+    sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    dedup_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=3, ram="32g", disk="5g"))
-    dedup_coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=1, ram="3.5g", preemptible=False)
-    )
-
-    # Decontam shares all knobs with all_sources_decon (imported above).
-    decontam_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g"))
-
-    # Store.
-    store_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="32g"))
-    store_max_workers: int = 2048 + 1024
+    store_shards_per_task: int = 1
+    # Centroid training is single-process FAISS K-means, not a pool stage.
+    train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
 
 DEFAULT_SCALE = PipelineScale()
@@ -229,23 +264,12 @@ DEFAULT_SCALE = PipelineScale()
 
 SMOKE_SCALE = PipelineScale(
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
+    pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
     n_per_source_for_sample=20_000,
-    sample_max_workers=16,
-    # K=64 on a few-thousand-row sample is seconds on a handful of cores.
-    train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
-    embed_worker_resources=ResourceConfig(cpu=8, ram="16g"),
-    assign_worker_resources=ResourceConfig(cpu=2, ram="8g"),
-    embed_max_workers_per_source=32,
-    assign_max_workers_per_source=32,
-    tokenize_max_workers=32,
-    minhash_worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
     dedup_max_parallelism=64,
-    dedup_worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
-    decontam_worker_resources=ResourceConfig(cpu=2, ram="8g"),
-    store_worker_resources=ResourceConfig(cpu=2, ram="8g"),
-    store_max_workers=64,
+    train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
 )
-"""Small-data sizing: a few sources, K=64, modest workers -- a true e2e smoke."""
+"""Small K + a small pool -- a true end-to-end run on a testbed sample."""
 
 
 def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
@@ -279,6 +303,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
         hash_attrs={
             "luxical_repo": LUXICAL_REPO,
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
+            "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
             "v": 1,
         },
@@ -286,11 +311,12 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=read_artifact(np, NormalizedData),
+                revision=LUXICAL_REVISION,
                 batch_size=scale.embed_batch_size,
-                worker_resources=scale.embed_worker_resources,
-                max_workers=scale.embed_max_workers_per_source,
+                worker_resources=scale.pool.worker,
+                max_workers=scale.pool.n_workers,
             ),
-            resources=scale.coordinator_resources,
+            resources=DRIVER_RESOURCES,
             pip_dependency_groups=["datakit"],
         ),
     )
@@ -321,29 +347,52 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
     sample_step = StepSpec(
         name="datakit/cluster/sample_centroids",
         deps=list(embed_steps.values()),
-        hash_attrs={"n_per_source": scale.n_per_source_for_sample, "format": "parquet", "v": 1},
+        hash_attrs={
+            "n_per_source": scale.n_per_source_for_sample,
+            "seed": cluster.sample_seed,
+            "format": "parquet",
+            "v": 1,
+        },
         fn=remote(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in es.items()},
                 n_per_source=scale.n_per_source_for_sample,
-                worker_resources=scale.sample_worker_resources,
-                max_workers=scale.sample_max_workers,
+                seed=cluster.sample_seed,
+                worker_resources=scale.pool.worker,
+                max_workers=scale.pool.n_workers,
+                parallel_sources=scale.sample_parallel_sources,
             ),
-            resources=scale.coordinator_resources,
+            resources=DRIVER_RESOURCES,
             pip_dependency_groups=["datakit"],
         ),
     )
+    # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
+    # is reproducible independent of which node (and how many physical cores) the
+    # single-process training pod lands on (marin#6798).
+    n_threads = int(scale.train_centroids_resources.cpu)
     return StepSpec(
         name="datakit/cluster/train_centroids",
         deps=[sample_step],
-        hash_attrs={"k_train": cluster.k_train, "k_views": list(cluster.k_views), "v": 1},
+        hash_attrs={
+            "k_train": cluster.k_train,
+            "k_views": list(cluster.k_views),
+            "n_threads": n_threads,
+            "seed": cluster.train_seed,
+            "n_iter": cluster.train_n_iter,
+            "n_redo": cluster.train_n_redo,
+            "v": 1,
+        },
         fn=remote(
             lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
                 sample_path=sp,
                 k_train=cluster.k_train,
                 k_views=cluster.k_views,
+                n_threads=n_threads,
+                n_iter=cluster.train_n_iter,
+                n_redo=cluster.train_n_redo,
+                seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
             pip_dependency_groups=["datakit"],
@@ -354,39 +403,48 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
 def _resolve_centroids(
     domain_centroids: str | StepSpec,
     cluster: ClusterConfig,
-) -> tuple[str, dict[int, str], list[StepSpec], object]:
-    """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign."""
+    centroids_version: str | None,
+) -> tuple[str, dict[int, str], list[StepSpec], str]:
+    """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign.
+
+    ``hash_value`` is the region-independent identity string mixed into the assign
+    hash by construction: an inline StepSpec contributes its ``name_with_hash``
+    (identity, not the ``MARIN_PREFIX``-rooted output path), and a pre-staged path
+    contributes the caller's ``centroids_version`` tag -- never the absolute ``gs://``
+    path -- so identical centroids resolve to the same assign output path in any region.
+    """
     if isinstance(domain_centroids, StepSpec):
         base = domain_centroids.output_path
         return (
             f"{base}/centroids_{cluster.k_train}.npy",
             {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
             [domain_centroids],
-            base,  # already includes a content hash; safe in hash_attrs
+            domain_centroids.name_with_hash,  # region-independent identity (also captured via the dep)
+        )
+    if not centroids_version:
+        raise ValueError(
+            "centroids_version is required when domain_centroids is a pre-staged path: "
+            "the absolute path is region-specific and must not enter the cache hash. "
+            "Pass a stable tag identifying the centroid bytes (e.g. the training run id)."
         )
     base = domain_centroids.rstrip("/")
     return (
         f"{base}/centroids_{cluster.k_train}.npy",
         {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
         [],
-        domain_centroids,
+        centroids_version,
     )
 
 
-def _resolve_quality_model(quality_model: str | StepSpec | None) -> StepSpec:
-    if quality_model is None:
-        raise NotImplementedError(
-            "quality_model=None means train inline, but v0 quality training "
-            "(sample → LLM-score → fasttext-train) is not yet wrapped as "
-            "StepSpecs. Pass a GCS path to a trained model.bin or a pre-built "
-            "StepSpec producing a FastTextModel artifact."
+def _resolve_quality_model_version(quality_model: str, quality_model_version: str | None) -> str:
+    """Return the region-independent identity tag hashed into the quality step."""
+    if not quality_model_version:
+        raise ValueError(
+            f"quality_model_version is required: the quality model dir ({quality_model}) is "
+            "region-specific and must not enter the cache hash. Pass a stable tag "
+            "identifying the model bytes (e.g. 'pooled-junkgate2')."
         )
-    if isinstance(quality_model, StepSpec):
-        return quality_model
-    return _register_model_step(
-        name="datakit/quality_model/reference",
-        model_bin_path=quality_model,
-    )
+    return quality_model_version
 
 
 @dataclass(frozen=True)
@@ -407,9 +465,10 @@ class DatakitSteps:
 def reference_datakit_steps(
     sources: dict[str, StepSpec],
     *,
+    quality_model: str,
+    quality_model_version: str | None = None,
     domain_centroids: str | StepSpec | None = None,
-    quality_model: str | StepSpec | None = None,
-    store_shards_per_task: int = 1,
+    centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
@@ -424,6 +483,12 @@ def reference_datakit_steps(
             :class:`marin.datakit.normalize.NormalizedData` artifact;
             misuse fails loudly the first time a downstream step tries
             ``read_artifact(step.output_path, NormalizedData)``.
+        quality_model: Directory holding the pooled fast-transformer scorer
+            artifacts plus the calibration json (immutable by convention).
+        quality_model_version: Required. A stable tag identifying the model bytes
+            (e.g. ``'pooled-junkgate2'``) -- hashed into the quality step in place
+            of the region-specific ``quality_model`` dir, so the same scorer
+            resolves to one output path across regions.
         domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
             and ``lookup_<k_train>_to_<k>.npy`` for each ``k`` in
             ``scale.cluster.k_views``; a StepSpec whose ``output_path`` will
@@ -432,32 +497,38 @@ def reference_datakit_steps(
             from the per-source embeds. When training inline, ``scale.cluster.k_train``
             must not exceed the centroid sample size -- use a smaller K
             (e.g. ``SMOKE_SCALE``) on small source sets.
-        quality_model: A GCS path to a trained fasttext quality ``.bin``,
-            or a StepSpec producing a ``FastTextModel`` artifact. ``None``
-            is reserved for a future inline-training mode and currently
-            raises :class:`NotImplementedError`.
-        store_shards_per_task: Tuning knob for the final store step.
-        scale: Resource / K / fan-out sizing. ``DEFAULT_SCALE`` is the
-            production full-fleet shape; ``SMOKE_SCALE`` runs the same DAG
-            end-to-end on a few small sources.
+        centroids_version: Required when ``domain_centroids`` is a pre-staged
+            path. A stable tag identifying the centroid bytes (e.g. the training
+            run id) -- hashed into the assign step in place of the region-specific
+            path so identical centroids resolve to one output path across regions.
+            Ignored (and unneeded) for the StepSpec / inline-training case, whose
+            identity comes from the step hash.
+        scale: K / fan-out sizing plus the per-stage worker :class:`PoolConfig`.
+            ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
+            runs the same DAG end-to-end on a testbed sample.
     """
     cluster = scale.cluster
+    mh = scale.minhash
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
         domain_centroids = build_train_centroids_step(embed_steps, scale)
 
-    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids, cluster)
-    quality_model_step = _resolve_quality_model(quality_model)
+    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(
+        domain_centroids, cluster, centroids_version
+    )
+    quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
 
     # One combined decontam bloom (no merge step); every per-source decon
-    # consumes it directly.
+    # consumes it directly. Same name/params as the testbed decon arm, so runs
+    # sharing a prefix share the built bloom.
     decon_bloom_step = build_eval_bloom_step(
-        name="datakit/bloom/_combined",
+        name="datakit/bloom/_combined_fixed",
         eval_data_sources=[EVAL_ROOT],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
+        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
     )
 
     # ---- Per-source steps ------------------------------------------------------
@@ -472,8 +543,9 @@ def reference_datakit_steps(
             train_normalize=normalize_step,
             tokenizer=TOKENIZER,
             tokenizer_backend=TOKENIZER_BACKEND,
-            max_workers=scale.tokenize_max_workers,
-            worker_resources=scale.tokenize_worker_resources,
+            tokenizer_revision=TOKENIZER_REVISION,
+            max_workers=scale.pool.n_workers,
+            worker_resources=scale.pool.worker,
         )
 
         # Domain assign: consumes the embed + the (given or trained) centroids.
@@ -496,19 +568,29 @@ def reference_datakit_steps(
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
                     window_size=scale.assign_batch_size,
-                    worker_resources=scale.assign_worker_resources,
-                    max_workers=scale.assign_max_workers_per_source,
+                    worker_resources=scale.pool.worker,
+                    max_workers=scale.pool.n_workers,
                 ),
-                resources=scale.coordinator_resources,
+                resources=DRIVER_RESOURCES,
                 pip_dependency_groups=["datakit"],
             ),
         )
 
-        quality = classify_llm_quality_step(
+        quality = StepSpec(
             name=f"datakit/quality/{name}",
-            normalized=normalize_step,
-            model_step=quality_model_step,
-            max_workers=scale.assign_max_workers_per_source,
+            deps=[normalize_step],
+            hash_attrs={"model_version": quality_model_hash, "v": 1},
+            fn=remote(
+                lambda output_path, np=normalize_step.output_path, src=name: score_normalized(
+                    output_path=output_path,
+                    normalized=read_artifact(np, NormalizedData),
+                    source=src,
+                    model_dir=quality_model,
+                    max_workers=scale.pool.n_workers,
+                    worker_resources=scale.pool.worker,
+                ),
+                resources=DRIVER_RESOURCES,
+            ),
         )
 
         decontam = decon_step(
@@ -519,16 +601,30 @@ def reference_datakit_steps(
             overlap_threshold=OVERLAP_THRESHOLD,
             estimated_doc_count=ESTIMATED_DOC_COUNT,
             false_positive_rate=FALSE_POSITIVE_RATE,
-            worker_resources=scale.decontam_worker_resources,
+            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
+            worker_resources=scale.pool.worker,
         )
 
         minhash = StepSpec(
             name=f"datakit/minhash/{name}",
             deps=[normalize_step],
+            hash_attrs={
+                "num_perms": mh.num_perms,
+                "num_bands": mh.num_bands,
+                "ngram_size": mh.ngram_size,
+                "text_cap_chars": mh.text_cap_chars,
+                "seed": mh.seed,
+                "v": 1,
+            },
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
                 output_path=op,
-                worker_resources=scale.minhash_worker_resources,
+                num_perms=mh.num_perms,
+                num_bands=mh.num_bands,
+                ngram_size=mh.ngram_size,
+                text_cap_chars=mh.text_cap_chars,
+                seed=mh.seed,
+                worker_resources=scale.pool.worker,
             ),
         )
         minhash_steps.append(minhash)
@@ -543,16 +639,19 @@ def reference_datakit_steps(
         }
 
     # ---- Cross-source dedup ----------------------------------------------------
+    # No content params of its own -- the MinHash params live in the minhash deps
+    # (so a param change re-keys minhash, then dedup via dep names); connected
+    # components is deterministic given those inputs. ``v`` is a manual salt.
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
+        hash_attrs={"v": 1},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
-            worker_resources=scale.dedup_worker_resources,
-            coordinator_resources=scale.dedup_coordinator_resources,
+            worker_resources=scale.pool.worker,
         ),
     )
 
@@ -564,14 +663,14 @@ def reference_datakit_steps(
             cluster_assign={
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
-            quality={n: read_artifact(s["quality"].output_path, LlmQualityOutput) for n, s in per_source.items()},
+            quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
             dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,
-            worker_resources=scale.store_worker_resources,
-            max_workers=scale.store_max_workers,
-            shards_per_task=store_shards_per_task,
+            worker_resources=scale.pool.worker,
+            max_workers=scale.pool.n_workers,
+            shards_per_task=scale.store_shards_per_task,
         )
 
     store_deps: list[StepSpec] = []
@@ -579,85 +678,235 @@ def reference_datakit_steps(
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
     store_deps.append(dedup)
 
+    # ``cluster_view`` / ``split`` are read directly by the store fn and are NOT
+    # captured by any dep (the assign step materializes every ``cluster_<K>`` column
+    # regardless of view), so they must be hashed here. The tokenizer is captured via
+    # the tokenize deps, and the quality bucket edges via the quality deps, so both
+    # are intentionally absent.
     store = StepSpec(
         name="datakit/store",
         deps=store_deps,
-        hash_attrs={"shards_per_task": store_shards_per_task},
+        hash_attrs={
+            "shards_per_task": scale.store_shards_per_task,
+            "cluster_view": cluster.cluster_view,
+            "split": SPLIT,
+        },
         fn=_store_fn,
     )
 
-    all_steps: list[StepSpec] = [quality_model_step, decon_bloom_step]
+    # ---- Per-stage reports --------------------------------------------------
+    # One single-page HTML per stage, aggregated across sources from the stage's
+    # site/sample outputs and counters. Plain callables: bounded reads, run
+    # inline in the driver. Bump "v" to regenerate reports over cached stage outputs.
+    normalize_paths = {n: s.output_path for n, s in sources.items()}
+    tokenize_paths = {n: s["tokenize"].output_path for n, s in per_source.items()}
+    quality_paths = {n: s["quality"].output_path for n, s in per_source.items()}
+    assign_paths = {n: s["assign"].output_path for n, s in per_source.items()}
+    decontam_paths = {n: s["decontam"].output_path for n, s in per_source.items()}
+    reports = [
+        StepSpec(
+            name="datakit/report/normalize",
+            deps=list(sources.values()),
+            hash_attrs={"v": 2},
+            fn=lambda op: normalize_report(
+                op, {n: read_artifact(p, NormalizedData) for n, p in normalize_paths.items()}
+            ),
+        ),
+        StepSpec(
+            name="datakit/report/tokenize",
+            deps=[s["tokenize"] for s in per_source.values()],
+            hash_attrs={"v": 1, "split": SPLIT},
+            fn=lambda op: tokenize_report(
+                op, {n: read_artifact(p, TokenizedAttrData) for n, p in tokenize_paths.items()}, SPLIT
+            ),
+        ),
+        StepSpec(
+            name="datakit/report/quality",
+            deps=[s["quality"] for s in per_source.values()],
+            hash_attrs={"v": 1},
+            fn=lambda op: quality_report(op, {n: read_artifact(p, QualityScores) for n, p in quality_paths.items()}),
+        ),
+        StepSpec(
+            name="datakit/report/domain",
+            deps=[s["assign"] for s in per_source.values()],
+            hash_attrs={"v": 1, "cluster_view": cluster.cluster_view},
+            fn=lambda op: assign_report(
+                op, {n: read_artifact(p, AssignmentAttrData) for n, p in assign_paths.items()}, cluster.cluster_view
+            ),
+        ),
+        StepSpec(
+            name="datakit/report/decontam",
+            deps=[s["decontam"] for s in per_source.values()],
+            hash_attrs={"v": 1},
+            fn=lambda op: decontam_report(op, {n: read_artifact(p, DeconAttributes) for n, p in decontam_paths.items()}),
+        ),
+        StepSpec(
+            name="datakit/report/dedup",
+            deps=[dedup],
+            hash_attrs={"v": 1},
+            fn=lambda op: dedup_report(op, read_artifact(dedup.output_path, FuzzyDupsAttrData)),
+        ),
+        StepSpec(
+            name="datakit/report/store",
+            deps=[store],
+            hash_attrs={"v": 1},
+            fn=lambda op: store_report(op, read_artifact(store.output_path, ClusteredStoreData)),
+        ),
+    ]
+
+    all_steps: list[StepSpec] = [decon_bloom_step]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
-    all_steps += [dedup, store]
+    all_steps += [dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
+
+
+SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
+QUALITY_MODEL = "s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2"
+
+# A content-diverse subset of a testbed sample (wiki / academic / reference /
+# code / math / multilingual / web / sft / agent-trajectory), small enough for a
+# quick end-to-end run. nsf_awards is a 3-row edge case on purpose.
+SAMPLE_SOURCES = (
+    "cp/wikiteam",
+    "cp/arxiv_abstracts",
+    "nsf_awards",
+    "starcoder2/ir_python",
+    "numinamath-1.5",
+    "finepdfs/spa_Latn",
+    "nemotron_cc_v2/medium_quality",
+    "nemotron_sft/sft_general",
+    "hplt_v3",
+    "swe-rebench-openhands",
+)
+
+
+def sample_sources(sample_prefix: str, names: list[str] | None = None, run_tag: str = "") -> dict[str, StepSpec]:
+    """Map testbed-sample source names to StepSpecs registered on their existing dirs.
+
+    ``sample`` mode: each source is a completed normalize-step output in the
+    sample tree, so the returned steps are already ``SUCCESS`` on storage; the
+    runner skips them and downstream steps read their ``NormalizedData``. The
+    sample id lives in the step *name* so downstream hashes re-key per sample.
+    ``None`` discovers every source (an ``.artifact.json`` at source depth 1-3).
+
+    ``run_tag`` enters each source step's ``hash_attrs`` (not its output path, which
+    stays the shared sample dir), so a fresh tag re-keys the whole downstream DAG --
+    every stage recomputes on the *same* input, for benchmarking a from-scratch run.
+    """
+    prefix = sample_prefix.rstrip("/")
+    sample_id = posixpath.basename(prefix)
+    discovered = [
+        str(m)[len(prefix) + 1 : -len("/.artifact.json")]
+        for depth in ("*", "*/*", "*/*/*")
+        for m in StoragePath(f"{prefix}/{depth}/.artifact.json").glob()
+    ]
+    if names is None:
+        names = discovered
+    else:
+        unknown = sorted(set(names) - set(discovered))
+        if unknown:
+            raise KeyError(f"sources {unknown} not in {sample_id}; known: {sorted(discovered)}")
+    logger.info(
+        "sample_sources: %d sources from %s%s", len(names), sample_id, f" (run_tag={run_tag})" if run_tag else ""
+    )
+    tag_attrs = {"run_tag": run_tag} if run_tag else {}
+    return {
+        name: StepSpec(
+            name=f"datakit/sample/{sample_id}/{name}",
+            override_output_path=f"{prefix}/{name}",
+            hash_attrs=tag_attrs,
+        )
+        for name in sorted(names)
+    }
+
+
+def _select_pipeline_sources(args: argparse.Namespace) -> dict[str, StepSpec]:
+    """Build the ``{name: normalize_step}`` mapping for the chosen mode."""
+    if args.mode == "sample":
+        default = ",".join(SAMPLE_SOURCES)
+        names = None if args.sources == "all" else [s.strip() for s in (args.sources or default).split(",") if s.strip()]
+        return sample_sources(args.sample_prefix, names, args.run_tag)
+    names = None if args.sources in (None, "all") else [s.strip() for s in args.sources.split(",") if s.strip()]
+    return select_sources(names)
+
+
+def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> PipelineScale:
+    """Override the scale's worker fleet from ``--pool-*`` flags."""
+    worker = replace(
+        scale.pool.worker,
+        **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
+    )
+    n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
+    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--mode",
+        choices=("full", "sample"),
+        default="full",
+        help="full: registry sources, K=5000. sample: a pre-built testbed sample (see --sample-prefix), K=64.",
+    )
+    parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
+    parser.add_argument("--quality-model", default=QUALITY_MODEL, help="pooled fast-transformer scorer + calib dir")
+    parser.add_argument(
         "--domain-centroids",
         default=None,
+        help="dir with centroids_<K>.npy + lookup_<K>_to_<k>.npy. Omit to train centroids inline from the embeds.",
+    )
+    parser.add_argument(
+        "--domain-centroids-version",
+        default=None,
         help=(
-            "GCS dir containing centroids_<K>.npy + lookup_<K>_to_<k>.npy from "
-            "cluster/domain/v0. If omitted, the pipeline trains centroids inline "
-            "from the per-source embeds."
+            "Stable identity tag for --domain-centroids (e.g. the training run id). "
+            "Required with --domain-centroids: hashed in place of the region-specific "
+            "path so identical centroids resolve to one output path across regions."
         ),
     )
     parser.add_argument(
-        "--quality-model",
+        "--quality-model-version",
         required=True,
-        help="GCS path to the trained fasttext quality model.bin from cluster/quality/v0",
+        help=(
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Hashed in "
+            "place of the region-specific model dir for cross-region reproducibility."
+        ),
     )
     parser.add_argument(
         "--sources",
         default=None,
-        help=(
-            "Comma-separated source names (keys of marin.datakit.sources.all_sources) to run. Omit to run every source."
-        ),
+        help="comma-separated source names, or 'all' for every source. Omit: full=all, sample=curated subset.",
     )
+    parser.add_argument("--pool-workers", type=int, default=None, help="per-stage worker count (override scale)")
+    parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
+    parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
+    parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
+    parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
     parser.add_argument(
-        "--scale",
-        choices=("full", "smoke"),
-        default="full",
-        help=(
-            "full: production sizing over all sources (K=5000). smoke: small resources + K=64 "
-            "for a quick e2e run -- pair with --sources and a few small sources."
-        ),
-    )
-    parser.add_argument(
-        "--max-concurrent",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Max steps StepRunner runs concurrently. Defaults to StepRunner's default (8).",
-    )
-    parser.add_argument(
-        "--store-shards-per-task",
-        type=int,
-        default=1,
-        metavar="N",
-        help=(
-            "Group N source-shard tuples into one store task so each task writes one part file "
-            "per (cluster, quality) it touches instead of one per input shard. Reduces output "
-            "file count by ~N x at the cost of N x longer per-task runtime and proportionally "
-            "more in-flight per-bucket writer state. Defaults to 1 (no batching)."
-        ),
+        "--run-tag",
+        default="",
+        help="sample mode: mix this into every step's hash so the whole DAG recomputes fresh (benchmarking)",
     )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
 
-    names = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
-    scale = SMOKE_SCALE if args.scale == "smoke" else DEFAULT_SCALE
+    scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
+    sources = _select_pipeline_sources(args)
 
+    # Each stage runs its pipeline on its own dedicated Zephyr coordinator +
+    # worker fleet (vanilla ``ZephyrContext``, built inside the stage functions),
+    # sized by ``scale.pool``. ``--max-concurrent`` bounds how many stages the
+    # StepRunner walks at once.
     result = reference_datakit_steps(
-        select_sources(names),
-        domain_centroids=args.domain_centroids,
+        sources,
         quality_model=args.quality_model,
-        store_shards_per_task=args.store_shards_per_task,
+        quality_model_version=args.quality_model_version,
+        domain_centroids=args.domain_centroids,
+        centroids_version=args.domain_centroids_version,
         scale=scale,
     )
     StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)

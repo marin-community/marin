@@ -28,8 +28,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
@@ -162,6 +164,15 @@ def meta_sequence_bump(tx: Tx, key: str) -> int:
     value = int(row[0]) + 1
     tx.execute(update(meta_table).where(meta_table.c.key == key).values(value=value))
     return value
+
+
+@writes_to(meta_table)
+def meta_value_set(tx: Tx, key: str, value: int) -> None:
+    tx.execute(
+        sqlite_insert(meta_table)
+        .values(key=key, value=value)
+        .on_conflict_do_update(index_elements=[meta_table.c.key], set_={"value": value})
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,18 +309,26 @@ def insert_job_config(
 
 
 @writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
-def delete_job(tx: Tx, job_id: JobName) -> None:
+def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
-    ``ON DELETE CASCADE`` removes the job's tasks, attempts, endpoints, config, and
-    workdir files.
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
+    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
+    explicitly through the projection, which keeps the in-memory endpoint cache in
+    sync as well as the row.
+
+    ``record_tombstone=False`` is for a deletion that immediately re-creates the
+    job id for the same requester (a federated resubmission replacing a finished
+    run): the parent must mirror the fresh submission, not drop its live handle.
     """
     # Record the tombstone BEFORE the delete so a parent federating with this peer
     # learns the job was pruned. The event resolves and stamps its requester from
     # the RECEIVED federated_jobs row (still present here) and carries no FK to
     # jobs, so it survives the CASCADE that removes that row (a no-op unless this
     # root was received via handoff).
-    record_federation_change(tx, job_id, tombstone=True)
+    if record_tombstone:
+        record_federation_change(tx, job_id, tombstone=True)
+    tx.caches[EndpointsProjection].remove_by_job_ids(tx, [job_id])
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
     # The attempt-counts and run-template memos are keyed by job id and derived from
     # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows
@@ -368,6 +387,7 @@ def insert_received_handle(
     job_id: JobName,
     requester_id: str,
     owner_principal: str,
+    handoff_nonce: str,
 ) -> None:
     """Record that ``job_id`` was handed to this peer by ``requester_id`` as a
     RECEIVED ``federated_jobs`` row (``peer_id`` is the requester; the SENT-only
@@ -384,10 +404,11 @@ def insert_received_handle(
             direction=int(FederationDirection.RECEIVED),
             peer_id=requester_id,
             owner_principal=owner_principal,
+            handoff_nonce=handoff_nonce,
         )
         .on_conflict_do_update(
             index_elements=["job_id"],
-            set_={"peer_id": requester_id, "owner_principal": owner_principal},
+            set_={"peer_id": requester_id, "owner_principal": owner_principal, "handoff_nonce": handoff_nonce},
         )
     )
     # Keep the per-transaction requester resolution consistent with this insert so a
@@ -764,6 +785,7 @@ def insert_federated_handle(
     peer_id: str,
     owner_principal: str,
     handoff_state: int,
+    handoff_nonce: str,
 ) -> None:
     """Insert the SENT ``federated_jobs`` handle for a job handed off to ``peer_id``."""
     tx.execute(
@@ -774,6 +796,7 @@ def insert_federated_handle(
             owner_principal=owner_principal,
             handoff_state=handoff_state,
             cancel_intent_version=0,
+            handoff_nonce=handoff_nonce,
         )
     )
 
@@ -860,6 +883,32 @@ def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, er
     )
 
 
+@writes_to(job_config_table)
+def insert_mirrored_job_config(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    name: str,
+    resources: job_pb2.ResourceSpecProto,
+) -> None:
+    """Insert the ``job_config`` companion for a job mirrored from a peer.
+
+    Sets the name and the resources the peer reports; the columns describing how to
+    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since
+    the peer runs it and the parent only renders it.
+    """
+    tx.execute(
+        insert(job_config_table).values(
+            job_id=job_id,
+            name=name,
+            res_cpu_millicores=int(resources.cpu_millicores),
+            res_memory_bytes=int(resources.memory_bytes),
+            res_disk_bytes=int(resources.disk_bytes),
+            res_device_json=proto_to_json(resources.device),
+        )
+    )
+
+
 @writes_to(jobs_table)
 def mirror_federated_job(
     tx: Tx,
@@ -908,6 +957,7 @@ def mirror_federated_task(
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
+    status_message: str | None,
 ) -> None:
     """Upsert a mirrored federated task row (``cluster`` set to a peer, no worker FK).
 
@@ -936,6 +986,7 @@ def mirror_federated_task(
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
+            status_message=status_message,
             backend_id="",
             cluster=peer_id,
             priority_neg_depth=0,
@@ -953,6 +1004,7 @@ def mirror_federated_task(
                 "finished_at_ms": finished_at_ms,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
+                "status_message": status_message,
                 "cluster": peer_id,
             },
         )

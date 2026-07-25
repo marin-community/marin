@@ -14,8 +14,10 @@ import pytest
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
+    IrisJobHandle,
     convert_constraints,
     resolve_coscheduling,
+    wrap_multiprocess,
 )
 from fray.types import (
     ANY_REGION,
@@ -27,6 +29,8 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
+from iris.cluster.types import Entrypoint as IrisEntrypoint
+from iris.cluster.types import ResourceSpec, gpu_device
 
 
 class TestConvertConstraints:
@@ -95,6 +99,13 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
 
+    def test_target_cluster_produces_eq_constraint(self):
+        constraints = convert_constraints(ResourceConfig(target_cluster="cw-us-east-02a"))
+        cluster_constraints = [constraint for constraint in constraints if constraint.key == "cluster"]
+        assert len(cluster_constraints) == 1
+        assert cluster_constraints[0].op == ConstraintOp.EQ
+        assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
@@ -130,6 +141,20 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+def test_iris_job_handle_returns_a_globally_bounded_tail():
+    job = MagicMock()
+    job.job_id = "/user/job"
+    job.logs.return_value = [
+        MagicMock(data="task-0 earlier\n"),
+        MagicMock(data="task-1 latest\n"),
+    ]
+
+    lines = IrisJobHandle(job).logs(max_lines=2)
+
+    assert lines == ("task-0 earlier", "task-1 latest")
+    job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
 class TestResourceConfigScale:
@@ -347,3 +372,55 @@ def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
 def test_resolve_coscheduling_single_replica_is_none():
     assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
     assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+
+
+def _gpu_resources(count: int) -> ResourceSpec:
+    return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
+
+
+def test_wrap_multiprocess_one_process_per_gpu() -> None:
+    # fray composes the multigpu supervisor into the command; iris runs it verbatim.
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
+    )
+    assert wrapped.command == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "8",
+        "--devices-per-proc",
+        "1",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "10",
+    ]
+
+
+def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
+    wrapped = wrap_multiprocess(
+        IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
+    )
+    assert wrapped.command[:8] == [
+        "python",
+        "-m",
+        "iris.hooks.multigpu_main",
+        "--nproc",
+        "4",
+        "--devices-per-proc",
+        "2",
+        "--",
+    ]
+
+
+def test_wrap_multiprocess_requires_gpu() -> None:
+    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
+    with pytest.raises(ValueError, match="requires a GPU device"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+
+
+def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
+    with pytest.raises(ValueError, match="must divide the GPU count"):
+        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)

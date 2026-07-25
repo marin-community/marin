@@ -82,6 +82,13 @@ def build_run_request(
     # Coscheduling drives Kueue gang admission on the direct path.
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
+    # Stamp the attempt's uid so the K8s backend can label the pod with it and
+    # tell this attempt's own pod apart from a stale pod a previous job left at
+    # the same (task_hash, attempt_id) name. Visible in this tx for both paths:
+    # promote inserted the attempt row above, redrive reads the current one.
+    uid = reads.attempt_uid_for(cur, row.task_id, attempt_id)
+    if uid is not None:
+        run_req.attempt_uid = uid
     return run_req
 
 
@@ -228,11 +235,15 @@ def drain_for_dispatch(
         order_by_task_id=True,
         backend_id=backend_id,
     )
+    # The K8s provider rebuilds each pod name from (task_id, attempt_id, uid), so
+    # poll must carry the current attempt's uid to target the right incarnation.
+    uids = reads.attempt_uids_for(cur, [(row.task_id, row.current_attempt_id) for row in running_rows])
     running_tasks = [
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
             coscheduled=row.has_coscheduling,
+            attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows
     ]

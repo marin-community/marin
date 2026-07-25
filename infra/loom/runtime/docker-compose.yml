@@ -1,0 +1,86 @@
+name: loom
+
+x-session-home-volume: &session-home-volume loom_loom_home
+x-session-uv-volume: &session-uv-volume loom_uv
+x-session-network: &session-network loom_default
+
+services:
+  loom-init:
+    image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
+    env_file: .env
+    restart: "no"
+    volumes:
+      - loom_home:/home/app
+    command:
+      - sh
+      - -ceu
+      - |
+        loom config set auth.trust_loopback false
+        loom config set auth.cookie_secure true
+        loom config set auth.base_url "https://$$LOOM_DOMAIN"
+
+  loom:
+    image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUST_BACKTRACE: "1"
+      LOOM_RUNNER: docker
+      LOOM_SESSION_IMAGE: ${LOOM_IMAGE:?LOOM_IMAGE is required}
+      LOOM_SESSION_HOME_VOLUME: *session-home-volume
+      LOOM_SESSION_UV_VOLUME: *session-uv-volume
+      LOOM_SESSION_DOCKER_GID: ${DOCKER_GID:?DOCKER_GID is required}
+      LOOM_SESSION_NETWORK: *session-network
+      LOOM_SESSION_API_URL: http://loom:${LOOM_PORT:?LOOM_PORT is required}
+    command:
+      - loom
+      - server
+      - run
+      - --addr
+      - 0.0.0.0:${LOOM_PORT:?LOOM_PORT is required}
+    depends_on:
+      loom-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${LOOM_PORT:?LOOM_PORT is required}:${LOOM_PORT:?LOOM_PORT is required}"
+    group_add:
+      - ${DOCKER_GID:?DOCKER_GID is required}
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+    cgroup: private
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - loom_home:/home/app
+      - uv:/opt/uv
+
+  caddy:
+    image: caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
+    restart: unless-stopped
+    environment:
+      LOOM_DOMAIN: ${LOOM_DOMAIN:?LOOM_DOMAIN is required}
+      LOOM_PORT: ${LOOM_PORT:?LOOM_PORT is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - loom
+
+volumes:
+  loom_home:
+    name: *session-home-volume
+  uv:
+    name: *session-uv-volume
+  caddy_data:
+  caddy_config:
+
+networks:
+  default:
+    name: *session-network

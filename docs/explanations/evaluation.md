@@ -8,37 +8,53 @@ For step-by-step usage, start with:
 
 ## Evaluation modes
 
-Marin supports three primary evaluation paths:
+Marin supports three evaluation paths:
 
-- **Multiple-choice tasks**: run through `lm-evaluation-harness` (during training or as standalone eval jobs).
-- **Generation tasks**: run through a vLLM-backed evaluator pipeline.
+- **In-loop training evals**: [`train_lm`][marin.experiment.train.train_lm] runs periodic multiple-choice evaluations through Levanter's lm-evaluation-harness integration and logs to W&B when an `EvalSuite` is provided.
+- **Post-hoc evals**: composable `EvalGroup`s evaluated against a served model with the evalchemy fork — multiple-choice and generation both.
 - **Harbor tasks**: run through Marin's Harbor integration for containerized agent benchmarks and registry datasets.
 
-## Multiple-choice evaluation (LM Evaluation Harness)
+## Post-hoc evaluation (evalchemy over a served endpoint)
 
-For multiple-choice tasks, Marin uses a fork of `lm-evaluation-harness`:
-https://github.com/stanford-crfm/lm-evaluation-harness
+A post-hoc eval is decoupled from the model backend by an OpenAI-compatible URL. Each `EvalGroup` is
+run inside one `remote_inference` context. The generic group runner passes its `RunningModel` to
+`run_evalchemy`, then inference is torn down.
+Multiple-choice tasks use the served backend's logprob API, so they run the same way as generation —
+no separate JAX-logprob backend.
 
-Key integration points:
-- [`train_lm`][marin.experiment.train.train_lm] runs in-loop evaluations periodically and logs to W&B when an `EvalSuite` is provided.
-- [`default_eval`][experiments.evals.evals.default_eval] runs standalone harness evaluation after training (or on an existing checkpoint).
+The lifecycle and the evaluator are separate APIs:
+
+```python
+with remote_inference(model, engine, iris) as session:
+    run_evalchemy(session.model, eval_config, output_path, env_vars=env)
+```
+
+`remote_inference` owns startup, liveness, Iris link registration, and teardown. Endpoint-oriented
+mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor` own only their native task and
+result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
+or outcomes behind a universal `do_eval` interface.
+
+- [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
+  `EvalGroup`; combine groups and aggregate them with
+  [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in
+  `experiments/evals/evals.py`. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
+
+One `EvalGroup` (a task set) becomes one `EvalchemyResult` artifact addressed by
+`evaluation/evalchemy/{model}/{group_id}`, so a pipeline picks up exactly the evals it needs and each
+is cached and reused. The in-loop `EvalSuite` and the post-hoc `EvalGroup`s draw from the same task
+menu.
 
 ### Task sets
 
 Task sets are configured in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
 
-- `CORE_TASKS` is the default for in-loop and standalone harness evals.
+- `CORE_TASKS` is the default for in-loop and post-hoc multiple-choice evals.
 - `CORE_TASKS_PLUS_MMLU` extends `CORE_TASKS` with MMLU.
-- You can define custom task lists in `task_configs.py` and pass them to `default_eval`.
+- Named menus (`core_evals`, `key_evals`, `base_model_evals`) bundle task sets into `EvalGroup`s; you can also define custom task lists in `task_configs.py` and pass them to your own `EvalGroup`s.
 
-!!! note
+### In-loop metrics
 
-    See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator implementation.
-    Additional evaluators live in [`lib/marin/src/marin/evaluation/evaluators`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
-
-### Reported metrics
-
-Beyond task accuracy, Marin tracks these multiple-choice metrics:
+Beyond task accuracy, the in-loop Levanter evaluator tracks these multiple-choice metrics:
 
 1. **Bits per byte (`bpb`)**: `bpb = -log_prob / byte_length * ln(2)`
 2. **Log probability (`logprob`)**: raw log probability of the correct answer.
@@ -46,19 +62,20 @@ Beyond task accuracy, Marin tracks these multiple-choice metrics:
 4. **Length-normalized choice probability (`choice_prob_norm`)**:
    `exp(log_prob_correct / (byte_length_correct * ln(2))) / sum(exp(log_prob_i / (byte_length_i * ln(2))))`
 
-## Generation-based evaluation
+## Generation tasks
 
-Generation tasks (for example AlpacaEval, HumanEval, GSM8K, and MATH) use a fast inference backend, typically vLLM.
+Generation tasks (for example HumanEval, GSM8K, and MATH) run through the same post-hoc evalchemy
+path as multiple-choice tasks: the served endpoint answers completion requests, and evalchemy scores
+them.
 
 - Task and suite definitions are in [`task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py).
 - A common entrypoint is [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py).
-- Current generation-eval setup is documented in [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
-
-In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or as dedicated vLLM jobs submitted through Iris.
 
 ## Harbor-based evaluation
 
-Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py) and the Harbor evaluator integration to run registry datasets in containerized environments.
+Agentic launcher runs pass the same `RunningModel` boundary to
+`run_harbor`. Off-cluster sandboxes receive a scoped capability route resolved by the inference
+session.
 
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.

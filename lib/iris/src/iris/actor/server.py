@@ -26,7 +26,10 @@ import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
@@ -105,7 +108,7 @@ class ActorServer:
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
-        self._app: ActorServiceASGIApplication | None = None
+        self._app: Starlette | None = None
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_container()
         self._server: uvicorn.Server | None = None
@@ -298,8 +301,9 @@ class ActorServer:
         logger.info("Cancelled operation %s", request.operation_id)
         return op.to_proto()
 
-    def _create_app(self) -> ActorServiceASGIApplication:
-        return ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
+    def _create_app(self) -> Starlette:
+        rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
+        return Starlette(routes=[*telltale.routes(), Mount(rpc_app.path, app=rpc_app)])
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

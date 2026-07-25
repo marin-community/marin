@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
+
 logger = logging.getLogger(__name__)
 
 WORKFLOWS = (
@@ -427,22 +429,22 @@ Read `AGENTS.md` (especially its Testing section) and
 
 def run_agent(prompt: str, root: Path) -> None:
     """Invoke Claude Code with the generated prompt."""
-    subprocess.run(
+    result = run_claude(
+        prompt,
         [
-            "claude",
             "--model=opus",
-            "--print",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "400",
-            "--",
-            prompt,
         ],
-        check=True,
         cwd=root,
     )
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
+        return
+    logger.info("%s", result.output)
 
 
 def infer_repo() -> str:

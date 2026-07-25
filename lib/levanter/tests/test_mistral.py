@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import equinox as eqx
@@ -22,6 +23,7 @@ from test_utils import (
 from levanter.layers.attention import AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.mistral import MistralConfig, MistralLMHeadModel
+from levanter.utils.flop_utils import lm_flops_per_token
 
 
 @skip_if_no_torch
@@ -160,6 +162,39 @@ def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
         gradient_checkpointing=False,  # disable for tests so debugging is easier
         use_flash_attention=use_flash,
         flash_attention_block_size=8 if use_flash else None,
+    )
+
+
+def test_mistral_flops_per_token_matches_gated_gqa():
+    # Mistral uses grouped-query attention (num_kv_heads < num_heads) and a gated (SwiGLU)
+    # MLP, so its FLOP estimate must count KV projections by num_kv_heads and the MLP with a
+    # gating factor. It inherits LlamaConfig.flops_per_token; this guards against a regression
+    # to an override that used num_heads for the KV projection and glu=False.
+    config = MistralConfig(
+        num_layers=3,
+        max_seq_len=128,
+        hidden_dim=64,
+        intermediate_dim=256,
+        num_heads=8,
+        num_kv_heads=2,
+    )
+    vocab_size = 1000
+    expected = lm_flops_per_token(
+        hidden_dim=config.hidden_dim,
+        intermediate_dim=config.intermediate_dim,
+        num_layers=config.num_layers,
+        num_kv_heads=config.num_kv_heads,
+        num_heads=config.num_heads,
+        seq_len=config.max_seq_len,
+        vocab_size=vocab_size,
+        glu=True,
+    )
+    assert config.flops_per_token(vocab_size, config.max_seq_len) == expected
+
+    # Reducing the number of KV heads must reduce the FLOP count; the buggy override ignored it.
+    mha_config = dataclasses.replace(config, num_kv_heads=config.num_heads)
+    assert config.flops_per_token(vocab_size, config.max_seq_len) < mha_config.flops_per_token(
+        vocab_size, config.max_seq_len
     )
 
 

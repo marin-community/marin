@@ -18,7 +18,7 @@ from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.ops.task import Assignment, finalize
-from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
@@ -996,8 +996,13 @@ def test_timeout_charges_cumulative_failure_budget(state):
 # =============================================================================
 
 
-def test_terminal_states_clean_up_endpoints(state):
-    """E2E: Task reaching terminal state removes associated endpoints."""
+def test_endpoint_survives_terminal_and_clears_on_prune(state):
+    """A terminal task keeps its endpoints; a job prune clears them.
+
+    Endpoint liveness is the lease: a task reaching a terminal state leaves its
+    endpoints in place until the lease lapses or the owning job is pruned or
+    cancelled through the FK CASCADE backstop.
+    """
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1021,15 +1026,30 @@ def test_terminal_states_clean_up_endpoints(state):
     # Verify endpoint visible while running
     assert len(_endpoints(state, EndpointQuery(exact_name="j1/actor"))) == 1
 
-    # Task succeeds
+    # Task succeeds; the endpoint stays served.
     transition_task(state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+    assert len(_endpoints(state, EndpointQuery(exact_name="j1/actor"))) == 1
 
-    # Endpoint removed
+    # Pruning the terminal job clears the endpoint via the FK CASCADE backstop.
+    job_id = JobName.root("test-user", "j1")
+    with state._db.transaction() as _tx:
+        _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(finished_at_ms=1000))
+    prune_old_data(
+        state._db,
+        worker_daemon_backends_for_prune(state),
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
+    )
     assert _endpoints(state, EndpointQuery(exact_name="j1/actor")) == []
 
 
-def test_endpoint_visibility_by_job_state(state):
-    """Endpoints associated with a task are deleted when the task reaches a terminal state."""
+def test_endpoint_visible_regardless_of_task_state(state):
+    """An endpoint stays visible while its lease is live, independent of task state.
+
+    Liveness is the lease alone, so pending, running, and terminal tasks all keep
+    their endpoints served until the lease lapses.
+    """
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1057,14 +1077,19 @@ def test_endpoint_visibility_by_job_state(state):
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_RUNNING
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
-    # Deleted when task reaches terminal state
+    # Still visible after the task reaches a terminal state; the lease governs
+    # visibility.
     transition_task(state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
-    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
-def test_endpoint_deleted_on_task_failure_with_retry(state):
-    """Endpoints are cleaned up when a task fails even if it retries back to PENDING."""
+def test_endpoint_survives_task_failure_retry(state):
+    """A prior attempt's endpoint survives a task failure and retry.
+
+    The endpoint lingers until its lease lapses; in production the crashed attempt
+    stops renewing, so its lease expires within ~10m.
+    """
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1092,12 +1117,16 @@ def test_endpoint_deleted_on_task_failure_with_retry(state):
     transition_task(state, task.task_id, job_pb2.TASK_STATE_FAILED, error="crash")
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
 
-    # Stale endpoints should be deleted even though the task retried
-    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+    # The endpoint persists across the retry until its lease lapses.
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
-def test_endpoint_deleted_on_worker_failure(state):
-    """Endpoints are cleaned up when the worker dies, even if the task retries."""
+def test_endpoint_survives_worker_failure_retry(state):
+    """An endpoint survives a worker death and task retry.
+
+    Liveness is the lease: the endpoint from the dead worker's attempt lingers
+    until its lease lapses.
+    """
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1124,8 +1153,8 @@ def test_endpoint_deleted_on_worker_failure(state):
     fail_worker(state, worker_id, "Connection lost")
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
 
-    # Endpoints should be cleaned up because the worker is dead
-    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+    # The endpoint persists across the retry until its lease lapses.
+    assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
 
 def test_endpoint_survives_building_state(state):
@@ -3554,13 +3583,12 @@ def test_reconcile_worker_failed_pending_rollback_cascades_children(state):
     assert child_job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_endpoint_registered_after_task_terminal_is_orphaned(state):
-    """Reproduce endpoint leak: register_endpoint succeeds for already-terminal tasks.
+def test_endpoint_registered_after_task_terminal_is_rejected(state):
+    """``add`` refuses to insert an endpoint for an already-terminal task.
 
-    When a task completes, apply_task_observations deletes its endpoints. But
-    register_endpoint doesn't check task state — only attempt_id. So a slow
-    register_endpoint call arriving after the task is terminal inserts an
-    orphaned endpoint that is never cleaned up.
+    A terminal task never renews, so its endpoint would be served for its full
+    lease even though the task is already gone. ``EndpointsProjection.add``
+    rejects the insert instead.
     """
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -3570,14 +3598,12 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(state):
 
     dispatch_task(state, task, worker_id)
 
-    # Task succeeds — any existing endpoints would be cleaned up here.
     transition_task(state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
     task_after = _query_task(state, task.task_id)
     assert task_after.state == job_pb2.TASK_STATE_SUCCEEDED
 
-    # Now a slow register_endpoint arrives AFTER the task is terminal.
-    # This simulates the task process still alive briefly after the
-    # controller processed the terminal heartbeat.
+    # A slow register_endpoint arrives AFTER the task is terminal (the task
+    # process was still briefly alive after the terminal heartbeat).
     ep = EndpointRow(
         endpoint_id="orphan-ep",
         name="leak/actor",
@@ -3587,15 +3613,11 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(state):
         registered_at=Timestamp.now(),
     )
     with state._db.transaction() as cur:
-        state._endpoints.add(cur, ep)
+        outcome = state._endpoints.add(cur, ep)
+    assert outcome is AddEndpointOutcome.TERMINAL
 
-    # BUG: The endpoint is now orphaned — the task is terminal so no
-    # future transition will clean it up.
-    leaked = _endpoints(state, EndpointQuery(exact_name="leak/actor"))
-    assert leaked == [], (
-        f"Expected no endpoints for terminal task, but found {len(leaked)}. "
-        "register_endpoint/add_endpoint must reject inserts for terminal tasks."
-    )
+    # The terminal guard rejected the insert, so no endpoint leaks.
+    assert _endpoints(state, EndpointQuery(exact_name="leak/actor")) == []
 
 
 # =============================================================================

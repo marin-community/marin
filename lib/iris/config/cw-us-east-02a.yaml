@@ -37,6 +37,26 @@ finelog:
 # Public host of this controller. The whole surface is IP-locked to the marin
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
+federation_public_parent: https://iris.oa.dev
+
+# Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
+provisioning:
+  provider: coreweave
+  coreweave:
+    cluster: { name: marin-gpu, zone: US-EAST-02A }
+    kueue:
+      flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
+    ingress:
+      ingress_class: traefik
+      acme_email: ops@openathena.ai
+      cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      active_cluster_issuer: letsencrypt-http01-prod
+    federation_dns:
+      hostname: iris-cw-us-east-02a.oa.dev
+      target: iris-cw-us-east-02a.208261-marin-gpu.coreweave.app
+    rbac: { service_account: iris-controller }
+    grafana_observer_rbac:
+      usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
 
 platform:
   label_prefix: cw-use02a
