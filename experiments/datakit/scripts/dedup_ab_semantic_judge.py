@@ -29,7 +29,7 @@ from rigging.log_setup import configure_logging
 from experiments.datakit.scripts.dedup_ab_machine_labels import DedupMachineLabelsData
 from experiments.datakit.scripts.dedup_ab_semantic_batch import _requested_pair_rows, _verified_case
 
-MODEL_ID = "Qwen/Qwen3.5-9B"
+MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
 MAX_MODEL_LEN = 131_072
 MAX_DIRECT_CHARS = 420_000
 MAX_CONCURRENT_REQUESTS = 4
@@ -283,9 +283,9 @@ async def judge_calibration_cases(
 def _inference_config(model: str) -> tuple[ServedModelConfig, VllmEngineConfig, IrisConfig, BrokerConfig]:
     worker_resources = ResourceConfig.with_gpu(
         "H100",
-        count=1,
-        cpu=8,
-        ram="64g",
+        count=2,
+        cpu=16,
+        ram="128g",
         disk="150g",
         preemptible=False,
     )
@@ -294,7 +294,7 @@ def _inference_config(model: str) -> tuple[ServedModelConfig, VllmEngineConfig, 
         model=model,
         tokenizer=model,
         max_model_len=MAX_MODEL_LEN,
-        tensor_parallel_size=1,
+        tensor_parallel_size=2,
     )
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
