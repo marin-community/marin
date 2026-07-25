@@ -309,6 +309,11 @@ that it is scoped to that endpoint and unexpired before forwarding. Mint one
 with `iris endpoints mint <name>` (or let `marin-serve
 --access link` print the ready-to-use URL at launch).
 
+A federated capability uses
+`/proxy/t/cluster=<peer>/<token>/<endpoint>/<sub_path>`. It stays beneath the
+same `/proxy/t/*` load-balancer rule; the public parent removes the
+`cluster=<peer>` discriminator and the child validates its own token.
+
 The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP disabled)
 on the same NEG and health check the `backend` stage already created — no new NEG,
 no new controller — and a URL-map path rule routing `/proxy/t` and `/proxy/t/*` to

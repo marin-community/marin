@@ -501,8 +501,8 @@ struct ProxyRoute {
     token: Option<String>,
     proxy_prefix: String,
     redirect: bool,
-    // Set when the route is a federation relay (`/proxy/<cluster>/t/...`): the peer
-    // whose proxy the parent forwards the capability URL to, verbatim and unverified.
+    // Set when the route is a federation relay (`/proxy/t/cluster=<peer>/...`):
+    // the peer whose proxy receives the capability URL, verbatim and unverified.
     relay_peer: Option<String>,
 }
 
@@ -845,35 +845,48 @@ fn parse_proxy_route(uri: &Uri) -> Result<ProxyRoute, Box<Response<Body>>> {
             "invalid proxy route",
         ))
     })?;
-    // Federation relay marker: `<cluster>/t/<token>/<name>/...`. A non-empty,
-    // non-`t` first segment immediately followed by the `t/` capability marker
-    // relays the URL to that peer; the parent strips `<cluster>` and forwards
-    // `/proxy/t/...` verbatim. Requiring the `t/` marker means a tagged URL only
-    // ever relays a capability token, never the child's other auth modes.
-    let (relay_peer, prefix_head, remainder) = match remainder.split_once('/') {
-        Some((head, rest)) if !head.is_empty() && head != "t" && rest.starts_with("t/") => (
-            Some(decode_path_segment(head)?),
-            format!("/proxy/{head}"),
-            rest,
-        ),
-        _ => (None, "/proxy".to_string(), remainder),
-    };
-    let (token, endpoint_and_path, token_prefix) =
-        if let Some(token_route) = remainder.strip_prefix("t/") {
-            let (token, rest) = token_route.split_once('/').ok_or_else(|| {
+    // Keep relays inside the existing capability namespace so an edge can open
+    // only `/proxy/t/*`. The explicit `cluster=` discriminator cannot collide
+    // with a minted JWT token and ensures no other child auth mode is relayed.
+    let (relay_peer, token_route, prefix_head) =
+        if let Some(relay_route) = remainder.strip_prefix("t/cluster=") {
+            let (peer, token_route) = relay_route.split_once('/').ok_or_else(|| {
                 Box::new(error_response(
                     StatusCode::BAD_REQUEST,
-                    "invalid token proxy route",
+                    "invalid federation relay route",
                 ))
             })?;
+            if peer.is_empty() {
+                return Err(Box::new(error_response(
+                    StatusCode::BAD_REQUEST,
+                    "federation relay cluster is empty",
+                )));
+            }
             (
-                Some(decode_path_segment(token)?),
-                rest,
-                format!("{prefix_head}/t/{token}"),
+                Some(decode_path_segment(peer)?),
+                Some(token_route),
+                format!("/proxy/t/cluster={peer}"),
             )
+        } else if let Some(token_route) = remainder.strip_prefix("t/") {
+            (None, Some(token_route), "/proxy/t".to_string())
         } else {
-            (None, remainder, prefix_head)
+            (None, None, "/proxy".to_string())
         };
+    let (token, endpoint_and_path, token_prefix) = if let Some(token_route) = token_route {
+        let (token, rest) = token_route.split_once('/').ok_or_else(|| {
+            Box::new(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid token proxy route",
+            ))
+        })?;
+        (
+            Some(decode_path_segment(token)?),
+            rest,
+            format!("{prefix_head}/{token}"),
+        )
+    } else {
+        (None, remainder, prefix_head)
+    };
     let (encoded_name, sub_path, redirect) =
         if let Some((name, path)) = endpoint_and_path.split_once('/') {
             (name, path, false)
@@ -1107,7 +1120,7 @@ fn federation_decision(
     })
 }
 
-/// A cluster-tagged capability URL (`/proxy/<cluster>/t/<token>/<name>/...`): the
+/// A cluster-tagged capability URL (`/proxy/t/cluster=<peer>/<token>/<name>/...`): the
 /// parent forwards it to the named peer's proxy without resolving or authenticating
 /// it locally. The child owns and validates the token exactly as for a direct call.
 fn relay_decision(route: ProxyRoute, peer_id: String, query: Option<&str>) -> NativeDecision {
@@ -1251,7 +1264,7 @@ async fn native_decision(
         // A cluster-tagged capability URL. Do not resolve or authenticate it here:
         // the child owns and validates the token. A tagless leading segment (no
         // trailing sub-path) still redirects to the canonical slashed form, keeping
-        // the external `<cluster>` prefix so the follow-up request relays.
+        // the external `cluster=<peer>` prefix so the follow-up request relays.
         if route.redirect {
             return redirect_decision(&route, request_uri.query());
         }
@@ -1599,21 +1612,35 @@ mod tests {
 
     #[test]
     fn relay_route_parses_the_cluster_tag_and_keeps_the_capability_path() {
-        let r = route("/proxy/cw-rno2a/t/tok123/serve.model/v1/models");
+        let r = route("/proxy/t/cluster=cw-rno2a/tok123/serve.model/v1/models");
         assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
         assert_eq!(r.token.as_deref(), Some("tok123"));
         assert_eq!(r.encoded_name, "serve.model");
         assert_eq!(r.sub_path, "v1/models");
         assert!(!r.redirect);
         // The external prefix keeps the cluster tag so a redirect round-trips.
-        assert_eq!(r.proxy_prefix, "/proxy/cw-rno2a/t/tok123/serve.model");
+        assert_eq!(
+            r.proxy_prefix,
+            "/proxy/t/cluster=cw-rno2a/tok123/serve.model"
+        );
     }
 
     #[test]
     fn relay_route_without_a_subpath_redirects_to_the_slashed_form() {
-        let r = route("/proxy/cw-rno2a/t/tok123/serve.model");
+        let r = route("/proxy/t/cluster=cw-rno2a/tok123/serve.model");
         assert_eq!(r.relay_peer.as_deref(), Some("cw-rno2a"));
         assert!(r.redirect);
+    }
+
+    #[test]
+    fn relay_route_requires_a_cluster_and_token_path() {
+        assert!(parse_proxy_route(
+            &"/proxy/t/cluster=/tok123/serve.model"
+                .parse::<Uri>()
+                .unwrap()
+        )
+        .is_err());
+        assert!(parse_proxy_route(&"/proxy/t/cluster=cw-rno2a".parse::<Uri>().unwrap()).is_err());
     }
 
     #[test]

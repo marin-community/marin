@@ -1,17 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""common-pile/* download + normalize helpers.
+"""Download and normalize the 26 filtered common-pile v0.1 subsets.
 
-27 filtered subsets of the common-pile v0.1 corpora. Each entry is a standalone
-HF repo (``common-pile/<subset>_filtered``, or ``common-pile/stackv2`` as the
-one exception); no shared family download, no custom preprocessing beyond what
-normalize does. Thin wrapper over :func:`hf_normalize_steps`.
-
-The download HF ids end in ``_filtered`` because Marin re-publishes curated
-variants of the canonical common-pile repos; the token-count-viewer's CSV
-shows the user-facing unfiltered names, but what actually downloads (and what
-the staged dirs on GCS hold) is the ``_filtered`` version.
+Marin uses the curated ``common-pile/<subset>_filtered`` repositories while
+retaining the canonical subset names in the source registry.
 """
 
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
@@ -94,8 +87,6 @@ _COMMON_PILE_ENTRIES: tuple[tuple[str, str, str, str], ...] = (
         "c0ac737",
         "raw/common_pile/stackexchange_filtered-c0ac737",
     ),
-    # Note: stackv2 is unfiltered — the only exception in the common-pile set.
-    ("cp/stackv2_code", "common-pile/stackv2", "d0e3266", "raw/common_pile/stackv2-d0e3266"),
     ("cp/ubuntu_irc", "common-pile/ubuntu_irc_filtered", "84f88c9", "raw/common_pile/ubuntu_irc_filtered-84f88c9"),
     ("cp/uk_hansard", "common-pile/uk_hansard_filtered", "c88adc4", "raw/common_pile/uk_hansard_filtered-c88adc4"),
     ("cp/usgpo", "common-pile/usgpo_filtered", "b150cc2", "raw/common_pile/usgpo_filtered-b150cc2"),
@@ -106,19 +97,14 @@ _COMMON_PILE_ENTRIES: tuple[tuple[str, str, str, str], ...] = (
 
 
 def common_pile_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
-    """Return ``(download, normalize)`` chains for every common-pile entry.
-
-    common-pile is published in the Dolma gzipped-JSON format rather than
-    parquet. Most repos use ``.json.gz``; ``stackv2`` uses ``.jsonl.gz``, so
-    we allow both. The default ``text``/``id`` fields match Dolma's schema.
-    """
+    """Return ``(download, normalize)`` chains for every common-pile entry."""
     return {
         marin_name: hf_normalize_steps(
             marin_name=marin_name,
             hf_dataset_id=hf_id,
             revision=revision,
             staged_path=staged,
-            file_extensions=(".json.gz", ".jsonl.gz"),
+            file_extensions=(".json.gz",),
         )
         for marin_name, hf_id, revision, staged in _COMMON_PILE_ENTRIES
     }

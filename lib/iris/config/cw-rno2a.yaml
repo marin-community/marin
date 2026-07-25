@@ -25,6 +25,11 @@
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: cw-rno2a
 
+# Public host of this controller. Capability URLs use the Marin origin so clients
+# reach serving endpoints through the federation parent.
+dashboard_url: https://iris-cw-rno2a.oa.dev
+federation_public_parent: https://iris.oa.dev
+
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on

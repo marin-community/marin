@@ -80,10 +80,18 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `ops` profile is restricted to the Google identity of
-the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
-account's email and immutable numeric subject; it does not create or copy a Loom
-token.
+activation. The `grafana-alerts` federation mapping authorizes the Google
+identity of the existing `marin-grafana` Cloud Run service account to select
+only the `ops` profile. Pulumi resolves that account's email and immutable
+numeric subject; it does not create or copy a Loom token.
+
+The Pulumi declaration is authoritative at activation time. An unchanged
+profile keeps its database revision; a changed declaration overwrites the
+current row and advances the revision. UI or API edits persist only until the
+next activation. Deployment pruning is enabled, so a profile or federation
+removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
+activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
+not deployment-managed and are not pruned.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting

@@ -12,14 +12,14 @@ config:
   marin-loom:bootDiskGb: "100"
   marin-loom:dataDiskGb: "500"
   marin-loom:dotenvSecretVersion: "3"
-  marin-loom:pruneDeployment: "false"
+  marin-loom:pruneDeployment: "true"
   marin-loom:snapshotRetentionDays: "14"
   marin-loom:profiles:
     ops:
-      agent: claude
+      agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
-      model: sonnet
-      effort: high
+      model: gpt-5.6-sol
+      effort: xhigh
       protocol: acp
       mode: auto
       class: automation
@@ -32,6 +32,9 @@ config:
       prelude: weaver
       restricted: false
       allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
   marin-loom:workloads:
     - name: grafana-alerts
       profile: ops
