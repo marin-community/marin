@@ -11,6 +11,7 @@ rehashed before the compact records enter either shuffle.
 """
 
 import argparse
+import hashlib
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -40,6 +41,7 @@ class DedupFinalReviewData(BaseModel):
     review_path: str
     machine_labels_path: str
     semantic_decisions_dir: str
+    manual_decisions_dir: str
     labels_dir: str
     coverage_dir: str
     counters: dict[str, int | float]
@@ -116,7 +118,7 @@ def final_decision(review_key: str, records: Iterator[dict[str, str]]) -> dict[s
     for record in records:
         kind = record["kind"]
         by_kind.setdefault(kind, []).append(json.loads(record["payload_json"]))
-    unknown_kinds = by_kind.keys() - {"pair", "machine", "semantic"}
+    unknown_kinds = by_kind.keys() - {"pair", "machine", "semantic", "manual"}
     if unknown_kinds:
         raise AssertionError(f"Unknown adjudication inputs for {review_key}: {sorted(unknown_kinds)}")
 
@@ -128,20 +130,38 @@ def final_decision(review_key: str, records: Iterator[dict[str, str]]) -> dict[s
             raise AssertionError(f"Machine {field} differs from verified full-text evidence for {review_key}")
 
     semantic_records = by_kind.get("semantic", [])
+    manual_records = by_kind.get("manual", [])
     if machine["needs_semantic_review"]:
-        if len(semantic_records) != 1:
-            raise AssertionError(f"Expected one semantic record for {review_key}, found {len(semantic_records)}")
-        decision = semantic_records[0]
-        _matching_identity_fields(pair, decision, review_key)
-        if decision.get("method") != "semantic":
-            raise AssertionError(f"Semantic decision has method {decision.get('method')!r} for {review_key}")
-        if decision.get("label") not in LABELS:
-            raise AssertionError(f"Semantic decision has invalid label {decision.get('label')!r} for {review_key}")
+        semantic = _one_record(by_kind, "semantic", review_key)
+        _matching_identity_fields(pair, semantic, review_key)
+        if semantic.get("method") != "semantic":
+            raise AssertionError(f"Semantic decision has method {semantic.get('method')!r} for {review_key}")
+        if semantic.get("label") in LABELS:
+            if manual_records:
+                raise AssertionError(f"Unexpected manual record for resolved semantic decision {review_key}")
+            decision = semantic
+        elif semantic.get("status") == "unresolved" and semantic.get("label") == "":
+            decision = _one_record(by_kind, "manual", review_key)
+            _matching_identity_fields(pair, decision, review_key)
+            if decision.get("method") != "manual_full_text":
+                raise AssertionError(f"Manual decision has method {decision.get('method')!r} for {review_key}")
+            if decision.get("label") not in LABELS:
+                raise AssertionError(f"Manual decision has invalid label {decision.get('label')!r} for {review_key}")
+            judgments_json = semantic.get("judgments_json")
+            if not isinstance(judgments_json, str):
+                raise AssertionError(f"Unresolved semantic decision has no judgment evidence for {review_key}")
+            semantic_sha256 = hashlib.sha256(judgments_json.encode()).hexdigest()
+            if decision.get("semantic_judgments_sha256") != semantic_sha256:
+                raise AssertionError(f"Manual override binds different semantic evidence for {review_key}")
+        else:
+            raise AssertionError(f"Semantic decision has invalid label {semantic.get('label')!r} for {review_key}")
         if not str(decision.get("basis", "")).strip():
             raise AssertionError(f"Semantic decision has no basis for {review_key}")
     else:
         if semantic_records:
             raise AssertionError(f"Unexpected semantic record for machine-resolved pair {review_key}")
+        if manual_records:
+            raise AssertionError(f"Unexpected manual record for machine-resolved pair {review_key}")
         decision = machine
         if decision["method"] not in MACHINE_METHODS or decision["label"] not in LABELS:
             raise AssertionError(f"Invalid machine decision for {review_key}")
@@ -329,6 +349,7 @@ def finalize(
     review_path: str,
     machine_labels_path: str,
     semantic_decisions_dir: str,
+    manual_decisions_dir: str,
     output_path: str,
     max_workers: int,
 ) -> DedupFinalReviewData:
@@ -346,6 +367,7 @@ def finalize(
         *_paths(review.pairs_dir, "pair"),
         *_paths(machine.decisions_dir, "machine"),
         *_paths(semantic_decisions_dir, "semantic", required=False),
+        *_paths(manual_decisions_dir, "manual", required=False),
     ]
     resources = ResourceConfig(cpu=2, ram="24g", disk="20g", preemptible=False)
     coordinator = ResourceConfig(cpu=4, ram="16g", disk="20g", preemptible=False)
@@ -404,6 +426,7 @@ def finalize(
         review_path=review_path,
         machine_labels_path=machine_labels_path,
         semantic_decisions_dir=semantic_decisions_dir,
+        manual_decisions_dir=manual_decisions_dir,
         labels_dir=labels_dir,
         coverage_dir=coverage_dir,
         counters=combined,
@@ -416,6 +439,7 @@ def main() -> None:
     parser.add_argument("--review", required=True)
     parser.add_argument("--machine-labels", required=True)
     parser.add_argument("--semantic-decisions", required=True)
+    parser.add_argument("--manual-decisions", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-workers", type=int, default=128)
     args = parser.parse_args()
@@ -426,6 +450,7 @@ def main() -> None:
         review_path=args.review,
         machine_labels_path=args.machine_labels,
         semantic_decisions_dir=args.semantic_decisions,
+        manual_decisions_dir=args.manual_decisions,
         output_path=args.output,
         max_workers=args.max_workers,
     )

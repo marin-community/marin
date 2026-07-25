@@ -71,6 +71,26 @@ def _machine(pair: dict) -> dict:
     }
 
 
+def _identity(decision: dict) -> dict:
+    return {
+        key: decision[key]
+        for key in (
+            "review_key",
+            "variant",
+            "member_source_main_dir",
+            "member_basename",
+            "member_id",
+            "canonical_source_main_dir",
+            "canonical_basename",
+            "canonical_id",
+            "raw_sha256",
+            "canonical_raw_sha256",
+            "pair_path",
+            "pair_row_index",
+        )
+    }
+
+
 def test_final_decision_accepts_hash_verified_machine_label() -> None:
     pair = _pair(exact=True)
     machine = _machine(pair)
@@ -115,6 +135,111 @@ def test_final_decision_requires_one_bound_semantic_label_when_routed() -> None:
 
     assert result["label"] == "false_positive"
     assert result["method"] == "semantic"
+
+
+def test_final_decision_accepts_hash_bound_manual_override_for_unresolved_semantic() -> None:
+    pair = _pair(ambiguous=True)
+    machine = _machine(pair)
+    identity = _identity(machine)
+    judgments_json = '{"judgments":[{"pass":"loss"}]}'
+    semantic = {
+        **identity,
+        "status": "unresolved",
+        "label": "",
+        "method": "semantic",
+        "basis": "The model judgments did not reach a valid majority.",
+        "judgments_json": judgments_json,
+    }
+    manual = {
+        **identity,
+        "label": "true_duplicate",
+        "method": "manual_full_text",
+        "basis": "Complete texts differ only in formatting.",
+        "semantic_judgments_sha256": hashlib.sha256(judgments_json.encode()).hexdigest(),
+    }
+
+    result = final_decision(
+        pair["review_key"],
+        iter(
+            [
+                _input("pair", _verified_pair(pair)),
+                _input("machine", machine),
+                _input("semantic", semantic),
+                _input("manual", manual),
+            ]
+        ),
+    )
+
+    assert result["label"] == "true_duplicate"
+    assert result["method"] == "manual_full_text"
+
+
+def test_final_decision_rejects_manual_override_bound_to_different_semantic_evidence() -> None:
+    pair = _pair(ambiguous=True)
+    machine = _machine(pair)
+    identity = _identity(machine)
+    semantic = {
+        **identity,
+        "status": "unresolved",
+        "label": "",
+        "method": "semantic",
+        "basis": "The model judgments did not reach a valid majority.",
+        "judgments_json": '{"judgments":[]}',
+    }
+    manual = {
+        **identity,
+        "label": "true_duplicate",
+        "method": "manual_full_text",
+        "basis": "Complete texts differ only in formatting.",
+        "semantic_judgments_sha256": hashlib.sha256(b"different evidence").hexdigest(),
+    }
+
+    with pytest.raises(AssertionError, match="different semantic evidence"):
+        final_decision(
+            pair["review_key"],
+            iter(
+                [
+                    _input("pair", _verified_pair(pair)),
+                    _input("machine", machine),
+                    _input("semantic", semantic),
+                    _input("manual", manual),
+                ]
+            ),
+        )
+
+
+def test_final_decision_rejects_manual_override_of_resolved_semantic_decision() -> None:
+    pair = _pair(ambiguous=True)
+    machine = _machine(pair)
+    identity = _identity(machine)
+    semantic = {
+        **identity,
+        "status": "resolved",
+        "label": "false_positive",
+        "method": "semantic",
+        "basis": "The complete texts discuss unrelated subjects.",
+        "judgments_json": '{"judgments":[]}',
+    }
+    manual = {
+        **identity,
+        "label": "true_duplicate",
+        "method": "manual_full_text",
+        "basis": "Complete texts differ only in formatting.",
+        "semantic_judgments_sha256": hashlib.sha256(semantic["judgments_json"].encode()).hexdigest(),
+    }
+
+    with pytest.raises(AssertionError, match="Unexpected manual record"):
+        final_decision(
+            pair["review_key"],
+            iter(
+                [
+                    _input("pair", _verified_pair(pair)),
+                    _input("machine", machine),
+                    _input("semantic", semantic),
+                    _input("manual", manual),
+                ]
+            ),
+        )
 
 
 def test_final_decision_rejects_tampered_machine_label() -> None:
