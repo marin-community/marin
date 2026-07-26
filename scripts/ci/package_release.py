@@ -31,6 +31,7 @@ PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
 LOCK_RETRY_DELAYS = (0, 5, 15, 30, 60, 120)
 PYTHON_LIBS_FAMILY = "python-libs"
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
+_LOCK_PACKAGE_BLOCK_RE = re.compile(r"(?ms)^\[\[package\]\]\n.*?(?=^\[\[package\]\]\n|\Z)")
 
 
 @dataclass(frozen=True)
@@ -562,6 +563,43 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
+def merge_targeted_lock_change(before: str, resolved: str, packages: Iterable[str]) -> str:
+    """Copy selected resolved package blocks into an otherwise unchanged lockfile."""
+    requested = set(packages)
+    before_matches = list(_LOCK_PACKAGE_BLOCK_RE.finditer(before))
+    resolved_matches = list(_LOCK_PACKAGE_BLOCK_RE.finditer(resolved))
+    if not before_matches or not resolved_matches:
+        raise ValueError("Expected uv.lock package entries")
+
+    resolved_blocks: dict[str, list[str]] = {}
+    for match in resolved_matches:
+        package = tomllib.loads(match.group(0))["package"][0]
+        resolved_blocks.setdefault(package["name"], []).append(match.group(0))
+
+    replacements: dict[str, str] = {}
+    for name in requested:
+        blocks = resolved_blocks.get(name, [])
+        if len(blocks) != 1:
+            raise ValueError(f"Expected one resolved uv.lock entry for {name}, found {len(blocks)}")
+        replacements[name] = blocks[0]
+
+    merged_blocks = []
+    found: dict[str, int] = {name: 0 for name in requested}
+    for match in before_matches:
+        block = match.group(0)
+        package = tomllib.loads(block)["package"][0]
+        name = package["name"]
+        if name in replacements:
+            block = replacements[name]
+            found[name] += 1
+        merged_blocks.append(block)
+
+    invalid = {name: count for name, count in found.items() if count != 1}
+    if invalid:
+        raise ValueError(f"Expected one existing uv.lock entry for each targeted package, found {invalid}")
+    return before[: before_matches[0].start()] + "".join(merged_blocks)
+
+
 def _emit_github_output(path: Path | None, **values: str) -> None:
     if path is None:
         return
@@ -613,8 +651,14 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise RuntimeError(f"`{' '.join(command)}` failed after {attempt} attempts")
-        updated_lock = lock_path.read_text()
+        resolved_lock = lock_path.read_text()
         try:
+            updated_lock = merge_targeted_lock_change(
+                original_lock,
+                resolved_lock,
+                (build.requirement_distribution, build.requirement_owner),
+            )
+            lock_path.write_text(updated_lock)
             validate_targeted_lock_change(
                 original_lock,
                 updated_lock,
@@ -626,6 +670,13 @@ def bump_native_requirement(
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise
+        check = subprocess.run(["uv", "lock", "--check"], cwd=repo_root)
+        if check.returncode != 0:
+            if attempt < len(LOCK_RETRY_DELAYS):
+                continue
+            requirement_path.write_text(original_requirement)
+            lock_path.write_text(original_lock)
+            raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
         return
     raise AssertionError("Unreachable lock retry loop")
 
