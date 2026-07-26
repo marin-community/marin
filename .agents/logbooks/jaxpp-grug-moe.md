@@ -3731,3 +3731,21 @@ author: dlwh
   - The reduced L8 A/B is a raw throughput negative because grouping nearly doubles its pipeline bubble, but it is a positive estimate for the high-microbatch L24 target. The target projection is strong enough to justify the fixed GPU numerical gate and one L24 confirmation.
 - Next action:
   - Run a real H100 exact-ring/CuTe FA4 comparison that enforces relative-L2 `<=0.002` for loss and every parameter/input-gradient leaf. If it passes, launch L24/b8192/m256 group-2 BF16, then compose FP8 wire only after measuring the BF16 result.
+
+### 2026-07-26 14:28 PDT - target-microbatch GPU parity blocks L24 promotion
+- Hypothesis: The MoE-boundary group-2 final-stage computation will match two ordered microbatches within relative-L2 `0.002` for loss, QB, every parameter gradient, and both input cotangents at the target microbatch size.
+- Commit Hash: `0c49e7dcf7` adds a self-contained one-node H100x8 gate with d2560, e64/top-k4, seq4096, global microbatch 32/local microbatch 4, CuTe FA4, exact ring EP8, BF16 compute, Pallas-Triton `block_k=32`/8 warps, one complete final-stage block, unequal weighted-loss denominators, and structured finite/per-leaf reporting.
+- Command: Parent `/dlwh/jaxpp-group2-moe-boundary-parity-20260726-212357` ran the pushed gate from a clean `0c49e7dcf7` workspace. Child: `/dlwh/jaxpp-group2-moe-boundary-parity-20260726-212357/0`.
+- Results:
+  - Problem initialization took approximately `10s`. Ordered lower/compile/execute took `20.998/7.262/2.019s`; grouped took `10.561/6.794/0.190s`. There was no setup, OOM, compiler, or timeout failure.
+  - Loss passed: reference `18.0793495`, absolute and maximum error `6.48499e-05`, relative-L2 `3.58696e-06`.
+  - QB failed: reference norm `0.3082554`, absolute `0.00107612`, maximum absolute error `0.000468697`, relative-L2 `0.00349099`.
+  - All 25 gradient leaves were finite, but 24 exceeded `0.002`. Only `blocks[0].mlp.router_bias` passed exactly.
+  - The maximum mismatch was `gradients['parameters'].blocks[0].mlp.expert_mlp.w_gate`: relative-L2 `1.38096071`, absolute-L2 `0.06535538`, reference-L2 `0.04732602`, maximum absolute error `3.32594e-05`.
+  - Other routed-MoE parameter gradients were `1.375880-1.380808`; both input cotangents were `0.685021` and `0.675166`; attention gradients were approximately `0.659-0.672`; shared-expert gradients were much closer at `0.003886-0.004493`.
+  - The child deliberately exited `1` after emitting `passed=false`. Iris is terminal and the allocation is released; no live resource remains. No L24 run was launched.
+- Interpretation:
+  - The near-exact scalar loss with order-one routed-MoE gradient disagreement is not acceptable mixed-precision reduction drift. The pattern points first to composing two exact-ring custom VJPs inside one differentiated/rematerialized block; the downstream attention/input failures can follow from an incorrect MoE input cotangent.
+  - The L8 bubble-normalized performance projection remains informative but is not promotable until the VJP failure is fixed under the unchanged `0.002` policy.
+- Next action:
+  - Isolate paired exact-ring VJP from packed attention and rematerialization. Compare two ring calls inside one `value_and_grad` against two separately differentiated calls on identical post-attention inputs, then test `save_moe`, `recompute_all`, and no checkpoint before another full-stage GPU gate.
