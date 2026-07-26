@@ -3189,6 +3189,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 run_id=run_id,
                 path_override=config.trainer.sharding_dump_path,
             )
+            if automatic_mpmd:
+                logger.warning("automatic JaxPP returns MPMD arrays; checkpoint writes are disabled for now")
+                checkpointer = None
 
         if explicit_mpmd:
             parameter_count_value = _shape_parameter_count(state.params)
@@ -3433,6 +3436,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if math.isnan(float(metrics["train/loss"])):
                 logger.error(f"NaN loss at step {current_step}. Stopping training.")
                 break
+            if automatic_mpmd:
+                logger.info("Automatic JaxPP step %d loss %.17g", current_step, float(metrics["train/loss"]))
             duration = time.perf_counter() - step_start
             hook_start = time.perf_counter()
             callback_state = state
