@@ -315,3 +315,29 @@ Confirmed clean: no submission of mine sets a cache directory, and every run's h
 Added `SCALE_RAM` (default 256g, unchanged) so the host-memory request can be raised without a code
 edit at submit time; verified it flows through to the ResourceConfig. Host offload parks ~40.5 GiB per
 GPU in pinned host memory = ~162 GiB per 4-GPU node against the 256g default.
+
+## Check-in 11 — v3 crashlooped silently; host-memory hypothesis survives; v4 raises RAM to 600g
+
+/mwittmann/ep25d5-d6144-e256-bf16-120-0726-1000-v3 reached failures=9 with restart cycles as short as
+2m45s. Classification across its 40,004-line warning stream and 52,238-line full stream:
+
+    "failed to allocate" (HBM OOM)        0
+    "SIGTERM caught" (preemption)         0
+    "another task died" (gang victim)     49
+    primary exception / traceback         NONE
+
+So one process disappears and the rest report it. A process that dies with no exception, no HBM OOM
+and no SIGTERM is the signature of a kernel SIGKILL, which is what a container host-memory OOM looks
+like from inside. That is exactly the hypothesis I pre-registered when v2's offload rung first ran, and
+it survives this look, so per the pre-authorized ladder the RAM request goes first.
+
+The arithmetic supports it: `SCALE_PROCESSES_PER_TASK` defaults to 1, so ONE container per node holds
+all 4 GPUs' offloaded optimizer state in pinned host memory = 4 x 40.5 = ~162 GiB, plus the JAX host
+allocations, the loader prefetch (32 buffers) and the process itself, against the launcher's hardcoded
+`ram="256g"`. GB200 nodes have 960 GB (`lib/iris/config/cw-us-east-08a.yaml`: gb200-4x, 144 vCPU,
+960GB LPDDR5X), so the 256g request was leaving ~800 GB of the node unused while the container hit its
+own limit.
+
+/mwittmann/ep25d5-d6144-e256-bf16-120-0726-1023-v4 = v3 + `SCALE_RAM=600g` (the knob added this
+session). Note the two are otherwise identical, so if v4 clears init this is a clean attribution.
+Stopped v3 before resubmitting; it was crashlooping the rack to no purpose.
