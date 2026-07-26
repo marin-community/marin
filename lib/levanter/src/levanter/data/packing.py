@@ -290,13 +290,14 @@ def greedy_pack_prompt_completions(
             concat_loss_weight = concat_loss_weight[-Pos.size :]
             segment_ids = segment_ids[-Pos.size :]
 
-        # Create the LmExample
-        tokens = hax.named(np.array(concat_ids), Pos)
-        loss_weight = hax.named(np.array(concat_loss_weight), Pos)
-        segment_ids = hax.named(np.array(segment_ids), Pos)
-        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        # Keep packed examples on the host until the batch loader shards them for computation.
+        with local_cpu_mesh():
+            tokens = hax.named(np.array(concat_ids), Pos)
+            loss_weight = hax.named(np.array(concat_loss_weight), Pos)
+            segment_ids_array = hax.named(np.array(segment_ids), Pos)
+            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids_array)
 
-        out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
+            out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
 
     return out
 
