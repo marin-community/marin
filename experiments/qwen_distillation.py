@@ -20,6 +20,7 @@ Retry the hard-label controls with materialized training loss:
     python -m experiments.qwen_distillation --version dev --stage screen-ce-retry --run --max-concurrent 4
 """
 
+import json
 import math
 from dataclasses import dataclass
 from datetime import timedelta
@@ -34,6 +35,7 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.distillation import DistillationObjective
 from levanter.distillation_initialization import TeacherInitialization
 from levanter.eval import LmEvalLossImplementation
+from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, TaskConfig, run_eval_harness_main
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.main.distill_lm import TrainLmDistillationConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -58,6 +60,7 @@ from marin.training.training import (
     run_levanter_distill_lm,
     run_levanter_train_lm,
 )
+from rigging.filesystem import StoragePath
 
 from experiments.models import qwen3_0_6b_base, qwen3_4b, qwen3_32b
 
@@ -75,6 +78,7 @@ SMOKE_DATA_VERSION = "2026.07.26.4"
 EXTENDED_DATA_VERSION = "2026.07.26.11"
 SMOKE_DATA_DOCUMENTS = 1_000
 EXTENDED_DATA_DOCUMENTS_PER_SHARD = 15_000
+SCREEN_EVAL_VERSION = "2026.07.26.12"
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
@@ -160,6 +164,32 @@ ARMS = {
         teacher_4b=True,
     ),
 }
+
+SCREEN_ARTIFACT_VERSIONS = {
+    Arm.CE_SCRATCH: "2026.07.26.10",
+    Arm.KL_SCRATCH: "2026.07.26.8",
+    Arm.CE_BASE: "2026.07.26.10",
+    Arm.KL_BASE: "2026.07.26.8",
+    Arm.HIDDEN: "2026.07.26.8",
+    Arm.FACTORIZED: "2026.07.26.8",
+    Arm.TAID: "2026.07.26.9",
+    Arm.STRUCTURED: "2026.07.26.8",
+    Arm.FOUR_B_TEACHER: "2026.07.26.8",
+}
+
+ZERO_SHOT_TASKS = (
+    TaskConfig(task="arc_easy", num_fewshot=0),
+    TaskConfig(task="hellaswag", num_fewshot=0),
+    TaskConfig(task="piqa", num_fewshot=0),
+    TaskConfig(task="winogrande", num_fewshot=0),
+)
+
+
+@dataclass(frozen=True)
+class EvaluationOnPodConfig:
+    eval_config: EvalHarnessMainConfig
+    resources: ResourceConfig
+    output_path: str
 
 
 def qwen3_0p6b_config(*, reference_checkpoint: str) -> Qwen3Config:
@@ -283,6 +313,84 @@ def _training_job(config: TrainLmOnPodConfig) -> None:
     remote(entrypoint, resources=config.resources, env_vars=env_vars)(config)
 
 
+def _run_checkpoint_evaluation(config: EvalHarnessMainConfig, output_path: str) -> None:
+    results = run_eval_harness_main(config)
+    (StoragePath(output_path) / "results.json").write_text(json.dumps(results, indent=2))
+
+
+def _evaluation_job(config: EvaluationOnPodConfig) -> None:
+    env_vars = resolve_training_env(None, config.resources)
+    remote(
+        _run_checkpoint_evaluation,
+        resources=config.resources,
+        env_vars=env_vars,
+        pip_dependency_groups=["gpu", "lm_eval"],
+    )(config.eval_config, config.output_path)
+
+
+def screen_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
+    version = SCREEN_ARTIFACT_VERSIONS[arm]
+    name = f"qwen-distillation/screen/{arm.value.lower()}-seed-{seed}"
+    path = f"s3://marin-us-east-02a/marin/{name}/{version}"
+    return ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)
+
+
+def evaluation_step(
+    checkpoint: ArtifactStep[LevanterCheckpoint],
+    arm: Arm,
+    *,
+    seed: int,
+) -> ArtifactStep[Artifact]:
+    name = f"qwen-distillation/screen-eval/{arm.value.lower()}-seed-{seed}"
+
+    def build_config(ctx: StepContext) -> EvaluationOnPodConfig:
+        checkpoint_path = LevanterCheckpoint(path=ctx.artifact_path(checkpoint)).checkpoint_dir
+        tokenizer_path = ctx.artifact_path(qwen3_0_6b_base)
+        run_id = f"{arm.value}-screen-eval-seed-{seed}"
+        return EvaluationOnPodConfig(
+            eval_config=EvalHarnessMainConfig(
+                eval_harness=LmEvalHarnessConfig(
+                    task_spec=list(ZERO_SHOT_TASKS),
+                    max_length=SEQ_LEN,
+                    bootstrap_iters=0,
+                ),
+                tokenizer=tokenizer_path,
+                checkpoint_path=checkpoint_path,
+                checkpoint_subpath="model" if ARMS[arm].objective is None else "model.student",
+                pad_tokenizer_to_match_model=True,
+                trainer=TrainerConfig(
+                    id=run_id,
+                    seed=seed,
+                    tracker=WandbConfig(
+                        project="marin",
+                        name=run_id,
+                        group=WANDB_GROUP,
+                        tags=[SERIES, "issue-7656", "screen-eval", arm.value, f"seed-{seed}"],
+                        replicate_path=ctx.output_path,
+                    ),
+                    mp=jmp.get_policy("p=f32,c=bfloat16"),
+                    train_batch_size=BATCH_SIZE,
+                    mesh=_mesh(),
+                    per_device_eval_parallelism=-1,
+                    allow_nondivisible_batch_size=True,
+                ),
+                model=qwen3_0p6b_config(reference_checkpoint=tokenizer_path),
+            ),
+            resources=ctx.runtime_arg("eval_resources"),
+            output_path=ctx.output_path,
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=SCREEN_EVAL_VERSION,
+        artifact_type=Artifact,
+        run=_evaluation_job,
+        build_config=build_config,
+        deps=(checkpoint, qwen3_0_6b_base),
+        runtime_args={"eval_resources": TRAIN_RESOURCES},
+    )
+
+
 def training_step(
     arm: Arm,
     *,
@@ -373,6 +481,8 @@ def build(stage: str) -> list[ArtifactStep]:
         return [qwen_datakit_cache()]
     if stage == "data-extended":
         return [qwen_datakit_cache(extended=True)]
+    if stage == "screen-eval":
+        return [evaluation_step(screen_checkpoint(arm, seed), arm, seed=seed) for arm in Arm for seed in SCREEN_SEEDS]
     if stage == "smoke":
         data = qwen_datakit_cache(smoke=True)
         return [
@@ -409,7 +519,7 @@ def build(stage: str) -> list[ArtifactStep]:
 @click.command()
 @click.option(
     "--stage",
-    type=click.Choice(["data", "data-extended", "smoke", "screen", "screen-retry", "screen-ce-retry"]),
+    type=click.Choice(["data", "data-extended", "smoke", "screen", "screen-retry", "screen-ce-retry", "screen-eval"]),
     required=True,
 )
 @build_options

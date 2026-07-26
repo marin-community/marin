@@ -1264,6 +1264,10 @@ class EvalHarnessMainConfig:
     checkpoint_path: str
     checkpoint_is_hf: bool = False
     """If True, the checkpoint is a HuggingFace checkpoint. Otherwise, it is a Levanter checkpoint."""
+    checkpoint_subpath: str = "model"
+    """Subtree to load from a native Levanter checkpoint."""
+    pad_tokenizer_to_match_model: bool = False
+    """If True, include checkpoint-only vocabulary padding rows."""
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
     """
@@ -1493,6 +1497,10 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
+        if config.pad_tokenizer_to_match_model:
+            converter = config.model.hf_checkpoint_converter()
+            converter = converter.replaced(tokenizer=tokenizer)
+            vocab_size = max(vocab_size, converter.default_hf_config.vocab_size)
         Vocab = round_axis_for_partitioning(hax.Axis("vocab", vocab_size), compute_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
@@ -1520,7 +1528,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
                 model = load_checkpoint(
                     model,
                     checkpoint_path,
-                    subpath="model",
+                    subpath=config.checkpoint_subpath,
                     axis_mapping=parameter_axis_mapping,
                 )
             model = hax.shard(model, parameter_axis_mapping)
