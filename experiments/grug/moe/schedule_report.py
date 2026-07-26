@@ -40,10 +40,10 @@ TOP_COVER = 6
 
 def pick_dump(directory: pathlib.Path) -> pathlib.Path:
     """The largest post-optimization dump, which is the train step rather than a helper module."""
-    # The backend-specific dump (…sm_100a_gpu_after_optimizations) is the scheduled one; prefer it.
-    candidates = sorted(directory.glob("*gpu_after_optimizations*.txt"), key=lambda path: path.stat().st_size)
-    if not candidates:
-        candidates = sorted(directory.glob("*after_optimizations*.txt"), key=lambda path: path.stat().st_size)
+    # Size, not name, identifies the train step: XLA emits the same module under both
+    # "after_optimizations" and "<arch>_gpu_after_optimizations", and dozens of tiny helper
+    # modules under both spellings, so a name preference picks a helper instead.
+    candidates = sorted(directory.glob("*after_optimizations*.txt"), key=lambda path: path.stat().st_size)
     if not candidates:
         candidates = sorted(directory.glob("*.txt"), key=lambda path: path.stat().st_size)
     if not candidates:
