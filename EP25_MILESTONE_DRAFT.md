@@ -212,6 +212,19 @@ mechanism that spends index or compute work to buy fidelity is close to free, wh
 that adds bytes to the collectives is expensive no matter how well implemented. Spill's 0.213pp and
 the collective-bound ceiling are the two measurements behind that claim.
 
+One error nearly escaped, and its shape is worth recording because it is not the kind that
+provenance checks catch. An earlier version of this document, and a summary derived from it, both
+stated that QB + cf1.15 was "the only measured 3%-compliant config" while reporting that same
+config's drop fraction as 0.037 two sections below. Every number involved was correct and
+correctly attributed; 0.037 was a real measurement. The fabrication was the interpretation, and
+it survived review because the sentence was plausible and the figure it rested on was sound —
+catching it required doing the one comparison of 0.037 against 0.03 that nobody did. The claim
+also crossed a hand-off: the section reporting the measurement and the ledger sentence
+generalising from it were written by different people, each treating the other's layer as
+already checked. A derived claim needs re-deriving at every hop it crosses. In a chain of
+summaries the dangerous residue is not a wrong number, which any audit trail will expose, but a
+wrong reading of a right number, which none of them will.
+
 A note on the numbers above. Three of them moved during the work, each time against the result's
 favour: a steady-state estimate taken from a truncated log window read 10% low until refetched as a
 true 100-step tail; a routing model that predicted spill's benefit proved 1.36-1.54x optimistic
