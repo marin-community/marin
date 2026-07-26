@@ -851,3 +851,66 @@ all fail to move the expert a2a, so the a2a legs are not hideable on this stack 
 or dataflow means we have.
 Confidence: 7/10 on the +0.33pp sign and magnitude (pending pair 2); 8/10 on both mechanism halves.
 Next: harvest treatment v4 (~09:00Z), pool both pairs, write the verdict.
+
+## FINAL (R6-5 manual-PGLE x prefetch-gate) 2026-07-26 08:55 UTC — SMALL CONFIRMED POSITIVE (+0.33pp), a2a UNMOVED
+
+Two matched pairs, opposite order, same draw (drops@0 = 0.1721 in all four legs), 120 steps,
+QB cf1.0 + custom adjoint + prefetch + drop reporting everywhere, both arms carrying the same
+3-step profiler window. Treatment adds exactly two XLA flags:
+`--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe/pgle/ep64-qb-adjoint-prefetch.pb`
+and `--xla_gpu_enable_latency_hiding_scheduler=true` (LHS defaults to false on this pin).
+
+| leg | order | p50 0-119 | p50 20-119 | p50 100-119 | step_s | drops@119 | loss tail20 |
+|---|---|--:|--:|--:|--:|--:|--:|
+| pgle v3 | pair 1, second | 22.619 | 22.549 | 22.262 | 11.97 | 0.0882 | 5.7759 |
+| ctrl v1 | pair 1, first | 22.273 | 22.200 | 21.938 | 12.16 | 0.0910 | 5.7415 |
+| ctrl v2 | pair 2, first | 22.318 | 22.200 | 21.910 | 12.14 | 0.0873 | 5.7385 |
+| pgle v4 | pair 2, second | 22.612 | 22.530 | 22.237 | 11.99 | 0.0896 | 5.7767 |
+
+**Verdict: +0.34pp raw / +0.32pp drop-corrected (pooled 20-119: 22.540 vs 22.200), replicated in
+both pairs and in every window (+0.27 to +0.37).** Step time 12.01 -> 11.99 s vs 12.20 s (-1.5%).
+The two control legs agree to 0.000pp at 20-119 across allocations 33 min apart, so allocation
+noise on this config is <=0.05pp and the effect is ~7x that.
+
+### Mechanism (per-op GPU timeline, new experiments/grug/moe/xplane_overlap.py, GPU:0, 3-step window)
+
+| op | control | PGLE+LHS |
+|---|--:|--:|
+| SendRecv (expert a2a), async stream | 6870 ms @ 87.1% hidden | 7400 ms @ 86.8% |
+| SendRecv, INLINE on the compute stream | 2980 ms @ 0% | 2961 ms @ 0% |
+| **ReduceScatter bf16 (FSDP grads)** | 759 ms @ **65.4%** | 537 ms @ **100%** |
+| AllReduce bf16 | 246 ms @ 80.2% | 322 ms @ 100% |
+| AllGather | 1544 ms @ 66.3% | 2262 ms @ 82.7% |
+| exposed collective total | 4932 ms (14.5% of span) | 4750 ms (14.2%) |
+
+1. **This closes candidate 1c** — David Hall's original XProf lead, "the final reduce-scatter (some
+   gradient thing) looks like it could be overlapped with next layer and isn't (reduce-scatter.10)",
+   open since round 1 and last assessed as scan-blocked and needing manual structural work. It is
+   NOT scan-blocked: it is scheduler-gated. Feeding XLA real measured latencies takes that
+   reduce-scatter from 65.4% hidden to 100% hidden with no structural change, and the bf16
+   all-reduce likewise 80.2% -> 100%. That is where the entire +0.33pp comes from.
+2. **The expert all-to-all is unmoved**: 87.1% -> 86.8% hidden on the async stream, and the ~3.0 s
+   per 3 steps that XLA collapses to a synchronous in-line SendRecv on the compute stream stays
+   exactly 0% overlapped in both arms. Real measured latencies PLUS the prefetch gate's legal
+   dataflow freedom change nothing about it. With the sealed rotation, prefetch-reorder and
+   token-chunk-overlap results this is now a four-way convergent finding: **the a2a legs are not
+   hideable on this stack by any scheduling or dataflow means available to us.** Anyone revisiting
+   overlap of the dispatch/combine a2a should treat that as settled and go structural instead.
+
+### Caveats and recommendation
+
+- Below the 0.5pp bar: keep behind a flag if the PGLE plumbing is cheap to maintain; it is not part
+  of the 25% bridge. Plumbing cost is a captured profile that must be regenerated whenever the HLO
+  changes (this one matched 197 instructions and missed 336 cheap elementwise fusions; zero
+  collectives missed), plus ~4 min of extra first-compile (cached after: pair-2 treatment reached
+  step 0 four minutes after submit).
+- Reproducible small fidelity cost: treatment ran +0.008 mean drop fraction (0.2569 vs 0.2493) and
+  +0.035 loss at step 119 (5.634 vs 5.598) in BOTH pairs. Small and self-consistent (more drops ->
+  worse loss), but the sign is stable, so a longer-horizon check is required before adoption.
+- Fleet: 4 rack legs + 4 CPU analysis jobs this assignment, submissions only; v1 of the treatment
+  died on the cluster-wide incarnation-mismatch gang abort (~40 s in, before any compile) and v2 on
+  an invalid `--version` string; neither was a code failure.
+
+Artifacts: xplane_overlap.py (9ad635b14 + follow-up), PGLE proto 3a73ca1b5, logs in the session
+scratchpad (v3.txt, v4.txt, ctrl.txt, ctrl2.txt, overlap_*.log).
+Confidence: 8/10 on the +0.33pp effect and its sign; 9/10 on both mechanism halves (per-op timelines, 4 GPUs, 2 configs); 5/10 on whether the loss/drop cost survives a longer horizon.
