@@ -134,7 +134,7 @@ def _model_config() -> GrugModelConfig:
         num_experts_per_token=1,
         num_layers=PIPELINE_STAGES,
         num_heads=2,
-        num_kv_heads=1,
+        num_kv_heads=2,
         max_seq_len=SEQUENCE_LENGTH,
         sliding_window=SEQUENCE_LENGTH,
         attention_implementation="reference",
