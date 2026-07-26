@@ -866,3 +866,20 @@ TWO CONSEQUENCES:
 This is the third time a smooth-looking extrapolation has failed against a structural effect in this work
 (schedule position, log truncation, now capacity alignment). Pattern: on this stack the interpolations that
 break are the ones crossing a discretization boundary.
+
+## The running leg is a DIRECT test of SCALE_CAPACITY_TILE, not an analogy 07:50
+Verified rather than assumed, through the shipped code path:
+  cf1.05  + SCALE_CAPACITY_TILE=128 -> _align_capacity(2151,128) = 2176
+  cf1.0625 + no tiling              -> ceil(1.0625 * 2048)       = 2176
+Identical. And in the fixed-a2a path capacity_factor reaches nothing except the capacity computation
+(ep_ragged_all_to_all.py:294; the other use at :472 is the ragged path, which this config does not take), so
+the two configurations are byte-identical in behaviour and differ only in which knob expresses them.
+CONSEQUENCE: the leg validates the feature for free, with no second measurement, and the result should be
+reported as "SCALE_CAPACITY_TILE=128 applied to a cf1.05 request yields X" rather than as an inference from a
+neighbouring capacity factor.
+IT ALSO SHARPENS THE FALSIFICATION I already committed to: cf1.05 is the single most likely request anyone
+would turn the tile knob on for, so a null here does not merely fail to support the default-on
+recommendation - it demonstrably invalidates it at the case that matters most. If the leg lands near 20.7%
+I will mark SCALE_CAPACITY_TILE unvalidated in the writeup and say the knob does not help where it would
+most often be used, rather than leaving a plausible-looking feature for someone to find and trust.
+PREDICTION restated, to be reported first: ~21.6-21.8% MFU at drops below 1.72% if alignment is the cause.
