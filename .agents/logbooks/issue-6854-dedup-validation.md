@@ -1483,6 +1483,52 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-25T23:59:31Z — 61,654 pairs verified
+
+- Four additional baseline checkpoints passed independent validation: 512
+  pairs, 392 model false positives, 119 model true duplicates, and one
+  unresolved outcome. They contain 1,077 valid judgments across 1,080 request
+  attempts; one judgment exhausted three invalid responses. One pair was
+  chunked and 511 were direct.
+- Complete-text comparison resolves the ambiguity as a false positive. Both
+  records cover the same MathOverflow thread, but the 3,262-character member
+  contains Gerald Edgar's distinct request for examples of two locally compact,
+  non-discrete groups that are homeomorphic but not topologically isomorphic,
+  including his question about which two of compact, connected, and abelian may
+  hold. The 3,023-character canonical retains replies to that request but omits
+  the request itself. Deleting the member therefore loses a distinct training
+  example under the audit rubric. Character similarity is 0.743357 and line
+  similarity is 0.395349. Pair location:
+  `part-00066-of-00128.parquet:1549`; member/canonical text SHA-256:
+  `1e3a17b9c53d7b4c18c81d052522b578dfbfc37e5b89dccd257b8a719836d4d0` /
+  `56094a10e874c18bf12a962f1f4249ec1e1e692179dd8ba99f59cb1024984bf2`.
+- The exact semantic judgments have SHA-256
+  `7f647222798305a693c421dc23a2c9351647f9628b8d8069300afed4b0c84325`.
+  The hash-bound manual record has Parquet SHA-256
+  `766d344b33cd0688db8107c89779391eaeb3962a3fffba4bbc32660bf704cb1c`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  the source cases, semantic checkpoint, manual row, Parquet bytes, and
+  completion marker.
+- The four outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 1024 and 1152:
+    `b8f17f138e7909a9b997f49ac55528fd2efd992b2ee588e1b97f109828b022ee`
+    and
+    `77637c8c8bedee64b75698ba8d98c4d1d940ce9e1a520e6ce540aff8fcae6cd2`;
+  - p2 decision-file 66 offsets 768 and 896:
+    `2d7cd94a37fc16bb6762b2bef73eb0158d80cffa34dc748b555142cf0c5ee894`
+    and
+    `a038da0243b3bb88c794507c23fe098bb816d48da8b59aa1e90e264a2acd1dd1`.
+
+- Across the stable 484-checkpoint snapshot, all 63 manual records leave:
+
+  - baseline: 49,617 pairs, 31,786 false positives, 17,831 true duplicates;
+  - treatment: 12,037 pairs, 6,274 false positives, 5,763 true duplicates;
+  - combined: 61,654 pairs, 38,060 false positives, 23,594 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-25T23:50:06Z — 61,142 pairs verified
 
 - Three additional baseline checkpoints passed independent validation: 384
