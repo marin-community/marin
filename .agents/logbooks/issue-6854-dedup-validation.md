@@ -1483,6 +1483,92 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T01:22:13Z — 76,131 pairs verified
+
+- Fifteen additional checkpoints passed independent validation: 1,805 pairs,
+  995 model false positives, 803 model true duplicates, and seven unresolved
+  outcomes. They contain 3,720 valid responses across 3,760 attempts; 40
+  invalid JSON responses affected 14 retried judgments. All 1,805 pairs used
+  direct review. This block contains 285 baseline pairs and 1,520 treatment
+  pairs.
+- Complete character comparison resolves six ambiguities as true duplicates.
+  In each pair, every line and character is identical except for `\text{`
+  and `}` surrounding the same boxed answer:
+
+  - treatment `part-00003-of-00128.parquet:9093`, answer A, 158 lines;
+  - treatment `part-00066-of-00128.parquet:8989`, answer G, 268 lines;
+  - treatment `part-00066-of-00128.parquet:9015`, answer C, 234 lines;
+  - treatment `part-00066-of-00128.parquet:9016`, answer C, 128 lines;
+  - treatment `part-00066-of-00128.parquet:9017`, answer D, 297 lines;
+  - baseline `part-00099-of-00128.parquet:7641`, answer H, 252 lines.
+
+- For treatment row 9,015, one otherwise valid model response incorrectly
+  claimed that the boxed span contained the full CBT answer. The exhaustive
+  character diff disproves that claim: the only difference is the seven-byte
+  LaTeX wrapper around the same answer C.
+- Complete line review resolves baseline
+  `part-00099-of-00128.parquet:7543` as a true duplicate. Both texts contain
+  the same positive-real AM-GM request, `(a+b+c)^3 >= 27abc`, AM-GM proof,
+  cubing and multiplication steps, equality condition `a=b=c`, and boxed
+  conclusion. The differences are prose, spacing, and punctuation. The texts
+  contain 1,397 / 1,297 characters and 47 / 43 lines; character similarity is
+  0.913883 and line similarity is 0.666667.
+- The seven exact semantic-judgment SHA-256 values are:
+
+  - `67ff635616e2bba05f9163655f2b13dba5d0365aefb11467ada897fbb51f3c3a`;
+  - `1aa5e83046312e7ae7256172a5869c002525f587bdc158d8b666d497409d8c21`;
+  - `5eb4abffdeb538ba800b75f1ec0ba67606c79f4e818ce6d706469c09cd0cc02f`;
+  - `646d22d96d83f30cc2509aa6c046cd6e2d9a2c7b3d84ef8a816609c5bc568204`;
+  - `06da6a323fc916a2a739d811256923ab26ea0c4adcb3065f30d883ae02eba4d0`;
+  - `c4ea231ecff4bb5e06ce8a6421478621e2625954366ae62d3f46773c9d76b4e5`;
+  - `96e5c9861a831008f995cf80adc79a5d160e843af30c071423563adbbceba6d6`.
+
+- The corresponding hash-bound manual-record Parquet SHA-256 values are:
+
+  - `0c92a019fb1fe420f1957f90d6d6c32745b2f8f1ab8b3890fd2701ed841e8b2a`;
+  - `6a9eee022b097a498db1cd080055725108266128c9c5783a7ce4d68b481a2157`;
+  - `b5026e62e93e241149251dac375dd242fd1e580f7bfac5579817dd972bb5e7b6`;
+  - `b089ecb2cae03a58c3fb74b2d146628de0e494d3155767b63d8a37ee1936ead6`;
+  - `0a78fcb79a7f102c99c7b363b984d030c8a971ec10cc060f7937cf39de296498`;
+  - `50e60bc21e652daad2233984e3a40c807c578991e586961f68ee149c853ff6bb`;
+  - `14c7a6efddccc2e8efee10d3447af08109d8f44ceac3a91de46270f066796b9c`.
+
+- A separate read-only batch-priority Iris job reread and exactly checked all
+  seven source cases, semantic checkpoints, manual rows, Parquet bytes, and
+  completion markers.
+- The 15 outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 5504 through 5888:
+    `b31f8194852104a8cef73d65f28970d22c68f889c7ef5c9a18be2588a5a8c911`,
+    `de44b83a7248aa0acfd34fc7731b07f9bde0ac4439387d6b36331715dcfbf130`,
+    `80b420b9fb87ac36c5a5398c316d9b99be240b6e20a7c536cc85cd4748cf6a5f`,
+    and
+    `a38df9b7e8efac85f0a750a6ca80d5c2c3523f63b2e3912a1a0ffabd86d98fca`;
+  - p2 decision-file 66 offsets 5248 through 5760:
+    `6b4100f1f4571e200f53f61961c375a471eddbe37e2607b68974b949daca7dc0`,
+    `6a086461bfcde815bb44c2614a689f31119d89647954ac3b80832f630d862b41`,
+    `6d21c9c6a474376919321743732badac46966187ea55c6edceae6221a44ceb10`,
+    `2233094a51e040ffb0285da3b6ec494cc42116dd995560c3e9e4f26b7e50ffb2`,
+    and
+    `9bb65bdfd957874f631d7c3d2fc164dfde840770ddede3393f26b1466cfaec95`;
+  - p3 decision-file 99 offsets 4352 through 4992:
+    `a8476425adc2554c8d126a59e876aa885e5f8a91198af2eb005940ae1711dc45`,
+    `369c60347241af267f8bbe1f6a116c4985b548cac9b04a67094e72fc5f8ef7b9`,
+    `2902e40fea151b4cd2ff8f89ed3593e88132470239b7b02eea4d456f716c31f2`,
+    `202845322cfb91b73a30a2d1c71b9ee5b07540b1d031ca97c9ccefffcf95753b`,
+    `18b2fa678f3c4a11eb6635acd8a554ab10fb3f60724be2717b649c62e290e02f`,
+    and
+    `0a62082193d517d18af8f403cf6bd5e4119d9d0079b99f2c85a67186f359e569`.
+
+- Across the stable 598-checkpoint snapshot, all 81 manual records leave:
+
+  - baseline: 61,204 pairs, 38,956 false positives, 22,248 true duplicates;
+  - treatment: 14,927 pairs, 7,846 false positives, 7,081 true duplicates;
+  - combined: 76,131 pairs, 46,802 false positives, 29,329 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T01:09:21Z — 74,326 pairs verified
 
 - Eleven additional checkpoints passed independent validation: 1,408 pairs,
