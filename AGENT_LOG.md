@@ -632,3 +632,42 @@ honest claim is: spill buys ~+1.0pp over cf1.15's 20.85% at comparable (not prov
 needs one 350-step QB+cf1.15 leg.
 Confidence: 9/10 spill is a real fidelity mechanism (drops halved, loss better at every m, ~free); 3/10 that
 m<=3 alone clears a strict 3% bar at cf1.0.
+
+## THREE CORRECTIONS 03:30
+
+### 1. STRIKE my "no scale run could ever have varied capacity factor" inference (it was wrong)
+I generalized from my branch to the fleet. Agent d4 added the SAME knob on ITS branch (commit 3e149490f;
+`agent/ep25-d4-pipelined:experiments/grug/moe/model.py` reads capacity_factor from SCALE_CAPACITY_FACTOR). So
+d4's cf1.15 = 20.848% and cf1.15-QB-off = 22.127% were produced with a WORKING knob and are of sound provenance.
+The real situation was BRANCH DIVERGENCE: the knob exists on d4's branch, not mine, and my env var hit a branch
+where the constant was still hard-wired. My diagnosis of my own symptom was right; the fleet-wide inference was not.
+MERGE HAZARD: my fix (595958b83) and d4's (3e149490f) are now INDEPENDENT implementations of the same knob under
+the same env name. Whoever merges these branches must RECONCILE, not double-apply. Mine is a GrugModelConfig
+field + env_float in the launcher; d4's reads os.environ inline at the construction site.
+
+### 2. TAIL-100 IS RECOVERABLE — and my 7-step numbers were biased LOW
+`iris job logs --max-lines N` (default 1000 = the truncation that bit me) fetches the full history. Refetched
+both legs at --max-lines 400000 and recovered 348 of 350 steps each. So we do NOT need the labelled-window
+fallback: true tail-100 is available for every leg, and I will use it from here.
+| leg | TRUE tail-100 (n=100, steps 250-349) | the 7-step window I reported | bias |
+| m=2 | 0.0414 | 0.0373 | -0.0041 |
+| m=3 | 0.0366 | 0.0329 | -0.0037 |
+The window was biased LOW by ~0.004 (~10% relative) in both legs, because drops are still declining at 350 steps
+so the last 7 steps are the lowest ones. The bias is systematic, not noise.
+
+### 3. CORRECTED SPILL VERDICT (supersedes the numbers in my final frontier report)
+Comparing tail-100 to tail-100 against d4's baseline tail-100 of 0.073:
+| m | p50 MFU | TRUE tail-100 drops | vs baseline |
+| 0 | 22.002 | 0.073 | - |
+| 2 | 21.872 | 0.0414 | -43% |
+| 3 | 21.849 | 0.0366 | -50% |
+Excess over the 3% bar: baseline 4.3pp -> m=3 0.66pp = 85% of the excess removed (I previously said 91%).
+m=3 steady state is 3.66%, NOT the 3.29% I reported - further from the bar than stated. Extrapolating -12% per
+attempt from the corrected base: m=4 ~3.2%, m=5 ~2.9%. So m=5 could still just reach the bar, but it is tighter
+than my earlier extrapolation implied and I would not bet above ~50% on it.
+MATCHED-STEP series (m=2 vs m=3): 60: 0.2418/0.1835 | 119: 0.0900/0.0922 | 250: 0.0524/0.0489 |
+300: 0.0371/0.0353 | 349: 0.0369/0.0326. Note m=2 and m=3 are indistinguishable at step 119 - spill's third
+attempt only separates late, which is consistent with it acting on the residual burstiness rather than on the
+early collapse.
+UNCHANGED by this correction: the MFU costs (-0.130pp / -0.023pp), the loss improvements (better at every m),
+the structural explanation of why spill is cheap, and the top-k-is-the-recovery-budget finding.
