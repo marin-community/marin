@@ -127,7 +127,7 @@ def _fp8_a2a_impl(x: jax.Array, fp8_dtype) -> jax.Array:
     hidden_dim bytes of payload) with the same routing, so each received row
     dequantizes with its sender's scale.
     """
-    q, scale = _wire_quantize(x, fp8_dtype)
+    q, scale = _wire_quantize_dispatch(x, fp8_dtype)
     bits = jax.lax.all_to_all(
         jax.lax.bitcast_convert_type(q, jnp.uint8),
         "expert",
