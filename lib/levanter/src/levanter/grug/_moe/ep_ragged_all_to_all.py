@@ -209,9 +209,16 @@ def _fp8_dispatch_gemm_fwd(send_block: jax.Array, w13: jax.Array):
     bits = jax.lax.all_to_all(
         jax.lax.bitcast_convert_type(quantized, jnp.uint8), "expert", split_axis=0, concat_axis=0, tiled=True
     )
-    scales = jax.lax.all_to_all(scale[..., None], "expert", split_axis=0, concat_axis=0, tiled=True)
+    if os.environ.get("SCALE_A2A_FP8_AMAX_FWD") is not None:
+        # A supplied scale is identical on every sender, so communicating it is pure waste.
+        # Reconstruct it locally instead of paying a second collective.
+        scales = jnp.broadcast_to(scale.reshape(-1)[:1], (bits.shape[0] * bits.shape[1],))
+    else:
+        scales = jax.lax.all_to_all(
+            scale[..., None], "expert", split_axis=0, concat_axis=0, tiled=True
+        ).reshape(-1)
     received = jax.lax.bitcast_convert_type(bits, jnp.float8_e4m3fn)
-    row_scale = scales.reshape(-1)
+    row_scale = scales
     weight_q, weight_scale = _quantize_weight_scalar(w13)
     hidden = received.reshape(-1, received.shape[-1]).astype(jnp.bfloat16) @ weight_q.astype(jnp.bfloat16)
     hidden = hidden * (row_scale * weight_scale)[:, None].astype(jnp.bfloat16)

@@ -17,7 +17,11 @@ from collections import defaultdict
 
 import fsspec
 
-TOP_OPS = 30
+import os
+
+# Truncating this list is how a correctly-labelled upper bound got used as a point estimate;
+# set XPLANE_TOP_OPS=0 for the full list when doing attribution rather than a quick look.
+TOP_OPS = int(os.environ.get("XPLANE_TOP_OPS", "30"))
 TOP_PARTNERS = 4
 # NCCL device kernels carry every collective on this stack (SendRecv is the expert all-to-all).
 COMM_PREFIX = "ncclDevKernel"
@@ -198,7 +202,7 @@ def analyze(path: str, data: bytes) -> None:
             )
 
         print(f"  {'stream':<14}{'op':<48} {'total ms':>9} {'overlap%':>9}  partners")
-        for (line, op), total in sorted(totals.items(), key=lambda kv: -kv[1])[:TOP_OPS]:
+        for (line, op), total in sorted(totals.items(), key=lambda kv: -kv[1])[: (TOP_OPS or None)]:
             overlap, partners = overlap_by_partner(op_intervals[(line, op)], others_by_stream[line])
             top = ", ".join(
                 f"{p}:{v / 1e9:.1f}ms" for p, v in sorted(partners.items(), key=lambda kv: -kv[1])[:TOP_PARTNERS]
