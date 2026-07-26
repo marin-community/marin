@@ -50,6 +50,21 @@ def _batch_experts_enabled() -> bool:
     return os.environ.get("SCALE_A2A_BATCH_EXPERTS") == "1"
 
 
+def _batch_expert_group_size(local_experts: int) -> int:
+    """Experts per batched a2a/GEMM group. Defaults to all local experts (one group = full batch).
+
+    Smaller groups trade the batching's launch-overhead win for a lower memory peak and a smaller
+    compiled graph: only ``group_size`` experts' received activations and grouped-GEMM intermediates
+    are live at once instead of all ``local_experts``.
+    """
+    group_size = int(os.environ.get("SCALE_A2A_BATCH_GROUP", local_experts))
+    if group_size <= 0 or local_experts % group_size != 0:
+        raise ValueError(
+            f"SCALE_A2A_BATCH_GROUP={group_size} must be a positive divisor of local_experts={local_experts}"
+        )
+    return group_size
+
+
 @jax.custom_vjp
 def _dispatch_gather(
     x_local: Float[Array, "Tlocal H"],
@@ -258,25 +273,36 @@ def _fixed_a2a_core(
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     if _batch_experts_enabled():
-        # One dispatch a2a, one grouped up/down GEMM, one combine a2a over all local experts. The
-        # local-expert axis is a batch dim the a2a passes through, so results match the per-expert
-        # loop; split/concat move the expert-shard axis (1) instead of axis 0.
-        with jax.named_scope("dispatch"):
-            received = jax.lax.all_to_all(send_x, "expert", split_axis=1, concat_axis=1, tiled=True)
-            received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
-        with jax.named_scope("moe_up_down"):
-            expert_input = received.reshape(local_experts, bucket_size, hidden_dim)
-            hidden = jnp.einsum("nbh,nhi->nbi", expert_input, moe_w13_local)
-            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
-            expert_output = jnp.einsum("nbi,nih->nbh", activation_fn(gate) * up, moe_w2_local)
+        # Process local experts in groups of `group_size`: one dispatch a2a, one grouped up/down GEMM,
+        # and one combine a2a per group. The grouped-expert axis is a batch dim the a2a passes through
+        # (split/concat move the expert-shard axis 1), so results match the per-expert loop. group_size
+        # = local_experts is the full batch (fewest collectives); a smaller group lowers the memory peak.
+        group_size = _batch_expert_group_size(local_experts)
+        send_x_grouped = send_x.reshape(local_experts // group_size, group_size, expert_shards, capacity, hidden_dim)
+        output_parts = []
+        for group_index in range(local_experts // group_size):
+            expert_slice = slice(group_index * group_size, (group_index + 1) * group_size)
+            with jax.named_scope("dispatch"):
+                received = jax.lax.all_to_all(
+                    send_x_grouped[group_index], "expert", split_axis=1, concat_axis=1, tiled=True
+                )
+                received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+            with jax.named_scope("moe_up_down"):
+                expert_input = received.reshape(group_size, bucket_size, hidden_dim)
+                hidden = jnp.einsum("nbh,nhi->nbi", expert_input, moe_w13_local[expert_slice])
+                gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+                expert_output = jnp.einsum("nbi,nih->nbh", activation_fn(gate) * up, moe_w2_local[expert_slice])
+            with jax.named_scope("combine"):
+                returned = jax.lax.all_to_all(
+                    expert_output.reshape(group_size, expert_shards, capacity, hidden_dim),
+                    "expert",
+                    split_axis=1,
+                    concat_axis=1,
+                    tiled=True,
+                )
+                output_parts.append(returned)
         with jax.named_scope("combine"):
-            send_output = jax.lax.all_to_all(
-                expert_output.reshape(local_experts, expert_shards, capacity, hidden_dim),
-                "expert",
-                split_axis=1,
-                concat_axis=1,
-                tiled=True,
-            )
+            send_output = jnp.concatenate(output_parts, axis=0) if len(output_parts) > 1 else output_parts[0]
             send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
             send_output = send_output.reshape(send_size, hidden_dim)
     else:

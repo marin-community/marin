@@ -750,6 +750,23 @@ def test_batch_experts_matches_loop_forward_and_gradients(monkeypatch: pytest.Mo
     for loop_g, batch_g in zip(loop_grads, batch_grads):
         np.testing.assert_allclose(np.asarray(batch_g), np.asarray(loop_g), rtol=1e-5, atol=1e-5)
 
+    # Grouped batching (group_size 2 < 4 local experts) must also match the loop.
+    monkeypatch.setenv("SCALE_A2A_BATCH_GROUP", "2")
+    group_out, group_dropped, group_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+    np.testing.assert_allclose(np.asarray(group_out), np.asarray(loop_out), rtol=1e-5, atol=1e-5)
+    assert group_dropped == loop_dropped
+    for loop_g, group_g in zip(loop_grads, group_grads):
+        np.testing.assert_allclose(np.asarray(group_g), np.asarray(loop_g), rtol=1e-5, atol=1e-5)
+
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
