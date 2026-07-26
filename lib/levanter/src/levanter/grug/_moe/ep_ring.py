@@ -133,6 +133,7 @@ def _moe_mlp_ep_ring_local(
                     moe_w2_local,
                     group_sizes,
                     axis_name="expert",
+                    gathered_rows=tokens,
                 ),
                 _CHECKPOINT_DISPATCH_OUTPUT,
             )

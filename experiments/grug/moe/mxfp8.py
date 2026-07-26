@@ -516,9 +516,11 @@ class MxFp8MoeMlpOp:
     def __call__(self, x, w13, w2, group_sizes):
         return _mxfp8_expert_mlp(self, x, w13, w2, group_sizes)
 
-    def dispatch_expert_mlp(self, x_local, token_sources, keep, w13, w2, group_sizes, *, axis_name):
+    def dispatch_expert_mlp(self, x_local, token_sources, keep, w13, w2, group_sizes, *, axis_name, gathered_rows):
         """Quantized-dispatch variant: see [mxfp8_dispatch_expert_mlp][]."""
-        return mxfp8_dispatch_expert_mlp(self, axis_name, x_local, token_sources, keep, w13, w2, group_sizes)
+        return mxfp8_dispatch_expert_mlp(
+            self, axis_name, gathered_rows, x_local, token_sources, keep, w13, w2, group_sizes
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -538,8 +540,8 @@ def _gathered_dispatch_payload(x_local, axis_name, token_sources, keep):
     )
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
-def mxfp8_dispatch_expert_mlp(op, axis_name, x_local, token_sources, keep, w13, w2, group_sizes):
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
+def mxfp8_dispatch_expert_mlp(op, axis_name, gathered_rows, x_local, token_sources, keep, w13, w2, group_sizes):
     """Quantize, dispatch, and run the expert MLP under a single custom VJP.
 
     The quantized payload never crosses an autodiff boundary, which it cannot do
@@ -555,33 +557,32 @@ def mxfp8_dispatch_expert_mlp(op, axis_name, x_local, token_sources, keep, w13, 
     pipelines directly instead.
 
     ``token_sources`` and ``keep`` are the backend's routing gather and validity
-    mask over the gathered token axis. The backward is the exact transpose of
-    that gather followed by the collective's transpose, in bf16 throughout, so
-    the reduction keeps NCCL's hierarchical algorithm.
+    mask over the gathered token axis, whose static length is ``gathered_rows``.
+    The backward is the exact transpose of that gather followed by the
+    collective's transpose, in bf16 throughout, so the reduction keeps NCCL's
+    hierarchical algorithm.
     """
     payload, scales = _gathered_dispatch_payload(x_local, axis_name, token_sources, keep)
     return _forward_pipeline_quantized(op, payload, scales, w13, w2, group_sizes)["y"]
 
 
-def _mxfp8_dispatch_expert_mlp_fwd(op, axis_name, x_local, token_sources, keep, w13, w2, group_sizes):
+def _mxfp8_dispatch_expert_mlp_fwd(op, axis_name, gathered_rows, x_local, token_sources, keep, w13, w2, group_sizes):
     payload, scales = _gathered_dispatch_payload(x_local, axis_name, token_sources, keep)
     inter = _forward_pipeline_quantized(op, payload, scales, w13, w2, group_sizes)
     mlp_res = (inter["x_col"], inter["x_sfc"], inter["h_col"], inter["sfh_col"], inter["c13"], w13, w2, group_sizes)
-    return inter["y"], (mlp_res, token_sources, keep, x_local.shape, x_local.dtype)
+    return inter["y"], (mlp_res, token_sources, keep)
 
 
-def _mxfp8_dispatch_expert_mlp_bwd(op, axis_name, res, g):
-    mlp_res, token_sources, keep, local_shape, local_dtype = res
+def _mxfp8_dispatch_expert_mlp_bwd(op, axis_name, gathered_rows, res, g):
+    mlp_res, token_sources, keep = res
     _, _, _, _, _, w13, w2, _ = mlp_res
 
     inter = _backward_pipeline(op, mlp_res, g)
-    dx_dispatch = jnp.where(keep[:, None], inter["dx"], 0).astype(local_dtype)
+    dx_dispatch = jnp.where(keep[:, None], inter["dx"], 0).astype(g.dtype)
 
     # Transpose of the routing gather, then of the all-gather. Both in bf16:
     # reduction legs never carry FP8 (the permutation-legs-only rule, #6911).
-    tokens_local, hidden = local_shape
-    gathered_rows = tokens_local * jax.lax.psum(1, axis_name)
-    dx_gathered = jnp.zeros((gathered_rows, hidden), local_dtype).at[token_sources].add(dx_dispatch, mode="drop")
+    dx_gathered = jnp.zeros((gathered_rows, g.shape[-1]), g.dtype).at[token_sources].add(dx_dispatch, mode="drop")
     dx_local = jax.lax.psum_scatter(dx_gathered, axis_name, scatter_dimension=0, tiled=True)
 
     return dx_local, None, None, inter["dw13"].astype(w13.dtype), inter["dw2"].astype(w2.dtype), None
