@@ -19,6 +19,8 @@ import fsspec
 
 TOP_OPS = 30
 TOP_PARTNERS = 4
+# NCCL device kernels carry every collective on this stack (SendRecv is the expert all-to-all).
+COMM_PREFIX = "ncclDevKernel"
 
 
 def read_varint(buf: memoryview, i: int) -> tuple[int, int]:
@@ -157,19 +159,34 @@ def analyze(path: str, data: bytes) -> None:
                 continue
             streams[line] = [(names.get(m, f"?{m}"), s, s + d) for m, s, d in events]
 
-        print(f"\n=== {path.rsplit('/', 1)[-1]} :: {name}")
+        span = max(e for events in streams.values() for _, _, e in events) - min(
+            s for events in streams.values() for _, s, _ in events
+        )
+        print(f"\n=== {path.rsplit('/', 1)[-1]} :: {name} (trace span {span / 1e9:.2f} ms)")
         for line, events in sorted(streams.items()):
             busy = union_length([(s, e) for _, s, e in events])
-            print(f"  line {line!r}: {len(events)} events, busy {busy / 1e9:.2f} ms")
+            comm = union_length([(s, e) for op, s, e in events if op.startswith(COMM_PREFIX)])
+            print(f"  line {line!r}: {len(events)} events, busy {busy / 1e9:.2f} ms, collective {comm / 1e9:.2f} ms")
 
-        totals: dict[str, int] = defaultdict(int)
-        op_intervals: dict[str, list[tuple[int, int]]] = defaultdict(list)
-        op_stream: dict[str, str] = {}
+        # Exposed collective time: collective kernels with nothing else running anywhere else.
+        comm_intervals = [(s, e) for events in streams.values() for op, s, e in events if op.startswith(COMM_PREFIX)]
+        noncomm = sorted(
+            (s, e, op) for events in streams.values() for op, s, e in events if not op.startswith(COMM_PREFIX)
+        )
+        comm_total = union_length(comm_intervals)
+        comm_covered, _ = overlap_by_partner(sorted(comm_intervals), noncomm)
+        print(
+            f"  collectives: {comm_total / 1e9:.2f} ms total, {comm_covered / 1e9:.2f} ms concurrent with "
+            f"non-collective work, {(comm_total - comm_covered) / 1e9:.2f} ms exposed "
+            f"({100 * (comm_total - comm_covered) / max(span, 1):.1f}% of span)"
+        )
+
+        totals: dict[tuple[str, str], int] = defaultdict(int)
+        op_intervals: dict[tuple[str, str], list[tuple[int, int]]] = defaultdict(list)
         for line, events in streams.items():
             for op, start, end in events:
-                totals[op] += end - start
-                op_intervals[op].append((start, end))
-                op_stream[op] = line
+                totals[(line, op)] += end - start
+                op_intervals[(line, op)].append((start, end))
 
         others_by_stream: dict[str, list[tuple[int, int, str]]] = {}
         for line in streams:
@@ -180,13 +197,14 @@ def analyze(path: str, data: bytes) -> None:
                 for other_op, start, end in events
             )
 
-        print(f"  {'op':<48} {'total ms':>9} {'overlap%':>9}  partners")
-        for op, total in sorted(totals.items(), key=lambda kv: -kv[1])[:TOP_OPS]:
-            overlap, partners = overlap_by_partner(op_intervals[op], others_by_stream[op_stream[op]])
+        print(f"  {'stream':<14}{'op':<48} {'total ms':>9} {'overlap%':>9}  partners")
+        for (line, op), total in sorted(totals.items(), key=lambda kv: -kv[1])[:TOP_OPS]:
+            overlap, partners = overlap_by_partner(op_intervals[(line, op)], others_by_stream[line])
             top = ", ".join(
                 f"{p}:{v / 1e9:.1f}ms" for p, v in sorted(partners.items(), key=lambda kv: -kv[1])[:TOP_PARTNERS]
             )
-            print(f"  {op[:48]:<48} {total / 1e9:>9.2f} {100 * overlap / max(total, 1):>8.1f}%  {top}")
+            stream_id = line.split("(", 1)[0].strip()
+            print(f"  {stream_id:<14}{op[:48]:<48} {total / 1e9:>9.2f} {100 * overlap / max(total, 1):>8.1f}%  {top}")
 
 
 def main() -> None:
