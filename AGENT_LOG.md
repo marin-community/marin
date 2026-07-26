@@ -359,7 +359,7 @@ Then run all three greps. The combination of what IS and ISN'T present is the cl
 
 | grep | class | reading |
 |---|---|---|
-| `grep -c "failed to allocate" /tmp/j.log` | 3. device HBM OOM | any hit => HBM. The adjacent `Stats: Limit / InUse / MaxInUse` lines and the `allocator.cc:71` histogram give the whole picture; the histogram sums to InUse and its entries can be matched to tensor shapes. |
+| `grep -cE "failed to allocate\|RESOURCE_EXHAUSTED.*Out of memory" /tmp/j.log` | 3. device HBM OOM (cuda_async logs the first string, BFC the second) | any hit => HBM. The adjacent `Stats: Limit / InUse / MaxInUse` lines and the `allocator.cc:71` histogram give the whole picture; the histogram sums to InUse and its entries can be matched to tensor shapes. |
 | `grep -c "SIGTERM caught" /tmp/j.log` | 1. preemption | hits, especially several tasks within the same instant, => eviction, not a crash. `ResourceConfig.with_gpu` sets `preemptible: true`, so exposure scales with COMPILE time. |
 | all three of the above zero, plus no traceback | 2. container host-memory OOM (SUSPECT, then TEST) | a process died by kernel SIGKILL, which leaves no log. Suspect when host offload or other large pinned host allocations are in play — but confirm by raising the request and re-running, because in my own case raising 256g -> 600g changed nothing, so this branch also covers residual transient gang aborts. |
 
@@ -650,3 +650,35 @@ error, which is not this signature, but I can no longer rule out that the 0.90 f
 a process killed inside a CUDA/NCCL allocation failure can die before it logs. That is a HYPOTHESIS,
 not a finding, and it does not touch the 4-of-256 memory result, which was measured at the DEFAULT
 0.75 fraction on the very first leg with an explicit XLA allocator report.
+
+## Check-in 16 — 4-of-128 MEASURED arena: 90.64 GiB. My ~70 GiB projection was too low.
+
+The default-fraction, default-allocator, no-offload 4-of-128 leg gave the cleanest possible failure —
+a textbook class 3, with all four other classes reading zero:
+
+    failed to allocate 0 | SIGTERM caught 0 | another task died 0 | ncclAlltoAll 0 | Cuda failure 0
+    jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 90.64GiB
+    [executable_name='jit_train_step']
+
+(The class-3 grep string differs between allocators: cuda_async logs `failed to allocate`, BFC logs
+`RESOURCE_EXHAUSTED ... Out of memory while trying to allocate`. Both are class 3. Recipe updated.)
+
+So the temp arena at 4-of-128 is 90.64 GiB, against 106.63 GiB at 4-of-256. I had projected ~70 GiB
+and was wrong by 20 GiB — a FAILED PREDICTION, recorded as such. What the two measurements together
+show is more useful than my projection was: halving the expert count cut the arena by only 15%,
+because the arena is dominated by the token-scaled bf16 residual stack (36.0 GiB, identical at both
+shapes) rather than by anything expert-scaled. The fp32 gradient accumulators do halve (40.5 -> 20.25
+GiB), which accounts for essentially the whole 16 GiB difference.
+
+Consequence: 4-of-128 at EP64 misses fitting at the default fraction by only ~2 GiB (resident ~49 +
+arena 90.64 = ~140 GiB against the 138.22 GiB limit). Two ways to close 2 GiB:
+- raise the fraction slightly — REJECTED. That is the exact knob that starved NCCL at 0.90, and I am
+  not going to re-enter that failure mode to buy 2 GiB.
+- host offload — CHOSEN. At 4-of-128 it frees ~20 GiB of resident (49 -> ~29), giving ~120 GiB against
+  138.22 with real margin, and it needs only ~81 GiB of pinned host memory per node (vs ~162 at
+  4-of-256), comfortably inside the 256g default. Better still, it makes the leg MORE comparable to
+  the number that matters: #7201's 23.1% full-feature 4-of-128 row also sets
+  `SCALE_OFFLOAD_OPT_STATE=1`. The cost is comparability to d1's d5120 control, which does not.
+
+Fired: /mwittmann/ep25d5-d6144-e128-bf16-120-0726-1140-v3 = 4-of-128, EP64, offload on, default BFC
+allocator at the default 0.75 fraction, no other change.
