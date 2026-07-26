@@ -33,6 +33,23 @@ class _RingRouting(NamedTuple):
     local_capacity: int
     tokens_per_shard: int
     topk: int
+    expert_axis_size: int
+
+
+class _BulkRingDispatchState(NamedTuple):
+    """Expert-sharded state between bulk-ring dispatch and expert compute."""
+
+    x_dispatch: Float[Array, "C H"]
+    weight_dispatch: Float[Array, "C"]
+    token_global: Int[Array, "C"]
+    group_sizes: Int[Array, "Elocal"]
+    dropped_local: Int[Array, "One"]
+
+
+class _BulkRingExpertState(NamedTuple):
+    """Expert-sharded state between bulk-ring expert compute and combine."""
+
+    out_dispatch: Float[Array, "C H"]
 
 
 def _ring_routing_prepass(
@@ -90,6 +107,7 @@ def _ring_routing_prepass(
         local_capacity=local_capacity,
         tokens_per_shard=tokens_per_shard,
         topk=topk,
+        expert_axis_size=ep_size,
     )
 
 
@@ -97,17 +115,13 @@ def _group_sizes_with_padding(accepted_counts: Int[Array, "Elocal"], capacity: i
     return accepted_counts.at[-1].add(capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
 
 
-def _bulk_ring_from_routing(
+def _bulk_ring_dispatch_from_routing(
     x_local: Float[Array, "Tlocal H"],
     combine_weights_local: Float[Array, "Tlocal K"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
-    moe_w2_local: Float[Array, "Elocal I H"],
     routing: _RingRouting,
-    ops: MoeRaggedDotOps | None = None,
     *,
-    activation_fn: Callable[[jax.Array], jax.Array],
     combine_dtype: Literal["bf16", "fp32"] = "bf16",
-) -> Float[Array, "Tlocal H"]:
+) -> _BulkRingDispatchState:
     with jax.named_scope("gather"):
         x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
@@ -125,25 +139,96 @@ def _bulk_ring_from_routing(
         weight_dispatch = jnp.where(routing.valid, weight, jnp.zeros_like(weight))
 
     group_sizes = _group_sizes_with_padding(routing.accepted_counts, routing.local_capacity)
+    return _BulkRingDispatchState(
+        x_dispatch=x_dispatch,
+        weight_dispatch=weight_dispatch,
+        token_global=token_global,
+        group_sizes=group_sizes,
+        dropped_local=routing.dropped_local[None],
+    )
+
+
+def _bulk_ring_expert_compute(
+    dispatch: _BulkRingDispatchState,
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    ops: MoeRaggedDotOps | None = None,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> _BulkRingExpertState:
     ragged_w13, ragged_w2 = _resolve_ragged_dot_fns(ops)
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_w13(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            ragged_w13(dispatch.x_dispatch, moe_w13_local, dispatch.group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
-            ragged_w2(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            ragged_w2(activation_fn(gate) * up, moe_w2_local, dispatch.group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
+    return _BulkRingExpertState(out_dispatch=out_dispatch)
 
+
+def _bulk_ring_combine(
+    dispatch: _BulkRingDispatchState,
+    expert: _BulkRingExpertState,
+    *,
+    tokens_per_shard: int,
+    expert_axis_size: int,
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
+) -> Float[Array, "Tlocal H"]:
     with jax.named_scope("scatter"):
+        output_shape = (tokens_per_shard * expert_axis_size, expert.out_dispatch.shape[-1])
         if combine_dtype == "bf16":
             out_global = (
-                jnp.zeros_like(x_global).at[token_global].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+                jnp.zeros(output_shape, dtype=dispatch.x_dispatch.dtype)
+                .at[dispatch.token_global]
+                .add(expert.out_dispatch * dispatch.weight_dispatch[:, None], mode="drop")
+            )
+        elif combine_dtype == "fp32":
+            weighted = expert.out_dispatch.astype(jnp.float32) * dispatch.weight_dispatch[:, None]
+            out_global = (
+                jnp.zeros(output_shape, dtype=jnp.float32).at[dispatch.token_global].add(weighted, mode="drop")
             )
         else:
-            weighted = out_dispatch.astype(jnp.float32) * weight_dispatch[:, None]
-            out_global = jnp.zeros(x_global.shape, dtype=jnp.float32).at[token_global].add(weighted, mode="drop")
-        return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True).astype(x_local.dtype)
+            raise ValueError(f"unknown bulk-ring combine dtype: {combine_dtype!r}")
+        return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True).astype(
+            dispatch.x_dispatch.dtype
+        )
+
+
+def _bulk_ring_from_routing(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    routing: _RingRouting,
+    ops: MoeRaggedDotOps | None = None,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
+) -> Float[Array, "Tlocal H"]:
+    dispatch = _bulk_ring_dispatch_from_routing(
+        x_local,
+        combine_weights_local,
+        routing,
+        combine_dtype=combine_dtype,
+    )
+    expert = _bulk_ring_expert_compute(
+        dispatch,
+        moe_w13_local,
+        moe_w2_local,
+        ops,
+        activation_fn=activation_fn,
+    )
+    return _bulk_ring_combine(
+        dispatch,
+        expert,
+        tokens_per_shard=routing.tokens_per_shard,
+        expert_axis_size=routing.expert_axis_size,
+        combine_dtype=combine_dtype,
+    )
 
 
 def _validate_quack_bulk_ring_contract(
@@ -339,6 +424,69 @@ def _two_chunk_ring_from_routing(
         out_local_1 = jax.lax.psum_scatter(out_global_1, "expert", scatter_dimension=0, tiled=True)
 
     return jnp.concatenate((out_local_0, out_local_1), axis=0)
+
+
+def _moe_mlp_ep_ring_dispatch_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    *,
+    local_experts: int,
+    num_experts: int,
+    capacity_factor: float,
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
+) -> _BulkRingDispatchState:
+    """Run the exact bulk-ring routing and gather phase for overlap benchmarks."""
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=local_experts,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    return _bulk_ring_dispatch_from_routing(
+        x_local,
+        combine_weights_local,
+        routing,
+        combine_dtype=combine_dtype,
+    )
+
+
+def _moe_mlp_ep_ring_expert_local(
+    dispatch: _BulkRingDispatchState,
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    ops: MoeRaggedDotOps | None = None,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> _BulkRingExpertState:
+    """Run exact bulk-ring expert compute on an expert-sharded dispatch buffer."""
+    return _bulk_ring_expert_compute(
+        dispatch,
+        moe_w13_local,
+        moe_w2_local,
+        ops,
+        activation_fn=activation_fn,
+    )
+
+
+def _moe_mlp_ep_ring_combine_local(
+    dispatch: _BulkRingDispatchState,
+    expert: _BulkRingExpertState,
+    *,
+    tokens_per_shard: int,
+    expert_axis_size: int,
+    combine_dtype: Literal["bf16", "fp32"] = "bf16",
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Run exact bulk-ring scatter and reduce the carried drop count."""
+    out_local = _bulk_ring_combine(
+        dispatch,
+        expert,
+        tokens_per_shard=tokens_per_shard,
+        expert_axis_size=expert_axis_size,
+        combine_dtype=combine_dtype,
+    )
+    dropped_total = jax.lax.psum(dispatch.dropped_local[0], _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, dropped_total
 
 
 def _moe_mlp_ep_ring_local(
