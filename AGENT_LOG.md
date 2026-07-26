@@ -526,3 +526,18 @@ go below it, since it moves overflow into underfull buckets whenever the token s
 This does NOT retro-explain d3/d4's null results as "nothing to correct" — the controllers plateau at ~8x the
 floor, so there IS non-uniformity present; it is just invisible to any one-step-delayed controller because it
 decorrelates step to step (the original diagnosis).
+
+## Calibrated prior at REAL scale 01:10 (replaces the discarded toy predictions)
+Rebuilt the CPU model at the true per-shard scale: T=65,536 tokens, ne=256, topk=8, capacity=2048, with
+document-block clustered routing (16 blocks x 4096 = seq_len structure) instead of uniform draws.
+  burst=0.00 (uniform) -> m0 drop 0.0096   <- independently reproduces the 0.9% analytic floor
+  burst=0.15           -> m0 drop 0.0329
+  burst=0.30           -> m0 drop 0.0692   <- CALIBRATED: matches the observed 6-8% band
+  burst=0.50           -> m0 drop 0.1187
+At the calibrated burst=0.30, spill sweep AT REAL SCALE:
+  m=0 0.0692 | m=1 0.0420 (-39%) | m=2 0.0304 (-56%) | m=3 0.0237 (-66%)
+READ: m=2 lands right AT the 3% bar (borderline, could fall either side live); m=3 clears it (~2.4%).
+This raises the prior that the pre-approved m=3 follow-up will be required. Treating these as a calibrated
+PRIOR, not a prediction - the live legs decide. The toy (mu=32) m=2/m=3 numbers are discarded entirely.
+Independent corroboration: a plain document-block structure at seq_len granularity reproduces the observed
+6-8% naturally at burst=0.30, supporting the document-correlation account of the burstiness.
