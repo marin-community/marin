@@ -18,7 +18,7 @@ import fsspec
 
 from experiments.grug.moe.xplane_overlap import event_names, iter_fields, plane_name
 
-TOP_ROWS = 40
+TOP_ROWS = 60
 
 
 def stat_names(plane) -> dict[int, str]:
@@ -62,6 +62,13 @@ def read_stats(event, stats_by_id: dict[int, str]) -> dict[str, str]:
     return out
 
 
+def scope_tag(name: str) -> str:
+    """Condense a jaxpr scope path to pass (forward/backward/remat) plus the leaf op."""
+    direction = "bwd" if "transpose(" in name else "fwd"
+    leaf = "/".join(name.split("/")[-3:])
+    return f"{direction} {leaf}"
+
+
 def analyze(path: str, data: bytes, needle: str) -> None:
     for field, payload in iter_fields(memoryview(data)):
         if field != 1:
@@ -102,17 +109,17 @@ def analyze(path: str, data: bytes, needle: str) -> None:
                     continue
                 stats = read_stats(event, stats_by_id)
                 hlo = stats.get("hlo_op") or stats.get("tf_op") or "?"
-                module = stats.get("hlo_module") or stats.get("program_id") or "?"
+                module = scope_tag(stats.get("name", "?"))
                 rows[(line.split("(", 1)[0].strip(), hlo, module)].append(duration)
                 if len(rows) == 1 and len(rows[(line.split("(", 1)[0].strip(), hlo, module)]) == 1:
                     print(f"  sample stats: {stats}")
             del timestamp
 
-        print(f"  {'stream':<14}{'hlo op':<40}{'module':<28}{'count':>7}{'total ms':>10}{'mean us':>10}")
+        print(f"  {'stream':<14}{'hlo op':<22}{'jaxpr scope':<46}{'count':>7}{'total ms':>10}{'mean us':>10}")
         for (stream, hlo, module), durations in sorted(rows.items(), key=lambda kv: -sum(kv[1]))[:TOP_ROWS]:
             total = sum(durations)
             print(
-                f"  {stream:<14}{hlo[:40]:<40}{module[:28]:<28}{len(durations):>7}"
+                f"  {stream:<14}{hlo[:22]:<22}{module[:46]:<46}{len(durations):>7}"
                 f"{total / 1e9:>10.2f}{total / len(durations) / 1e6:>10.1f}"
             )
 
