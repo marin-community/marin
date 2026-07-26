@@ -22,6 +22,10 @@ Retry the hard-label controls with materialized training loss:
 Smoke one terminal checkpoint through the zero-shot evaluation path:
 
     python -m experiments.qwen_distillation --version dev --stage screen-eval-smoke --run
+
+Launch the promoted treatment and four controls to the 1.8B-token endpoint:
+
+    python -m experiments.qwen_distillation --version dev --stage extended --run --max-concurrent 10
 """
 
 import json
@@ -75,6 +79,8 @@ BATCH_SIZE = 8
 MICROBATCH_SIZE = 4
 SCREEN_TOKENS = 100_000_000
 SCREEN_STEPS = math.ceil(SCREEN_TOKENS / (SEQ_LEN * BATCH_SIZE))
+EXTENDED_TOKENS = 1_800_000_000
+EXTENDED_STEPS = math.ceil(EXTENDED_TOKENS / (SEQ_LEN * BATCH_SIZE))
 SMOKE_STEPS = 12
 SCREEN_SEEDS = (0, 1)
 FULL_DATA_VERSION = "2026.07.26.2"
@@ -138,6 +144,13 @@ class Arm(StrEnum):
 
 SCREEN_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE, Arm.TAID)
 SCREEN_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
+EXTENDED_ARMS = (
+    Arm.CE_SCRATCH,
+    Arm.KL_SCRATCH,
+    Arm.CE_BASE,
+    Arm.KL_BASE,
+    Arm.FACTORIZED,
+)
 
 
 @dataclass(frozen=True)
@@ -187,6 +200,14 @@ ZERO_SHOT_TASKS = (
     TaskConfig(task="piqa", num_fewshot=0),
     TaskConfig(task="winogrande", dataset_path="allenai/winogrande", num_fewshot=0),
 )
+
+# Approximately two worst-case binomial standard errors at each task's sample count.
+ZERO_SHOT_ACCURACY_TOLERANCES = {
+    "arc_easy": 0.021,
+    "hellaswag": 0.010,
+    "piqa": 0.024,
+    "winogrande": 0.029,
+}
 
 
 @dataclass(frozen=True)
@@ -281,6 +302,7 @@ def _trainer(
     seed: int,
     num_train_steps: int,
     output_path: str,
+    label: str,
 ) -> TrainerConfig:
     eval_interval = max(1, math.ceil(num_train_steps / 8))
     return TrainerConfig(
@@ -290,7 +312,7 @@ def _trainer(
             project="marin",
             name=run_id,
             group=WANDB_GROUP,
-            tags=[SERIES, "issue-7656", arm.value, f"seed-{seed}"],
+            tags=[SERIES, "issue-7656", label, arm.value, f"seed-{seed}"],
             replicate_path=output_path,
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -422,6 +444,7 @@ def training_step(
             seed=seed,
             num_train_steps=num_train_steps,
             output_path=ctx.output_path,
+            label=label,
         )
 
         if arm_config.objective is None:
@@ -493,6 +516,19 @@ def build(stage: str) -> list[ArtifactStep]:
         return [evaluation_step(screen_checkpoint(arm, seed), arm, seed=seed) for arm in Arm for seed in SCREEN_SEEDS]
     if stage == "screen-eval-smoke":
         return [evaluation_step(screen_checkpoint(Arm.FOUR_B_TEACHER, 0), Arm.FOUR_B_TEACHER, seed=0)]
+    if stage == "extended":
+        data = qwen_datakit_cache(extended=True)
+        return [
+            training_step(
+                arm,
+                seed=seed,
+                num_train_steps=EXTENDED_STEPS,
+                label="extended",
+                data=data,
+            )
+            for arm in EXTENDED_ARMS
+            for seed in SCREEN_SEEDS
+        ]
     if stage == "smoke":
         data = qwen_datakit_cache(smoke=True)
         return [
@@ -539,6 +575,7 @@ def build(stage: str) -> list[ArtifactStep]:
             "screen-ce-retry",
             "screen-eval-smoke",
             "screen-eval",
+            "extended",
         ]
     ),
     required=True,

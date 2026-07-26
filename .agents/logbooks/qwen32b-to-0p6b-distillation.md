@@ -256,3 +256,34 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: the first smoke found that the distilled subtree uses the OCDBT path `model/student`, not `model.student`. The second loaded the checkpoint successfully and entered lm-eval, then found that WinoGrande's task metadata requested the invalid unnamespaced Hugging Face dataset ID `winogrande`. The third loaded all four task datasets and the 596,049,920-parameter student, then exposed an existing compatibility guard that had silently replaced the evaluator with `object` because the pinned lm-eval fork imports a Transformers 4 vision-model name.
 - Interpretation: both failures were evaluation boundary errors discovered before the 18-checkpoint fan-out; neither changes training results.
 - Next action: keep greedily packed evaluation examples on the host until the batch loader shards them for computation, and require the version `2026.07.26.16` smoke to write `results.json` before evaluating all terminal screen checkpoints.
+
+### 2026-07-26 19:19 - Checkpoint evaluation passes
+
+- Hypothesis: host-resident greedy packing removes the mesh mismatch without changing evaluation examples.
+- Commit hash: `b5d3e96f6d`.
+- Job: `/power/qwen-distill-screen-eval-smoke-b5d3e9`.
+- Result: all four tasks completed against `QD-005` seed 0 and wrote `results.json`. The evaluator scored 55,879 likelihood requests and 3.77 million tokens at approximately 48,500 tokens/s. Raw accuracy was finite for ARC-Easy, HellaSwag, PIQA, and WinoGrande. Auxiliary probability-normalization metrics were nonfinite when every option received negative infinity, so they are excluded from the gate.
+- Interpretation: native student checkpoint restoration, host packing, device scoring, W&B publication, and durable result writing are valid.
+- Next action: evaluate all 18 terminal screen checkpoints and use raw task accuracy for the paired regression gate.
+
+### 2026-07-26 19:20 - Screen training completes
+
+- Hypothesis: treatment promotion should require a lower paired held-out NLL than scratch forward KL, not merely a lower pooled mean.
+- Jobs: `/power/qwen-distill-screen-792acc`, `/power/qwen-distill-screen-retry-3ef219`, and `/power/qwen-distill-screen-ce-retry-912447`.
+- Result: all 18 cells reached step 6,103 and committed terminal checkpoints. Mean final NLL was `2.3064` for projected hidden-state matching, `2.2979` for factorized initialization, `2.3688` for TAID, `2.3622` for structured initialization, and `2.3521` for the 4B teacher. Scratch forward KL was `2.3315`. Factorized initialization was the only treatment at least 0.5% better in mean and better in both paired seeds. Projected hidden-state matching cleared the mean threshold but lost to scratch KL in seed 1.
+- Interpretation: factorized initialization is the only treatment still eligible for promotion on language-modeling loss. No arm is within 0.25 percentage points of the 0.5% mean-improvement boundary, so the predeclared third-seed rule does not fire.
+- Next action: apply the zero-shot regression gate to factorized initialization, then launch full restarts for the four controls and any promoted treatment on the 1.8B-token cache.
+
+### 2026-07-26 19:21 - Zero-shot tolerances frozen
+
+- Hypothesis: an apparent task regression smaller than sampling noise should not block an otherwise consistent promotion.
+- Result: the design declared task-level tolerances but omitted their numeric values. Before reading the completed 18-run evaluation matrix, the raw-accuracy tolerances were frozen at approximately two worst-case binomial standard errors: ARC-Easy `0.021`, HellaSwag `0.010`, PIQA `0.024`, and WinoGrande `0.029`.
+- Interpretation: the gate compares each factorized seed with its paired scratch-KL seed and rejects a task only when its raw accuracy falls by more than the frozen tolerance.
+- Next action: wait for all durable version `2026.07.26.16` evaluation artifacts.
+
+### 2026-07-26 19:25 - Factorized initialization passes the promotion gate
+
+- Hypothesis: factorized initialization preserves the 100M-token NLL gain without a task-level zero-shot regression.
+- Result: versus paired scratch forward-KL seeds, `QD-002` changed raw accuracy by `[+0.0034, +0.0002, +0.0011, +0.0118]` in seed 0 and `[-0.0046, +0.0001, +0.0022, +0.0039]` in seed 1 for ARC-Easy, HellaSwag, PIQA, and WinoGrande. Macro raw accuracy improved by `0.0041` and `0.0004`.
+- Interpretation: both seeds pass every frozen task tolerance. `QD-002` is promoted. `QD-001` is not promoted because its seed-1 held-out NLL was worse than paired scratch KL, even though its pooled mean cleared the threshold.
+- Next action: start fresh 109,864-step runs for `QD-002` and controls `QD-C0` through `QD-C3` on the 1.8B-token cache.
