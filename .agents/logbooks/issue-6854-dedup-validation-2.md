@@ -16,6 +16,123 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T17:51:45Z — 167,082 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1743-v485` independently
+  revalidated three checkpoints: p1 decision-file 38 semantic offsets 5,760
+  and 5,888, and p3 decision-file 103 semantic offset 1,792. Their 326 pairs
+  contain 194 model false positives, 128 model true duplicates, and four
+  unresolved outcomes. All pairs were direct. The audit reread 669 judgments
+  and their 689 request attempts: 659 attempts were valid, 30 were invalid,
+  and 10 judgments required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p1:
+    `b35c27443a5919f86470978bc27b5b77c2f0839be3cc30f098c85e45174b955e`
+    and
+    `61d0fc6858ba90bdff6f1c0d664e9ab742af50d2262a070cff8e3385c95e5628`;
+  - p3:
+    `94032028e8de234f95145c61d2102b73603406ba6b9bf234652d7cefa16fc556`.
+
+- Complete-text inspection resolves all four treatment ambiguities as true
+  duplicates:
+
+  - row 9,143 compares 218-line SFT records with identical Australian
+    Indigenous-rights questions, choices, reasoning, conclusions, and
+    answers. Its sole changed line is `\boxed{D}` versus
+    `\boxed{\text{D}}`. The 12,036/12,043-character records have character,
+    line, and word-sequence similarities 0.999709, 0.995413, and 0.999747.
+    Member/canonical text SHA-256 values are
+    `8e3eb3a4f159f5a675dcd6b0dd3181f4df83acc9ca2fd40ffc50904f7d893f32`
+    and
+    `4287b738415078f66f232fbbd9f41ad64c93d07bfd1852aef860dc24f7750632`.
+  - row 9,169 compares 56-line SFT records with identical
+    emotional-intelligence questions, choices, reasoning, conclusions, and
+    answers. Its sole changed line is `\boxed{\text{C}}` versus
+    `\boxed{C}`. The 4,176/4,169-character records have character, line, and
+    word-sequence similarities 0.999161, 0.982143, and 0.999258.
+    Member/canonical text SHA-256 values are
+    `7bebc87158a22973a7bb65f8ca321d46589d7ba44c80dac446cd03d1e7ec9c16`
+    and
+    `bdcc42ec9168b8f36c2e176ed755e351d224cfeb20346d4e4ad2a8e8e928a110`.
+  - row 9,170 compares 167-line SFT records with identical memory-assessment
+    questions, choices, reasoning, conclusions, and answers. Its sole changed
+    line is `\boxed{\text{J}}` versus `\boxed{J}`. The
+    8,811/8,804-character records have character, line, and word-sequence
+    similarities 0.999603, 0.994012, and 0.999632. Member/canonical text
+    SHA-256 values are
+    `b6eb09948a59300d79794e6ae0d91dcaa5085505094397948670a7d1fc3b3572`
+    and
+    `dd02384ba621cb1aa80713d1711a762fddc0f2fe000b3ccdf3d526dbe711e2eb`.
+  - row 9,174 compares 73-line SFT records with identical
+    electron-microscopy questions, choices, reasoning, conclusions, and
+    answers. Its sole changed line is `\boxed{\text{H}}` versus
+    `\boxed{H}`. The 5,789/5,782-character records have character, line, and
+    word-sequence similarities 0.999395, 0.986301, and 0.999456.
+    Member/canonical text SHA-256 values are
+    `add527135c9a99634be976006bd5e80b9e6498756f26be95c2a76178cf14f411`
+    and
+    `9c179831aa37ec208f97d6c8cdd1722acac9ee50c4dca878d9c4c51042c31936`.
+
+- The inspection, semantic-evidence, manual-Parquet, and marker SHA-256
+  values are:
+
+  - row 9,143:
+    `a9a9ab5e593c5e9556e59ef12c689540deec380f0d139fbc14f27f3d56d99e6b`,
+    `0a15e2e5df103c3ffc649bd5451675f10e32b3078ceb201495be1a894503d5a2`,
+    `0a38326b1b84153cc787083dcabc071dcacbc3e4321c1bf59c32cecc2ffec918`,
+    and
+    `cbc3dabc77da93b2ed9ff8e754ef725c7c48ef0f4e1ad0a1e372ee73beee6906`;
+  - row 9,169:
+    `c34b71e5b3d7e7549d1afa648f13f7d3f985e28a5414c014c02e2c309aaca8e5`,
+    `06dcdd51a325c83ba4fe9e1d2b72ff98d8ef315fee7fc6341dbf175ac473d029`,
+    `12693b7b424c1a6c9ea0ab705502d090a2d3042d9ec2468fe2930cf5179f9529`,
+    and
+    `15a1bfa65ceac53da9a9e073bea00e6767842ffc13381a451893107ac927ac73`;
+  - row 9,170:
+    `719811a0f938827f758a18560deb48c37b1cf25930a01774092e157deb08424f`,
+    `8f34da77dcb31df786fec5452e4a98cfd4da3d16500aa147687fb2add25ffa88`,
+    `484998a0ae504a0121a8544d9c88cfd0c710bdd26bafef9b44d2cabe57043c84`,
+    and
+    `771144714767e2abafb91d8fafb1afe33b57d8a2f4a38d4f539d39b5ae1875f6`;
+  - row 9,174:
+    `1ecbb7a77a8a1686db43b6b8a1a9f5c6d3bf853556ff02734251140ef4159861`,
+    `37e183771e98367792d74a3af356b4c944d10effe6c262ef6469406ad2b85855`,
+    `4238ec1490a442bbff9526d5787d42357da6ca58fd196d8250beb163aa8d0aa8`,
+    and
+    `c2aacf02942d057c775373feda99ad9510a5d727b4c2c30137d83e04979534e4`.
+
+- Inspection jobs `/rav/datakit-6854-inspect-row9143-1744-v486`,
+  `/rav/datakit-6854-inspect-row9169-1745-v487`,
+  `/rav/datakit-6854-inspect-row9170-1746-v488`, and
+  `/rav/datakit-6854-inspect-row9174-1747-v489` persisted the complete
+  documents and diffs. Publish jobs
+  `/rav/datakit-6854-publish-row9174-1748-v490`,
+  `/rav/datakit-6854-publish-row9170-1749-v491`,
+  `/rav/datakit-6854-publish-row9169-1750-v492`, and
+  `/rav/datakit-6854-publish-row9143-1751-v493` wrote the immutable manual
+  records. Independent verification jobs
+  `/rav/datakit-6854-verify-row9143-1752-v494`,
+  `/rav/datakit-6854-verify-row9169-1753-v495`,
+  `/rav/datakit-6854-verify-row9170-1754-v496`, and
+  `/rav/datakit-6854-verify-row9174-1755-v497` reread the source pairs,
+  semantic checkpoint, inspections, deterministic Parquet bytes, and
+  completion markers.
+
+- Across the stable 1,315-checkpoint snapshot, all 186 unresolved model
+  outcomes are covered by 147 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 133,817 pairs, 85,118 false positives, 48,699 true duplicates;
+  - treatment: 33,265 pairs, 17,204 false positives, 16,061 true duplicates;
+  - combined: 167,082 pairs, 102,322 false positives, 64,760 true duplicates.
+
+- The next audit frontiers are p0 `(7, 128)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(103, 1,920)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T17:41:30Z — 166,756 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1741-v484` independently
