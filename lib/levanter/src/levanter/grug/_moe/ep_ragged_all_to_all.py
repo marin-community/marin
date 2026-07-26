@@ -489,6 +489,42 @@ def _same_expert_echo_fixed_transport_metadata(
     return transport_position, within_envelope, envelope_overflow
 
 
+def _same_expert_compact_transport_metadata(
+    destination: Int[Array, "TK"],
+    receiver_slot: Int[Array, "TK"],
+    *,
+    expert_shards: int,
+    receiver_capacity: int,
+) -> tuple[Int[Array, "TK"], Int[Array, "TK"], Int[Array, "TK"], jax.Array]:
+    """Compact valid ECHO assignments into destination-major transport order."""
+    send_size = destination.shape[0]
+    valid = jnp.logical_and(
+        destination < expert_shards,
+        receiver_slot < receiver_capacity,
+    )
+    destination_rank = _stable_expert_local_rank(
+        destination,
+        num_experts=expert_shards + 1,
+    )
+    destination_counts = jnp.bincount(destination, length=expert_shards + 1).astype(jnp.int32)[:expert_shards]
+    destination_offsets = jnp.cumsum(destination_counts, dtype=jnp.int32) - destination_counts
+    safe_destination = jnp.minimum(destination, expert_shards - 1)
+    transport_position = jnp.where(
+        valid,
+        destination_offsets[safe_destination] + destination_rank,
+        send_size,
+    )
+    packed_destination = (
+        jnp.full((send_size,), expert_shards, dtype=jnp.int32).at[transport_position].set(destination, mode="drop")
+    )
+    packed_receiver_slot = (
+        jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
+        .at[transport_position]
+        .set(receiver_slot, mode="drop")
+    )
+    return transport_position, packed_destination, packed_receiver_slot, valid
+
+
 def _same_expert_hybridep_routing(
     destination: Int[Array, "TK"],
     flat_experts: Int[Array, "TK"],
@@ -803,7 +839,20 @@ def _same_expert_cloned_fixed_a2a_core(
             receiver_capacity=receiver_capacity,
             max_receiver_segments=max_receiver_segments,
         )
-        if use_mnnvl_transport or use_hybridep_transport:
+        if use_mnnvl_transport:
+            send_size = assignments_per_shard
+            (
+                transport_position,
+                send_destination,
+                send_receiver_slot,
+                keep,
+            ) = _same_expert_compact_transport_metadata(
+                destination,
+                receiver_slot,
+                expert_shards=expert_shards,
+                receiver_capacity=receiver_capacity,
+            )
+        elif use_hybridep_transport:
             send_size = assignments_per_shard
             transport_position = jnp.arange(send_size, dtype=jnp.int32)
             keep = destination < expert_shards
@@ -840,10 +889,10 @@ def _same_expert_cloned_fixed_a2a_core(
 
     with jax.named_scope("dispatch"):
         if echo_dispatch:
-            send_destination = destination
-            if use_mnnvl_transport or use_hybridep_transport:
+            if use_hybridep_transport:
+                send_destination = destination
                 send_receiver_slot = receiver_slot
-            else:
+            elif not use_mnnvl_transport:
                 send_receiver_slot = (
                     jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
                     .at[transport_position]

@@ -30,6 +30,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _receiver_destination_pooled_dispatch_metadata,
     _round_robin_ppermute_all_to_all,
     _same_expert_clone_dispatch_metadata,
+    _same_expert_compact_transport_metadata,
     _same_expert_echo_dispatch_metadata,
     _same_expert_echo_fixed_transport_metadata,
     _same_expert_hybridep_routing,
@@ -2119,6 +2120,29 @@ def test_same_expert_echo_fixed_transport_metadata_counts_only_envelope_overflow
     np.testing.assert_array_equal(transport_position, np.array([0, 2, 1, 4, 3, 4], dtype=np.int32))
     np.testing.assert_array_equal(keep, np.array([True, True, True, False, True, False]))
     assert int(envelope_overflow) == 1
+
+
+def test_same_expert_compact_transport_metadata_groups_valid_rows_by_destination():
+    destination = jnp.asarray([2, 0, 1, 3, 0, 2, 1, 3], dtype=jnp.int32)
+    receiver_slot = jnp.asarray([5, 1, 4, 8, 0, 3, 2, 8], dtype=jnp.int32)
+
+    position, packed_destination, packed_slot, keep = _same_expert_compact_transport_metadata(
+        destination,
+        receiver_slot,
+        expert_shards=3,
+        receiver_capacity=8,
+    )
+
+    np.testing.assert_array_equal(position, np.array([4, 0, 2, 8, 1, 5, 3, 8], dtype=np.int32))
+    np.testing.assert_array_equal(keep, np.array([True, True, True, False, True, True, True, False]))
+    np.testing.assert_array_equal(
+        packed_destination,
+        np.array([0, 0, 1, 1, 2, 2, 3, 3], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        packed_slot,
+        np.array([1, 0, 4, 2, 5, 3, 8, 8], dtype=np.int32),
+    )
 
 
 def test_same_expert_hybridep_routing_encodes_receiver_segments():
