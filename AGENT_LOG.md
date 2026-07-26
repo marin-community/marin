@@ -476,3 +476,31 @@ Caveat, and it runs in the conservative direction: the correction factors were d
 capacity headroom, later spill attempts should find free buckets MORE easily than the idealized model
 assumes is hard, so the model's optimism ought to shrink as cf rises — meaning the starred cells are
 probably pessimistic rather than optimistic.
+
+## Check-in 14 — v4 (RAM 600g) also failed; falling back to 4-of-128 per pre-authorization
+
+Triaged v4 with my own recipe (20,894-line warning stream):
+
+    failed to allocate  0      SIGTERM caught  0      another task died  58      Traceback  3
+
+The three tracebacks are `step_runner._harvest` re-raising the child failure plus faulthandler thread
+dumps from victims — no primary exception. So the RAM rung did NOT fix it: raising the request from
+256g to 600g changed nothing observable, which means either the host-memory hypothesis is wrong or
+600g was not the binding constraint. I am recording that as a FAILED prediction of mine rather than
+quietly dropping it; the arithmetic that motivated it (4 x 40.5 GiB pinned in one container) still
+looks right, but it did not produce the fix it predicted, so the class-2 diagnosis of v3 is now
+unconfirmed rather than established. The triage recipe's class-2 branch should be read as "suspect and
+test", not "diagnose" — I have weakened the wording accordingly.
+
+Tally at the 4-of-256 shape: 4 attempts, 0 steps. One measured HBM OOM (16/16 tasks, the real finding),
+one preemption, two gang aborts with no primary cause. Per the standing pre-authorization I am not
+spending a fifth attempt there.
+
+FALLBACK FIRED: /mwittmann/ep25d5-d6144-e128-bf16-120-0726-1100 — d6144, 128 experts, top-4, 48
+layers, EP64, batch 1024, seq 4096, 120 steps, QB-on, cf1.0, custom adjoint, drops. Deliberately NO
+host offload and the DEFAULT BFC allocator at fraction 0.90: my projection says ~119 GiB against the
+138.22 GiB limit at the default 0.75, so the headroom is there without offload, and dropping offload
+removes the host-memory variable entirely AND keeps the step's data movement identical to d1's d5120
+control. The only deviation from that control is the fraction (0.90 vs 0.75), which a peer measured as
+performance-neutral on this workload. So this number will be comparable BOTH to d1's 22.66% control
+and to #7201's 4-of-128 rows.
