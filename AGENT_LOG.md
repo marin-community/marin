@@ -261,3 +261,20 @@ Next: v2 healthy clique -> poller first reads ~03:10; final verdict assembly ~03
 Confidence: 4/10 g=0.5, 1/10 integral family
 Next: babysit v2 through boot; poll every ~15 min; assemble the integral+gain verdicts
 into the final report skeleton while waiting.
+
+## Check-in 2026-07-26 04:05 UTC — v2 starved behind peer gangs; waiting for a rack
+
+- v2 attempt 7 also died (cosched_failed); 7 consecutive NCCL-init/boot failures since
+  01:57. Timeline correlation: d4's /mwittmann/ep25d4-pgle-capture-30-v1 (submitted
+  02:15) and rav's /rav/rav-qbdrv-off2 (02:23) each hold 16/16 tasks RUNNING; my gang
+  has not held a healthy clique since they started. Either preemption contention at the
+  same priority band or a sick node subset (the same cw-us-east-08a degradation as the
+  6.5h log outage, which is ALSO still dark — 0 child rows for all evening jobs).
+- Action: NONE (deliberate). v2 cycles at 0% GPU (no compute burned, retry budget
+  1000). Adding a v3 would add a third contender to a contended rack. When d4's 30-step
+  capture or rav's ablation drains, v2 either self-heals or I stop+resubmit fresh
+  (fa4lse boot-hang recipe: fresh JAX_COMPILATION_CACHE_DIR, new allocation draw).
+- No job mutations this check-in. Integral-family verdict stands (both arms measured).
+
+Confidence: 4/10 g=0.5, 1/10 integral family
+Next: peer job completion -> v2 healthy clique; keep 15-min cadence.
