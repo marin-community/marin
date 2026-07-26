@@ -1247,3 +1247,45 @@ sequence axis), e4m3 forward and e5m2 backward on the wire, loss-trajectory pari
 Note the backward legs are 16 of the 24 a2a instructions, so the full halving needs both directions.
 Confidence: 9/10 on the sizing bracket; 6/10 that the top of the bracket is reachable.
 Next: kernel-feasibility survey (fp8 input + dequant epilogue) before proposing any build.
+
+## Check-in 2026-07-26 11:45 UTC — fp8 feasibility: the stock XLA path can do it, but ONLY if the per-token scale moves to the GEMM output
+
+Read the pinned XLA GEMM rewriter (xla/backends/gpu/transforms/gemm_rewriter.cc) rather than
+guessing what the stack supports. Three facts that decide the design:
+
+1. **Per-token scales are rejected by the fp8 custom-call path.** Line 1370:
+   `if (!ShapeUtil::IsScalar(scales[i]->shape())) { ... "The scaling factors must be scalars." }`.
+   So a `convert(fp8) * broadcast(per_token_scale)` on a GEMM operand does NOT fold into
+   `__cublas$lt$matmul$f8` — it stays a separate multiply over the full activation tensor. That is
+   precisely the ~2.9 s QDQ overhead that sank the earlier fp8-wire attempt, and it is a hard
+   conflict with the fidelity rule (per-token scaling only, never shared across tokens).
+2. **An UNSCALED fp8 operand is accepted.** Lines 286-291: a bare `convert(fp8)` with no multiply
+   matches, with `param.scale = nullptr`. So fp8 activations can enter the GEMM carrying no scale
+   at all.
+3. **Mixed e5m2 x e4m3 is allowed**; only e5m2 x e5m2 is rejected ("one of the input types must be
+   F8E4M3FN", lines 1278-1304). That matches the known requirement that the fp8 backward must be
+   mixed e5m2-grad x e4m3-weight, so the backward wire dtype is satisfiable on the stock path.
+
+### The design this implies needs no new kernel
+
+Because the first expert GEMM is row-linear, `scale_i * (a_i @ W)` equals `(scale_i * a_i) @ W`.
+So do not dequantize the INPUT — send unscaled e4m3 activations plus a per-token scale vector over
+the wire, feed the unscaled fp8 straight into the dot (matches fact 2), give the weights a
+per-EXPERT scalar scale (scalar, so fact 1 is satisfied, and weights are not token-indexed so the
+token-sharing invariant is untouched), and apply the per-token scale to the GEMM OUTPUT rows.
+The output scale then lands on `hidden` immediately before the SwiGLU `act(gate) * up`, which is
+already an elementwise fusion reading and writing that tensor — so it costs one extra broadcast
+multiply inside an existing fusion rather than a separate pass. That is "dequant as an epilogue"
+in the only sense that matters for cost, achieved by XLA fusion rather than by kernel surgery.
+
+Wire saving is the full halving on the dispatch leg (e4m3 payload + one f32 scale per token, i.e.
+5120 bf16 bytes -> 5120 fp8 bytes + 4, a 1.9993x reduction), with the combine leg and the backward
+legs following the same construction.
+
+Open risks, in order: (a) whether XLA actually emits `__cublas$lt$matmul$f8` for this shape on
+sm100a rather than falling back — cheaply checkable on the free EP4 harness by dumping HLO and
+grepping for the custom call; (b) whether fp8 weights are acceptable numerically, since this route
+quantizes weights as well as the wire (per-expert scalar scale); (c) loss-trajectory parity, which
+remains the verdict.
+Confidence: 7/10 that the no-new-kernel route compiles to a real fp8 GEMM; 5/10 that it beats bf16 end to end.
+Next: repo survey of existing fp8/MXFP8 kernels is running; then a free EP4 HLO check of (a).
