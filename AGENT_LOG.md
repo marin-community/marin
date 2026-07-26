@@ -670,3 +670,29 @@ Next: babysit treatment (watch for early XLA parse errors); then control.
   device timelines answers whether the dispatch a2a actually moves under the expert GEMM.
 Confidence: 4/10 on the direction (unchanged); 8/10 that v1 was infra, not code.
 Next: verify log flow + PGLE-consumption messages around step 5; build the xspace overlap reader while the leg runs.
+
+## Check-in 2026-07-26 07:00 UTC — PGLE is being consumed; control-side profile already shows ~90% collective overlap
+
+- TREATMENT v3 IN FLIGHT (/mwittmann/ep25d4-pgle-ab-pgle-120-v3-20260726, submitted 06:47Z after
+  v2 died instantly on an invalid `--version` string — calendar version or `<label>-dev` only).
+  Sentinels confirmed on all 16 hosts: prefetch active (local_experts=4 expert_shards=64) + custom
+  adjoint active. Logs flowing.
+- PGLE IS LIVE AND MATCHED: `profile_guided_latency_estimator: Found 197 instructions from the
+  profile / Missing 336` on the main train module (16x, one per host). Every missing name is a
+  cheap elementwise/concat fusion — zero collectives are missing (grep over all 370 distinct
+  missing names for all-to-all/send/recv/collective/all-reduce/all-gather/reduce-scatter: 0 hits).
+  So the scheduler has real measured latencies for exactly the ops this probe is about.
+  Note `xla_gpu_enable_latency_hiding_scheduler` defaults to FALSE on this pin, so the A/B is
+  LHS+PGLE jointly vs neither, as the brief specifies.
+- MECHANISM TOOL BUILT + FIRST RESULT (control side, from the existing capture xspace): new
+  experiments/grug/moe/xplane_overlap.py parses the raw xplane wire format (no tf/xprof deps) and
+  reports per-op concurrency across GPU streams. On the QB+adjoint+PREFETCH capture, per GPU:
+  ncclDevKernel_SendRecv = 9423 ms total occupancy of which **90.2% is already concurrent with
+  non-collective work** (top partners: the nvjet expert-GEMM kernels, 2776 ms + 740 ms + 595 ms).
+  Compute stream busy 31.6 s vs collective stream 9.8 s over the 3-step window.
+- Implication BEFORE the MFU read: the dispatch a2a is already ~90% hidden without LHS/PGLE, so
+  the headroom this probe can address is ~1 s per 3 steps (~2-3% of step time, i.e. <=0.5pp MFU
+  even if PGLE hid all of it). That is the mechanism-level explanation for why the prefetch
+  reorder alone measured an exact null.
+Confidence: 3/10 that PGLE+LHS clears +0.5pp (down from 4/10: the overlap headroom is measured small); 8/10 in the tooling.
+Next: harvest v3 MFU/drops; then the matched control leg; then the treatment-side overlap report.
