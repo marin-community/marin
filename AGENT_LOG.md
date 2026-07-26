@@ -1059,3 +1059,65 @@ may want to call it.
 Confidence: 9/10 that EP4 reproduces the collapse census; 9/10 that the rack leg's failures are pure infra.
 Next: coordinator decision on the rack slot; meanwhile fix the cover column so the EP4 harness can
 answer *why* the fwd dispatch legs get no slack.
+
+## Check-in 2026-07-26 10:30 UTC — COVER COLUMN FIXED, and it answers the asymmetry: it is the collective budget
+
+Session resumed after a transient 529; working tree verified clean at 54809714c, no partial edit.
+
+### Fixing cover took three parser bugs, all worth recording
+
+1. Brace-depth tracking does not survive a real dump. `backend_config`, `replica_groups` and
+   metadata strings carry unbalanced braces, and ONE bad line desynchronizes everything after it —
+   on the 82 MB dump it yielded 157 computations / 1473 instructions. Column structure is the
+   sound invariant: headers start at column 0 and end in `{`, a lone `}` at column 0 closes, and
+   instructions are indented. That parse yields **10972 computations / 193939 instructions.**
+2. `-start` / `-done` carry a numeric suffix AFTER the tag (`all-to-all-start.16`), so matching on
+   `endswith("-start")` silently finds nothing; and the done's operand lists the start's shape
+   before its name, so `-done(%name)` never matches — look for `%name` anywhere on a done line.
+3. `ROOT %x = ...` lines were skipped entirely by the instruction regex, dropping real cover.
+Selection gotcha too: XLA emits the train step under BOTH `after_optimizations` and
+`<arch>_gpu_after_optimizations`, plus dozens of tiny helper modules under both spellings, so
+prefer by SIZE, not by name — a name preference picks `jit__threefry_split`. Four parsing tests
+now guard all of this (experiments/grug/moe/test_schedule_report.py).
+
+### The answer: the forward dispatch legs get no slack because the in-flight budget is 1
+
+Baseline (LHS, `parallel_collective_overlap_limit` at its default 1), forward legs, EP4 harness:
+
+| instruction | leg | state | cover | what covers it |
+|---|---|---|--:|---|
+| all-to-all-start.16 | fwd dispatch | **SYNC** | **0** | nothing |
+| all-to-all-start.18 | fwd dispatch | **SYNC** | **0** | nothing |
+| all-to-all-start.20 | fwd dispatch | **SYNC** | **0** | nothing |
+| all-to-all-start.22 | fwd dispatch | async | 5 | loop_slice_fusion, custom-call.2064, custom-call.2076 |
+| all-to-all-start.17 | fwd combine | async | 3 | custom-call.2065, loop_multiply_fusion.10, custom-call.2077 |
+| all-to-all-start.19 | fwd combine | async | 3 | custom-call.2066, loop_multiply_fusion.11, custom-call.2078 |
+| all-to-all-start.21 | fwd combine | async | 3 | custom-call.2067, loop_multiply_fusion.12, custom-call.2079 |
+| all-to-all-start.23 | fwd combine | async | 5 | loop_add_fusion.8, fusion.2206, wrapped_slice.3 |
+
+The covering instructions on the combine legs are the expert GEMM custom-calls and the SwiGLU
+multiply. So the combine legs are covered BY THE EXPERT GEMM, and the dispatch legs have literally
+nothing between start and done. With a budget of one in-flight collective the scheduler must
+choose, and it spends the budget on combine; dispatch is then collapsed by the post-scheduling pass.
+
+### Raising the budget flips every MoE all-to-all to async, for free
+
+| leg | limit=1 (default) | limit=4 |
+|---|---|---|
+| fwd dispatch | 3 SYNC / 1 async | **0 SYNC / 4 async** |
+| fwd combine | 0 SYNC / 4 async | 0 SYNC / 4 async |
+| bwd dispatch | 4 SYNC / 4 async | **0 SYNC / 8 async** |
+| bwd combine | 3 SYNC / 5 async | **0 SYNC / 8 async** |
+| reshard (entry computation) | 6 SYNC / 8 async | 14 SYNC / 0 async |
+
+At limit=4 every dispatch leg carries 5-8 covering instructions including the expert GEMM
+custom-calls (2064/2065/2076/2077) and overlapping sibling a2a starts. **All 10 collapsed MoE
+all-to-alls become asynchronous and covered.** The budget is reallocated, not created: the 14
+reshard a2as in the entry computation collapse instead, which is the risk this trades into.
+
+This kills the "the fix must change what the dispatch leg depends on" branch. The dataflow the
+prefetch gate creates is already legal and sufficient; the scheduler simply was not permitted to
+use it. That retro-explains the prefetch null one level deeper than the previous entry did: the
+gate supplied slack, and a budget of 1 forbade spending it.
+Confidence: 9/10 on the budget explanation (cover evidence both directions, plus the flip); 5/10 that it is a net rack win, because the reshard collectives collapse in exchange.
+Next: free sweep at limit=2 and 8 in flight; then a rack-leg request with the best setting.
