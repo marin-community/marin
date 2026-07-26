@@ -1483,6 +1483,110 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T13:00:41Z — 134,810 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1251-v322` independently
+  revalidated two p1 decision-file 37 checkpoints at semantic offsets 256 and
+  384 and three p2 decision-file 69 checkpoints at offsets 4,224 through
+  4,480. Their 640 baseline pairs contain 438 model false positives, 197 model
+  true duplicates, and five unresolved outcomes. Twenty pairs were chunked and
+  620 were direct. The audit checked 2,786 judgments across 2,798 attempts:
+  2,781 valid and 17 invalid responses affecting seven retried judgments. The
+  outcome Parquet SHA-256 values, in p1 then p2 frontier order, are:
+
+  - `cea666fb97bb33cc370d3f90892331f7f9d8089a755bb140b7eaf3aa801dead6`;
+  - `ded60c0791469e578da4b1e65b86aa97002d7df2bcdfde6f3f59354b58953b58`;
+  - `3ac055a6ab490e25cce162aa85d78d926abb334cc1345e05ddc61f74c1d15854`;
+  - `dd4cc36bd508ba887590ee803bcebcf2a6a3832f70f6d44f511066ea05ba90cc`;
+  - `d4b0c3df9b5e6cca792f3ab709071312fef9096b256dc887a0dba92e4f9b8646`.
+
+- Complete-text inspection resolves one ambiguity as a false positive and four
+  as true duplicates:
+
+  - `part-00037-of-00128.parquet:984` is a true duplicate. Both documents
+    contain the same WordPress Roots Sage question, PHP snippets, failure,
+    `$sage_includes` solution, and documentation-gap explanation. The member
+    adds headings, author/date metadata, and summary wording; the canonical
+    also contains an extra image-path correction. Member/canonical character
+    counts are 1,614/1,322 and character, line, and word-sequence similarity
+    are 0.372616, 0.312500, and 0.632603. Text and inspection SHA-256 values
+    are `b890cb5acd95ce9bce3aec548bca81af6c6a2714d69b4a1048bf95265c7bb587`,
+    `1993307b9a30c2c0b476e6b5aec4391fbb7188acfd5c27816af50f9a3a3b9606`,
+    and `a4aef66167e21e054501d23b2b707ca9958a4999004eab70fd24bec9e47452a3`.
+  - `part-00069-of-00128.parquet:7225` is a false positive. The member
+    explicitly requires an empty input list to return an empty list; the
+    canonical request does not state that behavior. This is a distinct
+    edge-case instruction even though both implementations use set
+    conversion. Member/canonical character counts are 381/346 and character,
+    line, and word-sequence similarity are 0.423659, 0.250000, and 0.701754.
+    Text and inspection SHA-256 values are
+    `cd72c8836e016094ff8c70fdb49e899029d5f27c77d1c7505f327255a3e9545c`,
+    `761f8b367e9dc83795ccc0b7558639ed10fd3617a1a0e18c4fc7ef9169379427`,
+    and `563fd1a3efc42ac4756ee022517ba8e5f89a5e2a6ac8232a91aa8d3851033956`.
+  - `part-00069-of-00128.parquet:7293` is a true duplicate. Both complete
+    74-line texts contain the same supply-chain question, options, reasoning,
+    conclusion, and answer; only `\boxed{C}` versus `\boxed{\text{C}}`
+    differs. Member/canonical character counts are 5,541/5,548 and character,
+    line, and word-sequence similarity are 0.999369, 0.986486, and 0.998744.
+    Text and inspection SHA-256 values are
+    `92664422e367a973caf31589e0f6a72722c32b321b936d50cb5e435e4821b820`,
+    `c1cc009879192e16714cbc263b4cfc207a4394888953e5f4ca895f2f453fa8c9`,
+    and `50af05129aa093aaead08474f5084fb874efa9f57079ec4c68618e5d9518360c`.
+  - `part-00069-of-00128.parquet:7371` is a true duplicate. Both complete
+    66-line texts contain the same surveys-versus-interviews question,
+    options, reasoning, conclusion, and answer; only `\boxed{B}` versus
+    `\boxed{\text{B}}` differs. Member/canonical character counts are
+    7,482/7,489 and character, line, and word-sequence similarity are
+    0.999532, 0.984848, and 0.999109. Text and inspection SHA-256 values are
+    `04886e78b7b54a4832541320868557377f4300a2efc41f1adea56b31170bb668`,
+    `8642626cc582c9a1765dee143d744246a82bd2f67a2c0a2f6d7fe4687484b8a4`,
+    and `bc2b345207f58b53a7ce9b0984e1393c51b053a5243e9753e220f2fe19633f6d`.
+  - `part-00069-of-00128.parquet:7396` is a true duplicate. Both texts ask
+    the same exponent-comparison question and give the same logarithmic proof,
+    inequalities, conclusion, and boxed answer. Prompt formatting and minor
+    connective rephrasing add no new requirement. Member/canonical character
+    counts are 1,232/1,191 and character, line, and word-sequence similarity
+    are 0.844408, 0.882353, and 0.903382. Text and inspection SHA-256 values
+    are `39c9055559e564e9f57ad94c99c78ba55804c3e39d2edf90c5cda6557219b90e`,
+    `3567a4614d59c44f5c2061b8c149ed8937d8c8ef36b342ea5d42a45fba8cc841`,
+    and `bfcacc443e261ac605b72db9d17e83a3b6a73ef0ceda20b7f0474157b6f80b6a`.
+
+- `/rav/datakit-6854-publish-manual-five-rows-1300-v324` wrote the five
+  immutable manual records.
+  `/rav/datakit-6854-verify-manual-five-rows-1300-v325` separately reread all
+  source pairs, semantic checkpoints and evidence, inspection artifacts,
+  deterministic Parquet bytes, and completion markers. In pair order,
+  semantic-evidence, manual-Parquet, and marker SHA-256 values are:
+
+  - `b666d77d9e87e992d4c945d0a08a03692218d38899b361777e5e340d01e0aa81`,
+    `8fceb7f02eb039d87ddf5b5a04c70824f8fe3bfb9c17a3558e297fdaa52eb18b`,
+    and `ed41b2221e78e72f8ea4cf13e66d82636161c0820e9be3461a5d4a03e0c8076e`;
+  - `b241a594f6a83eb8f88c61acc865f9a0c83c2a4dabd262f323a63d6d88b5aad1`,
+    `744b9ab09b50179ce10b9f89eb2aecf3f50c19e4c3450a3003b5d093f2c79da8`,
+    and `f13bec97685c27402957ffb17befef47c82f0baa786ed168a3365b05661e1005`;
+  - `6945f2a366d7fe22a8c524302c0566bcc86e291578f2c71c299461c498f69c99`,
+    `f98eb70631b634b4ea8ebc79c0bc54ce1b7640dd00eb222ed6daf3f5eccb3803`,
+    and `ac924a59719c54d89d80632fbdb94c2a2e4071b114a45f76ffc6392261ef523f`;
+  - `d91af3183abb28f9482f9f27131d7a4828a9a4a5d66ca9b3f9c41b37105a6bcd`,
+    `c5a9b7bf56eb0b102364529adc098a466a0057fe7c222ed74c30f661009cdaa5`,
+    and `3826eb2b5efdd9958f5cc886ce03413cb6948629ab6c3f535511940133fc744b`;
+  - `6b12e426b3d7a458e5d17c2f982007cb223ce5e3ae8f4d5098ca14d5a30a653a`,
+    `f065c437a7f01b23f4add89e577cd4a839af134900bfce3b187f4c1f9d0502ab`,
+    and `c80fcb24e0258046d9abfbab7d70ea26a07a35530e7a190e070a7f181e7db694`.
+
+- Across the stable 1,061-checkpoint snapshot, all 153 unresolved model
+  outcomes are covered by 117 true-duplicate and 36 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 108,954 pairs, 69,358 false positives, 39,596 true duplicates;
+  - treatment: 25,856 pairs, 13,313 false positives, 12,543 true duplicates;
+  - combined: 134,810 pairs, 82,671 false positives, 52,139 true duplicates.
+
+- The next audit frontiers are p0 `(6, 0)`, p1 `(37, 512)`,
+  p2 `(69, 4,608)`, and p3 `(102, 128)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T12:47:58Z — 134,170 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1246-v321` independently
