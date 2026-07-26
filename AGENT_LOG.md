@@ -966,3 +966,31 @@ PGLE+LHS arm, whose p50 is already pinned by two independent legs (22.549 / 22.5
 spread 0.02pp) — a single treatment leg is therefore a real A/B.
 Confidence: 9/10 on the identification, 8/10 on the async->sync-collapse explanation, 4/10 that the overlap-limit flag alone moves it.
 Next: rack request pending with the coordinator; no rack submissions until approved.
+
+## Check-in 2026-07-26 09:10 UTC — both approved jobs submitted
+
+- RACK LEG: /mwittmann/ep25d4-ovlim4-120-v1-20260726 — PGLE+LHS arm plus
+  `--xla_gpu_experimental_parallel_collective_overlap_limit=4`, 120 steps, profiler window kept so
+  the same leg yields BOTH the MFU delta and the inline-instruction count. Control is the already
+  twice-measured PGLE+LHS arm (22.549 / 22.530 at 20-119). Will queue behind d1's spill m=3 and
+  d5's d6144 baseline; NOT resubmitting on PENDING.
+- EP4 SCHEDULE DUMP (free, does not count against the rack budget):
+  /mwittmann/ep25d4-schedump-ep4-v1-20260726 — 1 node / 4 GB200, 4 layers, 16 experts over 4 shards
+  so `local_experts = 4` matches the rack topology exactly, LHS on, `--xla_dump_to=/tmp/hlodump`,
+  `GRUG_RUN_INLINE=1` so training runs in the entrypoint task and a wrapper can post-process the
+  dump on the same node. New experiments/grug/moe/schedule_report.py walks the post-optimization
+  HLO in schedule order and prints, per collective, whether the post-scheduling pass tagged it
+  `is_sync":true` and how many real (non-nop) instructions sit between each surviving async
+  start/done pair — i.e. the slack the scheduler actually found, per instruction.
+
+### Flag-probe negatives worth keeping (they cost a cycle to find)
+- `xla_gpu_experimental_collective_start_as_early_as_possible` does NOT exist in jaxlib 0.10.1
+  (XLA rejects it: "Unknown flag in XLA_FLAGS"). It is in newer XLA only.
+- `xla_gpu_experimental_parallel_collective_overlap_limit` exists here, default **1**.
+- `xla_gpu_memory_limit_slop_factor` exists here, default **95**. Queued only if the first leg moves.
+- `xla_gpu_disable_async_collectives` is a disable-only filter; there is no enable-side counterpart,
+  so async conversion is already on for ALLTOALL and is not the gate.
+- Levanter's `log_xla_hlo` writes StableHLO (pre-optimization) — useless for schedule questions.
+  The scheduled GPU HLO only comes from `--xla_dump_to`.
+Confidence: 4/10 that the overlap-limit flag alone moves MFU; 7/10 that the schedule dump explains the dispatch-vs-combine asymmetry.
+Next: poll both; report the verdict two ways (MFU delta AND inline count) as instructed.
