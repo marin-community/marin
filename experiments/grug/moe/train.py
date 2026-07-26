@@ -460,7 +460,7 @@ def _warm_jaxpp_device_ragged(mpmd_mesh: Any) -> None:
         out_shardings=rows,
     )
     values = jax.device_put(
-        jnp.arange(expert_size * expert_size, dtype=jnp.int32)[:, None],
+        np.arange(expert_size * expert_size, dtype=np.int32)[:, None],
         rows,
     )
     jax.block_until_ready(warm(values))
