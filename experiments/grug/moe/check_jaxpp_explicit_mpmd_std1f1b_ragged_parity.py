@@ -209,6 +209,14 @@ def _authoritative_environment() -> dict[str, Any]:
     return environment
 
 
+def _wait_at_jaxpp_barrier(name: str) -> None:
+    dime2 = grug_train.jaxpp_dime2
+    if dime2 is None:
+        raise ModuleNotFoundError("jaxpp.dime2 is required for the ragged parity barrier")
+    client = dime2.get_distributed_client()
+    client.wait_at_barrier(name, dime2.env_vars.jaxpp_client_timeout.value)
+
+
 def _run_initialized_worker(
     process_id: int,
     direct_reference_barrier: Any | None,
@@ -288,6 +296,8 @@ def _run_initialized_worker(
                 raise RuntimeError(f"process {process_id} did not execute its direct reference")
         direct_loss, direct_gradients = direct_result
 
+        _wait_at_jaxpp_barrier("grug_ragged_parity_direct_reference_complete")
+        _event(process_id, "direct_reference_barrier_complete", stage_index=local_stage_index)
         _event(process_id, "dime_prewarm_start", stage_index=local_stage_index)
         grug_train._prewarm_jaxpp_dime(mpmd_mesh, "all")
         _event(process_id, "dime_prewarm_complete", stage_index=local_stage_index)
