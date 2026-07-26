@@ -11,9 +11,8 @@ dist/. Publication to PyPI is done by the release workflow
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing -- this script
 never uploads anything and never needs a token.
 
-marin-finelog and marin-dupekit are NOT built here: each has its own release
-workflow (finelog-release-wheels.yaml, dupekit-release-wheels.yaml) that
-publishes a pure-Python wheel together with its native (maturin) companion
+marin-finelog and marin-dupekit are NOT built here. The unified native release
+workflow publishes each pure-Python wheel together with its native companion
 (marin-finelog-server, marin-dupekit-native).
 
 Four modes:

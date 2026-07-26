@@ -5,7 +5,7 @@ Raison d'être: text-deduplication kernels written in Rust, with a pure-Python s
 ## Packaging
 
 dupekit ships as two PyPI dists, released in lockstep by
-`dupekit-release-wheels.yaml`:
+`native-release-wheels.yaml`:
 
 - `marin-dupekit` — pure Python (this directory; hatchling). A root workspace
   member. `src/dupekit/__init__.py` is a thin proxy that re-exports the native

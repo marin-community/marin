@@ -31,7 +31,7 @@ test = [
     # runtime dependency of the pure client — only the embedded-server smoke
     # test and the dashboard demo need it. It ships as the companion
     # marin-finelog-server dist (maturin, this package's rust/ subtree), built
-    # in lockstep by finelog-release-wheels.yaml; `scripts/rust_mode.py dev`
+    # in lockstep by native-release-wheels.yaml; `scripts/rust_mode.py dev`
     # swaps the [tool.uv.sources] entry below to the local rust/ tree so it
     # builds from source.
     "marin-finelog-server >= 0.2.0.dev0",

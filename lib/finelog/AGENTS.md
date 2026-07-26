@@ -73,7 +73,7 @@ startup-script metadata.
 ## Packaging
 
 Finelog ships as two PyPI dists, released in lockstep by
-`finelog-release-wheels.yaml`:
+`native-release-wheels.yaml`:
 
 - `marin-finelog` — pure Python (this directory; hatchling).
 - `marin-finelog-server` — the native in-process server ext, importable as

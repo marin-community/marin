@@ -1,0 +1,263 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Behavioral contracts for Marin-owned native package releases."""
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from scripts.ci.native_package_release import (
+    PACKAGES,
+    PublishedArtifact,
+    artifact_manifest,
+    cargo_compatible_version,
+    latest_stable_version,
+    next_development_version,
+    packages_for_changes,
+    python_compatible_version,
+    reconcile_published_artifacts,
+    release_plan,
+    update_native_requirement,
+    validate_targeted_lock_change,
+)
+
+RELEASE_WORKFLOW = Path(".github/workflows/native-release-wheels.yaml")
+
+
+def _artifact_names(package: str, version: str) -> list[str]:
+    platform_wheels = [f"cp312-cp312-manylinux_2_28_{arch}.whl" for arch in ("x86_64", "aarch64")] + [
+        f"cp312-cp312-macosx_11_0_{arch}.whl" for arch in ("x86_64", "arm64")
+    ]
+    if package == "iris":
+        return [
+            f"marin_iris_native-{version}-{platform_wheels[0]}",
+            f"marin_iris_native-{version}-{platform_wheels[1]}",
+            f"marin_iris_native-{version}-{platform_wheels[2]}",
+            f"marin_iris_native-{version}-{platform_wheels[3]}",
+            f"marin_iris_native-{version}.tar.gz",
+        ]
+
+    pure_distribution, native_distribution = {
+        "dupekit": ("marin_dupekit", "marin_dupekit_native"),
+        "finelog": ("marin_finelog", "marin_finelog_server"),
+    }[package]
+    return [
+        f"{pure_distribution}-{version}-py3-none-any.whl",
+        f"{pure_distribution}-{version}.tar.gz",
+        *(f"{native_distribution}-{version}-{platform}" for platform in platform_wheels),
+        f"{native_distribution}-{version}.tar.gz",
+    ]
+
+
+def _write_artifacts(root: Path, package: str, version: str) -> list[Path]:
+    paths = []
+    for index, name in enumerate(_artifact_names(package, version)):
+        path = root / name
+        path.write_bytes(f"artifact-{index}".encode())
+        paths.append(path)
+    return paths
+
+
+def _workflow(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text())
+    assert isinstance(data, dict)
+    return data
+
+
+def _triggers(workflow: dict) -> dict:
+    # PyYAML 1.1 parses the unquoted workflow key `on` as True.
+    triggers = workflow.get("on", workflow.get(True))
+    assert isinstance(triggers, dict)
+    return triggers
+
+
+def test_next_development_version_is_retry_stable_and_above_stable() -> None:
+    first = next_development_version("0.1.3", "0.1.4", 30194118926)
+    retry = next_development_version("0.1.3", "0.1.4", 30194118926)
+    later = next_development_version("0.1.3", "0.1.4", 30194120716)
+
+    assert first == retry == "0.1.5.dev30194118926"
+    assert later == "0.1.5.dev30194120716"
+
+
+def test_development_version_is_compatible_with_cargo_build_manifests() -> None:
+    assert cargo_compatible_version("0.1.4.dev30194118926") == "0.1.4-dev.30194118926"
+    assert cargo_compatible_version("0.1.4") == "0.1.4"
+    assert cargo_compatible_version("0.1.4+abc12345") == "0.1.4+abc12345"
+    assert python_compatible_version("0.1.4+abc12345") == "0.1.4+abc12345"
+
+
+def test_latest_stable_version_ignores_development_and_unsupported_releases() -> None:
+    versions = ["0.1.3", "0.1.4.dev30194118926", "0.1.2", "0.2.0rc1"]
+
+    assert latest_stable_version(versions) == "0.1.3"
+
+
+def test_change_detection_maps_shared_and_owned_sources() -> None:
+    assert packages_for_changes(["lib/iris/rust/src/lib.rs"]) == ["iris"]
+    assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
+    assert packages_for_changes(["scripts/ci/native_package_release.py"]) == [
+        "dupekit",
+        "finelog",
+        "iris",
+    ]
+
+
+def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
+    plan = release_plan(
+        event_name="pull_request",
+        ref="refs/pull/1/merge",
+        input_mode="manual",
+        input_package="all",
+        input_version="",
+        revision="abcdef123456",
+        serial=42,
+        changed_paths=["rust/Cargo.toml"],
+        repo_root=Path.cwd(),
+    )
+
+    assert plan.packages == ("dupekit", "finelog", "iris")
+    expected_builds = {
+        (package, operating_system, operation)
+        for package in plan.packages
+        for operating_system, operation in PACKAGES[package].build_legs
+    }
+    actual_builds = {(entry["package"], entry["os"], entry["operation"]) for entry in plan.builds}
+    assert actual_builds == expected_builds
+    assert all(plan.versions[package]["version"].endswith("+abcdef12") for package in plan.packages)
+    assert json.loads(json.dumps(dict(plan.versions)))["iris"]["mode"] == "manual"
+
+
+def test_update_native_requirement_advances_floor_without_touching_neighbors() -> None:
+    before = """\
+dependencies = [
+    "marin-finelog >= 0.2.10",
+    "marin-finelog-server >= 0.2.12.dev202607250802",
+    "marin-iris-native >= 0.1.3",
+]
+"""
+
+    after, changed = update_native_requirement(before, "marin-iris-native", "0.1.4.dev30194118926")
+
+    assert changed
+    assert after == before.replace(
+        '"marin-iris-native >= 0.1.3"',
+        '"marin-iris-native >= 0.1.4.dev30194118926"',
+    )
+
+
+def test_update_native_requirement_never_downgrades_floor() -> None:
+    text = 'dependencies = ["marin-iris-native >= 0.1.5.dev40000000000"]\n'
+
+    assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
+
+
+@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
+def test_artifact_manifest_requires_complete_release_pair(tmp_path: Path, package: str) -> None:
+    version = "0.3.0.dev30194118926"
+    paths = _write_artifacts(tmp_path, package, version)
+
+    manifest = artifact_manifest(package, version, paths)
+
+    assert set(manifest) == {path.name for path in paths}
+    with pytest.raises(ValueError, match="artifact manifest"):
+        artifact_manifest(package, version, paths[:-1])
+
+
+def test_reconcile_published_artifacts_accepts_matching_partial_upload(tmp_path: Path) -> None:
+    version = "0.1.4.dev30194118926"
+    paths = _write_artifacts(tmp_path, "iris", version)
+    manifest = artifact_manifest("iris", version, paths)
+    published_name = paths[0].name
+    published = {
+        "marin-iris-native": [
+            PublishedArtifact(filename=published_name, sha256=manifest[published_name]),
+        ]
+    }
+
+    missing = reconcile_published_artifacts("iris", version, manifest, published)
+
+    assert missing == set(manifest) - {published_name}
+
+
+@pytest.mark.parametrize(
+    "published",
+    [
+        {"marin-iris-native": [PublishedArtifact(filename="unexpected.whl", sha256="0" * 64)]},
+        {
+            "marin-iris-native": [
+                PublishedArtifact(
+                    filename="marin_iris_native-0.1.4.dev30194118926-cp312-cp312-manylinux_2_28_x86_64.whl",
+                    sha256=hashlib.sha256(b"different").hexdigest(),
+                )
+            ]
+        },
+    ],
+)
+def test_reconcile_published_artifacts_rejects_collision(
+    tmp_path: Path, published: dict[str, list[PublishedArtifact]]
+) -> None:
+    version = "0.1.4.dev30194118926"
+    manifest = artifact_manifest("iris", version, _write_artifacts(tmp_path, "iris", version))
+
+    with pytest.raises(ValueError, match="PyPI"):
+        reconcile_published_artifacts("iris", version, manifest, published)
+
+
+def test_validate_targeted_lock_change_rejects_unrelated_package_update() -> None:
+    before = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris-native"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "typing-extensions"
+version = "4.16.0"
+source = { registry = "https://pypi.org/simple" }
+"""
+    targeted = before.replace('version = "0.1.3"', 'version = "0.1.4.dev30194118926"')
+    unrelated = targeted.replace('version = "4.16.0"', 'version = "4.17.0"')
+
+    validate_targeted_lock_change(before, targeted, "marin-iris-native", "0.1.4.dev30194118926")
+    with pytest.raises(ValueError, match="typing-extensions"):
+        validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
+
+
+def test_release_workflow_publishes_only_trusted_native_main_changes() -> None:
+    workflow = _workflow(RELEASE_WORKFLOW)
+    triggers = _triggers(workflow)
+    push = triggers["push"]
+
+    assert push["branches"] == ["main"]
+    assert "schedule" not in triggers
+    assert "uv.lock" not in push["paths"]
+    assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+
+    publish = workflow["jobs"]["publish"]
+    assert publish["permissions"] == {"contents": "read", "id-token": "write"}
+    assert "github.repository == 'marin-community/marin'" in publish["if"]
+    publish_steps = publish["steps"]
+    publisher_index = next(
+        index for index, step in enumerate(publish_steps) if step.get("uses") == "pypa/gh-action-pypi-publish@v1.14.0"
+    )
+    assert publish_steps[publisher_index]["with"]["skip-existing"] is True
+    assert any("verify-release" in step.get("run", "") for step in publish_steps[:publisher_index])
+    assert "needs.plan.outputs.packages" in str(publish["strategy"])
+    assert "needs.plan.outputs.build_matrix" in str(workflow["jobs"]["build"]["strategy"])
+
+
+def test_release_workflow_serializes_app_authenticated_version_prs() -> None:
+    workflow = _workflow(RELEASE_WORKFLOW)
+    assert workflow["permissions"] == {"contents": "read"}
+    steps = workflow["jobs"]["bump"]["steps"]
+    assert any(step.get("uses") == "actions/create-github-app-token@v3" for step in steps)
+    assert any("git push --force-with-lease" in step.get("run", "") for step in steps)
+    assert any("gh pr merge" in step.get("run", "") and "--auto" in step["run"] for step in steps)

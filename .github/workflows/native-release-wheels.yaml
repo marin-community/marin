@@ -1,0 +1,286 @@
+name: "Native Packages - Release Wheels"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package family or all"
+        default: all
+        type: string
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [development, stable, manual]
+        default: manual
+      version:
+        description: "Version; required for a stable single-package release"
+        type: string
+  push:
+    branches:
+      - main
+    tags:
+      - "dupekit-v*"
+      - "finelog-v*"
+      - "iris-native-v*"
+    paths:
+      - "lib/dupekit/rust/**"
+      - "lib/finelog/rust/**"
+      - "lib/iris/rust/**"
+      - "rust/**"
+  pull_request:
+    paths:
+      - "lib/dupekit/rust/**"
+      - "lib/finelog/rust/**"
+      - "lib/iris/rust/**"
+      - "rust/**"
+      - "scripts/ci/native_package_release.py"
+      - ".github/workflows/native-release-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      packages: ${{ steps.plan.outputs.packages }}
+      publish: ${{ steps.plan.outputs.publish }}
+      versions: ${{ steps.plan.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Find changed source files
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --name-only "$PR_BASE" "$GITHUB_SHA" > "$RUNNER_TEMP/native-changes"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            git diff --name-only "$PUSH_BEFORE" "$GITHUB_SHA" > "$RUNNER_TEMP/native-changes"
+          else
+            touch "$RUNNER_TEMP/native-changes"
+          fi
+
+      - name: Resolve release plan
+        id: plan
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          python scripts/ci/native_package_release.py plan \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --ref "$GITHUB_REF" \
+            --mode "${INPUT_MODE:-manual}" \
+            --package "${INPUT_PACKAGE:-all}" \
+            --version "${INPUT_VERSION:-}" \
+            --revision "$GITHUB_SHA" \
+            --serial "$GITHUB_RUN_ID" \
+            --changed-files "$RUNNER_TEMP/native-changes" \
+            --github-output "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheels
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/native_package_release.py build \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --operation "${{ matrix.operation }}"
+
+      - name: Validate compatible native wheel
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/native_package_release.py validate-wheel \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --dist-dir dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.package }}-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    if: >-
+      github.repository == 'marin-community/marin' &&
+      needs.plan.outputs.publish == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-${{ matrix.package }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Build source distributions
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/native_package_release.py build \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --operation sdist
+
+      - name: Validate release artifacts
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/native_package_release.py verify-release \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --dist-dir dist
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+  bump:
+    needs: [plan, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Generate repository app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.NIGHTSHIFT_APP_ID }}
+          private-key: ${{ secrets.NIGHTSHIFT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Prepare shared update branch
+        id: prepare
+        env:
+          BRANCH: automation/native-package-versions
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          pr_url=$(gh pr list --head "$BRANCH" --base main --state open --json url --jq '.[0].url // ""')
+          if [[ -n "$pr_url" ]]; then
+            git fetch origin "$BRANCH"
+            git switch -C "$BRANCH" "origin/$BRANCH"
+            git rebase origin/main
+            echo "force_push=true" >> "$GITHUB_OUTPUT"
+          else
+            git switch -C "$BRANCH" origin/main
+            set +e
+            git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null
+            branch_status=$?
+            set -e
+            if [[ "$branch_status" == "0" ]]; then
+              git fetch origin "$BRANCH"
+              echo "force_push=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$branch_status" == "2" ]]; then
+              echo "force_push=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Could not inspect origin/$BRANCH"
+              exit "$branch_status"
+            fi
+          fi
+
+      - name: Advance compatibility floors and lock
+        id: bump
+        env:
+          VERSIONS: ${{ needs.plan.outputs.versions }}
+        run: |
+          python scripts/ci/native_package_release.py bump-releases \
+            --versions "$VERSIONS" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Commit and open or update pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: automation/native-package-versions
+          BODY_FILE: .github/native-package-version-pr.md
+          FORCE_PUSH: ${{ steps.prepare.outputs.force_push }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REQUIREMENT_PATHS: ${{ steps.bump.outputs.requirement_paths }}
+          SOURCE_SHA: ${{ github.sha }}
+          TITLE: "[dependencies] Advance native package versions"
+        run: |
+          set -euo pipefail
+          read -ra requirement_paths <<< "$REQUIREMENT_PATHS"
+          changed=$(git diff --name-only | sort)
+          expected=$(printf '%s\n' "${requirement_paths[@]}" uv.lock | sort)
+          if [[ "$changed" != "$expected" ]]; then
+            echo "Unexpected changed files:"
+            echo "$changed"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${requirement_paths[@]}" uv.lock
+          git commit -m "[dependencies] Advance native package versions" \
+            -m "Consume native wheels built from ${SOURCE_SHA}."
+          if [[ "$FORCE_PUSH" == "true" ]]; then
+            git push --force-with-lease origin "HEAD:$BRANCH"
+          else
+            git push origin "HEAD:$BRANCH"
+          fi
+
+          pr_url=$(gh pr list --head "$BRANCH" --base main --state open --json url --jq '.[0].url // ""')
+          if [[ -z "$pr_url" ]]; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label agent-generated \
+              --label dependencies >/dev/null
+            pr_url=$(gh pr view "$BRANCH" --json url --jq .url)
+          else
+            gh pr edit "$pr_url" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --add-label agent-generated \
+              --add-label dependencies >/dev/null
+          fi
+          gh pr merge "$pr_url" --auto --squash
+          echo "Updated $pr_url"
