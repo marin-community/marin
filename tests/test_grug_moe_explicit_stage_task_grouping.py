@@ -23,9 +23,14 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    paired_distinct_mlp_master_router_gradients,
+    paired_full_block_boundary_value_and_grads,
+    paired_full_block_per_microbatch_router_gradients,
     paired_moe_joint_checkpoint_value_and_grads,
     paired_moe_no_checkpoint_value_and_grads,
     paired_moe_per_checkpoint_value_and_grads,
+    single_full_block_boundary_value_and_grads,
+    single_full_block_no_checkpoint_boundary_value_and_grads,
     single_moe_value_and_grads,
     validate_full_task_structure,
     validate_pure_moe_structure,
@@ -678,6 +683,90 @@ def test_paired_moe_checkpoint_boundaries_match_separate_calls(paired_vjp) -> No
         np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
     for actual_route, expected_route in zip(actual[5], expected[5], strict=True):
         np.testing.assert_array_equal(actual_route["selected_experts"], expected_route["selected_experts"])
+
+
+def test_full_block_boundary_diagnostic_matches_ordered_checkpoint_controls() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        ordered = tuple(
+            jax.jit(single_full_block_boundary_value_and_grads)(
+                params,
+                qb_beta,
+                hidden,
+                cotangent,
+            )
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        ordered_no_checkpoint = tuple(
+            jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads)(
+                params,
+                qb_beta,
+                hidden,
+                cotangent,
+            )
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        paired = jax.jit(paired_full_block_boundary_value_and_grads)(
+            params,
+            qb_beta,
+            hiddens,
+            output_cotangents,
+        )
+        per_microbatch_router_gradients = jax.jit(paired_full_block_per_microbatch_router_gradients)(
+            params,
+            qb_beta,
+            hiddens,
+            output_cotangents,
+        )
+        distinct_mlp = jax.jit(paired_distinct_mlp_master_router_gradients)(
+            params,
+            qb_beta,
+            hiddens,
+            output_cotangents,
+        )
+
+    expected = (
+        (ordered[0][0], ordered[1][0]),
+        (ordered[0][1], ordered[1][1]),
+        (ordered[0][2], ordered[1][2]),
+        (ordered[0][3], ordered[1][3]),
+        (ordered[0][4], ordered[1][4]),
+        (ordered[0][5], ordered[1][5]),
+        (ordered[0][6], ordered[1][6]),
+        (ordered[0][7], ordered[1][7]),
+        _sum_microbatch_group((ordered[0][8], ordered[1][8])),
+        (ordered[0][9], ordered[1][9]),
+    )
+    expected_no_checkpoint = (
+        (ordered_no_checkpoint[0][0], ordered_no_checkpoint[1][0]),
+        (ordered_no_checkpoint[0][1], ordered_no_checkpoint[1][1]),
+        (ordered_no_checkpoint[0][2], ordered_no_checkpoint[1][2]),
+        (ordered_no_checkpoint[0][3], ordered_no_checkpoint[1][3]),
+        (ordered_no_checkpoint[0][4], ordered_no_checkpoint[1][4]),
+        (ordered_no_checkpoint[0][5], ordered_no_checkpoint[1][5]),
+        (ordered_no_checkpoint[0][6], ordered_no_checkpoint[1][6]),
+        (ordered_no_checkpoint[0][7], ordered_no_checkpoint[1][7]),
+        _sum_microbatch_group((ordered_no_checkpoint[0][8], ordered_no_checkpoint[1][8])),
+        (ordered_no_checkpoint[0][9], ordered_no_checkpoint[1][9]),
+    )
+    expected_router_gradients = (
+        ordered[0][8].mlp.router,
+        ordered[1][8].mlp.router,
+        ordered[0][8].mlp.router + ordered[1][8].mlp.router,
+    )
+
+    _assert_tree_rel_l2(paired, expected)
+    _assert_tree_rel_l2(expected_no_checkpoint, expected)
+    _assert_tree_rel_l2(per_microbatch_router_gradients, expected_router_gradients)
+    _assert_tree_rel_l2(distinct_mlp[1], expected[5])
+    _assert_tree_rel_l2(distinct_mlp[2], expected[7])
+    _assert_tree_rel_l2(distinct_mlp[3:6], expected_router_gradients)
+    for actual_routes, expected_routes in zip(paired[4], expected[4], strict=True):
+        np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
 
 
 def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, ...]:

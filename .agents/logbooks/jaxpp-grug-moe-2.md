@@ -148,3 +148,18 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The `59/61` routing-count mismatches and near-orthogonal routed-expert gradients make cross-matched collective calls a ranked possibility. The current paired MoE path also differs from the previously passing joined control by enclosing both ring calls in one checkpoint.
 - Next action:
   - On identical prepared MLP inputs, compare the current joint checkpoint with no encompassing checkpoint and one `save_moe` checkpoint per call. Report pre-ring routes, same-index and cross-index post-ring outputs/statistics, routing-count mismatches, and local VJPs before changing ring channels or tuple order.
+
+### 2026-07-26 16:44 PDT - MoE call order and checkpoint scope are not the full-block failure
+- Hypothesis: The target-shape paired block failure comes from cross-matched exact-ring calls or the joint `save_moe` checkpoint around both calls.
+- Commit Hash: `7690addcb0` adds same-index and cross-index reporting for joint-checkpoint, no-checkpoint, and per-call-checkpoint MoE pairs on identical post-attention MLP inputs.
+- Command: Parent `/dlwh/jaxpp-group2-moe-call-order-r6-7690addc-20260726-1644` ran `--diagnostic moe-call-order` from clean commit `7690addcb030059c88d416811742e48b34a017e8`; child `/dlwh/jaxpp-group2-moe-call-order-r6-7690addc-20260726-1644/0`.
+- Results:
+  - No arm passed the complete fixed relative-L2 `0.002` gate, and no arm cross-matched. Same-index selected routes and routing counts were exact in all three arms. Cross-index comparisons differed on all `515,433` assignments, all `131,072` tokens, and all `64` routing-count entries per microbatch.
+  - The no-checkpoint arm was bitwise exact for same-index pre-ring values, MoE outputs, input gradients, losses, and router statistics. The joint and per-call checkpoint arms had only `1.63639e-05` output relative-L2 and `1.49426e-05` combine-weight relative-L2.
+  - Routed expert gradients and input gradients passed in every arm. The sole meaningful same-index failure was the summed `mlp.router` gradient at relative-L2 `0.0057684313`, actual/reference norms `54.265850/54.267025`, norm ratio `0.99997835`, cosine `0.99998340`, absolute-L2 `0.31303561`, and maximum absolute error `0.0078125`.
+  - Iris reached the expected strict assertion after `1m31s`; the parent and child are terminal with no retry or live allocation.
+- Interpretation:
+  - Call swapping and the encompassing checkpoint boundary are ruled out. On identical MLP inputs, forward routing, ring values, routed expert VJPs, statistics, and input VJPs preserve program order.
+  - The router failure is consistent with summing two cotangents into one BF16 compute leaf before promotion. It is independent of the much larger r4/r5 full-block forward divergence, which must occur before or while constructing the paired MoE inputs.
+- Next action:
+  - Compare ordered and paired target-shape full blocks at post-attention residuals, MLP inputs, shared outputs, pre-MoE logits/routes, routed outputs, and final outputs. Include an ordered full-block-checkpoint versus no-checkpoint control and report each microbatch's router gradient separately before testing master-precision summation of two disjoint compute-MLP gradients.

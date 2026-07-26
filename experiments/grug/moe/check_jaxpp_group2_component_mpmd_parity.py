@@ -39,6 +39,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
+from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.moe import train as grug_train
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import (
@@ -80,7 +81,7 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
-_DIAGNOSTICS = ("gate", "moe-call-order")
+_DIAGNOSTICS = ("gate", "moe-call-order", "full-block-boundaries")
 
 
 def event(process_id: int | None, name: str, **fields: Any) -> None:
@@ -264,6 +265,7 @@ def _pre_ring_router_values(mlp: MoEMLP, mlp_input: jax.Array) -> dict[str, jax.
     combine_weights = jax.nn.sigmoid(selected_logits)
     combine_weights *= 2.5 / (jnp.sum(combine_weights, axis=-1, keepdims=True) + 1e-9)
     return {
+        "router_logits": router_logits,
         "selected_experts": selected_experts.astype(jnp.int32),
         "combine_weights": combine_weights.astype(mlp_input.dtype),
         "boundary_margin": (
@@ -399,6 +401,266 @@ def paired_moe_per_checkpoint_value_and_grads(
     )
 
 
+def _single_block_boundaries(
+    block: Block,
+    hidden: jax.Array,
+):
+    post_attention = block.attention_residual(
+        hidden,
+        AttentionMask.causal(),
+        use_pko=False,
+        disable_rope=False,
+    )
+    mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
+    shared_output = (
+        block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+        if block.shared is not None
+        else jnp.zeros_like(mlp_input)
+    )
+    pre_ring = _pre_ring_router_values(block.mlp, mlp_input)
+    routed_output, router_stats = block.mlp(mlp_input)
+    update = routed_output + shared_output if block.shared is not None else routed_output
+    output = post_attention + update
+    return output, (post_attention, mlp_input, shared_output, pre_ring, routed_output, router_stats)
+
+
+def _single_full_block_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    output_cotangent: jax.Array,
+    *,
+    checkpoint: bool,
+):
+    """Run one full block while returning every forward boundary."""
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+
+    def projected_single(master_params: Block, current_hidden: jax.Array):
+        block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
+        if checkpoint:
+            output, boundaries = eqx.filter_checkpoint(_single_block_boundaries, policy=policy)(block, current_hidden)
+        else:
+            output, boundaries = _single_block_boundaries(block, current_hidden)
+        router_stats = boundaries[-1]
+        loss = _project_output(output, output_cotangent)
+        loss += ROUTER_Z_LOSS_SCALE * router_stats["router_z_loss"]
+        return loss, (output, boundaries)
+
+    (loss, (output, boundaries)), (parameter_gradient, input_gradient) = jax.value_and_grad(
+        projected_single,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    post_attention, mlp_input, shared_output, pre_ring, routed_output, router_stats = boundaries
+    return (
+        loss,
+        post_attention,
+        mlp_input,
+        shared_output,
+        pre_ring,
+        routed_output,
+        output,
+        router_stats,
+        parameter_gradient,
+        input_gradient,
+    )
+
+
+def single_full_block_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    output_cotangent: jax.Array,
+):
+    """Run one ordered block under its complete save-MoE checkpoint."""
+    return _single_full_block_boundary_value_and_grads(
+        params,
+        qb_beta,
+        hidden,
+        output_cotangent,
+        checkpoint=True,
+    )
+
+
+def single_full_block_no_checkpoint_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    output_cotangent: jax.Array,
+):
+    """Run one ordered block without a rematerialization boundary."""
+    return _single_full_block_boundary_value_and_grads(
+        params,
+        qb_beta,
+        hidden,
+        output_cotangent,
+        checkpoint=False,
+    )
+
+
+def paired_full_block_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the complete paired block while returning forward boundaries."""
+
+    def projected_pair(master_params: Block, current_hiddens: tuple[jax.Array, jax.Array]):
+        block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
+        post_attention = tuple(
+            block.attention_residual(
+                hidden,
+                AttentionMask.causal(),
+                use_pko=False,
+                disable_rope=False,
+            )
+            for hidden in current_hiddens
+        )
+        mlp_inputs = tuple(block.mlp_gated_norm(block.rms_mlp(hidden)) for hidden in post_attention)
+        shared_outputs = tuple(
+            (
+                block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+                if block.shared is not None
+                else jnp.zeros_like(mlp_input)
+            )
+            for mlp_input in mlp_inputs
+        )
+        pre_ring = tuple(_pre_ring_router_values(block.mlp, mlp_input) for mlp_input in mlp_inputs)
+        routed_outputs, router_stats = paired_moe_component_forward(
+            block.mlp,
+            mlp_inputs,
+            remat_mode="save_moe",
+        )
+        updates = tuple(
+            routed + shared if block.shared is not None else routed
+            for routed, shared in zip(routed_outputs, shared_outputs, strict=True)
+        )
+        outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+        losses = tuple(
+            _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        boundaries = (post_attention, mlp_inputs, shared_outputs, pre_ring, routed_outputs, router_stats)
+        return losses[0] + losses[1], (losses, outputs, boundaries)
+
+    (_, auxiliary), (parameter_gradient, input_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hiddens)
+    losses, outputs, boundaries = auxiliary
+    post_attention, mlp_inputs, shared_outputs, pre_ring, routed_outputs, router_stats = boundaries
+    return (
+        losses,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        input_gradients,
+    )
+
+
+def paired_full_block_per_microbatch_router_gradients(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Pull back each paired loss separately to expose router accumulation order."""
+
+    def loss_pair(master_params: Block, current_hiddens: tuple[jax.Array, jax.Array]):
+        outputs, router_stats = grug_train.paired_compute_block_forward(
+            master_params,
+            qb_beta,
+            current_hiddens,
+            (AttentionMask.causal(), AttentionMask.causal()),
+            _MIXED_PRECISION,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode="save_moe",
+        )
+        return tuple(
+            _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+
+    losses, pullback = jax.vjp(loss_pair, params, hiddens)
+    zero = jnp.zeros_like(losses[0])
+    one = jnp.ones_like(losses[0])
+    first_gradient = pullback((one, zero))[0]
+    second_gradient = pullback((zero, one))[0]
+    return (
+        first_gradient.mlp.router,
+        second_gradient.mlp.router,
+        first_gradient.mlp.router + second_gradient.mlp.router,
+    )
+
+
+def paired_distinct_mlp_master_router_gradients(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Map distinct compute-MLP gradients to master precision before summing."""
+    compute_block, compute_pullback = jax.vjp(
+        lambda master_params: grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION),
+        params,
+    )
+    post_attention = tuple(
+        compute_block.attention_residual(
+            hidden,
+            AttentionMask.causal(),
+            use_pko=False,
+            disable_rope=False,
+        )
+        for hidden in hiddens
+    )
+    mlp_inputs = tuple(compute_block.mlp_gated_norm(compute_block.rms_mlp(hidden)) for hidden in post_attention)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    remat_call = eqx.filter_checkpoint(MoEMLP.__call__, policy=policy)
+
+    def projected_distinct(
+        first_mlp: MoEMLP,
+        second_mlp: MoEMLP,
+        current_inputs: tuple[jax.Array, jax.Array],
+    ):
+        first_output, first_stats = remat_call(first_mlp, current_inputs[0])
+        second_output, second_stats = remat_call(second_mlp, current_inputs[1])
+        losses = (
+            _project_output(first_output, output_cotangents[0]) + ROUTER_Z_LOSS_SCALE * first_stats["router_z_loss"],
+            _project_output(second_output, output_cotangents[1]) + ROUTER_Z_LOSS_SCALE * second_stats["router_z_loss"],
+        )
+        return losses[0] + losses[1], (losses, (first_output, second_output), (first_stats, second_stats))
+
+    (_, auxiliary), (first_compute_gradient, second_compute_gradient, input_gradients) = jax.value_and_grad(
+        projected_distinct,
+        argnums=(0, 1, 2),
+        has_aux=True,
+    )(compute_block.mlp, compute_block.mlp, mlp_inputs)
+
+    zero_compute_gradient = jax.tree.map(jnp.zeros_like, compute_block)
+    first_block_gradient = eqx.tree_at(lambda block: block.mlp, zero_compute_gradient, first_compute_gradient)
+    second_block_gradient = eqx.tree_at(lambda block: block.mlp, zero_compute_gradient, second_compute_gradient)
+    first_master_gradient = compute_pullback(first_block_gradient)[0].mlp.router
+    second_master_gradient = compute_pullback(second_block_gradient)[0].mlp.router
+    losses, outputs, router_stats = auxiliary
+    return (
+        losses,
+        outputs,
+        router_stats,
+        first_master_gradient,
+        second_master_gradient,
+        first_master_gradient + second_master_gradient,
+        input_gradients,
+    )
+
+
 def _compile_and_run(process_id: int, name: str, function, arguments):
     lower_start = time.monotonic()
     event(process_id, f"{name}_lower_start")
@@ -524,6 +786,21 @@ def _combine_single_moe_results(first, second):
     )
 
 
+def _combine_single_full_block_results(first, second):
+    return (
+        (first[0], second[0]),
+        (first[1], second[1]),
+        (first[2], second[2]),
+        (first[3], second[3]),
+        (first[4], second[4]),
+        (first[5], second[5]),
+        (first[6], second[6]),
+        (first[7], second[7]),
+        grug_train._sum_microbatch_group((first[8], second[8])),
+        (first[9], second[9]),
+    )
+
+
 def _tree_parity(actual, reference, *, root: str) -> dict[str, Any]:
     zero = jnp.asarray(0.0, dtype=jnp.float32)
     return build_parity_report(
@@ -555,6 +832,132 @@ def _routing_count_mismatches(actual_stats, reference_stats) -> tuple[int, int]:
         for actual, reference in zip(actual_stats, reference_stats, strict=True)
     )
     return tuple(int(value) for value in jax.device_get(mismatches))
+
+
+def _pre_ring_numeric(values):
+    return tuple(
+        {
+            "router_logits": value["router_logits"],
+            "combine_weights": value["combine_weights"],
+            "boundary_margin": value["boundary_margin"],
+        }
+        for value in values
+    )
+
+
+def _report_full_block_boundaries(
+    process_id: int,
+    event_name: str,
+    actual,
+    reference,
+) -> bool:
+    loss_report = tuple(
+        build_value_parity(actual_loss, reference_loss, tolerance=DEFAULT_TOLERANCE)
+        for actual_loss, reference_loss in zip(actual[0], reference[0], strict=True)
+    )
+    reports = {
+        "post_attention": _tree_parity(actual[1], reference[1], root="post_attention"),
+        "mlp_inputs": _tree_parity(actual[2], reference[2], root="mlp_inputs"),
+        "shared_outputs": _tree_parity(actual[3], reference[3], root="shared_outputs"),
+        "pre_moe": _tree_parity(_pre_ring_numeric(actual[4]), _pre_ring_numeric(reference[4]), root="pre_moe"),
+        "moe_outputs": _tree_parity(actual[5], reference[5], root="moe_outputs"),
+        "block_outputs": _tree_parity(actual[6], reference[6], root="block_outputs"),
+        "router_stats": _tree_parity(actual[7], reference[7], root="router_stats"),
+        "parameter_gradients": _tree_parity(actual[8], reference[8], root="parameter_gradients"),
+        "input_gradients": _tree_parity(actual[9], reference[9], root="input_gradients"),
+    }
+    route_mismatches = _route_mismatch_counts(actual[4], reference[4])
+    routing_count_mismatches = _routing_count_mismatches(actual[7], reference[7])
+    forward_checks = (
+        ("post_attention", reports["post_attention"]["passed"]),
+        ("mlp_inputs", reports["mlp_inputs"]["passed"]),
+        ("shared_outputs", reports["shared_outputs"]["passed"]),
+        ("pre_moe_values", reports["pre_moe"]["passed"]),
+        ("pre_moe_routes", not any(route_mismatches["assignments"])),
+        ("moe_outputs", reports["moe_outputs"]["passed"]),
+        ("router_stats", reports["router_stats"]["passed"] and not any(routing_count_mismatches)),
+        ("block_outputs", reports["block_outputs"]["passed"]),
+    )
+    first_divergent_boundary = next((name for name, passed in forward_checks if not passed), None)
+    passed = (
+        all(loss.passed for loss in loss_report)
+        and all(report["passed"] for report in reports.values())
+        and not any(route_mismatches["assignments"])
+        and not any(routing_count_mismatches)
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            event_name,
+            tolerance=DEFAULT_TOLERANCE,
+            loss=[dataclasses.asdict(loss) for loss in loss_report],
+            reports=reports,
+            route_mismatches=route_mismatches,
+            routing_count_mismatches=routing_count_mismatches,
+            first_divergent_boundary=first_divergent_boundary,
+            passed=passed,
+        )
+    return passed
+
+
+def _report_router_gradient_controls(
+    process_id: int,
+    paired_router_gradients,
+    distinct_mlp_result,
+    reference_single_results,
+) -> bool:
+    first_reference, second_reference = reference_single_results
+    reference_router_gradients = (
+        first_reference[8].mlp.router,
+        second_reference[8].mlp.router,
+    )
+    reference_sum = reference_router_gradients[0] + reference_router_gradients[1]
+    paired_reports = (
+        _tree_parity(paired_router_gradients[0], reference_router_gradients[0], root="paired_router_gradient_0"),
+        _tree_parity(paired_router_gradients[1], reference_router_gradients[1], root="paired_router_gradient_1"),
+    )
+    paired_sum_report = _tree_parity(paired_router_gradients[2], reference_sum, root="paired_router_gradient_sum")
+    distinct_reports = (
+        _tree_parity(distinct_mlp_result[3], reference_router_gradients[0], root="distinct_router_gradient_0"),
+        _tree_parity(distinct_mlp_result[4], reference_router_gradients[1], root="distinct_router_gradient_1"),
+    )
+    distinct_sum_report = _tree_parity(distinct_mlp_result[5], reference_sum, root="distinct_router_gradient_sum")
+    reference_mlp_outputs = (first_reference[5], second_reference[5])
+    reference_router_stats = (first_reference[7], second_reference[7])
+    distinct_output_report = _tree_parity(distinct_mlp_result[1], reference_mlp_outputs, root="distinct_mlp_outputs")
+    distinct_stats_report = _tree_parity(
+        distinct_mlp_result[2],
+        reference_router_stats,
+        root="distinct_mlp_router_stats",
+    )
+    distinct_routing_count_mismatches = _routing_count_mismatches(
+        distinct_mlp_result[2],
+        reference_router_stats,
+    )
+    passed = (
+        all(report["passed"] for report in paired_reports)
+        and paired_sum_report["passed"]
+        and all(report["passed"] for report in distinct_reports)
+        and distinct_sum_report["passed"]
+        and distinct_output_report["passed"]
+        and distinct_stats_report["passed"]
+        and not any(distinct_routing_count_mismatches)
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "full_block_router_gradient_controls",
+            tolerance=DEFAULT_TOLERANCE,
+            paired_per_microbatch_reports=paired_reports,
+            paired_program_order_sum_report=paired_sum_report,
+            distinct_mlp_per_microbatch_reports=distinct_reports,
+            distinct_mlp_master_precision_sum_report=distinct_sum_report,
+            distinct_mlp_output_report=distinct_output_report,
+            distinct_mlp_stats_report=distinct_stats_report,
+            distinct_mlp_routing_count_mismatches=distinct_routing_count_mismatches,
+            passed=passed,
+        )
+    return passed
 
 
 def _report_moe_call_order_arm(
@@ -792,6 +1195,87 @@ def _run_moe_call_order_diagnostic(
     return results["no_checkpoint"] or results["per_call_checkpoint"]
 
 
+def _run_full_block_boundary_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_checkpoint = jax.jit(single_full_block_boundary_value_and_grads)
+    checkpoint_references = tuple(
+        _compile_and_run(
+            process_id,
+            f"full_block_ordered_checkpoint_{index}",
+            ordered_checkpoint,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    checkpoint_reference = _combine_single_full_block_results(*checkpoint_references)
+
+    ordered_no_checkpoint = jax.jit(single_full_block_no_checkpoint_boundary_value_and_grads)
+    no_checkpoint_references = tuple(
+        _compile_and_run(
+            process_id,
+            f"full_block_ordered_no_checkpoint_{index}",
+            ordered_no_checkpoint,
+            (params, qb_beta, hidden, cotangent),
+        )
+        for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+    )
+    no_checkpoint_reference = _combine_single_full_block_results(*no_checkpoint_references)
+    checkpoint_control_passed = _report_full_block_boundaries(
+        process_id,
+        "ordered_checkpoint_vs_no_checkpoint_report",
+        checkpoint_reference,
+        no_checkpoint_reference,
+    )
+
+    paired_result = _compile_and_run(
+        process_id,
+        "full_block_paired",
+        jax.jit(paired_full_block_boundary_value_and_grads),
+        (params, qb_beta, hiddens, cotangents),
+    )
+    paired_passed = _report_full_block_boundaries(
+        process_id,
+        "full_block_paired_vs_ordered_report",
+        paired_result,
+        checkpoint_reference,
+    )
+
+    paired_router_gradients = _compile_and_run(
+        process_id,
+        "full_block_paired_per_microbatch_router_gradients",
+        jax.jit(paired_full_block_per_microbatch_router_gradients),
+        (params, qb_beta, hiddens, cotangents),
+    )
+    distinct_mlp_result = _compile_and_run(
+        process_id,
+        "full_block_distinct_mlp_router_gradients",
+        jax.jit(paired_distinct_mlp_master_router_gradients),
+        (params, qb_beta, hiddens, cotangents),
+    )
+    router_controls_passed = _report_router_gradient_controls(
+        process_id,
+        paired_router_gradients,
+        distinct_mlp_result,
+        checkpoint_references,
+    )
+    passed = checkpoint_control_passed and paired_passed and router_controls_passed
+    if process_id == 0:
+        event(
+            process_id,
+            "full_block_boundary_summary",
+            ordered_checkpoint_vs_no_checkpoint_passed=checkpoint_control_passed,
+            paired_vs_ordered_passed=paired_passed,
+            router_gradient_controls_passed=router_controls_passed,
+            passed=passed,
+        )
+    return passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -863,6 +1347,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_moe_call_order_complete")
             if not passed:
                 raise AssertionError("no paired MoE checkpoint formulation passed the fixed tolerance")
+            completed = True
+            return
+
+        if diagnostic == "full-block-boundaries":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_full_block_boundary_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_full_block_boundaries_complete")
+            if not passed:
+                raise AssertionError("full-block boundary parity exceeded the fixed per-leaf tolerance")
             completed = True
             return
 
