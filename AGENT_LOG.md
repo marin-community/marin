@@ -97,6 +97,27 @@ Jobs (all mine, `submit_d5.sh`):
   fall back to 4-of-128. Offload would make the number non-comparable to d1's 22.66% d5120 control
   and will be labeled if used.
 
+## Check-in 4 — spill transfers to top-4 unchanged, and the drop model validates against d1's live spill
+
+Re-ran the routing model through the SHIPPING `_assign_with_spill` kernel (not a re-implementation),
+same calibrated burstiness, capacity = bucket mean at cf1.0:
+
+| shape | capacity | m=0 | m=1 | m=2 | m=3 |
+|---|---|---|---|---|---|
+| d5120 proxy 256/top-8 | 2048 | 7.29% | 4.62% (-37%) | 3.44% (-53%) | 2.73% (-62%) |
+| cand A d6144 256/top-4 | 1024 | 7.52% | 4.81% (-36%) | 3.58% (-52%) | 2.88% (-62%) |
+| cand B d6144 128/top-4 | 2048 | 7.10% | 4.29% (-40%) | 3.11% (-56%) | 2.55% (-64%) |
+
+Two things fall out.
+1. INDEPENDENT VALIDATION of the model: d1's LIVE spill m=2 leg measured a 3.7% tail against a 7.3%
+   no-spill tail at the proxy shape. The model, calibrated only on the no-spill number, predicts
+   3.44% at m=2. Within 0.3pp on a quantity it was not fitted to. That materially raises my confidence
+   in the between-shape comparison above.
+2. Spill's reclaim RATE is shape-invariant (-36/-52/-62% at cand A vs -37/-53/-62% at the proxy). So
+   the compliant-config story does not change at top-4: m=3 is the setting that reaches the 3% bar,
+   landing ~2.9% at cand A and ~2.6% at cand B, exactly as it does on the proxy. Whatever MFU price
+   d1 measures for spill (m=2 cost -0.13pp) is the price at the hero shape too.
+
 Confidence: 7/10 the baseline completes; 4/10 that MXFP8 flips positive at i3072 (d2's -2.83pp was
 attributed to quantize/layout producer overhead that scales with tokens, not with GEMM width, so
 fatter GEMMs help the numerator but do not obviously remove the overhead).
