@@ -175,7 +175,51 @@ it:
 
 fa4-lse (+0.18pp, section 3) is below the bar and does not count toward the bridge.
 
-## 6. Reproduction
+## 6. Same-step spill, and what it implies about the cost of fidelity
+
+An assignment whose expert bucket is full is dropped and contributes nothing. Spill re-offers it,
+within the same step, to the next-ranked expert the same token selected, taking only that bucket's
+remaining headroom. `SCALE_A2A_SPILL=m` runs m such attempts. Bucket layout and capacity are
+unchanged. Because spill is expressed purely as a rewrite of the `(linear_indices, keep)` pair that
+the dispatch already builds, and both custom-adjoint VJPs are generic in exactly that pair, it
+required no adjoint changes; gradients still match autodiff at 1e-5 with spill on.
+
+350-step legs, QB on, cf1.0, one operating point, all from the same allocation draw, drops as a
+true 100-step tail:
+
+| m | p50 MFU | drop fraction (tail-100) | loss @349 |
+|--:|--:|--:|--:|
+| 0 | 22.062 | 0.0710 | 3.336 |
+| 2 | 21.872 | 0.0414 | 3.323 |
+| 3 | 21.849 | 0.0366 | 3.320 |
+
+Spill halves the residual drop fraction for 0.213pp of MFU, and loss improves at every m rather
+than degrading. The loss result is the one to weigh: a spilled assignment computes `w_k * E_j(x)`
+for an expert the router itself ranked for that token, instead of contributing zero, so the
+substitution is strictly closer to the intended MoE output than dropping. It does not reach a 3%
+bar at cf1.0 (m=3 leaves 3.66%), and the drop-recovery mechanism is bounded by top-k: an assignment
+can only be re-offered to experts the token already selected, so `m_max = topk - 1`.
+
+**Why this was cheap, and what that predicts.** The step is collective-volume-bound: exposed
+collective time almost exactly fills compute idle, so the remaining speed lever is reducing
+collective bytes. Spill adds no collective bytes and no matmul work — the expert GEMMs run on
+capacity-sized buffers whether or not a slot is filled — it adds one segment-rank over the
+assignment indices per attempt. It is therefore cheap by construction, not by luck. The general
+form is worth stating, because it ranks work that has not been tried yet: on this stack, a
+mechanism that spends index or compute work to buy fidelity is close to free, while a mechanism
+that adds bytes to the collectives is expensive no matter how well implemented. Spill's 0.213pp and
+the collective-bound ceiling are the two measurements behind that claim.
+
+A note on the numbers above. Three of them moved during the work, each time against the result's
+favour: a steady-state estimate taken from a truncated log window read 10% low until refetched as a
+true 100-step tail; a routing model that predicted spill's benefit proved 1.36-1.54x optimistic
+against live measurement; and the MFU cost was first measured against another run's baseline and
+rose from 0.153pp to 0.213pp once measured against its own allocation draw. The qualitative result
+survived all three. On the last of these: the cross-draw comparison happened to be nearly right, and
+was still not safe to rely on — draw variance was 0.060pp where the effect was 0.2pp, which is the
+regime in which being nearly right is indistinguishable from being lucky.
+
+## 7. Reproduction
 
 - Branch `agent/ep25-d1-adjoint`, based on `rav/ep-2` @ `fe21ea495` ("Reproduce 17% EP64 MFU on
   GB200"). No pushes have happened; landing the adjoint and the drop metric needs a PR from this
@@ -188,6 +232,14 @@ fa4-lse (+0.18pp, section 3) is below the bar and does not count toward the brid
 - Jobs: speed A/B `ep25d1-adj-control-120-0724-1707` (autodiff) and `ep25d1-adj-custom-120-0724-2216`
   (custom adjoint); drops `ep25d1-drops-30-0724-2318` (QB off) and `ep25d1-qbon-drops-30-0725-0027`
   (QB on); leg-batching `rav/ep64-batched-expert-stability-120-v1-20260724-2353`.
+- Spill (section 6): `SCALE_A2A_SPILL=m`, commit `1224ccb02`; 350-step legs
+  `ep25d1-qbon-cf115-350-0726-0313` (m=0, same draw), `ep25d1-spill2-cf100-350-0726-0028` (m=2),
+  `ep25d1-spill3-cf100-350-0726-0149` (m=3). Capacity factor knob `SCALE_CAPACITY_FACTOR`,
+  commit `595958b83` (agent d4 added an independent implementation of the same knob under the same
+  name in `3e149490f`; reconcile rather than double-apply when merging).
+- Steady-state figures are 100-step tails. `iris job logs` truncates to the most recent 1000 lines
+  unless `--max-lines` is passed, which biases any statistic over a still-trending metric; see
+  `lib/iris/OPS.md`.
 - Fidelity frontier and gain probe (d4): 350-step steady state
   `ep25d4-qb-cf100-drops-350-v1`; QB gain g=2 `ep25d4-qbgain2-cf100-350-v1` (`SCALE_QB_GAIN`, commit
   `58c9a19eb`).
