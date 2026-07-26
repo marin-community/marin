@@ -452,6 +452,15 @@ def _initialize_hybridep_transport(config: GrugRunConfig) -> None:
         tokens_per_rank=tokens_per_rank,
         local_experts=max_receiver_segments,
     )
+    if rank == 0:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+        logger.info(
+            "HybridEP initialized before XLA: torch_allocated=%d torch_reserved=%d cuda_free=%d cuda_total=%d",
+            torch.cuda.memory_allocated(device_index),
+            torch.cuda.memory_reserved(device_index),
+            free_bytes,
+            total_bytes,
+        )
     atexit.register(shutdown_hybridep_runtime)
 
 

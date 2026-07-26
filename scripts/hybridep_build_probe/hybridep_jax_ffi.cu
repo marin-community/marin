@@ -3,6 +3,7 @@
 
 #include <Python.h>
 
+#include <cstdio>
 #include <cstdint>
 #include <cmath>
 #include <memory>
@@ -11,6 +12,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <vector>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -49,6 +51,11 @@ std::unordered_map<int32_t, HandleImpl>& Handles() {
 int32_t& NextHandleId() {
   static int32_t handle_id = 1;
   return handle_id;
+}
+
+size_t& MaxActiveHandles() {
+  static size_t max_active_handles = 0;
+  return max_active_handles;
 }
 
 std::string& LastError() {
@@ -116,6 +123,34 @@ at::Tensor TensorFromFloat(void* data, int64_t rows, int64_t columns) {
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 }
 
+void ReserveMetadataAllocatorHeadroom(
+    const HybridEpConfigInstance& config,
+    int64_t tokens_per_rank) {
+  constexpr int kReservationSlots = 3;
+  const int64_t total_ranks =
+      static_cast<int64_t>(config.num_of_ranks_per_node) *
+      config.num_of_nodes;
+  const auto device = torch::TensorOptions().device(torch::kCUDA);
+
+  // DeepEP constructs these fixed-shape metadata tensors inside the FFI call.
+  // Reserve matching PyTorch caching-allocator blocks before JAX initializes so
+  // XLA cannot claim the memory and leave the first dispatch unable to allocate.
+  // The tensors themselves die here; their blocks remain reusable by PyTorch.
+  std::vector<at::Tensor> metadata_reservations;
+  metadata_reservations.reserve(3 * kReservationSlots);
+  for (int slot = 0; slot < kReservationSlots; ++slot) {
+    metadata_reservations.push_back(torch::empty(
+        {tokens_per_rank * config.num_of_nodes, config.num_of_ranks_per_node},
+        device.dtype(torch::kInt32)));
+    metadata_reservations.push_back(torch::empty(
+        {tokens_per_rank * total_ranks, config.num_of_experts_per_rank},
+        device.dtype(torch::kBool)));
+    metadata_reservations.push_back(torch::empty(
+        {tokens_per_rank * total_ranks, config.num_of_experts_per_rank},
+        device.dtype(torch::kInt32)));
+  }
+}
+
 ffi::Error HybridEPDispatch(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> hidden,
@@ -132,7 +167,6 @@ ffi::Error HybridEPDispatch(
           ffi::ErrorCode::kFailedPrecondition,
           "HybridEP JAX runtime is not initialized");
     }
-
     const auto hidden_dims = hidden.dimensions();
     const auto routing_dims = routing_map.dimensions();
     const auto probability_dims = probabilities.dimensions();
@@ -234,6 +268,14 @@ ffi::Error HybridEPDispatch(
     }
 
     Handles().emplace(handle_id, std::move(handle));
+    if (Handles().size() > MaxActiveHandles()) {
+      MaxActiveHandles() = Handles().size();
+      std::fprintf(
+          stderr,
+          "HybridEP JAX peak active dispatch handles: %zu\n",
+          MaxActiveHandles());
+      std::fflush(stderr);
+    }
     return ffi::Error::Success();
   } catch (const std::exception& error) {
     return ffi::Error::Internal(std::string("HybridEP dispatch: ") + error.what());
@@ -480,6 +522,8 @@ extern "C" int levanter_hybridep_init(
     RuntimeConfig() = config;
     Handles().clear();
     NextHandleId() = 1;
+    MaxActiveHandles() = 0;
+    ReserveMetadataAllocatorHeadroom(config, tokens);
     LastError().clear();
     return 0;
   } catch (const std::exception& error) {
@@ -495,6 +539,7 @@ extern "C" void levanter_hybridep_shutdown() {
   Runtime().reset();
   Handles().clear();
   NextHandleId() = 1;
+  MaxActiveHandles() = 0;
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(

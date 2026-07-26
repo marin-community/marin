@@ -206,7 +206,7 @@ def main() -> None:
         tokens=tokens,
         experts=num_experts,
     )
-    _trace("HybridEP runtime initialized")
+    _trace(f"HybridEP runtime initialized torch_reserved_bytes={torch.cuda.memory_reserved()}")
 
     token_indices = np.arange(tokens, dtype=np.int64)[:, None]
     topk_indices = np.arange(topk, dtype=np.int64)[None, :]
