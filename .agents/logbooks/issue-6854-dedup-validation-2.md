@@ -16,6 +16,43 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T17:34:20Z — 165,604 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1732-v480` independently
+  revalidated eight checkpoints: p1 decision-file 38 semantic offsets 4,736,
+  4,864, and 4,992, and p3 decision-file 103 semantic offsets 640 through
+  1,152. Their 1,024 pairs contain 759 false positives, 265 true duplicates,
+  and no unresolved outcomes. Six pairs were chunked and 1,018 were direct.
+  All 2,343 judgments were valid on their first request attempt.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p1:
+    `c32bc4df146c060bf4a143036ed2ccc3e291ec107ba130ebfb3e76435cf333ad`,
+    `84bd6775b5ed735c7f4deb17111b08e6c7708bd0e8e9525f060e22980d661dbe`,
+    and
+    `b67b3370e3b83a54084a9151352ba85606482b4d9c47013c3279b6174d2bad8b`;
+  - p3:
+    `667252c724175fcb5893bd5d86127cbd562ee27fa850f8b6082f6fe07a7a241f`,
+    `0dca6f60088fd1311f105bd5b28f3d596e1b04020b4dc5f00d2e45fe78e2f2fb`,
+    `136edc3b6d93ce5b622d29d9a04978b6fb79e938b938348dc269545409c9247f`,
+    `36423ffb9e9c1f4e8a86b7c65b8fbf3d9ab612a7df6984fd1ec33a951f9f4b6a`,
+    and
+    `f7182d84d6752bfbaefce4e20072e8b41991bc5065d4947725cf21e4361987b2`.
+
+- Across the stable 1,303-checkpoint snapshot, all 182 unresolved model
+  outcomes remain covered by 143 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 133,177 pairs, 84,713 false positives, 48,464 true duplicates;
+  - treatment: 32,427 pairs, 16,837 false positives, 15,590 true duplicates;
+  - combined: 165,604 pairs, 101,550 false positives, 64,054 true duplicates.
+
+- The next audit frontiers are p0 `(7, 128)`, p1 `(38, 5,120)`,
+  p2 `(71, 0)`, and p3 `(103, 1,280)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T17:32:00Z — 164,580 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1728-v476` independently
