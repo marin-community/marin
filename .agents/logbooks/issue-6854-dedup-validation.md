@@ -1483,6 +1483,41 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T00:52:01Z — 72,918 pairs verified
+
+- Nine additional checkpoints passed independent validation: 1,152 pairs,
+  825 false positives and 327 true duplicates, with no unresolved outcomes.
+  All 3,339 judgments were valid on the first attempt. Thirteen pairs were
+  chunked and 1,139 were direct.
+- This block contains 687 baseline pairs (499 false positives and 188 true
+  duplicates) and 465 treatment pairs (326 false positives and 139 true
+  duplicates).
+- The nine outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 4736, 4864, and 4992:
+    `f7bfb08124ea3b2888f440771d4bf7ca6012897dd370f872a2f8343ac298f65a`,
+    `cbfcc24ea86d0c58f3d2ee863a720917ea2f294192691c6c540572f93f5f4d78`,
+    and
+    `b3cd4e19c9b30c835c165a1ddba83aec80f17abf589cf84dcaa5da87484b96be`;
+  - p2 decision-file 66 offset 4608:
+    `a1f21b81fd8125ed1d5ac586441bb3cb938a4115970ea784523c3d4920eae343`;
+  - p3 decision-file 99 offsets 3328 through 3840:
+    `446babf3985115a75f40deb179b6df7d4b7128a5ce8704c4e6baa9b666beb1a7`,
+    `722962725c1fc9f7f1708821e1fc30efaa8f20b88b0b29729ec4ef7223629ca1`,
+    `6b3ad2040178978a915c25ba07d0c93a7b42752cda980ab8f12753c68c4b77ef`,
+    `031d157e31f10efe083f56a14d84546c437a03a9a59cf155cf814b645e38b1af`,
+    and
+    `739ff7f4356a6c57672f19c33f8012ce907262a4618c7d36b18cafa11bc57b0e`.
+
+- Across the stable 572-checkpoint snapshot, all 71 manual records leave:
+
+  - baseline: 60,407 pairs, 38,326 false positives, 22,081 true duplicates;
+  - treatment: 12,511 pairs, 6,608 false positives, 5,903 true duplicates;
+  - combined: 72,918 pairs, 44,934 false positives, 27,984 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:49:00Z — 71,766 pairs verified
 
 - Ten additional checkpoints passed independent validation: 1,280 pairs,
