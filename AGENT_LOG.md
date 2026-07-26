@@ -205,3 +205,24 @@ Next: babysit arm 3 via poller; arm-1 log polls; arm-1 rerun decision at ~01:45.
 
 Confidence: 4/10 g=0.5, 1/10 g0.001, 1.5/10 g0.01
 Next: arm-3 completion ~01:45 -> arm-1 rerun decision; keep polling logs.
+
+## Check-in 2026-07-26 01:55 UTC — arm 3 COMPLETE (negative); arm 1 rerun fired
+
+- ARM 3 FINAL (gamma=0.01, /mwittmann/ep25d3-qbint01-cf100-350-v1-20260726, succeeded
+  01:47): 0.912(30) 0.741(70) 0.619(136) 0.538(214) 0.482(291) 0.461(342). Decline rate
+  decayed -0.0043 -> -0.0008/step; final plateau ~0.46. Loss @342 3.472 (baseline
+  3.335@349). tok/s 352-355K = drop-inflated. VERDICT: clean negative — 10x gamma buys
+  only a 0.60 -> 0.46 plateau shift; the rule cannot service the early collapse.
+- Integral-family synthesis (arms 2+3): fixed-sign updates always lag the first-5-steps
+  collapse (peak 0.89-0.91 in every draw incl. g=1); drops-per-bias-travel is strongly
+  sublinear (0.60 at travel 0.35; 0.46 at travel 3.4); and the stock rule's advantage is
+  precisely its proportionality (correction size tracks imbalance). At NO gamma does the
+  integral rule approach 3% on a 350-step horizon. This closes the integral direction.
+- ARM 1 RERUN (v2) SUBMITTED 01:50: /mwittmann/ep25d3-qbg05-cf100-350-v2-20260726 —
+  identical g=0.5 config; telltale poller will attach at child-task registration so the
+  measurement is pipeline-independent. v1's metrics remain hostage to the 5.5h GB200
+  log-shipping outage (0 child rows; peers' evening jobs dark too).
+- Mutations: submissions only.
+
+Confidence: 4/10 g=0.5, 1/10 both integral arms (measured)
+Next: attach poller to arm-1 v2; babysit to ~03:30; assemble final verdict.
