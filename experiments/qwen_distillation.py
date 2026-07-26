@@ -72,7 +72,9 @@ SMOKE_STEPS = 12
 SCREEN_SEEDS = (0, 1)
 FULL_DATA_VERSION = "2026.07.26.2"
 SMOKE_DATA_VERSION = "2026.07.26.4"
+EXTENDED_DATA_VERSION = "2026.07.26.11"
 SMOKE_DATA_DOCUMENTS = 1_000
+EXTENDED_DATA_DOCUMENTS_PER_SHARD = 15_000
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
@@ -80,6 +82,13 @@ SAMPLE_0P1B = ArtifactStep.adopt(
     "qwen-distillation/raw/datakit-0p1b",
     "2026.07.26",
     "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7",
+    kind=Artifact,
+)
+
+SAMPLE_100B = ArtifactStep.adopt(
+    "qwen-distillation/raw/datakit-100b",
+    "2026.07.26",
+    "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f",
     kind=Artifact,
 )
 
@@ -178,12 +187,27 @@ def _mesh() -> MeshConfig:
     )
 
 
-def qwen_datakit_cache(*, smoke: bool = False) -> ArtifactStep[TokenizedCache]:
-    name = "qwen-distillation/data/datakit-0p1b-qwen3-smoke" if smoke else "qwen-distillation/data/datakit-0p1b-qwen3"
-    version = SMOKE_DATA_VERSION if smoke else FULL_DATA_VERSION
+def qwen_datakit_cache(*, smoke: bool = False, extended: bool = False) -> ArtifactStep[TokenizedCache]:
+    if smoke and extended:
+        raise ValueError("A tokenizer cache cannot be both smoke and extended")
+    if smoke:
+        name = "qwen-distillation/data/datakit-0p1b-qwen3-smoke"
+        version = SMOKE_DATA_VERSION
+        raw_data = SAMPLE_0P1B
+        sample_count = SMOKE_DATA_DOCUMENTS
+    elif extended:
+        name = "qwen-distillation/data/datakit-100b-qwen3"
+        version = EXTENDED_DATA_VERSION
+        raw_data = SAMPLE_100B
+        sample_count = EXTENDED_DATA_DOCUMENTS_PER_SHARD
+    else:
+        name = "qwen-distillation/data/datakit-0p1b-qwen3"
+        version = FULL_DATA_VERSION
+        raw_data = SAMPLE_0P1B
+        sample_count = None
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
-        root = ctx.artifact_path(SAMPLE_0P1B)
+        root = ctx.artifact_path(raw_data)
         return TokenizeConfig(
             train_paths=[f"{root}/{source}/**/*.parquet" for source in _TRAIN_SOURCES],
             validation_paths=[f"{root}/{_VALIDATION_SOURCE}/**/*.parquet"],
@@ -191,7 +215,7 @@ def qwen_datakit_cache(*, smoke: bool = False) -> ArtifactStep[TokenizedCache]:
             tokenizer=ctx.artifact_path(qwen3_0_6b_base),
             tokenizer_backend=TokenizerBackend.HF,
             format=TextLmDatasetFormat(text_key="text"),
-            sample_count=SMOKE_DATA_DOCUMENTS if smoke else None,
+            sample_count=sample_count,
             max_workers=256,
             worker_resources=ResourceConfig.with_cpu(cpu=2, ram="12g", disk="16g"),
             tags=["datakit", "qwen-distillation"],
@@ -203,7 +227,7 @@ def qwen_datakit_cache(*, smoke: bool = False) -> ArtifactStep[TokenizedCache]:
         artifact_type=TokenizedCache,
         run=remote(tokenize, resources=TOKENIZE_RESOURCES),
         build_config=build_config,
-        deps=(SAMPLE_0P1B, qwen3_0_6b_base),
+        deps=(raw_data, qwen3_0_6b_base),
     )
 
 
@@ -347,6 +371,8 @@ def training_step(
 def build(stage: str) -> list[ArtifactStep]:
     if stage == "data":
         return [qwen_datakit_cache()]
+    if stage == "data-extended":
+        return [qwen_datakit_cache(extended=True)]
     if stage == "smoke":
         data = qwen_datakit_cache(smoke=True)
         return [
@@ -383,7 +409,7 @@ def build(stage: str) -> list[ArtifactStep]:
 @click.command()
 @click.option(
     "--stage",
-    type=click.Choice(["data", "smoke", "screen", "screen-retry", "screen-ce-retry"]),
+    type=click.Choice(["data", "data-extended", "smoke", "screen", "screen-retry", "screen-ce-retry"]),
     required=True,
 )
 @build_options
