@@ -10,6 +10,7 @@ global microbatch is 32 examples, matching the target L24 run, so each H100
 owns four examples.
 """
 
+import argparse
 import dataclasses
 import faulthandler
 import json
@@ -23,9 +24,10 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import train as grug_train
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import (
@@ -34,7 +36,14 @@ from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import (
     build_value_parity,
 )
 from experiments.grug.moe.heuristic import MoeHeuristic
-from experiments.grug.moe.model import GrugModelConfig, Transformer, TransformerPipelineStage
+from experiments.grug.moe.model import (
+    Block,
+    GrugModelConfig,
+    RematMode,
+    Transformer,
+    TransformerPipelineStage,
+    _run_grouped_block_with_remat,
+)
 
 SOURCE_LINEAGE = "cb39dc4c7c"
 HIDDEN_DIM = 2560
@@ -56,6 +65,7 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
+_DIAGNOSTIC_MODES = ("full", "moe-pair")
 
 
 def _event(event: str, **fields: Any) -> None:
@@ -172,6 +182,296 @@ def ordered_last_stage_loss_and_grads(
     )
 
 
+def _project_output(output: jax.Array, cotangent: jax.Array) -> jax.Array:
+    return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+
+def _selected_experts_and_margin(block: Block, mlp_input: jax.Array) -> tuple[jax.Array, jax.Array]:
+    flat_input = jnp.reshape(mlp_input, (-1, mlp_input.shape[-1]))
+    router_logits = jnp.einsum(
+        "td,de->te",
+        flat_input,
+        reshard(block.mlp.router, P(None, None)),
+    ).astype(jnp.float32)
+    router_logits = reshard(router_logits, P(_BATCH_AXES, None))
+    biased_logits = router_logits + jax.lax.stop_gradient(reshard(block.mlp.router_bias, P(None)))
+    topk_logits, selected_experts = jax.lax.top_k(biased_logits, block.mlp.cfg.num_experts_per_token + 1)
+    top_k = block.mlp.cfg.num_experts_per_token
+    boundary_margin = topk_logits[:, top_k - 1] - topk_logits[:, top_k]
+    return selected_experts[:, :top_k], boundary_margin
+
+
+def ordered_moe_preparation_and_routes(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+):
+    """Prepare and route each microbatch independently."""
+    mlp_inputs = tuple(block.mlp_gated_norm(block.rms_mlp(hidden)) for hidden in hiddens)
+    routes = tuple(_selected_experts_and_margin(block, mlp_input) for mlp_input in mlp_inputs)
+    return mlp_inputs, tuple(route[0] for route in routes), tuple(route[1] for route in routes)
+
+
+def grouped_moe_preparation_and_routes(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+):
+    """Prepare the interleaved pair together and inspect its routes."""
+    packed_hidden = grug_train._pack_microbatch_pair(hiddens, name="MoE hidden")
+    packed_mlp_input = block.mlp_gated_norm(block.rms_mlp(packed_hidden))
+    mlp_inputs = grug_train._unpack_microbatch_pair(packed_mlp_input)
+    routes = tuple(_selected_experts_and_margin(block, mlp_input) for mlp_input in mlp_inputs)
+    return mlp_inputs, tuple(route[0] for route in routes), tuple(route[1] for route in routes)
+
+
+def joined_moe_pair_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate two learned-router MoE calls in one reverse pass."""
+
+    def projected_pair(current_block, current_hiddens):
+        outputs = []
+        router_stats = []
+        loss = jnp.asarray(0.0, dtype=jnp.float32)
+        for hidden, cotangent in zip(current_hiddens, cotangents, strict=True):
+            output, stats = current_block.moe_residual(hidden)
+            outputs.append(output)
+            router_stats.append(stats)
+            loss = loss + _project_output(output, cotangent)
+        return loss, (tuple(outputs), tuple(router_stats))
+
+    (loss, auxiliary), gradients = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(block, hiddens)
+    return loss, auxiliary, gradients[0], gradients[1]
+
+
+def grouped_moe_pair_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the production packed-preparation MoE boundary."""
+    packed_hidden = grug_train._pack_microbatch_pair(hiddens, name="MoE hidden")
+    packed_cotangent = grug_train._pack_microbatch_pair(cotangents, name="MoE cotangent")
+
+    def projected_grouped_moe(current_block, current_hidden):
+        output, router_stats = current_block.grouped_moe_residual(current_hidden)
+        return _project_output(output, packed_cotangent), (
+            grug_train._unpack_microbatch_pair(output),
+            router_stats,
+        )
+
+    (loss, auxiliary), (block_gradient, hidden_gradient) = jax.value_and_grad(
+        projected_grouped_moe,
+        argnums=(0, 1),
+        has_aux=True,
+    )(block, packed_hidden)
+    return (
+        loss,
+        auxiliary,
+        block_gradient,
+        grug_train._unpack_microbatch_pair(hidden_gradient),
+    )
+
+
+def ordered_moe_pair_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate two learned-router MoE calls separately and sum parameters."""
+    losses = []
+    outputs = []
+    router_stats = []
+    block_gradients = []
+    hidden_gradients = []
+    for hidden, cotangent in zip(hiddens, cotangents, strict=True):
+
+        def projected_single(current_block, current_hidden, cotangent=cotangent):
+            output, stats = current_block.moe_residual(current_hidden)
+            return _project_output(output, cotangent), (output, stats)
+
+        (loss, (output, stats)), (block_gradient, hidden_gradient) = jax.value_and_grad(
+            projected_single,
+            argnums=(0, 1),
+            has_aux=True,
+        )(block, hidden)
+        losses.append(loss)
+        outputs.append(output)
+        router_stats.append(stats)
+        block_gradients.append(block_gradient)
+        hidden_gradients.append(hidden_gradient)
+    return (
+        grug_train._sum_microbatch_group(tuple(losses)),
+        (tuple(outputs), tuple(router_stats)),
+        grug_train._sum_microbatch_group(tuple(block_gradients)),
+        tuple(hidden_gradients),
+    )
+
+
+def packed_attention_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+    mask: AttentionMask | jax.Array,
+):
+    """Differentiate one interleaved packed attention call."""
+    packed_hidden = grug_train._pack_microbatch_pair(hiddens, name="attention hidden")
+    packed_cotangent = grug_train._pack_microbatch_pair(cotangents, name="attention cotangent")
+
+    def projected_attention(current_block, current_hidden):
+        output = current_block.attention_residual(current_hidden, mask)
+        return _project_output(output, packed_cotangent), output
+
+    (loss, output), (block_gradient, hidden_gradient) = jax.value_and_grad(
+        projected_attention,
+        argnums=(0, 1),
+        has_aux=True,
+    )(block, packed_hidden)
+    return (
+        loss,
+        grug_train._unpack_microbatch_pair(output),
+        block_gradient,
+        grug_train._unpack_microbatch_pair(hidden_gradient),
+    )
+
+
+def ordered_attention_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+):
+    """Differentiate two attention calls separately and sum parameters."""
+    losses = []
+    outputs = []
+    block_gradients = []
+    hidden_gradients = []
+    for hidden, cotangent, mask in zip(hiddens, cotangents, masks, strict=True):
+
+        def projected_attention(current_block, current_hidden, mask=mask, cotangent=cotangent):
+            output = current_block.attention_residual(current_hidden, mask)
+            return _project_output(output, cotangent), output
+
+        (loss, output), (block_gradient, hidden_gradient) = jax.value_and_grad(
+            projected_attention,
+            argnums=(0, 1),
+            has_aux=True,
+        )(block, hidden)
+        losses.append(loss)
+        outputs.append(output)
+        block_gradients.append(block_gradient)
+        hidden_gradients.append(hidden_gradient)
+    return (
+        grug_train._sum_microbatch_group(tuple(losses)),
+        tuple(outputs),
+        grug_train._sum_microbatch_group(tuple(block_gradients)),
+        tuple(hidden_gradients),
+    )
+
+
+def grouped_block_value_and_grads(
+    block: Block,
+    packed_hidden: jax.Array,
+    packed_cotangent: jax.Array,
+    mask: AttentionMask | jax.Array,
+    *,
+    remat_mode: RematMode | None,
+):
+    """Differentiate a grouped block with no checkpoint or one production mode."""
+
+    def projected_block(current_block, current_hidden):
+        if remat_mode is None:
+            output, router_stats = current_block.grouped_call(current_hidden, mask)
+        else:
+            output, router_stats = _run_grouped_block_with_remat(
+                current_block,
+                current_hidden,
+                mask,
+                use_pko=False,
+                disable_rope=False,
+                remat_mode=remat_mode,
+            )
+        return _project_output(output, packed_cotangent), (output, router_stats)
+
+    (loss, auxiliary), (block_gradient, hidden_gradient) = jax.value_and_grad(
+        projected_block,
+        argnums=(0, 1),
+        has_aux=True,
+    )(block, packed_hidden)
+    return loss, auxiliary, block_gradient, hidden_gradient
+
+
+def joined_final_head_loss_and_grads(
+    stage: TransformerPipelineStage,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    router_metrics: tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    *,
+    logsumexp_weight: float | None,
+):
+    """Differentiate both weighted final-head losses in one reverse pass."""
+
+    def pair_loss(current_stage, current_hiddens):
+        losses = []
+        for hidden, batch, metrics in zip(current_hiddens, batches, router_metrics, strict=True):
+            final_hidden = current_stage.finalize_hidden(hidden)
+            losses.append(
+                current_stage.hidden_next_token_loss(
+                    final_hidden,
+                    batch.tokens,
+                    batch.loss_weight,
+                    metrics,
+                    reduction="mean",
+                    logsumexp_weight=logsumexp_weight,
+                )
+            )
+        return grug_train._sum_microbatch_group(tuple(losses))
+
+    loss, (stage_gradient, hidden_gradients) = jax.value_and_grad(pair_loss, argnums=(0, 1))(stage, hiddens)
+    return loss, stage_gradient, hidden_gradients
+
+
+def ordered_final_head_loss_and_grads(
+    stage: TransformerPipelineStage,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    router_metrics: tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    *,
+    logsumexp_weight: float | None,
+):
+    """Differentiate the weighted final-head losses separately and sum parameters."""
+    losses = []
+    stage_gradients = []
+    hidden_gradients = []
+    for hidden, batch, metrics in zip(hiddens, batches, router_metrics, strict=True):
+
+        def single_loss(current_stage, current_hidden, batch=batch, metrics=metrics):
+            final_hidden = current_stage.finalize_hidden(current_hidden)
+            return current_stage.hidden_next_token_loss(
+                final_hidden,
+                batch.tokens,
+                batch.loss_weight,
+                metrics,
+                reduction="mean",
+                logsumexp_weight=logsumexp_weight,
+            )
+
+        loss, (stage_gradient, hidden_gradient) = jax.value_and_grad(single_loss, argnums=(0, 1))(stage, hidden)
+        losses.append(loss)
+        stage_gradients.append(stage_gradient)
+        hidden_gradients.append(hidden_gradient)
+    return (
+        grug_train._sum_microbatch_group(tuple(losses)),
+        grug_train._sum_microbatch_group(tuple(stage_gradients)),
+        tuple(hidden_gradients),
+    )
+
+
 def _device_problem():
     mesh = grug_train._compact_or_pipeline_grug_mesh(
         expert_axis_size=EXPERT_AXIS_SIZE,
@@ -235,7 +535,130 @@ def _compile_and_run(name: str, function, arguments):
     return result
 
 
-def main() -> int:
+def _moe_pair_diagnostic(
+    mesh,
+    stage: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+) -> bool:
+    compute_block = grug_train._compute_stage(stage, qb_betas, _PRODUCTION_MIXED_PRECISION).blocks[0]
+    cotangents = (hiddens[1], hiddens[0])
+    joined = jax.jit(joined_moe_pair_value_and_grads)
+    grouped = jax.jit(grouped_moe_pair_value_and_grads)
+    ordered = jax.jit(ordered_moe_pair_value_and_grads)
+    grouped_preparation = jax.jit(grouped_moe_preparation_and_routes)
+    ordered_preparation = jax.jit(ordered_moe_preparation_and_routes)
+    arguments = (compute_block, hiddens, cotangents)
+    with jax.set_mesh(mesh):
+        ordered_preparation_result = _compile_and_run(
+            "moe_preparation_ordered",
+            ordered_preparation,
+            (compute_block, hiddens),
+        )
+        grouped_preparation_result = _compile_and_run(
+            "moe_preparation_grouped",
+            grouped_preparation,
+            (compute_block, hiddens),
+        )
+        reference = _compile_and_run("moe_pair_ordered", ordered, arguments)
+        joined_result = _compile_and_run("moe_pair_joined", joined, arguments)
+        grouped_result = _compile_and_run("moe_pair_grouped_boundary", grouped, arguments)
+        pair_value_report = build_parity_report(
+            automatic_loss=joined_result[0],
+            direct_loss=reference[0],
+            automatic_gradients={"outputs": joined_result[1][0], "router_stats": joined_result[1][1]},
+            direct_gradients={"outputs": reference[1][0], "router_stats": reference[1][1]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="values",
+        )
+        pair_gradient_report = build_parity_report(
+            automatic_loss=joined_result[0],
+            direct_loss=reference[0],
+            automatic_gradients={"parameters": joined_result[2], "inputs": joined_result[3]},
+            direct_gradients={"parameters": reference[2], "inputs": reference[3]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="gradients",
+        )
+        grouped_value_report = build_parity_report(
+            automatic_loss=grouped_result[0],
+            direct_loss=joined_result[0],
+            automatic_gradients={"outputs": grouped_result[1][0], "router_stats": grouped_result[1][1]},
+            direct_gradients={"outputs": joined_result[1][0], "router_stats": joined_result[1][1]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="values",
+        )
+        grouped_gradient_report = build_parity_report(
+            automatic_loss=grouped_result[0],
+            direct_loss=joined_result[0],
+            automatic_gradients={"parameters": grouped_result[2], "inputs": grouped_result[3]},
+            direct_gradients={"parameters": joined_result[2], "inputs": joined_result[3]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="gradients",
+        )
+        preparation_report = build_parity_report(
+            automatic_loss=jnp.sum(grouped_preparation_result[0][0].astype(jnp.float32)),
+            direct_loss=jnp.sum(ordered_preparation_result[0][0].astype(jnp.float32)),
+            automatic_gradients=grouped_preparation_result[0],
+            direct_gradients=ordered_preparation_result[0],
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="mlp_inputs",
+        )
+        route_mismatch_assignments = int(
+            sum(
+                jnp.sum(grouped_selected != ordered_selected)
+                for grouped_selected, ordered_selected in zip(
+                    grouped_preparation_result[1],
+                    ordered_preparation_result[1],
+                    strict=True,
+                )
+            )
+        )
+        route_mismatch_tokens = int(
+            sum(
+                jnp.sum(jnp.any(grouped_selected != ordered_selected, axis=-1))
+                for grouped_selected, ordered_selected in zip(
+                    grouped_preparation_result[1],
+                    ordered_preparation_result[1],
+                    strict=True,
+                )
+            )
+        )
+        ordered_min_boundary_margin = float(
+            jnp.min(jnp.stack(tuple(jnp.min(margin) for margin in ordered_preparation_result[2])))
+        )
+        grouped_min_boundary_margin = float(
+            jnp.min(jnp.stack(tuple(jnp.min(margin) for margin in grouped_preparation_result[2])))
+        )
+
+    passed = (
+        preparation_report.passed
+        and route_mismatch_assignments == 0
+        and pair_value_report.passed
+        and pair_gradient_report.passed
+        and grouped_value_report.passed
+        and grouped_gradient_report.passed
+    )
+    _event(
+        "moe_pair_parity_report",
+        source_lineage=SOURCE_LINEAGE,
+        preparation_report=preparation_report.as_dict(),
+        route_mismatch_assignments=route_mismatch_assignments,
+        route_mismatch_tokens=route_mismatch_tokens,
+        ordered_min_boundary_margin=ordered_min_boundary_margin,
+        grouped_min_boundary_margin=grouped_min_boundary_margin,
+        pair_value_report=pair_value_report.as_dict(),
+        pair_gradient_report=pair_gradient_report.as_dict(),
+        grouped_value_report=grouped_value_report.as_dict(),
+        grouped_gradient_report=grouped_gradient_report.as_dict(),
+        passed=passed,
+    )
+    return passed
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--diagnostic", choices=_DIAGNOSTIC_MODES, default="full")
+    args = parser.parse_args(argv)
     faulthandler.enable()
     faulthandler.dump_traceback_later(STACK_INTERVAL, repeat=True)
     validate_kernel_environment(os.environ)
@@ -254,11 +677,16 @@ def main() -> int:
         moe_implementation="ring",
         compute_dtype="bfloat16",
         remat_mode="save_moe",
+        diagnostic=args.diagnostic,
         tolerance=DEFAULT_TOLERANCE,
     )
     _event("problem_init_start")
     mesh, stage, qb_betas, hiddens, batches = _device_problem()
     _event("problem_init_done")
+    if args.diagnostic == "moe-pair":
+        passed = _moe_pair_diagnostic(mesh, stage, qb_betas, hiddens)
+        faulthandler.cancel_dump_traceback_later()
+        return 0 if passed else 1
 
     ordered = jax.jit(
         lambda params, biases, hidden_pair, batch_pair: ordered_last_stage_loss_and_grads(

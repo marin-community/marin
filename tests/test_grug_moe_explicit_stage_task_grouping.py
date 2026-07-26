@@ -19,7 +19,19 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
-from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import ordered_last_stage_loss_and_grads
+from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
+    grouped_block_value_and_grads,
+    grouped_moe_pair_value_and_grads,
+    grouped_moe_preparation_and_routes,
+    joined_final_head_loss_and_grads,
+    joined_moe_pair_value_and_grads,
+    ordered_attention_value_and_grads,
+    ordered_final_head_loss_and_grads,
+    ordered_last_stage_loss_and_grads,
+    ordered_moe_pair_value_and_grads,
+    ordered_moe_preparation_and_routes,
+    packed_attention_value_and_grads,
+)
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
@@ -262,14 +274,14 @@ def _assert_tree_rel_l2(actual, expected, *, tolerance: float = 0.002) -> None:
         assert relative_l2 <= tolerance
 
 
-def _tiny_grouped_last_stage(remat_mode: str):
+def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1):
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
         intermediate_dim=8,
         shared_expert_intermediate_dim=8,
-        num_experts=2,
-        num_experts_per_token=1,
+        num_experts=max(2, top_k + 1),
+        num_experts_per_token=top_k,
         num_layers=2,
         num_heads=2,
         num_kv_heads=2,
@@ -403,3 +415,149 @@ def test_grouped_last_stage_matches_ordered_value_and_vjp_under_jit(remat_mode: 
         expected = ordered_fn(stage, hiddens, batches)
 
     _assert_tree_rel_l2(actual, expected)
+
+
+def _tiny_boundary_inputs(mesh: Mesh):
+    batches = (
+        _shard_group_batch(
+            GrugLmExample(
+                tokens=jnp.asarray([[1, 2, 3, 4]], dtype=jnp.int32),
+                loss_weight=jnp.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=jnp.float32),
+                attn_mask=AttentionMask.causal(),
+            ),
+            mesh,
+        ),
+        _shard_group_batch(
+            GrugLmExample(
+                tokens=jnp.asarray([[4, 3, 2, 1]], dtype=jnp.int32),
+                loss_weight=jnp.asarray([[1.0, 1.0, 1.0, 0.0]], dtype=jnp.float32),
+                attn_mask=AttentionMask.causal(),
+            ),
+            mesh,
+        ),
+    )
+    hiddens = tuple(_shard_group_hidden(jax.random.normal(jax.random.PRNGKey(key), (1, 4, 8)), mesh) for key in (11, 12))
+    cotangents = tuple(
+        _shard_group_hidden(jax.random.normal(jax.random.PRNGKey(key), (1, 4, 8)), mesh) for key in (13, 14)
+    )
+    return batches, hiddens, cotangents
+
+
+def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:
+    mesh, stage = _tiny_grouped_last_stage("recompute_all", top_k=2)
+    batches, hiddens, cotangents = _tiny_boundary_inputs(mesh)
+    block = stage.blocks[0]
+    masks = tuple(batch.attn_mask for batch in batches)
+    with jax.set_mesh(mesh):
+        post_attention = tuple(
+            jax.jit(lambda hidden, mask=mask: block.attention_residual(hidden, mask))(hidden)
+            for hidden, mask in zip(hiddens, masks, strict=True)
+        )
+        grouped_preparation = jax.jit(grouped_moe_preparation_and_routes)(block, post_attention)
+        ordered_preparation = jax.jit(ordered_moe_preparation_and_routes)(block, post_attention)
+        joined = jax.jit(joined_moe_pair_value_and_grads)(block, post_attention, cotangents)
+        grouped = jax.jit(grouped_moe_pair_value_and_grads)(block, post_attention, cotangents)
+        ordered = jax.jit(ordered_moe_pair_value_and_grads)(block, post_attention, cotangents)
+
+    _assert_tree_rel_l2(grouped_preparation, ordered_preparation)
+    _assert_tree_rel_l2(joined, ordered)
+    _assert_tree_rel_l2(grouped, ordered)
+
+
+def test_grouped_block_remat_modes_match_no_checkpoint() -> None:
+    mesh, stage = _tiny_grouped_last_stage("recompute_all", top_k=2)
+    batches, hiddens, cotangents = _tiny_boundary_inputs(mesh)
+    packed_hidden = _pack_microbatch_pair(hiddens, name="hidden")
+    packed_cotangent = _pack_microbatch_pair(cotangents, name="cotangent")
+    packed_mask = _pack_group_attention_mask(batches)
+
+    with jax.set_mesh(mesh):
+        no_checkpoint = jax.jit(
+            lambda block, hidden, cotangent: grouped_block_value_and_grads(
+                block,
+                hidden,
+                cotangent,
+                packed_mask,
+                remat_mode=None,
+            )
+        )(stage.blocks[0], packed_hidden, packed_cotangent)
+        recompute_all = jax.jit(
+            lambda block, hidden, cotangent: grouped_block_value_and_grads(
+                block,
+                hidden,
+                cotangent,
+                packed_mask,
+                remat_mode="recompute_all",
+            )
+        )(stage.blocks[0], packed_hidden, packed_cotangent)
+        save_moe = jax.jit(
+            lambda block, hidden, cotangent: grouped_block_value_and_grads(
+                block,
+                hidden,
+                cotangent,
+                packed_mask,
+                remat_mode="save_moe",
+            )
+        )(stage.blocks[0], packed_hidden, packed_cotangent)
+
+    _assert_tree_rel_l2(recompute_all, no_checkpoint)
+    _assert_tree_rel_l2(save_moe, no_checkpoint)
+
+
+def test_packed_reference_attention_value_and_vjp_match_ordered_calls() -> None:
+    mesh, stage = _tiny_grouped_last_stage("recompute_all", top_k=2)
+    batches, hiddens, cotangents = _tiny_boundary_inputs(mesh)
+    masks = tuple(batch.attn_mask for batch in batches)
+    packed_mask = _pack_group_attention_mask(batches)
+
+    with jax.set_mesh(mesh):
+        packed = jax.jit(
+            lambda block, hidden_pair, cotangent_pair: packed_attention_value_and_grads(
+                block,
+                hidden_pair,
+                cotangent_pair,
+                packed_mask,
+            )
+        )(stage.blocks[0], hiddens, cotangents)
+        ordered = jax.jit(
+            lambda block, hidden_pair, cotangent_pair: ordered_attention_value_and_grads(
+                block,
+                hidden_pair,
+                cotangent_pair,
+                masks,
+            )
+        )(stage.blocks[0], hiddens, cotangents)
+
+    _assert_tree_rel_l2(packed, ordered)
+
+
+def test_final_norm_head_pair_vag_matches_separate_weighted_losses() -> None:
+    mesh, stage = _tiny_grouped_last_stage("recompute_all", top_k=2)
+    batches, hiddens, _ = _tiny_boundary_inputs(mesh)
+    with jax.set_mesh(mesh):
+        block_results = tuple(
+            jax.jit(lambda hidden, mask=batch.attn_mask: stage.block_range(hidden, mask))(hidden)
+            for hidden, batch in zip(hiddens, batches, strict=True)
+        )
+        final_inputs = tuple(result[0] for result in block_results)
+        router_metrics = tuple(result[1] for result in block_results)
+        joined = jax.jit(
+            lambda params, hidden_pair, metrics_pair: joined_final_head_loss_and_grads(
+                params,
+                hidden_pair,
+                batches,
+                metrics_pair,
+                logsumexp_weight=0.01,
+            )
+        )(stage, final_inputs, router_metrics)
+        ordered = jax.jit(
+            lambda params, hidden_pair, metrics_pair: ordered_final_head_loss_and_grads(
+                params,
+                hidden_pair,
+                batches,
+                metrics_pair,
+                logsumexp_weight=0.01,
+            )
+        )(stage, final_inputs, router_metrics)
+
+    _assert_tree_rel_l2(joined, ordered)

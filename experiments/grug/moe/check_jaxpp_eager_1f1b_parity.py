@@ -69,9 +69,12 @@ class PrecisionMode(StrEnum):
 @dataclasses.dataclass(frozen=True)
 class ValueParity:
     reference_l2: float
+    actual_l2: float
     absolute_l2: float
     max_absolute_error: float
     relative_l2: float
+    norm_ratio: float
+    cosine_similarity: float
     finite: bool
     passed: bool
 
@@ -80,9 +83,12 @@ class ValueParity:
 class GradientParity:
     path: str
     reference_l2: float
+    actual_l2: float
     absolute_l2: float
     max_absolute_error: float
     relative_l2: float
+    norm_ratio: float
+    cosine_similarity: float
     finite: bool
     passed: bool
 
@@ -109,30 +115,62 @@ class ParityReport:
 
 
 def relative_l2(actual: jax.Array, reference: jax.Array) -> tuple[float, float, float]:
-    reference_norm, absolute, relative, _, _ = parity_metrics(actual, reference)
-    return reference_norm, absolute, relative
+    metrics = parity_metrics(actual, reference)
+    return metrics.reference_l2, metrics.absolute_l2, metrics.relative_l2
 
 
-def parity_metrics(actual: jax.Array, reference: jax.Array) -> tuple[float, float, float, float, bool]:
-    """Return norms, maximum absolute error, and a joint finite-value check."""
+@dataclasses.dataclass(frozen=True)
+class TensorParityMetrics:
+    reference_l2: float
+    actual_l2: float
+    absolute_l2: float
+    max_absolute_error: float
+    relative_l2: float
+    norm_ratio: float
+    cosine_similarity: float
+    finite: bool
+
+
+def parity_metrics(actual: jax.Array, reference: jax.Array) -> TensorParityMetrics:
+    """Return error, scale, direction, and finite-value diagnostics."""
     actual_f32 = jnp.asarray(actual, dtype=jnp.float32)
     reference_f32 = jnp.asarray(reference, dtype=jnp.float32)
     difference = actual_f32 - reference_f32
     absolute = float(jnp.linalg.norm(difference))
     max_absolute_error = float(jnp.max(jnp.abs(difference), initial=0.0))
     reference_norm = float(jnp.linalg.norm(reference_f32))
+    actual_norm = float(jnp.linalg.norm(actual_f32))
     relative = absolute / max(reference_norm, 1e-12)
+    if reference_norm == 0.0:
+        norm_ratio = 1.0 if actual_norm == 0.0 else math.inf
+    else:
+        norm_ratio = actual_norm / reference_norm
+    if actual_norm == 0.0 or reference_norm == 0.0:
+        cosine_similarity = 1.0 if actual_norm == reference_norm else 0.0
+    else:
+        inner_product = float(jnp.sum(actual_f32 * reference_f32))
+        cosine_similarity = max(-1.0, min(1.0, inner_product / (actual_norm * reference_norm)))
     finite = bool(
         jnp.all(jnp.isfinite(actual_f32))
         & jnp.all(jnp.isfinite(reference_f32))
         & jnp.isfinite(absolute)
         & jnp.isfinite(max_absolute_error)
         & jnp.isfinite(reference_norm)
+        & jnp.isfinite(actual_norm)
         & jnp.isfinite(relative)
     )
     if not finite:
         relative = math.inf
-    return reference_norm, absolute, relative, max_absolute_error, finite
+    return TensorParityMetrics(
+        reference_l2=reference_norm,
+        actual_l2=actual_norm,
+        absolute_l2=absolute,
+        max_absolute_error=max_absolute_error,
+        relative_l2=relative,
+        norm_ratio=norm_ratio,
+        cosine_similarity=cosine_similarity,
+        finite=finite,
+    )
 
 
 def build_value_parity(
@@ -142,14 +180,17 @@ def build_value_parity(
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> ValueParity:
     """Build one finite, relative-L2-gated value result."""
-    reference_l2, absolute_l2, relative, max_absolute_error, finite = parity_metrics(actual, reference)
+    metrics = parity_metrics(actual, reference)
     return ValueParity(
-        reference_l2=reference_l2,
-        absolute_l2=absolute_l2,
-        max_absolute_error=max_absolute_error,
-        relative_l2=relative,
-        finite=finite,
-        passed=finite and relative <= tolerance,
+        reference_l2=metrics.reference_l2,
+        actual_l2=metrics.actual_l2,
+        absolute_l2=metrics.absolute_l2,
+        max_absolute_error=metrics.max_absolute_error,
+        relative_l2=metrics.relative_l2,
+        norm_ratio=metrics.norm_ratio,
+        cosine_similarity=metrics.cosine_similarity,
+        finite=metrics.finite,
+        passed=metrics.finite and metrics.relative_l2 <= tolerance,
     )
 
 
@@ -181,19 +222,22 @@ def build_parity_report(
     ):
         if automatic_path != direct_path:
             raise ValueError(f"automatic and direct gradient paths differ: {automatic_path} != {direct_path}")
-        reference_l2, absolute_l2, relative, max_absolute_error, finite = parity_metrics(
+        metrics = parity_metrics(
             automatic_leaf,
             direct_leaf,
         )
         gradients.append(
             GradientParity(
                 path=f"{gradient_root}{jax.tree_util.keystr(automatic_path)}",
-                reference_l2=reference_l2,
-                absolute_l2=absolute_l2,
-                max_absolute_error=max_absolute_error,
-                relative_l2=relative,
-                finite=finite,
-                passed=finite and relative <= tolerance,
+                reference_l2=metrics.reference_l2,
+                actual_l2=metrics.actual_l2,
+                absolute_l2=metrics.absolute_l2,
+                max_absolute_error=metrics.max_absolute_error,
+                relative_l2=metrics.relative_l2,
+                norm_ratio=metrics.norm_ratio,
+                cosine_similarity=metrics.cosine_similarity,
+                finite=metrics.finite,
+                passed=metrics.finite and metrics.relative_l2 <= tolerance,
             )
         )
 
