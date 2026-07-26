@@ -85,6 +85,9 @@ One-off analysis pages published to durable public hosting (see
     - [GitHub Issue #1183](https://github.com/marin-community/marin/issues/1183)
     - [WandB Report](https://api.wandb.ai/links/marin-community/qi3u8nx7)
     - Conclusion: Despite having a lower MFU, MoE outperforms similar sized dense model in both training and evaluation.
+- Nested expert-bank training [![#652](https://img.shields.io/github/issues/detail/state/marin-community/marin/652)](https://github.com/marin-community/marin/issues/652)
+    - [GitHub Issue #652](https://github.com/marin-community/marin/issues/652)
+    - [Experiment report](./nested-model-training.md)
 
 ## Training and Performance
 

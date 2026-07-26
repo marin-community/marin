@@ -166,18 +166,18 @@ in
 
 | Property | Value |
 |---|---:|
-| Hidden dimension | 1,280 |
-| Layers | 13 |
-| Attention heads | 10 |
-| Sequence length | 8,192 |
-| Routed expert intermediate dimension | 640 |
-| Shared expert intermediate dimension | 1,280 |
+| Hidden dimension | 768 |
+| Layers | 8 |
+| Attention heads | 6 |
+| KV heads | 1 |
+| Sequence length | 2,048 |
+| Routed expert intermediate dimension | 384 |
+| Shared expert intermediate dimension | 768 |
 | Routed experts selected per token | 4 |
 | Large routed experts | 256 |
 | Small routed experts | 128 |
-| Large total parameters | 8.64B |
-| Small total parameters | 4.54B |
-| Approximate active parameters, excluding LM head | 0.6B |
+| Large total parameters | 2.039B |
+| Small total parameters | 1.133B |
 
 All arms use the same shared dense expert, attention, embeddings, hidden width,
 depth, expert width, and top-k. Routed experts use Marin's ring
@@ -188,9 +188,9 @@ expert axis.
 
 Training uses the pinned SlimPajama-6B cache with the Llama 3.1 tokenizer.
 Validation uses the pinned Paloma domain caches. Every example is represented
-as one fixed-shape packed document. The four arms use seed 0, the same
+by the ordinary causal dataset path. The four arms use seed 0, the same
 block-shuffle configuration, the same optimizer heuristic, a global batch of
-256 sequences, and 2,097,152 tokens per optimizer step.
+1,024 sequences, and 2,097,152 tokens per optimizer step.
 
 Each arm uses 16 four-GB200 nodes on `cw-us-east-08a`, or 64 GPUs. The runs
 were submitted through the main Marin Iris controller at batch priority and
@@ -212,10 +212,29 @@ upstream backward tiling did not resolve the hang. Iris reported zero
 preemptions and zero task failures while the process remained resident.
 
 Every arm was therefore amended to Levanter's reference attention backend.
-The model, data, optimizer, routing treatment, token count, and hardware
-remained fixed. Relative loss comparisons remain valid. Reference-attention
-wall time is not a production estimate for FA4, so the cost section separates
-analytic model FLOPs from backend-specific GPU-hours.
+The amendment was applied identically to every arm, so relative loss
+comparisons remain valid. Reference-attention wall time is not a production
+estimate for FA4, so the cost section separates analytic model FLOPs from
+backend-specific GPU-hours.
+
+The first reference run retained the fixed-shape `pack=1` representation that
+had been introduced for THD. It produced finite forward loss but nonfinite
+gradients in every architecture because padding query rows were fully masked.
+Reference runs were corrected to use ordinary causal examples; THD runs still
+require `pack=1`.
+
+The first d768 smoke then exposed two independent configuration faults before
+a usable checkpoint: its four-step schedule rounded the fractional warmup to
+zero, and nested rows propagated an infinite router sentinel through QB
+arithmetic. The final proxy uses a finite zero-probability router sentinel and
+five explicit warmup steps, matching 1% of the bounded 500-step schedule.
+
+At d1280 and length 8,192, one reference-attention step took about 262 seconds.
+The four arms were therefore uniformly reduced to the d768, length-2,048 proxy
+above while preserving tokens per step. This amendment was made before any
+arm produced a usable parameter update. It keeps both controls in the
+billion-parameter range and makes a common loss trajectory possible within the
+deadline.
 
 The dependency and kernel investigation is recorded in
 [`2026-07-26-nested-moe-fa4-cute.md`](../../.agents/ops/2026-07-26-nested-moe-fa4-cute.md).

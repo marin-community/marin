@@ -51,6 +51,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
+_INELIGIBLE_ROUTER_LOGIT = -1e9
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
@@ -623,7 +624,7 @@ class MoEMLP(eqx.Module):
             nested_tokens = jnp.repeat(nested_rows.astype(jnp.bool_), s)
             nested_experts = nested_expert_eligibility(self.cfg.num_experts, self.cfg.nested_expert_count)
             ineligible = nested_tokens[:, None] & ~nested_experts[None, :]
-            eligible_router_logits = jnp.where(ineligible, -jnp.inf, router_logits)
+            eligible_router_logits = jnp.where(ineligible, _INELIGIBLE_ROUTER_LOGIT, router_logits)
         biased_logits = eligible_router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(eligible_router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.

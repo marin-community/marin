@@ -63,6 +63,7 @@ _DEFAULT_BATCH = 256
 _DEFAULT_HIDDEN_DIM = 1280
 _DEFAULT_SEQUENCE_LENGTH = 8192
 _SMOKE_STEPS = 20
+_PROXY_WARMUP_STEPS = 5
 _OUTPUT_SUBDIR = "experiments/nested-moe"
 _SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 _ATTENTION_IMPLEMENTATIONS = ("gpu_fa4_thd", "reference")
@@ -153,6 +154,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         hidden_dim,
         seq_len=sequence_length,
     )
+    optimizer = dataclasses.replace(optimizer, warmup=_PROXY_WARMUP_STEPS)
     full_steps = max(1, round(compute_optimal_tokens / (batch_size * sequence_length)))
     steps = env_int("NESTED_STEPS", _SMOKE_STEPS if phase == "smoke" else full_steps)
 

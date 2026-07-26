@@ -457,6 +457,24 @@ step count will be frozen from the corrected four-step throughput smoke and
 cannot exceed 500 steps. This amendment trades proxy scale for completed
 four-arm evidence; it does not relax any relative-loss or overhead threshold.
 
+### Finite router masking and proxy warmup
+
+The first d768 smoke isolated two pre-optimization configuration faults. The
+four-step smoke converted the default fractional 1% warmup to zero steps. Both
+controls produced one finite gradient and then nonfinite weights after taking
+the full learning rate immediately. The nested arms additionally had
+nonfinite first gradients because their `-inf` router eligibility sentinel
+entered QB subtraction and reduction arithmetic.
+
+The eligibility sentinel is replaced with the finite fp32 value `-1e9`, which
+has the same zero-probability and top-k behavior. A regression test now
+requires every nested-router gradient leaf to be finite while outer-expert
+gradients remain exactly zero. The proxy optimizer uses five explicit warmup
+steps, equal to 1% of the already bounded 500-step production schedule. The
+same value is used in smoke and production; it avoids changing the schedule
+after Gate 1. All model arms are amended together. No usable validation
+checkpoint was produced before this correction.
+
 ## Decision rules
 
 Promote:

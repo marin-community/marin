@@ -302,3 +302,18 @@ author: Marin research
   pre-commit entry point passed.
 - Next action: snapshot and submit all four corrected arms. Gate 1 still
   requires three finite steps and at least 85% relative nested throughput.
+
+### 2026-07-26 21:17 - Proxy optimizer and router arithmetic amendment
+
+- Result: the d768 controls produced finite first gradients but nonfinite
+  weights after one full-rate update. The nested arms produced nonfinite first
+  gradients. All final evaluation losses were nonfinite.
+- Diagnosis: a four-step run rounds the fractional 1% warmup to zero. Nested
+  eligibility also used `-inf`, which entered QB subtraction and reduction.
+- Change: use a finite `-1e9` eligibility sentinel and five explicit warmup
+  steps, matching 1% of the bounded 500-step production schedule. A focused
+  regression requires every nested-router gradient leaf to be finite.
+- Validation: four focused launcher, router-gradient, extraction, and
+  full-row tests passed; the required pre-commit entry point passed.
+- Next action: publish the amended snapshot and repeat the common four-arm
+  smoke. No arm is promoted without three finite updates.

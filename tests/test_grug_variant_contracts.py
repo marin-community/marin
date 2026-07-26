@@ -288,6 +288,7 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     assert config.model.hidden_dim == 768
     assert config.model.max_seq_len == 2048
     assert config.batch_size == 1024
+    assert config.optimizer.warmup == 5
 
 
 @pytest.mark.parametrize(
@@ -509,6 +510,7 @@ def test_grug_moe_nested_forward_has_no_outer_expert_gradients():
         mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
         grads = jax.grad(lambda candidate: jnp.sum(candidate(x, nested_rows=nested_rows)[0]))(mlp)
 
+    assert all(np.all(np.isfinite(np.asarray(leaf))) for leaf in jax.tree.leaves(grads))
     assert np.any(np.asarray(grads.expert_mlp.w_gate)[nested_experts] != 0)
     assert np.all(np.asarray(grads.expert_mlp.w_gate)[~nested_experts] == 0)
     assert np.any(np.asarray(grads.router)[:, nested_experts] != 0)
