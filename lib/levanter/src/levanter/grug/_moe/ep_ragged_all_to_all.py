@@ -37,6 +37,32 @@ _FP8_WIRE_MAX = {
 _WIRE_EPS = 1e-12
 
 
+def _report_underflow(x: jax.Array, quantized: jax.Array, fp8_dtype) -> None:
+    """Emit the fraction of values that quantized to exactly zero from a non-zero input.
+
+    fp8's characteristic failure is UNDERFLOW, not overflow: a scale that is far too large drives
+    every value below the format's smallest representable magnitude and they all become exactly
+    zero. That is not NaN, not Inf, and not out of range -- it is well-formed garbage, so
+    `crash_on_nan` and every other finiteness guard stay silent while the affected term silently
+    drops out of the computation. This was not hypothetical: a backward wire running an
+    uncalibrated scale eight orders of magnitude too large zeroed every cotangent and raised
+    nothing at all. A finiteness guard is the wrong instrument for the actual risk; this is the
+    right one.
+
+    Gated on SCALE_A2A_FP8_UNDERFLOW_CHECK=1 because it adds a reduction per quantization. Worth
+    paying on the first run of any new configuration or scale.
+    """
+    if os.environ.get("SCALE_A2A_FP8_UNDERFLOW_CHECK") != "1":
+        return
+    nonzero_in = jnp.abs(x.astype(jnp.float32)) > 0
+    zeroed = jnp.logical_and(nonzero_in, quantized.astype(jnp.float32) == 0)
+    jax.debug.print(
+        "fp8-underflow dtype={d} zeroed_fraction={f} (of non-zero inputs; >0.5 means the scale is far too large)",
+        d=jnp.dtype(fp8_dtype).name,
+        f=jnp.sum(zeroed) / jnp.maximum(jnp.sum(nonzero_in), 1),
+    )
+
+
 def _wire_quantize(x: jax.Array, fp8_dtype) -> tuple[jax.Array, jax.Array]:
     """Quantize each row (token slot) with its own current scale over the hidden dim.
 
@@ -58,6 +84,7 @@ def _wire_quantize(x: jax.Array, fp8_dtype) -> tuple[jax.Array, jax.Array]:
         )
     scale = jnp.maximum(amax, _WIRE_EPS) / _FP8_WIRE_MAX[jnp.dtype(fp8_dtype).type]
     q = (xf / scale[..., None]).astype(fp8_dtype)
+    _report_underflow(x, q, fp8_dtype)
     return q, scale
 
 
@@ -77,6 +104,7 @@ def _wire_quantize_fixed(x: jax.Array, fp8_dtype, amax: float) -> tuple[jax.Arra
     fp8_max = _FP8_WIRE_MAX[jnp.dtype(fp8_dtype).type]
     scale = jnp.asarray(max(amax, _WIRE_EPS) / fp8_max, dtype=jnp.float32)
     quantized = jnp.clip(x.astype(jnp.float32) / scale, -fp8_max, fp8_max).astype(fp8_dtype)
+    _report_underflow(x, quantized, fp8_dtype)
     return quantized, jnp.broadcast_to(scale, x.shape[:-1])
 
 

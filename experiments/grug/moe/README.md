@@ -224,6 +224,24 @@ stale code while the local tree looks correct, which is the worst version of thi
 nothing errors. Always `git add -f` new files under `lib/*`, and check `git status` before
 submitting a job that depends on them.
 
+### NaN guards do not protect fp8 work
+
+`crash_on_nan` / `crash_on_inf` catch OVERFLOW. fp8's characteristic failure is UNDERFLOW: a scale
+far too large drives every value below the smallest representable magnitude, and they all become
+exactly zero. Zeroed tensors are not NaN, not Inf and not out of range — they are well-formed
+garbage, so every finiteness guard stays silent, the run trains, the loss curve looks plausible
+because the surviving paths still descend, and the affected term has simply dropped out of the
+computation. A wrong published number, not a failed job.
+
+Demonstrated here, not hypothesized: a backward wire configured with a scale eight orders of
+magnitude too large quantized every cotangent to zero and raised nothing whatsoever — the guard
+never fired and the failure was only found by calibrating the constant against the real amax.
+
+Set `SCALE_A2A_FP8_UNDERFLOW_CHECK=1` on the first run of any new fp8 configuration or scale. It
+reports the fraction of non-zero inputs that quantized to exactly zero, which turns a silent
+multi-hour wrong result into an immediate diagnosis. Any low-precision work on this stack inherits
+this blind spot, not just the MoE wire.
+
 ### Diagnostics that lie toward giving up
 
 Two checks on this stack report "nothing here" when the thing is in fact present. Both would have
