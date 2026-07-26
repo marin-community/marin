@@ -376,6 +376,42 @@ def test_grug_moe_nested_checkpoint_init_extracts_weights_and_qb_state():
     assert int(initialized.step) == 0
 
 
+def test_grug_moe_weights_only_init_preserves_fresh_optimizer_and_step():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = _nested_grug_model_config(model_module)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        base_state = train_module.initial_state(
+            config,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+        loaded_model = model_module.Transformer.init(config, key=jax.random.PRNGKey(1))
+        loaded_pending = jnp.ones_like(base_state.pending_qb_betas)
+
+        def fake_load(exemplar, checkpoint_path, **kwargs):
+            assert checkpoint_path == "s3://test/checkpoints/step-500"
+            return {"params": loaded_model, "pending_qb_betas": loaded_pending}
+
+        initialized = train_module.init_weights_only_from_checkpoint(
+            base_state,
+            "s3://test/checkpoints/step-500",
+            mesh=None,
+            load_ema=False,
+            _load_fn=fake_load,
+        )
+
+    assert initialized.params is loaded_model
+    np.testing.assert_array_equal(initialized.pending_qb_betas, loaded_pending)
+    assert initialized.opt_state is base_state.opt_state
+    assert int(initialized.step) == 0
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

@@ -78,6 +78,8 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+    sft_weights_only_init: bool = False
+    """Load only base weights for SFT while retaining the fresh optimizer and step."""
 
 
 @dataclass(frozen=True)
@@ -307,6 +309,29 @@ def initial_state(
     )
 
 
+def init_weights_only_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: Callable[..., object] = load_checkpoint,
+) -> GrugTrainState:
+    """Load model and router-bias state while retaining a fresh optimizer and step."""
+    exemplar: dict[str, object] = {
+        "params": state.params,
+        "pending_qb_betas": state.pending_qb_betas,
+    }
+    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    updates: dict[str, object] = {
+        "params": loaded["params"],
+        "pending_qb_betas": loaded["pending_qb_betas"],
+    }
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return dataclasses.replace(state, **updates)
+
+
 def init_nested_weights_from_checkpoint(
     state: GrugTrainState,
     source_model: Transformer,
@@ -518,13 +543,29 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-        )
+        if config.trainer.sft_weights_only_init:
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            if int(state.step) == 0 and trainer.initialize_from is not None:
+                state = init_weights_only_from_checkpoint(
+                    state,
+                    trainer.initialize_from,
+                    mesh=mesh,
+                    load_ema=config.trainer.ema_beta is not None,
+                )
+        else:
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
         nested_init_fields = (config.nested_init_from, config.nested_init_source_model)
         if (nested_init_fields[0] is None) != (nested_init_fields[1] is None):
             raise ValueError("nested_init_from and nested_init_source_model must be set together")
@@ -714,6 +755,7 @@ __all__ = [
     "GrugTrainState",
     "GrugTrainerConfig",
     "init_nested_weights_from_checkpoint",
+    "init_weights_only_from_checkpoint",
     "initial_state",
     "run_grug",
 ]
