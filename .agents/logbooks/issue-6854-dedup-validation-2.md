@@ -16,6 +16,58 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T23:58:00Z — 195,564 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2353-v735` independently
+  revalidated two p2 decision-file 72 checkpoints at semantic offsets 640 and
+  768. Their 256 direct baseline pairs contain 164 model false positives, 91
+  model true duplicates, and one unresolved outcome. The 535 judgments
+  required 538 request attempts: 534 were valid and four invalid JSON attempts
+  affected two retried judgments. The outcome Parquet SHA-256 values are
+  `9f93339ce6fe7174234ea51d5e4448b163599aa3a3699bf7f0d5aa4ba42156a1`
+  and
+  `12c6a4aa80f1d0089e30f805f848fb874e63f8a572f27db0557612a0436b9e3a`.
+
+- Complete-text inspection resolves the baseline ambiguity as a false
+  positive. The 701/714-line TensorFlow references share long C++ API
+  catalogs, but the member uniquely contains a Keras Dense-model example, an
+  MSE derivation, and detailed Placeholder shape-attribute documentation. The
+  canonical instead contains addition, matrix-multiplication, and Conv3D
+  attribute examples. Character, line, and word-sequence similarities are
+  0.777123, 0.090459, and 0.763013. Member/canonical text SHA-256 values are
+  `8092a2338ebbd9e864ac0248fde658e6eff82c28bd3beb3d91047140acff784f`
+  and
+  `d00b75e89cdd863f9a057f1d501eb6dbaa594486564a89277931aa30c78090b9`.
+
+- `/rav/datakit-6854-inspect-row1205-2354-v736` persisted both complete texts,
+  their complete 1,409-line diff, and all three model judgments with inspection
+  SHA-256
+  `161e90ed66feb7ad10702d991d3eee913a9e4cd3b301dd6b9d295bf4713847dc`.
+  `/rav/datakit-6854-publish-row1205-2357-v737` published the hash-bound
+  false-positive record, and
+  `/rav/datakit-6854-verify-row1205-2357-v738` independently reread the source
+  pair, semantic checkpoint, inspection, deterministic Parquet bytes, and
+  completion marker. The semantic-judgment, manual-record, and marker SHA-256
+  values are
+  `32568dd182f39f174f365fd0b2243b2edc0b59ef3a6969f2ad65e3d5177c6e10`,
+  `765248921dd8643939aac3398a0d97487a629e4a1130564013ed188d9d820383`,
+  and
+  `d6b6ebd61cf6b0daf463403a50b1518c8514259c11a6337a264ed1af291fb845`.
+
+- Across the stable 1,540-checkpoint snapshot, all 231 unresolved model
+  outcomes are covered by 179 true-duplicate and 52 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 156,315 pairs, 99,351 false positives, 56,964 true duplicates;
+  - treatment: 39,249 pairs, 20,316 false positives, 18,933 true duplicates;
+  - combined: 195,564 pairs, 119,667 false positives, 75,897 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(40, 0)`, p2 `(72, 896)`,
+  and p3 `(105, 0)`. P2's next baseline batch has two oversized pairs and
+  requires 292 minimum model requests. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T23:50:00Z — 195,308 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2349-v734` independently
