@@ -800,3 +800,28 @@ Both are predicted compliant with real margin, and both beat the only measured c
 RECOMMENDATION for the final leg: m=3 @ cf1.05. Same MFU as m=2 within 0.02pp but 0.54pp more compliance
 margin, which is worth having given the spill axis is the optimistic one. If it lands at ~1.2% that is a
 signal there is headroom to lower cf further, and cf1.02 (est. 21.62%, ~2.3%) becomes the follow-up.
+
+## RETRACTION 06:05 — cf1.15's "20.85% is wrong" was itself the error class we have been fixing
+I wrote that cf1.15's MFU is 20.416% "not the 20.85% on the record". That was wrong and I retract it.
+20.85% came from a 120-STEP leg; my 20.416% is a 350-STEP leg. By the LR-schedule finding I established
+myself, those sample different schedule positions; and by the drop-artifact rule also established this
+session, they sit at different DROP REGIMES (3.7% end-of-anneal vs 2.60% steady state). Fewer drops means
+more real work at the same step accounting, which reads as LOWER MFU. So:
+  20.85%  @ 3.7% drops, 120-step leg
+  20.416% @ 2.60% drops, 350-step leg
+are CONSISTENT measurements of one configuration in two regimes, not a correction. Calling the older one
+wrong would have repeated exactly the mistake this whole repair exists to fix - reading a right number in the
+wrong frame. Rule going forward: quote cf1.15 with its run length and drop level attached, and use the
+350-step number when comparing against the 350-step spill legs.
+
+## SAME-REGIME CAPACITY PRICE and the re-derived prediction
+Both endpoints now measured at 350 steps on my own draws:
+  cf1.0 m=0 22.062 -> cf1.15 m=0 20.416 = -1.646pp per +0.15 cf = -0.5487pp per +0.05
+  (the 120-step pair implied -0.583pp per +0.05; the same-regime price is 0.034pp cheaper)
+PRE-REGISTERED PREDICTION for /mwittmann/ep25d1-spill3-cf105-350-0726-0603 (m=3 @ cf1.05, 350 steps),
+every term now from the same regime:
+  MFU   = 22.062 - 0.5487 (capacity) - 0.213 (spill m=3) = 21.30%
+  drops = 0.0078 (model) x 1.590 (axis-split correction: 1.50 spill at m=3, 1.03 capacity interp at cf1.05)
+        = 1.24%
+  => predicted +0.88pp over cf1.15 m=0 (20.416% @ 2.60%) at comparable-or-better fidelity, same run length.
+Stated before the result, and I will report it against the measurement either way.
