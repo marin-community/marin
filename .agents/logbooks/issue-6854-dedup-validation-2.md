@@ -16,6 +16,93 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T21:43:45Z — 186,643 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2135-v641` independently
+  revalidated five p1 decision-file 39 checkpoints at semantic offsets 3,200
+  through 3,712. Their 640 baseline pairs contain 390 model false positives,
+  247 model true duplicates, and three unresolved outcomes. Two pairs were
+  chunked and 638 were direct. All 1,458 judgments and request attempts were
+  valid on their first attempt.
+
+- The outcome Parquet SHA-256 values are
+  `154e536e59e7e0ce6d3a83362ff3b5b55d7a362aeb1e3f4deb08c9d704f87d88`,
+  `1db6f0136193a41ee18d174d4ec4392a3b7e4fac0e48bee32df11e0efecd89b0`,
+  `26f66042077ccd5c199e1e1768d7cf320e7bc8314dbee8190a98769127df5915`,
+  `ed99c6c2a642ab936edd95fdb12167ddca21eefacbdad796d9519a840a14115b`,
+  and
+  `8587a8d50618888f304d723a39e4d0c6068e63ca2fd432d146d6dde005ff295a`.
+
+- Three separate inspection jobs read, hash-bound, and persisted every complete
+  unresolved pair:
+
+  - Row 5,587 is a 3,932-character member and 4,074-character canonical with
+    character, line, and word-sequence similarity 0.757682, 0.48, and
+    0.671587. The thermostat pages share a rewritten installation scaffold,
+    but the member uniquely references a Y Plan wiring video and a solved
+    no-common-wire problem. The canonical instead focuses on hooking a Nest
+    thermostat to a humidifier. The manual label is false positive.
+  - Row 5,749 is a 5,142-character member and 5,444-character canonical with
+    similarity 0.709239, 0.4375, and 0.659280. The builder pages share a
+    rewritten scaffold but advertise different services and places. The member
+    uniquely describes Langley Corner property refurbishment, planning, and
+    architectural services; the canonical describes Moss End kitchen
+    renovation. The manual label is false positive.
+  - Row 6,004 is a 6,474-character member and 6,338-character canonical with
+    similarity 0.817827, 0.472222, and 0.784865. The CheaperForex articles
+    share a rewritten scaffold, but the member uniquely claims that advanced
+    algorithms and tools analyze trends and maximize profits. It also adds a
+    concluding claim about dedication, perseverance, and continuous education.
+    The manual label is false positive.
+
+- The inspection jobs for rows 5,587, 5,749, and 6,004 are
+  `/rav/datakit-6854-inspect-row5587-2137-v642`,
+  `/rav/datakit-6854-inspect-row5749-2137-v643`, and
+  `/rav/datakit-6854-inspect-row6004-2137-v644`. Their inspection SHA-256
+  values are
+  `7c6037be9fafdae65194428ce40d248bef84d029a71a159515c3d48898ad8517`,
+  `675de76308a7e3b29e4e6593e6857e1390f2e295fecc93450d45630157b82a2e`,
+  and
+  `b55d7593b50915fae2e6d47fdafd0e010c39322387b1adf812b4ddcdbbedb21b`.
+  Their semantic-judgment SHA-256 values are
+  `8b09e6ee09c18341a27c5de9867decb8f29bc0500a80c952d81af17a4cb301a3`,
+  `570790d190de7d95e7cc0b5f1ab643e45071a980b8d26a4963b3adc11d91dea5`,
+  and
+  `cf0e1bde5f37a530f8cdd8e7caed7990cac9105a0dd95972fd529ab7b6303e0c`.
+
+- `/rav/datakit-6854-publish-row5587-2140-v647`,
+  `/rav/datakit-6854-publish-row5749-2139-v646`, and
+  `/rav/datakit-6854-publish-row6004-2139-v645` wrote the three manual Parquet
+  and completion-marker pairs. Their manual SHA-256 values are
+  `fc0a8a5aec12c455fade079d706e13fee8e8f9320b6baa188a26c73e65a31351`,
+  `9ebb1f92d178a5b2923c4ce23b435d5ac2442447fe9b61b2d3945f60cadbd019`,
+  and
+  `e63ae61c50600eebf0f6eb594b77b1031d3271295f1c1c95ffaf5020a15e4158`.
+  Their marker SHA-256 values are
+  `22221fec105b51ca8ecddc50387e09689ef186b3f8ff4367d631a957a24dfef0`,
+  `315db723f9b7d62525533cd4261dbb30966d69897947a85d5025ca6eef31bb22`,
+  and
+  `a94f056827ac27bcf895317d8bacb663413652ce231f4d98f91cac6181328e4c`.
+  `/rav/datakit-6854-verify-row5587-2141-v648`,
+  `/rav/datakit-6854-verify-row5749-2142-v649`, and
+  `/rav/datakit-6854-verify-row6004-2142-v650` independently fetched and
+  verified the exact artifacts.
+
+- Across the stable 1,469-checkpoint snapshot, all 213 unresolved model
+  outcomes are covered by 163 true-duplicate and 50 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 149,804 pairs, 95,070 false positives, 54,734 true duplicates;
+  - treatment: 36,839 pairs, 19,053 false positives, 17,786 true duplicates;
+  - combined: 186,643 pairs, 114,123 false positives, 72,520 true duplicates.
+
+- The next audit frontiers are p0 `(8, 0)`, p1 `(39, 3,840)`, p2 `(72, 0)`,
+  and p3 `(104, 128)`. P1's next baseline batch has 153 review units and 306
+  minimum model requests, including one oversized pair. P2's next batch has
+  468 review units and 936 minimum requests, including 13 oversized pairs. All
+  four batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T21:34:20Z — 186,003 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2131-v640` independently
