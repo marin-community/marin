@@ -193,3 +193,51 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 - [`test_optimizer.py`](./test_optimizer.py) — unit tests for the AdamH
   parameter-group mask.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.
+
+## Profiling and schedule tooling
+
+Three scripts answer "where did the time go, and why did XLA schedule it that way" without any
+external profiling dependency. They read from the run's xprof S3 root or an `--xla_dump_to`
+directory and print to stdout, so they run as cheap Iris CPU jobs and are harvested from job logs.
+
+- [`xplane_overlap.py`](./xplane_overlap.py) — per-op occupancy on the GPU device timelines and
+  how much of each op is concurrent with work on other streams, plus total exposed collective
+  time. Answers *how much* is hidden.
+- [`xplane_op_detail.py`](./xplane_op_detail.py) — attributes GPU kernels back to HLO
+  instructions and to the jaxpr scope (`shard_map/dispatch/all_to_all`, forward vs backward), so a
+  kernel appearing on two streams can be split by instruction. Answers *which op*.
+- [`schedule_report.py`](./schedule_report.py) — from an `--xla_dump_to` dump, which collectives
+  the post-scheduling pass collapsed to synchronous, and what work covers the ones that stayed
+  async. Answers *why*.
+
+A single-node job (`GRUG_RUN_INLINE=1`, `--gpu <type>x4 --extra gpu`, and a wrapper that runs the
+launcher and then the report) reproduces scheduling decisions from the multi-node config when the
+mesh is chosen so `num_experts / expert_axis` matches the rack's local expert count. Verify any
+census taken this way against the rack profile before trusting it: a small mesh manufactures
+entry-level reshard collectives that the large mesh does not have.
+
+### Dump-reading traps
+
+These cost real debugging time; the parsing ones are covered by
+[`test_schedule_report.py`](./test_schedule_report.py).
+
+- **A collapsed collective still looks async.** `GpuConvertAsyncCollectivesToSync` does not delete
+  the pair — it tags the start with `is_sync` and re-emits start/done adjacently. The tag, not the
+  shape of the text, says whether a collective runs inline on the compute stream.
+- **Pick the dump by size, not by name.** XLA emits the same module under both
+  `after_optimizations` and `<arch>_gpu_after_optimizations`, plus dozens of tiny helper modules
+  under both spellings. A name preference silently selects `jit__threefry_split`.
+- **Instruction lines are not `name = <shape> opcode(`.** Tuple shapes contain spaces and nested
+  parens. Match the defined name and classify off substrings instead.
+- **Computations are delimited by column, not by brace balance.** `backend_config`,
+  `replica_groups` and metadata strings carry unbalanced braces; on a large dump one such line
+  desynchronizes every computation after it (157 computations found instead of 10972). Headers
+  start at column 0 and end in `{`; a lone `}` at column 0 closes.
+- **The async suffix follows the tag**: `all-to-all-start.16`, not `all-to-all.16-start`, so
+  `endswith("-start")` silently matches nothing. A done line also lists its start's *shape* before
+  the name, so `-done(%name)` never matches — look for `%name` anywhere on the done line. And
+  `ROOT %x = ...` lines need the `ROOT` prefix stripped or they are skipped entirely.
+- **`shard_map` collectives use underscores** (`all_to_all.112`) while native ones use hyphens
+  (`all-to-all-start`). Normalize before matching.
+- Levanter's `log_xla_hlo` writes StableHLO (pre-optimization) and cannot answer schedule
+  questions; only `--xla_dump_to` produces the scheduled module.
