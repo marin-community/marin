@@ -6,11 +6,13 @@
 This is an authoritative production-mixed-precision check for the
 device-initiated ``ragged_all_to_all`` path. The production gate reserves four
 H100x8 Iris tasks so every rank has an isolated physical node, then selects one
-working two-GPU pair per rank for its ``expert=2`` mesh. Each task computes its
-direct reference in a bounded single-process child before initializing the
-distributed JAX runtime in a second fresh process with that pair visible. The
-single-host fallback self-spawns four JAX processes on one H100x8 host and
-serializes only their direct-reference executions.
+working two-GPU pair per rank for its ``expert=2`` mesh. Each task attempts the
+complete direct reference in a bounded single-process child before initializing
+the distributed JAX runtime in a second fresh process with that pair visible.
+Once all ranks have initialized, one successful child result is shared through
+JaxPP's host-side distributed client. The single-host fallback self-spawns four
+JAX processes on one H100x8 host and serializes only their direct-reference
+executions.
 
 After installing the pinned JAX/JaxPP runtime with ``jaxpp_setup_scripts()``
 from ``train.py``, run the command below in every task of a four-replica
@@ -227,6 +229,52 @@ def _wait_at_jaxpp_barrier(name: str) -> None:
     client.wait_at_barrier(name, dime2.env_vars.jaxpp_client_timeout.value)
 
 
+def _share_standalone_direct_result(
+    process_id: int,
+    local_result: tuple[Any, Any] | None,
+) -> tuple[Any, Any]:
+    dime2 = grug_train.jaxpp_dime2
+    if dime2 is None:
+        raise ModuleNotFoundError("jaxpp.dime2 is required to share the direct parity reference")
+
+    client = dime2.get_distributed_client()
+    timeout = dime2.env_vars.jaxpp_client_timeout.value
+    status_key = f"grug-ragged-parity-direct-status-{process_id}"
+    result_key = f"grug-ragged-parity-direct-result-{process_id}"
+    client.key_value_set_bytes(status_key, b"1" if local_result is not None else b"0")
+    if local_result is not None:
+        client.key_value_set_bytes(result_key, pickle.dumps(local_result))
+    client.wait_at_barrier("grug_ragged_parity_direct_results_published", timeout)
+
+    source_process_id = next(
+        (
+            candidate_process_id
+            for candidate_process_id in range(PIPELINE_STAGES)
+            if client.blocking_key_value_get_bytes(
+                f"grug-ragged-parity-direct-status-{candidate_process_id}",
+                timeout,
+            )
+            == b"1"
+        ),
+        None,
+    )
+    if source_process_id is None:
+        raise RuntimeError("no pipeline rank produced a standalone direct reference")
+
+    shared_result = pickle.loads(
+        client.blocking_key_value_get_bytes(
+            f"grug-ragged-parity-direct-result-{source_process_id}",
+            timeout,
+        )
+    )
+    _event(
+        process_id,
+        "standalone_direct_reference_shared",
+        source_process_id=source_process_id,
+    )
+    return shared_result
+
+
 def _standalone_direct_reference(process_id: int, device_pair: str, output_path: Path) -> None:
     faulthandler.dump_traceback_later(60, repeat=True)
     try:
@@ -254,11 +302,11 @@ def _standalone_direct_reference(process_id: int, device_pair: str, output_path:
                 )
             )
             direct_loss, direct_gradients = direct_step(direct_state.params, direct_batch)
-            direct_stage_gradient = direct_gradients.split_for_pipeline(
+            direct_stage_gradients = direct_gradients.split_for_pipeline(
                 pipeline.stages,
                 pipeline.stage_layer_counts,
-            )[process_id]
-            host_result = jax.device_get((direct_loss, direct_stage_gradient))
+            )
+            host_result = jax.device_get((direct_loss, direct_stage_gradients))
         with output_path.open("wb") as output:
             pickle.dump(host_result, output)
         _event(process_id, "standalone_direct_reference_complete", device_pair=device_pair)
@@ -312,10 +360,18 @@ def _standalone_direct_reference_result(process_id: int):
                 device_pair=device_pair,
                 error=str(error),
             )
-    raise RuntimeError("all standalone direct-reference device pairs failed: " + "; ".join(failures))
+    _event(
+        process_id,
+        "standalone_direct_reference_unavailable",
+        error="; ".join(failures),
+    )
+    return None, _DIRECT_REFERENCE_DEVICE_PAIRS[0]
 
 
-def _run_distributed_worker_subprocess(standalone_direct_result: tuple[Any, Any], device_pair: str) -> int:
+def _run_distributed_worker_subprocess(
+    standalone_direct_result: tuple[Any, Any] | None,
+    device_pair: str,
+) -> int:
     descriptor, raw_input_path = tempfile.mkstemp(prefix="jaxpp-ragged-parity-direct-result-", suffix=".pkl")
     os.close(descriptor)
     input_path = Path(raw_input_path)
@@ -345,6 +401,7 @@ def _run_initialized_worker(
     process_id: int,
     direct_reference_barrier: Any | None,
     standalone_direct_result: tuple[Any, Any] | None = None,
+    share_standalone_result: bool = False,
 ) -> None:
     faulthandler.dump_traceback_later(120, repeat=True)
     completed = False
@@ -356,6 +413,11 @@ def _run_initialized_worker(
             device_count=jax.device_count(),
         )
         environment = _authoritative_environment()
+        if share_standalone_result:
+            standalone_direct_result = _share_standalone_direct_result(
+                process_id,
+                standalone_direct_result,
+            )
         pipeline = _pipeline_config()
         mesh = grug_train._compact_or_pipeline_grug_mesh(
             expert_axis_size=EXPERT_AXIS_SIZE,
@@ -386,7 +448,8 @@ def _run_initialized_worker(
         stage_batches = _stage_batches(mpmd_mesh, batch)
 
         if standalone_direct_result is not None:
-            direct_loss, direct_stage_gradient = standalone_direct_result
+            direct_loss, direct_stage_gradients = standalone_direct_result
+            direct_stage_gradient = direct_stage_gradients[local_stage_index]
             _event(process_id, "standalone_direct_reference_loaded", stage_index=local_stage_index)
             grug_train._warm_jaxpp_device_ragged(
                 mpmd_mesh,
@@ -575,7 +638,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             standalone_direct_result = pickle.load(direct_input)
         initialize_jax()
         _event(jax.process_index(), "distributed_initialize_complete")
-        _run_initialized_worker(jax.process_index(), None, standalone_direct_result)
+        _run_initialized_worker(
+            jax.process_index(),
+            None,
+            standalone_direct_result,
+            share_standalone_result=True,
+        )
         return 0
 
     job_info = get_job_info()

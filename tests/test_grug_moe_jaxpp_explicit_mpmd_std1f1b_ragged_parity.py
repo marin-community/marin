@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import optax
 import pytest
 
+from experiments.grug.moe import check_jaxpp_explicit_mpmd_std1f1b_ragged_parity as parity
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import DEFAULT_TOLERANCE
 from experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity import (
     build_stage_parity_report,
@@ -73,3 +74,47 @@ def test_device_ragged_validation_rejects_host_initiated_mode():
 
     with pytest.raises(ValueError, match="device-ragged parity requires"):
         validate_device_ragged_flags("--xla_gpu_autotune_level=0")
+
+
+def test_direct_reference_can_be_loaded_from_another_pipeline_rank(monkeypatch):
+    expected_result = ("loss", ("stage-0", "stage-1", "stage-2", "stage-3"))
+
+    class FakeClient:
+        def __init__(self):
+            self.values = {
+                "grug-ragged-parity-direct-status-1": b"1",
+                "grug-ragged-parity-direct-status-2": b"0",
+                "grug-ragged-parity-direct-status-3": b"0",
+                "grug-ragged-parity-direct-result-1": parity.pickle.dumps(expected_result),
+            }
+
+        def key_value_set_bytes(self, key, value):
+            self.values[key] = value
+
+        def wait_at_barrier(self, name, timeout):
+            assert name == "grug_ragged_parity_direct_results_published"
+            assert timeout == 123
+
+        def blocking_key_value_get_bytes(self, key, timeout):
+            assert timeout == 123
+            return self.values[key]
+
+    fake_client = FakeClient()
+    fake_dime2 = type(
+        "FakeDime2",
+        (),
+        {
+            "get_distributed_client": staticmethod(lambda: fake_client),
+            "env_vars": type(
+                "FakeEnvVars",
+                (),
+                {"jaxpp_client_timeout": type("FakeTimeout", (), {"value": 123})()},
+            )(),
+        },
+    )
+    monkeypatch.setattr(parity.grug_train, "jaxpp_dime2", fake_dime2)
+
+    result = parity._share_standalone_direct_result(0, None)
+
+    assert result == expected_result
+    assert fake_client.values["grug-ragged-parity-direct-status-0"] == b"0"
