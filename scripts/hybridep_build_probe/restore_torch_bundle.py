@@ -16,7 +16,7 @@ import zstandard
 
 TORCH_BUNDLE_URI = "s3://marin-us-east-02a/tmp/ttl=7d/wheels/ep64-torch-cu128-sitepackages.tar.zst"
 CUDA13_BUNDLE_URI = "s3://marin-us-east-02a/tmp/ttl=7d/wheels/ep64-cuda13-toolkit.tar.zst"
-HYBRIDEP_BUNDLE_URI = "s3://marin-us-east-02a/tmp/ttl=7d/wheels/ep64-hybridep-jax-metadata-headroom-v8.tar.zst"
+HYBRIDEP_BUNDLE_URI = "s3://marin-us-east-02a/tmp/ttl=7d/wheels/ep64-hybridep-jax-remat-release-v9.tar.zst"
 
 
 def _extract_bundle(uri: str, site_packages: Path) -> None:

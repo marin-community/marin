@@ -179,6 +179,7 @@ def _raw_combine_with_probabilities(
     expert_hidden: jax.Array,
     expert_probabilities: jax.Array,
     handle_token: jax.Array,
+    rematerialized_handle_token: jax.Array,
     output_rows: int,
     num_experts: int,
 ) -> tuple[jax.Array, jax.Array]:
@@ -191,7 +192,7 @@ def _raw_combine_with_probabilities(
         output_shapes,
         has_side_effect=_FFI_HAS_SIDE_EFFECT,
         vmap_method="broadcast_all",
-    )(expert_hidden, expert_probabilities, handle_token)
+    )(expert_hidden, expert_probabilities, handle_token, rematerialized_handle_token)
     return combined_hidden, combined_probabilities
 
 
@@ -226,7 +227,7 @@ def _hybridep_dispatch_fwd(
     local_experts: int,
 ):
     outputs = _raw_dispatch(hidden, routing_map, probabilities, output_rows, local_experts)
-    return outputs, (hidden.shape, routing_map.shape[1])
+    return outputs, (hidden.shape, routing_map.shape[1], outputs[3])
 
 
 def _hybridep_dispatch_bwd(
@@ -236,7 +237,7 @@ def _hybridep_dispatch_bwd(
     cotangents,
 ):
     del local_experts
-    hidden_shape, num_experts = residuals
+    hidden_shape, num_experts, rematerialized_handle = residuals
     hidden_cotangent = _cotangent_array(
         cotangents[0],
         shape=(output_rows, hidden_shape[1]),
@@ -256,6 +257,7 @@ def _hybridep_dispatch_bwd(
         hidden_cotangent,
         probability_cotangent,
         backward_handle,
+        rematerialized_handle,
         hidden_shape[0],
         num_experts,
     )

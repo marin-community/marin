@@ -162,6 +162,7 @@ def _combine_with_probabilities(
     expert_hidden: jax.Array,
     expert_probabilities: jax.Array,
     handle_token: jax.Array,
+    rematerialized_handle_token: jax.Array,
     output_rows: int,
     num_experts: int,
 ):
@@ -174,7 +175,7 @@ def _combine_with_probabilities(
         output_shapes,
         has_side_effect=False,
         vmap_method="broadcast_all",
-    )(expert_hidden, expert_probabilities, handle_token)
+    )(expert_hidden, expert_probabilities, handle_token, rematerialized_handle_token)
 
 
 def main() -> None:
@@ -356,6 +357,7 @@ def main() -> None:
         hidden_cotangent, probability_cotangent = _combine_with_probabilities(
             dispatched_hidden_cotangent,
             dispatched_probability_cotangent,
+            backward_handle,
             backward_handle,
             tokens,
             num_experts,

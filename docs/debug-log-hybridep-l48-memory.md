@@ -59,8 +59,39 @@ headroom that DeepEP can reuse at dispatch.
   headroom clears the earlier first-dispatch OOM through a five-handle schedule,
   but it still has no completed training step or MFU measurement.
 
+## Hypothesis 2
+
+The L48 allocation failure after 21 dispatches is a custom-VJP ownership leak,
+not ordinary activation liveness. Under `jax.checkpoint`, the reverse scan
+replays the forward dispatch to reconstruct the expert input needed by the
+expert-MLP gradient. It does not replay the corresponding forward combine.
+DeepEP therefore inserts the replay dispatch's roughly 576 MiB handle into its
+process-global map, but no FFI call consumes it.
+
+## Changes to make
+
+Retain the replay dispatch handle as a custom-VJP residual. Pass it alongside
+the real backward handle to combine-with-probabilities, which consumes the
+backward handle and releases the replay handle in one stream synchronization.
+
+## Results
+
+- A reduced JAXPR reproduces the reverse-scan sequence exactly: one replay
+  dispatch, one backward dispatch, and one combine consuming only the backward
+  handle.
+- The existing L48 logs show the corresponding runtime behavior: active
+  handles rise monotonically to 21 with no release before the next 256 MiB
+  metadata allocation fails.
+- A 48-layer, 65,536-token, d5120 residual-scan gradient smoke passed on four
+  GB200 GPUs. All four ranks repeated the bounded live-handle sequence
+  `1 → 2 → 3 → 2 → 1` through the full reverse scan and passed the hidden and
+  routing-probability gradient checks.
+- The validated bridge bundle was uploaded with SHA-256
+  `b8b7da360f29866b697905efde827be3b44046feab766d45556bb7cd8c39a3c5`.
+
 ## Future work
 
 - [ ] Confirm the PyTorch reservation and JAX allocator split on GB200.
 - [ ] Identify metadata unused by fused permute-dispatch/unpermute-combine.
-- [ ] Validate the smallest memory fix on L48, then measure MFU and overflow.
+- [ ] Validate the fix in the locked EP64 training executable, then measure MFU
+      and overflow.

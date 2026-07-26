@@ -123,6 +123,64 @@ ffi::Error ReadHandle(
   return ffi::Error::Success();
 }
 
+ffi::Error ReadHandleAndReleaseRematerialized(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32, 0> handle_token,
+    ffi::Buffer<ffi::F32, 0> rematerialized_handle_token,
+    HandleImpl* handle) {
+  float encoded_handles[2] = {};
+  cudaError_t status = cudaMemcpyAsync(
+      &encoded_handles[0],
+      handle_token.untyped_data(),
+      sizeof(encoded_handles[0]),
+      cudaMemcpyDeviceToHost,
+      stream);
+  if (status != cudaSuccess) {
+    return CudaError(status, "cudaMemcpyAsync(HybridEP backward handle token)");
+  }
+  status = cudaMemcpyAsync(
+      &encoded_handles[1],
+      rematerialized_handle_token.untyped_data(),
+      sizeof(encoded_handles[1]),
+      cudaMemcpyDeviceToHost,
+      stream);
+  if (status != cudaSuccess) {
+    return CudaError(status, "cudaMemcpyAsync(HybridEP rematerialized handle token)");
+  }
+  status = cudaStreamSynchronize(stream);
+  if (status != cudaSuccess) {
+    return CudaError(status, "cudaStreamSynchronize(HybridEP backward handle tokens)");
+  }
+
+  const auto handle_id = static_cast<int32_t>(std::lrint(encoded_handles[0]));
+  auto handle_iterator = Handles().find(handle_id);
+  if (handle_id <= 0 ||
+      encoded_handles[0] != static_cast<float>(handle_id) ||
+      handle_iterator == Handles().end()) {
+    return ffi::Error(
+        ffi::ErrorCode::kFailedPrecondition,
+        "HybridEP combine received an unknown backward dispatch handle");
+  }
+  *handle = std::move(handle_iterator->second);
+  Handles().erase(handle_iterator);
+  TraceHandleEvent("combine_with_probabilities", handle_id);
+
+  const auto rematerialized_handle_id =
+      static_cast<int32_t>(std::lrint(encoded_handles[1]));
+  if (rematerialized_handle_id <= 0 ||
+      encoded_handles[1] != static_cast<float>(rematerialized_handle_id)) {
+    return ffi::Error(
+        ffi::ErrorCode::kFailedPrecondition,
+        "HybridEP combine received an invalid rematerialized dispatch handle");
+  }
+  auto rematerialized_iterator = Handles().find(rematerialized_handle_id);
+  if (rematerialized_iterator != Handles().end()) {
+    Handles().erase(rematerialized_iterator);
+    TraceHandleEvent("release_rematerialized", rematerialized_handle_id);
+  }
+  return ffi::Error::Success();
+}
+
 at::Tensor TensorFromBF16(void* data, int64_t rows, int64_t columns) {
   return torch::from_blob(
       data,
@@ -377,6 +435,7 @@ ffi::Error HybridEPCombineWithProbabilities(
     ffi::Buffer<ffi::BF16, 2> expert_hidden,
     ffi::Buffer<ffi::F32, 1> expert_probabilities,
     ffi::Buffer<ffi::F32, 0> handle_token,
+    ffi::Buffer<ffi::F32, 0> rematerialized_handle_token,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> combined_hidden,
     ffi::Result<ffi::Buffer<ffi::F32, 2>> combined_probabilities) {
   try {
@@ -387,8 +446,11 @@ ffi::Error HybridEPCombineWithProbabilities(
           "HybridEP JAX runtime is not initialized");
     }
     HandleImpl handle;
-    ffi::Error handle_error =
-        ReadHandle(stream, handle_token, "combine_with_probabilities", &handle);
+    ffi::Error handle_error = ReadHandleAndReleaseRematerialized(
+        stream,
+        handle_token,
+        rematerialized_handle_token,
+        &handle);
     if (handle_error.failure()) {
       return handle_error;
     }
@@ -494,6 +556,7 @@ auto HybridEPCombineWithProbabilitiesBinding() {
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::F32, 1>>()
+      .Arg<ffi::Buffer<ffi::F32, 0>>()
       .Arg<ffi::Buffer<ffi::F32, 0>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 2>>();

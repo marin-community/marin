@@ -15,7 +15,7 @@ import fsspec
 import zstandard
 
 SOURCE_ROOT = Path("/tmp/DeepEP")
-OUTPUT_PATH = Path("/tmp/ep64-hybridep-jax-metadata-headroom-v8.tar.zst")
+OUTPUT_PATH = Path("/tmp/ep64-hybridep-jax-remat-release-v9.tar.zst")
 
 
 def _include(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
