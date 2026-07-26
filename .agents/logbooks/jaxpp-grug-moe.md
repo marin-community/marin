@@ -3517,3 +3517,22 @@ author: dlwh
   - This is a functional milestone, not a performance result. The three-step MFU includes short-run compilation/warmup effects and remains below the matched ring baseline.
 - Next action:
   - Require every stage's loss and every corresponding gradient leaf to pass `0.002`. If parity passes, launch L24/b512/m16 at `0.50` before any batch scaling.
+
+### 2026-07-26 09:42 PDT - authoritative parity reaches explicit execution and deadlocks
+- Hypothesis: Computing one complete direct reference before distributed initialization, publishing it through JaxPP's host-side client, then warming device-ragged collectives before ordered DIME creation will let the four-stage parity graph execute.
+- Commit Hash: `fedd078480` makes standalone reference failure non-fatal, publishes one successful complete loss/gradient result to every rank through the distributed client, and retains the fixed relative-L2 `0.002` gate for loss and every gradient leaf.
+- Commands:
+  - Parity attempts r1-r11 progressively isolated direct-reference execution from the distributed runtime. Same-host attempts hung in direct `block_until_ready`; four separate H100x8 tasks with fresh children showed that working local GPU pairs vary by node and that one task can fail all bounded pair attempts.
+  - `/dlwh/jaxpp-ragged-parity-r12-20260726-1745` was setup-invalid because it used the removed `jax-ml/jax-tvm-ffi` URL. It terminated before the harness started and contributed no runtime evidence.
+  - `/dlwh/jaxpp-ragged-parity-r13-20260726-1732` ran four H100x8 tasks on cw-rno2a with JAX `0.11.1.dev20260725`, NCCL `2.30.7`, JaxPP `7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9`, patched NVIDIA `jax-tvm-ffi` `e238a28483123efc8f56b9de358c2fb8b8de77e5`, device-ragged XLA flags, XLA preallocation `0.35`, four one-layer stages, four microbatches, and production mixed precision.
+- Results:
+  - All four tasks produced a complete direct reference. Working pairs were rank 0 `6,7`, rank 1 `2,3`, rank 2 `0,1`, and rank 3 `6,7`; earlier pairs timed out after 90 seconds.
+  - All ranks initialized the distributed runtime, selected rank 0's full direct result, loaded the corresponding stage gradient, completed device-ragged warmup and the host barrier, completed ordered DIME prewarm, lowered their explicit stage, and entered explicit execution together at `16:35:28Z`.
+  - No rank returned from execution. Identical watchdog locations persisted from `16:37:01Z` through `16:41:01Z`: rank 0 in `jaxpp/dime2.py:309 enqueue_nccl_transfer_group`, rank 1 in `jax/_src/compiler.py:377 backend_compile_and_load`, and ranks 2-3 in PJRT execution through `jax/_src/interpreters/pxla.py:420`.
+  - The parent was stopped after more than five minutes without progress. It is terminal killed with all 4/4 tasks completed and no live descendant or allocation.
+  - No JSON parity report was produced, so the `0.002` numerical gate was not evaluated.
+- Interpretation:
+  - Direct-reference GPU selection and cross-rank sharing are solved. The deadlock is localized after successful warmup, DIME initialization, and lowering to rank-asymmetric explicit `eval_local` execution.
+  - This reproduces #7655 with a one-layer-per-stage graph and a precomputed host reference. It is not evidence of a numerical mismatch.
+- Next action:
+  - Minimize the explicit execution graph at this boundary, starting with schedule microbatch count and transfer/task payload while preserving four distributed ranks and device-ragged MoE. Do not launch L24 performance work until the fixed `0.002` gate produces four passing reports.
