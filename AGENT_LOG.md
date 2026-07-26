@@ -250,3 +250,18 @@ by measurement: the coordinator's drop-model reframing, d1's toy-scale (mu=32) d
 "1,433,447 is prime" argument. Each was corrected before it reached a conclusion, and in each case the
 conclusion survived on better evidence. Worth one sentence in the write-up: a reader should trust the
 surviving numbers more, not less, knowing the failed ones were caught by the same process.
+
+## Check-in 8 — projected memory for the 4-of-128 fallback, from the now-verified decomposition
+
+The same accounting applied to cand B (d6144, 128 experts, top-4, EP64 -> 2 local experts/GPU):
+
+    resident: expert params fp32 20.25 GiB + MuonH momentum 20.25 + embedding trio 8.81  = ~49 GiB
+    temp arena: fp32 grad accumulators 20.25 + bf16 residual stack 36.0 (unchanged, it scales
+                with tokens not experts) + per-layer working set ~10-15               = ~70 GiB
+    total ~119 GiB against the 138.22 GiB limit at the DEFAULT 0.75 fraction.
+
+So the prediction is that 4-of-128 fits one rack at EP64 with no offload and no fraction bump, while
+4-of-256 does not fit even at fraction 1.0. Note this mirrors #7201's own choices exactly: their
+4-of-128 candidate is a 1-rack command and their 4-of-256 candidate is a 2-rack command. The EP64 path
+hits the same wall at the same place as their FSDP path, which is a coherence check on both.
+Ready to fire as `./submit_d5.sh rack-e128` if the offload rung fails.
