@@ -6,8 +6,7 @@ from collections.abc import Iterator
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 
 from scripts.ci.wait_for import BackoffConfig, EventKind, EventSpec, IrisJobSource, select_loop
 
@@ -16,16 +15,20 @@ class FakeIrisJobClient:
     def __init__(self, states: Iterator[job_pb2.JobState | ConnectError]):
         self._states = states
 
-    def get_job_states_once(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
+    def get_job_state(
+        self, request: controller_pb2.Controller.GetJobStateRequest
+    ) -> controller_pb2.Controller.GetJobStateResponse:
         state = next(self._states)
         if isinstance(state, ConnectError):
             raise state
-        return {job_ids[0].to_wire(): state}
+        return controller_pb2.Controller.GetJobStateResponse(states={request.job_ids[0]: state})
 
 
 class MissingIrisJobClient:
-    def get_job_states_once(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
-        return {}
+    def get_job_state(
+        self, request: controller_pb2.Controller.GetJobStateRequest
+    ) -> controller_pb2.Controller.GetJobStateResponse:
+        return controller_pb2.Controller.GetJobStateResponse()
 
 
 @pytest.mark.parametrize(

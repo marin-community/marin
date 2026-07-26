@@ -60,9 +60,9 @@ import click
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.types import JobName, is_job_finished
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import format_connect_error, is_retryable_error
 from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
@@ -72,6 +72,7 @@ from rigging.timing import ExponentialBackoff
 GH_TIMEOUT = 60.0
 # Give a flaky source several backoff rounds before declaring the wait unworkable.
 MAX_SOURCE_ERRORS = 5
+IRIS_JOB_RPC_TIMEOUT_MS = 30_000
 
 # `gh pr checks --json` reports one bucket per check, already deduped to the latest
 # run (the same view as the UI / `gh pr checks` exit code), so superseded reruns do
@@ -429,7 +430,9 @@ class Source:
 
 
 class IrisJobClient(Protocol):
-    def get_job_states_once(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]: ...
+    def get_job_state(
+        self, request: controller_pb2.Controller.GetJobStateRequest
+    ) -> controller_pb2.Controller.GetJobStateResponse: ...
 
 
 def _parse_pr(arg: str) -> str:
@@ -566,13 +569,14 @@ class IrisJobSource(Source):
             raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
 
     def check(self) -> dict | None:
-        states = self.client.get_job_states_once([self.job_id])
         wire_id = self.job_id.to_wire()
-        if wire_id not in states:
+        request = controller_pb2.Controller.GetJobStateRequest(job_ids=[wire_id])
+        response = self.client.get_job_state(request)
+        if wire_id not in response.states:
             # LaunchJob returns only after the controller registers the job, so
             # a missing target is invalid rather than a transient launch state.
             raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
-        state = states[wire_id]
+        state = response.states[wire_id]
         state_name = job_state_friendly(state)
         self.last_status = state_name
         if not is_job_finished(state):
@@ -721,16 +725,15 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     return [parse_spec(s) for s in raw]
 
 
-def _iris_client_from_job_info() -> RemoteClusterClient:
+def _iris_client_from_job_info() -> ControllerServiceClientSync:
     info = get_job_info()
     if info is None:
         raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")
     if not info.controller_address:
         raise click.ClickException("iris.job requires a controller address in the current Iris job metadata")
-    return RemoteClusterClient(
-        info.controller_address,
-        bundle_id=info.bundle_id,
-        use_controller_proxy=False,
+    return ControllerServiceClientSync(
+        address=info.controller_address,
+        timeout_ms=IRIS_JOB_RPC_TIMEOUT_MS,
     )
 
 
@@ -789,7 +792,7 @@ def main(
                 ignored.add(authenticated_user())
             iris_client = _iris_client_from_job_info() if needs_iris else None
             if iris_client is not None:
-                resources.callback(iris_client.shutdown, wait=False)
+                resources.callback(iris_client.close)
             sources = [
                 build_source(
                     s,

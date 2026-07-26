@@ -229,22 +229,14 @@ class RemoteClusterClient:
     def get_job_states(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
         """Lightweight batch query returning only the state enum per job."""
 
-        return call_with_retry(
-            f"get_job_states({len(job_ids)} jobs)",
-            lambda: self.get_job_states_once(job_ids),
-        )
+        def _call():
+            request = controller_pb2.Controller.GetJobStateRequest(
+                job_ids=[jid.to_wire() for jid in job_ids],
+            )
+            response = self._client.get_job_state(request)
+            return dict(response.states)
 
-    def get_job_states_once(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
-        """Query job states once without retrying.
-
-        Use this when the caller owns retry scheduling, such as a selector
-        with a deadline shorter than the standard retry budget.
-        """
-        request = controller_pb2.Controller.GetJobStateRequest(
-            job_ids=[jid.to_wire() for jid in job_ids],
-        )
-        response = self._client.get_job_state(request)
-        return dict(response.states)
+        return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
     def _poll_job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Fetch only the state enum for a single job via the lightweight RPC."""
