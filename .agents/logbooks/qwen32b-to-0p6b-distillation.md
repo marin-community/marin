@@ -174,3 +174,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: the 0.6B checkpoint staged successfully, but every tokenize shard failed before reading data. `load_tokenizer` interpreted the `s3://.../models/Qwen...` directory as a Hugging Face repository ID.
 - Interpretation: tokenizer staging supported local paths, the cross-region mirror, and Hugging Face IDs, but not explicit remote model directories. This is a boundary bug rather than a dataset failure.
 - Next action: teach tokenizer staging to copy only tokenizer files from explicit S3/GCS directories, cover the path with behavior tests, then resubmit with a new immutable artifact version.
+
+### 2026-07-26 17:05 - Full-batch systems smoke OOM
+
+- Hypothesis: four-way vocabulary and model sharding is sufficient for an exact online-KL step at sequence length 2,048 and batch size 8.
+- Commit hash: `651629ce09`.
+- Job: `/power/qwen-distill-smoke-651629` on one `GB200x4` node.
+- Result: data and all 17 teacher shards loaded, W&B initialized, and the train step traced and lowered. First execution failed on every device while allocating another 3.91 GiB; no step or checkpoint completed.
+- Interpretation: the failure is a compiled-step peak rather than staging, scheduler, or HLO-lowering failure. Preserve the effective batch and exact objective, but split it into two microbatches of four.
+- Next action: resubmit the 12-step smoke with `microbatch_size=4`; reduce to 2 only if the measured peak still exceeds capacity.

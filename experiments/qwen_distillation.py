@@ -56,12 +56,13 @@ SERIES = "QD"
 WANDB_GROUP = "QD-qwen32b-to-0p6b"
 SEQ_LEN = 2048
 BATCH_SIZE = 8
+MICROBATCH_SIZE = 4
 SCREEN_TOKENS = 100_000_000
 SCREEN_STEPS = math.ceil(SCREEN_TOKENS / (SEQ_LEN * BATCH_SIZE))
 SMOKE_STEPS = 12
 SCREEN_SEEDS = (0, 1)
 FULL_DATA_VERSION = "2026.07.26.2"
-SMOKE_DATA_VERSION = "2026.07.26.3"
+SMOKE_DATA_VERSION = "2026.07.26.4"
 SMOKE_DATA_DOCUMENTS = 1_000
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
@@ -223,7 +224,7 @@ def _trainer(
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=BATCH_SIZE,
-        per_device_parallelism=-1,
+        per_device_parallelism=MICROBATCH_SIZE,
         num_train_steps=num_train_steps,
         steps_per_eval=eval_interval,
         max_eval_batches=16,
