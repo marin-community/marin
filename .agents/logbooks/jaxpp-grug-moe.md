@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, and NCCL implicit launch ordering. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: globally ordered DIME prewarming in parent `/dlwh/iris-run-job-20260726-132849`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, and NCCL implicit launch ordering. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: globally ordered DIME prewarming after stage-state allocation in parent `/dlwh/iris-run-job-20260726-133417`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3367,3 +3367,22 @@ author: dlwh
   - Communicator and stream creation still occurs lazily inside different rank-local task phases. The prewarm treatment moves that creation before lowering and imposes one chain-wide order without changing the schedule, collective kernel, or receive-buffer policy.
 - Next action:
   - Require all three prewarm-link barriers and finite L8 steps. If the run succeeds, execute the fixed `0.002` parity gate before L24. If it retains the wait, test `JAXPP_REUSE_RECV_BUFFERS=false` as a separate control.
+
+### 2026-07-26 06:35 PDT - early DIME prewarm fragments symmetric memory
+- Hypothesis: Prewarming DIME before JaxPP lowering will impose consistent communicator order without changing device-ragged memory capacity.
+- Commit Hashes:
+  - `08b6be5dd3` adds DIME communicator and stream prewarming before stage-state allocation.
+  - `c224c3d442` moves the same prewarm after stage-local parameter and optimizer-state allocation.
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-132849` ran the matched L8 device-ragged graph with the early-prewarm placement.
+  - Parent `/dlwh/iris-run-job-20260726-133417` retries the same treatment after stage-state allocation.
+- Results:
+  - The early treatment prewarmed links 0->1 and 1->2 at `13:31:03Z` and link 2->3 at `13:31:04Z` on all four ranks.
+  - Compilation reached `grug_1f1b_mb0_stage2_backward` at `13:31:42Z`, then rank 2 failed at `13:31:46Z` in the DLPack transfer path. NCCL reported no suitable space for `0xcde000000` bytes inside `0x1400000000`: a `51.469 GiB` symmetric-memory allocation inside the 80 GiB device arena.
+  - The warning appeared on all eight rank-2 GPUs. Fabric and NVLink checks were healthy. No loss, throughput, or MFU was emitted.
+  - Parent and child are terminal killed; all four child ranks exited zero after user termination, and no live descendant remains. W&B initialized but contains only configuration and topology summaries: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ragged-prewarm-l8-e64k4-b512-s4096-p4m16-20260726-1328>.
+- Interpretation:
+  - Deterministic DIME initialization itself completes, but creating CuPy/NCCL resources before XLA stage state fragments the address space needed by the device-ragged symmetric allocation.
+  - The ordinary lazy path creates stage state before DIME and does not hit this allocation failure. `c224c3d442` preserves that allocator order while moving only communicator creation ahead of task lowering.
+- Next action:
+  - Babysit post-state-prewarm parent `/dlwh/iris-run-job-20260726-133417`. Require all three link barriers, no repeated symmetric-memory failure, and finite L8 steps before the `0.002` parity gate.
