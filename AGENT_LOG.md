@@ -118,6 +118,32 @@ Two things fall out.
    landing ~2.9% at cand A and ~2.6% at cand B, exactly as it does on the proxy. Whatever MFU price
    d1 measures for spill (m=2 cost -0.13pp) is the price at the hero shape too.
 
+## Check-in 5 — the comparison my leg is actually against (coordinator's steer: make it, don't disclaim it)
+
+Comparators from #7201's own measured table, on the same hardware, at the same shapes, with the same
+2.5 PF/s per-device denominator, all 12-step probes:
+
+| row | shape | parallelism | QB | MFU |
+|---|---|---|---|---|
+| chunk-4, batch 2304 | d6144 4-of-256 | 2-rack FSDP, 128 GPUs | ON | 18.6% (p50 18.63) |
+| chunk-2, batch 1024 | d6144 4-of-128 | 1-rack FSDP, 64 GPUs | OFF | 22.7% (p50 22.71) |
+| full-feature + host offload | d6144 4-of-128 | 1-rack FSDP, 64 GPUs | ON | 23.1% |
+
+Precision matters here: only the 18.6% and 23.1% rows carry `SCALE_MOE_QB 1`; the 22.7% chunk-2 row
+does not, so the honest QB-on comparators are 18.6% (4-of-256) and 23.1% (4-of-128).
+
+My leg is EP64 on ONE rack at 4-of-256, so the direct comparator is the 18.6% row. Caveats, and the
+direction each one pushes:
+- Mine is 1-rack EP, theirs is 2-rack FSDP. Their cross-rack penalty is the stated reason that row is
+  18.6% while 4-of-128 on one rack is 23.1%. Any advantage I show is partly "one rack beats two".
+  #7201's own projection rule is the one to use rather than inventing one: 1-rack -> 12-rack applies
+  -7% weak scaling (tok/s x 12 x 0.93), 2-rack -> 12-rack applies -5%.
+- I run sliding_window 2048 where the candidate runs sw512 with 5:1 local:global. My configuration
+  does MORE attention work, so any MFU advantage I measure is CONSERVATIVE — the candidate's own
+  attention config would read higher still.
+- I do not run XSA / attn-gate / GatedNorm / host offload; the 18.6% and 23.1% rows do.
+- Theirs are 12-step probes; mine is a 120-step p50 with the drop series, which is the stricter number.
+
 Confidence: 7/10 the baseline completes; 4/10 that MXFP8 flips positive at i3072 (d2's -2.83pp was
 attributed to quantize/layout producer overhead that scales with tokens, not with GEMM width, so
 fatter GEMMs help the numerator but do not obviously remove the overhead).
