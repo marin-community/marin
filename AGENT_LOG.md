@@ -914,3 +914,55 @@ noise on this config is <=0.05pp and the effect is ~7x that.
 Artifacts: xplane_overlap.py (9ad635b14 + follow-up), PGLE proto 3a73ca1b5, logs in the session
 scratchpad (v3.txt, v4.txt, ctrl.txt, ctrl2.txt, overlap_*.log).
 Confidence: 8/10 on the +0.33pp effect and its sign; 9/10 on both mechanism halves (per-op timelines, 4 GPUs, 2 configs); 5/10 on whether the loss/drop cost survives a longer horizon.
+
+## Check-in 2026-07-26 09:05 UTC — INLINE SendRecv: identified, explained, and a one-flag test found
+
+New direction accepted. Steps 1-2 done with zero rack time (two CPU analysis jobs over profiles
+already captured, plus XLA source reading). Built experiments/grug/moe/xplane_op_detail.py, which
+resolves each GPU kernel event's XStats (`hlo_op`, `hlo_module`, and the jaxpr scope in `name`) so
+kernels can be attributed to HLO instructions and to dispatch/combine/fwd/bwd.
+
+### 1. IDENTIFY — it is 9 of 24 all_to_all instructions, and the split is systematic
+
+The 48 layers are one scan body, so each instruction runs 144x in the 3-step window. There are
+exactly 24 `all_to_all.N.1` instructions per layer: 8 forward (4 dispatch + 4 combine) and 16
+backward. Control leg, GPU:0:
+
+| pass / leg | async stream | INLINE on compute stream |
+|---|---|---|
+| fwd dispatch | .118 | **.112, .114, .116** |
+| fwd combine | .113, .115, .117, .119 | none |
+| bwd dispatch | .80, .89, .91, .93, .95 | .81, .82, .83 |
+| bwd combine | .84, .85, .86, .87, .94 | .88, .90, .92 |
+
+9 inline instructions x ~2.2-2.5 ms x 144 = 2980 ms, which is the entire inline block. Under
+PGLE+LHS the count drops 9 -> 8 (.112 and .83 go async, nothing goes the other way) but total
+inline ms is unchanged at 2961, because the remaining inline .116 stretches.
+
+The systematic part: **every forward COMBINE is async in both arms; three of four forward
+DISPATCH legs are inline.** That is the reverse of what the prefetch gate targets — prefetch was
+built to give the dispatch leg slack — and it is the mechanism-level explanation of why the
+prefetch reorder measured an exact null.
+
+### 2. EXPLAIN — not a threshold, not command buffers: it is post-scheduling async->sync collapse
+
+`GpuCompiler::RunPostSchedulingPipelines` runs `GpuConvertAsyncCollectivesToSync` on the FINAL
+schedule. Any async-start whose matching done is separated only by no-ops (parameter, constant,
+bitcast, get-tuple-element) is flagged `is_sync = true` and executes inline on the compute stream.
+So an inline SendRecv is precisely a collective the scheduler could not find independent work to
+place under. This is the coordinator's candidate (3): dataflow/scheduling slack, and the profile
+is downstream evidence, not the cause. Sizes are identical across all 24 (same shapes), so it is
+not a size threshold; the inline ones merely *run faster* (2.2 vs 3.5 ms) because nothing competes.
+
+### 3. TEST — one flag, one leg, and the control is already measured twice
+
+`xla_gpu_experimental_parallel_collective_overlap_limit` defaults to **1**: "controls how many
+in-flight collectives latency hiding scheduler can schedule." With a budget of one, any a2a whose
+window overlaps an FSDP all-gather/reduce-scatter or another a2a cannot be overlapped, and the
+post-scheduling pass then collapses it to sync. Verified it parses in our jaxlib 0.10.1 (as does
+`xla_gpu_memory_limit_slop_factor`, default 95; `xla_gpu_experimental_collective_start_as_early_as_possible`
+does NOT exist in this version). The knob only bites with LHS on, so the experiment builds on the
+PGLE+LHS arm, whose p50 is already pinned by two independent legs (22.549 / 22.530 at 20-119,
+spread 0.02pp) — a single treatment leg is therefore a real A/B.
+Confidence: 9/10 on the identification, 8/10 on the async->sync-collapse explanation, 4/10 that the overlap-limit flag alone moves it.
+Next: rack request pending with the coordinator; no rack submissions until approved.
