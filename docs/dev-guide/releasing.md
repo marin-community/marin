@@ -1,15 +1,15 @@
 # Releasing Packages to PyPI
 
-Marin publishes twelve distributions to [PyPI](https://pypi.org/). Two
-GitHub Actions workflows build and publish them:
+Marin publishes twelve distributions to [PyPI](https://pypi.org/).
+[`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
+is their single build and publish workflow. Its dynamic matrix handles four
+release families:
 
-- [`native-release-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/native-release-wheels.yaml)
-  detects affected native package families and builds their Linux and macOS
-  wheels. Dupekit and Finelog include their pure-Python distributions in the
-  same release.
-- [`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
-  builds the seven general pure-Python libs, driven by
-  [`scripts/python_libs_package.py`](https://github.com/marin-community/marin/blob/main/scripts/python_libs_package.py).
+- The seven general pure-Python libraries share one version and exact sibling
+  dependency pins.
+- Dupekit and Finelog each publish a pure-Python distribution with a native
+  companion.
+- Iris publishes its native companion independently.
 
 The **distribution name** (what you `pip install`) carries a `marin-` prefix so
 the names don't collide on PyPI, which has no namespaces. The **import name**
@@ -41,10 +41,10 @@ upload token that expires when the run ends.
 | Trigger | Result |
 | --- | --- |
 | Native source change merged to `main` | Package-specific dev release, followed by an automatic compatibility-floor and `uv.lock` pull request. |
-| Daily pure-library schedule (06:00 UTC) | Pure-library dev release: `<base>.dev<YYYYMMDDhhmm>`, published. |
+| Daily pure-library schedule (06:00 UTC) | Coupled pure-library development release, published. |
 | Push a package release tag | Stable release at the tag version, published. |
 | `workflow_dispatch` (manual mode) | Build-only smoke; nothing is published. |
-| Pull request touching native build inputs | Build and import the native wheels; nothing is published. |
+| Pull request touching package build inputs | Build the selected family; native wheels are installed and imported; nothing is published. |
 
 Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
 `finelog-v<X.Y.Z>`, and `iris-native-v<X.Y.Z>`.
@@ -53,33 +53,33 @@ The seven general libs always share one version per build, and each published
 wheel pins its sibling `marin-*` dependencies to that exact version.
 
 Native implementation pull requests compile their changed Rust sources in
-`unified-unit` and in the package's release workflow. The follow-up dependency
+`unified-unit` and in the package release workflow. The follow-up dependency
 pull request changes only the consumer compatibility floor and `uv.lock`, so
 CI exercises the newly published wheels before they become the repository
 default. The shared update branch serializes releases from different native
 packages and uses a GitHub App token so its pull request triggers normal CI.
 
-Native package differences are declared in `PACKAGES` in
-`scripts/ci/native_package_release.py`: source paths, version files,
-distributions, import probes, and dependency-floor targets. Adding a package
-extends that registry and adds its PyPI projects' Trusted Publisher bindings
-to `native-release-wheels.yaml`; it does not require another workflow or build
-driver.
+Package-family differences are declared in `PACKAGES` in
+`scripts/ci/package_release.py`: source paths, version files, distributions,
+build legs, import probes, and optional dependency-floor targets. Adding a
+family extends that registry and adds its PyPI projects' Trusted Publisher
+bindings to `marin-release-libs-wheels.yaml`; it does not require another
+workflow. Add build-driver code only when the family introduces a genuinely
+new build system.
 
 ### Versioning
 
-The `version` declared in each general lib's `pyproject.toml` (or
-`lib/haliax/src/haliax/__about__.py`) is only a **floor**. Nightlies are
-resolved to one patch above `max(declared version, latest stable on PyPI)`,
-so a `.dev` build always sorts above the current stable and `pip install
---pre` / `uv` prefer it. Because the script reads the latest stable from
-PyPI, the declared version never needs re-bumping after a release.
+Declared package versions are floors. Development releases use one patch above
+the greatest supported declared or published version in the family. The
+GitHub run ID is the unique, retry-stable development serial. Looking across
+every distribution in a coupled family keeps a legacy development release or
+one diverged project from sorting above the new release.
 
-Native dev releases use one patch above the greater of the declared version
-and PyPI's current version, with the GitHub run ID as a unique, retry-stable
-development serial. After PyPI accepts the complete release, automation raises
-the native dependency floor and locks that exact registry version. A targeted
-lock validation rejects unrelated package churn.
+After PyPI accepts a complete native family release, automation raises its
+consumer dependency floor and locks that exact registry version. A targeted
+lock validation rejects unrelated package churn. The general Python family
+does not need a follow-up pull request because its source packages remain the
+workspace defaults.
 
 To cut a stable release, pick the next [SemVer](https://semver.org/) version
 and push the tag — no `pyproject.toml` edit required:
@@ -142,21 +142,24 @@ project:
 | PyPI project name | the distribution name from the table above |
 | Repository owner | `marin-community` |
 | Repository name | `marin` |
-| Workflow filename | one of the two release workflows listed above |
+| Workflow filename | `marin-release-libs-wheels.yaml` |
 | Environment name | `pypi-publish` |
 
-Every distribution produced by a multi-project workflow needs its own binding.
-The final publish job remains in each top-level workflow because
+Every distribution produced by the workflow needs its own binding. The publish
+job remains in this top-level workflow because
 [PyPI Trusted Publishing does not currently support naming a reusable workflow](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github)
 as the publisher.
 
-The native projects (`marin-dupekit`, `marin-dupekit-native`,
-`marin-finelog`, `marin-finelog-server`, and `marin-iris-native`) all bind to
-`native-release-wheels.yaml`.
+The seven general-library bindings already name
+`marin-release-libs-wheels.yaml`. Before enabling consolidated native
+publishing, change the five native project bindings (`marin-dupekit`,
+`marin-dupekit-native`, `marin-finelog`, `marin-finelog-server`, and
+`marin-iris-native`) to that same filename and the `pypi-publish` environment.
+No Google Cloud WIF or long-lived credential change is required.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 
-All release workflows publish through the `pypi-publish`
+The release workflow publishes through the `pypi-publish`
 [deployment environment](https://github.com/marin-community/marin/settings/environments).
 It already exists for `marin-dupekit`. Recommended settings:
 
@@ -190,11 +193,10 @@ needs manual revocation if exposed.
 - **`gh-action-pypi-publish` fails with 403 for one project.** Its
   trusted-publisher binding is missing or a field does not match. Re-check
   the four fields in step 3 — they must match the workflow exactly.
-- **A native release stopped after some files uploaded.** Rerun the failed
-  jobs in the same workflow run. The development version is stable across
-  reruns, and the preflight accepts only remote files whose hashes match the
-  complete local manifest. The publisher skips those matching files and
-  uploads the rest.
+- **A family release stopped after some files uploaded.** Rerun the failed
+  jobs in the same workflow run. The version is stable across reruns, and the
+  preflight accepts only remote files whose hashes match the complete family
+  manifest. The publisher skips those matching files and uploads the rest.
 - **A development release is not picked up by `pip install --pre`.** The dev build must
   sort above the latest stable. Confirm the stable on PyPI is not ahead of
-  what `scripts/python_libs_package.py --resolve-only` computes.
+  what `scripts/ci/package_release.py plan` computes for the family.

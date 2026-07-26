@@ -1,16 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavioral contracts for Marin-owned native package releases."""
+"""Behavioral contracts for Marin-owned package releases."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
 import yaml
 
-from scripts.ci.native_package_release import (
+from scripts.ci.package_release import (
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
@@ -24,10 +23,28 @@ from scripts.ci.native_package_release import (
     validate_targeted_lock_change,
 )
 
-RELEASE_WORKFLOW = Path(".github/workflows/native-release-wheels.yaml")
+RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
 
 
 def _artifact_names(package: str, version: str) -> list[str]:
+    if package == "python-libs":
+        return [
+            filename
+            for distribution in (
+                "marin_core",
+                "marin_iris",
+                "marin_fray",
+                "marin_rigging",
+                "marin_zephyr",
+                "marin_levanter",
+                "marin_haliax",
+            )
+            for filename in (
+                f"{distribution}-{version}-py3-none-any.whl",
+                f"{distribution}-{version}.tar.gz",
+            )
+        ]
+
     platform_wheels = [f"cp312-cp312-manylinux_2_28_{arch}.whl" for arch in ("x86_64", "aarch64")] + [
         f"cp312-cp312-macosx_11_0_{arch}.whl" for arch in ("x86_64", "arm64")
     ]
@@ -76,7 +93,7 @@ def _triggers(workflow: dict) -> dict:
 
 def test_next_development_version_is_retry_stable_and_above_stable() -> None:
     first = next_development_version("0.1.3", "0.1.4", 30194118926)
-    retry = next_development_version("0.1.3", "0.1.4", 30194118926)
+    retry = next_development_version("0.1.3", first, 30194118926)
     later = next_development_version("0.1.3", "0.1.4", 30194120716)
 
     assert first == retry == "0.1.5.dev30194118926"
@@ -107,10 +124,12 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/dupekit/src/dupekit/__init__.py"]) == ["dupekit"]
     assert packages_for_changes(["lib/finelog/src/finelog/client/log_client.py"]) == ["finelog"]
     assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
-    assert packages_for_changes(["scripts/ci/native_package_release.py"]) == [
+    assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
+    assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
         "iris",
+        "python-libs",
     ]
 
 
@@ -123,23 +142,83 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
         input_version="",
         revision="abcdef123456",
         serial=42,
-        changed_paths=["rust/Cargo.toml"],
+        changed_paths=["scripts/ci/package_release.py"],
         repo_root=Path.cwd(),
     )
 
-    assert plan.packages == ("dupekit", "finelog", "iris")
+    assert plan.packages == ("dupekit", "finelog", "iris", "python-libs")
     expected_builds = {
         ("dupekit", "ubuntu-latest", "linux"),
         ("dupekit", "macos-14", "macos"),
+        ("dupekit", "ubuntu-latest", "sdist"),
         ("finelog", "ubuntu-latest", "linux"),
         ("finelog", "macos-14", "macos"),
+        ("finelog", "ubuntu-latest", "sdist"),
         ("iris", "ubuntu-latest", "linux"),
         ("iris", "macos-14", "macos"),
+        ("iris", "ubuntu-latest", "sdist"),
+        ("python-libs", "ubuntu-latest", "python"),
     }
     actual_builds = {(entry["package"], entry["os"], entry["operation"]) for entry in plan.builds}
     assert actual_builds == expected_builds
-    assert all(plan.versions[package]["version"].endswith("+abcdef12") for package in plan.packages)
-    assert json.loads(json.dumps(dict(plan.versions)))["iris"]["mode"] == "manual"
+    assert all(plan.versions[package].version.endswith("+abcdef12") for package in plan.packages)
+    assert plan.versions["iris"].mode == "manual"
+    assert plan.bump
+
+
+def test_schedule_selects_only_coupled_python_libraries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("scripts.ci.package_release.latest_family_version", lambda package: "0.2.0")
+
+    plan = release_plan(
+        event_name="schedule",
+        ref="refs/heads/main",
+        input_mode="manual",
+        input_package="all",
+        input_version="",
+        revision="abcdef123456",
+        serial=30220111744,
+        changed_paths=[],
+        repo_root=Path.cwd(),
+    )
+
+    assert plan.packages == ("python-libs",)
+    assert plan.versions["python-libs"].version == "0.2.1.dev30220111744"
+    assert plan.builds == ({"package": "python-libs", "os": "ubuntu-latest", "operation": "python"},)
+    assert not plan.bump
+
+
+def test_general_library_tag_selects_one_stable_family() -> None:
+    plan = release_plan(
+        event_name="push",
+        ref="refs/tags/marin-libs-v0.3.0",
+        input_mode="manual",
+        input_package="all",
+        input_version="",
+        revision="abcdef123456",
+        serial=30220111744,
+        changed_paths=[],
+        repo_root=Path.cwd(),
+    )
+
+    assert plan.packages == ("python-libs",)
+    assert plan.versions["python-libs"].version == "0.3.0"
+    assert plan.builds == ({"package": "python-libs", "os": "ubuntu-latest", "operation": "python"},)
+    assert not plan.bump
+
+
+def test_dispatch_rejects_one_explicit_version_for_multiple_families() -> None:
+    with pytest.raises(ValueError, match="one package family"):
+        release_plan(
+            event_name="workflow_dispatch",
+            ref="refs/heads/main",
+            input_mode="development",
+            input_package="all",
+            input_version="0.3.0",
+            revision="abcdef123456",
+            serial=30220111744,
+            changed_paths=[],
+            repo_root=Path.cwd(),
+        )
 
 
 def test_update_native_requirement_advances_floor_without_touching_neighbors() -> None:
@@ -166,7 +245,7 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
-@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
+@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog", "python-libs"])
 def test_artifact_manifest_requires_complete_release_pair(tmp_path: Path, package: str) -> None:
     version = "0.3.0.dev30194118926"
     paths = _write_artifacts(tmp_path, package, version)
@@ -241,13 +320,13 @@ source = { registry = "https://pypi.org/simple" }
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
 
 
-def test_release_workflow_publishes_only_trusted_native_main_changes() -> None:
+def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     workflow = _workflow(RELEASE_WORKFLOW)
     triggers = _triggers(workflow)
     push = triggers["push"]
 
     assert push["branches"] == ["main"]
-    assert "schedule" not in triggers
+    assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
     assert not any(item.endswith("pyproject.toml") for item in push["paths"])
 

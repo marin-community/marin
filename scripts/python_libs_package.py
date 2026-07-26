@@ -6,39 +6,30 @@
 
 Builds the seven pure-Python marin-* lib packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
-dist/. Publication to PyPI is done by the release workflow
-(.github/workflows/marin-release-libs-wheels.yaml) via
-`pypa/gh-action-pypi-publish` with OIDC trusted publishing -- this script
-never uploads anything and never needs a token.
+dist/. The package release engine passes one exact version to this builder.
+Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
+`pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
+uploads anything and never needs a token.
 
-marin-finelog and marin-dupekit are NOT built here. The unified native release
+marin-finelog and marin-dupekit are NOT built here. The unified package release
 workflow publishes each pure-Python wheel together with its native companion
 (marin-finelog-server, marin-dupekit-native).
 
-Four modes:
-    nightly  -- version becomes <dev_base>.dev<YYYYMMDDhhmm> (UTC). <dev_base>
-                is one patch above max(declared version, latest stable on
-                PyPI), so PEP 440 orders the dev release above the current
-                stable and `pip install --pre` / `uv` prefer it.
-    stable   -- version is taken verbatim from --version (the release
-                workflow extracts it from the marin-libs-v<version> tag).
-    manual   -- version becomes <declared>+manual.<sha>; a build-only smoke.
-                PyPI rejects local-version identifiers, so the workflow's
-                publish job declines to run in this mode.
+Two modes:
+    stable   -- build the exact version supplied by the package release engine.
     vendor   -- version becomes <dev_base>.dev<YYYYMMDDHHMMSS>; copy wheels to
                 a local directory (no publish). For local-iteration loops
                 where a marin worktree feeds wheels into an experiment repo's
                 find-links. The second-precision timestamp guarantees rebuilt
-                wheels beat any nightly already published earlier the same day.
+                wheels beat any published development release from earlier
+                the same day.
 
 Usage:
-    python scripts/python_libs_package.py --mode nightly
     python scripts/python_libs_package.py --mode stable --version 0.2.0
-    python scripts/python_libs_package.py --mode nightly --resolve-only
     python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
 
 The build is done from a temporary in-place patch of each package's version
-file plus a cross-pin rewrite of every sibling dependency, so the eight wheels
+file plus a cross-pin rewrite of every sibling dependency, so the seven wheels
 published together always require each other at the exact same version.
 Mutations are reverted on exit (success OR failure) so the working tree stays
 clean.
@@ -46,7 +37,6 @@ clean.
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -82,19 +72,6 @@ def _check_tool(name: str, install_hint: str) -> None:
     if shutil.which(name) is None:
         print(f"ERROR: '{name}' not found. Install with: {install_hint}", file=sys.stderr)
         sys.exit(1)
-
-
-def _git_short_sha() -> str:
-    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, cwd=REPO_ROOT).strip()
-
-
-def _emit_github_output(key: str, value: str) -> None:
-    """Append `key=value` to $GITHUB_OUTPUT when running under GitHub Actions."""
-    path = os.environ.get("GITHUB_OUTPUT")
-    if not path:
-        return
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(f"{key}={value}\n")
 
 
 def _read_base_version(pkg: str) -> str:
@@ -239,9 +216,9 @@ def _bump_patch(version: str) -> str:
 
 
 def _highest_declared_version() -> str:
-    """Highest version currently declared across the eight libs.
+    """Highest version currently declared across the seven libs.
 
-    All eight share one synthetic version per build so cross-pins resolve
+    All seven share one synthetic version per build so cross-pins resolve
     cleanly; the declared versions are the floor that synthetic value sits on.
     """
     return max((_read_base_version(p) for p in PACKAGES), key=_version_key)
@@ -264,7 +241,7 @@ def _latest_pypi_stable(pkg: str) -> str | None:
 
 
 def _dev_base() -> str:
-    """Patch-bumped base shared by nightly and vendor builds.
+    """Return the patch-bumped base for a local vendor build.
 
     One patch above max(highest declared version, highest stable on PyPI
     across the libs). PEP 440 orders `<base>.devN` above the current stable,
@@ -281,30 +258,10 @@ def _dev_base() -> str:
     return _bump_patch(base)
 
 
-def resolve_version(mode: str, explicit: str | None) -> str:
-    """Return the build version for the requested mode.
-
-    nightly -> <dev_base>.dev<YYYYMMDDhhmm>
-    stable  -> <explicit>
-    manual  -> <declared>+manual.<sha>
-    vendor  -> <dev_base>.dev<YYYYMMDDHHMMSS>
-    """
-    if mode == "stable":
-        if not explicit:
-            raise SystemExit("--version is required for --mode stable")
-        return explicit
-    if mode == "nightly":
-        stamp = datetime.now(UTC).strftime("%Y%m%d%H%M")
-        return f"{_dev_base()}.dev{stamp}"
-    if mode == "manual":
-        return f"{_highest_declared_version()}+manual.{_git_short_sha()}"
-    if mode == "vendor":
-        # Second-precision timestamp guarantees the freshly-built wheel beats
-        # any nightly built earlier today, so `uv sync` in the consumer always
-        # picks up the local copy without cache games.
-        stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-        return f"{_dev_base()}.dev{stamp}"
-    raise SystemExit(f"Unknown mode: {mode}")
+def vendor_version() -> str:
+    """Return a development version that wins local vendor resolution."""
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    return f"{_dev_base()}.dev{stamp}"
 
 
 # ---------- build ------------------------------------------------------------
@@ -382,15 +339,11 @@ def lock_consumer(project_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mode", choices=["nightly", "stable", "manual", "vendor"], default="nightly")
+    parser.add_argument("--mode", choices=["stable", "vendor"], default="stable")
     parser.add_argument(
         "--version",
         default=None,
-        help=(
-            "Explicit version. Required for --mode stable; for the other modes it "
-            "overrides the computed value. CI's resolve job computes the version once "
-            "and passes it here so the build job stamps the identical value."
-        ),
+        help=("Exact version. Required for --mode stable; overrides the generated " "local version in vendor mode."),
     )
     parser.add_argument(
         "--vendor",
@@ -398,19 +351,12 @@ def main() -> None:
         default=None,
         help="Target directory to drop wheels into (required for --mode vendor)",
     )
-    parser.add_argument(
-        "--resolve-only",
-        action="store_true",
-        help="Print the resolved version and emit it to $GITHUB_OUTPUT; do not build.",
-    )
     args = parser.parse_args()
 
-    version = args.version if args.version else resolve_version(args.mode, args.version)
+    if args.mode == "stable" and not args.version:
+        raise SystemExit("--version is required for --mode stable")
+    version = args.version or vendor_version()
     print(f"Mode:    {args.mode}\nVersion: {version}")
-    _emit_github_output("version", version)
-
-    if args.resolve_only:
-        return
 
     if args.mode == "vendor":
         if args.vendor is None:

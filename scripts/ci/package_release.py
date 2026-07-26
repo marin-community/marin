@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve, validate, and consume Marin-owned native package releases."""
+"""Resolve, validate, and consume Marin-owned package releases."""
 
 import argparse
 import fnmatch
@@ -13,6 +13,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -20,7 +21,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -28,6 +29,7 @@ from types import MappingProxyType
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/{distribution}/json"
 PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
 LOCK_RETRY_DELAYS = (0, 5, 15, 30, 60, 120)
+PYTHON_LIBS_FAMILY = "python-libs"
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
 
 
@@ -39,20 +41,29 @@ class ArtifactExpectation:
 
 
 @dataclass(frozen=True)
-class NativePackage:
-    declared_version_path: Path
-    pypi_project: str
-    artifacts: Mapping[str, ArtifactExpectation]
-    requirement_path: Path
-    requirement_distribution: str
-    requirement_owner: str
-    tag_prefix: str
-    source_patterns: tuple[str, ...]
-    build_legs: tuple[tuple[str, str], ...]
+class PythonBundle:
+    script_path: Path
+
+
+@dataclass(frozen=True)
+class NativeBuild:
     import_name: str
     native_path: Path
     version_paths: tuple[Path, ...]
-    pure_path: Path | None
+    requirement_path: Path
+    requirement_distribution: str
+    requirement_owner: str
+    pure_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class PackageFamily:
+    declared_version_paths: tuple[Path, ...]
+    artifacts: Mapping[str, ArtifactExpectation]
+    tag_prefix: str
+    source_patterns: tuple[str, ...]
+    build_legs: tuple[tuple[str, str], ...]
+    build: PythonBundle | NativeBuild
 
 
 @dataclass(frozen=True)
@@ -70,77 +81,120 @@ class ReleaseMode(StrEnum):
 class BuildOperation(StrEnum):
     LINUX = "linux"
     MACOS = "macos"
+    PYTHON = "python"
     SDIST = "sdist"
+
+
+@dataclass(frozen=True)
+class ReleaseVersion:
+    mode: str
+    version: str
+    build_version: str
 
 
 @dataclass(frozen=True)
 class ReleasePlan:
     packages: tuple[str, ...]
-    versions: Mapping[str, Mapping[str, str]]
+    versions: Mapping[str, ReleaseVersion]
     builds: tuple[Mapping[str, str], ...]
+    bump: bool
 
 
-PACKAGES: Mapping[str, NativePackage] = MappingProxyType(
+PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
     {
-        "iris": NativePackage(
-            declared_version_path=Path("lib/iris/rust/pyproject.toml"),
-            pypi_project="marin-iris-native",
+        PYTHON_LIBS_FAMILY: PackageFamily(
+            declared_version_paths=(
+                Path("lib/marin/pyproject.toml"),
+                Path("lib/iris/pyproject.toml"),
+                Path("lib/fray/pyproject.toml"),
+                Path("lib/rigging/pyproject.toml"),
+                Path("lib/zephyr/pyproject.toml"),
+                Path("lib/levanter/pyproject.toml"),
+                Path("lib/haliax/src/haliax/__about__.py"),
+            ),
+            artifacts=MappingProxyType(
+                {
+                    distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True)
+                    for distribution in (
+                        "marin-core",
+                        "marin-iris",
+                        "marin-fray",
+                        "marin-rigging",
+                        "marin-zephyr",
+                        "marin-levanter",
+                        "marin-haliax",
+                    )
+                }
+            ),
+            tag_prefix="marin-libs-v",
+            source_patterns=("scripts/python_libs_package.py",),
+            build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
+            build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
+        ),
+        "iris": PackageFamily(
+            declared_version_paths=(Path("lib/iris/rust/pyproject.toml"),),
             artifacts=MappingProxyType(
                 {
                     "marin-iris-native": ArtifactExpectation(wheels=4, sdists=1, pure_python=False),
                 }
             ),
-            requirement_path=Path("lib/iris/pyproject.toml"),
-            requirement_distribution="marin-iris-native",
-            requirement_owner="marin-iris",
             tag_prefix="iris-native-v",
             source_patterns=("lib/iris/rust/**", "rust/iris-*/**"),
-            build_legs=(("ubuntu-latest", BuildOperation.LINUX), ("macos-14", BuildOperation.MACOS)),
-            import_name="iris_native",
-            native_path=Path("lib/iris/rust"),
-            version_paths=(
-                Path("lib/iris/rust/pyproject.toml"),
-                Path("lib/iris/rust/Cargo.toml"),
-                Path("lib/iris/rust/pyext/Cargo.toml"),
+            build_legs=(
+                ("ubuntu-latest", BuildOperation.LINUX),
+                ("macos-14", BuildOperation.MACOS),
+                ("ubuntu-latest", BuildOperation.SDIST),
             ),
-            pure_path=None,
+            build=NativeBuild(
+                import_name="iris_native",
+                native_path=Path("lib/iris/rust"),
+                version_paths=(
+                    Path("lib/iris/rust/pyproject.toml"),
+                    Path("lib/iris/rust/Cargo.toml"),
+                    Path("lib/iris/rust/pyext/Cargo.toml"),
+                ),
+                requirement_path=Path("lib/iris/pyproject.toml"),
+                requirement_distribution="marin-iris-native",
+                requirement_owner="marin-iris",
+            ),
         ),
-        "dupekit": NativePackage(
-            declared_version_path=Path("lib/dupekit/pyproject.toml"),
-            pypi_project="marin-dupekit",
+        "dupekit": PackageFamily(
+            declared_version_paths=(Path("lib/dupekit/pyproject.toml"),),
             artifacts=MappingProxyType(
                 {
                     "marin-dupekit": ArtifactExpectation(wheels=1, sdists=1, pure_python=True),
                     "marin-dupekit-native": ArtifactExpectation(wheels=4, sdists=1, pure_python=False),
                 }
             ),
-            requirement_path=Path("lib/dupekit/pyproject.toml"),
-            requirement_distribution="marin-dupekit-native",
-            requirement_owner="marin-dupekit",
             tag_prefix="dupekit-v",
             source_patterns=(
                 "lib/dupekit/src/**",
                 "lib/dupekit/rust/**",
                 "rust/dupekit-pyext/**",
             ),
-            build_legs=(("ubuntu-latest", BuildOperation.LINUX), ("macos-14", BuildOperation.MACOS)),
-            import_name="dupekit_native",
-            native_path=Path("lib/dupekit/rust"),
-            version_paths=(Path("lib/dupekit/pyproject.toml"), Path("lib/dupekit/rust/Cargo.toml")),
-            pure_path=Path("lib/dupekit"),
+            build_legs=(
+                ("ubuntu-latest", BuildOperation.LINUX),
+                ("macos-14", BuildOperation.MACOS),
+                ("ubuntu-latest", BuildOperation.SDIST),
+            ),
+            build=NativeBuild(
+                import_name="dupekit_native",
+                native_path=Path("lib/dupekit/rust"),
+                version_paths=(Path("lib/dupekit/pyproject.toml"), Path("lib/dupekit/rust/Cargo.toml")),
+                requirement_path=Path("lib/dupekit/pyproject.toml"),
+                requirement_distribution="marin-dupekit-native",
+                requirement_owner="marin-dupekit",
+                pure_path=Path("lib/dupekit"),
+            ),
         ),
-        "finelog": NativePackage(
-            declared_version_path=Path("lib/finelog/pyproject.toml"),
-            pypi_project="marin-finelog",
+        "finelog": PackageFamily(
+            declared_version_paths=(Path("lib/finelog/pyproject.toml"),),
             artifacts=MappingProxyType(
                 {
                     "marin-finelog": ArtifactExpectation(wheels=1, sdists=1, pure_python=True),
                     "marin-finelog-server": ArtifactExpectation(wheels=4, sdists=1, pure_python=False),
                 }
             ),
-            requirement_path=Path("lib/iris/pyproject.toml"),
-            requirement_distribution="marin-finelog-server",
-            requirement_owner="marin-iris",
             tag_prefix="finelog-v",
             source_patterns=(
                 "lib/finelog/src/**",
@@ -148,18 +202,27 @@ PACKAGES: Mapping[str, NativePackage] = MappingProxyType(
                 "rust/finelog/**",
                 "rust/finelog-pyext/**",
             ),
-            build_legs=(("ubuntu-latest", BuildOperation.LINUX), ("macos-14", BuildOperation.MACOS)),
-            import_name="finelog_server",
-            native_path=Path("lib/finelog/rust"),
-            version_paths=(Path("lib/finelog/pyproject.toml"), Path("lib/finelog/rust/pyproject.toml")),
-            pure_path=Path("lib/finelog"),
+            build_legs=(
+                ("ubuntu-latest", BuildOperation.LINUX),
+                ("macos-14", BuildOperation.MACOS),
+                ("ubuntu-latest", BuildOperation.SDIST),
+            ),
+            build=NativeBuild(
+                import_name="finelog_server",
+                native_path=Path("lib/finelog/rust"),
+                version_paths=(Path("lib/finelog/pyproject.toml"), Path("lib/finelog/rust/pyproject.toml")),
+                requirement_path=Path("lib/iris/pyproject.toml"),
+                requirement_distribution="marin-finelog-server",
+                requirement_owner="marin-iris",
+                pure_path=Path("lib/finelog"),
+            ),
         ),
     }
 )
 SHARED_SOURCE_PATTERNS = ("rust/Cargo.toml", "rust/Cargo.lock")
 SHARED_PR_PATTERNS = (
-    "scripts/ci/native_package_release.py",
-    ".github/workflows/native-release-wheels.yaml",
+    "scripts/ci/package_release.py",
+    ".github/workflows/marin-release-libs-wheels.yaml",
 )
 ZIG_VERSION = "0.15.2"
 ZIG_MIRRORS = (
@@ -229,6 +292,11 @@ def next_development_version(declared: str, published: str | None, serial: int) 
     """Return the next-patch development version with a retry-stable run serial."""
     if serial <= 0:
         raise ValueError(f"Development serial must be positive, got {serial}")
+    if published is not None:
+        published_match = _VERSION_RE.fullmatch(canonical_version(published))
+        assert published_match is not None
+        if published_match.group("dev") == str(serial):
+            return canonical_version(published)
     base = max((declared, published), key=_version_key) if published is not None else declared
     major, minor, patch, _, _ = _version_key(base)
     return f"{major}.{minor}.{patch + 1}.dev{serial}"
@@ -246,15 +314,26 @@ def latest_supported_version(versions: Iterable[str]) -> str | None:
     return max(supported, key=_version_key) if supported else None
 
 
-def _declared_version(repo_root: Path, package: NativePackage) -> str:
-    data = tomllib.loads((repo_root / package.declared_version_path).read_text())
-    project = data.get("project")
-    if isinstance(project, dict) and isinstance(project.get("version"), str):
-        return canonical_version(project["version"])
-    cargo_package = data.get("package")
-    if isinstance(cargo_package, dict) and isinstance(cargo_package.get("version"), str):
-        return canonical_version(cargo_package["version"])
-    raise ValueError(f"No project/package version in {package.declared_version_path}")
+def _version_from_path(path: Path) -> str:
+    text = path.read_text()
+    if path.suffix == ".toml":
+        data = tomllib.loads(text)
+        project = data.get("project")
+        if isinstance(project, dict) and isinstance(project.get("version"), str):
+            return canonical_version(project["version"])
+        cargo_package = data.get("package")
+        if isinstance(cargo_package, dict) and isinstance(cargo_package.get("version"), str):
+            return canonical_version(cargo_package["version"])
+    else:
+        match = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if match is not None:
+            return canonical_version(match.group(1))
+    raise ValueError(f"No project/package version in {path}")
+
+
+def _declared_version(repo_root: Path, package: PackageFamily) -> str:
+    versions = (_version_from_path(repo_root / path) for path in package.declared_version_paths)
+    return max(versions, key=_version_key)
 
 
 def latest_pypi_version(distribution: str) -> str | None:
@@ -269,6 +348,12 @@ def latest_pypi_version(distribution: str) -> str | None:
         raise
     releases = data.get("releases", {})
     return latest_supported_version(releases)
+
+
+def latest_family_version(package: PackageFamily) -> str | None:
+    """Return the greatest supported release across a coupled package family."""
+    versions = [version for distribution in package.artifacts if (version := latest_pypi_version(distribution))]
+    return max(versions, key=_version_key) if versions else None
 
 
 def resolve_version(
@@ -291,7 +376,7 @@ def resolve_version(
             raise ValueError("Development mode requires a release serial")
         return next_development_version(
             declared,
-            latest_pypi_version(package.pypi_project),
+            latest_family_version(package),
             development_serial,
         )
     if mode == ReleaseMode.MANUAL:
@@ -308,7 +393,9 @@ def packages_for_changes(paths: Iterable[str]) -> list[str]:
         return sorted(PACKAGES)
     selected = []
     for name, package in PACKAGES.items():
-        patterns = (*SHARED_SOURCE_PATTERNS, *package.source_patterns)
+        patterns = package.source_patterns
+        if isinstance(package.build, NativeBuild):
+            patterns = (*SHARED_SOURCE_PATTERNS, *patterns)
         if any(fnmatch.fnmatch(path, pattern) for path in changed for pattern in patterns):
             selected.append(name)
     return sorted(selected)
@@ -345,7 +432,7 @@ def _normalized_distribution(distribution: str) -> str:
     return re.sub(r"[-_.]+", "_", distribution).lower()
 
 
-def _artifact_distribution(package: NativePackage, version: str, filename: str) -> tuple[str, str]:
+def _artifact_distribution(package: PackageFamily, version: str, filename: str) -> tuple[str, str]:
     for distribution in package.artifacts:
         prefix = f"{_normalized_distribution(distribution)}-{version}"
         if filename == f"{prefix}.tar.gz":
@@ -486,21 +573,22 @@ def bump_native_requirement(
     package_name: str,
     version: str,
     repo_root: Path,
-    github_output: Path | None,
 ) -> None:
     """Advance the compatibility floor and exact universal lock entry."""
     package = PACKAGES[package_name]
+    build = package.build
+    if not isinstance(build, NativeBuild):
+        raise ValueError(f"{package_name} has no native dependency floor")
     version = canonical_version(version)
-    requirement_path = repo_root / package.requirement_path
+    requirement_path = repo_root / build.requirement_path
     lock_path = repo_root / "uv.lock"
     original_requirement = requirement_path.read_text()
     updated_requirement, changed = update_native_requirement(
         original_requirement,
-        package.requirement_distribution,
+        build.requirement_distribution,
         version,
     )
     if not changed:
-        _emit_github_output(github_output, changed="false", distribution=package.requirement_distribution)
         return
 
     original_lock = lock_path.read_text()
@@ -509,9 +597,9 @@ def bump_native_requirement(
         "uv",
         "lock",
         "--upgrade-package",
-        f"{package.requirement_distribution}=={version}",
+        f"{build.requirement_distribution}=={version}",
         "--refresh-package",
-        package.requirement_distribution,
+        build.requirement_distribution,
     ]
     for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
         if delay:
@@ -529,20 +617,14 @@ def bump_native_requirement(
             validate_targeted_lock_change(
                 original_lock,
                 updated_lock,
-                package.requirement_distribution,
+                build.requirement_distribution,
                 version,
-                allowed_packages=(package.requirement_owner,),
+                allowed_packages=(build.requirement_owner,),
             )
         except ValueError:
             requirement_path.write_text(original_requirement)
             lock_path.write_text(original_lock)
             raise
-        _emit_github_output(
-            github_output,
-            changed="true",
-            distribution=package.requirement_distribution,
-            requirement_path=package.requirement_path.as_posix(),
-        )
         return
     raise AssertionError("Unreachable lock retry loop")
 
@@ -591,18 +673,18 @@ def _ensure_zig(repo_root: Path) -> str:
     raise RuntimeError(f"Could not download Zig {ZIG_VERSION}") from last_error
 
 
-def _maturin(repo_root: Path, package: NativePackage, *args: str, env: Mapping[str, str] | None = None) -> None:
+def _maturin(repo_root: Path, build: NativeBuild, *args: str, env: Mapping[str, str] | None = None) -> None:
     subprocess.run(
         ["uvx", "--from", "maturin>=1.5,<2.0", "maturin", *args],
-        cwd=repo_root / package.native_path,
+        cwd=repo_root / build.native_path,
         env=env,
         check=True,
     )
 
 
-def _stamp_versions(repo_root: Path, package: NativePackage, version: str) -> None:
+def _stamp_versions(repo_root: Path, build: NativeBuild, version: str) -> None:
     pattern = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
-    for relative_path in package.version_paths:
+    for relative_path in build.version_paths:
         path = repo_root / relative_path
         updated, count = pattern.subn(rf'\1"{version}"', path.read_text(), count=1)
         if count != 1:
@@ -610,27 +692,42 @@ def _stamp_versions(repo_root: Path, package: NativePackage, version: str) -> No
         path.write_text(updated)
 
 
-def _uv_build(repo_root: Path, package: NativePackage, dist_dir: Path, kind: str) -> None:
-    assert package.pure_path is not None
+def _uv_build(repo_root: Path, pure_path: Path, dist_dir: Path, kind: str) -> None:
     subprocess.run(
         ["uv", "build", f"--{kind}", "--out-dir", str(dist_dir)],
-        cwd=repo_root / package.pure_path,
+        cwd=repo_root / pure_path,
         check=True,
     )
     (dist_dir / ".gitignore").unlink(missing_ok=True)
 
 
-def build_package(package_name: str, version: str, operation: str, repo_root: Path) -> None:
-    """Build one standardized native package matrix leg or its source distributions."""
-    package = PACKAGES[package_name]
+def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo_root: Path) -> None:
+    if operation != BuildOperation.PYTHON:
+        raise ValueError(f"Python bundle does not support build operation {operation!r}")
+    subprocess.run(
+        [
+            sys.executable,
+            build.script_path.as_posix(),
+            "--mode",
+            "stable",
+            "--version",
+            python_compatible_version(version),
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+    (repo_root / "dist" / ".gitignore").unlink(missing_ok=True)
+
+
+def _build_native_package(build: NativeBuild, version: str, operation: str, repo_root: Path) -> None:
     build_version = cargo_compatible_version(version)
-    _stamp_versions(repo_root, package, build_version)
+    _stamp_versions(repo_root, build, build_version)
     dist_dir = repo_root / "dist"
     if operation == BuildOperation.SDIST:
         dist_dir.mkdir(exist_ok=True)
-        _maturin(repo_root, package, "sdist", "--out", str(dist_dir))
-        if package.pure_path is not None:
-            _uv_build(repo_root, package, dist_dir, "sdist")
+        _maturin(repo_root, build, "sdist", "--out", str(dist_dir))
+        if build.pure_path is not None:
+            _uv_build(repo_root, build.pure_path, dist_dir, "sdist")
         return
 
     targets = {BuildOperation.LINUX: LINUX_TARGETS, BuildOperation.MACOS: MAC_TARGETS}.get(operation)
@@ -651,14 +748,26 @@ def build_package(package_name: str, version: str, operation: str, repo_root: Pa
             arguments.extend(("--manylinux", manylinux))
         if operation == BuildOperation.LINUX:
             arguments.append("--zig")
-        _maturin(repo_root, package, *arguments, env=environment)
-    if operation == BuildOperation.LINUX and package.pure_path is not None:
-        _uv_build(repo_root, package, dist_dir, "wheel")
+        _maturin(repo_root, build, *arguments, env=environment)
+    if operation == BuildOperation.LINUX and build.pure_path is not None:
+        _uv_build(repo_root, build.pure_path, dist_dir, "wheel")
+
+
+def build_package(package_name: str, version: str, operation: str, repo_root: Path) -> None:
+    """Build one package-family matrix leg."""
+    build = PACKAGES[package_name].build
+    if isinstance(build, PythonBundle):
+        _build_python_bundle(build, version, operation, repo_root)
+        return
+    _build_native_package(build, version, operation, repo_root)
 
 
 def validate_native_wheel(package_name: str, version: str, dist_dir: Path) -> None:
     """Install and import the compatible native wheel from one build leg."""
     package = PACKAGES[package_name]
+    build = package.build
+    if not isinstance(build, NativeBuild):
+        raise ValueError(f"{package_name} has no native wheel")
     with tempfile.TemporaryDirectory(prefix="native-wheel-") as temporary:
         environment = Path(temporary)
         subprocess.run(["uv", "venv", str(environment)], check=True)
@@ -674,12 +783,12 @@ def validate_native_wheel(package_name: str, version: str, dist_dir: Path) -> No
                 "--find-links",
                 str(dist_dir),
                 "--no-deps",
-                f"{package.requirement_distribution}=={python_compatible_version(version)}",
+                f"{build.requirement_distribution}=={python_compatible_version(version)}",
             ],
             check=True,
         )
         subprocess.run(
-            [str(python), "-c", f"import {package.import_name}"],
+            [str(python), "-c", f"import {build.import_name}"],
             check=True,
         )
 
@@ -702,11 +811,17 @@ def release_plan(
         selected = [package_name]
         mode = ReleaseMode.STABLE
         explicit_versions = {package_name: tag_version}
+    elif event_name == "schedule":
+        selected = [PYTHON_LIBS_FAMILY]
+        mode = ReleaseMode.DEVELOPMENT
+        explicit_versions = {}
     elif event_name == "workflow_dispatch":
         selected = sorted(PACKAGES) if input_package == "all" else [input_package]
         unknown = set(selected) - set(PACKAGES)
         if unknown:
-            raise ValueError(f"Unknown native package family: {sorted(unknown)}")
+            raise ValueError(f"Unknown package family: {sorted(unknown)}")
+        if input_version and len(selected) != 1:
+            raise ValueError("An explicit version requires one package family")
         mode = ReleaseMode(input_mode)
         if mode == ReleaseMode.STABLE and len(selected) != 1:
             raise ValueError("Stable dispatch requires one package family")
@@ -722,7 +837,7 @@ def release_plan(
     else:
         raise ValueError(f"Unsupported release event {event_name!r} on {ref!r}")
     if not selected:
-        raise ValueError("Native release workflow did not find an affected package")
+        raise ValueError("Package release workflow did not find an affected package")
 
     versions = {}
     builds = []
@@ -735,16 +850,17 @@ def release_plan(
             serial,
             repo_root,
         )
-        versions[name] = {
-            "mode": mode,
-            "version": version,
-            "build_version": cargo_compatible_version(version),
-        }
+        versions[name] = ReleaseVersion(
+            mode=mode,
+            version=version,
+            build_version=cargo_compatible_version(version),
+        )
         builds.extend(
             {"package": name, "os": operating_system, "operation": operation}
             for operating_system, operation in PACKAGES[name].build_legs
         )
-    return ReleasePlan(packages=tuple(selected), versions=MappingProxyType(versions), builds=tuple(builds))
+    bump = any(isinstance(PACKAGES[name].build, NativeBuild) for name in selected)
+    return ReleasePlan(packages=tuple(selected), versions=MappingProxyType(versions), builds=tuple(builds), bump=bump)
 
 
 def _verify_command(args: argparse.Namespace) -> None:
@@ -758,11 +874,16 @@ def _verify_command(args: argparse.Namespace) -> None:
 
 def _bump_releases_command(args: argparse.Namespace) -> None:
     versions = json.loads(args.versions)
-    selected = sorted(versions)
-    requirement_paths = sorted({PACKAGES[name].requirement_path for name in selected})
+    selected = [name for name in sorted(versions) if isinstance(PACKAGES[name].build, NativeBuild)]
+    requirement_paths = []
+    for name in selected:
+        build = PACKAGES[name].build
+        assert isinstance(build, NativeBuild)
+        requirement_paths.append(build.requirement_path)
+    requirement_paths.sort()
     before = {path: (args.repo_root / path).read_text() for path in requirement_paths}
     for name in selected:
-        bump_native_requirement(name, versions[name]["version"], args.repo_root, None)
+        bump_native_requirement(name, versions[name]["version"], args.repo_root)
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
     _emit_github_output(
         args.github_output,
@@ -786,9 +907,13 @@ def _plan_command(args: argparse.Namespace) -> None:
     )
     values = {
         "packages": json.dumps(plan.packages, separators=(",", ":")),
-        "versions": json.dumps(dict(plan.versions), separators=(",", ":")),
+        "versions": json.dumps(
+            {name: asdict(version) for name, version in plan.versions.items()},
+            separators=(",", ":"),
+        ),
         "build_matrix": json.dumps({"include": plan.builds}, separators=(",", ":")),
-        "publish": str(next(iter(plan.versions.values()))["mode"] != ReleaseMode.MANUAL).lower(),
+        "bump": str(plan.bump).lower(),
+        "publish": str(next(iter(plan.versions.values())).mode != ReleaseMode.MANUAL).lower(),
     }
     print(json.dumps(values, indent=2, sort_keys=True))
     _emit_github_output(args.github_output, **values)

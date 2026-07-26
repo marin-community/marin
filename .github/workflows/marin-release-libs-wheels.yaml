@@ -1,124 +1,293 @@
-name: "Marin - Release Libs Wheels"
+name: "Marin - Release Packages"
 
-# Builds the eight pure-Python marin-* lib wheels and publishes them to PyPI
-# via OIDC trusted publishing -- no API token is stored anywhere. Triggers:
-#   schedule          -> nightly dev release (<base>.dev<stamp>)
-#   push tag          -> stable release, version from the marin-libs-v* tag
-#   workflow_dispatch -> manual cut (nightly / stable / manual)
-#   pull_request      -> build-only smoke when the build script or this
-#                        workflow file changes
-# Trusted-publisher setup is documented in docs/dev-guide/releasing.md.
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: "Package family or all"
+        default: all
+        type: string
       mode:
         description: "Build mode"
         type: choice
-        options: [nightly, stable, manual]
+        options: [development, stable, manual]
         default: manual
       version:
-        description: "Version (required for stable mode, e.g. 0.2.0)"
+        description: "Version; required for a stable single-package release"
         type: string
   schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC daily
+    - cron: "0 6 * * *"
   push:
+    branches:
+      - main
     tags:
+      - "dupekit-v*"
+      - "finelog-v*"
+      - "iris-native-v*"
       - "marin-libs-v*"
-  pull_request:
+    # GitHub requires static path filters. Keep this list aligned with
+    # package-owned source_patterns; orchestration-only changes do not publish.
     paths:
+      - "lib/dupekit/src/**"
+      - "lib/dupekit/rust/**"
+      - "lib/finelog/src/**"
+      - "lib/finelog/rust/**"
+      - "lib/iris/rust/**"
+      - "rust/**"
+      - "scripts/python_libs_package.py"
+  pull_request:
+    # Pull requests also smoke shared release code, which selects every family.
+    paths:
+      - "lib/dupekit/src/**"
+      - "lib/dupekit/rust/**"
+      - "lib/finelog/src/**"
+      - "lib/finelog/rust/**"
+      - "lib/iris/rust/**"
+      - "rust/**"
+      - "scripts/ci/package_release.py"
       - "scripts/python_libs_package.py"
       - ".github/workflows/marin-release-libs-wheels.yaml"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false  # don't kill an in-flight publish
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  resolve:
+  plan:
     runs-on: ubuntu-latest
     outputs:
-      mode: ${{ steps.pick.outputs.mode }}
-      version: ${{ steps.resolved.outputs.version }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      bump: ${{ steps.plan.outputs.bump }}
+      packages: ${{ steps.plan.outputs.packages }}
+      publish: ${{ steps.plan.outputs.publish }}
+      versions: ${{ steps.plan.outputs.versions }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      # Hoist user-supplied dispatch inputs into env so they reach the shell as
-      # variables, not as `${{ ... }}` template substitutions -- free-form
-      # inputs interpolated into a shell script are an injection vector.
-      - id: pick
+      - name: Find changed source files
         env:
-          INPUT_MODE: ${{ github.event.inputs.mode }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/marin-libs-v* ]]; then
-            echo "mode=stable" >> "$GITHUB_OUTPUT"
-            echo "input_version=${GITHUB_REF_NAME#marin-libs-v}" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
-            echo "mode=nightly" >> "$GITHUB_OUTPUT"
-            echo "input_version=" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
-            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --name-only "$PR_BASE" "$GITHUB_SHA" > "$RUNNER_TEMP/package-changes"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            git diff --name-only "$PUSH_BEFORE" "$GITHUB_SHA" > "$RUNNER_TEMP/package-changes"
           else
-            # pull_request: build-only smoke
-            echo "mode=manual" >> "$GITHUB_OUTPUT"
-            echo "input_version=" >> "$GITHUB_OUTPUT"
+            touch "$RUNNER_TEMP/package-changes"
           fi
 
-      # Resolve the version exactly once for the whole run so the build job
-      # stamps the identical value -- a run straddling midnight UTC would
-      # otherwise compute a different nightly date in build vs resolve.
-      - id: resolved
+      - name: Resolve release plan
+        id: plan
         env:
-          MODE: ${{ steps.pick.outputs.mode }}
-          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          python3 scripts/python_libs_package.py \
-            --mode "$MODE" --version "$INPUT_VERSION" --resolve-only
+          python scripts/ci/package_release.py plan \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --ref "$GITHUB_REF" \
+            --mode "${INPUT_MODE:-manual}" \
+            --package "${INPUT_PACKAGE:-all}" \
+            --version "${INPUT_VERSION:-}" \
+            --revision "$GITHUB_SHA" \
+            --serial "$GITHUB_RUN_ID" \
+            --changed-files "$RUNNER_TEMP/package-changes" \
+            --github-output "$GITHUB_OUTPUT"
 
   build:
-    needs: resolve
-    runs-on: ubuntu-latest
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - if: matrix.operation != 'python'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: astral-sh/setup-uv@v7
 
-      - name: Build wheels + sdists
+      - name: Build wheels
         env:
-          MODE: ${{ needs.resolve.outputs.mode }}
-          VERSION: ${{ needs.resolve.outputs.version }}
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
         run: |
-          python3 scripts/python_libs_package.py --mode "$MODE" --version "$VERSION"
+          python scripts/ci/package_release.py build \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --operation "${{ matrix.operation }}"
+
+      - name: Validate compatible native wheel
+        if: matrix.operation == 'linux' || matrix.operation == 'macos'
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/package_release.py validate-wheel \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --dist-dir dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: marin-libs-dist
+          name: package-${{ matrix.package }}-${{ matrix.operation }}
           path: dist/*
-          retention-days: 14
+          if-no-files-found: error
 
   publish:
-    # Manual mode produces local-version identifiers (`X.Y.Z+manual.<sha>`)
-    # which PyPI rejects, so manual cuts -- and every pull_request smoke --
-    # are build-only regardless of how they were triggered.
-    if: |
-      github.event_name != 'pull_request'
-      && needs.resolve.outputs.mode != 'manual'
-    needs: [resolve, build]
+    needs: [plan, build]
+    if: >-
+      github.repository == 'marin-community/marin' &&
+      needs.plan.outputs.publish == 'true' &&
+      (github.event_name == 'push' ||
+       github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
     runs-on: ubuntu-latest
     environment: pypi-publish
     permissions:
-      id-token: write   # mint the OIDC token for trusted publishing
+      contents: read
+      id-token: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
-          name: marin-libs-dist
+          pattern: package-${{ matrix.package }}-*
           path: dist
+          merge-multiple: true
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+      - name: Validate release artifacts
+        env:
+          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
+        run: |
+          python scripts/ci/package_release.py verify-release \
+            --package "${{ matrix.package }}" \
+            --version "$VERSION" \
+            --dist-dir dist
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           packages-dir: dist/
+          skip-existing: true
+
+  bump:
+    needs: [plan, publish]
+    if: needs.publish.result == 'success' && needs.plan.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BRANCH: automation/native-package-versions
+    steps:
+      - name: Generate repository app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.NIGHTSHIFT_APP_ID }}
+          private-key: ${{ secrets.NIGHTSHIFT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Prepare shared update branch
+        id: prepare
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          pr_url=$(gh pr list --head "$BRANCH" --base main --state open --json url --jq '.[0].url // ""')
+          if [[ -n "$pr_url" ]]; then
+            git fetch origin "$BRANCH"
+            git switch -C "$BRANCH" "origin/$BRANCH"
+            git rebase origin/main
+            echo "force_push=true" >> "$GITHUB_OUTPUT"
+          else
+            git switch -C "$BRANCH" origin/main
+            set +e
+            git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null
+            branch_status=$?
+            set -e
+            if [[ "$branch_status" == "0" ]]; then
+              git fetch origin "$BRANCH"
+              echo "force_push=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$branch_status" == "2" ]]; then
+              echo "force_push=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Could not inspect origin/$BRANCH"
+              exit "$branch_status"
+            fi
+          fi
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Advance compatibility floors and lock
+        id: bump
+        env:
+          VERSIONS: ${{ needs.plan.outputs.versions }}
+        run: |
+          python scripts/ci/package_release.py bump-releases \
+            --versions "$VERSIONS" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Commit and open or update pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BODY_FILE: .github/native-package-version-pr.md
+          FORCE_PUSH: ${{ steps.prepare.outputs.force_push }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_URL: ${{ steps.prepare.outputs.pr_url }}
+          REQUIREMENT_PATHS: ${{ steps.bump.outputs.requirement_paths }}
+          SOURCE_SHA: ${{ github.sha }}
+          TITLE: "[dependencies] Advance native package versions"
+        run: |
+          set -euo pipefail
+          read -ra requirement_paths <<< "$REQUIREMENT_PATHS"
+          changed=$(git diff --name-only | sort)
+          expected=$(printf '%s\n' "${requirement_paths[@]}" uv.lock | sort)
+          if [[ "$changed" != "$expected" ]]; then
+            echo "Unexpected changed files:"
+            echo "$changed"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${requirement_paths[@]}" uv.lock
+          git commit -m "$TITLE" \
+            -m "Consume native wheels built from ${SOURCE_SHA}."
+          if [[ "$FORCE_PUSH" == "true" ]]; then
+            git push --force-with-lease origin "HEAD:$BRANCH"
+          else
+            git push origin "HEAD:$BRANCH"
+          fi
+
+          pr_url="$PR_URL"
+          if [[ -z "$pr_url" ]]; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label agent-generated \
+              --label dependencies >/dev/null
+            pr_url=$(gh pr view "$BRANCH" --json url --jq .url)
+          else
+            gh pr edit "$pr_url" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --add-label agent-generated \
+              --add-label dependencies >/dev/null
+          fi
+          gh pr merge "$pr_url" --auto --squash
+          echo "Updated $pr_url"
