@@ -12,6 +12,7 @@ from experiments.qwen_distillation import (
     ZERO_SHOT_ACCURACY_TOLERANCES,
     ZERO_SHOT_TASKS,
     Arm,
+    extended_checkpoint,
     screen_checkpoint_subpath,
 )
 
@@ -46,3 +47,8 @@ def test_extended_stage_uses_shared_token_cap_and_promoted_arm():
         Arm.KL_BASE,
         Arm.FACTORIZED,
     )
+
+
+def test_extended_checkpoint_uses_frozen_training_version():
+    checkpoint = extended_checkpoint(Arm.FACTORIZED, 1)
+    assert checkpoint.version == "2026.07.26.17"

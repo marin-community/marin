@@ -26,6 +26,10 @@ Smoke one terminal checkpoint through the zero-shot evaluation path:
 Launch the promoted treatment and four controls to the 1.8B-token endpoint:
 
     python -m experiments.qwen_distillation --version dev --stage extended --run --max-concurrent 10
+
+Evaluate all terminal extended checkpoints:
+
+    python -m experiments.qwen_distillation --version dev --stage extended-eval --run --max-concurrent 10
 """
 
 import json
@@ -89,6 +93,8 @@ EXTENDED_DATA_VERSION = "2026.07.26.11"
 SMOKE_DATA_DOCUMENTS = 1_000
 EXTENDED_DATA_DOCUMENTS_PER_SHARD = 15_000
 SCREEN_EVAL_VERSION = "2026.07.26.16"
+EXTENDED_ARTIFACT_VERSION = "2026.07.26.17"
+EXTENDED_EVAL_VERSION = "2026.07.26.18"
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
@@ -361,6 +367,12 @@ def screen_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
     return ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)
 
 
+def extended_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
+    name = f"qwen-distillation/extended/{arm.value.lower()}-seed-{seed}"
+    path = f"s3://marin-us-east-02a/marin/{name}/{EXTENDED_ARTIFACT_VERSION}"
+    return ArtifactStep.adopt(name, EXTENDED_ARTIFACT_VERSION, path, kind=LevanterCheckpoint)
+
+
 def screen_checkpoint_subpath(arm: Arm) -> str:
     return "model" if ARMS[arm].objective is None else "model/student"
 
@@ -370,13 +382,15 @@ def evaluation_step(
     arm: Arm,
     *,
     seed: int,
+    label: str = "screen",
+    version: str = SCREEN_EVAL_VERSION,
 ) -> ArtifactStep[Artifact]:
-    name = f"qwen-distillation/screen-eval/{arm.value.lower()}-seed-{seed}"
+    name = f"qwen-distillation/{label}-eval/{arm.value.lower()}-seed-{seed}"
 
     def build_config(ctx: StepContext) -> EvaluationOnPodConfig:
         checkpoint_path = LevanterCheckpoint(path=ctx.artifact_path(checkpoint)).checkpoint_dir
         tokenizer_path = ctx.artifact_path(qwen3_0_6b_base)
-        run_id = f"{arm.value}-screen-eval-seed-{seed}"
+        run_id = f"{arm.value}-{label}-eval-seed-{seed}"
         return EvaluationOnPodConfig(
             eval_config=EvalHarnessMainConfig(
                 eval_harness=LmEvalHarnessConfig(
@@ -395,7 +409,7 @@ def evaluation_step(
                         project="marin",
                         name=run_id,
                         group=WANDB_GROUP,
-                        tags=[SERIES, "issue-7656", "screen-eval", arm.value, f"seed-{seed}"],
+                        tags=[SERIES, "issue-7656", f"{label}-eval", arm.value, f"seed-{seed}"],
                         replicate_path=ctx.output_path,
                     ),
                     mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -412,7 +426,7 @@ def evaluation_step(
 
     return ArtifactStep(
         name=name,
-        version=SCREEN_EVAL_VERSION,
+        version=version,
         artifact_type=Artifact,
         run=_evaluation_job,
         build_config=build_config,
@@ -516,6 +530,18 @@ def build(stage: str) -> list[ArtifactStep]:
         return [evaluation_step(screen_checkpoint(arm, seed), arm, seed=seed) for arm in Arm for seed in SCREEN_SEEDS]
     if stage == "screen-eval-smoke":
         return [evaluation_step(screen_checkpoint(Arm.FOUR_B_TEACHER, 0), Arm.FOUR_B_TEACHER, seed=0)]
+    if stage == "extended-eval":
+        return [
+            evaluation_step(
+                extended_checkpoint(arm, seed),
+                arm,
+                seed=seed,
+                label="extended",
+                version=EXTENDED_EVAL_VERSION,
+            )
+            for arm in EXTENDED_ARMS
+            for seed in SCREEN_SEEDS
+        ]
     if stage == "extended":
         data = qwen_datakit_cache(extended=True)
         return [
@@ -576,6 +602,7 @@ def build(stage: str) -> list[ArtifactStep]:
             "screen-eval-smoke",
             "screen-eval",
             "extended",
+            "extended-eval",
         ]
     ),
     required=True,
