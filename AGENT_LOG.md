@@ -296,3 +296,24 @@ Next: peer job completion -> v2 healthy clique; keep 15-min cadence.
 
 Confidence: 4/10 g=0.5, 1/10 integral family
 Next: v3 child registers -> poller; first metrics ~05:00; series by ~06:15.
+
+## Check-in 2026-07-26 05:00 UTC — GB200 fabric incident: nobody is training
+
+- v3 attempt 0 hit the SAME NCCL SIGTRAP (fresh allocation, 10.186.207.x vs rav's healthy
+  10.186.211.x — but v2 died on 211.x too, so IP forensics are inconclusive).
+- KEY: rav's /rav/rav-qbdrv-off2 "running" job reads 0% GPU on task 0 — it is hung too.
+  d4's pgle-capture (02:15) succeeded but took ~2h for 30 steps. Since ~02:00 UTC the
+  cw-us-east-08a GB200 fabric fails or hangs NCCL clique init for everyone; the log
+  shipping outage (since 20:40) is presumably the same incident. This is infrastructure,
+  not experiment config (my v1 booted identically at 20:55; 3 evening legs trained clean).
+- REFRAME: the g=0.5 measurement EXISTS — v1 ran 350/350 to completion at 22:28. Only its
+  readability is hostage to the log pipeline. v3 stays submitted as a canary (cycles at
+  0% GPU, costs nothing, boots if the fabric heals) but the primary path to the g=0.5
+  number is log-pipeline recovery.
+- Log store poll 05:00: child rows still 0 for all four evening jobs (v1, qbint, qbint01,
+  smoke). 8h20m of outage. Peer evening jobs equally dark.
+- Mutations this session: submissions + the v2 stop (logged).
+
+Confidence: 4/10 g=0.5, 1/10 integral family (measured)
+Next: poll log store every ~20 min; if v3 boots, attach poller; assemble final report
+with v1-pending contingency stated.
