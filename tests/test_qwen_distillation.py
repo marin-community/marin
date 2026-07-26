@@ -6,6 +6,7 @@ import pytest
 from experiments.qwen_distillation import (
     BATCH_SIZE,
     EXTENDED_ARMS,
+    EXTENDED_CE_RETRY_ARMS,
     EXTENDED_STEPS,
     EXTENDED_TOKENS,
     SEQ_LEN,
@@ -47,6 +48,7 @@ def test_extended_stage_uses_shared_token_cap_and_promoted_arm():
         Arm.KL_BASE,
         Arm.FACTORIZED,
     )
+    assert EXTENDED_CE_RETRY_ARMS == (Arm.CE_SCRATCH, Arm.CE_BASE)
 
 
 def test_extended_checkpoint_uses_frozen_training_version():

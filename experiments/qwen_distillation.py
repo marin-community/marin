@@ -19,6 +19,10 @@ Retry the hard-label controls with materialized training loss:
 
     python -m experiments.qwen_distillation --version dev --stage screen-ce-retry --run --max-concurrent 4
 
+Resume extended hard-label controls after a systems failure:
+
+    python -m experiments.qwen_distillation --version dev --stage extended-ce-retry --run --max-concurrent 4
+
 Smoke one terminal checkpoint through the zero-shot evaluation path:
 
     python -m experiments.qwen_distillation --version dev --stage screen-eval-smoke --run
@@ -150,6 +154,7 @@ class Arm(StrEnum):
 
 SCREEN_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE, Arm.TAID)
 SCREEN_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
+EXTENDED_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
 EXTENDED_ARMS = (
     Arm.CE_SCRATCH,
     Arm.KL_SCRATCH,
@@ -473,6 +478,7 @@ def training_step(
                 pad_tokenizer_to_match_model=True,
                 train_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
                 eval_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
+                hf_save_steps=None,
             )
         else:
             teacher_path = ctx.artifact_path(teacher_checkpoint)
@@ -555,6 +561,19 @@ def build(stage: str) -> list[ArtifactStep]:
             for arm in EXTENDED_ARMS
             for seed in SCREEN_SEEDS
         ]
+    if stage == "extended-ce-retry":
+        data = qwen_datakit_cache(extended=True)
+        return [
+            training_step(
+                arm,
+                seed=seed,
+                num_train_steps=EXTENDED_STEPS,
+                label="extended",
+                data=data,
+            )
+            for arm in EXTENDED_CE_RETRY_ARMS
+            for seed in SCREEN_SEEDS
+        ]
     if stage == "smoke":
         data = qwen_datakit_cache(smoke=True)
         return [
@@ -603,6 +622,7 @@ def build(stage: str) -> list[ArtifactStep]:
             "screen-eval",
             "extended",
             "extended-eval",
+            "extended-ce-retry",
         ]
     ),
     required=True,

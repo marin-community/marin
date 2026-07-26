@@ -157,3 +157,25 @@ kernel family already isolated during validation. The standard trainer now
 supports the materialized float32 loss for training as well as evaluation. A
 `screen-ce-retry` stage selects only the four affected controls under artifact
 version `2026.07.26.10`.
+
+## Extended hard-label export failure
+
+The four hard-label extension cells trained normally until step 10,000, saved
+native Levanter checkpoints, and then failed in the scheduled Hugging Face
+export hook. Marin assigns every training run an `<output_path>/hf` export
+directory. The hook attempted to reconstruct a Hugging Face tokenizer from the
+regional `s3://` model directory, which Transformers rejected as an invalid
+repository ID.
+
+The online-distillation entry point does not currently install this export
+hook, so its six cells continued without interruption. The hard-label runs do
+not need intermediate Hugging Face exports: final comparisons and recovery
+use native checkpoints. `TrainLmConfig.hf_save_steps` now accepts `None`, and
+the Qwen experiment disables the hook for hard-label cells. The
+`extended-ce-retry` stage targets the four failed artifacts at their original
+`2026.07.26.17` paths so Levanter can resume from step 10,000.
+
+- Parent job: `/power/qwen-distill-extended-1db30a`
+- Failure boundary: step 10,000
+- Affected arms: `QD-C0` and `QD-C2`, both seeds
+- Unaffected arms: `QD-C1`, `QD-C3`, and `QD-002`, both seeds

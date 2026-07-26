@@ -18,7 +18,7 @@ author: rjpower
 
 ## Current TL;DR
 
-All 18 two-seed screen cells train with finite loss on `cw-us-east-08a`; six fast cells have terminal 100M-token checkpoints and the remaining online-teacher cells are still running. A 3.45B-token regional extension cache is complete. The zero-shot smoke loads the native distilled student checkpoint and is validating the four-task harness after fixing two checkpoint/dataset boundary errors. Qwen does not publish `Qwen3.5-32B` or `Qwen3.5-0.6B`; the working pair is `Qwen3-32B` and `Qwen3-0.6B`.
+All 18 two-seed screen cells and all 18 zero-shot evaluations completed on `cw-us-east-08a`. Factorized initialization is the only research treatment that passed the paired NLL and zero-shot promotion gates. Ten fresh 1.8B-token runs—factorized initialization and four controls, each with two seeds—are active on the 3.45B-token regional cache. Qwen does not publish `Qwen3.5-32B` or `Qwen3.5-0.6B`; the working pair is `Qwen3-32B` and `Qwen3-0.6B`.
 
 ## Current baseline
 
@@ -287,3 +287,21 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: versus paired scratch forward-KL seeds, `QD-002` changed raw accuracy by `[+0.0034, +0.0002, +0.0011, +0.0118]` in seed 0 and `[-0.0046, +0.0001, +0.0022, +0.0039]` in seed 1 for ARC-Easy, HellaSwag, PIQA, and WinoGrande. Macro raw accuracy improved by `0.0041` and `0.0004`.
 - Interpretation: both seeds pass every frozen task tolerance. `QD-002` is promoted. `QD-001` is not promoted because its seed-1 held-out NLL was worse than paired scratch KL, even though its pooled mean cleared the threshold.
 - Next action: start fresh 109,864-step runs for `QD-002` and controls `QD-C0` through `QD-C3` on the 1.8B-token cache.
+
+### 2026-07-26 19:30 - Extended runs launch
+
+- Hypothesis: factorized initialization retains its early advantage over scratch forward KL at a shared 1.8B-token endpoint.
+- Commit hash: `1db30ae713`.
+- Job: `/power/qwen-distill-extended-1db30a` on `cw-us-east-08a`, batch priority.
+- Config: ten fresh runs, 109,864 steps, sequence length 2,048, batch size 8, two seeds, and the preserved `2026.07.26.11` regional cache. The run set contains `QD-C0`, `QD-C1`, `QD-C2`, `QD-C3`, and promoted treatment `QD-002`.
+- Result: all ten W&B runs registered and entered finite training. Hard-label controls sustain approximately 97,000–101,000 tokens/s; online 32B-teacher runs sustain approximately 27,500–28,500 tokens/s after initialization.
+- Interpretation: the shared token cap corresponds to about five active hours for hard-label controls and eighteen for online distillation. The terminal comparison remains token-matched rather than wall-time-matched.
+- Next action: monitor all cells through their first held-out evaluation at step 13,733 and recover any failed cell from its durable checkpoint.
+
+### 2026-07-26 20:04 - Hard-label runs stop at the scheduled export
+
+- Hypothesis: the exact step-10,000 stop is caused by a periodic hook rather than training instability.
+- Job: `/power/qwen-distill-extended-1db30a`.
+- Result: `QD-C0` and `QD-C2`, both seeds, saved native checkpoints at step 10,000 and then failed during Hugging Face export. The export hook tried to reconstruct a tokenizer from the regional `s3://` model directory, which Transformers interpreted as an invalid repository ID. All six online-KD runs continued with finite loss.
+- Interpretation: disable unneeded intermediate Hugging Face export for hard-label cells. Preserve the native checkpoints and resume the four cells at the same artifact paths; training data order and the fixed token endpoint remain unchanged.
+- Next action: launch `extended-ce-retry` from the immutable fix and verify each run resumes above step 10,000.
