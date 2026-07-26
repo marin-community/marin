@@ -3555,3 +3555,18 @@ author: dlwh
   - Lazy per-task compilation during `eval_local` remains a leading mechanism: one rank begins DIME send while another is still compiling its task executable.
 - Next action:
   - Build a standalone four-stage BF16 forward/VJP chain with differentiable device-ragged work and exactly three forward plus three reverse DIME transfers. If it passes, precompile the exact m1 rank-local task executables before coordinated execution.
+
+### 2026-07-26 10:12 PDT - standalone BF16 ragged VJP chain passes exactly
+- Hypothesis: Differentiable BF16 device-ragged work plus three forward and three reverse DIME transfers is sufficient to reproduce the m1 training deadlock without Marin model or optimizer state.
+- Commit Hash: `e38cb35410` adds `jaxpp-four-stage-bf16-vjp-ragged`, a self-contained four-rank graph with seven compute tasks, six DIME transfers, and no final observation transfer.
+- Command: One-node H100x8 job `/dlwh/jaxpp-bf16-vjp-ragged-min-r1-20260726-1812` ran the new case with JAX `0.11.1.dev20260725`, JaxPP `7091a9b5`, NCCL `2.30.7`, device-ragged XLA flags, and XLA fraction `0.35`.
+- Results:
+  - Rank 3 produced expected and actual loss `5050.5`, absolute error `0.0`.
+  - Rank 0 produced the exact `0.5 * input` gradient, finite with maximum absolute error `0.0`.
+  - All four ranks lowered in `0.032-0.033s` and returned from `eval_local` in `6.108-6.972s`.
+  - No watchdog stack or timeout occurred. Iris succeeded in `46.67s`; no live descendant or allocation remains.
+- Interpretation:
+  - Differentiable BF16 ragged collectives, reverse-mode stage tasks, and bidirectional DIME are insufficient by themselves. The standalone package is a passing lower-bound control, not the deadlock reproducer.
+  - The remaining m1-specific ingredients include real Transformer stage state/body, task executable size, receive-buffer prologue, updates/metrics, and lazy compilation skew.
+- Next action:
+  - Precompile and allocate the exact m1 rank-local task executables and receive-buffer prologue, synchronize all four hosts, then begin transfer execution. A pass would isolate lazy compilation/allocation concurrent with DIME; a hang would move focus to the retained Transformer/update graph.

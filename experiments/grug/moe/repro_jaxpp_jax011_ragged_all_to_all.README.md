@@ -182,8 +182,16 @@ accumulates all returned payloads on stage 0, and forces 96 transfers plus 128
 stage tasks to remain live. The base cases require checksum `202`; the repeated
 cases require checksum `3,232`. Every case requires zero mismatches.
 
-The BF16 VJP case is an unexecuted next reduction. It must emit exact loss and
-gradient checks on ranks 3 and 0 respectively before it can refine the known
-failure boundary.
+The standalone BF16 VJP reduction also passed in
+`/dlwh/jaxpp-bf16-vjp-ragged-min-r1-20260726-1812`:
+
+- Rank 3 produced exact loss `5050.5` with absolute error `0.0`.
+- Rank 0 produced the exact `0.5 * input` gradient with maximum absolute error
+  `0.0`.
+- All four ranks lowered in `0.032-0.033s` and returned from `eval_local` in
+  `6.108-6.972s` without a watchdog stack or timeout.
+
+Therefore differentiable BF16 ragged forward/VJP tasks and bidirectional DIME
+transfers are not sufficient to reproduce the training deadlock.
 
 Part of #7024.
