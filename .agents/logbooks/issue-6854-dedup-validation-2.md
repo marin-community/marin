@@ -16,6 +16,58 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T16:49:30Z — 160,925 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1650-v450` independently
+  revalidated p1 decision-file 38 semantic offset 1,792 and p2 decision-file
+  70 semantic offsets 5,376 and 5,504. Their 384 direct pairs contain 148
+  model false positives, 235 model true duplicates, and one unresolved
+  outcome. All 803 judgments were valid on their first request attempt. The
+  outcome Parquet SHA-256 values are
+  `e76d6d3ab272e1a480e0ab83661d39888cf35a5d95e47e0ea07b8cb98e663117`,
+  `86a34eb2efed42c5d542618c6c9c325bba536a3e24a394c22dc6322ac7f89fda`,
+  and `046a5204ed53e38db9b213d0bebc73230cb2259413fd5766d5e5485c2ba6c00e`.
+
+- Complete-text inspection resolves the drinking-water article ambiguity as a
+  true duplicate. The member and canonical are sentence-level variants with
+  the same hydration facts, health risks, and recommendations. Member-only
+  strings `soda drink machine`, `bottle carefully`, and `get more info` are
+  malformed SEO fragments. Its closing paragraph restates the canonical's
+  existing warning about low water consumption and recommendation to add
+  flavor, so deleting the member loses no member-exclusive substantive fact.
+  The canonical's appended Q&A does not affect that deletion test. The
+  3,354/3,517-character records have 13/8 lines and character, line, and
+  word-sequence similarities 0.806869, 0.095238, and 0.746060.
+  Member/canonical text SHA-256 values are
+  `43cb8da70a6969333e502b826f5eaedb022a3e3e110b253be2928546e8b0f179`
+  and
+  `788bb999fa2d4f0fa8e007b8173c5ca7cee4bd49a762f65088d8b559aa94e00d`.
+
+- `/rav/datakit-6854-inspect-row2626-1651-v451` persisted the complete pair and
+  diff with inspection SHA-256
+  `da19637ffeaf9a9e0fff08fd68a28f431352776a382fc4a9d35cf6a3346434bc`.
+  `/rav/datakit-6854-publish-row2626-1652-v452` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row2626-1653-v453`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `c34c1d22e28705de10b33bd9f207281d020c5c3688c6b1d6d34319c8b5e0b60a`,
+  `2effd60f96da986cef6fd51fa55437d57d760754bdb45da81959cc4d9a1c5688`,
+  and `bdec29075c860c846abe294c222bcd16e2bbcf90c80c0b592810cd78ecaebaaf`.
+
+- Across the stable 1,266-checkpoint snapshot, all 177 unresolved model
+  outcomes are covered by 138 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 129,074 pairs, 82,102 false positives, 46,972 true duplicates;
+  - treatment: 31,851 pairs, 16,433 false positives, 15,418 true duplicates;
+  - combined: 160,925 pairs, 98,535 false positives, 62,390 true duplicates.
+
+- The next audit frontiers are p0 `(7, 0)`, p1 `(38, 1,920)`,
+  p2 `(70, 5,632)`, and p3 `(103, 128)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T16:42:45Z — 160,541 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1648-v449` independently
