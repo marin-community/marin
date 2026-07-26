@@ -430,6 +430,33 @@ No review findings were received. The interleaved-subset correction above came
 from the subsequent code-grounded implementation review. This failed review
 lane is an operational limitation, not evidence that the plan passed review.
 
+## Protocol amendments
+
+### Reference-attention data representation and proxy size
+
+The first uniform reference-attention smoke produced a finite forward loss in
+all four arms, but the first backward produced nonfinite gradients. Three arms
+stopped cleanly at step 2; the slower E128 arm was stopped after the same
+nonfinite-gradient signature was visible. The failure occurred in the E256 and
+E128 controls as well as both treatments.
+
+The reference backend had inherited `pack=1`, which was added only to satisfy
+the THD FlashAttention metadata contract. Fixed-shape THD examples contain
+fully masked padding query rows. The reference softmax evaluates those rows as
+all-negative-infinity and produces `0/0`; zero token loss weights do not remove
+the resulting backward NaNs. Reference-attention runs therefore return to the
+ordinary causal example representation (`pack=None`). THD runs retain
+`pack=1`. A materialized-config regression test covers both branches.
+
+The d1280, length-8192 reference step measured about 262 seconds. It cannot
+produce a useful loss trajectory before the deadline. The corrected proxy is
+d768, 8 layers, length 2,048, global batch 1,024, and therefore the same
+2,097,152 tokens per step. Its E256 and E128 models remain approximately 2.0B
+and 1.1B parameters. Every scientific arm changes together. The common final
+step count will be frozen from the corrected four-step throughput smoke and
+cannot exceed 500 steps. This amendment trades proxy scale for completed
+four-arm evidence; it does not relax any relative-loss or overhead threshold.
+
 ## Decision rules
 
 Promote:

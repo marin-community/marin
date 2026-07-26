@@ -240,3 +240,65 @@ author: Marin research
   FA4 THD forward and backward kernels rather than testing import alone.
 - Next action: require the forward/backward canary to pass before another
   four-rack smoke.
+
+### 2026-07-26 20:39 - Gate 1 reference-attention amendment
+
+- Result: the CUTLASS 4.6.0 and Quack 0.6.1 pair fixed the import and lowering
+  failures. A one-GB200 forward-only FA4/CuTe canary compiled in 13 seconds,
+  executed successfully, and returned finite output. The corresponding
+  forward/backward canaries compiled and dispatched, but did not return from
+  GPU execution. Matching the upstream dense-backward `subtile_factor=2` did
+  not change the result. Iris reported zero preemptions and zero task failures
+  while the processes remained resident; both exact canary jobs were stopped.
+- Interpretation: FA4 forward is functional on SM100, but its backward path is
+  not currently usable for this training window. This is an
+  architecture-independent kernel failure rather than evidence about a
+  treatment arm.
+- Amendment: run every arm with Levanter's `reference` attention backend.
+  Preserve the preregistered model, tokens, data order, optimizer, routing
+  treatments, and 64-GB200 allocation. Relative loss comparisons remain valid.
+  Measured wall-clock overhead is backend-specific and will not be presented as
+  production-FA4 overhead.
+- Validation: nine focused Levanter attention tests and two launcher tests
+  passed; the required pre-commit entry point passed. Commit `e2f4036439`
+  contains the amendment and final FA4 diagnostic.
+- Canonical smoke coordinators:
+  - `/power/nest-moe-001-smoke-ref-r8-coord`
+  - `/power/nest-moe-002-smoke-ref-r8-coord`
+  - `/power/nest-moe-003-smoke-ref-r8-coord`
+  - `/power/nest-moe-004-smoke-ref-r8-coord`
+- Next action: require finite optimizer-step telemetry from all four arms, then
+  freeze the production step count from observed throughput and the 09:00 UTC
+  hard stop.
+
+### 2026-07-26 20:43 - Reference smoke admitted
+
+- Result: all four arms received their 16-node, 64-GB200 allocations. Iris
+  reported all 64 tasks running, with zero preemptions and zero failures. Arm
+  001 reached the train-step compile on every host.
+- Next action: hold Gate 1 until every arm writes at least three finite
+  post-warmup steps and completes its 20-step smoke.
+
+### 2026-07-26 20:58 - Reference backward data failure and proxy amendment
+
+- Result: all four d1280/length-8192 arms returned finite first-forward losses.
+  The E256 control and both nested arms then produced nonfinite gradients and
+  stopped cleanly at step 2. Their first-step throughputs were 8,015, 7,883,
+  and 8,103 tokens/s. The E128 control exposed the same nonfinite-gradient
+  signature and was stopped explicitly before repeating the long second step.
+  No task was preempted or retried.
+- Diagnosis: `pack=1` was introduced for the THD kernel contract, but the
+  reference attention backend does not require THD metadata. Fully masked
+  padding query rows produce undefined all-masked softmax values under the
+  reference path, which contaminate backward despite zero token loss weights.
+- Change: retain `pack=1` only for `gpu_fa4_thd`; use ordinary causal examples
+  for `reference`. Add bounded hidden-dimension and sequence-length overrides,
+  and rebuild heuristic optimizer hyperparameters from the actual batch and
+  sequence length.
+- Proxy amendment: d768, 8 layers, length 2,048, global batch 1,024, four
+  steps. This retains 2,097,152 tokens per step and approximately 2.0B/1.1B
+  large/small parameter counts while making the reference backend feasible.
+- Validation: two materialized-launcher tests and the required focused
+  pre-commit entry point passed.
+- Next action: snapshot and submit all four corrected arms. Gate 1 still
+  requires three finite steps and at least 85% relative nested throughput.

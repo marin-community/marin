@@ -253,6 +253,7 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tm
 def test_nested_moe_launcher_uses_fixed_shape_thd_segments(monkeypatch, tmp_path):
     monkeypatch.setenv("NESTED_ARM", "nested25")
     monkeypatch.setenv("NESTED_PHASE", "smoke")
+    monkeypatch.setenv("NESTED_ATTENTION", "gpu_fa4_thd")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     step = launch_nested_experts.build(version="dev")
@@ -265,10 +266,28 @@ def test_nested_moe_launcher_uses_fixed_shape_thd_segments(monkeypatch, tmp_path
     assert {component.pack for component in components} == {1}
 
 
-def test_nested_moe_launcher_accepts_reference_attention_fallback(monkeypatch):
+def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatch, tmp_path):
+    monkeypatch.setenv("NESTED_ARM", "nested25")
+    monkeypatch.setenv("NESTED_PHASE", "smoke")
     monkeypatch.setenv("NESTED_ATTENTION", "reference")
+    monkeypatch.setenv("NESTED_HIDDEN_DIM", "768")
+    monkeypatch.setenv("NESTED_SEQUENCE_LENGTH", "2048")
+    monkeypatch.setenv("NESTED_BATCH", "1024")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     assert launch_nested_experts._attention_implementation() == "reference"
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+    data = config.data
+
+    components = list(data.components.values())
+    assert components
+    assert all(isinstance(component, DatasetComponent) for component in components)
+    assert {component.pack for component in components} == {None}
+    assert config.model.hidden_dim == 768
+    assert config.model.max_seq_len == 2048
+    assert config.batch_size == 1024
 
 
 @pytest.mark.parametrize(

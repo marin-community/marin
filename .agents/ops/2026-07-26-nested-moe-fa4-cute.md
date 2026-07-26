@@ -109,8 +109,45 @@ THD forward and backward kernels.
 
 ## Results
 
-Pending the forward/backward compilation canary.
+The corrected dependency pair passed import and lowering. A forward-only
+one-GB200 canary compiled in 13 seconds and executed successfully with finite
+output. The combined forward/backward canary compiled and dispatched but did
+not return from device execution. Matching the upstream dense-backward
+`subtile_factor=2` produced the same hang. Iris reported zero preemptions and
+zero task failures while each process remained resident, so both exact canary
+jobs were stopped.
+
+The experiment launcher now permits the `reference` attention backend through
+an explicit validated setting. All four scientific arms use that backend for
+the remainder of this window. Nine focused Levanter attention tests, two
+launcher tests, and the required pre-commit entry point passed in commit
+`e2f4036439`.
+
+## Hypothesis 6
+
+The first reference-attention smoke returned a finite forward loss but
+nonfinite gradients in the E256 control and both nested arms. The E128 control
+showed the same signature. The reference runs had retained `pack=1`, although
+that fixed-shape representation was introduced only for the THD kernel.
+Padding query rows have no eligible keys; reference softmax evaluates an
+all-negative-infinity row and contaminates backward.
+
+## Changes to make
+
+Apply `with_pack(data, 1)` only when the selected backend is
+`gpu_fa4_thd`. Reference attention uses ordinary causal examples. Reduce the
+fallback proxy to d768 and length 2,048 while retaining the original
+2,097,152 tokens per step through a 1,024-sequence global batch.
+
+## Results
+
+Two materialized-launcher tests assert the THD and reference data contracts,
+including the amended proxy overrides. The corrected GPU smoke is pending.
 
 ## Future work
 
 - [ ] Keep Quack and CUTLASS release lines constrained as a tested pair.
+- [ ] Reproduce the FA4 dense backward hang with the smallest SM100 tensor
+  shape and collect a device-side trace.
+- [ ] Re-enable FA4 for nested-MoE throughput measurements only after the
+  backward canary completes.

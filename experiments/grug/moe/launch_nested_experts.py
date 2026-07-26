@@ -19,6 +19,8 @@ Optional overrides:
     NESTED_NODES        four-GPU GB200 nodes (default: 16)
     NESTED_EXPERT_AXIS  expert-parallel axis size (default: 64)
     NESTED_ATTENTION    attention backend (default: gpu_fa4_thd)
+    NESTED_HIDDEN_DIM   model width (default: 1280)
+    NESTED_SEQUENCE_LENGTH  sequence length (default: 8192)
 """
 
 import dataclasses
@@ -39,7 +41,7 @@ from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.paloma import paloma_datasets
-from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.heuristic import MoeHeuristic, build_from_heuristic, compute_flops_per_token
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
     env_int,
@@ -51,7 +53,6 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
 
 _BUDGET = 3.46e19
-_HIDDEN_DIM = 1280
 _TARGET_STEPS = 8192
 _LARGE_EXPERTS = 256
 _SMALL_EXPERTS = 128
@@ -59,6 +60,8 @@ _GPUS_PER_NODE = 4
 _DEFAULT_NODES = 16
 _DEFAULT_EXPERT_AXIS = 64
 _DEFAULT_BATCH = 256
+_DEFAULT_HIDDEN_DIM = 1280
+_DEFAULT_SEQUENCE_LENGTH = 8192
 _SMOKE_STEPS = 20
 _OUTPUT_SUBDIR = "experiments/nested-moe"
 _SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -129,15 +132,28 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     if phase not in ("smoke", "full"):
         raise ValueError("NESTED_PHASE must be 'smoke' or 'full'")
 
-    base_model, optimizer, _, full_steps = build_from_heuristic(
+    hidden_dim = env_int("NESTED_HIDDEN_DIM", _DEFAULT_HIDDEN_DIM)
+    sequence_length = env_int("NESTED_SEQUENCE_LENGTH", _DEFAULT_SEQUENCE_LENGTH)
+    heuristic = MoeHeuristic()
+    base_model, _, _, _ = build_from_heuristic(
         budget=_BUDGET,
-        hidden_dim=_HIDDEN_DIM,
+        hidden_dim=hidden_dim,
+        heuristic=heuristic,
         target_steps=_TARGET_STEPS,
+        seq_len=sequence_length,
     )
     model = _arm_model(base_model, arm)
     nodes = env_int("NESTED_NODES", _DEFAULT_NODES)
     expert_axis = env_int("NESTED_EXPERT_AXIS", _DEFAULT_EXPERT_AXIS)
     batch_size = env_int("NESTED_BATCH", _DEFAULT_BATCH)
+    compute_optimal_tokens = _BUDGET / (3 * compute_flops_per_token(base_model))
+    optimizer = heuristic.build_optimizer_config(
+        batch_size,
+        compute_optimal_tokens,
+        hidden_dim,
+        seq_len=sequence_length,
+    )
+    full_steps = max(1, round(compute_optimal_tokens / (batch_size * sequence_length)))
     steps = env_int("NESTED_STEPS", _SMOKE_STEPS if phase == "smoke" else full_steps)
 
     total_devices = nodes * _GPUS_PER_NODE
@@ -156,7 +172,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         disk="512g",
         replicas=nodes,
     )
-    run_id = f"{arm.experiment_id.lower()}-{phase}-d{_HIDDEN_DIM}-e{model.num_experts}"
+    run_id = f"{arm.experiment_id.lower()}-{phase}-d{hidden_dim}-s{sequence_length}-e{model.num_experts}"
     step_name = f"{_OUTPUT_SUBDIR}/{run_id}"
     version = resolve_version(step_name, version)
     train_data = slimpajama_6b_dataset()
@@ -165,7 +181,8 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         eval_batch_size = 64 if phase == "smoke" else 256
         data = mixture(ctx, {train_data: 1.0}, validation=validation, shuffle=_SHUFFLE)
-        data = with_pack(data, 1)
+        if model.attention_implementation == "gpu_fa4_thd":
+            data = with_pack(data, 1)
         return GrugMoeLaunchConfig(
             model=model,
             data=data,
