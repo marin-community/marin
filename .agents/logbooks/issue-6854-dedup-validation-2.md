@@ -16,6 +16,85 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T19:01:00Z — 174,483 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1853-v546` independently
+  revalidated three p0 decision-file 7 checkpoints at semantic offsets 3,072,
+  3,200, and 3,328, plus p2 decision-file 71 semantic offset 0. Their 512
+  baseline pairs contain 296 model false positives, 214 model true duplicates,
+  and two unresolved outcomes. Thirty pairs were chunked and 482 were direct.
+  All 4,175 judgments and request attempts were valid on their first attempt.
+
+- The outcome Parquet SHA-256 values are
+  `30d8ecf6950b64a06d8a3958ddb7cade9eb92592a4390daa92c55b09760b3072`,
+  `764fe1e5484b6e0577d54475f53e39d7131c44a162eb44a59158644629316b39`,
+  `5f3e4cd6ebe567613afbc8090586cb1dc99338c4c67f63e04670e57e8392fc31`,
+  and
+  `7f57e55c02140a51b13ed7cfecb2959426c3bd82a2966e76ba0757260a9bd2bf`.
+
+- Complete-text inspection resolves p0 row 5,471 as a false positive. The
+  4,739/6,677-character Nectar mattress pages share a corrupted review
+  scaffold, but the member alone instructs readers to visit
+  `NectarSleep.com` for discount details and frames the record as a consumer
+  coupon page. The canonical discusses the company website only for warranty
+  details. Character, line, and word-sequence similarities are 0.588297,
+  0.342857, and 0.519685. Member/canonical text SHA-256 values are
+  `8f5ad9c7d0753c3dd7df604170a9fbc71bf2770c33aa0f035c60d219562649cd`
+  and
+  `b824721714ab59634414dc91587a2899ec1fef5fc4934206ea7c449b8e3f07c6`.
+
+- Complete-text inspection resolves p0 row 5,818 as a false positive. The
+  1,048/827-character college SEO pages share two sentence scaffolds, but the
+  member adds a complete instruction that a corporate internship can improve
+  career prospects and provide work experience, plus additional program and
+  adult-education payloads. This exceeds low-value institution slots and
+  matches the earlier false-positive boundary recorded against the same
+  canonical SHA-256
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+  The member SHA-256 is
+  `d3e0766e2886c8181b5d864fda12b56d8083a3f47a1fdb2c48af0005188f618b`;
+  character, line, and word-sequence similarities are 0.693333, 0.333333,
+  and 0.633452.
+
+- `/rav/datakit-6854-inspect-row5471-1855-v547` and
+  `/rav/datakit-6854-inspect-row5818-1856-v548` persisted the complete pairs
+  and diffs with inspection SHA-256 values
+  `8e35ccee9b2dad2e49731f9a5cdef083f7577c815b87fdde7b25324f37ab6fc5`
+  and
+  `8922d67d32cd8ed7585ce1fd8c19d0ef58f5097ed68f2ff5a363f3e217644f2b`.
+  Their semantic-judgment SHA-256 values are
+  `cf7f7dd1eaba85cd40d1934272334904f2cba3c351e894801a4e2b4a21f63114`
+  and
+  `c1e73059fa105159493c6c3d1d87f2405ed40b745d67312a1cf0739b47d9ed99`.
+
+- `/rav/datakit-6854-publish-row5471-1858-v550` and
+  `/rav/datakit-6854-publish-row5818-1857-v549` wrote the immutable
+  false-positive records. Separate jobs
+  `/rav/datakit-6854-verify-row5471-1859-v551` and
+  `/rav/datakit-6854-verify-row5818-1900-v552` independently reread the source
+  pairs, semantic checkpoints, inspections, deterministic Parquet bytes, and
+  completion markers. Their manual-Parquet SHA-256 values are
+  `f19ab283004b611ea09ed8ca2455e080d1d9d47f27128622ad4f39a74dbc6388`
+  and
+  `89adb1edc1424c441f475e1ba91de7ea2e79d7a180e954c4c0793567158ffe59`;
+  their marker SHA-256 values are
+  `a9d505b9c429e5fa04c8bd6fb2a8aee4ae152c88e86ca20d7eee48c00bc5526b`
+  and
+  `25f8ddb54de178a4094bff66bc971faf31734c8c6a07f030b54e21fb8dfe98d6`.
+
+- Across the stable 1,373-checkpoint snapshot, all 198 unresolved model
+  outcomes are covered by 155 true-duplicate and 43 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 140,038 pairs, 88,789 false positives, 51,249 true duplicates;
+  - treatment: 34,445 pairs, 17,811 false positives, 16,634 true duplicates;
+  - combined: 174,483 pairs, 106,600 false positives, 67,883 true duplicates.
+
+- The next audit frontiers are p0 `(7, 3,456)`, p1 `(39, 0)`,
+  p2 `(71, 128)`, and p3 `(104, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:52:45Z — 173,971 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1848-v542` independently
