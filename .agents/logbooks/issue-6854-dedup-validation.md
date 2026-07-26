@@ -1483,6 +1483,50 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T09:10:18Z — 114,348 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0905-v226` independently
+  revalidated p1 decision-file 36 semantic offset 2,304. Its 128 baseline pairs
+  contain 70 model false positives, 57 model true duplicates, and one
+  unresolved outcome. Of the pairs, 127 were direct and one was chunked. All
+  315 judgments were valid on their first attempts. The outcome Parquet
+  SHA-256 is
+  `9a01882c44813f8609cb96ee06a931c5b3e34785528f33a7ab426cebb2fe2407`.
+- Complete-text inspection resolves the ambiguity as a true duplicate. The
+  4,166-character, 35-line member is the same fragile-X scientific article
+  contained in the 6,664-character, 63-line canonical. The canonical adds
+  article-derived Q&A; article differences are capitalization, dash style, and
+  page chrome. The member-only `Forum for Science, Industry and Business`
+  header and `10.06.2011` date are source metadata, not a distinct example,
+  fact payload, or instruction. Character, line, and word-sequence similarity
+  are 0.757710, 0.591837, and 0.761739 after the canonical additions.
+  Pair location is `part-00036-of-00128.parquet:3691`; member/canonical text
+  SHA-256 values are
+  `c4c9cb7d94e6b3c8137414e2e1dc6ec14a3c29671458b9bcc76aaf0583ba1132` /
+  `4f1bee92afaeeff03d199d77ca1403afbd08537520944dea9a19edd90d287e69`;
+  inspection-artifact SHA-256 is
+  `243421de3d2747b00385cedd37e9fd843bda8a47a03ec31809b7a5fd11f3531e`.
+- `/rav/datakit-6854-publish-row3691-0909-v228` wrote the immutable hash-bound
+  manual record. `/rav/datakit-6854-verify-row3691-0910-v229` separately reread
+  the source pair, semantic checkpoint, complete inspection artifact, manual
+  record, deterministic Parquet bytes, and completion marker. The
+  semantic-evidence, manual-record, and manual-Parquet SHA-256 values are
+  `8f2949f2dacede6f56d4a7fcc16ad11ac5b2ca17029286f59bf6e15770367660`,
+  `326abae037fe3f8530df9adbe1da95660a0e86804ff29b6d15946fd46f62fc59`,
+  and `4be3ba0986d33dfd582fd63d4bf2ad9916d3cff260ccaeafa96157372dd63219`.
+- Across the stable 900-checkpoint snapshot, all 131 unresolved model outcomes
+  are covered by 101 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 92,154 pairs, 58,747 false positives, 33,407 true duplicates;
+  - treatment: 22,194 pairs, 11,438 false positives, 10,756 true duplicates;
+  - combined: 114,348 pairs, 70,185 false positives, 44,163 true duplicates.
+
+- The next audit frontiers are p0 `(5, 128)`, p1 `(36, 2432)`, p2 `(69, 0)`,
+  and p3 `(101, 0)`. All four batch-priority 2-H100 workers continue serving
+  requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T09:04:01Z — 114,220 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0903-v225` independently
