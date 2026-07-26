@@ -764,3 +764,31 @@ Useful calibration measured on two 350-step legs: MFU rises ~+0.30pp per +0.10 d
 A/B deltas get drop-corrected before being read.
 Confidence: 3/10 that PGLE+LHS clears +0.5pp (treatment matches the reference draw within noise).
 Next: babysit control; harvest both overlap reports; verdict.
+
+## Check-in 2026-07-26 07:30 UTC — MECHANISM ANSWERED: LHS+PGLE hides FSDP collectives, NOT the expert a2a
+
+Overlap report on the treatment leg's own xprof dump vs the control-config capture, GPU:0,
+3-step windows (per-op occupancy and the share of it concurrent with non-collective work):
+
+| op / stream | control | PGLE+LHS |
+|---|--:|--:|
+| trace span (3 steps) | 34065 ms | 33493 ms |
+| SendRecv, async stream | 6674 ms @ 86.1% | 7400 ms @ 86.8% |
+| SendRecv, INLINE on the compute stream | 2749 ms @ 0% | 2961 ms @ 0% |
+| AllGather | 1691 ms @ 72.8% | 2262 ms @ 82.7% |
+| ReduceScatter bf16 | 871 ms @ 27.1% | 537 ms @ **100%** |
+| AllReduce bf16 | 246 ms @ 80.2% | 322 ms @ **100%** |
+| AllReduce f32 | 301 ms @ 77.0% | 1160 ms @ 63.5% |
+| **exposed collective total** | **4887 ms (14.3% of span)** | **4750 ms (14.2%)** |
+
+Same pattern on GPUs 1-3 (exposed 14.0-14.9% treatment vs 14.1-15.9% control).
+
+- The scheduler DID act: the FSDP gradient reduce-scatter and the bf16 all-reduce go from
+  partially hidden to fully hidden, and all-gather improves ~10 points. So the flags are live and
+  PGLE's latencies are being used.
+- The expert dispatch/combine all-to-all is UNMOVED: 86.1% -> 86.8% on the async stream, and the
+  ~2.7-3.0 s per 3 steps that runs INLINE on the main compute stream stays 0% overlapped. That
+  inline block is the serialized piece the whole probe was aimed at, and PGLE+LHS does not touch it.
+- Net exposed collective time is flat (14.3% -> 14.2% of span), which is why the MFU is flat.
+Confidence: 8/10 on the mechanism verdict (direct per-op timeline evidence, consistent across 4 GPUs).
+Next: control leg completes ~08:00Z for the matched MFU delta; then final verdict.
