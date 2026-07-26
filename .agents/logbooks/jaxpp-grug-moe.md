@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's device-ragged symmetric arena before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-135924`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's device-ragged symmetric arena before globally ordered DIME creation in corrected parent `/dlwh/iris-run-job-20260726-140547`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3435,3 +3435,19 @@ author: dlwh
   - All initialization-time prewarm failures occur because CuPy/NCCL resources precede the local stage's first device-ragged symmetric reservation. The new treatment reverses that order, then applies deterministic DIME initialization.
 - Next action:
   - Require all four stages to log ragged warmup before any DIME creation, all three DIME link barriers, no 51.469 GiB allocation error, and finite L8 steps.
+
+### 2026-07-26 07:05 PDT - host-seed fix makes ragged-first treatment executable
+- Hypothesis: Reserving each stage's device-ragged symmetric arena before creating any CuPy/DIME resource will preserve the 51.469 GiB reservation and allow deterministic DIME initialization afterward.
+- Commit Hash: `672c3eba00` (`[grug] Seed ragged warmup from host`).
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-135924` attempted the first warm-then-DIME treatment from `66feb79449`.
+  - Corrected parent `/dlwh/iris-run-job-20260726-140547` runs the matched L8/d2560/e64/top-k4/seq4096/b512/m16 standard-1F1B graph with `GRUG_JAXPP_WARM_DEVICE_RAGGED=1`, `GRUG_JAXPP_PREWARM_DIME=all`, default receive-buffer reuse, and ordering controls unset.
+- Results:
+  - The first parent failed during setup on every rank before any ragged warmup, DIME resource creation, lowering, or allocation attempt. `jax.device_put` raised `NotImplementedError: Cannot reshard an input that is not fully addressable` because `jnp.arange` inherited the active global 32-device mesh.
+  - The parent and all four child ranks are terminal killed with no live descendant. This is a setup-invalid run, not evidence against ragged-first ordering.
+  - `672c3eba00` constructs the seed payload as a host NumPy array before placing it on each stage-local EP8 mesh. The focused explicit-MPMD parity suite passes all seven tests, changed-file precommit passes, and the corrected parent is submitted.
+- Interpretation:
+  - Stage-local warmup inputs must originate on the host while the global mesh exists; otherwise JAX treats the seed as a non-fully-addressable global array and refuses the stage-local reshard.
+  - The corrected run is the first valid test of device-ragged reservation before DIME.
+- Next action:
+  - Require every rank to log the device-ragged warmup before any DIME stream or communicator creation, followed by all 12 adjacent-link prewarm logs, no 51.469 GiB allocation error, and finite L8 steps. Run the fixed `0.002` loss/every-gradient parity gate only after a finite result.
