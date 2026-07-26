@@ -1483,6 +1483,54 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T00:31:28Z — 68,182 pairs verified
+
+- Sixteen additional baseline checkpoints passed independent validation:
+  2,048 pairs, 1,094 model false positives, 952 model true duplicates, and two
+  unresolved outcomes. They contain 4,652 valid judgments across 4,652 request
+  attempts, with no invalid responses or retries. Six pairs were chunked and
+  2,042 were direct.
+- Complete-text comparison resolves the word-spun gambling-history pair
+  conservatively as a false positive. The 4,463-character member and
+  4,468-character canonical align paragraph for paragraph and share the same
+  timeline, but the member says that the Mississippi River was a major trade
+  route where merchants brought money. The canonical replaces that subject
+  with Korean SEO spam and therefore does not retain the factual statement.
+  Deleting the member loses the cleaner fact. Character similarity is
+  0.512373 and line similarity is 0.629630. Pair location:
+  `part-00003-of-00128.parquet:5750`; member/canonical text SHA-256:
+  `930521e30e07f84f923d406866d1c0c6253ab4e516ddbeb360ad1d9ad07205ec` /
+  `e0610df9cd62d4883811daa22a00ba85f8bcaf9143d9918621afe9b207130111`.
+- Complete-text comparison resolves the career-spam pair as a false positive.
+  Before the shared scaffold, the 1,005-character member uniquely contains a
+  `Development Engineer Moog` job title and sentence about control-hardware
+  analysis, design, development, and testing, plus an
+  architecture/sustainable-agriculture study sentence. The 827-character
+  canonical contains neither. Character similarity is 0.710699 and line
+  similarity is 0.222222. Pair location:
+  `part-00066-of-00128.parquet:4902`; member/canonical text SHA-256:
+  `cba19a9e39ff27f9f84c2581e2969a0f3651b31811ec059391428373d73dcb99` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- The exact semantic judgments have SHA-256 values
+  `595a910203cf7a6d1ee72f3fca44f22dc222ba87c582d48422237b80446e2030`
+  and
+  `8a48d78bd6a132a5c738bad4898c2ca78df815e713445ddbda8f8edb89f9a397`.
+  The two hash-bound manual records have Parquet SHA-256 values
+  `f61295bd1bdc006c4730d05365dfc9d7eebba59bc9c05ca385876b790790c936`
+  and
+  `69d9dc5a066e1412d1e8a139f89f682ff225095bf51e5166f867f06a6d4305b1`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  both source cases, semantic checkpoints, manual rows, Parquet bytes, and
+  completion markers.
+- Across the stable 535-checkpoint snapshot, all 66 manual records leave:
+
+  - baseline: 56,145 pairs, 35,518 false positives, 20,627 true duplicates;
+  - treatment: 12,037 pairs, 6,274 false positives, 5,763 true duplicates;
+  - combined: 68,182 pairs, 41,792 false positives, 26,390 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:20:14Z — 66,134 pairs verified
 
 - Seven additional baseline checkpoints passed independent validation: 896
