@@ -278,3 +278,21 @@ into the final report skeleton while waiting.
 
 Confidence: 4/10 g=0.5, 1/10 integral family
 Next: peer job completion -> v2 healthy clique; keep 15-min cadence.
+
+## Check-in 2026-07-26 04:35 UTC — v2 stopped (zombie cycle), v3 fresh submission
+
+- MUTATION LOGGED: stopped my own /mwittmann/ep25d3-qbg05-cf100-350-v2-20260726 at 04:28.
+  Grounds: 7 consecutive NCCL-init failures over 2.5h, attempt 7 hung 45+ min at 0% GPU —
+  job-internal retry demonstrably not escaping the cursed allocation (fa4lse boot-hang
+  precedent: fresh submission escapes, in-job retries don't). d4's pgle capture had just
+  drained, freeing a rack.
+- v3 SUBMITTED 04:33: /mwittmann/ep25d3-qbg05-cf100-350-v3-20260726 — identical g=0.5
+  config + fresh JAX_COMPILATION_CACHE_DIR (the fa4lse recipe). New allocation draw.
+- Self-inflicted note: first v3 submit attempt died because a pkill pattern matched the
+  invoking shell's own command line; verified via DB that no v3 existed before
+  resubmitting (no double-submit).
+- rav's /rav/rav-qbdrv-off2 (QB-off ablation?) still holds the other rack at 04:25.
+- Poller to be attached at v3 child registration.
+
+Confidence: 4/10 g=0.5, 1/10 integral family
+Next: v3 child registers -> poller; first metrics ~05:00; series by ~06:15.
