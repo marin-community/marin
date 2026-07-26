@@ -30,7 +30,18 @@ ConfigT = TypeVar("ConfigT")
 # SCALE_ forwards experiment knobs read at trace time, including distributed
 # Newton-Schulz layout and fixed-capacity expert all-to-all settings.
 # WANDB_ keeps tracker authentication and routing intact across the nested job.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_", "WANDB_")
+# TF_ and GRPC_ expose the JAX coordination service's C++ diagnostics.
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "TF_",
+    "GRPC_",
+    "CE_",
+    "SCALE_",
+    "WANDB_",
+)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 _HYBRIDEP_SETUP_SCRIPT = r"""
@@ -65,6 +76,8 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
+    max_retries_preemption: int = 100,
+    max_task_failures: int = 10,
     processes_per_task: int = 1,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
@@ -94,7 +107,8 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(env_vars=env_vars, extras=extras, setup_scripts=setup_scripts),
         max_retries_failure=max_retries_failure,
-        max_task_failures=10,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)

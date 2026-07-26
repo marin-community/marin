@@ -96,6 +96,9 @@ class GrugMoeLaunchConfig:
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
     (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 keeps the
     single-process-per-node model."""
+    max_retries_failure: int = 3
+    max_retries_preemption: int = 100
+    max_task_failures: int = 10
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
@@ -184,6 +187,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        max_retries_failure=config.max_retries_failure,
+        max_retries_preemption=config.max_retries_preemption,
+        max_task_failures=config.max_task_failures,
     )
     run_grug(run_config)
 

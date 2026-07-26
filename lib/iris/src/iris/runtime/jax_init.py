@@ -18,7 +18,7 @@ from enum import StrEnum
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.filesystem import marin_prefix
-from rigging.timing import Deadline, Duration, ExponentialBackoff
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -53,26 +53,39 @@ _JAX_ENV_KEYS = (
 )
 
 
+def _startup_log(message: str, *args) -> None:
+    log = logger.warning if os.environ.get("JAX_DISTRIBUTED_DEBUG") == "1" else logger.info
+    log(message, *args)
+
+
 def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> None:
     env_snapshot = {key: os.environ.get(key, "") for key in _JAX_ENV_KEYS if key in os.environ}
     if job_info is None:
-        logger.info(
-            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s env=%s",
+        _startup_log(
+            "initialize_jax bootstrap inputs: job_info=None endpoint_name=%s port=%s pid=%d ppid=%d pod=%s env=%s",
             endpoint_name,
             port,
+            os.getpid(),
+            os.getppid(),
+            os.environ.get("HOSTNAME", ""),
             env_snapshot or "none",
         )
         return
 
-    logger.info(
-        "initialize_jax bootstrap inputs: task_index=%s num_tasks=%s advertise_host=%s ports=%s endpoint_name=%s "
-        "requested_port=%s env=%s",
+    _startup_log(
+        "initialize_jax bootstrap inputs: job_id=%s attempt_id=%s task_index=%s num_tasks=%s "
+        "advertise_host=%s ports=%s endpoint_name=%s requested_port=%s pid=%d ppid=%d pod=%s env=%s",
+        job_info.job_id,
+        job_info.attempt_id,
         job_info.task_index,
         job_info.num_tasks,
         job_info.advertise_host,
         dict(job_info.ports),
         endpoint_name,
         port,
+        os.getpid(),
+        os.getppid(),
+        os.environ.get("HOSTNAME", ""),
         env_snapshot or "none",
     )
 
@@ -222,6 +235,13 @@ def _initialize_supervised_jax(
 
     role = _supervised_coordinator_role(proc_index, task_index, num_tasks)
     if role is _CoordinatorRole.POLL:
+        _startup_log(
+            "initialize_jax coordinator poll: process_id=%d endpoint=%s pid=%d pod=%s",
+            proc_index,
+            endpoint_name,
+            os.getpid(),
+            os.environ.get("HOSTNAME", ""),
+        )
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
     elif role is _CoordinatorRole.REGISTER:
@@ -229,19 +249,55 @@ def _initialize_supervised_jax(
         endpoint_id = ctx.registry.register(endpoint_name, coordinator)
         atexit.register(ctx.registry.unregister, endpoint_id)
 
-    logger.info(
-        "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
+    _startup_log(
+        "initialize_jax connect: process_id=%d/%d local_device_ids=%s coordinator=%s role=%s "
+        "endpoint=%s task_index=%d attempt_id=%s pid=%d ppid=%d pod=%s",
         proc_index,
         proc_count,
         device_ids,
         coordinator,
+        role,
+        endpoint_name,
+        task_index,
+        job_info.attempt_id if job_info else "",
+        os.getpid(),
+        os.getppid(),
+        os.environ.get("HOSTNAME", ""),
     )
-    jax.distributed.initialize(
-        coordinator,
-        proc_count,
+    timer = Timer()
+    try:
+        jax.distributed.initialize(
+            coordinator,
+            proc_count,
+            proc_index,
+            local_device_ids=device_ids,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        )
+    except Exception:
+        logger.exception(
+            "initialize_jax failed: process_id=%d/%d task_index=%d attempt_id=%s pid=%d pod=%s "
+            "coordinator=%s elapsed_ms=%d",
+            proc_index,
+            proc_count,
+            task_index,
+            job_info.attempt_id if job_info else "",
+            os.getpid(),
+            os.environ.get("HOSTNAME", ""),
+            coordinator,
+            timer.elapsed_ms(),
+        )
+        raise
+    _startup_log(
+        "initialize_jax connected: process_id=%d/%d task_index=%d attempt_id=%s pid=%d pod=%s "
+        "coordinator=%s elapsed_ms=%d",
         proc_index,
-        local_device_ids=device_ids,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        proc_count,
+        task_index,
+        job_info.attempt_id if job_info else "",
+        os.getpid(),
+        os.environ.get("HOSTNAME", ""),
+        coordinator,
+        timer.elapsed_ms(),
     )
 
 

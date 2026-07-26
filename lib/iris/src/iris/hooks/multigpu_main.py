@@ -130,6 +130,13 @@ def _spawn_children(
                 text=True,
                 bufsize=1,
             )
+            logger.info(
+                "launched local rank %d: child_pid=%d supervisor_pid=%d pod=%s",
+                local_rank,
+                child.pid,
+                os.getpid(),
+                os.environ.get("HOSTNAME", ""),
+            )
             children.append(child)
             pump = threading.Thread(target=_pump_output, args=(local_rank, child.stdout, write_lock), daemon=True)
             pump.start()
@@ -166,11 +173,14 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     num_tasks = job_info.num_tasks if job_info else 1
     task_index = job_info.task_index if job_info else 0
     logger.info(
-        "supervising %d process(es) x %d device(s) each; task_index=%d num_tasks=%d; command=%s",
+        "supervising %d process(es) x %d device(s) each; task_index=%d num_tasks=%d "
+        "supervisor_pid=%d pod=%s; command=%s",
         nproc,
         devices_per_proc,
         task_index,
         num_tasks,
+        os.getpid(),
+        os.environ.get("HOSTNAME", ""),
         " ".join(child_argv),
     )
 

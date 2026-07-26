@@ -198,6 +198,9 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
     # (multi-controller) via the iris.hooks.multigpu_main supervisor.
     processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
+    max_retries_failure = env_int("SCALE_MAX_RETRIES_FAILURE", 3)
+    max_retries_preemption = env_int("SCALE_MAX_RETRIES_PREEMPTION", 100)
+    max_task_failures = env_int("SCALE_MAX_TASK_FAILURES", 10)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
@@ -349,6 +352,9 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,
