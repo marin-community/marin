@@ -161,6 +161,13 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
+def _attempt_scoped_endpoint_name(endpoint_name: str, job_info) -> str:
+    """Keep a retried gang from resolving the previous attempt's coordinator."""
+    if job_info is None or job_info.attempt_id == 0:
+        return endpoint_name
+    return f"{endpoint_name}/attempt-{job_info.attempt_id}"
+
+
 class _CoordinatorRole(StrEnum):
     """How a supervised rank obtains the JAX coordinator address."""
 
@@ -288,6 +295,7 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
+    endpoint_name = _attempt_scoped_endpoint_name(endpoint_name, job_info)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived

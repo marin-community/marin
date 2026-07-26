@@ -76,12 +76,12 @@ class FakeContext:
     resolver: ThreadSafeEndpointStore
 
 
-def _make_job_info(task_index: int, num_tasks: int = 2) -> JobInfo:
+def _make_job_info(task_index: int, num_tasks: int = 2, attempt_id: int = 0) -> JobInfo:
     job_name = JobName.from_string(f"/testuser/jax-integration/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
-        attempt_id=0,
+        attempt_id=attempt_id,
         advertise_host="10.0.0.1",
         controller_address="controller:8080",
         ports={},
@@ -185,6 +185,37 @@ def test_task0_restart_reregisters_and_task1_resolves_new_address():
         poll_interval=0.01,
     )
     assert resolved == "10.0.0.2:8476"
+
+
+def test_retried_gang_does_not_resolve_stale_coordinator():
+    """Attempt-scoped discovery prevents a restarted gang from joining attempt 0."""
+    store = ThreadSafeEndpointStore()
+    store.register("jax_coordinator", "10.0.0.1:8476")
+    mock_jax_init = MagicMock()
+
+    with patch("jax.distributed.initialize", mock_jax_init):
+        job0 = _make_job_info(task_index=0, attempt_id=1)
+        job0.advertise_host = "10.0.0.2"
+        ctx0 = FakeContext(registry=store, resolver=store)
+        with (
+            patch("iris.runtime.jax_init.get_job_info", return_value=job0),
+            patch("iris.runtime.jax_init.iris_ctx", return_value=ctx0),
+            patch("iris.runtime.jax_init.atexit"),
+        ):
+            initialize_jax()
+
+        job1 = _make_job_info(task_index=1, attempt_id=1)
+        ctx1 = FakeContext(registry=store, resolver=store)
+        with (
+            patch("iris.runtime.jax_init.get_job_info", return_value=job1),
+            patch("iris.runtime.jax_init.iris_ctx", return_value=ctx1),
+        ):
+            initialize_jax(poll_interval=0.01, poll_timeout=5.0)
+
+    assert mock_jax_init.call_args_list[0].args == ("10.0.0.2:8476", 2, 0)
+    assert mock_jax_init.call_args_list[1].args == ("10.0.0.2:8476", 2, 1)
+    resolved = store.resolve("jax_coordinator/attempt-1")
+    assert resolved.first().url == "10.0.0.2:8476"
 
 
 def test_concurrent_restart_reconvergence():
