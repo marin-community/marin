@@ -5,7 +5,6 @@ import contextlib
 import dataclasses
 import functools
 import importlib
-import itertools
 import logging
 import math
 import os
@@ -376,8 +375,16 @@ def _require_jaxpp_explicit_mpmd():
     return jaxpp_explicit_mpmd
 
 
+def _jaxpp_dime_stage_links(num_stages: int) -> tuple[tuple[int, int], ...]:
+    """Return pipeline dataflow links that require DIME resources."""
+    adjacent_links = tuple((stage_index, stage_index + 1) for stage_index in range(num_stages - 1))
+    if num_stages <= 2:
+        return adjacent_links
+    return (*adjacent_links, (num_stages - 1, 0))
+
+
 def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None:
-    """Create adjacent-stage DIME resources in one global order."""
+    """Create pipeline DIME resources in one global order."""
     if jaxpp_dime2 is None:
         raise ModuleNotFoundError("jaxpp.dime2 is required for GRUG_JAXPP_PREWARM_DIME")
 
@@ -389,7 +396,9 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None
     process_index = jax.process_index()
     client = jaxpp_dime2.get_distributed_client()
     timeout = jaxpp_dime2.env_vars.jaxpp_client_timeout.value
-    for source_stage, (source_devices, target_devices) in enumerate(itertools.pairwise(stage_devices)):
+    for source_stage, target_stage in _jaxpp_dime_stage_links(len(stage_devices)):
+        source_devices = stage_devices[source_stage]
+        target_devices = stage_devices[target_stage]
         for source_device, target_device in zip(source_devices, target_devices, strict=True):
             participant_processes = {source_device.process_index, target_device.process_index}
             if process_index not in participant_processes:
@@ -413,7 +422,6 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None
                 is_send=not local_is_source,
             )
 
-        target_stage = source_stage + 1
         client.wait_at_barrier(
             f"grug_jaxpp_dime_prewarm_{source_stage}_{target_stage}",
             timeout,

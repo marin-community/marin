@@ -165,6 +165,12 @@ def test_local_precompile_requires_explicit_binary_opt_in():
         local_precompile_enabled({"GRUG_JAXPP_PRECOMPILE_LOCAL": "true"})
 
 
+def test_dime_prewarm_includes_terminal_metrics_link():
+    assert parity.grug_train._jaxpp_dime_stage_links(1) == ()
+    assert parity.grug_train._jaxpp_dime_stage_links(2) == ((0, 1),)
+    assert parity.grug_train._jaxpp_dime_stage_links(4) == ((0, 1), (1, 2), (2, 3), (3, 0))
+
+
 def test_direct_reference_can_be_loaded_from_another_pipeline_rank(monkeypatch):
     expected_result = ("loss", ("stage-0", "stage-1", "stage-2", "stage-3"))
 
