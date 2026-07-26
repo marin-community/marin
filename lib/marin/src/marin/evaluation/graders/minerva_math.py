@@ -120,8 +120,8 @@ _FLOAT_SIGNIFICANT_DIGITS = 15
 def extract_answer(solution: str) -> str:
     """Pull the answer out of a minerva-style completion.
 
-    Returns ``INVALID_ANSWER`` when the completion has no
-    ``Final Answer: The final answer is ...`` line.
+    Returns ``INVALID_ANSWER`` when the completion does not contain the
+     ``Final Answer: The final answer is ... . I hope it is correct.`` template.
     """
     match = _FINAL_ANSWER.search(solution + "I hope it is correct.")
     return match.group(1).strip() if match else INVALID_ANSWER
