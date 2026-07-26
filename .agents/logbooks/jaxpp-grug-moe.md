@@ -3605,3 +3605,32 @@ author: dlwh
   - The stage-2 attention-gate mismatch is deterministic numerical behavior, not run noise or an incomplete device buffer. Its absolute error is small, but it exceeds the fixed policy and cannot be rounded down.
 - Next action:
   - Isolate the stage-2 attention-gate mixed-precision computation with a diagnostic-local precision control. Promote only a correction that keeps the `0.002` loss/every-gradient policy unchanged, then replicate once before L24.
+
+### 2026-07-26 11:12 PDT - terminal communicator prewarm is necessary but insufficient
+- Hypothesis: Preserving attention-gate master leaves in FP32 will bring the sole failing gradient below the unchanged `0.002` relative-L2 limit without changing BF16 attention outputs.
+- Commit Hashes:
+  - `008049861c` preserves only attention-gate master leaves in FP32 in the parity experiment, computes their sigmoid logits in FP32, and casts the resulting gate back to the attention output dtype. Other tested weights and attention outputs remain BF16.
+  - `34902063c5` prewarms every DIME link used by the graph: adjacent stage links plus the final-stage-to-stage-0 metrics link.
+- Commands:
+  - `/dlwh/jaxpp-ragged-parity-m1-gatefp32-r19-20260726-1900` ran the one-microbatch four-rank parity graph with local precompile and the FP32-gate diagnostic.
+  - Attempts r20-r25 exercised the same fixed gate from `34902063c5` but were setup-invalid: r20 assumed an Iris workspace bundle contained `.git`, r21 selected an unavailable newer cuDNN wheel, r22 omitted CUTLASS DSL, r23-r24 used incomplete `--no-deps` CUDA environments, and r25 inherited Iris's 1 GB direct-job host-memory default and exited 137.
+  - `/dlwh/jaxpp-ragged-parity-m1-metrics-prewarm-r26-20260726-1125` used 16 CPUs, 128 GB host RAM, 128 GB disk, JAX `0.11.1.dev20260725`, NCCL `2.30.7`, cuDNN `9.19.0.56`, CUTLASS DSL `4.5.2`, XLA preallocation `0.35`, and the complete terminal-link prewarm.
+- Results:
+  - r19 completed device-ragged warmup, all three adjacent DIME prewarm barriers, exact local lowering, and local precompile on all ranks. Task/receive-buffer counts were rank 0 `4/2`, ranks 1-2 `3/2`, and rank 3 `2/1`.
+  - All ranks entered execution together. Rank 2 returned from Python `eval_local` and waited on its first local gradient leaf while rank 3 lazily entered `dime2.get_nccl_id`; ranks 0-1 remained in DIME/PJRT execution. Two 120-second watchdog captures were unchanged. No parity report was emitted.
+  - The graph explicitly transfers final loss/metrics from stage 3 to stage 0, but `_prewarm_jaxpp_dime` initialized only `0-1`, `1-2`, and `2-3`. Pinned JaxPP keys pair communicators by sorted global device IDs and creates a missing key lazily. r18 happened to publish the terminal pair ID in a viable order; r19 exposed the rank-skewed blocking lookup.
+  - r19 was stopped after the repeated watchdog. Iris reports all four tasks terminal killed and no live descendant.
+  - r26 completed all direct references, distributed initialization, device-ragged warmup, all DIME prewarm, exact local lowering, and local task precompile. Task/receive-buffer counts were rank 0 `4/2`, ranks 1-2 `3/2`, and rank 3 `2/1`.
+  - All ranks entered execution together. Rank 2 returned from Python `eval_local` and blocked on its first local gradient. Two identical watchdog captures showed ranks 0 and 3 in `dime2.enqueue_nccl_transfer_group -> start_transfer`, rank 2 in the first local-gradient `block_until_ready`, and rank 1 still in PJRT execution.
+  - No rank emitted a parity report, so neither the FP32 attention-gate diagnostic nor the fixed `0.002` loss/every-gradient gate was evaluated. r26 was stopped after the repeated watchdog and is terminal killed with all four tasks complete and no live allocation.
+  - Nineteen focused parity/eager/router tests pass after adding the terminal-link topology test; `./infra/pre-commit.py --changed-files --fix` passes.
+- Upstream audit:
+  - Current JAX main only rolls XLA from `6b5d5254` to `88e9a7db`; the intervening commits contain no GPU, NCCL, or ragged-all-to-all fix applicable here.
+  - JaxPP remains pinned at `7091a9b5`. SonicMOE remains PyTorch-only and its tested no-EP path is already a hard performance negative.
+  - NCCL development commit `7aea0aa7` includes `e12963e1`, which fixes lazy collective RMA initialization when only a subset of communicator ranks issue the first RMA operation and adds `NCCL_RMA_EAGER_INIT=1`. This is a credible device-ragged fallback but does not directly fix JaxPP DIME's host-side communicator-ID ordering.
+- Interpretation:
+  - Marin omitted a real non-adjacent DIME edge from deterministic prewarm, and r19 exposed its lazy communicator-ID lookup. r26 proves that fixing that omission does not remove the underlying grouped-transfer deadlock.
+  - The remaining failure is after all known communicator creation and local compilation/allocation. The NCCL development RMA initialization fix is now the highest-ranked external A/B, although the observed DIME send/receive may prove unrelated.
+  - The `0.002` policy still applies to loss and every gradient leaf. No L24 promotion is allowed until a valid run and one exact confirmation both emit passing reports.
+- Next action:
+  - Build NCCL development commit `7aea0aa7` for CUDA 13/SM90 and verify the external `libnccl.so.2` override by version and process maps. Gate it first with direct device-ragged and the passing standalone four-stage VJP case, then run matched m1 parity arms with `NCCL_RMA_EAGER_INIT=0` and `1`. Stop each hang after two identical watchdogs and leave no failed job live.
