@@ -244,3 +244,20 @@ Next: attach poller to arm-1 v2; babysit to ~03:30; assemble final verdict.
 
 Confidence: 4/10 g=0.5, 1/10 integral family (measured, two gammas)
 Next: v2 healthy clique -> poller first reads ~03:10; final verdict assembly ~03:45.
+
+## Check-in 2026-07-26 03:20 UTC — v2 attempt 5 still in NCCL init (0% GPU, ~40 min)
+
+- Attempt 5 running but 0% GPU at 03:20 — likely another slow/hung clique (the same
+  boot-flake family; supervisor cycles it on its own timeout, preemption retry budget
+  1000). Not touching it (no mutations on my own running job needed; the brief forbids
+  PENDING resubmits — v3 only on terminal failure, with a fresh compile-cache dir per
+  the fa4lse boot-hang recipe).
+- Arm-1 v1 + both integral legs: child rows still 0 in the log store (6.5h outage). The
+  v2 poller remains the only measurement path for g=0.5 tonight.
+- Timeline impact: v2 first metrics now unlikely before ~03:45; 350 steps needs ~75 min
+  more -> series complete ~05:15 at best. The integral-family and g=2/g=1 evidence is
+  already decision-complete; g=0.5 is the last open number.
+
+Confidence: 4/10 g=0.5, 1/10 integral family
+Next: babysit v2 through boot; poll every ~15 min; assemble the integral+gain verdicts
+into the final report skeleton while waiting.
