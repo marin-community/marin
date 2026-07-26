@@ -404,3 +404,23 @@ kernel placement. Every other collective on this stack is on the async stream #1
 hidden. Whatever forces that copy of the a2a onto the compute stream is worth a look on its own; it
 is a scheduling fix rather than a bytes fix, and this effort has established that scheduling fixes
 are the cheap kind. I am not chasing it in this direction, but it should not be lost.
+
+### Attribution of the inline a2a (xplane_op_detail, dense control, GPU:0, steps 20-22)
+
+Every `SendRecv` event on this stack is a MoE dispatch/combine all-to-all — 12 distinct
+`all_to_all.N.1` HLO ops, 144 events each (48 layers x 3 steps), all under
+`Block/MoEMLP/MoEExpertMlp/moe_mlp/shard_map/{dispatch,combine}/all_to_all`. So the whole 6,886 ms of
+`SendRecv` occupancy per 3 steps is payload latent halves, with nothing else mixed in.
+
+Exactly THREE of the twelve are scheduled on the compute stream instead of the async collective
+stream, and those three are the fully-serialized 1,266 ms:
+
+    Stream #50 (compute)  all_to_all.40.1  bwd dispatch  439.18 ms
+    Stream #50 (compute)  all_to_all.46.1  bwd combine   423.72 ms
+    Stream #50 (compute)  all_to_all.56.1  fwd dispatch  402.75 ms
+
+The other nine sit on stream #159 and are 85% hidden. Consistent across all four GPUs to within 1%,
+so it is a scheduling decision, not jitter. This sharpens the independent finding in check-in 8: the
+question is not "why is the a2a exposed" but "why did XLA put three of the twelve a2a instances
+inline". Fixing those three placements would recover ~422 ms/step — comparable to the entire
+best-case win from halving the payload — for no bytes and no arithmetic.
