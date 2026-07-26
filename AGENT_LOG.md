@@ -825,3 +825,44 @@ every term now from the same regime:
         = 1.24%
   => predicted +0.88pp over cf1.15 m=0 (20.416% @ 2.60%) at comparable-or-better fidelity, same run length.
 Stated before the result, and I will report it against the measurement either way.
+
+## FINAL COMBINATION LEG 07:30 — clears the bar, beats cf1.15, but MFU missed my prediction by 0.63pp
+/mwittmann/ep25d1-spill3-cf105-350-0726-0603 (provenance "capacity_factor": 1.05), 349 samples, then failed at
+teardown as before; data valid.
+PRE-REGISTERED TEST, stated before the run:
+  MFU:   predicted 21.30%  measured 20.670%  error -0.63pp   <- MISSED
+  drops: predicted 1.24%   measured 1.72%    error +0.48pp   <- close, right side of the bar
+FULL FRONTIER (all my draws, all 350-step tail-100):
+| config | p50 MFU | tail-100 | clears 3%? |
+| cf1.0  m=0 | 22.062 | 0.0710 | no |
+| cf1.0  m=2 | 21.872 | 0.0414 | no |
+| cf1.0  m=3 | 21.849 | 0.0366 | no |
+| cf1.05 m=3 | 20.670 | 0.0172 | YES |
+| cf1.15 m=0 | 20.416 | 0.0260 | YES |
+RESULT: the combination IS the best compliant config - 20.670% at 1.72% drops vs cf1.15's 20.416% at 2.60%.
+Better on BOTH axes. But the margin is +0.25pp, not the +0.88pp I predicted.
+
+## WHY THE PREDICTION MISSED: the capacity price is a CLIFF, not a slope
+Three same-length points now pin the capacity curve:
+  cf1.00 -> cf1.05: 1.179pp for +0.05 (net of the 0.213pp spill cost)   EXPENSIVE
+  cf1.05 -> cf1.15: 0.254pp for +0.10 = 0.127pp per +0.05               NEARLY FREE
+I had assumed a linear -0.5487pp per +0.05 from the two endpoints. The truth is strongly front-loaded.
+MECHANISM (capacity alignment): capacity = ceil(cf * assignments_per_shard / num_experts).
+  cf1.00   -> 2048 = 16.00 x 128  ALIGNED
+  cf1.05   -> 2151 = 16.80 x 128  unaligned
+  cf1.15   -> 2356 = 18.41 x 128  unaligned
+cf1.0's capacity is exactly 16 x 128. The cost is paid on LEAVING that alignment, and once paid, growing
+capacity further is almost free. That is a tiling effect on the expert GEMM's M dimension, not the cost of
+the extra compute - which is consistent with the collective-bound picture, where a bit more padded compute
+is nearly free but a badly shaped GEMM is not.
+TWO CONSEQUENCES:
+1. RETRACT my proposed cf1.02 follow-up. Capacity would be 2089 (unaligned), so it pays the SAME cliff and
+   lands near 20.6%, not the 21.62% I estimated from the linear price. The estimate was an artifact of
+   assuming a slope where there is a step.
+2. NEW TESTABLE CANDIDATE: cf 1.0625 -> capacity 2176 = 17 x 128, REALIGNED. If the cliff is alignment, this
+   should recover most of the 1.18pp while keeping cf1.05-or-better fidelity (more capacity than cf1.05).
+   Predicted ~21.6-21.8% at drops below 1.72%. That would be a compliant config ~1.2pp above cf1.15 and
+   would make the combination clearly worth it rather than marginally.
+This is the third time a smooth-looking extrapolation has failed against a structural effect in this work
+(schedule position, log truncation, now capacity alignment). Pattern: on this stack the interpolations that
+break are the ones crossing a discretization boundary.
