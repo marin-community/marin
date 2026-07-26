@@ -20,7 +20,9 @@ def log_lines(job: str, raw: str | None) -> list[str]:
         with open(raw) as handle:
             return handle.readlines()
     proc = subprocess.run(
-        [".venv/bin/iris", "--cluster=marin", "job", "logs", job],
+        # --max-lines matters: the server default is 1000 lines, which silently truncates a
+        # 120-step run to its first ~20 steps and biases every "steady state" number.
+        [".venv/bin/iris", "--cluster=marin", "job", "logs", job, "--max-lines", "400000"],
         capture_output=True,
         text=True,
         timeout=1800,
