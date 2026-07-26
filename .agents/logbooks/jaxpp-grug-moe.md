@@ -3536,3 +3536,22 @@ author: dlwh
   - This reproduces #7655 with a one-layer-per-stage graph and a precomputed host reference. It is not evidence of a numerical mismatch.
 - Next action:
   - Minimize the explicit execution graph at this boundary, starting with schedule microbatch count and transfer/task payload while preserving four distributed ranks and device-ragged MoE. Do not launch L24 performance work until the fixed `0.002` gate produces four passing reports.
+
+### 2026-07-26 09:58 PDT - one-microbatch generic pipeline retains the deadlock
+- Hypothesis: If the deadlock requires standard-1F1B interleaving, repeated microbatches, gradient accumulation, or averaging, the one-microbatch generic explicit pipeline will return.
+- Commit Hashes:
+  - `b5e4d26664` reduces the parity graph from four microbatches to one.
+  - `d543189a26` supplies the stage-major batch tuple required by the one-microbatch explicit step.
+- Commands:
+  - `/dlwh/jaxpp-ragged-parity-m1-r14-20260726-1746` exposed the harness batch-shape mismatch before lowering and is setup-invalid.
+  - `/dlwh/jaxpp-ragged-parity-m1-r15-20260726-1751` reran the corrected one-microbatch graph on four H100x8 cw-rno2a tasks with the r13 runtime and ordering.
+- Results:
+  - Pinned JaxPP/Marin uses the generic one-microbatch explicit pipeline: 12 tasks and 7 transfers, versus the four-microbatch standard schedule's 69 tasks and 25 transfers. It has no microbatch accumulation or averaging tasks.
+  - All ranks completed the direct reference on pair `0,1`, distributed initialization and rank-0 result sharing, device-ragged warmup/barrier, DIME prewarm, explicit lowering, and `explicit_execute_start` at `16:52:08Z`.
+  - Identical watchdogs at `16:53:42Z` and `16:55:42Z` showed rank 0 in `dime2.py:309 enqueue_nccl_transfer_group`, rank 1 in `compiler.py:377 backend_compile_and_load`, rank 2 in `api.py:2727 block_until_ready`, and rank 3 in `dime2.py:81 get_nccl_id`.
+  - No rank completed execution or emitted a JSON report. The parent is terminal killed with all 4/4 tasks completed and no live allocation.
+- Interpretation:
+  - Standard-1F1B interleaving, repeated microbatches, accumulation, and averaging are not required. The minimum Marin boundary is now a four-rank, one-layer-per-stage BF16 forward/VJP pipeline with six adjacent activation/gradient transfers plus final loss transfer.
+  - Lazy per-task compilation during `eval_local` remains a leading mechanism: one rank begins DIME send while another is still compiling its task executable.
+- Next action:
+  - Build a standalone four-stage BF16 forward/VJP chain with differentiable device-ragged work and exactly three forward plus three reverse DIME transfers. If it passes, precompile the exact m1 rank-local task executables before coordinated execution.
