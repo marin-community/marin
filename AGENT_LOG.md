@@ -792,3 +792,33 @@ Same pattern on GPUs 1-3 (exposed 14.0-14.9% treatment vs 14.1-15.9% control).
 - Net exposed collective time is flat (14.3% -> 14.2% of span), which is why the MFU is flat.
 Confidence: 8/10 on the mechanism verdict (direct per-op timeline evidence, consistent across 4 GPUs).
 Next: control leg completes ~08:00Z for the matched MFU delta; then final verdict.
+
+## Check-in 2026-07-26 07:55 UTC — MATCHED A/B: PGLE+LHS = +0.33pp, consistent across every window
+
+Back-to-back, same draw (drops@0 identical to 4 decimals), same config apart from the two XLA
+flags, both legs carrying the same profiler window:
+
+| window | leg | n | p10 | p50 | p90 | mean | step_s | drop mean |
+|---|---|--:|--:|--:|--:|--:|--:|--:|
+| 0-119 | PGLE+LHS | 118 | 22.261 | **22.619** | 24.191 | 22.907 | 11.97 | 0.3456 |
+| 0-119 | control | 118 | 21.912 | **22.273** | 23.940 | 22.563 | 12.16 | 0.3382 |
+| 20-119 | PGLE+LHS | 100 | 22.244 | 22.549 | 23.331 | 22.670 | 12.01 | 0.2563 |
+| 20-119 | control | 100 | 21.895 | 22.200 | 23.016 | 22.314 | 12.20 | 0.2480 |
+| 60-119 | PGLE+LHS | 60 | 22.205 | 22.424 | 22.604 | 22.414 | 12.09 | 0.1591 |
+| 60-119 | control | 60 | 21.865 | 22.054 | 22.258 | 22.051 | 12.30 | 0.1518 |
+| 100-119 | PGLE+LHS | 20 | 22.166 | 22.262 | 22.403 | 22.276 | 12.16 | 0.1104 |
+| 100-119 | control | 20 | 21.810 | 21.938 | 22.001 | 21.919 | 12.36 | 0.1064 |
+
+Delta p50: +0.346 / +0.349 / +0.370 / +0.324 pp raw; +0.32 to +0.35 pp after drop-correction
+(-0.30pp per +0.10 drop). Step time 11.97 vs 12.16 s (-1.6%). Drops match throughout
+(0.0882 vs 0.0910 @119; tail20 0.1104 vs 0.1064), so this is a same-regime comparison, not a
+drop artifact. Loss tail20 5.7759 (PGLE) vs 5.7415 (control) at 120 steps -- +0.03, i.e. the two
+legs' loss trajectories differ by less than the step-to-step wiggle, but treatment is nominally
+higher; worth watching on a longer horizon before adopting.
+
+Read: a real but SMALL positive, below the 0.5pp bar the brief set for "matters", and it comes
+from the FSDP/optimizer collectives (reduce-scatter 27% -> 100% hidden), NOT from the expert a2a,
+which is unmoved. Single pair so far -- a +0.33pp claim needs a second pair.
+Confidence: 6/10 that the sign is real and ~+0.3pp; 8/10 that the source is FSDP collectives, not the a2a.
+Next: second matched pair in the REVERSED order (control first, then treatment) to cancel any
+time-ordering / placement drift.
