@@ -777,3 +777,64 @@ already assumes 2 racks. It does not compare against a steady-state FSDP number,
 And 24.59% is a THROUGHPUT number at ~9-13% drops: the compliant configuration costs extra, and per R3
 the corrected recommendation at this shape is cf1.05 + spill m=1..2 for about -0.65pp, landing near
 **~23.9%** compliant — still above the 23.1% FSDP row, which is the comparison that matters.
+
+## Check-in 17 — three qualifications that MUST travel with the 24.59% headline
+
+### Q1. The largest uncertainty: the comparison is cross-drop-regime in an UNKNOWN direction
+
+#7201's 4-of-128 rows do NOT log drops — that is the emission bug d1 found, where the per-layer count
+is computed but never reaches the tracker. So their drop rate at 22.7% / 23.1% is unknown.
+
+This matters because of a result this effort established itself: heavy-drop runs read HIGHER MFU,
+since dropped assignments gather a zero pad row and do less real work at the same step accounting. My
+24.59% is measured at ~9-13% drops. If their drops were LOWER than mine, some part of my +1.5pp is the
+drop artifact rather than the parallelization. If HIGHER, my advantage is understated. The direction is
+genuinely unknown, and this is the single largest uncertainty on the headline — larger than any of the
+configuration caveats, all of which at least have a known sign.
+
+CONSEQUENCE FOR HOW TO REPORT IT: lead with the PAIR, not the raw number.
+
+    throughput frontier   24.59%  at ~9-13% drops   (cross-drop-regime vs 23.1%, direction unknown)
+    compliant projection  ~23.9%  at <3% drops      (cf1.05 + spill m=1..2, about -0.65pp)
+
+The compliant figure is the more robust claim precisely because it prices the fidelity instead of
+leaving it as an unpriced difference between the two sides of the comparison — and it still clears the
+23.1% FSDP row.
+
+### Q2. Every drop figure must carry its run length
+
+d1 established that the LR schedule is defined over `num_train_steps`, so step 119 of my 120-step run
+is END-OF-ANNEAL while step 119 of a 350-step run is mid-schedule at ~68% of peak LR. Different
+optimization states produce different routing concentration, so the numbers are not interchangeable.
+
+    my 4-of-128 leg:  drops 0.089 @119 of 120 steps   (end-of-anneal)
+    proxy reference:  drops 0.071 tail-100 of 350 steps (mid-to-late schedule)
+
+These must never sit in the same column without the annotation. It also means my model's cand-B
+prediction of 7.10%, calibrated against 350-step tails, is not directly checkable against this leg's
+8.9% — the run lengths differ, so this leg neither confirms nor refutes the m=0 projection. Confirming
+it needs a 350-step leg at the d6144 shape, which is now the top unmeasured item in my direction.
+
+### Q3. Scope: this does not answer the goal as posed
+
+The original goal named 4- or 8-of-256. 4-of-128 is a genuine #7201 top candidate and the one-rack
+answer, but it is a DIFFERENT shape. Stated plainly:
+- 4-of-256: no MFU number, and none is obtainable on one rack at EP64 (R4). Its own candidate command
+  assumes 2 racks.
+- 8-of-256: 22.66% at the d5120 proxy, which is where this effort's optimization work was done.
+- 4-of-128 (this result): 24.59% steady, EP-favorable.
+So the honest framing is "the one-rack candidate is both faster and EP-favorable", NOT "the goal is
+met at 256 experts".
+
+### Why the magnitude is credible rather than surprising
+
+Top-4 halves the assignments relative to top-8, which halves both the a2a bytes and the expert-GEMM
+rows. At the same batch and sequence length that is a direct throughput reduction in the two costs this
+effort has spent all session optimizing, so a top-4 shape SHOULD read higher than a top-8 shape
+independent of parallelization. That makes granularity a throughput lever in its own right, which the
+run decision should weigh alongside the parallelization choice.
+Caveat on the cleanliness of that inference: my 24.59% (d6144, i3072) and the 22.66% proxy (d5120,
+i1280) differ in hidden and intermediate dimension as well as in top-k, so the comparison is a
+mechanism argument, not a controlled A/B. I did not find an 8-of-256 row inside #7201 to check it
+against; its 4-of-256 row is 18.6% but at 2 racks, where the cross-rack penalty dominates. A clean
+test would be one d6144 leg at top-8 of 128 against this one.
