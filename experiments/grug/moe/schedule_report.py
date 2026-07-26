@@ -28,10 +28,13 @@ from collections import Counter
 
 # What the async->sync pass treats as "not work" when deciding whether a pair is covered.
 NOP_MARKERS = (" parameter(", " constant(", " bitcast(", " get-tuple-element(", " tuple(")
-INSTRUCTION = re.compile(r"^\s*%?([\w.\-]+)\s*=\s")
+INSTRUCTION = re.compile(r"^\s*(?:ROOT\s+)?%?([\w.\-]+)\s*=\s")
 COMPUTATION_NAME = re.compile(r"%?([\w.\-]+)\s*\(")
 OP_NAME = re.compile(r'op_name="([^"]*)"')
 IS_SYNC = '"is_sync":true'
+# Async halves are named foo-start / foo-start.12 -- the disambiguating suffix follows the tag.
+START_NAME = re.compile(r"-start(\.\d+)?$")
+DONE_NAME = re.compile(r"-done(\.\d+)?$")
 TOP_COVER = 6
 
 
@@ -101,7 +104,7 @@ def main() -> None:
         for index, (name, line) in enumerate(body):
             # Match on the defined name, not the line: a done line names its start as an operand.
             flat_name = name.replace("_", "-")
-            if needle not in flat_name or not flat_name.endswith("-start"):
+            if needle not in flat_name or not START_NAME.search(flat_name):
                 continue
             state = "SYNC" if IS_SYNC in line else "async"
             leg = leg_of(line)
@@ -109,7 +112,7 @@ def main() -> None:
             # The done's operand carries the start's shape before the name, so look for a
             # reference to %<start> on any line that defines a matching done.
             done = next(
-                (i for i, (other_name, other) in enumerate(body) if other_name.endswith("-done") and f"%{name}" in other),
+                (i for i, (other_name, other) in enumerate(body) if DONE_NAME.search(other_name.replace("_", "-")) and f"%{name}" in other),
                 None,
             )
             if done is None:
