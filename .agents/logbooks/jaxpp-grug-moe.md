@@ -3749,3 +3749,6 @@ author: dlwh
   - The L8 bubble-normalized performance projection remains informative but is not promotable until the VJP failure is fixed under the unchanged `0.002` policy.
 - Next action:
   - Isolate paired exact-ring VJP from packed attention and rematerialization. Compare two ring calls inside one `value_and_grad` against two separately differentiated calls on identical post-attention inputs, then test `save_moe`, `recompute_all`, and no checkpoint before another full-stage GPU gate.
+
+## Continuation
+- Continued in [jaxpp-grug-moe-2.md](jaxpp-grug-moe-2.md).
