@@ -18,9 +18,10 @@ overhead, not a clean measurement.
   It composes with leg-batched expert GEMMs, which reach 25.39% p50 on a separate 120-step run.
 - Those numbers route with load balancing off, where the routed experts drop 85-89% of assignments
   early in training (real router collapse, verified exact, not a metric artifact). QB load-balancing
-  costs -1.44pp and settles at ~6% drops at cf1.0 (22.60% p50); the only measured 3%-compliant
-  config is QB + cf1.15 at 20.85%. The throughput frontier (24.04) and strict fidelity (20.85) sit
-  ~3.2pp apart; closing that gap is the top open fidelity direction.
+  costs -1.44pp and settles at ~6% drops at cf1.0 (22.60% p50). No configuration has yet been
+  measured under a strict 3% bar: QB + cf1.15 read 3.7% when last measured and its steady state was
+  never taken, and same-step spill (section 6) reaches 3.66%. Closing that gap is the top open
+  fidelity direction.
 - MFU is not comparable across drop regimes: the expert GEMMs run on fixed capacity-sized buffers,
   but a run that drops more still reads higher MFU because the dropped rows carry no real work. The
   drop fraction is a fidelity metric, and cross-regime MFU gaps (like the -1.44pp QB cost) are upper
@@ -94,9 +95,10 @@ A 350-step QB-on cf1.0 run resolves the steady state (loss healthy to 3.335): dr
 that grows past ~150 steps. cf1.0 QB-on levels toward ~6% and does not cross the 3% bar; the
 120-step extrapolation toward <3% is falsified. Step-119 drop is draw-variable (0.175 here vs 0.083
 in the frontier leg), so the steady-state ~6% is the reliable figure, not any single step-119 point.
-The only measured config under a strict 3% bar is QB + cf1.15 (0.037 at step 119, 20.85% p50); cf1.0
-carries ~6% steady drops at 22.60% (the ~3% reference is the known-acceptable rate at 8 buckets from
-a prior 1e23 run).
+No configuration has been measured under a strict 3% bar. QB + cf1.15 is the closest on the record
+at 0.037 (20.85% p50), but that is 3.7%, above the bar, and it was read at step 119 rather than at
+steady state; cf1.0 carries ~6% steady drops at 22.60%. The ~3% reference is the known-acceptable
+rate at 8 buckets from a prior 1e23 run.
 
 grug's QB is an implicit proportional controller: it applies a 1x router-bias residual per step, not
 DeepSeek's +/-gamma integral accumulation. Doubling the gain (g=2, `SCALE_QB_GAIN`, commit
