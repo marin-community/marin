@@ -433,3 +433,46 @@ m and applies to all shapes equally. The ordering (cand B slightly better than p
 worse) and the ~0.4pp spread survive. Also unchanged: the no-spill prediction, since m=0 needs no
 correction — the hero shape should still land in the same 6-8% band as the proxy, which my live leg
 tests directly.
+
+## Check-in 13 — the corrected compliant-config recommendation, per candidate
+
+Swept capacity factor x spill attempts through the shipping kernel at all three shapes, then applied
+the m-dependent correction factors from check-in 12. Corrected drop %, `*` clears the 3% bar:
+
+| shape | cf | m=0 | m=1 | m=2 | m=3 |
+|---|---|---|---|---|---|
+| proxy 256/top-8 | 1.00 | 7.29 | 4.95 | 4.14 | 3.66 |
+| | 1.05 | 5.22 | 2.82* | 1.93* | 1.37* |
+| | 1.10 | 3.67 | 1.55* | 0.81* | 0.42* |
+| | 1.15 | 2.46* | 0.79* | 0.30* | 0.12* |
+| cand A 256/top-4 | 1.00 | 7.52 | 5.15 | 4.31 | 3.85 |
+| | 1.05 | 5.42 | 2.99* | 2.03* | 1.47* |
+| | 1.10 | 3.81 | 1.69* | 0.91* | 0.50* |
+| | 1.15 | 2.62* | 0.85* | 0.34* | 0.14* |
+| cand B 128/top-4 | 1.00 | 7.10 | 4.59 | 3.74 | 3.42 |
+| | 1.05 | 5.07 | 2.54* | 1.60* | 1.01* |
+| | 1.10 | 3.57 | 1.34* | 0.60* | 0.26* |
+| | 1.15 | 2.33* | 0.72* | 0.25* | 0.07* |
+
+Read with the measured MFU prices (both from the proxy): capacity costs about -0.58pp per +0.05 cf,
+spill m=2 costs -0.13pp, and the old strict config cf1.15 + m=0 cost -1.75pp.
+
+RECOMMENDED COMPLIANT CONFIG, corrected, per candidate:
+- cand A (d6144 4-of-256): **cf1.05 + spill m=2** -> ~2.0% drops for about -0.7pp total. cf1.05 + m=1
+  also technically clears at 2.99%, but with no margin at all on a modelled number, so m=2 is the
+  recommendation. cf1.0 is not reachable at any m, because m saturates at 3.
+- cand B (d6144 4-of-128): **cf1.05 + spill m=1** -> ~2.5% for about -0.65pp, or m=2 -> 1.6% for
+  roughly the same price if margin is wanted.
+- Either is about 1pp cheaper than the cf1.15 + m=0 config the effort has been quoting (-1.75pp).
+
+Cross-agent consequence to carry into the report: d1's combination ranking (m=2 at cf1.05 winning on
+expected compliant MFU) was derived at the PROXY shape, where the spill axis still has room. At a
+top-4 shape the ranking must shift toward capacity, because the spill axis is pinned at m=3 — the
+saturation table is what forces that. The table above is the top-4 version of that ranking. If d1's
+cf1.15 leg validates the model's capacity response, this becomes a measured recommendation rather than
+a modelled one.
+
+Caveat, and it runs in the conservative direction: the correction factors were derived at cf1.0. With
+capacity headroom, later spill attempts should find free buckets MORE easily than the idealized model
+assumes is hard, so the model's optimism ought to shrink as cf rises — meaning the starred cells are
+probably pessimistic rather than optimistic.
