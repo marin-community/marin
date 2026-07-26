@@ -571,6 +571,11 @@ divisible by H = 6144, T = 65,536, or V = 128,256, and the reconstruction from k
 observed value. This is consistent with #7201's own 4-of-256 candidate command, which already assumes
 2 racks AND host offload.
 
+NOT AFFECTED BY THE LATER MEMORY-FRACTION CONFUSION. This result was measured on the FIRST leg at the
+DEFAULT 0.75 fraction, with an explicit XLA allocator report, and 16/16 tasks agreeing. The
+fraction-0.90 mistake (which starved NCCL, see the triage recipe class 5) came later and affected only
+the subsequent attempts. A reader who sees that confusion should not discount this number.
+
 ## R5. MXFP8 does not flip at the fatter expert GEMM
 
 d2 measured -2.83pp at d5120/i1280 and named "fatter expert GEMMs, such as d6144/i2560" as the
