@@ -18,6 +18,10 @@ Retry only screen arms that failed before training:
 Retry the hard-label controls with materialized training loss:
 
     python -m experiments.qwen_distillation --version dev --stage screen-ce-retry --run --max-concurrent 4
+
+Smoke one terminal checkpoint through the zero-shot evaluation path:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-eval-smoke --run
 """
 
 import json
@@ -483,6 +487,8 @@ def build(stage: str) -> list[ArtifactStep]:
         return [qwen_datakit_cache(extended=True)]
     if stage == "screen-eval":
         return [evaluation_step(screen_checkpoint(arm, seed), arm, seed=seed) for arm in Arm for seed in SCREEN_SEEDS]
+    if stage == "screen-eval-smoke":
+        return [evaluation_step(screen_checkpoint(Arm.FOUR_B_TEACHER, 0), Arm.FOUR_B_TEACHER, seed=0)]
     if stage == "smoke":
         data = qwen_datakit_cache(smoke=True)
         return [
@@ -519,7 +525,18 @@ def build(stage: str) -> list[ArtifactStep]:
 @click.command()
 @click.option(
     "--stage",
-    type=click.Choice(["data", "data-extended", "smoke", "screen", "screen-retry", "screen-ce-retry", "screen-eval"]),
+    type=click.Choice(
+        [
+            "data",
+            "data-extended",
+            "smoke",
+            "screen",
+            "screen-retry",
+            "screen-ce-retry",
+            "screen-eval-smoke",
+            "screen-eval",
+        ]
+    ),
     required=True,
 )
 @build_options
