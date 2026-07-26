@@ -707,3 +707,56 @@ arena 90.64 = ~140 GiB against the 138.22 GiB limit). Two ways to close 2 GiB:
 
 Fired: /mwittmann/ep25d5-d6144-e128-bf16-120-0726-1140-v3 = 4-of-128, EP64, offload on, default BFC
 allocator at the default 0.75 fraction, no other change.
+
+## RESULT — the 4-of-128 EP64 leg COMPLETED: 24.59% steady p50, and EP beats FSDP at the candidate shape
+
+/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1140-v3 — SUCCEEDED, 16/16 tasks, all 120 steps.
+d6144, 128 experts, top-4, 48 layers, EP64 on one GB200 rack, batch 1024, seq 4096, QB-on, cf1.0,
+custom adjoint + gather dispatch, drops reported, host offload on, default BFC allocator at the
+default 0.75 fraction, sliding window 2048.
+
+| window | p10 | p50 | p90 | sd | tok/s | step |
+|---|---|---|---|---|---|---|
+| steady tail, steps 90-119 | 24.434 | **24.594** | 24.771 | 0.118 | 276,413 | 15.174s |
+| whole run past warmup, steps 10-119 | 24.537 | 24.944 | 26.861 | 0.794 | | |
+| early window, steps 10-24 | 26.373 | 27.042 | 27.318 | 0.319 | 300,047 | 13.979s |
+
+Drop series: 0.169 @0 -> 0.859 @10 (QB warming up) -> 0.607 @30 -> 0.304 @40 -> 0.191 @60 ->
+0.128 @90 -> 0.124 @100 -> 0.103 @110 -> 0.089 @119. Tail-30 sits ~0.09-0.13.
+Loss 10.31 @2 -> 5.59 @119, descending cleanly throughout.
+
+### The EP-versus-FSDP comparison, both ways, honestly
+
+#7201's 4-of-128 comparators are 1-rack FSDP 12-STEP probes: 22.7% (QB-off, chunk-2) and 23.1%
+(QB-on, full-feature + host offload).
+
+1. STEADY-STATE, the honest number: mine is **24.59%** at ~9-13% drops. It is the only steady-state
+   number that exists at this shape — theirs stop at 12 steps. Against their best (23.1%) that is
+   **+1.5pp and +8.3% tok/s** (276.4K vs 255.3K).
+2. LIKE-FOR-LIKE measurement window: a 12-step probe cannot have converged QB. At step 12 my own drop
+   fraction is ~0.86, and by my own protocol caveat heavy-drop runs READ HIGHER because dropped
+   assignments gather the zero pad row. My matched early window (steps 10-24, drops 0.86 -> 0.66)
+   reads **27.04%**. If their probes sat in a similar regime, the like-for-like gap is nearer +3.9pp.
+   I cannot verify their drop trajectory, so I present (1) as the result and (2) as the caveat that
+   makes the comparison fair rather than as a second claim.
+
+Direction of the remaining caveats, stated so the reader can sign them:
+- CONSERVATIVE: I run sliding window 2048 where the candidate runs sw512 with 5:1 local:global, so my
+  configuration does MORE attention work. The candidate's own attention config would read higher.
+- CONSERVATIVE: I run no XSA / attn-gate / GatedNorm; the 23.1% row does.
+- NEUTRAL: host offload is on in both mine and the 23.1% row. Default allocator and default 0.75
+  fraction in mine, so no memory-knob caveat to sign.
+- AGAINST comparability with d1's d5120 control (22.66%): that control has no offload. This leg is
+  built to match #7201's row, not d1's.
+
+VERDICT: at the one-rack hero candidate shape, EP64 with the custom adjoint beats the FSDP
+parallelization that #7201's candidate assumes, on the honest steady-state number, with the surviving
+caveats all pointing the same way. This is the first evidence that the EP line is optimizing the path
+the run should actually take at the shape most likely to be chosen.
+
+### What this does NOT say
+It says nothing about 4-of-256, which does not fit one rack at EP64 (R4) and whose candidate command
+already assumes 2 racks. It does not compare against a steady-state FSDP number, because none exists.
+And 24.59% is a THROUGHPUT number at ~9-13% drops: the compliant configuration costs extra, and per R3
+the corrected recommendation at this shape is cf1.05 + spill m=1..2 for about -0.65pp, landing near
+**~23.9%** compliant — still above the 23.1% FSDP row, which is the comparison that matters.
