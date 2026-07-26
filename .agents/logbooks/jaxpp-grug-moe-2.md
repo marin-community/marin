@@ -75,7 +75,7 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Run a one-block target-shape JaxPP H100 compile/parity gate on `cw-rno2a`. Require loss and every gradient leaf relative-L2 `<=0.002`; do not launch L8 or L24 until it passes.
 
 ### 2026-07-26 16:15 PDT - one-task JaxPP component gate compiles but fails target parity
-- Hypothesis: The locally exact paired block composition will retain loss, routing, QB/router metrics, every block-parameter gradient, and both input gradients within relative-L2 `0.002` when compiled as one target-shape JaxPP MPMD task.
+- Hypothesis: The locally exact paired block composition will retain loss, routing, QB/router metrics, every block-parameter gradient, and both input gradients within relative-L2 `0.002` when compiled as one target-shape JaxPP MPMD task. This r3 harness compares JaxPP-paired directly with ordered VJPs; it does not include a target-H100 direct-paired executable and therefore cannot attribute a failure specifically to JaxPP.
 - Commit Hash:
   - `54f3265262` adds the one-block d2560/e64/top-k4/sequence-4096/global-microbatch-32/local-4 H100x8 gate.
   - `695f389d9c` separates the pure paired-MoE structural contract from the expanded full-VJP task Jaxpr after r2 showed that reverse-mode and `save_moe` rematerialization expand the full task to four ring bodies and ten router einsums.
@@ -100,6 +100,6 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The child exited `1` on the unchanged numerical assertion. Iris was terminal after `2m04.87s`; no retry or live allocation remained.
 - Interpretation:
   - The component task graph is compile-compact and operational: target lowering, one-task precompile, and execution complete quickly. The full-task structural count expansion was harness-only and is now recorded instead of rejected.
-  - The target numerical result is a hard negative. Distinct JaxPP task compilation/execution changes block outputs enough to cross near-tied router boundaries, after which routed gradients diverge. Local paired-block parity and the prior direct joined-attention/joined-ring controls do not establish parity across this JaxPP task boundary.
+  - The composed target path is a hard numerical negative, but r3 does not isolate its source. The divergence may already occur in a target-H100 direct `jax.jit(paired_block_value_and_grads)` arm, or it may be introduced by JaxPP task compilation/execution. CPU tiny parity and the separate target attention/ring controls do not prove the complete target direct-paired composition.
 - Next action:
-  - Do not launch L8 or L24. Isolate the first value divergence inside the JaxPP task by reporting the two independent post-attention values, then pre-router dense inputs and selected experts, against the ordered executable. Keep exact routing equality and the per-leaf `0.002` policy unchanged.
+  - Add target-H100 direct paired lower/compile/execute and report direct-paired versus ordered, JaxPP-paired versus direct-paired, and JaxPP-paired versus ordered. Only attribute the failure to JaxPP if direct-paired passes. Keep exact routing equality and the per-leaf `0.002` policy unchanged; do not launch L8 or L24.

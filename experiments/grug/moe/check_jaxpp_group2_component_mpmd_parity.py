@@ -373,7 +373,13 @@ def _exact_routing_mismatches(
     return tuple(int(value) for value in jax.device_get(mismatches))
 
 
-def _report_parity(process_id: int, actual, reference, parameter_signature: dict[str, Any]) -> bool:
+def _report_parity(
+    process_id: int,
+    event_name: str,
+    actual,
+    reference,
+    parameter_signature: dict[str, Any],
+) -> bool:
     per_microbatch_loss = tuple(
         build_value_parity(actual_loss, reference_loss, tolerance=DEFAULT_TOLERANCE)
         for actual_loss, reference_loss in zip(actual[0], reference[0], strict=True)
@@ -421,7 +427,7 @@ def _report_parity(process_id: int, actual, reference, parameter_signature: dict
     if process_id == 0:
         event(
             process_id,
-            "component_parity_report",
+            event_name,
             source_lineage=SOURCE_LINEAGE,
             tolerance=DEFAULT_TOLERANCE,
             per_microbatch_loss=[dataclasses.asdict(loss) for loss in per_microbatch_loss],
@@ -520,7 +526,16 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         with jax.set_mesh(stage_mesh):
             ordered = jax.jit(ordered_block_value_and_grads)
             reference = _compile_and_run(process_id, "ordered", ordered, arguments)
-        out_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, reference)
+            direct_paired = jax.jit(paired_block_value_and_grads)
+            direct_paired_result = _compile_and_run(process_id, "direct_paired", direct_paired, arguments)
+        direct_paired_passed = _report_parity(
+            process_id,
+            "direct_paired_vs_ordered_parity_report",
+            direct_paired_result,
+            reference,
+            parameter_signature,
+        )
+        out_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, direct_paired_result)
         in_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, arguments)
 
         @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=False)
@@ -563,7 +578,30 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         actual = _reconstruct_local_outputs(lowered, local_outputs)
         _block_until_ready(actual)
         event(process_id, "jaxpp_execute_done", elapsed_seconds=time.monotonic() - execute_start)
-        passed = _report_parity(process_id, actual, reference, parameter_signature)
+        jaxpp_vs_direct_paired_passed = _report_parity(
+            process_id,
+            "jaxpp_paired_vs_direct_paired_parity_report",
+            actual,
+            direct_paired_result,
+            parameter_signature,
+        )
+        jaxpp_vs_ordered_passed = _report_parity(
+            process_id,
+            "jaxpp_paired_vs_ordered_parity_report",
+            actual,
+            reference,
+            parameter_signature,
+        )
+        passed = direct_paired_passed and jaxpp_vs_direct_paired_passed and jaxpp_vs_ordered_passed
+        if process_id == 0:
+            event(
+                process_id,
+                "component_parity_summary",
+                direct_paired_vs_ordered_passed=direct_paired_passed,
+                jaxpp_paired_vs_direct_paired_passed=jaxpp_vs_direct_paired_passed,
+                jaxpp_paired_vs_ordered_passed=jaxpp_vs_ordered_passed,
+                passed=passed,
+            )
         multihost_utils.sync_global_devices("group2_component_parity_complete")
         if not passed:
             raise AssertionError("component parity exceeded the fixed per-leaf tolerance")
