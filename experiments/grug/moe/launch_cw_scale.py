@@ -225,8 +225,18 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
+    # Rack GPU workers default to preemptible, so every job carries an eviction window proportional
+    # to its COMPILE time -- ~20 minutes at d6144/48L, which is long enough that a run can be evicted
+    # repeatedly without ever reaching step 0. SCALE_PREEMPTIBLE=0 asks the scheduler for
+    # non-preemptible workers instead, at the cost of a smaller pool to schedule into.
     resources = ResourceConfig.with_gpu(
-        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+        gpu_type,
+        count=gpus_per_node,
+        cpu=32,
+        ram=os.environ.get("SCALE_RAM", "256g"),
+        disk="256g",
+        replicas=replicas,
+        preemptible=os.environ.get("SCALE_PREEMPTIBLE", "1") == "1",
     )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
