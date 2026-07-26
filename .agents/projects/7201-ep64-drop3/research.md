@@ -376,6 +376,15 @@ in JAX before use.
 - Reject for this installed XLA: `xla_gpu_enable_custom_fusions` and
   `xla_gpu_enable_address_computation_fusion`; both flags are unknown and the
   process exits before distributed initialization.
+- Promote: optimize or overlap the fixed BF16 token transport at the original
+  shared width. The matched steady-QB profile attributes 30.13% of aggregate
+  GPU kernel time to communication and 23.20% to NCCL SendRecv. The six
+  `[64,4608,5120]` fixed token A2As account for 7.407 device-seconds across the
+  four-GPU, four-step capture, about 78% of SendRecv time.
+- Revise: the communication-free ceiling of the current 21.05% MFU control is
+  only about 30.1%. Exceeding 30% therefore requires removing or hiding nearly
+  all fixed token A2A time and improving at least one local compute path; a
+  transport-only win is not enough margin.
 
 ### Source Ledger
 
@@ -458,6 +467,8 @@ in JAX before use.
 | Shared-expert 21504 two-padding-expert steady one-node profile | XPlane / XProf | `s3://marin-us-east-02a/tmp/ttl=30d/xprof/ep64-d5120-sh21504-pad2-qb-profile150-v125-20260726-1926` | profile the current highest-MFU drop-compliant trajectory under the exact 200-step schedule | pending | QB on, padding 2, profile steps 150-153 from process indices 0-3 only, HLO proto enabled, and CUDA graphs disabled with `--xla_gpu_enable_command_buffer=`. Unlike v114, its optimizer schedule exactly matches the 200-step qualification run |
 | Shared-expert 21504 two-padding-expert 350-step QB qualification | W&B | `marin-community/rav_moe/ep64-d5120-sh21504-pad2-qb350-v126-20260726-1930` | verify the highest-MFU capacity after the full QB settling horizon from echo #458 | pending | normal CUDA graph settings, QB on, padding 2, and 350 training steps. This is the final stability gate if default 32-CTA transport remains faster than the 48-CTA A/B |
 | Shared-expert 21504 two-padding-expert NCCL-40-CTA A/B | local Iris log | `/rav/ep64-d5120-sh21504-pad2-qb-nccl40-v127-20260726-1932` | locate whether any communication-parallelism point above the default 32 CTAs fits HBM | high | failed on the first `jit_train_step`: NCCL reported CUDA out of memory while allocating for `ncclAlltoAll` on multiple ranks. The first root cause begins at log line 7010; later connection-refused errors are teardown. Together with the 48- and 64-CTA failures, this closes the above-default CTA lead. Full log: `/tmp/marin-job-logs/ep64-d5120-sh21504-pad2-qb-nccl40-v127-20260726-1932.log` |
+| Original shared-5120 steady QB control | W&B | `marin-community/rav_moe/ep64-d5120-sh5120-pad2-qb200-v128-20260726-1953` | establish the stable matched-shape baseline for the >30% kernel target | high | finished 200/200. Full-run p50 was 21.050% and mean 21.067%; tail-100 median was 21.023%, tail-50 21.007%, and tail-20 20.997%. Tail-50 median exact aggregate post-ECHO drop was 1.784%; final loss was 5.098 and finite/falling. |
+| Original shared-5120 steady-QB one-node profile | XPlane / XProf | `s3://marin-us-east-02a/tmp/ttl=30d/xprof/ep64-d5120-sh5120-pad2-qb-profile150-v129-20260726-1953` | attribute the removable gap from the matched 21.05% control to 30% | high | process indices 0-3 only, profile steps 150-154, HLO proto enabled, and CUDA graphs disabled with `--xla_gpu_enable_command_buffer=`. Aggregate GPU kernel time is 69.87% compute / 30.13% communication; NCCL SendRecv is 23.20%. The six fixed BF16 `[64,4608,5120]` token A2As total 7.407 device-s across four GPUs and four steps. |
 
 ### Handoff
 
