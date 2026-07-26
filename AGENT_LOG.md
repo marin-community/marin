@@ -1952,3 +1952,34 @@ identical on every sender and communicating it is pure waste.
   rack legs. The tool now takes `XPLANE_TOP_OPS=0` for a full list; attribution work should never
   use the truncated view.
 Confidence: 9/10 that the incomplete wiring explains the shortfall; the two reduce fusions are named, measured in both legs, and traced to a specific unrouted call site.
+
+## PRE-REGISTRATION 2026-07-26 15:35 UTC — stated before the leg runs
+
+From the untruncated table (per step, GPU:0, 3-step window / 3):
+
+| component | ms/step | fate if all five sites route through the supplied scale |
+|---|--:|---|
+| `loop_reduce_fusion_1` | 1346 | removed (amax) |
+| `loop_reduce_fusion_2` | 766 | removed (amax) |
+| `input_reduce_fusion_14` | 204 | probably removed; name suggests another amax |
+| `loop_convert_fusion_30/_11` | 327 | STAYS — these are the casts themselves |
+| net of everything else | -404 | stays (bf16 kernels replaced by faster fp8 ones) |
+| **total added compute today** | **+2239** | |
+
+**Prediction:** added compute falls to **~127 ms/step** (conservative, keeping
+`input_reduce_fusion_14`) or to roughly zero if that one is also an amax. Against the **920 ms/step
+break-even that is a decisive clear**.
+
+Net step time = control 11.94 + added compute 0.127 - exposure saving 0.920 = **11.15 s/step**,
+giving MFU 22.674 x 11.94/11.15 = **24.28%, +1.60pp** over the limit=4 control. If
+`input_reduce_fusion_14` goes too the result is capped by the full-elimination target of 24.57% /
++1.90pp, so the honest pre-registered range is **+1.5 to +1.9pp**.
+
+Falsification: if added compute lands materially above ~400 ms/step, or the reduce fusions survive
+at all, then something other than amax lives in them and the whole attribution chain needs redoing
+from the op list rather than from reasoning.
+
+Submitting with `SCALE_A2A_FP8_UNDERFLOW_CHECK=1` — required, since the guard's first real use is
+overdue and it confirms the calibration directly instead of by inference from the loss. Harvest
+must also confirm the scale `all_to_all` is genuinely absent from the collective list rather than
+merely deleted in principle.
