@@ -1483,6 +1483,55 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T05:27:22Z — 95,804 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0518-v111` independently
+  revalidated five additional baseline checkpoints. Their 640 pairs contain
+  393 false positives, 246 true duplicates, and one unresolved outcome. All
+  1,556 judgments were valid on the first request; four pairs were chunked and
+  636 were direct.
+- The p0 decision-file 4 outcome Parquet SHA-256 values for offsets 3,200 and
+  3,328 are
+  `346cfa488f9e3e53786cbed6dd418408cae4216997797c61156fa18bc37519ec`
+  and
+  `ff42a62d83db6ba9c0ee5552627bf034ca6d366d184c61b1f65420132c1d52f2`.
+  The p1 decision-file 35 values for offsets 3,328, 3,456, and 3,584 are
+  `562f21705ca3ef35f61f50b62f3eca6db1ab934033bc7c7a66a9774e9843df7a`,
+  `be069281968d8d461b3cdf5a08bc2943399cbbd72d6179a7053a6bfef7851d3d`,
+  and
+  `b88e939d2f07656e6d041ae0c340df0a737fb86568c80a745288c8aa773eb5a3`.
+- Complete-text review resolves the new ambiguous baseline pair as a false
+  positive. Both documents are low-value college SEO pages with some shared
+  sentence scaffolding, but the 911-character member and 827-character
+  canonical name different institutions and programs. The member also has
+  admissions, internship, and wildlife-ecology claims absent from the
+  canonical. Their character 5-gram Jaccard value is 0.195294 and word
+  5-gram Jaccard value is 0.086207, so dropping the member would remove
+  substantive unique content. Pair location:
+  `part-00035-of-00128.parquet:5706`; member/canonical text SHA-256 values:
+  `4e5ea623b527e9b59b9eaa3d06efbb6d62e125b9cf4d7fcf9e676207027ed39c`
+  /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- The semantic-judgment SHA-256 value is
+  `660ccd09c7064fef5dbda40299bc0086236502809df572fb95877732a5787902`.
+  `/rav/datakit-6854-publish-manual-0524-v113` published its hash-bound manual
+  shard, and the separate
+  `/rav/datakit-6854-verify-manual-0525-v114` job reread and verified it. The
+  Parquet and record SHA-256 values are
+  `674985382c96ff96a4cc15200dafdbc61daa5e8e0ce8e23aa50bb239d866da6a`
+  and
+  `cccec5a3be82bd5171dfc2df3897f89ee9679c573a7f54e9266457538fe52669`.
+- Across the stable 753-checkpoint snapshot, all 99 unresolved model outcomes
+  are covered by 76 true-duplicate and 23 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 78,414 pairs, 49,639 false positives, 28,775 true duplicates;
+  - treatment: 17,390 pairs, 8,955 false positives, 8,435 true duplicates;
+  - combined: 95,804 pairs, 58,594 false positives, 37,210 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T05:17:26Z — 95,164 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0516-v110` independently
