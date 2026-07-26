@@ -1746,6 +1746,54 @@ def paired_compute_block_forward(
     )
 
 
+def paired_compute_block_monolithic_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    Block,
+    tuple[jax.Array, jax.Array],
+]:
+    """Differentiate the complete paired forward with one ordinary reverse pass."""
+
+    def projected_pair(master_params: Block, current_hiddens: tuple[jax.Array, jax.Array]):
+        outputs, router_stats = paired_compute_block_forward(
+            master_params,
+            qb_beta,
+            current_hiddens,
+            masks,
+            mp,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            remat_mode=remat_mode,
+        )
+        losses = tuple(
+            jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+            + router_z_loss_scale * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        return losses[0] + losses[1], (losses, outputs, router_stats)
+
+    (_, auxiliary), (master_gradient, input_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hiddens)
+    losses, outputs, router_stats = auxiliary
+    return losses, outputs, router_stats, master_gradient, input_gradients
+
+
 def paired_compute_block_value_and_grads(
     params: Block,
     qb_beta: jax.Array,

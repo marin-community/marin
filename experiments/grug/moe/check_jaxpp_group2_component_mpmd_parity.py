@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-block JaxPP gate for the exact paired MoE component boundary.
+"""One-block direct/JaxPP gate for the exact paired MoE component boundary.
 
 The authoritative GPU run self-spawns two JAX processes on one H100x8 node.
 Each process owns four devices, while one JaxPP MPMD task spans the complete
-EP8 mesh. The task keeps attention, shared/dense work, and their VJPs separate
-for the two original microbatches; only the two exact-ring ``MoEMLP`` calls
-share one task-local reverse pass.
+EP8 mesh. The paired forward keeps attention and shared/dense work separate
+for the two original microbatches and joins only the two exact-ring ``MoEMLP``
+calls. The gate differentiates that complete forward monolithically, first
+under direct ``jax.jit`` and then, only if direct parity passes, as one JaxPP
+task.
 """
 
 from __future__ import annotations
@@ -226,15 +228,15 @@ def ordered_block_value_and_grads(
     )
 
 
-def paired_block_value_and_grads(
+def monolithic_paired_block_value_and_grads(
     params: Block,
     qb_beta: jax.Array,
     hiddens: tuple[jax.Array, jax.Array],
     cotangents: tuple[jax.Array, jax.Array],
 ):
-    """Run the production component composition with only MoEMLP joined."""
+    """Differentiate the complete paired forward with one ordinary reverse pass."""
     masks = (AttentionMask.causal(), AttentionMask.causal())
-    return grug_train.paired_compute_block_value_and_grads(
+    return grug_train.paired_compute_block_monolithic_value_and_grads(
         params,
         qb_beta,
         hiddens,
@@ -509,6 +511,7 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
             moe_implementation="ring",
             remat_mode="save_moe",
             compute_dtype="bfloat16",
+            paired_vjp_formulation="monolithic_value_and_grad",
         )
         event(process_id, "problem_init_start")
         with jax.set_mesh(stage_mesh):
@@ -526,23 +529,40 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         with jax.set_mesh(stage_mesh):
             ordered = jax.jit(ordered_block_value_and_grads)
             reference = _compile_and_run(process_id, "ordered", ordered, arguments)
-            direct_paired = jax.jit(paired_block_value_and_grads)
-            direct_paired_result = _compile_and_run(process_id, "direct_paired", direct_paired, arguments)
-        direct_paired_passed = _report_parity(
+            direct_monolithic = jax.jit(monolithic_paired_block_value_and_grads)
+            direct_monolithic_result = _compile_and_run(
+                process_id,
+                "direct_monolithic",
+                direct_monolithic,
+                arguments,
+            )
+        direct_monolithic_passed = _report_parity(
             process_id,
-            "direct_paired_vs_ordered_parity_report",
-            direct_paired_result,
+            "direct_monolithic_vs_ordered_parity_report",
+            direct_monolithic_result,
             reference,
             parameter_signature,
         )
-        out_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, direct_paired_result)
+        if not direct_monolithic_passed:
+            if process_id == 0:
+                event(
+                    process_id,
+                    "component_parity_summary",
+                    direct_monolithic_vs_ordered_passed=False,
+                    jaxpp_skipped=True,
+                    passed=False,
+                )
+            multihost_utils.sync_global_devices("group2_component_direct_monolithic_complete")
+            raise AssertionError("direct monolithic paired parity exceeded the fixed per-leaf tolerance")
+
+        out_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, direct_monolithic_result)
         in_shardings = grug_train._tree_named_shardings_on_stage(mpmd_mesh, 0, arguments)
 
         @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=False)
         def program(current_params, current_qb_beta, current_hiddens, current_cotangents):
             return mpmd.task(
-                paired_block_value_and_grads,
-                name="grug_group2_component_block_vjp",
+                monolithic_paired_block_value_and_grads,
+                name="grug_group2_component_block_monolithic_vag",
                 out_shardings=out_shardings,
             )(current_params, current_qb_beta, current_hiddens, current_cotangents)
 
@@ -578,28 +598,29 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         actual = _reconstruct_local_outputs(lowered, local_outputs)
         _block_until_ready(actual)
         event(process_id, "jaxpp_execute_done", elapsed_seconds=time.monotonic() - execute_start)
-        jaxpp_vs_direct_paired_passed = _report_parity(
+        jaxpp_vs_direct_monolithic_passed = _report_parity(
             process_id,
-            "jaxpp_paired_vs_direct_paired_parity_report",
+            "jaxpp_monolithic_vs_direct_monolithic_parity_report",
             actual,
-            direct_paired_result,
+            direct_monolithic_result,
             parameter_signature,
         )
         jaxpp_vs_ordered_passed = _report_parity(
             process_id,
-            "jaxpp_paired_vs_ordered_parity_report",
+            "jaxpp_monolithic_vs_ordered_parity_report",
             actual,
             reference,
             parameter_signature,
         )
-        passed = direct_paired_passed and jaxpp_vs_direct_paired_passed and jaxpp_vs_ordered_passed
+        passed = direct_monolithic_passed and jaxpp_vs_direct_monolithic_passed and jaxpp_vs_ordered_passed
         if process_id == 0:
             event(
                 process_id,
                 "component_parity_summary",
-                direct_paired_vs_ordered_passed=direct_paired_passed,
-                jaxpp_paired_vs_direct_paired_passed=jaxpp_vs_direct_paired_passed,
-                jaxpp_paired_vs_ordered_passed=jaxpp_vs_ordered_passed,
+                direct_monolithic_vs_ordered_passed=direct_monolithic_passed,
+                jaxpp_monolithic_vs_direct_monolithic_passed=jaxpp_vs_direct_monolithic_passed,
+                jaxpp_monolithic_vs_ordered_passed=jaxpp_vs_ordered_passed,
+                jaxpp_skipped=False,
                 passed=passed,
             )
         multihost_utils.sync_global_devices("group2_component_parity_complete")

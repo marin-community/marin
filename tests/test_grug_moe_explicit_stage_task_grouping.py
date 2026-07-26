@@ -61,6 +61,7 @@ from experiments.grug.moe.train import (
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
     paired_compute_block_forward,
+    paired_compute_block_monolithic_value_and_grads,
     paired_compute_block_value_and_grads,
     unpack_fp8_pipeline_wire,
 )
@@ -584,6 +585,52 @@ def test_paired_component_block_matches_two_ordered_master_block_vjps(remat_mode
     for actual_stats, expected_stats in zip(actual[2], expected[2], strict=True):
         np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
         _assert_tree_rel_l2(actual_stats["qb_beta"], expected_stats["qb_beta"])
+
+
+@pytest.mark.parametrize("remat_mode", ("recompute_all", "save_moe"))
+def test_monolithic_paired_component_block_matches_two_ordered_master_block_vjps(remat_mode: str) -> None:
+    mesh, stage = _tiny_grouped_last_stage(remat_mode, top_k=2)
+    batches, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    masks = tuple(batch.attn_mask for batch in batches)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    router_z_loss_scale = 0.1
+
+    monolithic_vjp = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: paired_compute_block_monolithic_value_and_grads(
+            block,
+            qb_beta,
+            hidden_pair,
+            masks,
+            cotangent_pair,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode=remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
+    )
+    ordered_vjp = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: _ordered_master_block_value_and_grads(
+            block,
+            qb_beta,
+            hidden_pair,
+            masks,
+            cotangent_pair,
+            mp,
+            remat_mode=remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
+    )
+
+    with jax.set_mesh(mesh):
+        actual = monolithic_vjp(params, hiddens, output_cotangents)
+        expected = ordered_vjp(params, hiddens, output_cotangents)
+
+    _assert_tree_rel_l2(actual, expected)
+    for actual_stats, expected_stats in zip(actual[2], expected[2], strict=True):
+        np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
 
 
 def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, ...]:
