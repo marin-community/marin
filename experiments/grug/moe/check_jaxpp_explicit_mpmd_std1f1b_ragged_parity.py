@@ -43,8 +43,13 @@ import importlib
 import json
 import multiprocessing as mp
 import os
+import pickle
+import subprocess
+import sys
+import tempfile
 import traceback
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import jax
@@ -222,8 +227,7 @@ def _wait_at_jaxpp_barrier(name: str) -> None:
     client.wait_at_barrier(name, dime2.env_vars.jaxpp_client_timeout.value)
 
 
-def _standalone_direct_reference(process_id: int, device_pair: str, connection: Any) -> None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = device_pair
+def _standalone_direct_reference(process_id: int, device_pair: str, output_path: Path) -> None:
     faulthandler.dump_traceback_later(60, repeat=True)
     try:
         _event(process_id, "standalone_direct_reference_start", device_pair=device_pair)
@@ -255,56 +259,43 @@ def _standalone_direct_reference(process_id: int, device_pair: str, connection: 
                 pipeline.stage_layer_counts,
             )[process_id]
             host_result = jax.device_get((direct_loss, direct_stage_gradient))
-        connection.send(("ok", host_result))
+        with output_path.open("wb") as output:
+            pickle.dump(host_result, output)
         _event(process_id, "standalone_direct_reference_complete", device_pair=device_pair)
-    except BaseException as error:
-        connection.send(("error", (type(error).__name__, str(error))))
-        traceback.print_exc()
-        raise
     finally:
         faulthandler.cancel_dump_traceback_later()
-        connection.close()
 
 
 def _standalone_direct_reference_attempt(process_id: int, device_pair: str):
-    context = mp.get_context("spawn")
-    receive_connection, send_connection = context.Pipe(duplex=False)
-    process = context.Process(
-        target=_standalone_direct_reference,
-        args=(process_id, device_pair, send_connection),
-        name=f"jaxpp-ragged-parity-direct-reference-{process_id}-{device_pair.replace(',', '-')}",
+    descriptor, raw_output_path = tempfile.mkstemp(prefix=f"jaxpp-ragged-parity-direct-{process_id}-", suffix=".pkl")
+    os.close(descriptor)
+    output_path = Path(raw_output_path)
+    environment = os.environ.copy()
+    environment["CUDA_VISIBLE_DEVICES"] = device_pair
+    command = (
+        sys.executable,
+        "-m",
+        "experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity",
+        "--standalone-direct-output",
+        str(output_path),
+        "--standalone-direct-stage",
+        str(process_id),
+        "--standalone-direct-device-pair",
+        device_pair,
     )
-    process.start()
-    send_connection.close()
     try:
-        if not receive_connection.poll(90):
-            raise TimeoutError(f"standalone direct reference on GPUs {device_pair} exceeded 90 seconds")
-        status, payload = receive_connection.recv()
-    except BaseException:
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=10)
-        if process.is_alive():
-            process.kill()
-            process.join()
-        raise
+        try:
+            completed = subprocess.run(command, env=environment, timeout=90, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError(f"standalone direct reference on GPUs {device_pair} exceeded 90 seconds") from error
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"standalone direct reference on GPUs {device_pair} exited with status {completed.returncode}"
+            )
+        with output_path.open("rb") as output:
+            return pickle.load(output)
     finally:
-        receive_connection.close()
-
-    process.join(timeout=30)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=10)
-        if process.is_alive():
-            process.kill()
-            process.join()
-        raise TimeoutError("standalone direct reference did not exit after returning its result")
-    if status == "error":
-        error_type, error = payload
-        raise RuntimeError(f"standalone direct reference failed with {error_type}: {error}")
-    if process.exitcode != 0:
-        raise RuntimeError(f"standalone direct reference exited with status {process.exitcode}")
-    return payload
+        output_path.unlink(missing_ok=True)
 
 
 def _standalone_direct_reference_result(process_id: int):
@@ -531,11 +522,27 @@ def _run_self_spawned_worker(
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--coordinator-port", type=int, default=COORDINATOR_PORT)
+    parser.add_argument("--standalone-direct-output", type=Path)
+    parser.add_argument("--standalone-direct-stage", type=int)
+    parser.add_argument("--standalone-direct-device-pair")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.standalone_direct_output is not None:
+        if args.standalone_direct_stage is None or args.standalone_direct_device_pair is None:
+            raise ValueError(
+                "--standalone-direct-stage and --standalone-direct-device-pair are required with "
+                "--standalone-direct-output"
+            )
+        _standalone_direct_reference(
+            args.standalone_direct_stage,
+            args.standalone_direct_device_pair,
+            args.standalone_direct_output,
+        )
+        return 0
+
     job_info = get_job_info()
     if job_info is not None and job_info.num_tasks > 1:
         standalone_direct_result, device_pair = _standalone_direct_reference_result(job_info.task_index)
