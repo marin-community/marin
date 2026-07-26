@@ -5,7 +5,7 @@ when pinned JaxPP executes a JAX 0.11.1 nightly training graph containing
 `jax.lax.ragged_all_to_all`. It uses the minimum two MPMD ranks. Each stage has
 two H100s because the receiving stage needs a two-device collective axis.
 
-The global payload is four `int32` values:
+The base cases use four `int32` values:
 
 ```text
 [[0], [1], [100], [101]]
@@ -24,6 +24,14 @@ destination 1: [[1], [101]]
 Both cases require zero mismatches and checksum `202`. `direct-ragged` runs the
 same collective on two H100s without JaxPP.
 
+`jaxpp-four-stage-bf16-vjp-ragged` casts the same values to BF16 and removes the
+Marin model, optimizer, and training state. Ranks 0-2 each run one
+differentiable ragged forward task. Rank 3 runs a fourth ragged forward inside
+a scalar mean-square loss and forms its VJP. Ranks 2-0 then run reverse VJP
+tasks. The program has seven tasks, three forward DIME transfers, three reverse
+DIME transfers, and no final scalar transfer. Rank 3 checks loss `5050.5`; rank
+0 checks the exact input gradient `0.5 * input`.
+
 ## Pinned environment
 
 - JAX, JAXLIB, CUDA 13 plugin, and PJRT: `0.11.1.dev20260725`
@@ -39,10 +47,11 @@ The script rejects any other package versions or an unpatched JaxPP runtime.
 
 ## H100 command
 
-Run the five base cases and the 16-microbatch four-stage pair on one eight-H100 Iris task. The direct and transfer-only
+Run the six base cases and the 16-microbatch four-stage pair on one eight-H100 Iris task. The direct and transfer-only
 controls must pass before interpreting the combined cases. The two four-stage
 cases isolate rank count and bidirectional transfer structure before adding a
-device ragged collective to every stage task.
+device ragged collective to every stage task. The BF16 VJP case then replaces
+the synthetic reverse transform with reverse-mode differentiation.
 
 ```bash
 STAMP=$(date -u +%Y%m%d-%H%M%S)
@@ -103,6 +112,9 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
       --timeout 180 --stack-after 30
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
       --case jaxpp-four-stage-ragged --coordinator-port 5834 \
+      --timeout 180 --stack-after 30
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
+      --case jaxpp-four-stage-bf16-vjp-ragged --coordinator-port 5837 \
       --timeout 180 --stack-after 30
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
       --case jaxpp-four-stage-transfer --microbatches 16 \
@@ -169,5 +181,9 @@ original payload. The `--microbatches 16` pair repeats the full chain,
 accumulates all returned payloads on stage 0, and forces 96 transfers plus 128
 stage tasks to remain live. The base cases require checksum `202`; the repeated
 cases require checksum `3,232`. Every case requires zero mismatches.
+
+The BF16 VJP case is an unexecuted next reduction. It must emit exact loss and
+gradient checks on ranks 3 and 0 respectively before it can refine the known
+failure boundary.
 
 Part of #7024.

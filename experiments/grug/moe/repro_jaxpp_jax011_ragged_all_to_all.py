@@ -13,6 +13,10 @@ before the combined ``jaxpp-ragged`` case. The four-stage cases add a
 forward/backward transfer chain across four MPMD ranks, with either identity
 stage tasks or one exact ragged exchange per stage task. The companion README
 pins the exact H100 environment and command.
+
+The four-stage BF16 VJP case retains the bidirectional transfer topology while
+replacing the synthetic backward transform with reverse-mode differentiation
+through BF16 ragged collectives.
 """
 
 from __future__ import annotations
@@ -54,6 +58,11 @@ GLOBAL_SHAPE = (4, 1)
 LOCAL_ROWS = 2
 PEERS = 2
 EXPECTED_CHECKSUM = 202
+BF16_VJP_CASE = "jaxpp-four-stage-bf16-vjp-ragged"
+BF16_VJP_EXPECTED_LOSS = 5050.5
+BF16_VJP_TASK_COUNT = 7
+BF16_VJP_FORWARD_TRANSFER_COUNT = 3
+BF16_VJP_REVERSE_TRANSFER_COUNT = 3
 
 Case = Literal[
     "direct-ragged",
@@ -61,6 +70,7 @@ Case = Literal[
     "jaxpp-ragged",
     "jaxpp-four-stage-transfer",
     "jaxpp-four-stage-ragged",
+    "jaxpp-four-stage-bf16-vjp-ragged",
 ]
 
 
@@ -317,6 +327,12 @@ def initialize_mpmd_payload(sharding: NamedSharding, *, owns_stage: bool) -> jax
     return empty_array(GLOBAL_SHAPE, jnp.int32, sharding)
 
 
+def initialize_mpmd_bf16_payload(sharding: NamedSharding, *, owns_stage: bool) -> jax.Array:
+    if owns_stage:
+        return jax.device_put(jnp.asarray(payload(), dtype=jnp.bfloat16), sharding)
+    return empty_array(GLOBAL_SHAPE, jnp.bfloat16, sharding)
+
+
 def stage_payload_task(mesh: Mesh, *, ragged: bool):
     def local_stage(x: jax.Array) -> jax.Array:
         if ragged:
@@ -333,6 +349,77 @@ def stage_payload_task(mesh: Mesh, *, ragged: bool):
         )(x)
 
     return stage
+
+
+def bf16_ragged_stage_tasks(mesh: Mesh):
+    stage_forward = stage_payload_task(mesh, ragged=True)
+
+    def stage_backward(stage_input: jax.Array, output_cotangent: jax.Array) -> jax.Array:
+        _, pullback = jax.vjp(stage_forward, stage_input)
+        return pullback(output_cotangent)[0]
+
+    return stage_forward, stage_backward
+
+
+def bf16_ragged_loss_and_vjp(mesh: Mesh):
+    stage_forward = stage_payload_task(mesh, ragged=True)
+
+    def loss_and_vjp(stage_input: jax.Array) -> tuple[jax.Array, jax.Array]:
+        def loss_fn(value: jax.Array) -> jax.Array:
+            output = stage_forward(value).astype(jnp.float32)
+            return jnp.mean(jnp.square(output))
+
+        return jax.value_and_grad(loss_fn)(stage_input)
+
+    return loss_and_vjp
+
+
+def four_stage_bf16_vjp_program(
+    stage_meshes: tuple[Mesh, ...],
+    stage_rows: tuple[NamedSharding, ...],
+    stage_scalars: tuple[NamedSharding, ...],
+    x: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    if len(stage_meshes) != FOUR_STAGE_MPMD_RANKS:
+        raise ValueError(f"BF16 VJP program requires {FOUR_STAGE_MPMD_RANKS} stages")
+
+    stage_tasks = tuple(bf16_ragged_stage_tasks(mesh) for mesh in stage_meshes)
+    stage_inputs = [x]
+    value = jaxpp_mpmd.task(
+        stage_tasks[0][0],
+        name="bf16_vjp_stage0_forward",
+        out_shardings=stage_rows[0],
+    )(x)
+    for stage_index in range(1, FOUR_STAGE_MPMD_RANKS - 1):
+        value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+        stage_inputs.append(value)
+        value = jaxpp_mpmd.task(
+            stage_tasks[stage_index][0],
+            name=f"bf16_vjp_stage{stage_index}_forward",
+            out_shardings=stage_rows[stage_index],
+        )(value)
+
+    last_stage_index = FOUR_STAGE_MPMD_RANKS - 1
+    value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[last_stage_index]).done()
+    stage_inputs.append(value)
+    loss, input_cotangent = jaxpp_mpmd.task(
+        bf16_ragged_loss_and_vjp(stage_meshes[last_stage_index]),
+        name=f"bf16_vjp_stage{last_stage_index}_loss_backward",
+        out_shardings=(stage_scalars[last_stage_index], stage_rows[last_stage_index]),
+    )(value)
+
+    for stage_index in reversed(range(last_stage_index)):
+        input_cotangent = jaxpp_mpmd.transfer(
+            input_cotangent,
+            out_shardings=stage_rows[stage_index],
+        ).done()
+        input_cotangent = jaxpp_mpmd.task(
+            stage_tasks[stage_index][1],
+            name=f"bf16_vjp_stage{stage_index}_backward",
+            out_shardings=stage_rows[stage_index],
+        )(stage_inputs[stage_index], input_cotangent)
+
+    return loss, input_cotangent
 
 
 def four_stage_program(
@@ -401,6 +488,36 @@ def four_stage_program(
     )(accumulated)
 
 
+def check_bf16_vjp_loss(loss: jax.Array, *, process_id: int) -> None:
+    actual = float(np.asarray(jax.device_get(loss), dtype=np.float32))
+    absolute_error = abs(actual - BF16_VJP_EXPECTED_LOSS)
+    event(
+        "bf16_vjp_loss_check",
+        case=BF16_VJP_CASE,
+        process_id=process_id,
+        actual=actual,
+        expected=BF16_VJP_EXPECTED_LOSS,
+        absolute_error=absolute_error,
+    )
+    if not np.isfinite(actual) or actual != BF16_VJP_EXPECTED_LOSS:
+        raise AssertionError(f"{BF16_VJP_CASE}: expected loss {BF16_VJP_EXPECTED_LOSS}, got {actual}")
+
+
+def check_bf16_vjp_gradient(gradient: jax.Array, *, process_id: int) -> None:
+    actual = np.asarray(jax.device_get(gradient), dtype=np.float32)
+    expected = payload().astype(np.float32) * np.float32(0.5)
+    max_absolute_error = float(np.max(np.abs(actual - expected)))
+    event(
+        "bf16_vjp_gradient_check",
+        case=BF16_VJP_CASE,
+        process_id=process_id,
+        max_absolute_error=max_absolute_error,
+        finite=bool(np.all(np.isfinite(actual))),
+    )
+    if not np.array_equal(actual, expected):
+        raise AssertionError(f"{BF16_VJP_CASE}: input gradient mismatch; max absolute error {max_absolute_error}")
+
+
 def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int]) -> None:
     event("worker_started", case=config.case, process_id=process_id, local_device_ids=local_device_ids)
     watchdog: threading.Event | None = None
@@ -430,7 +547,23 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
         stage_scalars = tuple(NamedSharding(mesh, P()) for mesh in stage_meshes)
         stage0_rows = stage_rows[0]
 
-        if config.case.startswith("jaxpp-four-stage-"):
+        if config.case == BF16_VJP_CASE:
+
+            @jaxpp_mpmd.mpmd(
+                mpmd_mesh,
+                in_shardings=(stage0_rows,),
+                infer_donation=False,
+            )
+            def program(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+                return four_stage_bf16_vjp_program(
+                    stage_meshes,
+                    stage_rows,
+                    stage_scalars,
+                    x,
+                )
+
+            input_dtype = jnp.bfloat16
+        elif config.case.startswith("jaxpp-four-stage-"):
 
             @jaxpp_mpmd.mpmd(
                 mpmd_mesh,
@@ -448,6 +581,7 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
                 )
 
             result_stage_index = 0
+            input_dtype = jnp.int32
         else:
             stage1_mesh = stage_meshes[1]
             stage1_rows = stage_rows[1]
@@ -482,15 +616,25 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
                 )(transferred)
 
             result_stage_index = 1
-        input_struct = jax.ShapeDtypeStruct(GLOBAL_SHAPE, jnp.int32, sharding=stage0_rows)
+            input_dtype = jnp.int32
+        input_struct = jax.ShapeDtypeStruct(GLOBAL_SHAPE, input_dtype, sharding=stage0_rows)
         with phase("jaxpp_lower", process_id=process_id):
             lowered = program.lower(input_struct)
 
-        x = initialize_mpmd_payload(stage0_rows, owns_stage=mpmd_mesh.my_mpmd_axis_index == 0)
+        if config.case == BF16_VJP_CASE:
+            x = initialize_mpmd_bf16_payload(stage0_rows, owns_stage=mpmd_mesh.my_mpmd_axis_index == 0)
+        else:
+            x = initialize_mpmd_payload(stage0_rows, owns_stage=mpmd_mesh.my_mpmd_axis_index == 0)
         with phase("jaxpp_eval_local", process_id=process_id):
             result = lowered(x)
             jax.block_until_ready(result)
-        if mpmd_mesh.my_mpmd_axis_index == result_stage_index:
+        if config.case == BF16_VJP_CASE:
+            loss, gradient = result
+            if mpmd_mesh.my_mpmd_axis_index == 0:
+                check_bf16_vjp_gradient(gradient, process_id=process_id)
+            if mpmd_mesh.my_mpmd_axis_index == FOUR_STAGE_MPMD_RANKS - 1:
+                check_bf16_vjp_loss(loss, process_id=process_id)
+        elif mpmd_mesh.my_mpmd_axis_index == result_stage_index:
             expected_checksum = EXPECTED_CHECKSUM * (
                 config.microbatches if config.case.startswith("jaxpp-four-stage-") else 1
             )
@@ -583,6 +727,7 @@ def parse_args() -> Config:
             "jaxpp-ragged",
             "jaxpp-four-stage-transfer",
             "jaxpp-four-stage-ragged",
+            BF16_VJP_CASE,
         ),
         required=True,
     )
@@ -595,12 +740,22 @@ def parse_args() -> Config:
         parser.error("--microbatches must be positive")
     if not args.case.startswith("jaxpp-four-stage-") and args.microbatches != 1:
         parser.error("--microbatches is supported only by four-stage cases")
+    if args.case == BF16_VJP_CASE and args.microbatches != 1:
+        parser.error(f"{BF16_VJP_CASE} requires exactly one microbatch")
     return Config(**vars(args))
 
 
 def main() -> None:
     config = parse_args()
     actual_environment = check_environment(config.case)
+    graph = None
+    if config.case == BF16_VJP_CASE:
+        graph = {
+            "tasks": BF16_VJP_TASK_COUNT,
+            "forward_dime_transfers": BF16_VJP_FORWARD_TRANSFER_COUNT,
+            "reverse_dime_transfers": BF16_VJP_REVERSE_TRANSFER_COUNT,
+            "final_observation_transfers": 0,
+        }
     event(
         "environment",
         config=asdict(config),
@@ -610,8 +765,9 @@ def main() -> None:
             "mpmd_ranks": mpmd_ranks(config.case) if config.case.startswith("jaxpp-") else 1,
             "devices_per_stage": DEVICES_PER_STAGE,
             "global_shape": GLOBAL_SHAPE,
-            "dtype": "int32",
+            "dtype": "bfloat16" if config.case == BF16_VJP_CASE else "int32",
         },
+        graph=graph,
     )
     if config.case == "direct-ragged":
         run_direct_ragged(config)
