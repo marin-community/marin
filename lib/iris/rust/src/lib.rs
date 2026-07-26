@@ -2045,7 +2045,7 @@ mod tests {
 
         let relay = proxy_metric_key(&proxy_request(
             "GET",
-            "/proxy/cw-rno2a/t/tok/serve.model/v1/models",
+            "/proxy/t/cluster=cw-rno2a/tok/serve.model/v1/models",
         ))
         .unwrap();
         assert_eq!(relay.endpoint, "serve.model");
