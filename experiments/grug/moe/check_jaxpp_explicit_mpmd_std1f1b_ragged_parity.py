@@ -4,14 +4,15 @@
 """Compare direct and explicit-MPMD std-1F1B Grug MoE loss and gradients.
 
 This is an authoritative production-mixed-precision check for the
-device-initiated ``ragged_all_to_all`` path. It self-spawns four JAX processes
-on one H100x8 host. Each pipeline rank owns two local GPUs as its ``expert=2``
-mesh, and each of the four logical stages owns one transformer layer.
+device-initiated ``ragged_all_to_all`` path. The production gate runs as four
+Iris tasks with two H100s each, so every pipeline rank owns an isolated
+``expert=2`` mesh. The single-host fallback self-spawns four JAX processes on
+one H100x8 host and serializes only their direct-reference executions.
 
 After installing the pinned JAX/JaxPP runtime with ``jaxpp_setup_scripts()``
-from ``train.py``, run exactly:
+from ``train.py``, run the command below in every task of a four-replica
+H100x2 Iris job:
 
-    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
     JAXPP_SOURCE=/tmp/jaxpp \
     XLA_PYTHON_CLIENT_MEM_FRACTION=.35 \
     XLA_FLAGS="--xla_gpu_autotune_level=0 \
@@ -46,6 +47,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from iris.cluster.client.job_info import get_job_info
+from iris.runtime.jax_init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -206,17 +209,11 @@ def _authoritative_environment() -> dict[str, Any]:
     return environment
 
 
-def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[int]) -> None:
+def _run_initialized_worker(
+    process_id: int,
+    direct_reference_barrier: Any | None,
+) -> None:
     faulthandler.dump_traceback_later(120, repeat=True)
-    _event(process_id, "distributed_initialize_start", local_device_ids=local_device_ids)
-    jax.distributed.initialize(
-        coordinator_address=f"127.0.0.1:{coordinator_port}",
-        num_processes=PIPELINE_STAGES,
-        process_id=process_id,
-        local_device_ids=local_device_ids,
-        cluster_detection_method="deactivate",
-    )
-    _event(process_id, "distributed_initialize_complete")
     completed = False
     exit_code = 0
     try:
@@ -255,27 +252,42 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         )
         stage_batches = _stage_batches(mpmd_mesh, batch)
 
-        _event(process_id, "direct_reference_start", stage_index=local_stage_index)
-        with jax.set_mesh(stage_mesh):
-            direct_state = grug_train.initial_state(
-                _model_config(),
-                optimizer=optimizer,
-                mp=eager_parity._MIXED_PRECISION,
-                key=jax.random.PRNGKey(0),
-                ema_beta=None,
-            )
-            direct_batch = _batch_for_mesh(stage_mesh)
-            direct_step = jax.jit(
-                functools.partial(
-                    eager_parity._direct_microbatch_mean,
-                    precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+        def run_direct_reference():
+            _event(process_id, "direct_reference_start", stage_index=local_stage_index)
+            with jax.set_mesh(stage_mesh):
+                direct_state = grug_train.initial_state(
+                    _model_config(),
+                    optimizer=optimizer,
+                    mp=eager_parity._MIXED_PRECISION,
+                    key=jax.random.PRNGKey(0),
+                    ema_beta=None,
                 )
-            )
-            direct_loss, direct_gradients = direct_step(direct_state.params, direct_batch)
-            jax.block_until_ready((direct_loss, direct_gradients))
-        _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
+                direct_batch = _batch_for_mesh(stage_mesh)
+                direct_step = jax.jit(
+                    functools.partial(
+                        eager_parity._direct_microbatch_mean,
+                        precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+                    )
+                )
+                result = direct_step(direct_state.params, direct_batch)
+                jax.block_until_ready(result)
+            _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
+            return result
 
-        multihost_utils.sync_global_devices("explicit_mpmd_ragged_parity_direct_complete")
+        if direct_reference_barrier is None:
+            direct_result = run_direct_reference()
+        else:
+            direct_result = None
+            for active_process_id in range(PIPELINE_STAGES):
+                direct_reference_barrier.wait()
+                if process_id == active_process_id:
+                    direct_result = run_direct_reference()
+                direct_reference_barrier.wait()
+
+            if direct_result is None:
+                raise RuntimeError(f"process {process_id} did not execute its direct reference")
+        direct_loss, direct_gradients = direct_result
+
         _event(process_id, "dime_prewarm_start", stage_index=local_stage_index)
         grug_train._prewarm_jaxpp_dime(mpmd_mesh, "all")
         _event(process_id, "dime_prewarm_complete", stage_index=local_stage_index)
@@ -375,6 +387,24 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
     raise SystemExit(exit_code)
 
 
+def _run_self_spawned_worker(
+    process_id: int,
+    coordinator_port: int,
+    local_device_ids: list[int],
+    direct_reference_barrier: Any,
+) -> None:
+    _event(process_id, "distributed_initialize_start", local_device_ids=local_device_ids)
+    jax.distributed.initialize(
+        coordinator_address=f"127.0.0.1:{coordinator_port}",
+        num_processes=PIPELINE_STAGES,
+        process_id=process_id,
+        local_device_ids=local_device_ids,
+        cluster_detection_method="deactivate",
+    )
+    _event(process_id, "distributed_initialize_complete")
+    _run_initialized_worker(process_id, direct_reference_barrier)
+
+
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--coordinator-port", type=int, default=COORDINATOR_PORT)
@@ -383,10 +413,18 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    job_info = get_job_info()
+    if job_info is not None and job_info.num_tasks > 1:
+        initialize_jax()
+        _event(jax.process_index(), "distributed_initialize_complete")
+        _run_initialized_worker(jax.process_index(), None)
+        return 0
+
     context = mp.get_context("spawn")
+    direct_reference_barrier = context.Barrier(PIPELINE_STAGES)
     processes = [
         context.Process(
-            target=_run_worker,
+            target=_run_self_spawned_worker,
             args=(
                 process_id,
                 args.coordinator_port,
@@ -396,6 +434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         (process_id + 1) * DEVICES_PER_STAGE,
                     )
                 ),
+                direct_reference_barrier,
             ),
             name=f"jaxpp-explicit-ragged-parity-rank-{process_id}",
         )
