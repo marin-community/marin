@@ -504,3 +504,104 @@ removes the host-memory variable entirely AND keeps the step's data movement ide
 control. The only deviation from that control is the fraction (0.90 vs 0.75), which a peer measured as
 performance-neutral on this workload. So this number will be comparable BOTH to d1's 22.66% control
 and to #7201's 4-of-128 rows.
+
+---
+
+# STANDALONE RESULTS — ep25-d5, written to survive without the narrative above
+
+Question: does the EP25 stack (custom scatter-add adjoint, gather dispatch, QB balancing, spill)
+transfer from the d5120 8-of-256 proxy to the REAL hero-run candidates, d6144 4-of-256 (707B) and
+d6144 4-of-128 (360B) from issue #7201?
+
+## R1. The proxy was FLATTERING on fidelity: top-k is the spill recovery budget
+
+MEASURED through the shipping `_assign_with_spill` kernel, identical settings, m = spill attempts:
+
+    cand A d6144 256/top-4:  m3 2.88 | m4 2.88 | m5 2.88 | m6 2.88 | m7 2.88   <- stops dead at m=3
+    d5120 proxy 256/top-8:   m3 2.73 | m4 2.28 | m5 1.97 | m6 1.75 | m7 1.57   <- keeps improving
+
+A flat line beside a declining one at identical settings is the whole argument, and it needs no
+modelling assumptions: an assignment can only be re-offered to experts the token ITSELF selected, so
+top-4 leaves at most 3 alternatives while top-8 leaves 7. Every compliance claim in this effort was
+measured at the top-8 proxy, which has more than twice the recovery budget of either hero candidate.
+
+## R2. Corrected drop projections, and neither top-4 candidate is compliant by spill alone
+
+Model calibrated on the proxy's live no-spill tail, then corrected by the factors implied by d1's live
+truncation-corrected measurements (x1.204 at m=2, x1.338 at m=3; the factor grows with m because an
+idealized model overestimates how many free buckets later attempts find):
+
+| shape | m_max | corrected m=2 | corrected m=3 | 3% bar |
+|---|---|---|---|---|
+| d5120 proxy 256/top-8 | 7 | 4.14% | 3.66% | fails at m=3, has budget left |
+| cand A d6144 256/top-4 | 3 | 4.31% | 3.86% | fails, SATURATED |
+| cand B d6144 128/top-4 | 3 | 3.74% | 3.42% | fails, SATURATED |
+
+The no-spill (m=0) prediction needs no correction and is unchanged: at matched burstiness the three
+shapes land within 0.4pp of each other (7.57 / 7.76 / 7.35), so the uniform-routing floor rising from
+0.88% to 1.25% at top-4 does NOT change the regime. The worry that motivated this direction is
+answered: drops at the hero shape are not materially worse than at the proxy. What IS worse is the
+recovery budget.
+
+## R3. The corrected compliant-config recommendation, per candidate
+
+Capacity costs about -0.58pp MFU per +0.05 cf; spill m=2 costs -0.13pp; the cf1.15 + m=0 config this
+effort has been quoting costs -1.75pp.
+
+- cand A (4-of-256): cf1.05 + spill m=2 -> ~2.0% drops, about -0.7pp. cf1.0 is unreachable at any m.
+- cand B (4-of-128): cf1.05 + spill m=1 -> ~2.5%, about -0.65pp; m=2 -> ~1.6% for roughly the same.
+- Both are about 1pp cheaper than cf1.15 + m=0.
+d1's ranking (m=2 at cf1.05) was derived at the proxy, where the spill axis still has room; at a top-4
+shape the ranking must shift toward capacity because spill is pinned at m=3.
+
+## R4. 707B / 4-of-256 at EP64 does not fit one rack
+
+MEASURED, 16/16 tasks, identical report: allocator limit 138.22 GiB (0.75 x 184.3 physical), 92.02 GiB
+resident, and a single failing 106.63 GiB request. 92.02 + 106.63 = 198.65 GiB against 184.3 GiB of
+physical HBM, so no memory fraction closes it. The resident set decomposes exactly — six units of
+4 x 48 x 6144 x 3072 fp32 (= expert params 3 units + MuonH momentum 3 units = 81.00 GiB) plus the
+embedding trio (8.81 GiB) — confirming nothing is replicated that should be sharded. The 106.63 GiB
+request is XLA:GPU's single temp arena, not a tensor: as fp32 or bf16 its element count is not
+divisible by H = 6144, T = 65,536, or V = 128,256, and the reconstruction from known intermediates
+(fp32 grad accumulators 40.5 + bf16 residual stack 36.0 + per-layer working set ~20-30) lands on the
+observed value. This is consistent with #7201's own 4-of-256 candidate command, which already assumes
+2 racks AND host offload.
+
+## R5. MXFP8 does not flip at the fatter expert GEMM
+
+d2 measured -2.83pp at d5120/i1280 and named "fatter expert GEMMs, such as d6144/i2560" as the
+reopening condition. Matched EP4 pair at d6144/i3072, identical drop regime (0.1480 vs 0.1440 at step
+39), 40 steps: bf16 p50 9.067% (p10 8.990 / p90 9.150) vs MXFP8 p50 8.754% (p10 8.680 / p90 8.788) =
+**-0.313pp**, bands non-overlapping, loss parity 0.005. Same sign as d2's result, at the shape that was
+supposed to reverse it. Magnitude caveat: EP4 gives the grouped kernel 16 local experts x 4,096 rows
+where EP64 would give 4 x 65,536, and a 4-layer model dilutes the MoE share. The port itself works
+(40/40 steps clean on GB200), so the 4.5.2/cu13 CUTLASS resolution transfers.
+
+## R6. Operational findings (lift these out of the direction)
+
+- Rack GPU workers are `preemptible: true` via `ResourceConfig.with_gpu`, so every job carries an
+  eviction window proportional to COMPILE time; a 707B compile is ~30 minutes. Evidence: five tasks
+  taking `preemption_notifier SIGTERM caught` within 500 microseconds. An evicted task returning with
+  a new incarnation is exactly how the "different incarnation" gang-abort surfaces.
+- `ram` was hardcoded at 256g while a gb200-4x node has 960 GB; with one container per node holding
+  all 4 GPUs' offloaded optimizer state (~162 GiB), roughly 800 GB per node sat idle. Now overridable
+  via `SCALE_RAM` (default unchanged).
+- The three-way triage recipe for look-alike gang aborts is above; class 2 is "suspect, then test",
+  because raising 256g -> 600g did not fix my case.
+
+## R7. Open, and what would close it
+
+The 4-of-128 EP64 leg (/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1100) is the direct EP-versus-FSDP
+test at the shape most likely to be chosen. #7201's comparators are 22.7% (QB-off chunk-2) and 23.1%
+(QB-on full-feature), both 1-rack FSDP 12-step probes. If the EP64 number beats 23.1%, that is the
+first evidence EP plus the custom adjoint wins at the candidate shape and is the headline of this
+effort. If it lands below, that is equally important and must be reported just as prominently: it
+would mean FSDP is the better parallelization at the one-rack hero candidate and that the EP line —
+adjoint, spill, and all — is optimizing a path the run should not take at that shape.
+Caveats to attach either way: my sw2048 versus the candidate's sw512 + 5:1 local:global means my
+configuration does MORE attention work, so an EP advantage is conservative and an EP deficit is
+overstated; I run no XSA / attn-gate / GatedNorm / host offload where the 23.1% row does; mine is a
+120-step p50 with a drop series where theirs is a 12-step probe; and I run BFC at fraction 0.90 rather
+than the default 0.75, which a peer measured as performance-neutral on this workload.
+Also unmeasured: spill live at any d6144 shape — everything in R1-R3 is kernel-exact but not a live
+training leg.
