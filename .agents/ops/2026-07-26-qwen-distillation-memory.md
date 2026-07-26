@@ -78,6 +78,33 @@ Use an explicit zero-weight mask before accumulating tagged and labeled
 evaluation losses. Add regression tests whose ignored positions contain
 nonfinite losses, then repeat the smoke and require finite validation metrics.
 
+## Results
+
+The explicit evaluator mask passed its regression tests but the device smoke
+still reported nonfinite validation loss. W&B retained finite student
+parameter norms, finite student gradient norms, and a finite distillation loss
+through step 11 (`9.1567`). This rules out student corruption and zero-weight
+aggregation as the primary cause.
+
+- Job: `/power/qwen-distill-smoke-c39033`
+- Commit: `c3903335cb`
+- Training throughput at step 11: 27,515 tokens/s
+- Validation path: unreduced fused linear cross-entropy
+
+## Hypothesis 4
+
+The GPU fused cross-entropy path is nonfinite when asked for unreduced
+per-position Qwen losses in this shape, while the independently computed
+full-logit KL remains finite.
+
+## Changes to make
+
+Compute validation NLL from materialized float32 logits as
+`logsumexp(logits) - logits[target]`. The online KL already materializes this
+logit shape successfully, and the student-only evaluation has lower peak
+memory than the training step. Keep explicit masking in the evaluator as a
+separate correctness fix.
+
 ## Future work
 
 - [ ] Record steady-state step throughput after the corrected evaluation

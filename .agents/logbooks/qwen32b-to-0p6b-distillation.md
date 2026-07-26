@@ -202,3 +202,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: the task completed all 12 steps, logged finite training loss, and saved `step-11`. The allocator OOM disappeared. Validation metrics were nonfinite because padded zero-weight positions used multiplication rather than explicit masking.
 - Interpretation: the online 32B-to-0.6B system fits one `GB200x4` node. Evaluation must mask ignored positions before accumulation so undefined losses on padding cannot contaminate validation aggregates.
 - Next action: land the evaluator regression fix and repeat the smoke, requiring finite validation loss and a resumable checkpoint before starting the paired screen.
+
+### 2026-07-26 17:46 - Nonfinite validation isolated to fused unreduced NLL
+
+- Hypothesis: nonfinite validation came from multiplying undefined padded losses by zero in the evaluator.
+- Commit hash: `c3903335cb`.
+- Job: `/power/qwen-distill-smoke-c39033` on one `GB200x4` node.
+- Result: explicit masking did not change validation. The run again completed and checkpointed; step-11 distillation loss was `9.1567`, student gradient and parameter norms were finite, and steady-state throughput reached 27,515 tokens/s. Only the unreduced fused hard-label NLL was nonfinite.
+- Interpretation: the student is not corrupted. Replace the validation-only fused linear cross-entropy with the stable identity `logsumexp(logits) - logits[target]`, using the same full-logit shape already validated by online KL.
+- Next action: test and device-smoke the stable validation NLL, then run an explicit checkpoint continuation before launching the screen.

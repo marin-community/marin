@@ -29,6 +29,7 @@ from levanter.distillation import (
     TaidState,
     distillation_loss,
     distillation_trainable_filter,
+    hard_label_next_token_loss,
     projected_hidden_distillation_loss,
     taid_loss_with_state_update,
 )
@@ -284,10 +285,12 @@ def main(config: TrainLmDistillationConfig) -> None:
                 student_model = inference_mode(model.student, True)
                 student_model = trainer.mp.cast_to_compute(student_model)
                 example = _named_eval_example(batch, EvalBatch=trainer.EvalBatch, Pos=Pos)
-                per_position = student_model.compute_next_token_loss(
-                    example,
-                    reduction=None,
-                    reduction_axis=(),
+                logits = student_model(example.tokens, example.attn_mask)
+                per_position = hard_label_next_token_loss(
+                    logits,
+                    example.tokens,
+                    Vocab=student_model.Vocab,
+                    Pos=Pos,
                 ).array
                 token_ids = jnp.roll(example.tokens.array, -1, axis=-1)
                 return per_position, example.loss_weight.array, token_ids

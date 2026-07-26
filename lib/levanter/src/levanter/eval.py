@@ -534,7 +534,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         @hax.named_jit(axis_resources=self.axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
-            weighted_loss = jnp.where(weights != 0, losses * weights, 0.0)  # b t
+            weighted_loss = jnp.where(weights != 0, losses, 0.0) * weights  # b t
             this_loss = jnp.sum(weighted_loss)  # scalar
             this_weights = jnp.sum(weights)  # scalar
 
@@ -747,10 +747,13 @@ class LabeledEvaluator(Generic[Ex, M]):
             label_matches = labels[:, None, None, :] == aggregate_label_ids[None, :, :, None]
             label_matches = jnp.logical_and(label_matches, valid_label_ids[None, :, :, None])
             weights_per_aggregate = jnp.any(label_matches, axis=2).astype(losses.dtype)
-            weighted_losses = jnp.where(
-                weights_per_aggregate != 0,
-                losses[:, None, :] * weights_per_aggregate,
-                0.0,
+            weighted_losses = (
+                jnp.where(
+                    weights_per_aggregate != 0,
+                    losses[:, None, :],
+                    0.0,
+                )
+                * weights_per_aggregate
             )
 
             this_loss_per_label = jnp.sum(weighted_losses, axis=(0, 2))

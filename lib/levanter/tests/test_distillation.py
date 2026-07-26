@@ -19,6 +19,7 @@ from levanter.distillation import (
     distillation_loss,
     distillation_trainable_filter,
     forward_kl_loss,
+    hard_label_next_token_loss,
     model_with_layer_anchors,
     projected_hidden_loss,
     taid_loss_with_state_update,
@@ -71,6 +72,33 @@ def test_forward_kl_matches_positional_reference_with_loss_weights():
     per_position = -jnp.sum(teacher_probs * student_log_probs, axis=-1)
     expected = jnp.sum(per_position * weights_array) / jnp.sum(weights_array)
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_hard_label_next_token_loss_matches_reference():
+    Batch = hax.Axis("batch", 2)
+    Pos = hax.Axis("position", 3)
+    Vocab = hax.Axis("vocab", 4)
+    logits = hax.named(
+        jnp.asarray(
+            [
+                [[1.0, -1.0, 0.0, 0.5], [0.0, 0.5, 1.0, -0.5], [3.0, 0.0, -2.0, 1.0]],
+                [[-0.5, 0.0, 0.5, 1.0], [1.5, 0.5, -0.5, -1.5], [0.0, 0.0, 0.0, 0.0]],
+            ],
+            dtype=jnp.bfloat16,
+        ),
+        (Batch, Pos, Vocab),
+    )
+    tokens = hax.named(jnp.asarray([[0, 2, 3], [3, 1, 0]], dtype=jnp.int32), (Batch, Pos))
+
+    actual = hard_label_next_token_loss(logits, tokens, Vocab=Vocab, Pos=Pos)
+
+    target_ids = jnp.roll(tokens.array, -1, axis=-1)
+    expected = -jnp.take_along_axis(
+        jax.nn.log_softmax(logits.array.astype(jnp.float32), axis=-1),
+        target_ids[..., None],
+        axis=-1,
+    )[..., 0]
+    np.testing.assert_allclose(actual.array, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_teacher_has_zero_gradient_and_is_not_saveable():

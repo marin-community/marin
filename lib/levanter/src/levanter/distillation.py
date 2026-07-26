@@ -92,6 +92,21 @@ def forward_kl_loss(
     return _weighted_mean(per_position_loss, loss_weight.astype(jnp.float32))
 
 
+def hard_label_next_token_loss(
+    logits: NamedArray,
+    tokens: NamedArray,
+    *,
+    Vocab: Axis,
+    Pos: Axis,
+) -> NamedArray:
+    """Compute unreduced next-token NLL from materialized logits."""
+    logits = logits.astype(jnp.float32)
+    target_ids = hax.roll(tokens, -1, Pos)
+    log_normalizers = hax.nn.logsumexp(logits, Vocab)
+    target_logits = logits.take(Vocab, target_ids)
+    return log_normalizers - target_logits
+
+
 def taid_target_logits(
     student_logits: NamedArray,
     teacher_logits: NamedArray,
