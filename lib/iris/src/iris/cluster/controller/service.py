@@ -2447,11 +2447,12 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
+    # --- Endpoint registry (deprecated compatibility surface) ---
     #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
+    # EndpointService is the canonical home and all current clients call it. These
+    # forward there so a pre-migration worker or task (e.g. an already-running log
+    # shipper) that still calls the old ControllerService surface keeps working
+    # across a controller update. Remove once those old callers have drained.
 
     def register_endpoint(
         self,

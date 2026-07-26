@@ -9,13 +9,13 @@ A job on a child cluster mints its capability token locally. The minted URL
 names the child cluster and uses the parent origin:
 
 ```
-https://iris.oa.dev/proxy/<cluster>/t/<token>/<name>/<subpath>
-        └─ parent strips <cluster>, forwards the rest ─┐
+https://iris.oa.dev/proxy/t/cluster=<cluster>/<token>/<name>/<subpath>
+        └─ parent strips cluster=<cluster>, forwards the rest ─┐
                                                         ▼
         https://<child-proxy>/proxy/t/<token>/<name>/<subpath>
 ```
 
-The parent recognizes `/proxy/<cluster>/t/…`, looks `<cluster>` up in its
+The parent recognizes `/proxy/t/cluster=<cluster>/…`, looks `<cluster>` up in its
 configured `peers`, and forwards the remaining `/proxy/t/<token>/<name>/…` to
 that child's proxy without reading the token. The child validates its own token
 exactly as it would for a direct local capability URL, and serves. The parent is
@@ -43,10 +43,10 @@ federation` bearers, a separate path, never capability tokens).
 - The child is the sole auth boundary; the parent validates nothing about the
   token. This matches the capability-URL contract already in force: the token in
   the path is the credential, validated by its issuer.
-- The relay fires only when the segment after `<cluster>` is the `t/` marker, so
-  it relays a capability URL and nothing else. A request without `t/` is not a
-  relay; it falls through to a normal (local) lookup. There is no path by which
-  the relay exposes the child's other auth modes.
+- The relay fires only beneath `/proxy/t/` when the first token-position segment
+  is `cluster=<cluster>`, so it relays a capability URL and nothing else. A
+  request without that discriminator remains a normal local capability. There
+  is no path by which the relay exposes the child's other auth modes.
 - The parent relays only to a cluster in its `peers` map (404 otherwise), so it
   is not an open relay to arbitrary hosts.
 - A tampered `<name>` fails the child's endpoint-scoped token check; a tampered
@@ -55,9 +55,9 @@ federation` bearers, a separate path, never capability tokens).
 
 ## Changes by layer
 
-- Rust (`lib/iris/rust/src/lib.rs`): `parse_proxy_route` recognizes a leading
-  `<cluster>/t/…` (a non-`t` first segment followed by the `t/` marker) and
-  carries the relay peer. `native_decision` short-circuits: no local resolve, no
+- Rust (`lib/iris/rust/src/lib.rs`): `parse_proxy_route` recognizes
+  `t/cluster=<cluster>/…` beneath the existing capability route and carries the
+  relay peer. `native_decision` short-circuits: no local resolve, no
   token verify; it POSTs a relay decision and forwards the remainder
   `/proxy/t/<token>/<name>/<sub>` (plus query) to the returned upstream. Add
   `FederationDirection::Relay`. Bump the crate version; publish and pin
@@ -69,7 +69,7 @@ federation` bearers, a separate path, never capability tokens).
   Authorization header.
 - Mint / URL: add `capability_url` to `MintEndpointTokenResponse`; the minting
   controller builds the fully-qualified URL — the federated form
-  `<parent-origin>/proxy/<self-cluster>/t/<token>/<name>` when a parent origin is
+  `<parent-origin>/proxy/t/cluster=<self-cluster>/<token>/<name>` when a parent origin is
   configured, otherwise the local form. `cli/endpoints.py::mint`, the client
   helper, and the eval orchestrator use `resp.capability_url`.
 - Config: add the child's public parent origin (`federation_public_parent`, one
@@ -107,18 +107,18 @@ translation as a follow-up.
 ## Rollout
 
 - Publish the relay-capable `marin-iris-native` wheel; bump the pin.
-- Deploy the parent proxy first (so it understands the `<cluster>/t/` route),
+- Deploy the parent proxy first (so it understands the `t/cluster=<cluster>/` route),
   then configure children with `federation_public_parent` so mint begins emitting
   tagged URLs. A tagged URL never resolves before the parent can route it.
 - Migration 0048 rides along, unchanged from #7627.
 
 ## Test plan
 
-- Rust unit: relay parse (`<cluster>/t/…`), relay decision shape, no token
+- Rust unit: relay parse (`t/cluster=<cluster>/…`), relay decision shape, no token
   validation on the relay path.
 - Python: `_federation_decision` relay direction — configured peer resolves to an
   upstream; unknown peer is rejected.
 - e2e with the real native proxy (as in `test_federation_proxy`): child mints,
-  parent relays `/proxy/<cluster>/t/<token>/<name>/…`, child serves; a wrong
+  parent relays `/proxy/t/cluster=<cluster>/<token>/<name>/…`, child serves; a wrong
   cluster tag is rejected.
 - Mint: `capability_url` federated vs local form by config.

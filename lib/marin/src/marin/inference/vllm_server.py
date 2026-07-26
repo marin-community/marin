@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 from rigging.filesystem import marin_prefix
+from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
@@ -39,6 +40,12 @@ _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
+# libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
+_RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+
+
+class TransientStartupError(RuntimeError):
+    """A vLLM startup failure whose child logs show a transient Run:ai streamer read fault."""
 
 
 class VllmLauncher(Protocol):
@@ -424,13 +431,16 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     max_num_batched_tokens = engine_kwargs.get("max_num_batched_tokens")
     if max_num_batched_tokens is not None:
         args.extend(["--max-num-batched-tokens", str(max_num_batched_tokens)])
+    max_num_seqs = engine_kwargs.get("max_num_seqs")
+    if max_num_seqs is not None:
+        args.extend(["--max-num-seqs", str(max_num_seqs)])
     return args
 
 
 def _poll_until_ready(
     server_url: str,
     *,
-    timeout_seconds: int,
+    timeout_seconds: float,
     poll_interval_seconds: float = 5,
     check_alive: Callable[[], None] | None = None,
 ) -> None:
@@ -681,26 +691,37 @@ def _launch_vllm_process(
     )
 
 
-def _wait_for_vllm_server(handle: VllmServerHandle, *, command: list[str], timeout_seconds: int) -> None:
+def _wait_for_vllm_server(
+    handle: VllmServerHandle,
+    *,
+    command: list[str],
+    timeout_seconds: float,
+    poll_interval_seconds: float = 5,
+) -> None:
     process = handle.process
     assert handle.log_pump is not None
 
     def _check_process_alive() -> None:
-        if process.poll() is not None:
-            # Child has exited; drain the readers before reading the tail so it has the final lines.
-            handle.log_pump.join(timeout=5)
-            logs = _native_logs_tail(handle.log_dir)
-            raise RuntimeError(
-                "vLLM server process exited before becoming ready.\n"
-                f"Command: {command}\n"
-                f"Exit code: {process.returncode}\n"
-                f"Logs: {handle.log_dir}\n"
-                f"{logs}"
-            )
+        if process.poll() is None:
+            return
+        # Child has exited; drain the readers before reading the tail so it has the final lines.
+        handle.log_pump.join(timeout=5)
+        message = (
+            "vLLM server process exited before becoming ready.\n"
+            f"Command: {command}\n"
+            f"Exit code: {process.returncode}\n"
+            f"Logs: {handle.log_dir}\n"
+            f"{_native_logs_tail(handle.log_dir)}"
+        )
+        # The fault is already in the tail carried by ``message``, so classify off that.
+        if _RUNAI_STREAMER_READ_MARKER in message.lower():
+            raise TransientStartupError(message)
+        raise RuntimeError(message)
 
     _poll_until_ready(
         handle.server_url,
         timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
         check_alive=_check_process_alive,
     )
 
@@ -714,11 +735,20 @@ def _start_vllm_native_server(
     extra_cli_args: list[str] | None = None,
     launcher: VllmLauncher | None = None,
     compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+    max_attempts: int = 3,
+    poll_interval_seconds: float = 5,
+    backoff: ExponentialBackoff | None = None,
 ) -> VllmServerHandle:
-    """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
+    """Start `vllm serve` as a subprocess and wait until `/v1/models` responds.
+
+    Retries up to ``max_attempts`` times on a transient streamer read fault, with all attempts sharing
+    one ``timeout_seconds`` deadline. Any other startup failure is raised on the first attempt.
+    """
 
     resolved_port = port if port is not None else 8000
     launcher = launcher or WorkspaceVllm()
+    # Fresh per call (mutable counter); wide jitter de-correlates retriers hitting the fault together.
+    backoff = backoff or ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
 
     cmd: list[str] = [
         *launcher.command(),
@@ -734,35 +764,73 @@ def _start_vllm_native_server(
         *(extra_cli_args or []),
     ]
 
-    log_dir = tempfile.mkdtemp(prefix="vllm_server_")
-    cache, native_env = _prepare_vllm_compilation_cache(
-        model_name_or_path=model_name_or_path,
-        extra_cli_args=extra_cli_args,
-        launcher=launcher,
-        mode=compilation_cache_mode,
-    )
-    logger.info(
-        "Starting vLLM native server (output streams to the job log). "
-        f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
-        f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
-    )
     server_url: str = f"http://{host}:{resolved_port}/v1"
-    handle = _launch_vllm_process(
-        command=cmd,
-        environment=native_env,
-        server_url=server_url,
-        port=resolved_port,
-        log_dir=log_dir,
-        compilation_cache=cache,
-    )
+    deadline = Deadline.from_seconds(timeout_seconds)
+    stale_log_dir: str | None = None
+
+    def _attempt() -> VllmServerHandle:
+        nonlocal stale_log_dir
+        # Drop the previous attempt's logs; a failed cleanup only leaks a temp dir, so ignore it.
+        if stale_log_dir is not None:
+            shutil.rmtree(stale_log_dir, ignore_errors=True)
+            stale_log_dir = None
+
+        remaining = deadline.remaining_seconds()
+        if remaining <= 0:
+            raise TimeoutError(f"vLLM startup budget of {timeout_seconds}s exhausted before this attempt.")
+
+        log_dir = tempfile.mkdtemp(prefix="vllm_server_")
+        # Prepared per attempt: a failed attempt's stop() removes the cache workspace with the process.
+        cache, native_env = _prepare_vllm_compilation_cache(
+            model_name_or_path=model_name_or_path,
+            extra_cli_args=extra_cli_args,
+            launcher=launcher,
+            mode=compilation_cache_mode,
+        )
+        logger.info(
+            "Starting vLLM native server (output streams to the job log). "
+            f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
+            f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
+        )
+        handle = _launch_vllm_process(
+            command=cmd,
+            environment=native_env,
+            server_url=server_url,
+            port=resolved_port,
+            log_dir=log_dir,
+            compilation_cache=cache,
+        )
+        try:
+            _wait_for_vllm_server(
+                handle,
+                command=cmd,
+                timeout_seconds=remaining,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+        except Exception:
+            try:
+                handle.stop()
+            except Exception:
+                # Don't let a stop() failure mask the startup failure the classifier needs.
+                logger.warning("vLLM teardown failed after a startup failure", exc_info=True)
+            stale_log_dir = log_dir
+            raise
+        return handle
 
     try:
-        _wait_for_vllm_server(handle, command=cmd, timeout_seconds=timeout_seconds)
-    except Exception:
-        handle.stop()
+        handle = retry_with_backoff(
+            _attempt,
+            retryable=lambda exc: isinstance(exc, TransientStartupError),
+            max_attempts=max_attempts,
+            max_elapsed=timeout_seconds,
+            backoff=backoff,
+            operation="vllm_startup",
+        )
+    except TransientStartupError as exc:
+        exc.add_note(f"vLLM startup failed after {max_attempts} attempts (each a transient Run:ai streamer read fault).")
         raise
 
-    cache.publish()
+    handle.compilation_cache.publish()
 
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
