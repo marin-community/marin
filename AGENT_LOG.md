@@ -1983,3 +1983,38 @@ Submitting with `SCALE_A2A_FP8_UNDERFLOW_CHECK=1` — required, since the guard'
 overdue and it confirms the calibration directly instead of by inference from the loss. Harvest
 must also confirm the scale `all_to_all` is genuinely absent from the collective list rather than
 merely deleted in principle.
+
+## Check-in 2026-07-26 16:05 UTC (agent d6) — underflow guard made memory-cheap; v4 submitted
+
+**The v3 kill, quantified.** Jaxpr count of equations producing FULL-SIZE arrays, quantize plus
+telemetry, at a scaled-down [8,2048,512]:
+
+| formulation | full-size eqns | added by the guard |
+|---|--:|---|
+| old (float32 masks) | 12 | **8** (2x f32 convert, abs f32, 2x int32 convert, 3x bool) |
+| new (native count_nonzero) | 4 | **0** |
+
+The 4 that remain are the quantization itself and exist with or without the check. At the rack
+shape [64,2048,5120] = 671M elems the old guard added ~12.7 GB of temporaries *per quantization
+site*; five sites hoisted out of a 48-layer scan is how a telemetry line asked for 313 GiB.
+
+**Why the new form is exactly equivalent, not an approximation.** Quantization maps zero to zero
+and never turns a zero into a non-zero, so {q != 0} is a subset of {x != 0} and
+`count_nonzero(x) - count_nonzero(q)` IS the underflow count. Verified against the old formula on
+six constructed cases — healthy, total underflow, half-padding-rows, 50% partial underflow,
+all-zero input, and e5m2 cotangents at the calibrated 1e-07 — identical to 1e-9 on all six. I did
+not fall back to sampling a slice: a slice of a dispatch buffer can be all padding, which would
+read as zeroed_fraction=0 and give a false ALL-CLEAR on the guard's first real use.
+
+**Why it will not re-OOM:** the compare feeds straight into a reduce with nothing full-size in
+between, which is the same reduce-fusion shape as the per-token amax pass that ran over the
+identical tensor for many legs without ever OOMing. Local verification is CPU-only (no CUDA
+jaxlib here), so the memory claim rests on the jaxpr structure, not on a GPU compile.
+
+Tests 10/10 with `SCALE_A2A_FP8_UNDERFLOW_CHECK=1` set.
+
+Submitted /mwittmann/ep25d4-fp8delayed-120-v4-20260726, byte-identical to v3 apart from the run
+name. It carries two changes that have never executed: all five quantization sites routed through
+the supplied-scale path, and the scale all_to_all deleted. Honouring the pre-registration at
+AGENT_LOG 15:35 UTC as committed; reporting order fixed as underflow, loss, drops, MFU, op-level.
+Confidence: 9/10 that the guard is correct and cheap; 6/10 that v4 reaches a step (two untested changes plus this cluster's eviction class).
