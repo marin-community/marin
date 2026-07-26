@@ -7,11 +7,12 @@ Declares the `context` database on the shared `marin-metadata` Cloud SQL instanc
 (infra/cloudsql owns the instance), its Cloud SQL IAM database users, and the `echo-sync`
 scheduled Cloud Run job that keeps the corpus mirror current (sync/main.py).
 
-Access is IAM, not passwords: the `echo@openathena.ai` group reads the corpus and
-appends to the logbook, and the sync job's service account writes `chunks`/`sync_state`.
-Every principal authenticates through the Cloud SQL connector with a short-lived OAuth
-token, so no database password exists. Table grants are applied by migrate.py (see
-README.md); this program owns the users and their login IAM roles.
+Access is IAM, not passwords: the `eng-all@openathena.ai` group reads the corpus
+and appends to the logbook, and the sync job's service account writes
+`chunks`/`sync_state`. Every principal authenticates through the Cloud SQL connector
+with a short-lived OAuth token, so no database password exists. Table grants are
+applied by migrate.py (see README.md); this program owns the users and their login
+IAM roles.
 """
 
 import hashlib
@@ -31,8 +32,14 @@ REGION = "us-central1"
 INSTANCE = "marin-metadata"
 CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "context"
-# Google group whose members read the corpus and append to work_log, via IAM group auth.
-AGENTS_GROUP = "echo@openathena.ai"
+# Cloud Identity group whose members read the corpus and append to work_log through
+# Cloud SQL IAM group authentication. Cloud SQL does not support domain principals as
+# database users, so the organization-wide group represents *@openathena.ai at the
+# database boundary.
+OPENATHENA_GROUP = "eng-all@openathena.ai"
+# Kept as an inert database user until m0001's fresh-stack grant and m0003's revoke can
+# run in order. It receives no IAM login roles or IAP access.
+LEGACY_ECHO_GROUP = "echo@openathena.ai"
 # The Cloud Run runtime service accounts (created by their components as <name>@<project>).
 SYNC_SA = f"echo-sync@{PROJECT}.iam.gserviceaccount.com"
 API_SA = f"echo-api@{PROJECT}.iam.gserviceaccount.com"
@@ -61,21 +68,33 @@ def main() -> None:
 
     database = gcp.sql.Database("context", name=DATABASE, instance=INSTANCE, project=PROJECT, opts=child)
 
-    # IAM database users. The group is added once; its members inherit its grants without
-    # per-user registration. The sync SA is created by the job component below.
-    agents_group = gcp.sql.User(
+    # IAM database groups are added once; their members inherit database grants without
+    # per-user registration. Keep the legacy group present for migration ordering, but
+    # grant login only to the organization-wide group.
+    legacy_echo_group = gcp.sql.User(
         "agents-group",
-        name=AGENTS_GROUP,
+        name=LEGACY_ECHO_GROUP,
         instance=INSTANCE,
         project=PROJECT,
         type="CLOUD_IAM_GROUP",
         opts=pulumi.ResourceOptions.merge(
             child,
-            pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{AGENTS_GROUP}" if adopt else None),
+            pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{LEGACY_ECHO_GROUP}" if adopt else None),
+        ),
+    )
+    openathena_group = gcp.sql.User(
+        "openathena-group",
+        name=OPENATHENA_GROUP,
+        instance=INSTANCE,
+        project=PROJECT,
+        type="CLOUD_IAM_GROUP",
+        opts=pulumi.ResourceOptions.merge(
+            child,
+            pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{OPENATHENA_GROUP}" if adopt else None),
         ),
     )
     for member, roles in (
-        (f"group:{AGENTS_GROUP}", LOGIN_ROLES),
+        (f"group:{OPENATHENA_GROUP}", LOGIN_ROLES),
         (f"serviceAccount:{SYNC_SA}", ("roles/cloudsql.instanceUser",)),
         (f"serviceAccount:{API_SA}", ("roles/cloudsql.instanceUser",)),
     ):
@@ -138,14 +157,14 @@ def main() -> None:
             max_instances=1,
             cpu_always_allocated=True,
             memory="2Gi",
-            iap_members=(f"group:{AGENTS_GROUP}",),
+            iap_members=("*@openathena.ai",),
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,
     )
 
     # The service SAs exist only after their components; register them as IAM database users.
-    db_users = [agents_group]
+    db_users = [legacy_echo_group, openathena_group]
     for resource_name, db_user, component in (("sync-sa", SYNC_DB_USER, sync), ("api-sa", API_DB_USER, api)):
         db_users.append(
             gcp.sql.User(

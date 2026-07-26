@@ -10,8 +10,10 @@
 #     "fastembed>=0.3",
 # ]
 # ///
-"""Search the echo corpus (github+discord) over Cloud SQL IAM auth. See
-`.agents/skills/context-search/SKILL.md`."""
+"""Search the echo corpus over Cloud SQL IAM authentication.
+
+See ``infra/echo/README.md`` for access requirements and usage.
+"""
 
 import argparse
 import datetime
