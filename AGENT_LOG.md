@@ -144,6 +144,54 @@ direction each one pushes:
 - I do not run XSA / attn-gate / GatedNorm / host offload; the 18.6% and 23.1% rows do.
 - Theirs are 12-step probes; mine is a 120-step p50 with the drop series, which is the stricter number.
 
-Confidence: 7/10 the baseline completes; 4/10 that MXFP8 flips positive at i3072 (d2's -2.83pp was
-attributed to quantize/layout producer overhead that scales with tokens, not with GEMM width, so
-fatter GEMMs help the numerator but do not obviously remove the overhead).
+## Check-in 6 — RESULT: 707B at EP64 does not fit one rack (measured), and MXFP8 does not flip
+
+### Finding 1 — the memory wall at 4-of-256 / EP64, one rack
+
+/mwittmann/ep25d5-d6144-e256-bf16-120-0726-0205 failed at 09:11:45Z. All 16 tasks reported the same
+`gpu_cudamallocasync_allocator` failure, so this is the shape, not a straggler:
+
+    Limit     138.22 GiB   (= 0.75 x 184.3 GiB physical; cuda_async honors XLA_PYTHON_CLIENT_MEM_FRACTION)
+    InUse      92.02 GiB
+    MaxInUse  117.83 GiB
+    failing request: ONE allocation of 114,492,278,784 bytes = 106.63 GiB
+
+92.02 + 106.63 = 198.65 GiB required against 184.3 GiB physical. No memory fraction closes a 14 GiB
+gap to the whole device, so the 0.85/0.90 rung is ruled out by arithmetic rather than by a burned rack
+leg. A single 106.63 GiB buffer is 58% of HBM in one piece, i.e. compile-time planned, so the remedy
+has to be structural (offload / more sharding / fewer per-GPU tokens), not allocator tuning.
+Corroborating detail from the same histogram: six live 14,495,514,624-byte buffers, which is exactly
+4 local experts x 48 layers x 6144 x 6144 in bf16 — the w13 expert stacks.
+
+Went straight to the offload rung: /mwittmann/ep25d5-d6144-e256-bf16-120-0726-0219-v2 adds
+`SCALE_OFFLOAD_OPT_STATE=1` and fraction 0.90. MuonH momentum on 10.87B expert params is ~43.5 GiB of
+that 92 GiB resident set, so the requirement should fall to ~155 GiB against a 165.9 GiB limit.
+Comparability actually improves rather than degrades: BOTH #7201 d6144 candidate commands already set
+`SCALE_OFFLOAD_OPT_STATE=1`, so offload matches the candidate; it is only non-comparable to d1's
+d5120 control, which will be stated on the number.
+
+### Finding 2 — MXFP8 at the fatter GEMM: matched EP4 pair, still negative
+
+d2's verdict named "fatter expert GEMMs, such as d6144/i2560" as the reopening condition. Tested at
+d6144/i3072 (4 GPUs, EP4, 64 experts top-4, 4 layers, 40 steps, everything else identical):
+
+| arm | p10 | p50 | p90 | tok/s | step | drop@39 | loss@39 |
+|---|---|---|---|---|---|---|---|
+| bf16 | 8.990 | **9.067** | 9.150 | 55,450 | 1.182s | 0.1480 | 6.7372 |
+| MXFP8 | 8.680 | **8.754** | 8.788 | 53,465 | 1.226s | 0.1440 | 6.7418 |
+
+-0.313pp p50 (-3.5% relative); bands do not overlap (bf16 p10 8.990 > MXFP8 p90 8.788). The drop
+series are near-identical throughout, so this is a MATCHED-REGIME comparison and the delta is real
+throughput, not the drop artifact. Loss differs by 0.005 => MXFP8's numerics are fine at this horizon;
+the loss is purely speed. Same SIGN as d2's -2.83pp at d5120/i1280, measured at the shape that was
+supposed to reverse it.
+Magnitude caveat (not sign): EP4 gives the grouped kernel 16 local experts x 4,096 rows where EP64
+would give 4 x 65,536, which is friendlier to it, and a 4-layer model dilutes the MoE share of the
+step. So -0.31pp is not the rack number — but the reopening condition has been tested and did not
+deliver, which is enough to keep MXFP8 off the rack queue.
+Positive by-product: the MXFP8 port runs clean end-to-end on GB200 (40/40 steps, descending loss),
+which confirms the 4.5.2/cu13 CUTLASS resolution ports correctly onto this branch.
+
+Confidence: 9/10 on the OOM finding (16/16 tasks, identical arithmetic); 7/10 that MXFP8 stays
+negative at EP64 rack scale (sign is measured at the right GEMM shape, scale extrapolation is the gap);
+6/10 the offload rung lands the baseline.
