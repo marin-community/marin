@@ -67,7 +67,12 @@ execution:
   full_exploitation_level: 8
   recovery:
     # TRC batch capacity is preemptible; long no-progress gaps are normal.
-    startup_relocation_timeout: 3h
+    # Idle-reslice: a dispatch that is submitted but NOT training (W&B state != running)
+    # for > idle_reslice_timeout is restarted on a DIFFERENT slice/region (stop the old Iris
+    # job, submit a new uniquely-named one) to chase fresh capacity. Never touch a run that is
+    # actively training (W&B state == running). Keep cycling regions/slices that aren't progressing.
+    idle_reslice_timeout: 1h
+    startup_relocation_timeout: 1h
     same_target_restart_timeout: 6h
     same_region_relocation_timeout: 24h
     cross_region_restart_timeout: 96h
