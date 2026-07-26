@@ -49,15 +49,21 @@ def _report_underflow(x: jax.Array, quantized: jax.Array, fp8_dtype) -> None:
     nothing at all. A finiteness guard is the wrong instrument for the actual risk; this is the
     right one.
 
-    Gated on SCALE_A2A_FP8_UNDERFLOW_CHECK=1 because it adds a reduction per quantization. Worth
-    paying on the first run of any new configuration or scale.
+    Counts in the native dtypes and reduces straight to scalars. Quantization maps zero to zero and
+    never turns a zero into a non-zero, so ``{q != 0}`` is a subset of ``{x != 0}`` and the
+    difference of the two counts is exactly the number of values that underflowed. Comparing
+    through float32 masks instead builds full-size temporaries per quantization site and costs a
+    further 5 GiB at rack shapes.
 
-    Counts in the native dtypes and reduces straight to scalars. Comparing through float32 masks
-    instead builds two full-size temporaries per quantization site, which XLA hoists out of the
-    layer scan: at [64, 2048, 5120] across 48 scanned layers that asked for 313 GiB and the run
-    died before its first step. Quantization maps zero to zero and never turns a zero into a
-    non-zero, so ``{q != 0}`` is a subset of ``{x != 0}`` and the difference of the two counts is
-    exactly the number of values that underflowed.
+    RUN THIS IN A SMALL PROBE CONFIGURATION, NOT IN A RACK LEG. ``jax.debug.print`` is a side
+    effect, and an effect inside the rematerialized scan body defeats remat: measured on the real
+    kernel under shard_map + checkpoint + scan, a bare ``jax.debug.print`` with no dependence on
+    any tensor raises the compiled temp buffer 1.41x, while the two reductions with the callback
+    removed cost nothing (0.97x). At 48 layers that is the difference between a step that fits and
+    one that asks for 300+ GiB. The calibration-probe shape (1 replica, 4 layers) absorbs it fine.
+
+    Gated on SCALE_A2A_FP8_UNDERFLOW_CHECK=1. Worth paying on the first run of any new
+    configuration or scale.
     """
     if os.environ.get("SCALE_A2A_FP8_UNDERFLOW_CHECK") != "1":
         return
