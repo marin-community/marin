@@ -1749,3 +1749,40 @@ combination leg; will not resubmit on PENDING. Loss verdict stands alone: the qu
 changed from per-token current to a shared tensor-wide scale, so the previous leg's parity does not
 transfer, and the precision cost measured 0.0381 vs 0.0374 hostile / 0.0374 vs 0.0373 realistic.
 Confidence: 7/10 that the amax removal shows up as step time; 6/10 that it clears break-even.
+
+## CALIBRATION 2026-07-26 14:00 UTC — 8.0 is right-ish for the forward and catastrophically wrong for the backward
+
+Free 4-GPU probe, real model, 6 steps, amax logged at every wire quantization:
+
+| wire | tensor amax | p99 row | median row | spread across steps x layers |
+|---|--:|--:|--:|---|
+| forward e4m3 (activations) | **3.52 - 4.03** | 3.17 - 3.41 | ~3.0 | ~15%, stable |
+| backward e5m2 (cotangents) | **7.5e-08** | 5.6e-08 | 4.1e-08 | (fewer samples, magnitude unambiguous) |
+
+**The forward and backward magnitudes differ by EIGHT ORDERS OF MAGNITUDE.** A single shared
+constant cannot serve both, exactly as the coordinator predicted on principle.
+
+Consequences for the leg now running (`ep25d4-fp8delayed-120-v1-20260726`, SCALE_A2A_FP8_AMAX=8.0):
+- Forward: 8.0 against a true ~3.9 means the scale is ~2x too large, so activations occupy about
+  half the e4m3 range. Costs roughly one mantissa bit. Wasteful, not fatal, and in the safe
+  direction (no clipping).
+- Backward: 8.0 against a true 7.5e-08 means the scale is ~10^8 too large, so **every cotangent
+  quantizes to zero**. The gradient through the dispatch a2a backward is destroyed.
+
+**So that leg's LOSS reading is invalid and must not be reported as a verdict on delayed scaling.**
+Its THROUGHPUT reading remains valid: the compute profile does not depend on the value of the
+constant, only on the absence of the amax reduction, so the step-time and exposure numbers still
+answer the break-even question (QDQ falling ~2.7x). I will report those two readings with
+different confidence rather than discarding the leg.
+
+**Calibrated constants for the resubmission:** forward e4m3 = 4.5 (true max 4.03 plus headroom),
+backward e5m2 = 1.0e-07 (true 7.5e-08 plus headroom). These need to be SEPARATE knobs; the current
+single `SCALE_A2A_FP8_AMAX` is itself the bug, not just its value.
+
+**Spread finding, which bears on how short an amax history can be:** the forward amax varies only
+3.52-4.03 across six steps and all layers, about 15%. Gate 1 measured that a scale 30% too large
+or 20% too small moves the GEMM error only in the fourth decimal. So the observed drift sits well
+inside the tolerance, and a short amax history — or even a constant — represents delayed scaling
+faithfully at this shape. That is direct evidence for the `amax_history_length=32` choice rather
+than an assumption.
+Confidence: 9/10 on the calibration (real model, real shapes, stable across steps); 9/10 that the running leg's loss is invalid and its throughput is not.
