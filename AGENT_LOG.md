@@ -1148,3 +1148,57 @@ Rack case, sized off my own measurements: ~2980 ms of inline SendRecv per 3-step
 Confidence: 9/10 that the census result transfers (same code, same legs, same pass); 5/10 that it converts to >=0.5pp MFU, since async-and-covered in the schedule is necessary but not sufficient for wall-clock overlap on the device.
 Next: rack-leg request with the coordinator (one leg, PGLE+LHS arm + limit=4, control already
 pinned twice at 22.549 / 22.530).
+
+## FINAL (inline-SendRecv direction) 2026-07-26 11:20 UTC — census transfers PERFECTLY, MFU moves +0.12pp: exposure relocates
+
+Rack leg /mwittmann/ep25d4-ovlim4-120-v2-20260726 (PGLE+LHS arm + `overlap_limit=4`, 120 steps,
+failures=0, compile 10 min in a low-flake window). Both readings from the same profiler window.
+
+### Reading 1 — MFU, against the twice-pinned PGLE+LHS arm
+
+| window | limit=4 p50 | limit=1 p50 | raw | drop-corrected |
+|---|--:|--:|--:|--:|
+| 0-119 | 22.783 | 22.619 | +0.164 | +0.130 |
+| 20-119 | 22.674 | 22.549 | +0.125 | +0.093 |
+| 60-119 | 22.526 | 22.424 | +0.101 | +0.108 |
+| 100-119 | 22.377 | 22.262 | +0.115 | +0.104 |
+
+**+0.12pp**, consistent across every window. Step time 12.01 -> 11.94 s. Drops matched
+(0.0876 vs 0.0882 @119). Against the ORIGINAL no-flag control the stack is now +0.47pp
+(22.674 vs 22.200 at 20-119). Loss tail20 5.8226 vs 5.7759, same small positive bias as the
+earlier PGLE arm carried.
+
+### Reading 2 — the census transferred completely
+
+Attribution of the leg's own profile: **all 24 `all_to_all` instructions are on the async
+collective stream on all four GPUs; zero on the compute streams.** Compute-stream collective time
+went 2961 ms -> **0.00 ms**. The EP4 harness predicted exactly this, at zero rack cost.
+
+### Why the prize did not follow: there is no compute left to hide behind
+
+| metric (GPU:0, 3-step window) | limit=1 | limit=4 |
+|---|--:|--:|
+| trace span | 33493 ms | 33159 ms |
+| collective time ON the compute stream | 2961 ms @ 0% hidden | **0 ms** |
+| SendRecv on the async stream | 7400 ms @ 86.8% hidden | 10347 ms @ **64.3%** hidden |
+| exposed collective total | 4750 ms (14.2% of span) | 4287 ms (12.9%) |
+
+Moving the a2a off the compute stream did not create work to cover it: the same GEMMs now have to
+cover 40% more async collective time, so the hidden *fraction* fell from 86.8% to 64.3% while
+hidden *absolute* rose only 6423 -> 6653 ms. Net exposed collective fell just 463 ms per 3 steps
+(154 ms/step, ~1.3%), which is the +0.12pp.
+
+The binding constraint is visible in one line: the compute stream is busy **28.7 s of a 33.2 s
+span (86.6%)**, leaving 4.44 s idle, and exposed collective time is **4.29 s** — i.e. the exposed
+collective almost exactly fills the compute idle. The step is collective-volume-bound, not
+schedule-bound. Further scheduling work on these legs cannot pay; only reducing collective bytes
+(or raising arithmetic intensity per byte) can.
+
+### Recommendation
+
+Adopt `--xla_gpu_experimental_parallel_collective_overlap_limit=4` together with the PGLE+LHS
+flags: pure XLA flags, no code change, so it composes with everything else in the stack, and the
+pair is worth +0.47pp over the current default at zero maintenance beyond regenerating the PGLE
+profile when the HLO changes. Neither is part of a path to 25%; the honest ceiling of the whole
+scheduling family is now measured, not guessed.
+Confidence: 9/10 on both readings (census is a direct instruction census; MFU is 4 windows against a twice-pinned control); 9/10 that scheduling is now exhausted as a lever for the a2a legs.
