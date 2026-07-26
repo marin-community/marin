@@ -235,12 +235,24 @@ tiles of 128; at 1.05 it is 2151, which is odd; at 1.15 it is 2356, divisible on
 paid on leaving alignment and almost nothing is paid for growing capacity afterwards — consistent
 with a collective-bound step, where extra padded compute is cheap but a badly shaped GEMM is not.
 
-The fix is not to prefer one lucky capacity factor. It is to round capacity up to a tile-aligned
-value whatever factor is requested, so a run asking for 1.05 silently gets 2176 rather than 2151.
-The extra capacity is itself a fidelity gain, since a larger bucket drops fewer assignments, so the
-alignment is free on both axes. `SCALE_CAPACITY_TILE=N` does this; the recommended production
-setting is 128, and buckets at or below one tile are left alone so small configurations are
-unaffected.
+That explanation is wrong. Rounding the capacity up to a 128-aligned 2176 — from an odd 2151, which
+should be close to the worst case for a tiled GEMM — moved MFU by +0.038pp, which is noise. The
+alignment story predicted recovering most of the 1.18pp and recovered none of it.
+
+`SCALE_CAPACITY_TILE=N` implements the rounding and is left in at default 0, off. It is
+**unvalidated and should not be enabled**: the measurement above is exactly the case it was built
+for, because `capacity_factor 1.05 with tile 128` and `capacity_factor 1.0625 with no tile` compute
+the identical capacity of 2176, so that leg is the feature's own test and the feature failed it. The
+code is kept because it is correct and cheap and may matter at a boundary not identified here, but
+nothing measured justifies turning it on.
+
+What survives is the cliff itself, not its explanation. Leaving capacity factor 1.0 costs 1.18pp;
+everything above it is flat, within 0.04pp from 1.05 to 1.0625. The penalty is paid once on leaving
+1.0 and is not a function of capacity thereafter. Two candidates went untested: a boundary coarser
+than 128 — 2048 is the only capacity measured here divisible by 256, and 2176 is not — or something
+keyed to capacity equalling the mean load exactly. The cause is unknown, and four legs on this axis
+were enough given the remaining prize is about a point on a configuration that is already
+compliant.
 
 **Why this was cheap, and what that predicts.** The step is collective-volume-bound: exposed
 collective time almost exactly fills compute idle, so the remaining speed lever is reducing
