@@ -46,6 +46,10 @@ MEM_ENV=()
 [[ -n "$MEM_FRACTION" ]] && MEM_ENV+=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
 [[ "$ALLOC" == cuda_async ]] && MEM_ENV+=(-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
 [[ "$OFFLOAD" == 1 ]] && MEM_ENV+=(-e SCALE_OFFLOAD_OPT_STATE 1)
+# Host-memory request per node. The latent arms park the replicated projections AND their offloaded
+# MuonH momentum in pinned host memory -- ~27 GiB per GPU more than the dense arm, i.e. ~108 GiB per
+# 4-GPU node against the 256g default. A gb200-4x node has 960 GB.
+[[ -n "${SCALE_RAM_REQ:-}" ]] && MEM_ENV+=(-e SCALE_RAM "$SCALE_RAM_REQ")
 PROFILE_ENV=()
 [[ "$PROFILE_STEPS" != 0 ]] && PROFILE_ENV+=(-e SCALE_PROFILER_STEPS "$PROFILE_STEPS"
                                              -e SCALE_PROFILER_START "${PROFILE_START:-20}")
