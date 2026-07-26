@@ -1483,6 +1483,45 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T04:20:34Z — 87,553 pairs verified
+
+- Two additional p2 baseline checkpoints passed independent validation. Their
+  256 pairs contain 167 model false positives, 88 model true duplicates, and
+  one unresolved outcome. All pairs were direct. The 523 judgments used 525
+  attempts: 522 valid responses and three invalid JSON responses confined to
+  one judgment. The decision-file 67 outcome Parquet SHA-256 values for offsets
+  4352 and 4480 are
+  `71b9a3f139b8b812ce1e9486d613239dca813008f20e9ad312fcbb71eeb3c629`
+  and
+  `5d14c5be361057d502539d280bd3e368d82e77d2fecc318fe4cf4e8d43020be6`.
+- Complete character and line comparison resolves pair-file row 7601 as a true
+  duplicate. The 13,368-character member and 13,361-character canonical contain
+  the identical World War II multiple-choice question, ten options, full
+  reasoning trace, historical explanation, and answer A. The only changed line
+  is the final answer formatting: member `\boxed{\text{A}}` versus canonical
+  `\boxed{A}`. Sequence similarity is 0.999738.
+- The member/canonical text SHA-256 values are
+  `57d6c8b2bdf35c7b2ec43677de968278748ae22cd42ec33baf692748edc75f7d`
+  and
+  `5ab29e339ffb25bdb62ad902b73b2e4aaf11556d9bf25c71470f653874a3385b`.
+  Both arms share all 26 MinHash buckets for the pair.
+- The manual decision binds semantic-judgment SHA-256
+  `9a670a8f551b359f6171fa31417f8a616b8c697ff499826d8171fc5dc9d7a83d`.
+  Its Parquet SHA-256 is
+  `719c2adaa608c008cdd1fce888e4890bc33597cc21b30005251ed0fe2a249292`.
+  A separate batch-priority Iris process exactly reread the source pair,
+  semantic outcome, manual row, Parquet bytes, and completion marker.
+- Across the stable 688-checkpoint snapshot, all 91 unresolved model outcomes
+  have manual records: 71 true duplicates and 20 false positives. The adjusted
+  totals are:
+
+  - baseline: 70,734 pairs, 45,050 false positives, 25,684 true duplicates;
+  - treatment: 16,819 pairs, 8,711 false positives, 8,108 true duplicates;
+  - combined: 87,553 pairs, 53,761 false positives, 33,792 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T04:12:52Z — 87,297 pairs verified
 
 - Three additional p2 baseline checkpoints passed independent validation.
