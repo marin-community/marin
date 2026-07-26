@@ -360,11 +360,20 @@ regime in which being nearly right is indistinguishable from being lucky.
 - Jobs: speed A/B `ep25d1-adj-control-120-0724-1707` (autodiff) and `ep25d1-adj-custom-120-0724-2216`
   (custom adjoint); drops `ep25d1-drops-30-0724-2318` (QB off) and `ep25d1-qbon-drops-30-0725-0027`
   (QB on); leg-batching `rav/ep64-batched-expert-stability-120-v1-20260724-2353`.
-- Spill (section 6): `SCALE_A2A_SPILL=m`, commit `1224ccb02`; 350-step legs
-  `ep25d1-qbon-cf115-350-0726-0313` (m=0, same draw), `ep25d1-spill2-cf100-350-0726-0028` (m=2),
-  `ep25d1-spill3-cf100-350-0726-0149` (m=3). Capacity factor knob `SCALE_CAPACITY_FACTOR`,
-  commit `595958b83` (agent d4 added an independent implementation of the same knob under the same
-  name in `3e149490f`; reconcile rather than double-apply when merging).
+- Spill (section 6): `SCALE_A2A_SPILL=m`, commit `1224ccb02`. 350-step legs, all one draw:
+  `ep25d1-qbon-cf115-350-0726-0313` (m=0, capacity factor 1.0 — the job name predates the knob fix
+  and it ran at 1.0, confirmed by the absence of `capacity_factor` in its logged hyperparameters),
+  `ep25d1-spill2-cf100-350-0726-0028` (m=2), `ep25d1-spill3-cf100-350-0726-0149` (m=3),
+  `ep25d1-cf115-m0-350-0726-0434` (capacity factor 1.15),
+  `ep25d1-spill3-cf105-350-0726-0603` (m=3, 1.05), `ep25d1-spill3-cf10625-350-0726-0730` (m=3,
+  1.0625).
+- Capacity factor knob `SCALE_CAPACITY_FACTOR`, commit `595958b83`; it did not exist before, so
+  every earlier scale run was implicitly capacity factor 1.0. Agent d4 added an independent
+  implementation under the same name in `3e149490f` — reconcile rather than double-apply when
+  merging. Capacity is serialized into the logged hyperparameters, so grep
+  `"capacity_factor"` to confirm a run used the value it was asked for.
+- `SCALE_CAPACITY_TILE=N` (commit `58ee2cdd0`) rounds capacity up to a multiple of N. Default 0,
+  off, and **unvalidated** — see section 6. Do not enable it on the strength of the code alone.
 - Steady-state figures are 100-step tails. `iris job logs` truncates to the most recent 1000 lines
   unless `--max-lines` is passed, which biases any statistic over a still-trending metric; see
   `lib/iris/OPS.md`.
