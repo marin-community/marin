@@ -21,7 +21,11 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
-from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import component_structure
+from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
+    component_structure,
+    validate_full_task_structure,
+    validate_pure_moe_structure,
+)
 from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
     grouped_block_value_and_grads,
     joined_attention_pair_value_and_grads,
@@ -608,7 +612,7 @@ def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, 
 
 def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention() -> None:
     mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
-    _, hiddens, _ = _tiny_boundary_inputs(mesh)
+    batches, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
 
@@ -624,9 +628,28 @@ def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention()
     assert len(router_calls) == 2
     assert not any("Attention" in name or "_BlockAttentionView" in name for name in name_stacks)
     structure = component_structure(closed_jaxpr)
-    assert structure["ring_body_count"] == 2
-    assert structure["router_call_count"] == 2
-    assert structure["attention_inside_joined_moe_count"] == 0
+    validate_pure_moe_structure(structure)
+
+    masks = tuple(batch.attn_mask for batch in batches)
+    with jax.set_mesh(mesh):
+        full_vjp_jaxpr, _, _ = eqx.filter_make_jaxpr(
+            lambda params, hidden_pair, cotangent_pair: paired_compute_block_value_and_grads(
+                params,
+                qb_beta,
+                hidden_pair,
+                masks,
+                cotangent_pair,
+                mp,
+                use_pko=False,
+                disable_rope=False,
+                remat_mode="save_moe",
+                router_z_loss_scale=0.1,
+            )
+        )(stage.blocks[0], hiddens, output_cotangents)
+    full_vjp_structure = component_structure(full_vjp_jaxpr)
+    validate_full_task_structure(full_vjp_structure)
+    assert full_vjp_structure["ring_body_count"] > structure["ring_body_count"]
+    assert full_vjp_structure["router_call_count"] > structure["router_call_count"]
 
 
 def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:

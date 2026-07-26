@@ -26,6 +26,7 @@ import traceback
 from collections.abc import Sequence
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -43,7 +44,12 @@ from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import (
     build_value_parity,
 )
 from experiments.grug.moe.heuristic import MoeHeuristic
-from experiments.grug.moe.model import Block, GrugModelConfig, _run_block_with_remat
+from experiments.grug.moe.model import (
+    Block,
+    GrugModelConfig,
+    _run_block_with_remat,
+    paired_moe_component_forward,
+)
 
 SOURCE_LINEAGE = "0adaf6156d"
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
@@ -304,6 +310,37 @@ def component_structure(closed_jaxpr: jax_core.ClosedJaxpr) -> dict[str, Any]:
     }
 
 
+def validate_pure_moe_structure(structure: dict[str, Any]) -> None:
+    """Require the untransposed paired MoE boundary to contain two calls."""
+    expected = {
+        "ring_body_count": 2,
+        "router_call_count": 2,
+        "attention_inside_joined_moe_count": 0,
+    }
+    actual = {name: structure[name] for name in expected}
+    if actual != expected:
+        raise AssertionError(f"unexpected pure paired MoE JAXPR structure: {structure}")
+
+
+def validate_full_task_structure(structure: dict[str, Any]) -> None:
+    """Reject attention captured inside the joined MoE boundary after VJP expansion."""
+    if structure["attention_inside_joined_moe_count"] != 0:
+        raise AssertionError(f"attention entered the joined MoE JAXPR boundary: {structure}")
+
+
+def _target_pure_moe_structure(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+) -> dict[str, Any]:
+    compute_block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    mlp_inputs = tuple(compute_block.mlp_gated_norm(compute_block.rms_mlp(hidden)) for hidden in hiddens)
+    closed_jaxpr, _, _ = eqx.filter_make_jaxpr(
+        lambda mlp, inputs: paired_moe_component_forward(mlp, inputs, remat_mode="save_moe")
+    )(compute_block.mlp, mlp_inputs)
+    return component_structure(closed_jaxpr)
+
+
 def _parameter_tree_signature(params: Block) -> dict[str, Any]:
     leaves_with_paths, _ = jax.tree.flatten_with_path(params)
     records = [
@@ -474,6 +511,10 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         if parameter_signature["leaf_count"] != PARAMETER_LEAF_COUNT:
             raise ValueError(f"unexpected Block parameter structure: {parameter_signature}")
         event(process_id, "problem_init_done", parameter_tree=parameter_signature)
+        with jax.set_mesh(stage_mesh):
+            pure_moe_structure = _target_pure_moe_structure(params, qb_beta, hiddens)
+        validate_pure_moe_structure(pure_moe_structure)
+        event(process_id, "pure_paired_moe_structure", **pure_moe_structure)
 
         arguments = (params, qb_beta, hiddens, cotangents)
         with jax.set_mesh(stage_mesh):
@@ -495,13 +536,8 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         lowered = program.lower(*arguments)
         event(process_id, "jaxpp_lower_done", elapsed_seconds=time.monotonic() - lower_start)
         structure = component_structure(lowered._local_jaxpr.closed_jaxpr)
-        if (
-            structure["ring_body_count"] != 2
-            or structure["router_call_count"] != 2
-            or structure["attention_inside_joined_moe_count"] != 0
-        ):
-            raise AssertionError(f"unexpected joined MoE JAXPR structure: {structure}")
-        event(process_id, "jaxpp_component_structure", **structure)
+        validate_full_task_structure(structure)
+        event(process_id, "jaxpp_full_task_component_structure", **structure)
 
         flat_args, argument_tree = jax.tree.flatten(arguments)
         if argument_tree != jax.tree.structure(lowered.in_shardings):
