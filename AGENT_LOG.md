@@ -743,3 +743,30 @@ is serialized into the logged hparams. I will grep '"capacity_factor": 1.15' in 
 trusting any number from it. The m=0 leg above demonstrates the negative control - the field is ABSENT there
 because that bundle predates the fix.
 PRE-REGISTERED (restated): model m=0 @ cf1.15 = 0.0230 -> predict tail-100 ~2.3%.
+
+## METHODOLOGICAL FINDING 05:20 — step-N drop readings are NOT comparable across runs of different length
+My cf1.15 leg reads 0.1487 at step 119; d4's published cf1.15 reads 0.037 at step 119. A 4x gap that is not
+draw variance. Cause: the LR schedule is defined over num_train_steps, so step 119 sits at a completely
+different schedule position in a 120-step run than in a 350-step run.
+  120-step run at step 119: 99% through the schedule, LR ~6% of peak (fully annealed)
+  350-step run at step 119: 34% through the schedule, LR ~68% of peak  (measured in my log: 0.0265 at 119,
+                            decaying to 0.0021 by 349)
+A high LR churns the router, which drives drops up; an annealed LR lets the router settle, which drives them
+down. So a step-119 drop from a 120-step run is an END-OF-ANNEAL number and a step-119 drop from a 350-step
+run is a MID-SCHEDULE number, and the two must never be compared.
+THIS RE-ATTRIBUTES AN EARLIER CLAIM. The record says "step-119 drop is draw-variable (0.175 here vs 0.083 in
+the frontier leg)". That was not draw variance: 0.175 is the 350-step run mid-schedule and 0.083 is the
+120-step frontier run at end-of-anneal, the same config at two different schedule positions. The apparent
+"draw variance" was a systematic schedule effect, and attributing it to draws made the numbers look noisier
+and less trustworthy than they actually are.
+CONSEQUENCES:
+1. The 120-step frontier table (QB-on cf1.0 0.083, QB-on cf1.15 0.037) reports END-OF-ANNEAL drops, not
+   steady-state drops, and is not comparable to any 350-step tail-100 in this work.
+2. My own three legs (m=0/2/3) are ALL 350 steps and all reported as tail-100, so the spill comparison is
+   internally consistent and unaffected.
+3. The "cf1.15 = 3.7%" figure now being used for the public record repair is an end-of-anneal 120-step number.
+   My running 350-step leg is the first measurement of cf1.15 that is comparable to the spill legs. It is at
+   0.063 at step 154 and still declining, so I expect its tail-100 to come in BELOW 0.037 (more total training
+   = better-balanced router), not above.
+4. General rule for this work: only compare drop fractions at the same fraction of the LR schedule, and prefer
+   a tail window over any single step.
