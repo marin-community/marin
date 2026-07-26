@@ -205,13 +205,16 @@ def _stage_batches(mpmd_mesh, batch: GrugLmExample):
         )
         for microbatch_index in range(MICROBATCHES)
     )
-    return tuple(
+    stage_batch_groups = tuple(
         tuple(
             grug_train._put_batch_on_stage(mpmd_mesh, mpmd_index, stage_batch)
             for mpmd_index, stage_batch in zip(stage_mpmd_indices, microbatch_batches, strict=True)
         )
         for microbatch_batches in host_stage_batches
     )
+    if MICROBATCHES == 1:
+        return stage_batch_groups[0]
+    return stage_batch_groups
 
 
 def _authoritative_environment() -> dict[str, Any]:
