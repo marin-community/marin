@@ -112,11 +112,47 @@ author: Marin research
   for the full phase. Focused Pyrefly passes for the launcher, trainer, and
   tests; checking the model still reports two unchanged pre-existing errors
   (`jax.shard_map` import discovery and the existing HF converter bound).
-- Interpretation: Gate 0 passes. Pin child resources to `cw-us-east-08a`;
-  child jobs inherit the batch band from their parent coordinator.
+- Interpretation: Gate 0 passes. Federate the whole coordinator to
+  `cw-us-east-08a`; child jobs run locally on that peer and inherit the batch
+  band from their parent coordinator.
 - Review: an asynchronous `loom ... --agent claude --model fable` launch also
   returned HTTP 405. No Fable content was received before the bounded review
   deadline. Revision 2 records this failed lane and the implementation review's
   interleaved-subset correction.
 - Next action: publish revision 2, snapshot the implementation, then launch the
   four 20-step batch smokes.
+
+### 2026-07-26 19:26 - Gate 1 smokes submitted
+
+- Hypothesis: the four preregistered arms compile and complete 20 steps on the
+  target single-rack GB200 geometry.
+- Commit hash: `4dd4d09e9a344f836dd904c2efb08e852041f7d2`.
+- Config: calendar version `2026.07.26`; main Iris submission federated to
+  `cw-us-east-08a`; batch priority; 16 replicas with four GB200s each.
+- Artifact check: `/power/nest-moe-artifact-check` succeeded in-cluster and
+  found records for SlimPajama-6B and sampled Paloma caches. No data build or
+  cross-region transfer is expected.
+- Canonical coordinator jobs:
+  - `/power/nest-moe-001-smoke-coord`
+  - `/power/nest-moe-002-smoke-coord`
+  - `/power/nest-moe-003-smoke-coord`
+  - `/power/nest-moe-004-smoke-coord`
+- Initial state: all four are pending federation admission on
+  `cw-us-east-08a`; no child training job has started.
+- Next action: monitor admission, compilation, steady-state metrics, and final
+  checkpoint writes; resubmit only architecture or infrastructure failures
+  within their preregistered retry rules.
+
+### 2026-07-26 19:27 - Smoke relaunch required before GPU allocation
+
+- Result: the four coordinators reached the target peer, but each child
+  submission failed before allocation. The child `ResourceConfig` redundantly
+  pinned `cw-us-east-08a`; from a coordinator already running on that peer,
+  Iris interpreted the self-pin as a second federation request and rejected it
+  because a cluster is not its own configured peer.
+- Interpretation: this is an orchestration configuration error, not an
+  architecture or accelerator failure. Remove the child pin and retain
+  whole-job federation from the main Iris controller.
+- GPU cost: zero; no child training job was created.
+- Next action: publish a corrected snapshot and submit `r1` coordinators with
+  the same preregistered configs.

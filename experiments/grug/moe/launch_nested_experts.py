@@ -143,7 +143,6 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         ram="512g",
         disk="512g",
         replicas=nodes,
-        target_cluster="cw-us-east-08a",
     )
     run_id = f"{arm.experiment_id.lower()}-{phase}-d{_HIDDEN_DIM}-e{model.num_experts}"
     step_name = f"{_OUTPUT_SUBDIR}/{run_id}"
