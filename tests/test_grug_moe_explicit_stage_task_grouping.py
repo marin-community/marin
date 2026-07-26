@@ -23,6 +23,10 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    paired_moe_joint_checkpoint_value_and_grads,
+    paired_moe_no_checkpoint_value_and_grads,
+    paired_moe_per_checkpoint_value_and_grads,
+    single_moe_value_and_grads,
     validate_full_task_structure,
     validate_pure_moe_structure,
 )
@@ -631,6 +635,49 @@ def test_monolithic_paired_component_block_matches_two_ordered_master_block_vjps
     _assert_tree_rel_l2(actual, expected)
     for actual_stats, expected_stats in zip(actual[2], expected[2], strict=True):
         np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
+
+
+@pytest.mark.parametrize(
+    "paired_vjp",
+    (
+        paired_moe_joint_checkpoint_value_and_grads,
+        paired_moe_no_checkpoint_value_and_grads,
+        paired_moe_per_checkpoint_value_and_grads,
+    ),
+)
+def test_paired_moe_checkpoint_boundaries_match_separate_calls(paired_vjp) -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    batches, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    masks = tuple(batch.attn_mask for batch in batches)
+
+    with jax.set_mesh(mesh):
+        block = _compute_block(stage.blocks[0], qb_beta, mp)
+        post_attention = tuple(
+            jax.jit(lambda hidden, mask=mask: block.attention_residual(hidden, mask))(hidden)
+            for hidden, mask in zip(hiddens, masks, strict=True)
+        )
+        mlp_inputs = tuple(block.mlp_gated_norm(block.rms_mlp(hidden)) for hidden in post_attention)
+        separate = tuple(
+            jax.jit(single_moe_value_and_grads)(block.mlp, mlp_input, cotangent)
+            for mlp_input, cotangent in zip(mlp_inputs, output_cotangents, strict=True)
+        )
+        actual = jax.jit(paired_vjp)(block.mlp, mlp_inputs, output_cotangents)
+
+    expected = (
+        (separate[0][0], separate[1][0]),
+        (separate[0][1], separate[1][1]),
+        (separate[0][2], separate[1][2]),
+        _sum_microbatch_group((separate[0][3], separate[1][3])),
+        (separate[0][4], separate[1][4]),
+        (separate[0][5], separate[1][5]),
+    )
+    _assert_tree_rel_l2(actual, expected)
+    for actual_stats, expected_stats in zip(actual[2], expected[2], strict=True):
+        np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
+    for actual_route, expected_route in zip(actual[5], expected[5], strict=True):
+        np.testing.assert_array_equal(actual_route["selected_experts"], expected_route["selected_experts"])
 
 
 def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, ...]:

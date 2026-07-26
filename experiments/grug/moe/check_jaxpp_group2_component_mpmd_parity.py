@@ -35,9 +35,10 @@ import jmp
 import numpy as np
 from jax.experimental import multihost_utils
 from jax.extend import core as jax_core
-from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import AxisType, Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 
 from experiments.grug.moe import train as grug_train
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import (
@@ -49,6 +50,7 @@ from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.model import (
     Block,
     GrugModelConfig,
+    MoEMLP,
     _run_block_with_remat,
     paired_moe_component_forward,
 )
@@ -78,6 +80,7 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
+_DIAGNOSTICS = ("gate", "moe-call-order")
 
 
 def event(process_id: int | None, name: str, **fields: Any) -> None:
@@ -250,6 +253,152 @@ def monolithic_paired_block_value_and_grads(
     )
 
 
+def _pre_ring_router_values(mlp: MoEMLP, mlp_input: jax.Array) -> dict[str, jax.Array]:
+    flat_input = jnp.reshape(mlp_input, (-1, mlp_input.shape[-1]))
+    router_logits = jnp.einsum("td,de->te", flat_input, reshard(mlp.router, P(None, None))).astype(jnp.float32)
+    router_logits = reshard(router_logits, P(_BATCH_AXES, None))
+    biased_logits = router_logits + jax.lax.stop_gradient(reshard(mlp.router_bias, P(None)))
+    topk_logits, selected_experts = jax.lax.top_k(biased_logits, mlp.cfg.num_experts_per_token + 1)
+    selected_experts = selected_experts[:, : mlp.cfg.num_experts_per_token]
+    selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+    combine_weights = jax.nn.sigmoid(selected_logits)
+    combine_weights *= 2.5 / (jnp.sum(combine_weights, axis=-1, keepdims=True) + 1e-9)
+    return {
+        "selected_experts": selected_experts.astype(jnp.int32),
+        "combine_weights": combine_weights.astype(mlp_input.dtype),
+        "boundary_margin": (
+            topk_logits[:, mlp.cfg.num_experts_per_token - 1] - topk_logits[:, mlp.cfg.num_experts_per_token]
+        ),
+    }
+
+
+def prepare_moe_call_order_inputs(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+) -> tuple[MoEMLP, tuple[jax.Array, jax.Array]]:
+    """Build identical target MLP inputs for every call-order arm."""
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    mask = AttentionMask.causal()
+    post_attention = tuple(
+        block.attention_residual(hidden, mask, use_pko=False, disable_rope=False) for hidden in hiddens
+    )
+    mlp_inputs = tuple(block.mlp_gated_norm(block.rms_mlp(hidden)) for hidden in post_attention)
+    return block.mlp, mlp_inputs
+
+
+def single_moe_value_and_grads(
+    mlp: MoEMLP,
+    mlp_input: jax.Array,
+    output_cotangent: jax.Array,
+):
+    """Differentiate one unpaired MoE call and expose its pre-ring route."""
+
+    def projected_single(current_mlp: MoEMLP, current_input: jax.Array):
+        output, router_stats = current_mlp(current_input)
+        loss = _project_output(output, output_cotangent)
+        loss += ROUTER_Z_LOSS_SCALE * router_stats["router_z_loss"]
+        return loss, (output, router_stats)
+
+    (loss, (output, router_stats)), (mlp_gradient, input_gradient) = jax.value_and_grad(
+        projected_single,
+        argnums=(0, 1),
+        has_aux=True,
+    )(mlp, mlp_input)
+    return loss, output, router_stats, mlp_gradient, input_gradient, _pre_ring_router_values(mlp, mlp_input)
+
+
+def _paired_moe_calls_no_checkpoint(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+):
+    first = mlp(mlp_inputs[0])
+    second = mlp(mlp_inputs[1])
+    return (first[0], second[0]), (first[1], second[1])
+
+
+def _paired_moe_calls_per_checkpoint(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+):
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    remat_call = eqx.filter_checkpoint(MoEMLP.__call__, policy=policy)
+    first = remat_call(mlp, mlp_inputs[0])
+    second = remat_call(mlp, mlp_inputs[1])
+    return (first[0], second[0]), (first[1], second[1])
+
+
+def _paired_moe_variant_value_and_grads(
+    forward,
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    pre_ring = tuple(_pre_ring_router_values(mlp, mlp_input) for mlp_input in mlp_inputs)
+
+    def projected_pair(current_mlp: MoEMLP, current_inputs: tuple[jax.Array, jax.Array]):
+        outputs, router_stats = forward(current_mlp, current_inputs)
+        losses = tuple(
+            _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        return losses[0] + losses[1], (losses, outputs, router_stats)
+
+    (_, auxiliary), (mlp_gradient, input_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(mlp, mlp_inputs)
+    losses, outputs, router_stats = auxiliary
+    return losses, outputs, router_stats, mlp_gradient, input_gradients, pre_ring
+
+
+def paired_moe_joint_checkpoint_value_and_grads(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the current joint multi-call checkpoint boundary."""
+    return _paired_moe_variant_value_and_grads(
+        lambda current_mlp, current_inputs: paired_moe_component_forward(
+            current_mlp,
+            current_inputs,
+            remat_mode="save_moe",
+        ),
+        mlp,
+        mlp_inputs,
+        output_cotangents,
+    )
+
+
+def paired_moe_no_checkpoint_value_and_grads(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate two calls without an encompassing checkpoint."""
+    return _paired_moe_variant_value_and_grads(
+        _paired_moe_calls_no_checkpoint,
+        mlp,
+        mlp_inputs,
+        output_cotangents,
+    )
+
+
+def paired_moe_per_checkpoint_value_and_grads(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate two calls with one save-MoE checkpoint per call."""
+    return _paired_moe_variant_value_and_grads(
+        _paired_moe_calls_per_checkpoint,
+        mlp,
+        mlp_inputs,
+        output_cotangents,
+    )
+
+
 def _compile_and_run(process_id: int, name: str, function, arguments):
     lower_start = time.monotonic()
     event(process_id, f"{name}_lower_start")
@@ -364,6 +513,123 @@ def _sum_losses(losses: tuple[jax.Array, jax.Array]) -> jax.Array:
     return losses[0] + losses[1]
 
 
+def _combine_single_moe_results(first, second):
+    return (
+        (first[0], second[0]),
+        (first[1], second[1]),
+        (first[2], second[2]),
+        grug_train._sum_microbatch_group((first[3], second[3])),
+        (first[4], second[4]),
+        (first[5], second[5]),
+    )
+
+
+def _tree_parity(actual, reference, *, root: str) -> dict[str, Any]:
+    zero = jnp.asarray(0.0, dtype=jnp.float32)
+    return build_parity_report(
+        automatic_loss=zero,
+        direct_loss=zero,
+        automatic_gradients=actual,
+        direct_gradients=reference,
+        tolerance=DEFAULT_TOLERANCE,
+        gradient_root=root,
+    ).as_dict()
+
+
+def _route_mismatch_counts(actual_routes, reference_routes) -> dict[str, tuple[int, int]]:
+    assignment_counts = []
+    token_counts = []
+    for actual, reference in zip(actual_routes, reference_routes, strict=True):
+        assignments = actual["selected_experts"] != reference["selected_experts"]
+        assignment_counts.append(jnp.sum(assignments, dtype=jnp.int32))
+        token_counts.append(jnp.sum(jnp.any(assignments, axis=-1), dtype=jnp.int32))
+    return {
+        "assignments": tuple(int(value) for value in jax.device_get(tuple(assignment_counts))),
+        "tokens": tuple(int(value) for value in jax.device_get(tuple(token_counts))),
+    }
+
+
+def _routing_count_mismatches(actual_stats, reference_stats) -> tuple[int, int]:
+    mismatches = tuple(
+        jnp.sum(actual["routing_counts"] != reference["routing_counts"], dtype=jnp.int32)
+        for actual, reference in zip(actual_stats, reference_stats, strict=True)
+    )
+    return tuple(int(value) for value in jax.device_get(mismatches))
+
+
+def _report_moe_call_order_arm(
+    process_id: int,
+    name: str,
+    actual,
+    reference,
+) -> bool:
+    crossed_reference = (
+        (reference[0][1], reference[0][0]),
+        (reference[1][1], reference[1][0]),
+        (reference[2][1], reference[2][0]),
+        reference[3],
+        (reference[4][1], reference[4][0]),
+        (reference[5][1], reference[5][0]),
+    )
+    same_output_report = _tree_parity(actual[1], reference[1], root="post_ring_outputs")
+    cross_output_report = _tree_parity(actual[1], crossed_reference[1], root="post_ring_outputs")
+    same_stats_report = _tree_parity(actual[2], reference[2], root="router_stats")
+    cross_stats_report = _tree_parity(actual[2], crossed_reference[2], root="router_stats")
+    parameter_gradient_report = _tree_parity(actual[3], reference[3], root="mlp_gradient")
+    same_input_gradient_report = _tree_parity(actual[4], reference[4], root="input_gradients")
+    cross_input_gradient_report = _tree_parity(actual[4], crossed_reference[4], root="input_gradients")
+    same_pre_ring_report = _tree_parity(actual[5], reference[5], root="pre_ring")
+    cross_pre_ring_report = _tree_parity(actual[5], crossed_reference[5], root="pre_ring")
+    same_route_mismatches = _route_mismatch_counts(actual[5], reference[5])
+    cross_route_mismatches = _route_mismatch_counts(actual[5], crossed_reference[5])
+    same_routing_count_mismatches = _routing_count_mismatches(actual[2], reference[2])
+    cross_routing_count_mismatches = _routing_count_mismatches(actual[2], crossed_reference[2])
+    same_loss = tuple(
+        build_value_parity(actual_loss, reference_loss, tolerance=DEFAULT_TOLERANCE)
+        for actual_loss, reference_loss in zip(actual[0], reference[0], strict=True)
+    )
+    same_passed = (
+        all(loss.passed for loss in same_loss)
+        and same_output_report["passed"]
+        and same_stats_report["passed"]
+        and parameter_gradient_report["passed"]
+        and same_input_gradient_report["passed"]
+        and same_pre_ring_report["passed"]
+        and not any(same_route_mismatches["assignments"])
+        and not any(same_routing_count_mismatches)
+    )
+    cross_match = (
+        cross_output_report["passed"]
+        and cross_stats_report["passed"]
+        and cross_input_gradient_report["passed"]
+        and not any(cross_routing_count_mismatches)
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "moe_call_order_arm_report",
+            arm=name,
+            tolerance=DEFAULT_TOLERANCE,
+            same_loss=[dataclasses.asdict(loss) for loss in same_loss],
+            same_output_report=same_output_report,
+            cross_output_report=cross_output_report,
+            same_stats_report=same_stats_report,
+            cross_stats_report=cross_stats_report,
+            parameter_gradient_report=parameter_gradient_report,
+            same_input_gradient_report=same_input_gradient_report,
+            cross_input_gradient_report=cross_input_gradient_report,
+            same_pre_ring_report=same_pre_ring_report,
+            cross_pre_ring_report=cross_pre_ring_report,
+            same_route_mismatches=same_route_mismatches,
+            cross_route_mismatches=cross_route_mismatches,
+            same_routing_count_mismatches=same_routing_count_mismatches,
+            cross_routing_count_mismatches=cross_routing_count_mismatches,
+            same_passed=same_passed,
+            cross_match=cross_match,
+        )
+    return same_passed
+
+
 def _exact_routing_mismatches(
     actual_stats: tuple[dict[str, jax.Array], dict[str, jax.Array]],
     reference_stats: tuple[dict[str, jax.Array], dict[str, jax.Array]],
@@ -472,7 +738,66 @@ def _start_watchdog(process_id: int) -> None:
     timer.start()
 
 
-def _run_worker(process_id: int, coordinator_address: str, local_device_ids: list[int]) -> None:
+def _run_moe_call_order_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+):
+    prepared = _compile_and_run(
+        process_id,
+        "moe_order_preparation",
+        jax.jit(prepare_moe_call_order_inputs),
+        (params, qb_beta, hiddens),
+    )
+    mlp, mlp_inputs = prepared
+    single = jax.jit(single_moe_value_and_grads)
+    first_reference = _compile_and_run(
+        process_id,
+        "moe_order_reference_0",
+        single,
+        (mlp, mlp_inputs[0], cotangents[0]),
+    )
+    second_reference = _compile_and_run(
+        process_id,
+        "moe_order_reference_1",
+        single,
+        (mlp, mlp_inputs[1], cotangents[1]),
+    )
+    reference = _combine_single_moe_results(first_reference, second_reference)
+    arms = (
+        ("joint_checkpoint", paired_moe_joint_checkpoint_value_and_grads),
+        ("no_checkpoint", paired_moe_no_checkpoint_value_and_grads),
+        ("per_call_checkpoint", paired_moe_per_checkpoint_value_and_grads),
+    )
+    results = {}
+    for name, function in arms:
+        result = _compile_and_run(
+            process_id,
+            f"moe_order_{name}",
+            jax.jit(function),
+            (mlp, mlp_inputs, cotangents),
+        )
+        results[name] = _report_moe_call_order_arm(process_id, name, result, reference)
+    if process_id == 0:
+        event(
+            process_id,
+            "moe_call_order_summary",
+            joint_checkpoint_passed=results["joint_checkpoint"],
+            no_checkpoint_passed=results["no_checkpoint"],
+            per_call_checkpoint_passed=results["per_call_checkpoint"],
+            passed=results["no_checkpoint"] or results["per_call_checkpoint"],
+        )
+    return results["no_checkpoint"] or results["per_call_checkpoint"]
+
+
+def _run_worker(
+    process_id: int,
+    coordinator_address: str,
+    local_device_ids: list[int],
+    diagnostic: str,
+) -> None:
     event(process_id, "distributed_initialize_start", local_device_ids=local_device_ids)
     jax.distributed.initialize(
         coordinator_address=coordinator_address,
@@ -492,9 +817,14 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
             _MESH_AXES,
             axis_types=tuple(AxisType.Explicit for _ in _MESH_AXES),
         )
-        mpmd = grug_train._require_jaxpp_explicit_mpmd()
-        mpmd_mesh = mpmd.MpmdMesh(global_mesh, "pipeline")
-        stage_mesh = mpmd_mesh.unstack[0]
+        if diagnostic == "gate":
+            mpmd = grug_train._require_jaxpp_explicit_mpmd()
+            mpmd_mesh = mpmd.MpmdMesh(global_mesh, "pipeline")
+            stage_mesh = mpmd_mesh.unstack[0]
+        else:
+            mpmd = None
+            mpmd_mesh = None
+            stage_mesh = global_mesh
         event(
             process_id,
             "configuration",
@@ -512,6 +842,7 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
             remat_mode="save_moe",
             compute_dtype="bfloat16",
             paired_vjp_formulation="monolithic_value_and_grad",
+            diagnostic=diagnostic,
         )
         event(process_id, "problem_init_start")
         with jax.set_mesh(stage_mesh):
@@ -526,6 +857,17 @@ def _run_worker(process_id: int, coordinator_address: str, local_device_ids: lis
         event(process_id, "pure_paired_moe_structure", **pure_moe_structure)
 
         arguments = (params, qb_beta, hiddens, cotangents)
+        if diagnostic == "moe-call-order":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_moe_call_order_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_moe_call_order_complete")
+            if not passed:
+                raise AssertionError("no paired MoE checkpoint formulation passed the fixed tolerance")
+            completed = True
+            return
+
+        assert mpmd is not None
+        assert mpmd_mesh is not None
         with jax.set_mesh(stage_mesh):
             ordered = jax.jit(ordered_block_value_and_grads)
             reference = _compile_and_run(process_id, "ordered", ordered, arguments)
@@ -675,6 +1017,7 @@ def _monitor_workers(processes: list[multiprocessing.Process]) -> int:
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--coordinator-port", type=int, default=COORDINATOR_PORT)
+    parser.add_argument("--diagnostic", choices=_DIAGNOSTICS, default="gate")
     return parser.parse_args(argv)
 
 
@@ -694,6 +1037,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         (process_id + 1) * DEVICES_PER_PROCESS,
                     )
                 ),
+                args.diagnostic,
             ),
             name=f"jaxpp-group2-component-rank-{process_id}",
         )
