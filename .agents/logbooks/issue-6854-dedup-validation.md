@@ -1483,6 +1483,66 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T11:07:10Z — 123,015 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1101-v280` independently
+  revalidated six p0 decision-file 5 checkpoints at semantic offsets 2,048
+  through 2,688 and six p3 decision-file 101 checkpoints at offsets 1,792
+  through 2,432. Their 1,536 baseline pairs contain 678 model false positives,
+  857 model true duplicates, and one unresolved outcome. One pair was chunked
+  and 1,535 were direct. All 3,284 judgments were valid on their first
+  attempts. The outcome Parquet SHA-256 values, in p0 then p3 frontier order,
+  are:
+
+  - `041fbb17a0686e2b7553b584366ada3c6b318c324e1f58698b0f62e0bfa3dfec`;
+  - `91da3b5242991b77734d3130141cbe5674eee73324bbfce92ba878ba4b1f582f`;
+  - `2a1c90496d35159c1abe129e28e783ace878886594c715f8f21b934d24e4f89d`;
+  - `b5c458c2f0ed11aae78a43d9621b262adb4128c4cd31d89f180aa25ed909719e`;
+  - `b1c4ce6c61e176edb6f5e388aad7b4e651d0d8bd3fbcb4142970d76c8095768a`;
+  - `a316aaeb3dbd28820190c75d80437b0b06d4477575e130e3878d9a47d282f8a1`;
+  - `df5dcf43295e26d8d13466f65e266cac2b9cdb9970c60841707994d5dc0e2f6f`;
+  - `30d23edf446549d906af3fb9e4cc8d624454609a67625db91e41c5017e943e17`;
+  - `780eab7442195c3641e245d5ad251820d4d321f5ef1469db51960492ca0cd013`;
+  - `a7c2dea89eeefa5ab8c4a40e72c37905b3c8563a1158de6c5bd20da5c3431f70`;
+  - `a100198dc3eca15a9b0345cda065b31bf18b88233afa30acba8677180675000d`;
+  - `819d935ff75df4f6391e615513e423b15cd3e5d49ee1d2470eeb6a0004ec6b5b`.
+
+- Complete-text review resolves `part-00005-of-00128.parquet:4583` as a false
+  positive. The 2,092-character, 19-line member and 827-character, three-line
+  canonical share only two admissions/job-board boilerplate fragments. The
+  member additionally contains a Carrollton nursing-application title, West
+  Georgia admissions instructions, a college-grades paragraph, nursing-degree
+  guidance, and clinical-internship and nursing-career content. Character,
+  line, and word-sequence similarity are 0.199383, 0.090909, and 0.249412;
+  neither text contains the other. The member/canonical text SHA-256 values are
+  `951e9953b9801de5b85b29bf447b1b7a357e66a4850b041e9cc88312529b1137` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`;
+  inspection-artifact SHA-256 is
+  `b2bb4517a03d918a2a0f54746e7c0ca450e6789875154f0acffce00fd0860daa`.
+- The loss pass classified the pair as a high-confidence false positive. The
+  duplication pass and low-confidence tiebreak both identified the member-only
+  institutions and nursing topic but treated them as low-value template slots.
+  `/rav/datakit-6854-publish-row4583-1107-v282` wrote the immutable
+  false-positive record, and `/rav/datakit-6854-verify-row4583-1107-v283`
+  separately reread the source pair, semantic checkpoint, inspection artifact,
+  record, deterministic Parquet bytes, and completion marker.
+  Semantic-evidence, manual-record, and manual-Parquet SHA-256 values are
+  `3f06e57aeed2d51f0265c6f4068736734d36f6d370b9ca940a149ff8c932e6ba`,
+  `f89edc79e293b0967ef15b3e16e3c51cb5e495eaa06cab80c0c025248022b469`,
+  and `c83be81a1ca8143930f1fe8897aec646c58ade5a71f6499bd1021e3eeba3e83d`.
+- Across the stable 968-checkpoint snapshot, all 137 unresolved model outcomes
+  are covered by 105 true-duplicate and 32 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 99,602 pairs, 63,343 false positives, 36,259 true duplicates;
+  - treatment: 23,413 pairs, 12,032 false positives, 11,381 true duplicates;
+  - combined: 123,015 pairs, 75,375 false positives, 47,640 true duplicates.
+
+- The next audit frontiers are p0 `(5, 2,816)`, p1 `(37, 0)`, p2 `(69, 0)`,
+  and p3 `(101, 2,560)`. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T10:58:50Z — 121,479 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1047-v272` independently
