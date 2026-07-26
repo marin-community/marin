@@ -4,16 +4,17 @@
 """Compare direct and explicit-MPMD std-1F1B Grug MoE loss and gradients.
 
 This is an authoritative production-mixed-precision check for the
-device-initiated ``ragged_all_to_all`` path. The production gate runs as four
-Iris tasks with two H100s each, so every pipeline rank owns an isolated
-``expert=2`` mesh. Each task computes its direct reference in a short
-single-process child before initializing the distributed JAX runtime. The
-single-host fallback self-spawns four JAX processes on one H100x8 host and
-serializes only their direct-reference executions.
+device-initiated ``ragged_all_to_all`` path. The production gate reserves four
+H100x8 Iris tasks so every rank has an isolated physical node, then selects one
+working two-GPU pair per rank for its ``expert=2`` mesh. Each task computes its
+direct reference in a bounded single-process child before initializing the
+distributed JAX runtime. The single-host fallback self-spawns four JAX
+processes on one H100x8 host and serializes only their direct-reference
+executions.
 
 After installing the pinned JAX/JaxPP runtime with ``jaxpp_setup_scripts()``
 from ``train.py``, run the command below in every task of a four-replica
-H100x2 Iris job:
+H100x8 Iris job:
 
     JAXPP_SOURCE=/tmp/jaxpp \
     XLA_PYTHON_CLIENT_MEM_FRACTION=.35 \
@@ -41,6 +42,7 @@ import functools
 import importlib
 import json
 import multiprocessing as mp
+import os
 import traceback
 from collections.abc import Sequence
 from typing import Any
@@ -69,6 +71,7 @@ SEQUENCE_LENGTH = 8
 COORDINATOR_PORT = 5847
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _DEVICE_RAGGED_FLAG = "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true"
+_DIRECT_REFERENCE_DEVICE_PAIRS = ("0,1", "2,3", "4,5", "6,7")
 
 
 def _event(process_id: int, event: str, **fields: Any) -> None:
@@ -219,9 +222,11 @@ def _wait_at_jaxpp_barrier(name: str) -> None:
     client.wait_at_barrier(name, dime2.env_vars.jaxpp_client_timeout.value)
 
 
-def _standalone_direct_reference(process_id: int, connection: Any) -> None:
+def _standalone_direct_reference(process_id: int, device_pair: str, connection: Any) -> None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = device_pair
+    faulthandler.dump_traceback_later(60, repeat=True)
     try:
-        _event(process_id, "standalone_direct_reference_start")
+        _event(process_id, "standalone_direct_reference_start", device_pair=device_pair)
         pipeline = _pipeline_config()
         optimizer = gradient_capture_optimizer()
         mesh = grug_train._compact_or_pipeline_grug_mesh(
@@ -251,33 +256,37 @@ def _standalone_direct_reference(process_id: int, connection: Any) -> None:
             )[process_id]
             host_result = jax.device_get((direct_loss, direct_stage_gradient))
         connection.send(("ok", host_result))
-        _event(process_id, "standalone_direct_reference_complete")
+        _event(process_id, "standalone_direct_reference_complete", device_pair=device_pair)
     except BaseException as error:
         connection.send(("error", (type(error).__name__, str(error))))
         traceback.print_exc()
         raise
     finally:
+        faulthandler.cancel_dump_traceback_later()
         connection.close()
 
 
-def _standalone_direct_reference_result(process_id: int):
+def _standalone_direct_reference_attempt(process_id: int, device_pair: str):
     context = mp.get_context("spawn")
     receive_connection, send_connection = context.Pipe(duplex=False)
     process = context.Process(
         target=_standalone_direct_reference,
-        args=(process_id, send_connection),
-        name=f"jaxpp-ragged-parity-direct-reference-{process_id}",
+        args=(process_id, device_pair, send_connection),
+        name=f"jaxpp-ragged-parity-direct-reference-{process_id}-{device_pair.replace(',', '-')}",
     )
     process.start()
     send_connection.close()
     try:
-        if not receive_connection.poll(600):
-            raise TimeoutError("standalone direct reference exceeded 600 seconds")
+        if not receive_connection.poll(90):
+            raise TimeoutError(f"standalone direct reference on GPUs {device_pair} exceeded 90 seconds")
         status, payload = receive_connection.recv()
     except BaseException:
         if process.is_alive():
             process.terminate()
             process.join(timeout=10)
+        if process.is_alive():
+            process.kill()
+            process.join()
         raise
     finally:
         receive_connection.close()
@@ -286,6 +295,9 @@ def _standalone_direct_reference_result(process_id: int):
     if process.is_alive():
         process.terminate()
         process.join(timeout=10)
+        if process.is_alive():
+            process.kill()
+            process.join()
         raise TimeoutError("standalone direct reference did not exit after returning its result")
     if status == "error":
         error_type, error = payload
@@ -293,6 +305,23 @@ def _standalone_direct_reference_result(process_id: int):
     if process.exitcode != 0:
         raise RuntimeError(f"standalone direct reference exited with status {process.exitcode}")
     return payload
+
+
+def _standalone_direct_reference_result(process_id: int):
+    failures = []
+    for device_pair in _DIRECT_REFERENCE_DEVICE_PAIRS:
+        try:
+            result = _standalone_direct_reference_attempt(process_id, device_pair)
+            return result, device_pair
+        except (RuntimeError, TimeoutError) as error:
+            failures.append(f"{device_pair}: {error}")
+            _event(
+                process_id,
+                "standalone_direct_reference_retry",
+                device_pair=device_pair,
+                error=str(error),
+            )
+    raise RuntimeError("all standalone direct-reference device pairs failed: " + "; ".join(failures))
 
 
 def _run_initialized_worker(
@@ -509,7 +538,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     job_info = get_job_info()
     if job_info is not None and job_info.num_tasks > 1:
-        standalone_direct_result = _standalone_direct_reference_result(job_info.task_index)
+        standalone_direct_result, device_pair = _standalone_direct_reference_result(job_info.task_index)
+        os.environ["CUDA_VISIBLE_DEVICES"] = device_pair
         initialize_jax()
         _event(jax.process_index(), "distributed_initialize_complete")
         _run_initialized_worker(jax.process_index(), None, standalone_direct_result)
