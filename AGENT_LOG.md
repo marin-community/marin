@@ -195,3 +195,40 @@ which confirms the 4.5.2/cu13 CUTLASS resolution ports correctly onto this branc
 Confidence: 9/10 on the OOM finding (16/16 tasks, identical arithmetic); 7/10 that MXFP8 stays
 negative at EP64 rack scale (sign is measured at the right GEMM shape, scale extrapolation is the gap);
 6/10 the offload rung lands the baseline.
+
+## Check-in 7 — the 106.63 GiB buffer identified: NOT a sharding gap, it is the temp arena
+
+The failing job's allocator dump also printed the histogram of live allocations, which sums to exactly
+the reported 92.02 GiB InUse over 324 allocations. Decomposing it:
+
+| bytes | count | GiB | identity |
+|---|---|---|---|
+| 14,495,514,624 | 6 | 81.00 | fp32 `[4, 48, 6144, 3072]` — see below |
+| 3,152,019,456 | 3 | 8.81 | fp32 `[128256, 6144]` embedding-shaped (embed, lm_head, one Adam slot) |
+| everything else | 315 | ~2.2 | router, norms, scalars |
+
+14,495,514,624 B = 3,623,878,656 fp32 elements = 4 local experts x 48 layers x 6144 x 3072 exactly.
+The routed expert weights are `w13 [4,48,6144,6144]` = TWO such units and `w2 [4,48,3072,6144]` = ONE,
+so params = 3 units = 40.5 GiB and the MuonH momentum = 3 more = 40.5 GiB. Six units, 81.00 GiB, with
+nothing left over. So the resident set is exactly "expert params fp32 + expert momentum fp32 + the
+replicated embedding trio", i.e. ALL persistent state and no activations — the job died on the very
+first step's temporaries. Nothing is replicated that should be sharded; the per-GPU parameter shard is
+what it should be at EP64.
+
+The 114,492,278,784-byte request is therefore not a tensor at all. It factors as
+2^11 x 3 x 13 x 1,433,447 — that trailing prime means no tensor shape produces it, and it matches no
+combination of model dimensions. It is XLA:GPU's single contiguous TEMP ALLOCATION for the executable,
+which the runtime requests once per execution, so its size is the sum of the module's live
+intermediates. Reconstructing what has to be live at the peak of one step:
+
+    fp32 expert-weight gradient accumulators (same 3 units as params)   40.5 GiB
+    bf16 scan residual stack [48, 65536, 6144]                          36.0 GiB
+    per-layer recompute working set (MoE send/recv/hidden + attention)   ~20-30 GiB
+                                                                        ~96-106 GiB
+
+which lands on the observed 106.63 GiB. VERDICT: legitimate consequence of the shape, not a bug. The
+compressible items, in order: the fp32 gradient accumulators (40.5 GiB), the scan residual stack
+(36 GiB, shrinks with per-GPU tokens or residual offload), and the optimizer state (40.5 GiB, but that
+is RESIDENT rather than arena — which is exactly why `SCALE_OFFLOAD_OPT_STATE=1` is the right rung:
+it takes resident 92.02 -> ~51.5 GiB, so 51.5 + 106.63 = ~158 GiB against the 165.9 GiB limit at
+fraction 0.90).
