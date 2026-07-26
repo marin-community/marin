@@ -44,3 +44,59 @@ I need, so no change; a cf sweep at this shape would need that constant lifted t
 
 Confidence: 7/10 that the d6144 4-of-256 EP64 baseline is measurable on one rack (memory is the risk,
 not the code). Next: drop-floor simulation at top-4, MXFP8 port from d2, EP4 smoke.
+
+## Check-in 2 — deliverable 3 answered ahead of the cluster: top-4 does NOT change the drop regime
+
+Simulated routing at true per-shard scale (T = 65,536 tokens/shard, capacity = the per-(sender,expert)
+bucket mean at cf1.0, so the residual is purely statistical + burstiness). Routing model: 16 document
+blocks per shard; each block draws a Dirichlet expert preference; a token's distribution is
+`(1-burst)*uniform + burst*block_pref`; top-k by exact Gumbel-top-k.
+
+Uniform-routing floor (burst = 0), which is the quantity my brief flagged as rising:
+
+| shape | bucket mean | simulated floor | 0.3989/sqrt(mu) |
+|---|---|---|---|
+| d5120 proxy, 256 experts, top-8 | 2048 | 0.96% | 0.88% |
+| cand A, d6144, 256 experts, top-4 | 1024 | 1.24% | 1.25% |
+| cand B, d6144, 128 experts, top-4 | 2048 | 0.84% | 0.88% |
+
+Confirms the arithmetic: the floor rises 0.88 -> 1.25% at top-4 of 256. But the live system does not
+sit at the floor. Calibrating `burst` so the PROXY shape reproduces the observed live steady tail
+(d4's 350-step tail-100 mean 7.3%) gives burst = 0.764, and at that same burstiness:
+
+    d5120 proxy 256/top8: 7.57%   |   cand A 256/top4: 7.76%   |   cand B 128/top4: 7.35%
+    (3 seeds each; seed spread ~0.5pp, larger than the between-shape spread)
+
+PRE-REGISTERED PREDICTION for my live leg: drops at d6144 4-of-256 land in the same 6-8% band as the
+proxy, NOT materially worse. Mechanism: in the burstiness-dominated regime the floor is a small
+additive term, and doubling k while halving the bucket mean roughly cancels. If the live leg confirms
+it, the whole fidelity story — including d1's spill result (drops 7.3% -> 3.7% tail at -0.13pp with
+BETTER loss) — transfers to the hero shape unchanged.
+Caveat: this is a model, and its absolute calibration is model-dependent (my burst parameterization
+needs 0.764 where d1's needed 0.30 for the same 7%); only the BETWEEN-SHAPE comparison at matched
+burstiness is being claimed.
+
+## Check-in 3 — MXFP8 ported, jobs in flight
+
+MXFP8 port (commit d1785580c): kernels, `mxfp8_expert_mlp`, and the CUTLASS resolution
+(`nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6` + the base-wheel exclusion) taken verbatim from
+agent/ep25-d2-bakeoff; `uv sync` reproduces d2's lock with no changes. Wired as a third arm of
+`_fixed_a2a_core` (all locals dispatch, one grouped MXFP8 GEMM, then per-expert combine), mutually
+exclusive with `SCALE_A2A_BATCH_EXPERTS`. 24 kernel tests pass on CPU including 2 new ones.
+Note d2's own verdict names this exact reopening condition: "fatter expert GEMMs, such as d6144/i2560".
+
+Jobs (all mine, `submit_d5.sh`):
+- /mwittmann/ep25d5-smoke-bf16-0726-0201 — EP4 4-GPU smoke, d6144/i3072, 64 experts top-4 (bucket mean
+  1024, same as the rack target), 4 layers, 40 steps. RUNNING; sentinel line confirms the modified
+  module shipped and hparams confirm i3072/kv12/qb_routing.
+- /mwittmann/ep25d5-smoke-mxfp8-0726-0202 — same + SCALE_MOE_MXFP8=1. RUNNING.
+- /mwittmann/ep25d5-d6144-e256-bf16-120-0726-0205 — THE RACK BASELINE (coordinator approved one leg,
+  bf16 alone): 16 replicas / 64 GPUs, EP64, 256 experts top-4, d6144, 48 layers, batch 1024, seq 4096,
+  120 steps, QB-on, cf1.0, custom adjoint, drops, `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
+  OOM ladder if it fails: cuda_async (in) -> BFC fraction 0.85/0.90 -> SCALE_OFFLOAD_OPT_STATE=1 ->
+  fall back to 4-of-128. Offload would make the number non-comparable to d1's 22.66% d5120 control
+  and will be labeled if used.
+
+Confidence: 7/10 the baseline completes; 4/10 that MXFP8 flips positive at i3072 (d2's -2.83pp was
+attributed to quantize/layout producer overhead that scales with tokens, not with GEMM width, so
+fatter GEMMs help the numerator but do not obviously remove the overhead).
