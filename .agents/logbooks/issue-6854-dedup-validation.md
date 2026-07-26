@@ -1483,6 +1483,37 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T12:47:58Z — 134,170 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1246-v321` independently
+  revalidated six p2 decision-file 69 checkpoints at semantic offsets 3,456
+  through 4,096 and p3 decision-file 102 semantic offset 0. Their 896 baseline
+  pairs contain 677 false positives and 219 true duplicates, with no
+  unresolved outcomes. Twenty-one pairs were chunked and 875 were direct. All
+  3,275 judgments were valid on their first attempts. The outcome Parquet
+  SHA-256 values, in p2 then p3 frontier order, are:
+
+  - `14d557d37f90195995301a8fbc0461a9dd81525449c555e86adb3ea5a9736508`;
+  - `5373a85e09e40b3aee4005ca8d89920ab4456bda7673b87dd89601f220ae6fd7`;
+  - `c321f0c4c1868dbaf4394fa466c73b078197b231f2fb6484c40d8558fac3b4b1`;
+  - `2780f4754c70b20d3c1088570d258e30580877ba4e41bf0899d632763e564cb5`;
+  - `ac6cf2b3574373d64bda5d4021822b07df6c7a49025275fde0998259a68c0f11`;
+  - `337477fdebab3974821b77c9ef4ac78f9381a89bcc9a30546e1fd71e94fb40b2`;
+  - `0550c2a89a151eb0cd945966b2b958e851358d449adbb62e53d04f5e5805782d`.
+
+- Across the stable 1,056-checkpoint snapshot, all 148 unresolved model
+  outcomes remain covered by 113 true-duplicate and 35 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 108,314 pairs, 68,919 false positives, 39,395 true duplicates;
+  - treatment: 25,856 pairs, 13,313 false positives, 12,543 true duplicates;
+  - combined: 134,170 pairs, 82,232 false positives, 51,938 true duplicates.
+
+- The next audit frontiers are p0 `(6, 0)`, p1 `(37, 256)`,
+  p2 `(69, 4,224)`, and p3 `(102, 128)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T12:44:32Z — 133,274 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1238-v317` independently
