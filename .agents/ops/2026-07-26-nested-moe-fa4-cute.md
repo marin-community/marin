@@ -76,7 +76,23 @@ component's pack setting.
 Seven focused launcher/mask/nested tests passed. Corrected smoke runs remain
 pending.
 
+## Hypothesis 4
+
+The `r4` jobs supplied valid THD metadata and reached the FA4 THD import, but
+failed on the same missing `ThrMma` symbol. The current dependency lock combines
+FlashAttention 4.0.0b16 and Quack 0.5.0 with CUTLASS DSL 4.6.0; the former two
+still depend on the CUTLASS 4.5 API.
+
+## Changes to make
+
+Restore the previous `nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6` constraints and
+the root resolver override that suppresses the overlapping base wheel. Test the
+exact import on one GB200 before another multi-rack allocation.
+
+## Results
+
+Pending the single-GPU import canary.
+
 ## Future work
 
-- [ ] Repair or repin the FA4/CuTe dependency stack separately from this
-      deadline-bound experiment.
+- [ ] Upgrade the FA4/Quack stack before reintroducing CUTLASS DSL 4.6.

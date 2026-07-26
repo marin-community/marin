@@ -208,3 +208,18 @@ author: Marin research
   materialized-config assertion that every nested experiment component has
   `pack=1`.
 - Next action: snapshot and relaunch the four smoke arms.
+
+### 2026-07-26 19:53 - Gate 1 dependency incompatibility confirmed
+
+- Result: all four `r4` arms reached the THD FlashAttention import after the
+  data fix, then failed before step 0 with the same missing
+  `cutlass.cute.core.ThrMma` symbol seen under the CuTe backend.
+- Diagnosis: the repository currently resolves CUTLASS DSL 4.6.0 while
+  FlashAttention 4.0.0b16 and Quack 0.5.0 still import the CUTLASS 4.5
+  `ThrMma` API. This is shared infrastructure: E256, E128, and both nested
+  treatments produced no metric rows or checkpoints.
+- Change: restore the last known-compatible CUTLASS DSL 4.5.2 constraint in
+  both GPU extras and restore the root solver override for its overlapping base
+  wheel.
+- Next action: require a single-GB200 import canary to pass before relaunching
+  the four-arm smoke.
