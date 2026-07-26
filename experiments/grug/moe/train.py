@@ -3254,7 +3254,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     every=interval,
                 )
 
-        explicit_loop_step = 0 if explicit_mpmd else None
+        if explicit_mpmd:
+            pipeline_loop_step = 0
+        elif config.trainer.pipeline is not None:
+            pipeline_loop_step = int(state.step)
+        else:
+            pipeline_loop_step = None
 
     last_loss: float | jax.Array = 0.0
     last_step_duration = 0.0
@@ -3266,11 +3271,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     pipeline_state_sharding = None
     pipeline_batch_sharding = None
     try:
-        while (explicit_loop_step if explicit_loop_step is not None else int(state.step)) < trainer.num_train_steps:
+        while (pipeline_loop_step if pipeline_loop_step is not None else int(state.step)) < trainer.num_train_steps:
             with jax.profiler.TraceAnnotation("load_batch"):
                 batch = next(iterator)
             step_start = time.perf_counter()
-            current_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
+            current_step = pipeline_loop_step if pipeline_loop_step is not None else int(state.step)
             # grad_watch runs only on its configured interval.
             compute_watch = (
                 watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
@@ -3412,8 +3417,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state,
                     pipeline_batch,
                 )
-            if explicit_loop_step is not None:
-                explicit_loop_step += 1
+                metrics = dict(metrics)
+                metrics["train/loss"] = pp.mpmd_to_spmd_reshard(
+                    mpmd_mesh,
+                    metrics["train/loss"],
+                    NamedSharding(mesh, P()),
+                )
+            if pipeline_loop_step is not None:
+                pipeline_loop_step += 1
             step = current_step
 
             jax.block_until_ready(metrics["train/loss"])
@@ -3430,10 +3441,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callback_state = _merge_pipeline_state(state)
                     else:
                         callback_state = state
-                    if explicit_loop_step is not None:
+                    if pipeline_loop_step is not None:
                         callback_state = dataclasses.replace(
                             callback_state,
-                            step=jnp.array(explicit_loop_step, dtype=jnp.int32),
+                            step=jnp.array(pipeline_loop_step, dtype=jnp.int32),
                         )
                     state_callbacks.run(callback_state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
@@ -3458,8 +3469,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
             if checkpointer is not None:
-                checkpoint_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
-                checkpoint_tree = callback_state if explicit_loop_step is not None else state
+                checkpoint_step = pipeline_loop_step if pipeline_loop_step is not None else int(state.step)
+                checkpoint_tree = callback_state if pipeline_loop_step is not None else state
                 checkpointer.on_step(tree=checkpoint_tree, step=checkpoint_step)
     except BaseException:
         logger.exception("Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause")
@@ -3471,11 +3482,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 final_state = _merge_pipeline_state(state)
             else:
                 final_state = state
-            if explicit_loop_step is not None:
-                final_state = dataclasses.replace(final_state, step=jnp.array(explicit_loop_step, dtype=jnp.int32))
+            if pipeline_loop_step is not None:
+                final_state = dataclasses.replace(final_state, step=jnp.array(pipeline_loop_step, dtype=jnp.int32))
             state_callbacks.run(final_state, loss=last_loss, step_duration=last_step_duration, force=True)
         if checkpointer is not None:
-            checkpoint_step = explicit_loop_step if explicit_loop_step is not None else int(state.step)
+            checkpoint_step = pipeline_loop_step if pipeline_loop_step is not None else int(state.step)
             checkpointer.on_step(tree=final_state, step=checkpoint_step, force=True)
             checkpointer.wait_until_finished()
 
