@@ -3694,3 +3694,21 @@ author: dlwh
   - The fixed acceptance policy remains relative-L2 `<=0.002` for loss and every gradient leaf. This run did not reach the numerical gate.
 - Next action:
   - Concatenate each pair along the ordinary batch dimension so attention remains one supported CuTe call, but split inside every MoE invocation and execute exact ring routing separately for each original microbatch. Sum the two loss/QB/gradient contributions in original-microbatch units, then prove JIT value/VJP parity before another H100 smoke.
+
+### 2026-07-26 13:54 PDT - MoE-boundary group-2 passes the real H100 smoke
+- Hypothesis: Interleaving a pair within each local batch shard will let CuTe FA4 process one supported attention batch while two tuple-unrolled exact-ring MoE calls preserve the original routing, QB, capacity, drop, weighted-loss, and gradient semantics.
+- Commit Hash: `cb39dc4c7c` implements interleaved pack/unpack, one packed attention/shared-MLP path, per-original-microbatch exact-ring routing, separate router metric streams and weighted losses, and summed loss/QB/parameter gradients. It preserves separate activation cotangents and both `recompute_all` and `save_moe` rematerialization policies.
+- Validation:
+  - Twenty-one focused grouped-stage, eager-parity, and input-gradient tests pass. The JIT value/VJP test uses unequal weighted-loss denominators and enforces relative-L2 `<=0.002` independently on every output leaf for both rematerialization modes.
+  - `./infra/pre-commit.py --changed-files --fix`, including Pyrefly, passes.
+- Command: Parent `/dlwh/iris-run-job-20260726-204822` ran L4/d2560/e64/top-k4/seq4096/b128/m4 with four explicit standard-1F1B stages, exact ring, CuTe FA4, BF16 wire, Pallas-Triton `block_k=32`/8 warps, and MoE-boundary group size 2. Child: `/dlwh/iris-run-job-20260726-204822/grug-train-jaxpp-rno2a-ring-moeboundary-interleaved-group2-l4-e64k4-b128-s4096-p4m4-20260726-2048`.
+- Results:
+  - Stage forward compilation advanced through stages 0-3 from `20:50:17Z` to `20:50:46Z`; backward compilation propagated through stages 2-0, and final `keep_step` compilation completed at `20:52:06Z`.
+  - Execution completed `6/6` at `20:52:12Z`. The three steady reported rows excluding one isolated slow row averaged `10.535006` MFU and `0.384260s`; loss decreased from `8.825315` to `8.639116`.
+  - W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-moeboundary-interleaved-group2-l4-e64k4-b128-s4096-p4m4-20260726-2048>.
+  - Parent and child succeeded, all four tasks exited `0`, and the final Kubernetes probe returned `404`; no live resource remains.
+- Interpretation:
+  - Packing at the attention boundary avoids both prior blockers: CuTe sees an ordinary batch rather than a `vmap` tracer, and the executable no longer duplicates the complete transformer stage.
+  - This is a functional and compile positive, not yet a throughput promotion. The fixed `0.002` per-leaf policy remains in force before L24.
+- Next action:
+  - Run the matched L8/b512/m16 treatment and compare clean rows against the group-1 `16.116235` MFU control. If materially positive, run the fixed GPU loss/every-gradient parity gate before composing FP8 wire or launching L24.
