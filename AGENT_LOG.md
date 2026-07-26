@@ -671,3 +671,47 @@ attempt only separates late, which is consistent with it acting on the residual 
 early collapse.
 UNCHANGED by this correction: the MFU costs (-0.130pp / -0.023pp), the loss improvements (better at every m),
 the structural explanation of why spill is cheap, and the top-k-is-the-recovery-budget finding.
+
+## LEG RANKING via d5's model, recalibrated against my TRUE tail-100 (not extrapolation) 04:00
+Ran d5's approach through my own shipping `_assign_with_spill` kernel at real scale (ne=256, topk=8,
+mu=2048, document-block routing) to get what d5 never published: m=4/m=5 and a capacity sweep.
+
+### The model over-predicts spill's benefit — measured against my corrected numbers
+| m | model reclaim | MY measured reclaim (vs B=0.073) | measured/model ABS drop ratio |
+| 2 | 56.1% | 43.3% | 1.36x |
+| 3 | 65.7% | 49.9% | 1.54x |
+d5's "within 0.3pp" validation was against my 7-step-biased 3.7%; against my TRUE tail-100 of 4.14% the
+model is 0.70pp optimistic at m=2. The error GROWS with m (+0.18 ratio per attempt), which makes sense:
+an idealized model over-estimates how many free buckets later attempts find, because a token's alternative
+experts are correlated with its first choice.
+
+### Capacity sweep (burst 0.30, model absolutes) — spill x cf is strongly MULTIPLICATIVE
+| cf | m=0 | m=2 | m=3 | m=5 |
+| 1.00 | 0.0692 | 0.0304 | 0.0237 | 0.0169 |
+| 1.05 | 0.0484 | 0.0127 | 0.0078 | 0.0031 |
+| 1.10 | 0.0336 | 0.0045 | 0.0020 | 0.0004 |
+| 1.15 | 0.0230 | 0.0013 | 0.0004 | 0.0000 |
+The coordinator's COMBINATION hypothesis is CONFIRMED and is the strongest result here: a small capacity
+bump plus modest spill beats either mechanism pushed to its limit.
+
+### Ranking by expected compliant MFU (capacity -0.583pp per +0.05 cf; spill -0.130/-0.153/-0.178pp at m=2/3/5)
+| config | MFU | predicted drops (K-corrected) | clears? |
+| m=5 @ cf1.00 | 21.82 | 2.6% (const-K) / 3.2% (growing-K) | ~50/50 |
+| m=2 @ cf1.05 | 21.29 | 1.73% | YES, 1.27pp margin |
+| m=3 @ cf1.05 | 21.27 | 1.20% | YES, 1.80pp margin |
+| m=3 @ cf1.10 | 20.68 | 0.31% | YES but MFU worse than cf1.15-beating candidates |
+Checked the coordinator's prior: their m=5@cf1.0 ~21.83%/~50% and m=3@cf1.05 ~21.27% are both CONFIRMED
+by my independent arithmetic. Expected compliant MFU: m=5@cf1.0 = 0.5x21.82 = 10.9; m=2@cf1.05 = 0.85x21.29
+= 18.1. The combination wins on expected value; m=5@cf1.0 wins only if you are willing to take the coin flip
+for +0.53pp.
+CRITICAL: m=5's K is EXTRAPOLATED (never measured at m>3), while m=2/m=3's K is MEASURED at that same m. That
+asymmetry, not the point estimates, is what decides the bet.
+
+### The cf1.15 leg does double duty (why the ordering is right)
+The cf AXIS has never been validated against any live run of mine - every combination number above rests on
+the model's untested capacity response. The cf1.15 leg IS that validation.
+PRE-REGISTERED: model m=0 @ cf1.15 = 0.0230, so I predict measured tail-100 ~2.3%. Near 2.3% => cf axis
+sound and the combination ranking stands. Materially higher => the cf axis is optimistic too and every
+combination candidate needs the same discount, which would push the pick toward higher cf.
+RECOMMENDATION: run cf1.15 next as planned, then pick the combination leg with BOTH axes calibrated -
+most likely m=2 @ cf1.05 (~21.29%, beats cf1.15's 20.85% by +0.44pp with a 1.3pp compliance margin).
