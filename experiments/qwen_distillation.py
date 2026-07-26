@@ -339,6 +339,10 @@ def screen_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
     return ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)
 
 
+def screen_checkpoint_subpath(arm: Arm) -> str:
+    return "model" if ARMS[arm].objective is None else "model/student"
+
+
 def evaluation_step(
     checkpoint: ArtifactStep[LevanterCheckpoint],
     arm: Arm,
@@ -360,7 +364,7 @@ def evaluation_step(
                 ),
                 tokenizer=tokenizer_path,
                 checkpoint_path=checkpoint_path,
-                checkpoint_subpath="model" if ARMS[arm].objective is None else "model.student",
+                checkpoint_subpath=screen_checkpoint_subpath(arm),
                 pad_tokenizer_to_match_model=True,
                 trainer=TrainerConfig(
                     id=run_id,
