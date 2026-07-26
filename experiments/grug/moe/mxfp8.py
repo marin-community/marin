@@ -65,11 +65,15 @@ _STANDALONE_DIR = Path(__file__).resolve().parent / "standalone"
 if str(_STANDALONE_DIR) not in sys.path:
     sys.path.insert(0, str(_STANDALONE_DIR))
 
+from levanter.grug._moe.mxfp8_wire import dequantize_mxfp8_rows, mxfp8_all_gather  # noqa: E402
 from mxfp8_grouped.quantize import (  # noqa: E402
     _round_up,
+    build_sf_wgrad_fast,
+    build_sfa_fast,
     build_sfb_fast,
     dual_quantize_activation,
     quantize_mxfp8,
+    quantize_mxfp8_tokens,
 )
 
 # Every expert's row group is padded to a multiple of this in the kernel-facing
@@ -308,6 +312,51 @@ def _forward_pipeline(op: "MxFp8MoeMlpOp", x, w13, w2, group_sizes) -> dict:
     x_pad = _pad_rows(x, layout)
     x_q, x_sf, x_col, x_sfc = _dual_quantize(x_pad, row_idx, col_idx, perm_d, producer)
 
+    return _forward_legs(fused, producer, layout, (x_q, x_sf, x_col, x_sfc), w13, w2)
+
+
+def _forward_pipeline_quantized(op: "MxFp8MoeMlpOp", payload, scales, w13, w2, group_sizes) -> dict:
+    """Forward legs for a dispatch buffer that arrived already MXFP8-quantized.
+
+    The wire carries the feature-axis orientation, which is exactly what the
+    forward GEMM wants and is bit-identical to quantizing after the dispatch
+    (#7665, FP8W-001). The token-axis orientation the wgrads need cannot cross
+    the permutation, so it is rebuilt here from the arrived payload; measured
+    cost is 2.7e-6 to 1.1e-3 of the error the bf16-wire path already carries.
+    """
+    _require_sm100()
+    if payload.dtype != jnp.float8_e4m3fn:
+        raise ValueError(f"quantized dispatch expects float8_e4m3fn payload, got {payload.dtype}")
+    capacity, d = payload.shape
+    e, dk, n2 = w13.shape
+    ew, f, dw = w2.shape
+    if dk != d or dw != d or ew != e or n2 != 2 * f:
+        raise ValueError(f"inconsistent MLP shapes: payload={payload.shape}, w13={w13.shape}, w2={w2.shape}")
+    if d % 128 != 0 or f % 128 != 0:
+        raise ValueError(f"mxfp8 kernels require 128-aligned dims; got hidden={d}, intermediate={f}")
+    producer = _resolve_producer(op.producer)
+    fused = _fused_kernels()
+
+    layout = padded_dispatch_layout(group_sizes, capacity=capacity)
+    row_idx, col_idx = _identity_maps(layout)
+    perm_d = wgrad_block_perm(layout.padded_group_sizes, rows=d, total_tokens=layout.padded_rows)
+
+    # Row orientation passes through untouched; only the swizzle is applied,
+    # and that has to happen here because it is parameterised by group_sizes.
+    x_q = _pad_rows(payload, layout)
+    s_row = _pad_rows(scales, layout)
+    x_sf = build_sfa_fast(s_row, row_idx)
+
+    x_col, s_col = quantize_mxfp8_tokens(dequantize_mxfp8_rows(x_q, s_row))
+    x_sfc = build_sf_wgrad_fast(s_col.T, col_idx, perm_d)
+
+    return _forward_legs(fused, producer, layout, (x_q, x_sf, x_col, x_sfc), w13, w2)
+
+
+def _forward_legs(fused, producer, layout, activation_operands, w13, w2) -> dict:
+    """Weight quantize + the two fused GEMM legs, shared by both forward paths."""
+    x_q, x_sf, x_col, x_sfc = activation_operands
+
     w13i = _interleave_w13(w13)
     w13i_q, s13f = quantize_mxfp8(w13i)  # (E, N2, D) along D: fwd B operand
     sfb13f = build_sfb_fast(s13f)
@@ -466,3 +515,76 @@ class MxFp8MoeMlpOp:
 
     def __call__(self, x, w13, w2, group_sizes):
         return _mxfp8_expert_mlp(self, x, w13, w2, group_sizes)
+
+    def dispatch_expert_mlp(self, x_local, token_sources, keep, w13, w2, group_sizes, *, axis_name):
+        """Quantized-dispatch variant: see [mxfp8_dispatch_expert_mlp][]."""
+        return mxfp8_dispatch_expert_mlp(self, axis_name, x_local, token_sources, keep, w13, w2, group_sizes)
+
+
+# --------------------------------------------------------------------------- #
+# Fused quantize -> dispatch -> expert MLP (issue #7665)
+# --------------------------------------------------------------------------- #
+
+
+def _gathered_dispatch_payload(x_local, axis_name, token_sources, keep):
+    """Quantize locally, gather once, then permute payload and scales together."""
+    payload, scales = mxfp8_all_gather(x_local, axis_name)
+    payload = jnp.take(payload, token_sources, axis=0)
+    scales = jnp.take(scales, token_sources, axis=0)
+    zero_payload = jnp.zeros((), payload.dtype)
+    return (
+        jnp.where(keep[:, None], payload, zero_payload),
+        jnp.where(keep[:, None], scales, jnp.zeros((), scales.dtype)),
+    )
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def mxfp8_dispatch_expert_mlp(op, axis_name, x_local, token_sources, keep, w13, w2, group_sizes):
+    """Quantize, dispatch, and run the expert MLP under a single custom VJP.
+
+    The quantized payload never crosses an autodiff boundary, which it cannot do
+    safely in either candidate carrier dtype: a uint8 payload has a float0
+    tangent type and drops the cotangent silently, while a float8 payload
+    downcasts an incoming bf16 cotangent to unscaled e4m3, flushing ordinary
+    gradient magnitudes to zero (#7665, FP8W-003 and FP8W-005). Fusing keeps
+    bf16 on both differentiable faces.
+
+    This also cannot delegate to [MxFp8MoeMlpOp.__call__][]'s own custom VJP,
+    since that op's activation input would be the quantized payload and the same
+    downcast reappears one level in; it drives the forward and backward
+    pipelines directly instead.
+
+    ``token_sources`` and ``keep`` are the backend's routing gather and validity
+    mask over the gathered token axis. The backward is the exact transpose of
+    that gather followed by the collective's transpose, in bf16 throughout, so
+    the reduction keeps NCCL's hierarchical algorithm.
+    """
+    payload, scales = _gathered_dispatch_payload(x_local, axis_name, token_sources, keep)
+    return _forward_pipeline_quantized(op, payload, scales, w13, w2, group_sizes)["y"]
+
+
+def _mxfp8_dispatch_expert_mlp_fwd(op, axis_name, x_local, token_sources, keep, w13, w2, group_sizes):
+    payload, scales = _gathered_dispatch_payload(x_local, axis_name, token_sources, keep)
+    inter = _forward_pipeline_quantized(op, payload, scales, w13, w2, group_sizes)
+    mlp_res = (inter["x_col"], inter["x_sfc"], inter["h_col"], inter["sfh_col"], inter["c13"], w13, w2, group_sizes)
+    return inter["y"], (mlp_res, token_sources, keep, x_local.shape, x_local.dtype)
+
+
+def _mxfp8_dispatch_expert_mlp_bwd(op, axis_name, res, g):
+    mlp_res, token_sources, keep, local_shape, local_dtype = res
+    _, _, _, _, _, w13, w2, _ = mlp_res
+
+    inter = _backward_pipeline(op, mlp_res, g)
+    dx_dispatch = jnp.where(keep[:, None], inter["dx"], 0).astype(local_dtype)
+
+    # Transpose of the routing gather, then of the all-gather. Both in bf16:
+    # reduction legs never carry FP8 (the permutation-legs-only rule, #6911).
+    tokens_local, hidden = local_shape
+    gathered_rows = tokens_local * jax.lax.psum(1, axis_name)
+    dx_gathered = jnp.zeros((gathered_rows, hidden), local_dtype).at[token_sources].add(dx_dispatch, mode="drop")
+    dx_local = jax.lax.psum_scatter(dx_gathered, axis_name, scatter_dimension=0, tiled=True)
+
+    return dx_local, None, None, inter["dw13"].astype(w13.dtype), inter["dw2"].astype(w2.dtype), None
+
+
+mxfp8_dispatch_expert_mlp.defvjp(_mxfp8_dispatch_expert_mlp_fwd, _mxfp8_dispatch_expert_mlp_bwd)

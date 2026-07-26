@@ -191,6 +191,10 @@ class GrugFp8Config:
     # bwd). Bit-identical numerics; costs fp8 copies of the local expert
     # weights held across the backward pass.
     mxfp8_save_qweights: bool = False
+    # MXFP8 forward-dispatch wire (#7665): quantize before the EP dispatch
+    # collective and hand the payload straight to the grouped kernels, instead
+    # of the fp8_wire quantize-dequantize round trip. Requires recipe='mxfp8'.
+    mxfp8_dispatch: bool = False
     amax_history_length: int = 1024
 
     def __post_init__(self) -> None:
@@ -204,6 +208,11 @@ class GrugFp8Config:
                 )
             if not self.grouped:
                 raise ValueError("recipe='mxfp8' requires grouped=True (the recipe only changes the grouped GEMMs)")
+        if self.mxfp8_dispatch and self.recipe not in ("auto", "mxfp8"):
+            raise ValueError(
+                f"mxfp8_dispatch needs the mxfp8 recipe (the payload feeds the block-scaled grouped "
+                f"kernels); got recipe={self.recipe!r}"
+            )
 
 
 def _gpu_compute_capability_major() -> int:
@@ -865,6 +874,7 @@ class MoEMLP(eqx.Module):
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
                 ragged_dot_ops=ragged_dot_ops,
                 fp8_wire=fp8.wire if fp8 is not None else False,
+                mxfp8_dispatch=fp8.mxfp8_dispatch if fp8 is not None else False,
                 expert_mlp_op=expert_mlp_op,
             ),
             cfg=cfg,

@@ -35,20 +35,30 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     fp8_wire: bool = False,
+    mxfp8_dispatch: bool = False,
     expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
+    if mxfp8_dispatch and expert_mlp_op is None:
+        raise ValueError("mxfp8_dispatch needs an expert_mlp_op that consumes a quantized dispatch buffer")
+    if mxfp8_dispatch and fp8_wire:
+        raise ValueError("mxfp8_dispatch replaces the fp8_wire round trip; enable one or the other")
     with jax.named_scope("gather"):
-        if fp8_wire:
+        # Under mxfp8_dispatch the activation all-gather moves inside the op's
+        # fused custom VJP (#7665), so only the routing metadata is gathered
+        # here; it is small and stays in its native dtype.
+        if mxfp8_dispatch:
+            x_global = None
+        elif fp8_wire:
             x_global = fp8_all_gather(x_local, "expert")
         else:
             x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
         combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
 
-        tokens = x_global.shape[0]
+        tokens = selected_experts_global.shape[0]
         topk = selected_experts_global.shape[1]
         assignments = tokens * topk
         expert_flat = selected_experts_global.reshape(assignments)
@@ -97,9 +107,12 @@ def _moe_mlp_ep_ring_local(
         token_local = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        x_take = jnp.take(x_global, token_local, axis=0)
-        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
-        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        if mxfp8_dispatch:
+            x_dispatch = None
+        else:
+            x_take = jnp.take(x_global, token_local, axis=0)
+            x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+            x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
@@ -107,7 +120,23 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        if expert_mlp_op is not None:
+        if mxfp8_dispatch:
+            # Quantize, gather, permute and run the MLP in one custom VJP: the
+            # payload must not cross an autodiff boundary in either carrier
+            # dtype (#7665).
+            out_dispatch = tree_checkpoint_name(
+                expert_mlp_op.dispatch_expert_mlp(
+                    x_local,
+                    token_local,
+                    valid,
+                    moe_w13_local,
+                    moe_w2_local,
+                    group_sizes,
+                    axis_name="expert",
+                ),
+                _CHECKPOINT_DISPATCH_OUTPUT,
+            )
+        elif expert_mlp_op is not None:
             # The op owns the whole w13 -> activation -> w2 body (fused kernels
             # save their own residuals), so only the combined output is tagged.
             out_dispatch = tree_checkpoint_name(
@@ -125,7 +154,10 @@ def _moe_mlp_ep_ring_local(
             )
 
     with jax.named_scope("scatter"):
-        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        # x_global is absent under mxfp8_dispatch; the combine buffer is shaped
+        # from the gathered token count either way.
+        out_global_zeros = jnp.zeros((tokens, x_local.shape[-1]), x_local.dtype)
+        out_global = out_global_zeros.at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         if fp8_wire:

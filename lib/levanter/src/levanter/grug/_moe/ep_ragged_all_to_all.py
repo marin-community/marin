@@ -39,8 +39,11 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     fp8_wire: bool = False,
+    mxfp8_dispatch: bool = False,
     expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    if mxfp8_dispatch:
+        raise NotImplementedError("mxfp8_dispatch is wired into the ring backend only so far (#7665)")
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(

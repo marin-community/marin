@@ -76,6 +76,9 @@ class MoEExpertMlp(eqx.Module):
     # partition_for_grad_overwrite / apply_updates like Linear's dot_general ops.
     ragged_dot_ops: MoeRaggedDotOps | None = None
     fp8_wire: bool = eqx.field(static=True, default=False)
+    # Quantize before the dispatch collective and hand the payload straight to
+    # expert_mlp_op, instead of the fp8_wire round trip (#7665).
+    mxfp8_dispatch: bool = eqx.field(static=True, default=False)
     # Optional stateless whole-expert-MLP op (e.g. MXFP8 fused kernels). Static:
     # it carries no arrays, so it threads through shard_map as a closure constant.
     expert_mlp_op: MoeExpertMlpOp | None = eqx.field(static=True, default=None)
@@ -94,6 +97,7 @@ class MoEExpertMlp(eqx.Module):
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
         ragged_dot_ops: MoeRaggedDotOps | None = None,
         fp8_wire: bool = False,
+        mxfp8_dispatch: bool = False,
         expert_mlp_op: MoeExpertMlpOp | None = None,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -113,6 +117,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=capacity_factor,
             ragged_dot_ops=ragged_dot_ops,
             fp8_wire=fp8_wire,
+            mxfp8_dispatch=mxfp8_dispatch,
             expert_mlp_op=expert_mlp_op,
         )
 
@@ -140,6 +145,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             ragged_dot_ops=self.ragged_dot_ops,
             fp8_wire=self.fp8_wire,
+            mxfp8_dispatch=self.mxfp8_dispatch,
             expert_mlp_op=self.expert_mlp_op,
         )
 
@@ -159,6 +165,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     ragged_dot_ops: MoeRaggedDotOps | None = None,
     fp8_wire: bool = False,
+    mxfp8_dispatch: bool = False,
     expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -223,6 +230,11 @@ def moe_mlp(
         raise NotImplementedError(
             "ragged_dot_ops is only wired into the EP ring / ragged_all_to_all backends; "
             f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+        )
+    if mxfp8_dispatch and resolved_implementation != "ring":
+        raise NotImplementedError(
+            "mxfp8_dispatch is only wired into the EP ring backend so far (#7665); "
+            f"got implementation={resolved_implementation!r}"
         )
     if fp8_wire and (not has_ep or resolved_implementation not in _QUANTIZED_EP_MOE_IMPLEMENTATIONS):
         raise NotImplementedError(
@@ -292,7 +304,7 @@ def moe_mlp(
             )
 
         backend_kwargs = (
-            {"fp8_wire": fp8_wire, "expert_mlp_op": expert_mlp_op}
+            {"fp8_wire": fp8_wire, "mxfp8_dispatch": mxfp8_dispatch, "expert_mlp_op": expert_mlp_op}
             if resolved_implementation in _QUANTIZED_EP_MOE_IMPLEMENTATIONS
             else {}
         )
