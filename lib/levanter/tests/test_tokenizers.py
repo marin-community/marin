@@ -31,6 +31,7 @@ from levanter.tokenizers import (
     _load_tokenizer_config,
     _stage_from_hf,
     _stage_from_mirror,
+    _stage_from_remote_directory,
     _stage_tokenizer,
     _try_load_tokenizer_from_dir,
     load_tokenizer,
@@ -1470,6 +1471,53 @@ def test_stage_from_mirror_absent(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_stage_from_remote_directory_copies_only_tokenizer_files(tmp_path, fake_tokenizer_dir):
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    entries = [
+        "bucket/model/tokenizer.json",
+        "bucket/model/tokenizer_config.json",
+        "bucket/model/model.safetensors",
+    ]
+
+    class FakeRemoteFS:
+        def ls(self, path, detail=False):
+            assert path == "bucket/model"
+            assert detail is False
+            return entries
+
+    def fake_fetch(src_url, dest_path):
+        shutil.copy2(fake_tokenizer_dir / os.path.basename(src_url), dest_path)
+        return True
+
+    with (
+        patch("levanter.tokenizers.url_to_fs", return_value=(FakeRemoteFS(), "bucket/model")),
+        patch("levanter.tokenizers.fetch_file_atomic", side_effect=fake_fetch) as fetch,
+    ):
+        result = _stage_from_remote_directory("s3://bucket/model", str(local_dir))
+
+    assert result is True
+    assert sorted(path.name for path in local_dir.iterdir()) == ["tokenizer.json", "tokenizer_config.json"]
+    assert fetch.call_count == 2
+
+
+def test_stage_tokenizer_remote_directory_skips_hf(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    def fake_remote_stage(name_or_path, local_dir):
+        assert name_or_path == "s3://bucket/model"
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+        return True
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers.is_remote_path", return_value=True),
+        patch("levanter.tokenizers._stage_from_remote_directory", side_effect=fake_remote_stage),
+        patch("levanter.tokenizers._stage_from_hf") as mock_hf,
+    ):
+        _stage_tokenizer("s3://bucket/model")
+
+    mock_hf.assert_not_called()
 
 
 def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):

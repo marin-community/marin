@@ -163,3 +163,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: 12 focused behavior tests pass and Pyrefly reports zero errors. The dry graph resolves the regional Datakit source, Qwen tokenizer cache, pinned 32B and 0.6B checkpoints, and a 12-step `GB200x4` smoke.
 - Interpretation: the CPU-level behavior and Marin graph are internally consistent. Device memory, exact sharding, checkpoint resume, and regional object-store access remain empirical smoke gates.
 - Next action: create and push the immutable code snapshot, materialize the Qwen-tokenized cache on `cw-us-east-08a`, and run the one-node smoke.
+
+### 2026-07-26 16:35 - Regional tokenizer staging failure
+
+- Hypothesis: the pinned regional Qwen model artifact can also supply tokenizer files to Datakit workers without another model download.
+- Commit hash: `d3c5b9de06`.
+- Job: `/power/qwen-distill-data-d3c5b9` on `cw-us-east-08a`, batch priority.
+- Result: the 0.6B checkpoint staged successfully, but every tokenize shard failed before reading data. `load_tokenizer` interpreted the `s3://.../models/Qwen...` directory as a Hugging Face repository ID.
+- Interpretation: tokenizer staging supported local paths, the cross-region mirror, and Hugging Face IDs, but not explicit remote model directories. This is a boundary bug rather than a dataset failure.
+- Next action: teach tokenizer staging to copy only tokenizer files from explicit S3/GCS directories, cover the path with behavior tests, then resubmit with a new immutable artifact version.
