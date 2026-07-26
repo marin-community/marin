@@ -3148,8 +3148,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             _install_jaxpp_bind_meshes_patch()
             if os.environ.get("GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false").lower() in ("1", "true", "yes", "on"):
                 _install_jaxpp_const_sharding_patch()
-        elif os.environ.get("GRUG_JAXPP_PREWARM_DIME", "false").lower() in ("1", "true", "yes", "on"):
-            _prewarm_jaxpp_dime(mpmd_mesh)
 
     explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
     automatic_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "auto"
@@ -3219,6 +3217,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 pipeline=config.trainer.pipeline,
                 mpmd_mesh=mpmd_mesh,
             )
+            if os.environ.get("GRUG_JAXPP_PREWARM_DIME", "false").lower() in ("1", "true", "yes", "on"):
+                _prewarm_jaxpp_dime(mpmd_mesh)
             logger.warning("explicit_mpmd uses stage-local JaxPP arrays; checkpoint writes are disabled for now")
             checkpointer = None
         else:
