@@ -95,10 +95,14 @@ A 350-step QB-on cf1.0 run resolves the steady state (loss healthy to 3.335): dr
 that grows past ~150 steps. cf1.0 QB-on levels toward ~6% and does not cross the 3% bar; the
 120-step extrapolation toward <3% is falsified. Step-119 drop is draw-variable (0.175 here vs 0.083
 in the frontier leg), so the steady-state ~6% is the reliable figure, not any single step-119 point.
-No configuration has been measured under a strict 3% bar. QB + cf1.15 is the closest on the record
-at 0.037 (20.85% p50), but that is 3.7%, above the bar, and it was read at step 119 rather than at
-steady state; cf1.0 carries ~6% steady drops at 22.60%. The ~3% reference is the known-acceptable
-rate at 8 buckets from a prior 1e23 run.
+QB + cf1.15 is 3%-compliant, at 2.60% measured as a 100-step tail of a 350-step run (20.416% p50).
+The 0.037 in the table above is the same configuration read at step 119 of a 120-step run, i.e. at
+end of anneal and in a different drop regime; at 3.7% it does not itself clear the bar. The two are
+consistent measurements of one configuration, not a disagreement — fewer drops means more real work
+at the same step accounting, which reads as lower MFU, so the 350-step number is both the compliant
+one and the slower one. Quote cf1.15 with its run length and drop level attached. cf1.0 carries
+~7.1% steady drops at 22.062%. The ~3% reference is the known-acceptable rate at 8 buckets from a
+prior 1e23 run.
 
 grug's QB is an implicit proportional controller: it applies a 1x router-bias residual per step, not
 DeepSeek's +/-gamma integral accumulation. Doubling the gain (g=2, `SCALE_QB_GAIN`, commit
@@ -153,7 +157,7 @@ number is a cumulative mean against the p50 used for the fixed path, one draw ea
 
 The goal (>=25% at the operating point without regressing fidelity) is not met at honest fidelity.
 The best honest config is QB-on cf1.0 at 22.60% p50, which settles at ~6% steady drops, above a
-strict 3% bar; the only measured 3%-compliant config is QB + cf1.15 at 20.85%. The QB-off frontier
+strict 3% bar; the only measured 3%-compliant config is QB + cf1.15, at 20.416% over 350 steps. The QB-off frontier
 of 24.04 (adjoint) and 25.39 (with leg-batching) is a matched-regime speed result, but at ~85% early
 drops it is a bench number, not a shippable config, and it reads high partly because dropped
 assignments do less real work (see the measurement caveat).
@@ -163,7 +167,7 @@ assignments do less real work (see the measurement caveat).
 | QB-off bench, adjoint | ~85% early | 24.04 |
 | QB-off bench, adjoint + leg-batching | ~85% early | 25.39 |
 | QB-on cf1.0 (best honest) | ~6% steady | 22.60 |
-| QB-on cf1.15 (strict 3%) | 0.037 @119 | 20.85 |
+| QB-on cf1.15 (strict 3%) | 0.0260 tail-100 | 20.416 |
 
 The strict-fidelity config and the throughput frontier are ~3.2pp apart. Ranked follow-ups to close
 it:
@@ -201,6 +205,27 @@ for an expert the router itself ranked for that token, instead of contributing z
 substitution is strictly closer to the intended MoE output than dropping. It does not reach a 3%
 bar at cf1.0 (m=3 leaves 3.66%), and the drop-recovery mechanism is bounded by top-k: an assignment
 can only be re-offered to experts the token already selected, so `m_max = topk - 1`.
+
+**A routing model is trustworthy on one axis and not the other.** Predicting a configuration that
+has not been run means trusting a model, and the useful question is which part of it to trust. With
+live 350-step measurements on both axes, the error splits cleanly:
+
+| measurement | model | measured | ratio |
+|---|--:|--:|--:|
+| cf1.0, m=0 | 0.0692 | 0.0710 | 1.03x |
+| cf1.15, m=0 | 0.0230 | 0.0260 | 1.13x |
+| cf1.0, m=2 | 0.0304 | 0.0414 | 1.36x |
+| cf1.0, m=3 | 0.0237 | 0.0366 | 1.54x |
+
+The capacity response is accurate; the spill response is optimistic, and grows more so with each
+attempt. The mechanism explains the split: the model assumes a spilled assignment finds a free
+bucket among the token's remaining choices independently each time, but a token's alternative
+experts are correlated with its first choice, so later attempts find fewer free buckets than an
+idealised count predicts. That is why the error is absent at m=0, small on capacity, and compounding
+in m. A prediction that corrects the spill axis and takes the capacity axis at face value is usable;
+one that trusts the model whole is not. Both the split and its mechanism were only visible because
+live points existed on both axes — a single-axis sweep would have shown a model that looked either
+fine or uniformly optimistic, and neither reading would have been right.
 
 **Why this was cheap, and what that predicts.** The step is collective-volume-bound: exposed
 collective time almost exactly fills compute idle, so the remaining speed lever is reducing
