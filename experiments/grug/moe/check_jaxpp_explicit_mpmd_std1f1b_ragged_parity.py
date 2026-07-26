@@ -33,10 +33,12 @@ optimizer state. Loss and every gradient leaf must have relative-L2 at most
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import functools
 import importlib
 import json
 import multiprocessing as mp
+import traceback
 from collections.abc import Sequence
 from typing import Any
 
@@ -62,6 +64,10 @@ SEQUENCE_LENGTH = 8
 COORDINATOR_PORT = 5847
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _DEVICE_RAGGED_FLAG = "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true"
+
+
+def _event(process_id: int, event: str, **fields: Any) -> None:
+    print(json.dumps({"event": event, "process_id": process_id, **fields}, sort_keys=True), flush=True)
 
 
 def validate_authoritative_topology(
@@ -214,6 +220,8 @@ def _authoritative_environment() -> dict[str, Any]:
 
 
 def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[int]) -> None:
+    faulthandler.dump_traceback_later(120, repeat=True)
+    _event(process_id, "distributed_initialize_start", local_device_ids=local_device_ids)
     jax.distributed.initialize(
         coordinator_address=f"127.0.0.1:{coordinator_port}",
         num_processes=PIPELINE_STAGES,
@@ -221,6 +229,7 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         local_device_ids=local_device_ids,
         cluster_detection_method="deactivate",
     )
+    _event(process_id, "distributed_initialize_complete")
     try:
         validate_authoritative_topology(
             process_count=jax.process_count(),
@@ -239,6 +248,7 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         local_stage_index = mpmd_mesh.my_mpmd_axis_index
         optimizer = gradient_capture_optimizer()
 
+        _event(process_id, "direct_reference_start", stage_index=local_stage_index)
         with jax.set_mesh(mesh):
             initial_state = grug_train.initial_state(
                 _model_config(),
@@ -256,12 +266,21 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
             )
             direct_loss, direct_gradients = direct_step(initial_state.params, batch)
             jax.block_until_ready((direct_loss, direct_gradients))
+        _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
 
+        multihost_utils.sync_global_devices("explicit_mpmd_ragged_parity_direct_complete")
+        _event(process_id, "dime_prewarm_start", stage_index=local_stage_index)
+        grug_train._prewarm_jaxpp_dime(mpmd_mesh, "all")
+        _event(process_id, "dime_prewarm_complete", stage_index=local_stage_index)
+
+        _event(process_id, "direct_gradient_reshard_start", stage_index=local_stage_index)
         direct_stage_gradients = _direct_stage_gradients(
             direct_gradients,
             pipeline=pipeline,
             mpmd_mesh=mpmd_mesh,
         )
+        jax.block_until_ready(direct_stage_gradients)
+        _event(process_id, "direct_gradient_reshard_complete", stage_index=local_stage_index)
         pipeline_state = grug_train._split_state_for_explicit_mpmd(
             initial_state,
             pipeline=pipeline,
@@ -270,6 +289,7 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         )
         stage_batches = _stage_batches(mpmd_mesh, batch)
 
+        _event(process_id, "explicit_lower_start", stage_index=local_stage_index)
         explicit_step = grug_train._make_explicit_mpmd_train_step(
             optimizer,
             eager_parity._MIXED_PRECISION,
@@ -280,8 +300,11 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
             sample_batches=stage_batches,
         )
         explicit_step = grug_train._LocalLoweredExplicitMpmdStep(explicit_step.lower(pipeline_state, stage_batches))
+        _event(process_id, "explicit_lower_complete", stage_index=local_stage_index)
+        _event(process_id, "explicit_execute_start", stage_index=local_stage_index)
         next_state, metrics, _ = explicit_step(pipeline_state, stage_batches)
         jax.block_until_ready((next_state, metrics))
+        _event(process_id, "explicit_execute_complete", stage_index=local_stage_index)
 
         explicit_gradients = captured_gradients(next_state.opt_state[local_stage_index])
         explicit_loss_local = np.zeros((), dtype=np.float32)
@@ -291,6 +314,7 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
             explicit_loss_local,
             is_source=local_stage_index == 0,
         )
+        _event(process_id, "loss_broadcast_complete", stage_index=local_stage_index)
         direct_loss_host = np.asarray(jax.device_get(direct_loss), dtype=np.float32)
         report = build_stage_parity_report(
             stage_index=local_stage_index,
@@ -334,8 +358,20 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         all_passed = bool(np.all(stage_results))
         multihost_utils.sync_global_devices("explicit_mpmd_std1f1b_ragged_parity_complete")
         raise SystemExit(0 if all_passed else 1)
+    except Exception as error:
+        _event(
+            process_id,
+            "worker_error",
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+        traceback.print_exc()
+        raise
     finally:
+        faulthandler.cancel_dump_traceback_later()
+        _event(process_id, "distributed_shutdown_start")
         jax.distributed.shutdown()
+        _event(process_id, "distributed_shutdown_complete")
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
