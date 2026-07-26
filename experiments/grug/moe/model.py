@@ -143,6 +143,12 @@ class GrugModelConfig:
     # width, so every layer feeds FA4 one static shape. Both None (default) = uniform ``num_kv_heads``.
     local_kv_heads: int | None = None
     global_kv_heads: int | None = None
+    # DeepSeek-V3 multi-token prediction: mtp_depth extra MoE prediction modules after the trunk. Each
+    # depth k predicts token t_{i+k+1} from the previous depth's hidden and the embedding of t_{i+k},
+    # combined by a [2D, D] projection and run through one MoE Block. Shares token_embed + output_proj;
+    # runs entirely outside the trunk scan. 0 (default) = off. Only depth 1 is supported.
+    mtp_depth: int = 0
+    mtp_loss_weight: float = 0.3
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -773,6 +779,13 @@ class Transformer(eqx.Module):
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
+    # DeepSeek-V3 MTP (depth 1): a standalone MoE block + [2D, D] projection + norms, run after the
+    # trunk scan. None when mtp_depth == 0.
+    mtp_block: Block | None
+    mtp_proj: jax.Array | None
+    mtp_hidden_norm: RMSNorm | None
+    mtp_embed_norm: RMSNorm | None
+    mtp_final_norm: RMSNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -802,12 +815,36 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
 
+        mtp_block = mtp_proj = mtp_hidden_norm = mtp_embed_norm = mtp_final_norm = None
+        if cfg.mtp_depth:
+            if cfg.mtp_depth != 1:
+                raise ValueError(f"only mtp_depth=1 is supported, got {cfg.mtp_depth}")
+            # Derive MTP keys off the base key so the trunk block RNG is unchanged when MTP is off.
+            mtp_block_key, mtp_proj_key = random.split(random.fold_in(key, 0x4D5450), 2)
+            # A plain MoE block: no QB (avoids threading its load-balance stat back), no global/hetero
+            # interleave (single block, called with is_global=None). Other features follow cfg.
+            mtp_cfg = dataclasses.replace(
+                cfg, qb_routing=False, global_every=0, local_kv_heads=None, global_kv_heads=None, mtp_depth=0
+            )
+            mtp_block = Block.init(mtp_cfg, key=mtp_block_key)
+            mtp_proj = reshard(
+                _init_weight(mtp_proj_key, (2 * cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)
+            )
+            mtp_hidden_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            mtp_embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            mtp_final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mtp_block=mtp_block,
+            mtp_proj=mtp_proj,
+            mtp_hidden_norm=mtp_hidden_norm,
+            mtp_embed_norm=mtp_embed_norm,
+            mtp_final_norm=mtp_final_norm,
             config=cfg,
         )
 
@@ -820,7 +857,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], Float[Array, "L E"]]:
+    ) -> tuple[Float[Array, "B S D"], Float[Array, "L E"], Float[Array, "B S D"] | None]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -884,19 +921,34 @@ class Transformer(eqx.Module):
             hidden, qb_beta_per_layer = jax.lax.scan(
                 _scan_layer, hidden, xs=(self.stacked_blocks.stacked, is_global), unroll=cfg.scan_unroll
             )
-            return self.final_norm(hidden), qb_beta_per_layer
+        else:
+            layer_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
 
-        layer_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
+            def _scan_layer(
+                carry_hidden: Float[Array, "B S D"], layer: Block
+            ) -> tuple[Float[Array, "B S D"], jax.Array]:
+                # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
+                new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
+                return new_hidden, qb_beta
 
-        def _scan_layer(carry_hidden: Float[Array, "B S D"], layer: Block) -> tuple[Float[Array, "B S D"], jax.Array]:
-            # Carry the hidden state; OUTPUT the per-layer qb_beta so scan stacks it to [L, E].
-            new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask)
-            return new_hidden, qb_beta
+            hidden, qb_beta_per_layer = jax.lax.scan(
+                _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
+            )
 
-        hidden, qb_beta_per_layer = jax.lax.scan(
-            _scan_layer, hidden, xs=self.stacked_blocks.stacked, unroll=cfg.scan_unroll
-        )
-        return self.final_norm(hidden), qb_beta_per_layer
+        out = self.final_norm(hidden)
+        mtp_hidden = None
+        if self.mtp_block is not None:
+            # DeepSeek-V3 MTP depth-1, entirely outside the trunk scan: combine the trunk hidden with the
+            # embedding of the next token t_{i+1}, project [2D,D], and run one MoE block (local sliding
+            # mask). Checkpointed like the trunk blocks so it does not blow up the recompute_all budget.
+            mtp_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
+            next_ids = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+            next_embed = self.mtp_embed_norm(_embedding_gather(self.token_embed, next_ids))
+            combined = jnp.concatenate([self.mtp_hidden_norm(hidden), next_embed], axis=-1)
+            h_proj = jnp.einsum("bst,td->bsd", combined, self.mtp_proj, out_sharding=_batch_spec())
+            mtp_h, _ = eqx.filter_checkpoint(self.mtp_block, policy=remat_policy)(h_proj, mtp_mask)
+            mtp_hidden = self.mtp_final_norm(mtp_h)
+        return out, qb_beta_per_layer, mtp_hidden
 
     @named_call
     def logits(
@@ -904,7 +956,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        hidden, _ = self(token_ids, mask=mask)
+        hidden, _, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_batch_spec())
 
     def next_token_loss(
@@ -917,7 +969,7 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
     ) -> tuple[jax.Array, Float[Array, "L E"]]:
-        hidden, qb_beta_per_layer = self(token_ids, mask=mask)
+        hidden, qb_beta_per_layer, mtp_hidden = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         loss = fused_linear_softmax_cross_entropy_loss(
@@ -929,6 +981,21 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
+        if mtp_hidden is not None:
+            # MTP depth-1 predicts t_{i+2}: labels shifted one further, and the last two positions have
+            # no valid target so their weight is zeroed. Shares the output head with the main model.
+            mtp_labels = jnp.concatenate([labels[:, 1:], labels[:, :1] * 0], axis=1).astype(jnp.int32)
+            mtp_weight = loss_weight.at[:, -2:].set(0.0)
+            mtp_loss = fused_linear_softmax_cross_entropy_loss(
+                mtp_hidden,
+                self.output_proj,
+                mtp_labels,
+                weight=mtp_weight,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+            )
+            loss = loss + self.config.mtp_loss_weight * mtp_loss
         return loss, qb_beta_per_layer
 
 

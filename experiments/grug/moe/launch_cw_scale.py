@@ -155,6 +155,8 @@ def build_scale_model() -> GrugModelConfig:
         rope_fused=os.environ.get("SCALE_ROPE_FUSED") == "1",
         local_kv_heads=env_int("SCALE_LOCAL_KV_HEADS", 0) or None,
         global_kv_heads=env_int("SCALE_GLOBAL_KV_HEADS", 0) or None,
+        mtp_depth=env_int("SCALE_MTP_DEPTH", 0),
+        mtp_loss_weight=env_float("SCALE_MTP_WEIGHT", 0.3),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",
