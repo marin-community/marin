@@ -3586,3 +3586,22 @@ author: dlwh
   - Numerical promotion remains blocked. The one failing near-zero leaf exceeds the human-approved policy even though its absolute error is small; do not round it down or relax the gate.
 - Next action:
   - Replicate the exact control to measure determinism, then isolate the stage-2 attention-gate gradient under the fixed policy. Launch L24 only after every leaf passes `0.002`.
+
+### 2026-07-26 10:44 PDT - local-output readiness is stable; numerical failure replicates exactly
+- Hypothesis: r17's post-execution wait came from synchronizing the complete reconstructed MPMD output pytree, including fallback leaves not owned by the local rank. Synchronizing only the local stage optimizer state and the rank-0 loss should make completion deterministic without changing the numerical gate.
+- Commit Hash: `11deda5edc` replaces whole-output `block_until_ready` with per-leaf readiness on the rank-local optimizer state plus the rank-0 loss. It emits a start/complete event for every local gradient leaf.
+- Commands:
+  - `/dlwh/jaxpp-ragged-parity-m1-precompile-r17-20260726-1840` replicated r16 before the local-output change.
+  - `/dlwh/jaxpp-ragged-parity-m1-localready-r18-20260726-1842` ran the same four-task H100x8 m1 graph from `11deda5edc`.
+- Results:
+  - r17 precompiled all ranks and began execution. Ranks 1-3 returned from local execution, while rank 0 remained in `jax.block_until_ready((next_state, metrics))`; ranks 1-3 then waited in `broadcast_one_to_all`. Two 120-second watchdogs were identical. The stopped parent is terminal killed with no live resources.
+  - r18 precompile counts matched r16/r17: rank 0 `4/2`, rank 1 `3/2`, rank 2 `3/2`, and rank 3 `2/1` task/receive buffers.
+  - Every local gradient leaf completed readiness, rank 0's loss completed readiness, all ranks completed execution and loss broadcast, and all four reports were emitted without a watchdog.
+  - Loss relative-L2 was exactly `0.0`. Stage max gradient relative-L2 values again were `0.00189865`, `0.00193056`, `0.00231603`, and `0.00198969`.
+  - The sole failing leaf reproduced bit-for-bit: `params['stage_2'].blocks[0].attn.attn_gate`, relative-L2 `0.002316026868913077`, absolute-L2 `1.0531771721389305e-7`, reference-L2 `4.5473443606169894e-5`.
+  - The user-approved policy remains relative-L2 `<=0.002` for loss and every gradient leaf. r18 therefore fails promotion. Iris is terminal failed because rank 0 returned the gate's nonzero status; no task or allocation remains live.
+- Interpretation:
+  - Coordinated local precompile plus rank-local output synchronization is a stable functional fix for this reduced graph. Reconstructed remote fallback leaves must not be used as a rank-local completion fence.
+  - The stage-2 attention-gate mismatch is deterministic numerical behavior, not run noise or an incomplete device buffer. Its absolute error is small, but it exceeds the fixed policy and cannot be rounded down.
+- Next action:
+  - Isolate the stage-2 attention-gate mixed-precision computation with a diagnostic-local precision control. Promote only a correction that keeps the `0.002` loss/every-gradient policy unchanged, then replicate once before L24.
