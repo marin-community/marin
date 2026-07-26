@@ -232,3 +232,73 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   A/B. GB200 capacity is available on `cw-us-east-08a` (the earlier 0/0 worker reading was
   wrong — the config has on-demand `gb200-4x` scale groups and jobs were completing during
   this session).
+
+### 2026-07-26 22:34 - FP8W-006: fused path runs on GB200; end-to-end parity and first timing
+
+- **Hypothesis:** H4, H5, and the fused-VJP shape forced by FP8W-005.
+- **Commit hash:** `ac4874e1f` (fused path at `3999982e5`).
+- **Command:** `iris --cluster cw-us-east-08a job run --user mwittmann --gpu GB200x4
+  --enable-extra-resources --cpu 16 --memory 64g --extra gpu --job-name
+  fp8w-006-dispatch-parity-r2 -- python
+  experiments/grug/moe/standalone/test_mxfp8_dispatch_gpu.py --tokens 512 --hidden 512`
+- **Config:** 1x GB200x4 (sm100, cc 10.0), jax 0.10.1, ring EP over 4 devices, XLA
+  producer, T=512 gathered tokens, D=512, I=256, E=16, top-4, capacity factor 1.25.
+  Deliberately small: this is a correctness and smoke run, not the operating point.
+- **Result:** control (bf16 dispatch, op quantizes on arrival) vs treatment (quantize
+  before the collective):
+
+  | metric | value |
+  |---|---|
+  | dx nonzero | true |
+  | dw13 relfrob | 0.0 |
+  | dw2 relfrob | 0.0 |
+  | dx relfrob | 9.88e-4 |
+  | forward relfrob | 7.67e-4 |
+  | fwd speedup | 1.035x |
+  | fwd+bwd speedup | 1.017x |
+
+- **Interpretation:** the fused custom VJP works end to end on real kernels and the
+  dispatch gradient survives, which is the FP8W-005 failure mode cleared. Both weight
+  gradients are exactly equal. The speedups are at a toy shape where the collective is a
+  negligible share of the step, so they carry no information about the operating point;
+  they are reported only to show the direction is not negative. The forward relfrob of
+  7.67e-4 contradicted the bit-identical prediction and is chased in FP8W-007.
+- **Next action:** isolate the forward difference at operand level.
+
+### 2026-07-26 22:38 - FP8W-007: the wire is exact; the e2e delta is downstream of the op
+
+- **Hypothesis:** the row-orientation operand is bit-identical (H1 on real kernels), so the
+  FP8W-006 forward difference arises somewhere other than the wire.
+- **Commit hash:** `ac4874e1f`.
+- **Command:** as above with `--check-operands --hidden 512`, job
+  `fp8w-007-operands-r2`. Feeds one dispatch buffer (512 rows, a 96-row all-zero tail,
+  uneven group sizes) through `_forward_pipeline` and `_forward_pipeline_quantized` and
+  diffs the operands the grouped kernels receive.
+- **Result:**
+
+  | check | value |
+  |---|---|
+  | row operand bit-identical | true |
+  | row scales bit-identical | true |
+  | column operand bit-identical | false |
+  | y relfrob | 0.0 |
+  | control x_q has NaN | false |
+  | treatment x_q has NaN | false |
+
+- **Interpretation:** H1 confirmed on sm100, not just on CPU: quantizing before the
+  dispatch produces byte-identical forward operands and an exactly identical forward
+  output. The column operand differs, which is the intended rebuild measured in FP8W-001.
+  The FP8W-006 end-to-end difference is therefore downstream of the op. The most likely
+  source is the bf16 scatter-add in the ring combine, whose accumulation order over
+  duplicate token indices XLA is free to schedule differently between the two graphs;
+  7.67e-4 is the right magnitude for bf16 accumulation-order noise. Not yet proven, and it
+  is the one loose end in the parity story.
+
+  **H7 is answered as a side effect: no NaN on sm100.** The control path quantizes an
+  all-zero-tail buffer through the vendored reference and produces no NaN, so the 0/0 that
+  XLA CPU produces is a denormal-flush artifact of that backend and does not affect the
+  #7271 training path. The wire's masking remains the more robust behaviour but is not
+  fixing a live GPU bug.
+- **Next action:** confirm the combine-ordering hypothesis, then run the layer A/B at the
+  #7201 operating point (d5120 or d6144, 48 layers, 4-of-128), where the collective is a
+  real share of the step and the timing means something.
