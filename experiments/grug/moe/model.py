@@ -152,6 +152,8 @@ class GrugModelConfig:
     # Expert count for the MTP block; 0 (default) = same as the trunk. Fewer experts shrinks the MTP
     # block's params + expert-gather transient, which otherwise OOMs the HBM-bound trunk.
     mtp_num_experts: int = 0
+    # Use a dense-MLP MTP block instead of a MoE one (bypasses the standalone QuACK grouped GEMM).
+    mtp_dense: bool = False
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -776,6 +778,34 @@ class Block(eqx.Module):
         return x + mlp_out, qb_beta
 
 
+class DenseBlock(eqx.Module):
+    """Attention + dense MLP transformer block (no MoE). Used for the MTP head to bypass the standalone
+    sonic_cute grouped-GEMM lowering. Returns ``(hidden, None)`` to match the ``Block`` call interface."""
+
+    rms_attn: RMSNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp: DenseMLP
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "DenseBlock":
+        k_attn, k_mlp = random.split(key, 2)
+        return DenseBlock(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn=CausalSelfAttention.init(cfg, key=k_attn),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp=DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=k_mlp),
+        )
+
+    @named_call
+    def __call__(
+        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, is_global: jax.Array | None = None
+    ) -> tuple[Float[Array, "B S D"], None]:
+        x = x + self.attn(self.rms_attn(x), mask, is_global)
+        x = x + self.mlp(self.rms_mlp(x))
+        return x, None
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -784,7 +814,7 @@ class Transformer(eqx.Module):
     final_norm: RMSNorm
     # DeepSeek-V3 MTP (depth 1): a standalone MoE block + [2D, D] projection + norms, run after the
     # trunk scan. None when mtp_depth == 0.
-    mtp_block: Block | None
+    mtp_block: Block | DenseBlock | None
     mtp_proj: jax.Array | None
     mtp_hidden_norm: RMSNorm | None
     mtp_embed_norm: RMSNorm | None
@@ -838,7 +868,9 @@ class Transformer(eqx.Module):
                 num_experts=mtp_experts,
                 num_experts_per_token=min(cfg.num_experts_per_token, mtp_experts),
             )
-            mtp_block = Block.init(mtp_cfg, key=mtp_block_key)
+            mtp_block = (
+                DenseBlock.init(mtp_cfg, key=mtp_block_key) if cfg.mtp_dense else Block.init(mtp_cfg, key=mtp_block_key)
+            )
             mtp_proj = reshard(
                 _init_weight(mtp_proj_key, (2 * cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)
             )
