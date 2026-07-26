@@ -6,6 +6,7 @@
 import dataclasses
 import datetime
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -56,7 +57,9 @@ NCCL_EP_RUNTIME_VERSION = "2.30.7"
 DEEPEP_CUDA_TOOLCHAIN_VERSION = "13.2.78"
 DEEPEP_CUDA_CCCL_VERSION = "13.3.3.4.1"
 DEEPEP_CUDA_RUNTIME_VERSION = "13.2.75"
+JAX_NIGHTLY_INDEX = "https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/"
 _NCCL_EP_IMPLEMENTATIONS = ("nccl_ep", "nccl_ep_drop")
+_JAX_NIGHTLY_VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+\.dev\d{8}")
 
 
 def env_float(key: str, default: float) -> float:
@@ -77,6 +80,33 @@ def env_optional_int_tuple(key: str) -> tuple[int, ...] | None:
     if any(not part for part in parts):
         raise ValueError(f"{key} must be a comma-separated list of integers, got {raw!r}")
     return tuple(int(part) for part in parts)
+
+
+def jax_nightly_setup_scripts(*, version: str) -> tuple[str, ...]:
+    """Upgrade a worker venv to one exact public JAX CUDA 13 nightly."""
+    if _JAX_NIGHTLY_VERSION_PATTERN.fullmatch(version) is None:
+        raise ValueError(f"JAX_NIGHTLY_VERSION must look like 0.11.1.dev20260725, got {version!r}")
+
+    packages = (
+        f"jax=={version}",
+        f"jaxlib=={version}",
+        f"jax-cuda13-plugin[with-cuda]=={version}",
+        f"jax-cuda13-pjrt=={version}",
+    )
+    return (
+        "\n".join(
+            [
+                "set -euxo pipefail",
+                'source "$IRIS_VENV/bin/activate"',
+                'cd "$IRIS_WORKDIR"',
+                f"echo 'installing JAX CUDA 13 nightly {version}'",
+                "uv pip install --link-mode symlink "
+                f"--prerelease allow --index {JAX_NIGHTLY_INDEX} " + " ".join(repr(package) for package in packages),
+                "python -c 'import jax, jaxlib; print(\"JAX nightly active\", jax.__version__, jaxlib.__version__)'",
+            ]
+        )
+        + "\n",
+    )
 
 
 def deepep_setup_scripts(*, source_root: str, revision: str) -> tuple[str, ...]:
@@ -356,8 +386,11 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
             f"got {pipeline.stage_layer_counts} (sum={sum(pipeline.stage_layer_counts)})"
         )
     post_setup_scripts = ()
+    jax_nightly_version = os.environ.get("JAX_NIGHTLY_VERSION")
+    if jax_nightly_version:
+        post_setup_scripts = jax_nightly_setup_scripts(version=jax_nightly_version)
     if pipeline is not None or model.moe_implementation == "ring_quack_approx":
-        post_setup_scripts = jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
+        post_setup_scripts += jaxpp_setup_scripts(revision=os.environ.get("JAXPP_REVISION", DEFAULT_JAXPP_REVISION))
     if model.moe_implementation == "deepep":
         source_root = os.environ.get("DEEPEP_SRC_ROOT")
         if not source_root:

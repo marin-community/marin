@@ -59,6 +59,7 @@ WORKER_DISK="256g"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 JAXPP_REVISION="7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
+JAX_NIGHTLY_VERSION="${JAX_NIGHTLY_VERSION:-}"
 JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="${JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT:-7200}"
 JAXPP_CLIENT_TIMEOUT="${JAXPP_CLIENT_TIMEOUT:-7200000}"
 DEEPEP_REVISION="7febc6e25660af0f54d95dd781ecdcd62265ecca"
@@ -119,6 +120,9 @@ Options:
   --jax-init-timeout N      JAX distributed initialization timeout in seconds (default: 7200).
   --jaxpp-client-timeout-ms N
                             JaxPP coordination-client timeout in milliseconds (default: 7200000).
+  --jax-nightly-version VERSION
+                            Upgrade worker venvs to one exact public CUDA 13 nightly,
+                            e.g. 0.11.1.dev20260725. Omit to keep the locked JAX version.
   --xla-memory-fraction N   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.70).
   --remat NAME              recompute_all or save_moe (default: save_moe).
   --steps N                 MAY_STEPS (default: 20).
@@ -167,6 +171,7 @@ while [ "$#" -gt 0 ]; do
         --conservative-loop-clustering) JAXPP_CONSERVATIVE_LOOP_CLUSTERING="$2"; shift 2 ;;
         --jax-init-timeout) JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT="$2"; shift 2 ;;
         --jaxpp-client-timeout-ms) JAXPP_CLIENT_TIMEOUT="$2"; shift 2 ;;
+        --jax-nightly-version) JAX_NIGHTLY_VERSION="$2"; shift 2 ;;
         --xla-memory-fraction) XLA_MEMORY_FRACTION="$2"; shift 2 ;;
         --remat) REMAT="$2"; shift 2 ;;
         --steps) STEPS="$2"; shift 2 ;;
@@ -364,6 +369,11 @@ if [ "$JAXPP_CLIENT_TIMEOUT" -le 0 ]; then
     exit 1
 fi
 
+if [ -n "$JAX_NIGHTLY_VERSION" ] && ! [[ "$JAX_NIGHTLY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.dev[0-9]{8}$ ]]; then
+    echo "ERROR: JAX nightly version must look like 0.11.1.dev20260725, got: $JAX_NIGHTLY_VERSION" >&2
+    exit 1
+fi
+
 R2_HELPER="${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh"
 if [ -x "$R2_HELPER" ]; then
     if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
@@ -423,6 +433,7 @@ ENV_ARGS=(
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
     -e PP_MICROBATCHES "$MICROBATCHES"
     -e JAXPP_REVISION "$JAXPP_REVISION"
+    -e JAX_NIGHTLY_VERSION "$JAX_NIGHTLY_VERSION"
     -e JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT "$JAX_DISTRIBUTED_INITIALIZATION_TIMEOUT"
     -e JAXPP_CLIENT_TIMEOUT "$JAXPP_CLIENT_TIMEOUT"
     -e JAX_COMPILATION_CACHE_DIR "/tmp/jax-compilation-cache"
@@ -492,7 +503,7 @@ for maybe_env in \
     JAXPP_DISABLE_SCHEDULE_TASK_FUSION JAXPP_ENABLE_CHECK_JAXPR \
     JAXPP_ENABLE_TASK_JAXPR_DEDUPLICATION \
     NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_HCA \
-    TF_CPP_VMODULE TF_GPU_ALLOCATOR XLA_FLAGS XLA_PYTHON_CLIENT_PREALLOCATE; do
+    TF_CPP_VMODULE TF_CPP_MAX_VLOG_LEVEL TF_GPU_ALLOCATOR XLA_FLAGS XLA_PYTHON_CLIENT_PREALLOCATE; do
     if [ -n "${!maybe_env:-}" ]; then
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
     fi
@@ -544,6 +555,7 @@ steps: $STEPS
 tracker: $TRACKER
 data: $DATA
 jaxpp_revision: $JAXPP_REVISION
+jax_nightly_version: ${JAX_NIGHTLY_VERSION:-locked}
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_jaxpp_may_d2560
