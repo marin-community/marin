@@ -411,3 +411,22 @@ Next: 20-min polls for pipeline/fabric recovery; fill in the g=0.5 line; stand b
 
 Confidence: 1/10 global variants; 4/10 g=0.5 smoother plateau when readable
 Next: watch cycle; resubmit g=0.5 cross-check on fabric heal; harvest v1 on log heal.
+
+## Check-in 2026-07-26 07:50 UTC — dormant watch posture
+
+- 07:40 fleet: d1's v2 leg 0% GPU (4h+ stuck on a 120-step leg); rav's qbdrv-cf115-3
+  (04:26) 0% GPU; his 05:05 smoke churning. NOBODY has trained since d4's 02:15 capture.
+  Fabric down 5.5h; log shipping down 11h.
+- v1 g=0.5 metric recovery paths exhausted: pods gone (no task exec), both log-serving
+  paths 0 rows (data never left workers), no checkpoints (disabled), tracker was
+  json_logger only. The data exists only in stranded worker buffers.
+- DORMANT WATCH with defined triggers: (a) any fleet gang shows GPU>0 -> fabric healed
+  -> resubmit g=0.5 cross-check (v4, fresh compile cache) with poller attached; (b) any
+  evening-job child rows appear in the log store -> harvest v1 immediately
+  (harvest_ep25.py ready). Posting further check-ins only on trigger events or hourly.
+- R6-2 deliverable complete as committed at 06:00 (a48a8a9e3): global-QB-controller
+  family closed (integral negative at g=0.001 and g=0.01, both measured end-to-end;
+  g<1 fixed-point-capped; g=2 limit-cycled [d4]); sender-local is the only route.
+
+Confidence: 1/10 global variants
+Next: trigger-driven watch only.
