@@ -1383,3 +1383,34 @@ wider than real MoE activations. The number that matters is the loss trajectory 
 Gate 2 next: confirm `__cublas$lt$matmul$f8` appears for the REAL dispatch path, not just probe
 shapes. If it silently falls back there, stop and report.
 Confidence: 9/10 on the identity; 6/10 on end-to-end loss parity (weights are half the error budget).
+
+## GATE 2 PASSED 2026-07-26 12:10 UTC — the fp8 GEMM survives the real dispatch graph
+
+experiments/grug/moe/fp8_dispatch_probe.py reproduces the actual dispatch path rather than clean
+parameters: per-token quantize -> bitcast to uint8 -> tiled `all_to_all` inside `shard_map` on a
+4-way expert mesh -> bitcast back to e4m3 -> reshape to [bucket, hidden] -> dot -> output-side
+scale -> SwiGLU, at operating-point widths (hidden 5120, ffn 2x1280, capacity 2048).
+
+| arrangement | lowers to |
+|---|---|
+| dequantize on arrival (what ships today) | `__cublas$lt$matmul` |
+| unscaled fp8 into the dot, scale on the output | **`__cublas$lt$matmul$f8`** |
+
+So the bitcast through uint8, the collective itself, the shard_map boundary and the reshape all
+preserve the rewriter's operand pattern — the failure mode this gate existed to catch does not
+occur. It also re-confirms on the real graph that today's shipped arrangement never had an fp8
+GEMM at all, which is the mechanical half of the old -2.02pp.
+
+GO for gate 3. Remaining work is the implementation I estimated at 1-2 days: carry (payload,
+scale) out of the wire instead of dequantizing at ep_ragged_all_to_all.py:70, per-expert scalar
+weight quantization, output-side scale application (folds into the existing SwiGLU fusion on the
+dispatch leg, and into the combine-weight einsum on the combine leg), and extending the structured
+custom adjoint to e5m2 cotangents in the mixed e5m2-grad x e4m3-weight form that probe row 4
+already confirmed lowers correctly.
+
+Verdict criteria fixed in advance: matched-draw rack pair (bf16 wire control vs fp8 wire), QB-on
+cf1.0, drops on, 120 steps, one leg in flight. **Loss-trajectory parity is the verdict**, not MFU
+— weights are half the quantization error budget per gate 1. Prize bracket, quoted as a bracket:
++1.34pp (a2a hidden fraction unchanged) to +2.84pp (a2a fully hidden), against a total remaining
+collective-exposure budget of +3.37pp.
+Confidence: 9/10 that the lowering holds in the production path; 6/10 on end-to-end loss parity.
