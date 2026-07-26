@@ -1454,3 +1454,37 @@ Both fidelity notes from the coordinator are already satisfied by the current de
 per-token current-scaling (never tile- or sequence-spanning) and per-expert scalar, and nothing in
 the forward or dgrad path uses an amax cotangent.
 Confidence: 9/10 on the wgrad constraint (direct measurement, structural argument); 6/10 on end-to-end loss parity, unchanged.
+
+## PARITY CLEAR 2026-07-26 12:45 UTC — fused fp8 dispatch GEMM implemented, 8/8 tests pass
+
+`SCALE_A2A_FP8_GEMM=1` (requires `SCALE_A2A_FP8_WIRE=1`) replaces the dispatch leg's
+dequantize-then-bf16-dot with a single fp8 dot. `_fp8_dispatch_gemm` is one custom_vjp spanning
+the collective and the GEMM, so the fp8 payload never crosses an autodiff boundary.
+
+Parity against a bf16 reference (single-device expert mesh, so the a2a is the identity and only
+quantization plus the output-side scaling are under test):
+
+| quantity | relative error | path |
+|---|--:|---|
+| forward | 0.0356 | e4m3 activations x e4m3 weights, per-token scale on the output |
+| dgrad | 0.0726 | e5m2 cotangent x e4m3 weight, scale on the output rows |
+| wgrad | 0.0252 | bf16, per the reduction-axis constraint |
+
+dgrad carries roughly twice the forward error, which is what an e5m2 wire should cost (2-bit
+mantissa against e4m3's 3). wgrad is the most accurate of the three precisely because it stayed
+bf16. All within the hostile-fixture ceiling; the verdict remains the gate-3 loss trajectory.
+
+Two implementation findings worth keeping:
+- Custom-VJP residuals must be JAX types. Stashing `w13.dtype` there fails with "not a valid JAX
+  type"; dtypes have to ride as zero-size arrays. Shapes needed no residual at all, since the
+  tiled a2a preserves shape.
+- A replicated input to `shard_map` needs its cotangent psum-ed across the manual axis, or JAX
+  rejects the bwd rule with "the manual axis types do not match". Production is unaffected —
+  expert weights are sharded per device, not replicated — but a test that replicates them trips
+  it, and the error names the axis rather than the cause.
+- `SCALE_A2A_FP8_GEMM` supersedes `SCALE_A2A_PREFETCH`: the fused op owns its collective, so the
+  prefetch gate cannot hoist the next round's dispatch above this round's GEMM. Harmless now that
+  the parallel-collective budget keeps every a2a async, but the two knobs do not compose and the
+  code logs that.
+Confidence: 9/10 on forward and dgrad correctness; 6/10 on end-to-end loss parity, unchanged.
+Next: rack slot when free (pre-approved) — matched pair, bf16 wire control vs fp8 wire+GEMM.
