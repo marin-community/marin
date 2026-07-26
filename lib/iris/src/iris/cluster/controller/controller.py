@@ -1405,15 +1405,15 @@ class Controller:
             for backend_id in self._backend_ids:
                 result = recon_results.get(backend_id)
                 if result is not None and not result.effects.is_empty:
-                    commit_effects(cur, result.effects)
+                    commit_effects(cur, result.effects, task_event_table=self._log_stack.task_event_table)
             if timeout_decisions:
-                finalize(cur, timeout_decisions, now=now)
+                finalize(cur, timeout_decisions, now=now, task_event_table=self._log_stack.task_event_table)
             if pending_kicks:
                 # Resolve after the schedule/reconcile writes so the attempt
                 # re-check sees this tick's reassignments.
                 kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
                 if kick_decisions:
-                    finalize(cur, kick_decisions, now=now)
+                    finalize(cur, kick_decisions, now=now, task_event_table=self._log_stack.task_event_table)
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
@@ -1447,9 +1447,15 @@ class Controller:
                     for task, reason in routing_unschedulable
                 ],
                 now=now,
+                task_event_table=self._log_stack.task_event_table,
             )
         if result.unschedulable:
-            finalize(cur, self._unschedulable_decisions(result.unschedulable), now=now)
+            finalize(
+                cur,
+                self._unschedulable_decisions(result.unschedulable),
+                now=now,
+                task_event_table=self._log_stack.task_event_table,
+            )
         # Each backend's assignments are re-checked against the liveness tracker that
         # backend owns. Walking backends in order reproduces the merged ordering.
         for backend_id in self._backend_ids:
@@ -1460,7 +1466,7 @@ class Controller:
             assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
             ops.task.assign(cur, backend_result.assignments, health=health)
         if result.preemptions:
-            finalize(cur, result.preemptions, now=now)
+            finalize(cur, result.preemptions, now=now, task_event_table=self._log_stack.task_event_table)
             logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
 
     def _run_scheduling(self) -> SchedulingOutcome:
@@ -1570,6 +1576,7 @@ class Controller:
                 cur,
                 preemptions,
                 now=Timestamp.now(),
+                task_event_table=self._log_stack.task_event_table,
             )
         logger.info("Preemption pass: %d tasks preempted", len(preemptions))
 
@@ -1614,6 +1621,7 @@ class Controller:
                 cur,
                 self._unschedulable_decisions(tasks),
                 now=Timestamp.now(),
+                task_event_table=self._log_stack.task_event_table,
             )
 
     def _unschedulable_decisions(self, tasks: list[PendingTask]) -> list[TerminalDecision]:

@@ -196,6 +196,12 @@ _REASON_SCHEDULING_GATED = "SchedulingGated"
 # cgroup limit gets no such condition, so it correctly stays an application
 # failure. GA since Kubernetes 1.26.
 _DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
+# Kueue uses its own pod condition when it evicts an admitted Workload. The
+# reason identifies a controller-authored Workload eviction; other
+# TerminationTarget users must not turn application exits into infrastructure
+# failures accidentally.
+_KUEUE_TERMINATION_TARGET_CONDITION = "TerminationTarget"
+_KUEUE_WORKLOAD_EVICTION_REASON_PREFIX = "WorkloadEvicted"
 
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs only)
@@ -1016,16 +1022,23 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _has_disruption_target_condition(pod: dict) -> bool:
-    """True if the control plane marked this pod for infrastructure disruption.
+def _infrastructure_failure_condition(pod: dict) -> dict | None:
+    """Return the authoritative pod disruption condition, if present.
 
-    See :data:`_DISRUPTION_TARGET_CONDITION` — the authoritative preemption/
-    eviction/drain signal, independent of the container exit code.
+    Kubernetes stamps ``DisruptionTarget`` for native disruptions. Kueue stamps
+    ``TerminationTarget`` with a ``WorkloadEvicted*`` reason before deleting a
+    preempted Workload's pods.
     """
     for condition in pod.get("status", {}).get("conditions", []):
-        if condition.get("type") == _DISRUPTION_TARGET_CONDITION and condition.get("status") == "True":
-            return True
-    return False
+        if condition.get("status") != "True":
+            continue
+        if condition.get("type") == _DISRUPTION_TARGET_CONDITION:
+            return condition
+        if condition.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION and str(condition.get("reason", "")).startswith(
+            _KUEUE_WORKLOAD_EVICTION_REASON_PREFIX
+        ):
+            return condition
+    return None
 
 
 def _is_infrastructure_failure(pod: dict) -> bool:
@@ -1041,7 +1054,7 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     # exit 137 — which the terminated-reason whitelist below misses. A container
     # that OOMs on its own cgroup limit carries no such condition and correctly
     # falls through to an application failure.
-    if _has_disruption_target_condition(pod):
+    if _infrastructure_failure_condition(pod) is not None:
         return True
     status = _task_container_status(pod)
     if status is None:
@@ -1175,10 +1188,17 @@ def _init_container_failure(pod: dict) -> str | None:
 def _extract_terminal_reason(pod: dict) -> str | None:
     """A bounded terminal-cause string for a failed attempt.
 
-    Prefers an init-container failure — invisible to the task-container extractors —
-    over the task container's own terminal reason.
+    Prefers an authoritative controller disruption condition, then an
+    init-container failure invisible to the task-container extractors, over the
+    task container's own terminal reason.
     """
-    reason = _init_container_failure(pod) or _extract_error(pod)
+    condition = _infrastructure_failure_condition(pod)
+    condition_reason = None
+    if condition is not None:
+        short_reason = condition.get("reason", "") or condition.get("type", "")
+        message = condition.get("message", "")
+        condition_reason = f"{short_reason}: {message}" if message else short_reason
+    reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
     return reason[:_TERMINAL_REASON_MAX_CHARS] if reason is not None else None
 
 
@@ -1487,6 +1507,15 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     actionable failure (image pull, config error) or a Kueue-declined admission,
     Normal for a transient wait.
     """
+    disruption = _infrastructure_failure_condition(pod)
+    if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
+        return _PodEvent(
+            source=_EVENT_SOURCE_KUEUE,
+            reason=disruption.get("reason", "") or _KUEUE_TERMINATION_TARGET_CONDITION,
+            message=disruption.get("message", ""),
+            severity="Warning",
+        )
+
     pr = _pod_reason_message(pod, workload)
     if not pr.reason:
         return None
@@ -1995,7 +2024,7 @@ class PeriodicProfiler:
 
 
 class TaskEventLog:
-    """Appends scheduling/admission events to the ``iris.task_event`` namespace.
+    """Appends Kubernetes backend events to the ``iris.task_event`` namespace.
 
     Driven synchronously from the pod poll — no background thread, since the
     verdicts come from the pod/workload lists ``sync`` already fetches.

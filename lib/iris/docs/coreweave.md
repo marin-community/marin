@@ -311,6 +311,47 @@ Free, fully-managed Grafana included with every CKS cluster. Pre-configured
 dashboards for CKS (control plane, Pods), Fleet (node/resource trends),
 and Network (traffic, latency). No setup required.
 
+Kubernetes Events and deleted Pod objects are short-lived. For actor-level
+history, use CoreWeave's
+[Kubernetes Audit Logs dashboard](https://docs.coreweave.com/observability/managed-grafana/cks/kubernetes-audit-logs)
+or the regional Loki API. CKS audit logs have dedicated regional data sources;
+CoreWeave documents that some log types expire after two weeks. Use the regional
+source for detailed incident queries:
+
+```bash
+KUBE_CONFIG=~/.kube/coreweave-iris
+KUBE_CONTEXT=marin-rn02a_RNO2A
+CW_CLUSTER=marin-rn02a
+AUDIT_HOST=https://observe-audit.us-west.coreweave.com
+POD_NAME=iris-example-0
+START=2026-07-25T21:20:00Z
+END=2026-07-25T21:35:00Z
+
+CW_OBSERVE_TOKEN=$(kubectl --kubeconfig "$KUBE_CONFIG" --context "$KUBE_CONTEXT" \
+  config view --raw --minify -o jsonpath='{.users[0].user.token}')
+curl -sS -G "$AUDIT_HOST/loki/api/v1/query_range" \
+  -H "Authorization: Bearer $CW_OBSERVE_TOKEN" \
+  --data-urlencode \
+  "query={logging_component=\"unicaster\", app=\"kube-apiserver\", stream=\"\", cluster=\"$CW_CLUSTER\"} |= \"$POD_NAME\" | json | apiVersion=\"audit.k8s.io/v1\"" \
+  --data-urlencode "start=$START" \
+  --data-urlencode "end=$END" \
+  --data-urlencode "limit=1000"
+unset CW_OBSERVE_TOKEN
+```
+
+Use `observe-audit.us-east.coreweave.com` for US-EAST and
+`observe-audit.us-west.coreweave.com` for RNO2A/US-WEST. Filter the results by
+`objectRef.name`, `verb`, and `user.username` to distinguish Iris cleanup from
+Kueue, kubelet, or an operator. The kubeconfig token is also the CoreWeave API
+access token; never print it or save the response with request headers.
+
+Do not mirror the full audit stream through the Iris Grafana bridge. CoreWeave
+already stores it, and
+[Telemetry Relay](https://docs.coreweave.com/observability/telemetry-forwarding/relay)
+can forward audit logs if longer customer-controlled retention is required.
+Iris keeps the smaller task-scoped interpretation in `iris.task_event`; use
+`iris task events /user/job/0` before querying raw audit logs.
+
 ## 4. Operator Setup Guide
 
 §0 is the quickstart for the `marin-gpu` cluster. This section is the generic

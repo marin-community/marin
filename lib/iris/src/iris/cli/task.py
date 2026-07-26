@@ -8,13 +8,18 @@ Usage:
     iris --config cluster.yaml task exec /user/job/0 -- bash -c "ls /app"
 """
 
+import contextlib
 import logging
 import sys
+from datetime import UTC, datetime
 
 import click
+from finelog.client import LogClient
+from rigging.connect import proxy_path
 from tabulate import tabulate
 
-from iris.cli.connect import rpc_client_for_ctx
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.types import TERMINAL_TASK_STATES, TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import format_resources, signal_name, task_state_friendly
@@ -190,6 +195,54 @@ def fetch_task_status(ctx, task_id: str) -> controller_pb2.Controller.GetTaskSta
         return client.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=target.task_id.to_wire()))
 
 
+def build_task_events_sql(target: TaskAttempt, limit: int) -> str:
+    """Build the bounded finelog query for a task's chronological action history."""
+    task_id = target.task_id.to_wire().replace("'", "''")
+    predicates = [f"task_id = '{task_id}'"]
+    if target.attempt_id is not None:
+        predicates.append(f"attempt_id = {target.attempt_id}")
+    where = " AND ".join(predicates)
+    return (
+        'SELECT attempt_id, ts, type, reason, message, source, count FROM "iris.task_event" '
+        f"WHERE {where} ORDER BY ts ASC LIMIT {limit}"
+    )
+
+
+def _format_event_timestamp(value: object) -> str:
+    if isinstance(value, datetime):
+        timestamp = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def render_task_events_text(task_id: str, rows: list[dict]) -> str:
+    """Render finelog task-event rows as a chronological operator timeline."""
+    lines = [f"Task: {task_id}", ""]
+    if not rows:
+        lines.append("No task events found.")
+        return "\n".join(lines)
+    table_rows = [
+        [
+            _format_event_timestamp(row["ts"]),
+            row["attempt_id"],
+            row["type"],
+            row["source"],
+            row["reason"],
+            row["count"],
+            _truncate(str(row["message"]), 100),
+        ]
+        for row in rows
+    ]
+    lines.append(
+        tabulate(
+            table_rows,
+            headers=["TIME (UTC)", "ATTEMPT", "TYPE", "SOURCE", "ACTION", "COUNT", "MESSAGE"],
+            tablefmt="plain",
+        )
+    )
+    return "\n".join(lines)
+
+
 @click.group()
 def task():
     """Task operations."""
@@ -213,6 +266,32 @@ def task_describe(ctx, task_id: str) -> None:
     """
     response = fetch_task_status(ctx, task_id)
     click.echo(render_task_description_text(build_task_description(response)))
+
+
+@task.command("events")
+@click.argument("task_id")
+@click.option("--limit", type=click.IntRange(min=1, max=10_000), default=200, show_default=True)
+@click.pass_context
+def task_events(ctx, task_id: str, limit: int) -> None:
+    """Show backend events and controller actions for a task.
+
+    Without an attempt suffix, returns all retained attempts in chronological
+    order. Add ``:ATTEMPT`` to select one attempt.
+
+    Examples:
+
+      iris task events /user/job/0
+
+      iris task events /user/job/0:2
+    """
+    target = TaskAttempt.from_wire(task_id)
+    url = require_controller_url(ctx)
+    credentials = ctx.obj.get("credentials") if ctx.obj else None
+    interceptors = credentials.interceptors() if credentials is not None else ()
+    log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
+        rows = log_client.query(build_task_events_sql(target, limit)).to_pylist()
+    click.echo(render_task_events_text(target.task_id.to_wire(), rows))
 
 
 @task.command("exec")

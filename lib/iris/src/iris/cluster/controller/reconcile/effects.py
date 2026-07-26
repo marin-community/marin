@@ -112,6 +112,18 @@ class LogEvent:
     details: tuple[tuple[str, object], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class TaskActionEvent:
+    """A durable controller decision affecting one task attempt."""
+
+    task_id: JobName
+    attempt_id: int
+    ts: Timestamp
+    reason: str
+    message: str
+    severity: str = "Normal"
+
+
 # ---------------------------------------------------------------------------
 # ControllerEffects
 # ---------------------------------------------------------------------------
@@ -133,6 +145,7 @@ class ControllerEffects:
 
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
+    task_events: list[TaskActionEvent] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -141,4 +154,4 @@ class ControllerEffects:
         ``health.build_failed`` is excluded: it is folded into the liveness
         tracker by the backend, never persisted by ``commit_effects``.
         """
-        return not (self.tasks or self.attempts or self.jobs or self.log_events)
+        return not (self.tasks or self.attempts or self.jobs or self.log_events or self.task_events)

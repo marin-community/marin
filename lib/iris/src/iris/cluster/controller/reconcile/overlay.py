@@ -16,6 +16,7 @@ from iris.cluster.controller.reconcile.effects import (
     ControllerEffects,
     JobRowDelta,
     LogEvent,
+    TaskActionEvent,
     TaskRowDelta,
 )
 from iris.cluster.controller.reconcile.policy import CANCEL_GUARD_STATES
@@ -345,6 +346,9 @@ class Overlay:
 
     def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)
+
+    def emit_task_event(self, event: TaskActionEvent) -> None:
+        self._effects.task_events.append(event)
 
     def emit_worker_build_failed(self, worker_id: WorkerId) -> None:
         self._effects.health.build_failed.append(worker_id)

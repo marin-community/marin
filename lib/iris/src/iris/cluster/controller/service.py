@@ -90,7 +90,13 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
-from iris.cluster.stats.tables import PROFILE_NAMESPACE, IrisProfile
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    IrisProfile,
+    TaskEventRow,
+)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -1164,6 +1170,11 @@ class ControllerServiceImpl:
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._task_event_table = self._log_client.get_table(
+            TASK_EVENT_NAMESPACE,
+            TaskEventRow,
+            storage_policy=TASK_EVENT_STORAGE_POLICY,
+        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
@@ -1624,6 +1635,7 @@ class ControllerServiceImpl:
                             cur,
                             job_id=job_id,
                             reason="Replaced by new submission",
+                            task_event_table=self._task_event_table,
                         )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
@@ -1990,6 +2002,7 @@ class ControllerServiceImpl:
                 cur,
                 job_id=job_id,
                 reason="Terminated by user",
+                task_event_table=self._task_event_table,
             )
             # Re-report the job's state to its requester (a no-op unless this
             # root was received via handoff). A routed cancel of an already-

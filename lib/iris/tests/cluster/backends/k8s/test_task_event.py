@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``iris.task_event`` scheduling/admission timeline: the "event log for
+"""The Kubernetes portion of the ``iris.task_event`` task-action timeline.
 every job". The k8s backend classifies a not-yet-running pod into a
 ``(source, reason)`` verdict and appends a finelog row when that verdict
 changes, so the dashboard can render *why* a task is wedged in BUILDING
@@ -11,6 +11,7 @@ opaque "Building 18m"."""
 from iris.cluster.backends.k8s.tasks import (
     _EVENT_SOURCE_CONTAINER,
     _EVENT_SOURCE_KUEUE,
+    _KUEUE_POD_GROUP_NAME,
     _LABEL_ATTEMPT_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -76,6 +77,35 @@ def test_pod_event_none_for_healthy_running_pod():
         "status": {"phase": "Running", "containerStatuses": [{"name": "task", "state": {"running": {}}}]},
     }
     assert _pod_event(pod, None) is None
+
+
+def test_pod_event_surfaces_kueue_termination_target():
+    pod = {
+        "metadata": {
+            "name": "iris-job-0-0",
+            "labels": {_KUEUE_POD_GROUP_NAME: "wl-abc"},
+        },
+        "status": {
+            "phase": "Failed",
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}],
+            "conditions": [
+                {
+                    "type": "TerminationTarget",
+                    "status": "True",
+                    "reason": "WorkloadEvictedDueToPreempted",
+                    "message": "Preempted due to prioritization in the ClusterQueue",
+                }
+            ],
+        },
+    }
+
+    event = _pod_event(pod, None)
+
+    assert event is not None
+    assert event.source == _EVENT_SOURCE_KUEUE
+    assert event.reason == "WorkloadEvictedDueToPreempted"
+    assert event.message == "Preempted due to prioritization in the ClusterQueue"
+    assert event.severity == "Warning"
 
 
 # --- TaskEventLog dedup / retain ----------------------------------------------
