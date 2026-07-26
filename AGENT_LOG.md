@@ -584,3 +584,25 @@ by the floor (0.9% here) and by conservation (1-cf). Not a way to buy capacity.
 Double caution for that shape: the statistical floor is HIGHER (1.25%) while spill has LESS headroom (m capped
 at 3, and each attempt chooses among fewer alternatives). Spill may be needed there just to reach where we are
 here, and m=3 is the ceiling rather than a tuning choice.
+
+## FIRST-CLASS FINDING: top-k is the budget for drop recovery (architecture input for the hero run)
+Spill's maximum strength is structurally capped at m_max = topk - 1. Lowering top-k degrades fidelity headroom
+FOUR ways at once, all compounding:
+| | 8-of-256 (proxy, measured here) | 4-of-256 (hero candidate) |
+| per-(sender,expert) bucket mean | 2048 | 1024 |
+| statistical floor (no-spill)    | 0.88% | 1.25%  (halved mean -> floor x sqrt2) |
+| m_max = topk-1                  | 7 | 3 |
+| alternatives per spilled token  | 7 | 3 |
+| share of a token's routed signal lost per dropped assignment | ~12.5% | ~25% |
+So at 4-of-256: the floor is HIGHER, the mechanism's ceiling is LOWER, each attempt chooses among FEWER
+candidates, and each residual drop costs the token TWICE as much of its routed signal. A peer model (validated
+out-of-sample against my live m=2 to within 0.3pp) puts 4-of-256 at ~2.88% at m=3 - just inside the 3% bar with
+the mechanism already AT ITS CEILING and zero headroom left; the proxy 8-of-256 models ~2.7% at m=3 with four
+more attempts still in reserve.
+CONSEQUENCE FOR THE HERO-RUN DECISION: at 4-of-256, m=3 is the CEILING, not a tuning choice. If a top-4
+architecture is chosen and the drop bar later tightens below 3%, the ONLY remaining lever is capacity factor, at
+the measured -1.75pp per +0.15 cf. A top-8 architecture still has spill attempts in reserve. This is an
+architecture consideration absent from the tracker's current candidate comparison (total params / active params
+/ TPS). Holds regardless of how my own m=3 leg lands.
+NOTE the last row is analytical (weight-share arithmetic), not measured; the first four rows are
+measured/derived.
