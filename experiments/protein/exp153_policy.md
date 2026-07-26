@@ -68,10 +68,10 @@ execution:
   wall_time: 8 weeks
   # Maximum requested GPU NODES across submitted, running, or retrying dispatches.
   # Nodes, not GPUs: a node is the atomic schedulable unit and its GPU count differs by
-  # cluster (8 on H100, 4 on GB200). Set high deliberately -- there is no real quota to
-  # enforce here, and a low cap was proving more confusing than useful. Actual usage stays
-  # far below this while the sweep eases in; batch priority is what protects other users.
-  max_inflight_nodes: 256
+  # cluster (8 on H100, 4 on GB200). 32 is the size of the cw-us-east-02a H100 fleet, so
+  # this is a real ceiling rather than a hedge. Waves stay under it deliberately to leave
+  # headroom for other users; batch priority is the other protection.
+  max_inflight_nodes: 32
   observation_interval: 15m
   full_exploitation_level: 8
   recovery:
