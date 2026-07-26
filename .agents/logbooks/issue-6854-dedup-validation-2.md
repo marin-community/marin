@@ -16,6 +16,83 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T17:24:35Z — 163,940 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1719-v469` independently
+  revalidated p1 decision-file 38 semantic offsets 4,096 and 4,224 and p3
+  decision-file 103 semantic offset 256. Their 384 baseline pairs contain 279
+  model false positives, 103 model true duplicates, and two unresolved
+  outcomes. Eleven pairs were chunked and 373 were direct. The audit reread
+  all 2,003 judgments and their 2,011 request attempts: 1,999 attempts were
+  valid, 12 were invalid, and four judgments required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p1:
+    `19c76b69ce68199557cf5be5f401fa920a10bc4f74ae0e5b3e85e1749073fefa`
+    and
+    `bd4da0e978ea0d9a020df9c5745688c167dfc20359ec37fcbc4f4887e5413ff7`;
+  - p3:
+    `c88f1771f594c6977b489f6a299c8f0de67863119e5684bbbd5fe197215cee3f`.
+
+- Complete-text inspection resolves both baseline ambiguities as true
+  duplicates:
+
+  - `part-00038-of-00128.parquet:7413` compares 333-line SFT records with
+    identical positive-reinforcement questions, choices, reasoning,
+    behavioral-psychology facts, conclusions, and answers. The sole changed
+    line is `\boxed{E}` versus `\boxed{\text{E}}`. The
+    17,545/17,552-character records have character, line, and word-sequence
+    similarities 0.999801, 0.996997, and 0.999823. Member/canonical text
+    SHA-256 values are
+    `3b58e4c8f919fa3d2845ba34441621fa2965093b95b4925582c9d40a38de6b28`
+    and
+    `f889337ce22248d60330d62534a2edfc0cef8b432027052ee6f4bbfa63cdd718`.
+  - `part-00038-of-00128.parquet:7447` compares 389-line SFT records with
+    identical vaccination questions, choices, reasoning, statistics,
+    conclusions, and answers. The sole changed line is `\boxed{J}` versus
+    `\boxed{\text{J}}`. The 20,343/20,350-character records have character,
+    line, and word-sequence similarities 0.999828, 0.997429, and 0.999865.
+    Member/canonical text SHA-256 values are
+    `5dea2d66f28687ed1109fcf014bc8c48a9a87d72496739cbb0f3b68a97ebcd31`
+    and
+    `b73ae5af67cbedc077fae9beb8bded0459d71167a43a893926ba0d135aed92ac`.
+
+- The row-7413 inspection, semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `ab3b78ae00d632f57b85a67f1ffec5a75e57723e1ed169dcf613bd9ad9643d54`,
+  `03a660dd24588424d2c1d1e384d6188c9e4711a13317dbebcbbade91ccfda4d4`,
+  `8cf53941daaaaf4ddddb1561e1d0eff051118d83e80d11963c3201c942f62e8a`,
+  and `eee442731ea9af3d679ec9ac149e7b5bb74e0cc5bba4c2eb84bf7d53f614a36f`.
+  `/rav/datakit-6854-inspect-row7413-1720-v470`,
+  `/rav/datakit-6854-publish-row7413-1723-v473`, and
+  `/rav/datakit-6854-verify-row7413-1724-v474` persisted and independently
+  verified those artifacts.
+
+- The row-7447 inspection, semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `d705fa789ea0a59a863d54c4eac0ab7c3812a30a63d74caaff551b921f671adc`,
+  `e048fa85acfa289aefc81643ef0b3cd471e99d15d40a7233aa4a0c94c0ec1f85`,
+  `01629cd795ebea05fc2d37bee1c13f5e253339762c7dd55d551e32643748c13f`,
+  and `367dfb3a08d474a668e96ac906eadbbb39cd30cd9676e86f8ac8d6c8f8602f7b`.
+  `/rav/datakit-6854-inspect-row7447-1721-v471`,
+  `/rav/datakit-6854-publish-row7447-1722-v472`, and
+  `/rav/datakit-6854-verify-row7447-1725-v475` persisted and independently
+  verified those artifacts.
+
+- Across the stable 1,290-checkpoint snapshot, all 181 unresolved model
+  outcomes are covered by 142 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 131,890 pairs, 83,785 false positives, 48,105 true duplicates;
+  - treatment: 32,050 pairs, 16,566 false positives, 15,484 true duplicates;
+  - combined: 163,940 pairs, 100,351 false positives, 63,589 true duplicates.
+
+- The next audit frontiers are p0 `(7, 128)`, p1 `(38, 4,352)`,
+  p2 `(71, 0)`, and p3 `(103, 384)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T17:16:10Z — 163,556 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1717-v468` independently
