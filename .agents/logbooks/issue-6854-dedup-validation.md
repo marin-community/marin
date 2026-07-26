@@ -1483,6 +1483,57 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T00:20:14Z — 66,134 pairs verified
+
+- Seven additional baseline checkpoints passed independent validation: 896
+  pairs, 527 model false positives, 368 model true duplicates, and one
+  unresolved outcome. They contain 1,985 valid judgments across 1,985 request
+  attempts, with no invalid responses or retries. Two pairs were chunked and
+  894 were direct.
+- Complete-text comparison resolves the ambiguity as a true duplicate under
+  the audit's explicit low-value-template rule. The 767-character member and
+  681-character canonical are the same ForSaleByOwner location-marketing
+  template. Removing the member's generic 92-character map/navigation prefix
+  and substituting `Englewood` with `Coopertown` plus nine numeric fields makes
+  the member character-for-character identical to the canonical. The numeric
+  fields are population, commute time and mode share, income and change,
+  college and graduate education shares, residency duration, and home value.
+  Character similarity is 0.824586 and line similarity is 0.230769. Pair
+  location: `part-00066-of-00128.parquet:4298`; member/canonical text SHA-256:
+  `69858ade7f503286f7cbb1fbdac39eb8779d691110b120e559ac1c6263a5bdcc` /
+  `44d13f015e513e39f09083cacf59fb27f606dca23cb8c9ba3cf81fff6e5a2f97`.
+- The exact semantic judgments have SHA-256
+  `f8a4492d7009de00868516be733e0dc29ccc7cd775c6fdafdaff61768196d05c`.
+  The hash-bound manual record has Parquet SHA-256
+  `dcff98e29578993a4b2a6e4351d27c9aa02c13f14dabc954b3aea5dc3bc18ad1`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  the source cases, semantic checkpoint, manual row, Parquet bytes, and
+  completion marker.
+- The seven outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 2688 and 2816:
+    `a7c2df9b09094ec952f16191f2cb86264841cc0f139e666e6ec5ba04cd822c43`
+    and
+    `fbd45d0b24398d594fb39a8fc73343093ef02a6c1ca7e3229ef8b27394048de4`;
+  - p2 decision-file 66 offsets 2432, 2560, and 2688:
+    `fe85010547f250944c37d1a863930c12c1bd06a2c0bea8d537c4042b2f45ed39`,
+    `be26da5457053f3316fea2dd06f504f4e1d68acb73c5993495d007b66c26546c`,
+    and
+    `87e3ee643add478b07c13c07c19c56a174d11aa4e9eebf3c5a7b21062b30f838`;
+  - p3 decision-file 99 offsets 1024 and 1152:
+    `e8043e6d3118ce40f7cb3de42d4b89db25d160ea5965ec37298b38a53d8a9622`
+    and
+    `50ab6f0d17d552f62a1eba0f1808ae6b41f9f9ccadff021e523e8e6c36f69bcc`.
+
+- Across the stable 519-checkpoint snapshot, all 64 manual records leave:
+
+  - baseline: 54,097 pairs, 34,422 false positives, 19,675 true duplicates;
+  - treatment: 12,037 pairs, 6,274 false positives, 5,763 true duplicates;
+  - combined: 66,134 pairs, 40,696 false positives, 25,438 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:11:20Z — 65,238 pairs verified
 
 - Six additional baseline checkpoints passed independent validation: 768
