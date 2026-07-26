@@ -49,6 +49,13 @@ case "$MODE" in
            "${MEM_ENV[@]}")
     [[ "$MODE" == rack-mxfp8 ]] && SHAPE+=(-e SCALE_MOE_MXFP8 1)
     ;;
+  # Same as rack-bf16 plus same-step spill, the fidelity arm. m from SPILL (default 3).
+  rack-spill)
+    NAME="ep25d5-d6144-e256-spill${SPILL:-3}-120-${SUFFIX}"
+    SHAPE=(-e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 4
+           -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
+           -e SCALE_A2A_SPILL "${SPILL:-3}" "${MEM_ENV[@]}")
+    ;;
   # Fallback primary shape if 707B does not fit: 4-of-128, 359.6B total, same 22.6B active.
   rack-e128)
     NAME="ep25d5-d6144-e128-bf16-120-${SUFFIX}"
