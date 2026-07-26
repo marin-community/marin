@@ -16,6 +16,112 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T22:21:00Z — 189,224 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2208-v668` independently
+  revalidated six p1 decision-file 39 checkpoints spanning semantic offsets
+  5,248 through 5,888 and p3 decision-file 104 offset 256. Their 789 pairs
+  contain 364 model false positives, 420 model true duplicates, and five
+  unresolved outcomes. The arm split is 128 baseline pairs with 88 false
+  positives and 40 true duplicates, plus 661 treatment pairs with 276 false
+  positives, 380 true duplicates, and five unresolved outcomes. Sixteen pairs
+  were chunked and 773 were direct. The 2,893 judgments required 2,906 request
+  attempts: 2,887 were valid, and 19 invalid JSON attempts affected seven
+  retried judgments.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p1:
+    `3f1bf90bb6af180c5b952a0e50358da45a030c17798412fe7f64312c07fddbc9`,
+    `19ac1dd32c05c6a00888751df7b07975943aa63c4d5d2afee0c2d22305736b06`,
+    `ba34d4848c1f7f0587ac0ea055200012e3d2267d8c7752cd695d0f240138de0b`,
+    `f256be537acd6cdde4b4bb4d0dbaca7c9cd7a3cd8e6a57f7513677dd7c940ac5`,
+    `972eeda2631512ce87f36497c36ab8a10c2d63f896542e01118e8c70ef50317f`,
+    and
+    `962083ca34f1e3c69986d83841400b087f807c54e60dc3e265abdf94b0510682`;
+  - p3:
+    `2f9ffb4166b4a111dec1ca444ec2ff40e78cfb29438b7504edcba80029f2ecfd`.
+
+- Five separate inspection jobs read, hash-bound, and persisted every complete
+  unresolved pair. All five are true duplicates:
+
+  - Row 8,460 compares the same Carnegie Mellon cold-study release. The
+    2,778-character member adds a PRNewswire dateline, source attribution,
+    and malformed logo snippet; the 3,420-character canonical preserves the
+    article and adds related-story text and article-derived Q&A. The
+    member-only material is source metadata and page chrome rather than a
+    distinct fact payload or training example. Character, line, and
+    word-sequence similarity are 0.823814, 0.076923, and 0.827309.
+  - Row 8,546 compares the same jammer article. The 2,168-character member
+    adds a cart notification, share controls, title expansion, and equivalent
+    date spelling; the 2,919-character canonical preserves the article and
+    adds article-derived Q&A. The member-only material is page chrome rather
+    than substantive content. Similarity is 0.828779, 0.488889, and 0.819188.
+  - Rows 9,000, 9,033, and 9,034 are complete SFT records with identical
+    questions, options, reasoning, conclusions, and answers. Their only
+    differences are `\boxed{B}` versus `\boxed{\text{B}}`,
+    `\boxed{\text{G}}` versus `\boxed{G}`, and
+    `\boxed{\text{B}}` versus `\boxed{B}`. Their member/canonical character
+    counts are 7,799/7,806, 5,073/5,066, and 10,035/10,028.
+
+- The inspection jobs, in row order, are
+  `/rav/datakit-6854-inspect-row8460-2210-v669`,
+  `/rav/datakit-6854-inspect-row8546-2210-v670`,
+  `/rav/datakit-6854-inspect-row9000-2211-v671`,
+  `/rav/datakit-6854-inspect-row9033-2211-v672`, and
+  `/rav/datakit-6854-inspect-row9034-2211-v673`. Their inspection SHA-256
+  values are
+  `4d1547c350e67d6c0b525f1db87da64285c95af01634934299a2c4675067a8c9`,
+  `40d0a942955fdedbb213f48aa885e3e90553b956261139f5c98fed9960f9d8f6`,
+  `ad8c82c2a5dd8e884e0a64bc284779712c22b99344a5629518fb28c0648c1175`,
+  `c5850d3a88620484de5649db84feaac9101580388bc80e49b1f429b18d144940`,
+  and
+  `aed04c2cfc0bc4e5c6e82bc7a945e876a6825814bdc88049da664e0192312a25`.
+  Their semantic-judgment SHA-256 values are
+  `9be6c068401d2d5ea4e7065497c99cedc570e1369a20ce7494857ac21ad2a29b`,
+  `f27cf8564136fb4e8d4b1d26b52978ecb7bc81ec7012606fa81139dae2965b2e`,
+  `274a571e8cc86891e278e89234a6b4ff1f5f3ff80f6c94f1796a17dabf62a0a2`,
+  `e5b965464fc91d72645d979c7d859695f50d8d42309b7a833cd11d63cb9759ef`,
+  and
+  `f20839152e5f4cb5aa721a1c3c1dfdc82e14160e7928f2b6d4e990c8953b062d`.
+
+- The publish jobs wrote five manual Parquet and completion-marker pairs. In
+  row order, their manual SHA-256 values are
+  `c06044f0d84494906a1e5a722af611e99765dbe04363132c6f3a75e286835dfc`,
+  `5cbc8f0f127a241bbce428cf08e5a3a4b62c65a35fbb7989916059addceff110`,
+  `6334cfaa65c8dff1b1ed01492895bcc277c62c3f86cd581337ecd7bbeb14e031`,
+  `fbbfc263eb0f1f9db473926398e198c2d669c82b564596e30e04a760f524ba35`,
+  and
+  `e202a958a00a5d06f0c5a20395e3a120bf4542edb67c87dc88cf021798352336`.
+  Their marker SHA-256 values are
+  `e04abcbb9f07b941cd14ac83151927433ce2fb4900de178297c80ec345245725`,
+  `3e4beb611b5a5aa83863e6e1f8fcdd8d6c14467a9e75604d9524699b304b0753`,
+  `c48f76262e0157a4d5689c59fe434a616b742451c0dbb6738c649527002c066a`,
+  `35a0c1b1b782160604ce05b67aa05aa00fb33c736bc90817159d95e70c770961`,
+  and
+  `445b4fda67cd319b640335b9cfb49ae8a83c853d57e69b008a38fac5c2b48ccd`.
+  The matching verify-only jobs
+  `/rav/datakit-6854-verify-row8460-2217-v679`,
+  `/rav/datakit-6854-verify-row8546-2218-v680`,
+  `/rav/datakit-6854-verify-row9000-2218-v681`,
+  `/rav/datakit-6854-verify-row9033-2219-v682`, and
+  `/rav/datakit-6854-verify-row9034-2219-v683` independently fetched and
+  verified the exact artifacts.
+
+- Across the stable 1,490-checkpoint snapshot, all 223 unresolved model
+  outcomes are covered by 173 true-duplicate and 50 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 151,195 pairs, 96,110 false positives, 55,085 true duplicates;
+  - treatment: 38,029 pairs, 19,673 false positives, 18,356 true duplicates;
+  - combined: 189,224 pairs, 115,783 false positives, 73,441 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(40, 0)`, p2 `(72, 128)`,
+  and p3 `(104, 384)`. P3's next baseline batch has 128 direct pairs requiring
+  256 minimum model requests. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T22:07:00Z — 188,435 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2159-v661` independently
