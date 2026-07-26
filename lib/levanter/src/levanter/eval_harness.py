@@ -39,6 +39,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
 import numpy as np
+import transformers
 from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
@@ -61,21 +62,6 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
-# The pinned lm-eval fork reads attributes such as `transformers.AutoModelForVision2Seq` (removed in
-# transformers>=5) at import time, raising AttributeError rather than ImportError. Catch both so a
-# broken or absent fork degrades to "lm-eval unavailable" instead of crashing the run.
-try:
-    from lm_eval import evaluator
-    from lm_eval.api.instance import Instance
-    from lm_eval.api.model import TemplateLM
-    from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
-except (ImportError, AttributeError):
-    TemplateLM = object
-    Instance = object
-    evaluator = object
-    handle_stop_sequences = None
-    postprocess_generated_text = None
-
 import haliax as hax
 from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
 from tqdm_loggable.auto import tqdm
@@ -90,6 +76,24 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
+
+# The pinned lm-eval fork registers a vision model through this Transformers 4 name at import
+# time. Levanter's harness is text-only, so the generic auto-model placeholder is never
+# instantiated; it only keeps the fork importable with Transformers 5.
+transformers.AutoModelForVision2Seq = transformers.AutoModel  # type: ignore[attr-defined]
+
+# An absent optional dependency or another import failure still leaves the training path usable.
+try:
+    from lm_eval import evaluator
+    from lm_eval.api.instance import Instance
+    from lm_eval.api.model import TemplateLM
+    from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
+except (ImportError, AttributeError):
+    TemplateLM = object
+    Instance = object
+    evaluator = object
+    handle_stop_sequences = None
+    postprocess_generated_text = None
 
 logger = logging.getLogger(__name__)
 
@@ -437,7 +441,7 @@ def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
     return eos_token_id
 
 
-# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent or broken
+# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is unavailable
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -740,7 +744,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
-        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent or broken
+        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is unavailable
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -928,7 +932,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
-                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent or broken
+                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is unavailable
                 text = postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
@@ -1313,6 +1317,11 @@ def run_lm_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
         Otherwise, returns None.
     """
+    if evaluator is object:
+        raise RuntimeError(
+            "lm-eval is unavailable. Install the marin-levanter lm-eval extra and inspect any import error."
+        )
+
     # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
 

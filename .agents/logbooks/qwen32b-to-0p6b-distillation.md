@@ -18,7 +18,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The local scaffold and all nine experiment arms are implemented and pass 12 focused behavior tests plus Pyrefly. No cluster run has launched yet; the next gate is a versioned commit followed by the regional data and one-node smoke stages. Qwen does not publish `Qwen3.5-32B` or `Qwen3.5-0.6B`. The exact requested sizes are `Qwen3-32B` and `Qwen3-0.6B`, so those are the working teacher and student.
+All 18 two-seed screen cells train with finite loss on `cw-us-east-08a`; six fast cells have terminal 100M-token checkpoints and the remaining online-teacher cells are still running. A 3.45B-token regional extension cache is complete. The zero-shot smoke loads the native distilled student checkpoint and is validating the four-task harness after fixing two checkpoint/dataset boundary errors. Qwen does not publish `Qwen3.5-32B` or `Qwen3.5-0.6B`; the working pair is `Qwen3-32B` and `Qwen3-0.6B`.
 
 ## Current baseline
 
@@ -238,3 +238,21 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: both TAID cells completed full-batch updates at approximately 30,000 tokens/s. All four hard-label controls passed tokenizer and vocabulary setup, then failed their first optimizer update with `Loss is NaN`.
 - Interpretation: the failure is confined to the fused linear cross-entropy path shared by training and the earlier nonfinite validation path. Add an explicit training-loss implementation and use weighted materialized float32 NLL for `QD-C0` and `QD-C2`.
 - Next action: test the scalar weighted loss, snapshot it, and launch only the four CE controls as `screen-ce-retry` at version `2026.07.26.10`.
+
+### 2026-07-26 18:37 - Extension cache completes
+
+- Hypothesis: a bounded sample from the prebuilt 100B Datakit artifact can provide at least 1.8B regional training tokens without reading data across regions.
+- Commit hash: `c39678dbd7`.
+- Job: `/power/qwen-distill-data-extended-c39678` on `cw-us-east-08a`, batch priority.
+- Result: the first train attempt completed 161 of 162 shards before exhausting worker failures. Zephyr resumed those outputs, completed the remaining train shard, and built validation. The final cache contains 3,449,692,841 train tokens in 2,403,926 documents and 4,496,920 validation tokens in 15,000 documents.
+- Interpretation: the extension can use a fixed 1.8B-token endpoint without repeating training data. Preserve the completed artifact at `qwen-distillation/data/datakit-100b-qwen3/2026.07.26.11`.
+- Next action: select promoted treatments after both screen seeds and zero-shot checks finish, then launch them with all four controls against this cache.
+
+### 2026-07-26 18:44 - Native checkpoint evaluation recovery
+
+- Hypothesis: the standard Levanter lm-eval entry point can evaluate both standard and distilled native checkpoints when given the model subtree and checkpoint-padded vocabulary.
+- Commit hash: `06adb716aa`.
+- Jobs: `/power/qwen-distill-screen-eval-smoke-c4067e`, `/power/qwen-distill-screen-eval-smoke-158eed`, and `/power/qwen-distill-screen-eval-smoke-06adb7`.
+- Result: the first smoke found that the distilled subtree uses the OCDBT path `model/student`, not `model.student`. The second loaded the checkpoint successfully and entered lm-eval, then found that WinoGrande's task metadata requested the invalid unnamespaced Hugging Face dataset ID `winogrande`. The third loaded all four task datasets and the 596,049,920-parameter student, then exposed an existing compatibility guard that had silently replaced the evaluator with `object` because the pinned lm-eval fork imports a Transformers 4 vision-model name.
+- Interpretation: both failures were evaluation boundary errors discovered before the 18-checkpoint fan-out; neither changes training results.
+- Next action: bind the fork's unused vision-model import to the generic Transformers auto-model placeholder, make an unavailable evaluator fail before task execution, and require the version `2026.07.26.14` smoke to write `results.json` before evaluating all terminal screen checkpoints.
