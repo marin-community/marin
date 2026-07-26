@@ -424,3 +424,46 @@ so it is a scheduling decision, not jitter. This sharpens the independent findin
 question is not "why is the a2a exposed" but "why did XLA put three of the twelve a2a instances
 inline". Fixing those three placements would recover ~422 ms/step — comparable to the entire
 best-case win from halving the payload — for no bytes and no arithmetic.
+
+## Check-in 9 — the latent legs keep dying where the dense leg did not, and there is a concrete mechanism
+
+Tally so far on the rack: dense 1 submission, 1 success. Latent 3 submissions, 0 successes, 6 deaths.
+That asymmetry is now large enough that "cluster transient" is no longer the leading explanation.
+
+Classification of every latent death (d5's recipe, full warning streams):
+
+    matched-work v1: 21:10 (11 x SIGTERM = preemption) | 21:28 gang | 21:40 gang (+2 SIGTERM on
+                     tasks 0 and 15, i.e. the leader) -> retries exhausted, job failed
+    param-preserving: 21:29 gang | 21:59 gang | 22:03 gang
+    matched-work v2: 21:48 gang, then quiet (compiling)
+
+`failed to allocate` = 0, `RESOURCE_EXHAUSTED` = 0, `ncclAlltoAll` = 0, `Cuda failure` = 0 in ALL of
+them, and at 21:59 all sixteen tasks logged "another task died" — so no task is the primary, which
+means the primary left no log at all. Per d5's triage that is class 2: a kernel SIGKILL, i.e. what a
+container host-memory OOM looks like from inside the container.
+
+THE MECHANISM, and it follows directly from check-in 5's finding rather than being invented to fit:
+the latent arms carry 1.812 B REPLICATED projection parameters per GPU, and with
+`SCALE_OFFLOAD_OPT_STATE=1` their MuonH momentum is parked in PINNED HOST memory alongside the
+expert momentum. Per GPU that is ~20.25 GiB (expert momentum) + ~6.75 GiB (projection momentum)
+versus the dense arm's ~20.25 GiB alone. With `SCALE_PROCESSES_PER_TASK=1` one container holds all
+four GPUs' worth:
+
+    dense  arm: ~81 GiB pinned per node
+    latent arms: ~108 GiB pinned per node          against the launcher's ram="256g" default
+
+plus JAX host allocations, the loader prefetch and the process itself. A gb200-4x node has 960 GB, so
+the container is capped far below the hardware. The timing fits too: the 21:59 death landed ~30
+minutes in, at the compile-to-execution transition, which is exactly when the optimizer state is
+first materialised on the host.
+
+TEST, deliberately set up as an A/B rather than a blanket change:
+- `/mwittmann/ep25d6-d6144-e256-latent3072-120-0726-1615-v2` — resubmitted with **SCALE_RAM=600g**
+  (the knob added to the launcher this session; nothing else changed). Stopped the crashlooping
+  0726-1530 first rather than let it keep taking the rack.
+- `/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1600-v2` — LEFT ON THE 256g DEFAULT and
+  still compiling. If it dies at its own compile-to-execution transition while the 600g leg lives,
+  that is the hypothesis confirmed on a matched pair rather than on a single-arm change.
+
+Recording d5's caution alongside: they raised 256g -> 600g on a different arm and it changed nothing,
+which is why their triage recipe words class 2 as "suspect, then test". This is the test.
