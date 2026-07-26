@@ -571,3 +571,39 @@ kernel SIGKILL, the signature of a container host-memory OOM. The mechanism foll
 node needs ~108 GiB against the dense arm's ~81 GiB, versus a launcher default of `ram="256g"` on a
 node with 960 GB. Under test as an A/B (one leg at 600g, one left at 256g).
 Added `SCALE_RAM` and `SCALE_PREEMPTIBLE` to the launcher so neither needs a code edit again.
+
+## Check-in 10 — the host-memory hypothesis is FALSIFIED, and the real signature is the incarnation abort
+
+The A/B set up in check-in 9 returned, and it returned against me. The 600g leg
+(`...-e256-latent3072-120-0726-1615-v2`) died at 22:15-22:16 in exactly the same way as the 256g legs:
+9 x `another task died`, zero `SIGTERM caught`, zero HBM OOM. **Raising the host-memory request from
+256g to 600g changed nothing.** Recording that as a failed prediction of mine, the same way d5
+recorded theirs on the identical hypothesis — which is now two independent falsifications of the
+class-2 host-memory branch on this cluster, and the triage recipe should probably be reworded from
+"suspect, then test" to "usually not it".
+
+The primary error, found by reading the full (non-warning) stream instead of the warning stream:
+
+    F0726 22:13:21 client.h:80] Terminating process because the JAX distributed service detected
+    fatal errors ... absl::Status: ALREADY_EXISTS: Aborted connect attempt as there is a request
+    from a newer incarnation. RPC: CoordinationService/RegisterTask
+
+That is not a memory failure at all. A task restarted, re-registered with a NEW incarnation, and the
+peers still holding the old one aborted — the cluster-wide incarnation-mismatch class this session has
+been chasing. d5 predicted exactly this mechanism from preemption evidence ("an evicted task that
+comes back carries a NEW incarnation, and a peer still holding the old one reports exactly the
+'different incarnation' gang-abort"); this is that prediction confirmed with the error text.
+
+Which makes eviction the root and COMPILE TIME the exposure. My dense leg was submitted at 21:01 and
+was executing steps by ~21:20; it then ran through the 21:28-21:40 window untouched. Every latent leg
+has been caught mid-compile, and a ~20-minute compile that restarts from scratch on every eviction
+can lose indefinitely. The latent-versus-dense asymmetry in check-in 9 is better explained by WHEN
+each job was in its lifecycle than by anything about latent — which also means check-in 9's
+"latent legs are harder to land" framing was over-read from the arm labels, and I am withdrawing it.
+
+ACTION: stopped the crashlooping matched v2 and resubmitted the PRIMARY arm as
+`/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1630-v3` with **`SCALE_PREEMPTIBLE=0`**
+(the launcher knob added earlier today) plus SCALE_RAM=600g. It scheduled, so non-preemptible GB200
+capacity exists. This is the direct test of the eviction root cause: if v3 clears compile and steps
+where four preemptible attempts did not, the mechanism is settled and the fix is a one-line launcher
+change for anyone running long compiles on this cluster.
