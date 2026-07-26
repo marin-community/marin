@@ -331,3 +331,65 @@ with v1-pending contingency stated.
 
 Confidence: 4/10 g=0.5, 1/10 integral family
 Next: 20-min polls; final report skeleton commit.
+
+## FINAL REPORT (R6-2) 2026-07-26 06:00 UTC — g=0.5 number pending pipeline; verdict stands
+
+QUESTION: does any global-QB-controller variant reach <3% steady-state drops at <=0.5pp
+MFU cost with loss parity? ANSWER: NO for the integral family (measured, two gammas);
+NO by construction for damped gain (fixed-point argument below; v1 measured but its
+metrics are hostage to the GB200 log outage). The global-controller family is closed;
+the sender-local route (d4's R6-3) is the only remaining one.
+
+Measured arms (all: GB200 EP64 operating point, QB-on cf1.0 + custom adjoint + drops,
+350 steps, DISABLE_CHECKPOINT; drop series step-indexed vs the g=1 baseline):
+
+| arm | drops @150 | @250 | @340s | tail shape | loss @end | MFU read |
+|---|---:|---:|---:|---|---|---:|
+| g=1 baseline (d4, 2 draws) | 0.125 | 0.089 | 0.064(349) | slow decline, tail-100 0.073 | 3.335 | 22.002% p50 |
+| integral g=0.001 (/mwittmann/ep25d3-qbint-cf100-350-v1-20260725) | 0.657(154) | ~0.60 | 0.606(348) | early -0.0007/st -> plateau | 3.452(348) | ~23.1% (drop-inflated, NOT comparable) |
+| integral g=0.01 (/mwittmann/ep25d3-qbint01-cf100-350-v1-20260726) | ~0.66 | 0.497(265) | 0.461(342) | decaying decline -> ~0.45 | 3.472(342) | ~22.9% (drop-inflated) |
+| g=2 over-relax (d4, prior) | 0.686 | 0.705 | 0.675(349) | flat limit cycle | 3.434 | 23.386% (drop-inflated) |
+| g=0.5 damped (v1, /mwittmann/ep25d3-qbg05-cf100-350-v1-20260725) | — | — | — | RAN 350/350 CLEAN | — | metrics hostage to log outage |
+
+Findings:
+1. INTEGRAL RULE (DeepSeek-V3 sign updates) — CLEAN NEGATIVE AT BOTH GAMMAS. The rule
+   accumulates bias travel linearly (0.35 units by step 349 at g=0.001; 3.4 at g=0.01),
+   but drops-per-travel is strongly sublinear (0.60 plateau at 0.35 travel; 0.46 at 3.4)
+   and the first-5-steps collapse (peak 0.89-0.91 in every draw) outruns any fixed rate.
+   10x gamma bought only a 0.60->0.46 plateau shift. DSv3's rule works over 100k+ steps
+   by PREVENTING drift; it cannot REVERSE an established collapse inside 350 steps.
+2. DAMPED GAIN g<1 CANNOT BEAT g=1's PLATEAU BY CONSTRUCTION. The blend
+   pending <- g*beta + (1-g)*pending has the SAME fixed point as g=1 (pending=beta) —
+   gain only sets the approach rate. g=2 overshoots into a 0.67+ limit cycle (d4,
+   measured); g=1 plateaus at ~6%; g=0.5 can at best converge to the same ~6% more
+   smoothly (a modest oscillation-amplitude win at best, never <3%). The v1 measurement
+   will confirm the shape; it cannot change the direction-level answer.
+3. Synthesis with the g=1 fixed-point evidence: the ~6% cf1.0 plateau is NOT
+   under-correction of the global bias (proportionality argument, 3 gain settings) and
+   NOT serviceable by fixed-rate integral travel (2 gammas). What remains is exactly the
+   sender-local bucket-hotspot hypothesis (drops at 64x256 sender-expert granularity,
+   invisible to any global-expert controller) — d4's R6-3 direction is the only route.
+4. MFU-regime caution honored throughout: the heavy-drop arms read HIGHER MFU
+   (22.9-23.4%) than the balanced baseline (22.0%) — dropped assignments gather the zero
+   pad row. No cross-regime MFU comparison is cited as a win anywhere above.
+
+Infra (for the coordinator): cw-us-east-08a GB200 has TWO ongoing incidents since
+~20:40 UTC — (a) log shipping from GB200 workers (0 child rows ingested for ALL evening
+jobs incl. peers'; v1's completed 350-step metrics unreadable), (b) since ~02:00, NCCL
+clique init fails/hangs for every new rack job (mine, d1's, d4's, rav's all at 0% GPU;
+d4's 02:15 capture was the last job to train). v3 (g=0.5 rerun) stays submitted as the
+canary. When (a) heals I harvest v1; when (b) heals v3 gives the cross-check.
+
+Code (all local commits on agent/ep25-d3-qbprobes, never pushed):
+- 3f10dcc6a SCALE_QB_INTEGRAL (model.py::_compute_qb_loads + train.py::_next_qb_betas;
+  stock path byte-identical when off; 4/4 CPU tests pass incl. EP8 bincount parity and
+  forward identity; pyrefly clean; EP4 smoke green).
+- harvest_ep25.py (finelog-SQL metrics harvest; reproduces all d4 reference numbers).
+- telltale_poll.sh (in-pod telltale polling; log-pipeline-independent series capture).
+
+Job mutations this session: submissions (smoke, v1, qbint, qbint01, v2, v3) + one stop
+of my own zombie v2 (logged). Zero stops/kills/kicks on others' jobs.
+
+Confidence: 1/10 that any global-controller variant reaches <3% (family closed);
+4/10 that v1's g=0.5 series, when readable, shows a meaningfully smoother plateau than g=1
+Next: 20-min polls for pipeline/fabric recovery; fill in the g=0.5 line; stand by.
