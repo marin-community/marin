@@ -195,6 +195,7 @@ class TaskEventRow:
 
     task_id: str
     attempt_id: int
+    attempt_uid: str | None
     ts: datetime
     type: str
     reason: str

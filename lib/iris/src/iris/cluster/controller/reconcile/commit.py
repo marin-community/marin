@@ -15,12 +15,10 @@ transaction leaves no observable trace. Health is owned by the controller and
 folded through a single ``apply`` site, so this sink never touches it.
 """
 
-import logging
-
-from finelog.client.log_client import Table
 from sqlalchemy import bindparam, func
 from sqlalchemy import update as sa_update
 
+from iris.cluster.controller import reads
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -36,7 +34,6 @@ from iris.cluster.controller.writes import record_federation_change
 from iris.cluster.stats.tables import TaskEventRow
 from iris.rpc import job_pb2
 
-logger = logging.getLogger(__name__)
 _CONTROLLER_EVENT_SOURCE = "iris/controller"
 
 
@@ -235,8 +232,6 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
 def commit_effects(
     cur: Tx,
     effects: ControllerEffects,
-    *,
-    task_event_table: Table | None = None,
 ) -> None:
     """Record a batch's ``effects`` within the caller's write transaction.
 
@@ -256,28 +251,26 @@ def commit_effects(
     _flush_jobs(cur, list(effects.jobs.values()))
 
     task_events = tuple(effects.task_events)
+    task_event_table = cur.task_event_table
     if task_events and task_event_table is not None:
-
-        def _write_task_events() -> None:
-            rows = [
-                TaskEventRow(
-                    task_id=event.task_id.to_wire(),
-                    attempt_id=event.attempt_id,
-                    ts=event.ts.as_naive_utc(),
-                    type=event.severity,
-                    reason=event.reason,
-                    message=event.message,
-                    source=_CONTROLLER_EVENT_SOURCE,
-                    count=1,
-                )
-                for event in task_events
-            ]
-            try:
-                task_event_table.write(rows)
-            except Exception:
-                logger.warning("Failed to write controller actions to iris.task_event", exc_info=True)
-
-        cur.register(_write_task_events)
+        attempt_uids = reads.attempt_uids_for(cur, [(event.task_id, event.attempt_id) for event in task_events])
+        rows = [
+            TaskEventRow(
+                task_id=event.task_id.to_wire(),
+                attempt_id=event.attempt_id,
+                attempt_uid=str(attempt_uid),
+                ts=event.ts.as_naive_utc(),
+                type=event.severity,
+                reason=event.reason,
+                message=event.message,
+                source=_CONTROLLER_EVENT_SOURCE,
+                count=1,
+            )
+            for event in task_events
+            if (attempt_uid := attempt_uids.get((event.task_id, event.attempt_id))) is not None
+        ]
+        if rows:
+            cur.register(lambda: task_event_table.write(rows))
 
     log_events = effects.log_events
     if log_events:

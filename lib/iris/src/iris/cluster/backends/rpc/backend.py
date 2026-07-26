@@ -226,7 +226,6 @@ class RpcTaskBackend:
             health=self.health,
             defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
-            task_event_table=runtime.task_event_table,
         )
 
     def seed_liveness(self) -> None:

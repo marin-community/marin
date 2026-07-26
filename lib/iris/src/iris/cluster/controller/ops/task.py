@@ -19,7 +19,6 @@ Worker-reported task states are authored through ``ops.worker.apply_reconcile``
 
 from dataclasses import dataclass
 
-from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads, writes
@@ -151,7 +150,6 @@ def finalize(
     decisions: list[TerminalDecision],
     *,
     now: Timestamp,
-    task_event_table: Table | None = None,
 ) -> ControllerEffects:
     """Load snapshot for a batch of terminal-state decisions, apply once.
 
@@ -166,5 +164,5 @@ def finalize(
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
     effects = ReconcileState.open(snapshot).finalize_tasks(decisions)
-    commit_effects(cur, effects, task_event_table=task_event_table)
+    commit_effects(cur, effects)
     return effects

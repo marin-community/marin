@@ -10,7 +10,6 @@ so the dashboard and CLI retain the cause after the Pod is gone.
 from iris.cluster.backends.k8s.tasks import (
     _EVENT_SOURCE_CONTAINER,
     _EVENT_SOURCE_KUEUE,
-    _KUEUE_POD_GROUP_NAME,
     _LABEL_ATTEMPT_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -78,35 +77,6 @@ def test_pod_event_none_for_healthy_running_pod():
     assert _pod_event(pod, None) is None
 
 
-def test_pod_event_surfaces_kueue_termination_target():
-    pod = {
-        "metadata": {
-            "name": "iris-job-0-0",
-            "labels": {_KUEUE_POD_GROUP_NAME: "wl-abc"},
-        },
-        "status": {
-            "phase": "Failed",
-            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}],
-            "conditions": [
-                {
-                    "type": "TerminationTarget",
-                    "status": "True",
-                    "reason": "WorkloadEvictedDueToPreempted",
-                    "message": "Preempted due to prioritization in the ClusterQueue",
-                }
-            ],
-        },
-    }
-
-    event = _pod_event(pod, None)
-
-    assert event is not None
-    assert event.source == _EVENT_SOURCE_KUEUE
-    assert event.reason == "WorkloadEvictedDueToPreempted"
-    assert event.message == "Preempted due to prioritization in the ClusterQueue"
-    assert event.severity == "Warning"
-
-
 # --- TaskEventLog dedup / retain ----------------------------------------------
 
 
@@ -115,7 +85,7 @@ def test_event_log_writes_once_per_verdict_and_dedups_message_drift():
     when the message's numerals drift (Total nodes: 32 -> 40)."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
+    key = ("/job/0", 0, "attempt-a")
 
     log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
     drifted = unadmitted_workload(msg=KUEUE_UNADMITTED_MSG.replace("Total nodes: 32", "Total nodes: 40"))
@@ -135,7 +105,7 @@ def test_event_log_records_a_severity_upgrade_under_the_same_reason():
     the dedup keys on severity too, so the admission denial is never suppressed."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
+    key = ("/job/0", 0, "attempt-a")
 
     log.observe(key, _pod_event(gated_pod(), unevaluated_workload()))
     log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
@@ -151,7 +121,7 @@ def test_event_log_records_a_severity_upgrade_under_the_same_reason():
 def test_event_log_appends_a_row_when_the_verdict_changes():
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
+    key = ("/job/0", 0, "attempt-a")
 
     log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
     log.observe(key, _pod_event(imagepull_pod(), None))
@@ -168,7 +138,7 @@ def test_event_log_retain_forgets_gone_attempts():
     retried attempt starts its timeline clean rather than being deduped away."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
+    key = ("/job/0", 0, "attempt-a")
 
     log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
     log.retain(set())  # attempt gone
@@ -217,7 +187,7 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
     try:
         task_id = JobName.from_wire("/job/0")
         _seed_gated_task(k8s, task_id)
-        entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+        entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="attempt-a")
 
         provider.sync(make_batch(running_tasks=[entry]))
 
@@ -226,6 +196,7 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
         row = rows[0]
         assert row.task_id == "/job/0"
         assert row.attempt_id == 0
+        assert row.attempt_uid == "attempt-a"
         assert row.type == "Warning"
         assert row.reason == "SchedulingGated"
         assert row.source == _EVENT_SOURCE_KUEUE

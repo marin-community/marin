@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 
-from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
 
@@ -316,7 +315,6 @@ def cancel(
     *,
     job_id: JobName,
     reason: str,
-    task_event_table: Table | None = None,
 ) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
@@ -338,7 +336,7 @@ def cancel(
     # No per-job state preload: the cascade-kill merge guard skips already-
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects, task_event_table=task_event_table)
+    commit_effects(cur, effects)
     # Fast-path clear of the cancelled subtree's endpoints (the FK CASCADE
     # backstop): cancellation stops routing to these endpoints at once rather
     # than waiting out their lease. Derive the subtree from the snapshot's

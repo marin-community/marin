@@ -187,9 +187,10 @@ iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 
 `task events` is the first stop when a pod or Kubernetes Event has already been
 garbage-collected. It queries `iris.task_event` across every retained attempt in
-one call and shows both backend observations (`k8s/kueue`, `k8s/container`) and
-controller decisions (`iris/controller`) in chronological order. Events are
-retained for up to seven days.
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to seven
+days.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -413,7 +414,7 @@ Namespaces:
   ```sql
   SELECT attempt_id, ts, type, reason, message, source, count
   FROM "iris.task_event"
-  WHERE task_id='/user/job/0'
+  WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
   ORDER BY ts ASC;
   ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.

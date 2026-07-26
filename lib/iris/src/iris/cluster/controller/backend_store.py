@@ -14,7 +14,6 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads, writes
@@ -114,7 +113,6 @@ class DbBackendWorkerStore:
     health: WorkerHealthTracker
     defaults: UserBudgetDefaults
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
-    task_event_table: Table | None = None
 
     def transition_snapshot(
         self,
@@ -208,7 +206,6 @@ class DbBackendWorkerStore:
             worker_ids=[str(wid) for wid in worker_ids],
             reason=reason,
             health=self.health,
-            task_event_table=self.task_event_table,
         )
         removed_ids = [wid for wid, _ in failure_result.removed_workers]
         if not removed_ids:
@@ -232,7 +229,6 @@ class DbBackendWorkerStore:
                 worker_ids=[str(wid) for wid in siblings],
                 reason=_SLICE_SIBLING_TEARDOWN_REASON,
                 health=self.health,
-                task_event_table=self.task_event_table,
             )
         self.health.forget_many(removed_set | set(siblings))
         return removed_ids + siblings

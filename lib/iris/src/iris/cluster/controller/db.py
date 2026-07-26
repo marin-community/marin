@@ -50,6 +50,7 @@ from pathlib import Path
 from threading import RLock
 
 import fsspec.core
+from finelog.client.log_client import Table
 from rigging.filesystem import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
@@ -149,8 +150,9 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int):
+    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int, task_event_table: Table | None = None):
         self.conn = conn
+        self.task_event_table = task_event_table
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
         # established (``BEGIN``). It is a conservative lower bound on what the
@@ -201,6 +203,7 @@ def write_transaction(
     write_engine: Engine,
     write_lock: threading.RLock,
     caches: CacheRegistry,
+    task_event_table: Table | None = None,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -220,7 +223,7 @@ def write_transaction(
         # Sample the commit sequence BEFORE opening the snapshot (conservative).
         seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches, seq)
+        tx = Tx(conn, caches, seq, task_event_table)
         try:
             yield tx
         except Exception:
@@ -279,6 +282,7 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
+        self._task_event_table: Table | None = None
         # Per-controller cache registry, mirrored onto every Tx this DB mints as
         # ``tx.caches``. Built before the engines so no cursor is ever minted
         # without it. Populated by higher layers (each per-controller memo
@@ -320,6 +324,10 @@ class ControllerDB:
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)
+
+    def attach_task_event_table(self, table: Table) -> None:
+        """Attach the controller's task-action sink to every transaction."""
+        self._task_event_table = table
 
     @property
     def sa_read_engine(self) -> Engine:
@@ -407,7 +415,12 @@ class ControllerDB:
         readers. The yielded cursor carries this DB's cache registry as
         ``tx.caches`` so write sinks reach per-controller memos through it.
         """
-        with write_transaction(self._sa_write_engine, self._lock, self._caches) as tx:
+        with write_transaction(
+            self._sa_write_engine,
+            self._lock,
+            self._caches,
+            self._task_event_table,
+        ) as tx:
             yield tx
 
     @contextmanager

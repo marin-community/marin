@@ -20,8 +20,6 @@ from iris.cluster.controller.backend import (
     TaskTarget,
 )
 from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.effects import ControllerEffects, TaskActionEvent, TaskActionReason
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import stamp_backend
@@ -305,6 +303,8 @@ def test_apply_running(state):
 
 def test_apply_succeeded(state):
     """RUNNING -> SUCCEEDED via direct provider update."""
+    task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
     [task_id] = submit_direct_job(state, "apply-succeeded")
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
@@ -333,6 +333,8 @@ def test_apply_succeeded(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_SUCCEEDED
     assert task.exit_code == 0
+    [[event]] = task_event_table.writes
+    assert (event.reason, event.type) == ("TaskTerminated", "Normal")
 
 
 def test_apply_failed_with_retry(state):
@@ -435,6 +437,8 @@ def test_apply_failed_directly_from_assigned(state):
 
 def test_apply_worker_failed_from_running_retries(state):
     """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
+    task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
     jid = JobName.root("test-user", "wf-retry")
     req = make_direct_job_request("wf-retry")
     req.max_retries_preemption = 5
@@ -455,7 +459,7 @@ def test_apply_worker_failed_from_running_retries(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        effects = commit_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
@@ -466,9 +470,13 @@ def test_apply_worker_failed_from_running_retries(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 1
-    assert [(event.reason, event.task_id, event.attempt_id) for event in effects.task_events] == [
-        ("TaskRetryScheduled", task_id, attempt_id)
-    ]
+    [[event]] = task_event_table.writes
+    assert (event.task_id, event.attempt_id, event.reason) == (
+        task_id.to_wire(),
+        attempt_id,
+        "TaskRetryScheduled",
+    )
+    assert event.attempt_uid
 
 
 def test_apply_worker_failed_from_assigned(state):
@@ -491,28 +499,6 @@ def test_apply_worker_failed_from_assigned(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 0
-
-
-def test_controller_task_actions_write_to_finelog_after_commit(state):
-    table = FakeStatsTable()
-    task_id = JobName.from_wire("/test-user/job/0")
-    event = TaskActionEvent(
-        task_id=task_id,
-        attempt_id=2,
-        ts=Timestamp.from_ms(1_753_478_807_000),
-        reason=TaskActionReason.RETRY_SCHEDULED,
-        message="Backend reported WORKER_FAILED; controller returned the task to PENDING.",
-    )
-
-    with state._db.transaction() as cur:
-        commit_effects(cur, ControllerEffects(task_events=[event]), task_event_table=table)
-        assert table.writes == []
-
-    [[row]] = table.writes
-    assert row.task_id == task_id.to_wire()
-    assert row.attempt_id == 2
-    assert row.reason == "TaskRetryScheduled"
-    assert row.source == "iris/controller"
 
 
 # =============================================================================
@@ -733,6 +719,8 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
     """End-to-end lockstep invariant: a transient failure bounces the whole gang to PENDING,
     and the next drain re-promotes every sibling to the SAME next attempt_id — which is what
     keeps the per-generation pod-group-name uniform across the gang."""
+    task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
     _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
 
     with state._db.transaction() as cur:
@@ -749,16 +737,17 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
 
     # One sibling hits a transient (preemption) failure -> whole gang bounced to PENDING.
     with state._db.transaction() as cur:
-        effects = commit_dispatch_updates(
+        commit_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
             now=Timestamp.now(),
         )
     assert all(s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids))
-    assert [(event.task_id, event.reason) for event in effects.task_events] == [
-        (task_ids[0], "TaskRetryScheduled"),
-        (task_ids[1], "CoscheduledSiblingRequeued"),
-        (task_ids[2], "CoscheduledSiblingRequeued"),
+    events = [event for write in task_event_table.writes for event in write]
+    assert [(event.task_id, event.reason) for event in events] == [
+        (task_ids[0].to_wire(), "TaskRetryScheduled"),
+        (task_ids[1].to_wire(), "CoscheduledSiblingRequeued"),
+        (task_ids[2].to_wire(), "CoscheduledSiblingRequeued"),
     ]
 
     # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.

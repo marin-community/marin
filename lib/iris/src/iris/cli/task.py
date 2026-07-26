@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 import click
 from finelog.client import LogClient
 from rigging.connect import proxy_path
+from rigging.timing import Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
@@ -198,16 +199,21 @@ def fetch_task_status(ctx, task_id: str) -> controller_pb2.Controller.GetTaskSta
         return client.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=target.task_id.to_wire()))
 
 
-def build_task_events_sql(target: TaskAttempt, limit: int) -> str:
-    """Build the bounded finelog query for a task's chronological action history."""
+def build_task_events_sql(target: TaskAttempt, attempt_uids: list[str], limit: int) -> str:
+    """Build a query for the newest retained events in one task incarnation."""
     task_id = target.task_id.to_wire().replace("'", "''")
-    predicates = [f"task_id = '{task_id}'"]
-    if target.attempt_id is not None:
-        predicates.append(f"attempt_id = {target.attempt_id}")
+    escaped_uids = [uid.replace("'", "''") for uid in attempt_uids]
+    uid_literals = ", ".join("'" + uid + "'" for uid in escaped_uids)
+    predicates = [
+        f"task_id = '{task_id}'",
+        f"attempt_uid IN ({uid_literals})",
+    ]
     where = " AND ".join(predicates)
     return (
+        "SELECT attempt_id, ts, type, reason, message, source, count FROM ("
         f'SELECT attempt_id, ts, type, reason, message, source, count FROM "{TASK_EVENT_NAMESPACE}" '
-        f"WHERE {where} ORDER BY ts ASC LIMIT {limit}"
+        f"WHERE {where} ORDER BY ts DESC LIMIT {limit}"
+        ") AS recent ORDER BY ts ASC"
     )
 
 
@@ -216,7 +222,7 @@ class TaskEventView:
     """Typed task-event row returned by finelog."""
 
     attempt_id: int
-    ts: datetime
+    ts: Timestamp
     event_type: str
     reason: str
     message: str
@@ -239,9 +245,10 @@ class TaskEventView:
         strings = (event_type, reason, message, source)
         if not all(isinstance(value, str) for value in strings):
             raise ValueError("finelog task event has a non-string type, reason, message, or source")
+        normalized_ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
         return cls(
             attempt_id=attempt_id,
-            ts=ts,
+            ts=Timestamp.from_seconds(normalized_ts.timestamp()),
             event_type=event_type,
             reason=reason,
             message=message,
@@ -254,9 +261,7 @@ def build_task_event_display_rows(events: list[TaskEventView]) -> list[list[obje
     """Build chronological table rows from typed task events."""
     return [
         [
-            (event.ts.replace(tzinfo=UTC) if event.ts.tzinfo is None else event.ts.astimezone(UTC)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
+            event.ts.as_formatted_date(),
             event.attempt_id,
             event.event_type,
             event.source,
@@ -282,6 +287,23 @@ def render_task_events_text(task_id: str, events: list[TaskEventView]) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def task_event_attempt_uids(
+    response: controller_pb2.Controller.GetTaskStatusResponse,
+    target: TaskAttempt,
+) -> list[str]:
+    """Return the current job incarnation's attempt UIDs selected by ``target``."""
+    attempts = response.task.attempts
+    if target.attempt_id is None:
+        return [attempt.attempt_uid for attempt in attempts if attempt.attempt_uid]
+    uid = next(
+        (attempt.attempt_uid for attempt in attempts if attempt.attempt_id == target.attempt_id),
+        "",
+    )
+    if not uid:
+        raise click.ClickException(f"Attempt {target.attempt_id} not found for task {target.task_id}")
+    return [uid]
 
 
 @click.group()
@@ -326,13 +348,19 @@ def task_events(ctx, task_id: str, limit: int) -> None:
       iris task events /user/job/0:2
     """
     target = TaskAttempt.from_wire(task_id)
+    response = fetch_task_status(ctx, task_id)
+    attempt_uids = task_event_attempt_uids(response, target)
+    if not attempt_uids:
+        click.echo(render_task_events_text(target.task_id.to_wire(), []))
+        return
     url = require_controller_url(ctx)
     credentials = ctx.obj.get("credentials") if ctx.obj else None
     interceptors = credentials.interceptors() if credentials is not None else ()
     log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
     with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
         events = [
-            TaskEventView.from_row(row) for row in log_client.query(build_task_events_sql(target, limit)).to_pylist()
+            TaskEventView.from_row(row)
+            for row in log_client.query(build_task_events_sql(target, attempt_uids, limit)).to_pylist()
         ]
     click.echo(render_task_events_text(target.task_id.to_wire(), events))
 

@@ -337,7 +337,7 @@ class ReconcileState:
             reason = TaskActionReason.TERMINATED
             resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
             message = f"{message_prefix}; controller resolved the task as {resolved_state}."
-            severity = "Warning"
+            severity = "Normal" if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED else "Warning"
         else:
             return
         self.overlay.emit_task_event(

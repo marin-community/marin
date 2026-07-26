@@ -1,67 +1,68 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import UTC, datetime
-
-from iris.cli.task import TaskEventView, build_task_event_display_rows, build_task_events_sql
+from finelog.client import FlushResult
+from iris.cli.task import TaskEventView, build_task_events_sql
+from iris.cluster.stats.tables import (
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    TaskEventRow,
+)
 from iris.cluster.types import TaskAttempt
+from rigging.timing import Timestamp
 
 
-def test_build_task_events_sql_queries_all_attempts_in_time_order():
-    sql = build_task_events_sql(TaskAttempt.from_wire("/alice/job/0"), limit=25)
-
-    assert "WHERE task_id = '/alice/job/0'" in sql
-    assert "attempt_id =" not in sql
-    assert "ORDER BY ts ASC" in sql
-    assert sql.endswith("LIMIT 25")
-
-
-def test_build_task_events_sql_can_select_one_attempt():
-    sql = build_task_events_sql(TaskAttempt.from_wire("/alice/job/0:3"), limit=10)
-
-    assert "task_id = '/alice/job/0'" in sql
-    assert "attempt_id = 3" in sql
-
-
-def test_build_task_event_display_rows_preserves_timeline_fields():
-    events = [
-        TaskEventView(
+def test_task_event_query_returns_the_newest_window_from_the_current_incarnation(log_client):
+    table = log_client.get_table(
+        TASK_EVENT_NAMESPACE,
+        TaskEventRow,
+        storage_policy=TASK_EVENT_STORAGE_POLICY,
+    )
+    now = Timestamp.now()
+    rows = [
+        TaskEventRow(
+            task_id="/alice/job/0",
             attempt_id=0,
-            ts=datetime(2026, 7, 25, 21, 26, 47, tzinfo=UTC),
-            event_type="Warning",
-            reason="WorkloadEvictedDueToPreempted",
-            message="Preempted due to ClusterQueue prioritization",
-            source="k8s/kueue",
-            count=1,
-        ),
-        TaskEventView(
-            attempt_id=0,
-            ts=datetime(2026, 7, 25, 21, 27, 25, tzinfo=UTC),
-            event_type="Normal",
-            reason="TaskRetryScheduled",
-            message="Backend reported WORKER_FAILED; controller returned the task to PENDING.",
+            attempt_uid="old-incarnation",
+            ts=now.add_ms(-4_000).as_naive_utc(),
+            type="Warning",
+            reason="OldRunFailed",
+            message="old",
             source="iris/controller",
             count=1,
         ),
+        *[
+            TaskEventRow(
+                task_id="/alice/job/0",
+                attempt_id=attempt_id,
+                attempt_uid=f"current-{attempt_id}",
+                ts=now.add_ms(offset).as_naive_utc(),
+                type="Normal",
+                reason=reason,
+                message=reason,
+                source="iris/controller",
+                count=1,
+            )
+            for attempt_id, offset, reason in [
+                (0, -3_000, "First"),
+                (1, -2_000, "Second"),
+                (1, -1_000, "Third"),
+            ]
+        ],
     ]
+    table.write(rows)
+    assert table.flush(timeout=5) == FlushResult.SUCCEEDED
 
-    assert build_task_event_display_rows(events) == [
-        [
-            "2026-07-25 21:26:47",
-            0,
-            "Warning",
-            "k8s/kueue",
-            "WorkloadEvictedDueToPreempted",
-            1,
-            "Preempted due to ClusterQueue prioritization",
-        ],
-        [
-            "2026-07-25 21:27:25",
-            0,
-            "Normal",
-            "iris/controller",
-            "TaskRetryScheduled",
-            1,
-            "Backend reported WORKER_FAILED; controller returned the task to PENDING.",
-        ],
+    result = log_client.query(
+        build_task_events_sql(
+            TaskAttempt.from_wire("/alice/job/0"),
+            ["current-0", "current-1"],
+            limit=2,
+        )
+    )
+    events = [TaskEventView.from_row(row) for row in result.to_pylist()]
+
+    assert [(event.attempt_id, event.reason) for event in events] == [
+        (1, "Second"),
+        (1, "Third"),
     ]

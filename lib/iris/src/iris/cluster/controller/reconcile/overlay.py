@@ -348,6 +348,8 @@ class Overlay:
         self._effects.log_events.append(event)
 
     def emit_task_event(self, event: TaskActionEvent) -> None:
+        if event.attempt_id < 0:
+            return
         self._effects.task_events.append(event)
 
     def emit_worker_build_failed(self, worker_id: WorkerId) -> None:

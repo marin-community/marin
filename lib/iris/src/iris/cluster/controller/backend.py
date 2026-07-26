@@ -33,8 +33,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
-from finelog.client.log_client import Table
-
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
@@ -461,8 +459,6 @@ class BackendRuntime:
     scale groups mapped to no backend)."""
     budget_defaults: UserBudgetDefaults
     """Per-user budget defaults."""
-    task_event_table: Table | None = None
-    """Finelog sink for controller actions authored during worker teardown."""
 
 
 class TaskBackend(Protocol):

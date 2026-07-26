@@ -88,11 +88,13 @@ The reconcile effect contract in
 `lib/iris/src/iris/cluster/controller/reconcile/batches.py:323` now emits compact
 task actions for retry, coscheduled sibling cascade, and job finalization. The
 commit sink writes those actions to `iris.task_event` after the SQL transaction
-commits, including worker-reaping transactions. The namespace retains up to seven days, and
-`iris task events /user/job/0` queries all attempts in one chronological view.
+commits, including worker-reaping transactions. The namespace retains up to
+seven days, and `iris task events /user/job/0` queries the current job
+incarnation's attempts in one chronological view.
 
-No data migration was required. Existing one-hour segments age out under the
-new policy; new events use the expanded vocabulary.
+No data migration was required. `attempt_uid` is an additive nullable finelog
+column, so old segments remain readable while new events are separated across
+job recreations. Existing one-hour segments age out under the new policy.
 
 ## How OPS.md could have shortened this
 

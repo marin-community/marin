@@ -291,12 +291,16 @@ def test_job_cancellation_kills_all_tasks(harness):
     harness.dispatch(tasks[0], worker_id)
     harness.dispatch(tasks[1], worker_id)
 
+    task_event_table = FakeStatsTable()
+    harness.state._db.attach_task_event_table(task_event_table)
     with harness.state._db.transaction() as cur:
         ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
         assert harness.query_task(task.task_id).state == job_pb2.TASK_STATE_KILLED
+    events = [event for write in task_event_table.writes for event in write]
+    assert {event.task_id for event in events} == {tasks[0].task_id.to_wire(), tasks[1].task_id.to_wire()}
 
 
 def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
@@ -2928,12 +2932,12 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks2[0].task_id).state == job_pb2.TASK_STATE_RUNNING
 
     task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
     result = ops.worker.fail(
         state._db,
         worker_ids=["w2"],
         reason="slice terminated",
         health=state._health,
-        task_event_table=task_event_table,
     )
 
     assert len(result.removed_workers) == 1
