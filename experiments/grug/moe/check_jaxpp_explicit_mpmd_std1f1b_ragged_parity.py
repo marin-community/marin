@@ -161,7 +161,7 @@ def _pipeline_config() -> grug_train.GrugJaxPPConfig:
     )
 
 
-def _global_batch(mesh: jax.sharding.Mesh) -> GrugLmExample:
+def _batch_for_mesh(mesh: jax.sharding.Mesh) -> GrugLmExample:
     global_batch_size = MICROBATCHES * MICROBATCH_SIZE
     tokens = jnp.arange(global_batch_size * SEQUENCE_LENGTH, dtype=jnp.int32)
     tokens = (tokens.reshape(global_batch_size, SEQUENCE_LENGTH) * 7 + 3) % _model_config().vocab_size
@@ -199,19 +199,6 @@ def _stage_batches(mpmd_mesh, batch: GrugLmExample):
     )
 
 
-def _direct_stage_gradients(direct_gradients, *, pipeline, mpmd_mesh):
-    stage_gradients = direct_gradients.split_for_pipeline(
-        pipeline.stages,
-        pipeline.stage_layer_counts,
-    )
-    stage_mpmd_indices = grug_train._pipeline_stage_mpmd_indices(pipeline)
-    target_shardings = tuple(
-        grug_train._tree_mpmd_shardings_on_stage(mpmd_mesh, mpmd_index, gradients)
-        for mpmd_index, gradients in zip(stage_mpmd_indices, stage_gradients, strict=True)
-    )
-    return grug_train._reshard_to_mpmd(mpmd_mesh, stage_gradients, target_shardings)
-
-
 def _authoritative_environment() -> dict[str, Any]:
     reproducer = importlib.import_module("experiments.grug.moe.repro_jaxpp_jax011_ragged_all_to_all")
     environment = reproducer.check_environment("jaxpp-four-stage-ragged")
@@ -230,6 +217,8 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         cluster_detection_method="deactivate",
     )
     _event(process_id, "distributed_initialize_complete")
+    completed = False
+    exit_code = 0
     try:
         validate_authoritative_topology(
             process_count=jax.process_count(),
@@ -246,9 +235,9 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         explicit_mpmd = grug_train._require_jaxpp_explicit_mpmd()
         mpmd_mesh = explicit_mpmd.MpmdMesh(mesh, pipeline.stage_axis_name)
         local_stage_index = mpmd_mesh.my_mpmd_axis_index
+        stage_mesh = mpmd_mesh.my_mpmd_group_mesh
         optimizer = gradient_capture_optimizer()
 
-        _event(process_id, "direct_reference_start", stage_index=local_stage_index)
         with jax.set_mesh(mesh):
             initial_state = grug_train.initial_state(
                 _model_config(),
@@ -257,14 +246,32 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
                 key=jax.random.PRNGKey(0),
                 ema_beta=None,
             )
-            batch = _global_batch(mesh)
+            batch = _batch_for_mesh(mesh)
+        pipeline_state = grug_train._split_state_for_explicit_mpmd(
+            initial_state,
+            pipeline=pipeline,
+            optimizer=optimizer,
+            mpmd_mesh=mpmd_mesh,
+        )
+        stage_batches = _stage_batches(mpmd_mesh, batch)
+
+        _event(process_id, "direct_reference_start", stage_index=local_stage_index)
+        with jax.set_mesh(stage_mesh):
+            direct_state = grug_train.initial_state(
+                _model_config(),
+                optimizer=optimizer,
+                mp=eager_parity._MIXED_PRECISION,
+                key=jax.random.PRNGKey(0),
+                ema_beta=None,
+            )
+            direct_batch = _batch_for_mesh(stage_mesh)
             direct_step = jax.jit(
                 functools.partial(
                     eager_parity._direct_microbatch_mean,
                     precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
                 )
             )
-            direct_loss, direct_gradients = direct_step(initial_state.params, batch)
+            direct_loss, direct_gradients = direct_step(direct_state.params, direct_batch)
             jax.block_until_ready((direct_loss, direct_gradients))
         _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
 
@@ -273,21 +280,10 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         grug_train._prewarm_jaxpp_dime(mpmd_mesh, "all")
         _event(process_id, "dime_prewarm_complete", stage_index=local_stage_index)
 
-        _event(process_id, "direct_gradient_reshard_start", stage_index=local_stage_index)
-        direct_stage_gradients = _direct_stage_gradients(
-            direct_gradients,
-            pipeline=pipeline,
-            mpmd_mesh=mpmd_mesh,
+        direct_stage_gradients = direct_gradients.split_for_pipeline(
+            pipeline.stages,
+            pipeline.stage_layer_counts,
         )
-        jax.block_until_ready(direct_stage_gradients)
-        _event(process_id, "direct_gradient_reshard_complete", stage_index=local_stage_index)
-        pipeline_state = grug_train._split_state_for_explicit_mpmd(
-            initial_state,
-            pipeline=pipeline,
-            optimizer=optimizer,
-            mpmd_mesh=mpmd_mesh,
-        )
-        stage_batches = _stage_batches(mpmd_mesh, batch)
 
         _event(process_id, "explicit_lower_start", stage_index=local_stage_index)
         explicit_step = grug_train._make_explicit_mpmd_train_step(
@@ -357,8 +353,9 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         stage_results = multihost_utils.process_allgather(np.asarray(report.passed, dtype=np.int32))
         all_passed = bool(np.all(stage_results))
         multihost_utils.sync_global_devices("explicit_mpmd_std1f1b_ragged_parity_complete")
-        raise SystemExit(0 if all_passed else 1)
-    except Exception as error:
+        completed = True
+        exit_code = 0 if all_passed else 1
+    except BaseException as error:
         _event(
             process_id,
             "worker_error",
@@ -369,9 +366,13 @@ def _run_worker(process_id: int, coordinator_port: int, local_device_ids: list[i
         raise
     finally:
         faulthandler.cancel_dump_traceback_later()
-        _event(process_id, "distributed_shutdown_start")
-        jax.distributed.shutdown()
-        _event(process_id, "distributed_shutdown_complete")
+        if completed:
+            _event(process_id, "distributed_shutdown_start")
+            jax.distributed.shutdown()
+            _event(process_id, "distributed_shutdown_complete")
+        else:
+            _event(process_id, "distributed_shutdown_skipped_after_error")
+    raise SystemExit(exit_code)
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
