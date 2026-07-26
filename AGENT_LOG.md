@@ -1583,3 +1583,38 @@ Even a fully optimized fp8 wire lands the honest configuration near **24.4-24.6%
 largest remaining speed lever, but it is **short of 25% with a strict 3% drop bar at this shape**.
 This route should be pursued on its merits, not as a path that closes the goal.
 Confidence: 8/10 on the attribution (one op measured in both legs carries it; the rest are upper bounds); 9/10 on the break-even arithmetic.
+
+## GATE 1 (delayed scaling) 2026-07-26 13:30 UTC — precision cost is ~2%, far below what the amax passes cost
+
+Relative GEMM error vs fp32 (e4m3 activations x e4m3 weights, per-expert scalar weight scale):
+
+| activation dynamic range | per-token current | delayed per-tensor (exact) | scale +30% stale | scale -20% stale |
+|---|--:|--:|--:|--:|
+| hostile, e^-4..e^4 (~3000x) | 0.0374 | **0.0381** | 0.0380 | 0.0378 |
+| moderate, e^-1..e^1 | 0.0373 | 0.0377 | 0.0376 | 0.0379 |
+| realistic, e^-0.3..e^0.3 | 0.0373 | **0.0374** | 0.0374 | 0.0378 |
+
+Delayed per-tensor costs **2% relative** on the hostile fixture and is indistinguishable on a
+realistic one. Staleness barely registers: a scale 30% too large or 20% too small moves the error
+in the fourth decimal, so amax history does not need to be tight.
+
+The reason is the same one that made per-column weight scales pointless in the earlier gate: error
+is dominated by e4m3's 3-bit MANTISSA, not by dynamic range. Per-token scaling only pays when rows
+span more than the format's exponent range, and e4m3 covers ~28000x while even the hostile fixture
+spans ~3000x. Under-range, a shared scale loses essentially nothing.
+
+**Two distinctions kept separate, per the coordinator and because conflating them is how this goes
+wrong:** delayed per-tensor scaling is CAUSALLY SAFE — the scale derives entirely from the previous
+step, so it depends on no token in the current batch, future or past. The sequence-axis rule
+forbids token-spanning tiles computed from the CURRENT batch, which this is not. What delayed
+scaling costs is PRECISION, one scale per tensor instead of one per token, and that cost is
+measured above at ~2%. Correctness question: settled. Quality question: 2%, and the loss verdict
+still stands on its own.
+
+So the trade is: remove ~2500 ms/step of amax reduction (the entire measured QDQ overhead) for ~2%
+relative quantization error. Against a break-even requirement of a 2.73x QDQ reduction and a
++1.90pp prize at full elimination, that is the favorable side of the discriminator.
+
+NOTE the next leg CANNOT inherit the previous leg's loss parity — the quantization scheme changes
+from per-token current to delayed per-tensor, so its loss verdict must stand alone.
+Confidence: 9/10 on the precision measurement; 7/10 that delayed scaling flips the sign at the rack.
