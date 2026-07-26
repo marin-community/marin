@@ -1483,6 +1483,37 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T14:48:45Z — 146,119 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1444-v371` independently
+  revalidated eight baseline checkpoints: p0 decision-file 6 offset 128, p2
+  decision-file 70 offset 0, and p3 decision-file 102 offsets 3,456 through
+  4,096. Their 1,024 pairs contain 769 false positives and 255 true
+  duplicates, with no unresolved outcomes. Forty-three pairs were chunked and
+  981 were direct. All 5,985 judgments were valid on their first attempts.
+  The outcome Parquet SHA-256 values are
+  `971c7e32f996b39570bcfe506f3ac84c8f04b283b5ef9d1226300aa1050e3ab0`,
+  `9fc8c8a9a9215eeabf460dded27ad2a2a07596687dadd2dbab5db36504ee736b`,
+  `74d285532e9eeea83a117cc348177ae6fa0e7b44e6b8b5cbc4bdb7348775c497`,
+  `e2fe9b310a7506b40457db78d3c9c914fc757c27c93e440b44f4650b33bd2eb3`,
+  `e02a4a1a3b98f28a8570780be40d8780f170af2e8a79c0b3ca4f33c687d23a10`,
+  `c0a9c365a7bbeb717bf1c59133f1e83ba9c2f7e388f83f815fee80c5d95365e8`,
+  `7f2c0975ee810d179be971f8a9efb98da63332c48c9781d356ae107e3171732b`,
+  and `2d9889b337fb7bb19c4b98818a05642334fa39f4bef127cff86eb9bd975abc8f`.
+
+- Across the stable 1,150-checkpoint snapshot, all 165 unresolved model
+  outcomes remain covered by 127 true-duplicate and 38 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 117,781 pairs, 74,828 false positives, 42,953 true duplicates;
+  - treatment: 28,338 pairs, 14,591 false positives, 13,747 true duplicates;
+  - combined: 146,119 pairs, 89,419 false positives, 56,700 true duplicates.
+
+- The next audit frontiers are p0 `(6, 256)`, p1 `(38, 0)`,
+  p2 `(70, 128)`, and p3 `(102, 4,224)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T14:44:38Z — 145,095 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1439-v367` independently
