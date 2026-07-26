@@ -17,7 +17,9 @@ import re
 import sys
 
 NOP_OPCODES = ("parameter", "constant", "bitcast", "get-tuple-element", "tuple(")
-INSTRUCTION = re.compile(r"^\s*(%?[\w.\-]+)\s*=\s*\S+\s+([\w-]+)\(")
+# Instruction defs only need their name: shapes contain spaces and nested parens, so do not
+# try to parse the opcode out of them -- classify off substrings in the line instead.
+INSTRUCTION = re.compile(r"^\s*%?([\w.\-]+)\s*=\s")
 COMPUTATION = re.compile(r"^\s*(ENTRY\s+)?%?([\w.\-]+)\s*[\({]")
 COLLECTIVE = re.compile(r"all-to-all|all-gather|all-reduce|reduce-scatter|collective-permute|async-start|async-done")
 TOP_COVER = 5
@@ -55,7 +57,10 @@ def main() -> None:
     starts: dict[str, tuple[int, str, str]] = {}
     print(f"\n{'computation':<26}{'instruction':<28}{'state':<10}{'cover':>6}  covering ops")
     for position, (_, computation, name, line) in enumerate(order):
-        if needle not in line and not COLLECTIVE.search(line):
+        # XLA writes native collectives with hyphens (all-to-all-start) and shard_map-wrapped
+        # ones with underscores (all_to_all.112-start); match either spelling.
+        flat = line.replace("_", "-")
+        if needle.replace("_", "-") not in flat and not COLLECTIVE.search(flat):
             continue
         if "-start(" in line or "async-start" in line:
             starts[name] = (position, computation, line)
@@ -69,7 +74,7 @@ def main() -> None:
             real = [(n, l) for n, l in between if not any(op in l for op in NOP_OPCODES)]
             cover = ", ".join(n for n, _ in real[:TOP_COVER]) or "-"
             print(f"{start_computation[:26]:<26}{done.group(1)[:28]:<28}{'async':<10}{len(real):>6}  {cover}")
-        elif needle in line and "-done" not in line:
+        elif needle.replace("_", "-") in flat and "-done" not in flat:
             state = "SYNC" if '"is_sync":true' in line or '"is_sync": true' in line else "plain"
             print(f"{computation[:26]:<26}{name[:28]:<28}{state:<10}{'-':>6}")
 
