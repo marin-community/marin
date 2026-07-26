@@ -91,6 +91,55 @@ def time_fn(fn, args, *, iters=20, warmup=5):
     return (time.perf_counter() - start) / iters * 1e3
 
 
+def check_operands(args):
+    """Compare the two paths' forward operands directly, outside the EP backend.
+
+    FP8W-001 predicts the row-orientation operand is bit-identical whether the
+    quantization happens before or after the dispatch. The end-to-end arms
+    differ by ~1e-3, so this isolates where that comes from: it feeds one
+    dispatch buffer through both forward pipelines and diffs the operands the
+    grouped kernels actually receive.
+    """
+    from levanter.grug._moe.mxfp8_wire import quantize_mxfp8_rows  # noqa: PLC0415
+
+    from experiments.grug.moe.mxfp8 import _forward_pipeline, _forward_pipeline_quantized  # noqa: PLC0415
+
+    op = MxFp8MoeMlpOp(producer=args.producer)
+    d, i, e = args.hidden, args.intermediate, 4
+    capacity = 512
+    keys = jax.random.split(jax.random.key(7), 4)
+    x = (jax.random.normal(keys[0], (capacity, d), jnp.float32) * 0.5).astype(jnp.bfloat16)
+    # Leave a tail of exactly-zero rows: dropped slots and pad rows are routine,
+    # and they are where the two quantizers are known to differ.
+    x = x.at[-96:].set(0)
+    group_sizes = jnp.array([160, 128, 128, capacity - 416], jnp.int32)
+    w13 = (jax.random.normal(keys[1], (e, d, 2 * i), jnp.float32) * 0.02).astype(jnp.bfloat16)
+    w2 = (jax.random.normal(keys[2], (e, i, d), jnp.float32) * 0.02).astype(jnp.bfloat16)
+
+    payload, scales = quantize_mxfp8_rows(x.astype(jnp.float32))
+    ctl = jax.jit(lambda a, b, c: _forward_pipeline(op, a, b, c, group_sizes))(x, w13, w2)
+    trt = jax.jit(lambda p, s, b, c: _forward_pipeline_quantized(op, p, s, b, c, group_sizes))(payload, scales, w13, w2)
+
+    same_q = bool(jnp.all(ctl["x_q"].view(jnp.uint8) == trt["x_q"].view(jnp.uint8)))
+    same_sf = bool(jnp.all(ctl["x_sf"].view(jnp.uint8) == trt["x_sf"].view(jnp.uint8)))
+    same_col = bool(jnp.all(ctl["x_col"].view(jnp.uint8) == trt["x_col"].view(jnp.uint8)))
+    print(
+        json.dumps(
+            {
+                "row_operand_bit_identical": same_q,
+                "row_scales_bit_identical": same_sf,
+                "col_operand_bit_identical": same_col,
+                "y_relfrob": relfrob(trt["y"], ctl["y"]),
+                "control_x_q_has_nan": bool(jnp.any(jnp.isnan(ctl["x_q"].astype(jnp.float32)))),
+                "treatment_x_q_has_nan": bool(jnp.any(jnp.isnan(trt["x_q"].astype(jnp.float32)))),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokens", type=int, default=512)
@@ -100,6 +149,7 @@ def main():
     ap.add_argument("--topk", type=int, default=4)
     ap.add_argument("--producer", default="xla", choices=("auto", "cute", "xla"))
     ap.add_argument("--iters", type=int, default=20)
+    ap.add_argument("--check-operands", action="store_true", help="diff the two forward pipelines' operands")
     args = ap.parse_args()
 
     dev = jax.devices()[0]
@@ -108,6 +158,10 @@ def main():
         f"jax {jax.__version__}, {len(jax.devices())} devices",
         flush=True,
     )
+
+    if args.check_operands:
+        check_operands(args)
+        return
 
     mesh = build_mesh()
     keys = jax.random.split(jax.random.key(0), 6)
