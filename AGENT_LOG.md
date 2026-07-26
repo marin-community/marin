@@ -1414,3 +1414,43 @@ cf1.0, drops on, 120 steps, one leg in flight. **Loss-trajectory parity is the v
 +1.34pp (a2a hidden fraction unchanged) to +2.84pp (a2a fully hidden), against a total remaining
 collective-exposure budget of +3.37pp.
 Confidence: 9/10 that the lowering holds in the production path; 6/10 on end-to-end loss parity.
+
+## Check-in 2026-07-26 12:25 UTC — implementation constraint found: per-token scaling and pure-fp8 WGRAD are incompatible
+
+Before writing the backward I checked whether the weight-gradient GEMM admits the same treatment
+as the forward. It does not, and the reason is structural:
+
+- **Forward** `hidden_i = scale_i * (q_i @ W)`: the per-token scale varies along the OUTPUT row
+  axis, so it factors out of the dot. This is the row-linearity identity gate 1 verified, and it
+  is why the forward lowers to `__cublas$lt$matmul$f8`.
+- **dgrad** `dX_i = scale_i * (ct_i @ W^T)`: same structure, scale again on the output rows.
+  Fine, and the mixed e5m2-grad x e4m3-weight form is confirmed lowering (probe row 4).
+- **wgrad** `dW = sum_i (q_i * scale_i)^T ct_i`: the per-token scale varies along the REDUCTION
+  axis. It cannot be hoisted out of the sum. Measured: hoisting a single scalar in its place gives
+  **87% relative error**, and folding the row scale into `ct` instead does not fix it, because
+  `ct`'s own per-token quantization scale then sits inside the same reduction one level down.
+
+So the fidelity rule (per-token scaling, never shared across tokens) and a pure-fp8 wgrad are
+mutually exclusive. This is not a bug to work around; it is a property of where the scale lives.
+
+### Consequence for the increment
+
+wgrad stays bf16. That costs no WIRE bytes — the wire carries activations and cotangents, and both
+of those remain fp8 in both directions, so the prize bracket is unchanged. What it costs is one
+dequantization of the received tensor in the backward, local compute, no collective. Under
+`remat_mode=recompute_all` the forward is recomputed in backward anyway, so this lands on a tensor
+that is already being materialized; whether it is free or eats into the gain is exactly the kind of
+thing that shows up at gate 3 rather than in analysis, and I will report it as a risk rather than
+assume it away.
+
+One clean alternative exists if that cost turns out to matter: use DELAYED (previous-step amax,
+per-tensor) scaling for the wgrad activation operand only. Delayed scaling is causally safe by the
+established rule — the scale does not depend on the current batch — and being per-tensor it factors
+out of the reduction. That would need amax history state, and per prior experience on this stack the
+amax cotangent under `shard_map` must reduce with **pmax, not psum**. Not building it now; recording
+it so the option is on the record with its known trap attached.
+
+Both fidelity notes from the coordinator are already satisfied by the current design: scales are
+per-token current-scaling (never tile- or sequence-spanning) and per-expert scalar, and nothing in
+the forward or dgrad path uses an amax cotangent.
+Confidence: 9/10 on the wgrad constraint (direct measurement, structural argument); 6/10 on end-to-end loss parity, unchanged.
