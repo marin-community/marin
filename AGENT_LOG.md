@@ -2104,3 +2104,83 @@ Production delayed scaling, which re-derives the scale from an amax history ever
 this drift by construction; a constant cannot. The route is not damaged by this, but the
 *constant* is a scaffold, not a result.
 Confidence: 9/10 on the measurements; 7/10 on how much of the zeroed mass is real signal, which needs the cotangent magnitude distribution rather than the count.
+
+## FINAL (five-site delayed scaling) 2026-07-26 16:55 UTC — PRE-REGISTRATION FALSIFIED ON BOTH CLAUSES
+
+/mwittmann/ep25d4-fp8delayed-120-v5-20260726 (succeeded, 120 steps) vs the limit=4 control
+/mwittmann/ep25d4-ovlim4-120-v2-20260726. v5 = v4 with the underflow guard removed; all five
+quantization sites on the supplied scale, scale all_to_all deleted, FWD 4.5 / BWD 1.0e-07.
+Reporting in the pre-registered order.
+
+### (a) Underflow telemetry
+Reported in full above from the probe job. Forward clean (max 3e-4). Backward not clean (mean
+0.109, 6.9% of observations above 0.5) and drifting upward within 12 steps. The guard could not
+run inside the rack leg — a debug callback in the rematerialized scan body costs 1.41x temp.
+
+### (b) Loss — PARITY
+| step | 20 | 40 | 60 | 80 | 100 | 119 | tail20 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| control | 8.6397 | 7.2383 | 6.6974 | 6.3176 | 5.9720 | 5.6819 | 5.8226 |
+| v5 fp8 | 8.7264 | 7.2231 | 6.7028 | 6.2857 | 5.9694 | 5.6507 | 5.7941 |
+Above the control at step 20, below it at 40/80/100/119, differences in the third decimal.
+**Parity.** Not an improvement, and it is not entitled to be read as one.
+
+### (c) Drops (120-step, comparable only to other 120-step legs) — MATCHED
+Mean 20-119 **0.2655 vs 0.2670**; @119 0.0891 vs 0.0876. Matched to 0.6%, so raw and
+drop-corrected MFU deltas coincide here.
+
+### (d) MFU — MISSED THE PRE-REGISTERED RANGE BY ~3.2pp
+| window | control | v5 | delta |
+|---|--:|--:|--:|
+| 0-119 | 22.783 | 21.188 | -1.595 |
+| 20-119 | **22.674** | **21.089** | **-1.585** |
+| 40-119 | 22.526 | 21.024 | -1.502 |
+Step time 11.94 -> 12.85 s. Predicted +1.5 to +1.9pp; measured **-1.59pp**. It is +0.21pp better
+than the two-site delayed leg (-1.795 raw), which is the entire measured value of routing the
+other three sites.
+
+### (e) Op-level accounting, untruncated (XPLANE_TOP_OPS=0, 6398 vs 6422 ops, GPU:0)
+
+| quantity, per 3-step window | control | v5 |
+|---|--:|--:|
+| trace span | 33159 | 36876 |
+| collective total | 13226 | 8453 |
+| exposed collective | 4287 | **1480** |
+| non-collective total | 28769 | 35314 |
+
+- **Added non-collective compute = +2182 ms/step** by op totals, **+2174 ms/step** by span. Two
+  independent methods agreeing to 0.4%. Predicted **127**. Break-even **920**. Falsification
+  threshold was "materially above ~400". **FIRED, by a factor of 17 against the prediction.**
+- **The reduce fusions survived.** `loop_reduce_fusion_1` 816 -> **4800**, `loop_reduce_fusion_2`
+  410 -> **2691**. Against the two-site leg they are 4854 and 2709: routing the remaining three
+  sites through the supplied scale moved them by **1.1% and 0.7%**. **Second clause FIRED.**
+- **The scale all_to_all is genuinely gone**, not merely deleted in principle: the collective op
+  set is unchanged from the control and the total falls 9757 -> 8453 (-13.4%) against the
+  two-site leg, with exposure 1633 -> 1480. That change is real and it is the only part of this
+  leg that worked as designed.
+- Exposure saving now measures **936 ms/step** (4287 -> 1480 per 3 steps), slightly better than
+  the 920 the break-even was set from.
+
+### What this falsifies, stated plainly
+The chain was: the two `loop_reduce_fusion` passes are the per-token amax reductions; delayed
+scaling removes the amax; therefore they vanish and the wire pays for itself. **The premise is
+wrong.** All five amax reductions are gone in this leg and the two fusions are within 1% of their
+size in the leg that still computed amax at three of five sites. Whatever occupies 2497 ms/step of
+reduce fusion in the fp8 legs, it is not the amax.
+
+Two methodological cautions for whoever picks this up. First, XLA numbers fusions per module, so
+`loop_reduce_fusion_1` in the control and in the fp8 leg need not be the same fusion; the claim
+that survives regardless is the aggregate, +2182 ms/step of non-collective compute. Second, the
+next step is to name these fusions from the HLO — `--xla_dump_to` and read what the fusion
+computes — not to infer them from profile names or from what the source looks like it should
+produce. That inference has now been wrong three times in a row (my predecessor's top-30 read, its
+untruncated re-read, and my own reading of the OOM), and each wrong inference cost a rack leg.
+
+### Route status
+Fidelity is not the obstacle (loss parity, drops matched). Byte reduction works and is worth
+**936 ms/step** of exposure — 64% of the available idle-fill budget, exactly as advertised. The
+quantization compute costs **2182 ms/step** against a 920 break-even, and the one change the
+attribution said would fix it has now been executed completely and changed nothing. The direction
+is not closed by scoping, but its central mechanism claim is measured false, and no further
+variant should be run until the reduce fusions are identified from the HLO.
+Confidence: 9/10 on every number here (two independent accounting methods agree; drops matched; the falsification is 17x, not marginal).
