@@ -53,11 +53,13 @@ def _batch_experts_enabled() -> bool:
 def _capacity_tile() -> int:
     """Tile to round the per-(sender, expert) bucket capacity up to. 0 disables alignment.
 
-    Bucket capacity becomes the M dimension of the expert GEMM, so an unaligned capacity is paid
-    as tiling waste on every expert matmul. `ceil(capacity_factor * assignments / experts)` lands
-    on an arbitrary integer -- capacity factor 1.05 on a 2048-token bucket gives 2151, which is odd
-    -- while the same bucket rounded to 2176 is 17 tiles of 128. Rounding up buys a little extra
-    capacity, which strictly reduces drops, so the alignment is free on both axes.
+    UNVALIDATED; leave off. This was built to test whether the measured cost of raising the capacity
+    factor above 1.0 (-1.18pp of MFU at the EP64 operating point) came from the bucket capacity, which
+    is the M dimension of the expert GEMM, landing on a badly shaped integer -- capacity factor 1.05
+    gives 2151, which is odd. It does not: rounding that same bucket up to a 128-aligned 2176 moved
+    MFU by +0.038pp, i.e. noise. The cliff on leaving capacity factor 1.0 is real but its cause is not
+    this. Kept because rounding up is correct and cheap and may matter at a coarser boundary, but
+    nothing measured justifies enabling it.
     """
     return int(os.environ.get("SCALE_CAPACITY_TILE", "0"))
 
