@@ -178,9 +178,19 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 ## Task Operations
 
 ```bash
-iris task exec /user/job/0 -- bash          # shell into running container
+iris task describe /user/job/0                 # state, attempts, backend object, root cause
+iris task events /user/job/0                   # retained backend + controller action timeline
+iris task events /user/job/0:2                 # one attempt only
+iris task exec /user/job/0 -- bash             # shell into running container
 iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 ```
+
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to seven
+days.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -397,6 +407,16 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.task_event` — up to seven days of deduplicated backend verdicts and
+  state-changing controller actions per task attempt. Query all attempts with
+  `iris task events /user/job/0`, or directly:
+
+  ```sql
+  SELECT attempt_id, ts, type, reason, message, source, count
+  FROM "iris.task_event"
+  WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
+  ORDER BY ts ASC;
+  ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.

@@ -52,6 +52,7 @@ from iris.cluster.controller.schema import jobs_table, slices_table, task_attemp
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from iris.test_util import FakeStatsTable
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
@@ -290,12 +291,16 @@ def test_job_cancellation_kills_all_tasks(harness):
     harness.dispatch(tasks[0], worker_id)
     harness.dispatch(tasks[1], worker_id)
 
+    task_event_table = FakeStatsTable()
+    harness.state._db.attach_task_event_table(task_event_table)
     with harness.state._db.transaction() as cur:
         ops.job.cancel(cur, job_id=job_id, reason="User cancelled")
 
     assert harness.query_job(job_id).state == job_pb2.JOB_STATE_KILLED
     for task in tasks:
         assert harness.query_task(task.task_id).state == job_pb2.TASK_STATE_KILLED
+    events = [event for write in task_event_table.writes for event in write]
+    assert {event.task_id for event in events} == {tasks[0].task_id.to_wire(), tasks[1].task_id.to_wire()}
 
 
 def test_cancel_job_holds_resources_until_heartbeat_finalization(harness):
@@ -2926,6 +2931,8 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     assert _query_task(state, tasks2[0].task_id).state == job_pb2.TASK_STATE_RUNNING
 
+    task_event_table = FakeStatsTable()
+    state._db.attach_task_event_table(task_event_table)
     result = ops.worker.fail(
         state._db,
         worker_ids=["w2"],
@@ -2943,6 +2950,9 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     assert _query_worker(state, w1) is not None
     assert _query_worker(state, w2) is None
+    task_event_rows = [row for write in task_event_table.writes for row in write]
+    assert [row.task_id for row in task_event_rows] == [tasks2[0].task_id.to_wire()]
+    assert task_event_rows[0].source == "iris/controller"
 
 
 def test_fail_workers_batch_skips_unknown(state):

@@ -56,7 +56,8 @@ relative range keeps one cache key as its edges drift. It calls only `Query`, av
 Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
-`label_<key>` fields.
+`label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
+bounded recent view of `iris.task_event`, beside the live API server events.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
@@ -159,8 +160,9 @@ state — see below), `fleet.json` (canary +
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
-grouped by run), `k8s.json` (current CW control-plane state from the k8s source), and
-`finelog.json` (fleet readiness plus mirror pod, probe, resource, and PVC details).
+grouped by run), `k8s.json` (current CW control-plane state plus recent durable
+Iris task actions), and `finelog.json` (fleet readiness plus mirror pod, probe,
+resource, and PVC details).
 
 `jobs.json` is the at-a-glance job view. Its fleet panels read the `iris.task_state`
 finelog namespace on the marin hub — one row per active root job every 30s per

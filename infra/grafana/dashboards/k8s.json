@@ -1,7 +1,7 @@
 {
   "uid": "marin-k8s",
   "title": "K8s control plane",
-  "description": "Current control-plane state of the CoreWeave clusters, read straight from their k8s API servers by the bridge's k8s source: watched components, webhook endpoints, backoff pods, pending/gated pods, Kueue admission backlog, Warning events, and GPU rack tray inventory. Every table carries a cluster column; a cluster the bridge cannot read shows up in the Cluster health panel with its error class. These panels are current-state only — the bridge stores no history; trends live in the finelog-backed dashboards.",
+  "description": "CoreWeave Kubernetes control-plane state and recent task actions: live API reads cover watched components, webhook endpoints, pods, Kueue admission, Warning events, and GPU rack inventory; the finelog-backed task-action table retains Iris and backend decisions after Kubernetes objects disappear. Every table carries a cluster column.",
   "tags": [
     "marin",
     "generated"
@@ -358,13 +358,140 @@
       }
     },
     {
+      "id": 12,
+      "type": "table",
+      "title": "Recent Iris task actions",
+      "description": "Task-scoped backend verdicts and controller decisions retained in iris.task_event on the fleet finelog hub. Kueue evictions, retries, gang bounces, and finalization remain visible here after Kubernetes Events and Pods disappear; CoreWeave audit logs remain the actor-level API record.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "attempt_uid"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "time",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT ts, COALESCE(NULLIF(cluster,''),'marin') AS cluster, task_id, attempt_id, attempt_uid, type, source, reason, message, count FROM \"iris.task_event\" WHERE ts >= {{from}} AND ts < {{to}} ORDER BY ts DESC LIMIT 200"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "ts",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "task_id",
+              "text": "task",
+              "type": "string"
+            },
+            {
+              "selector": "attempt_id",
+              "text": "attempt",
+              "type": "number"
+            },
+            {
+              "selector": "attempt_uid",
+              "text": "attempt_uid",
+              "type": "string"
+            },
+            {
+              "selector": "type",
+              "text": "type",
+              "type": "string"
+            },
+            {
+              "selector": "source",
+              "text": "source",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 9,
       "panelRef": "gpu_rack_tray_inventory",
       "gridPos": {
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 50
       }
     },
     {
@@ -380,7 +507,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 59
       },
       "fieldConfig": {
         "defaults": {
@@ -456,7 +583,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 73
       },
       "panelRef": "finelog_fleet_health"
     }

@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``iris.task_event`` scheduling/admission timeline: the "event log for
-every job". The k8s backend classifies a not-yet-running pod into a
-``(source, reason)`` verdict and appends a finelog row when that verdict
-changes, so the dashboard can render *why* a task is wedged in BUILDING
-(Kueue admission denial, image-pull failure) as a sequence, not a single
-opaque "Building 18m"."""
+"""Kubernetes backend events in the ``iris.task_event`` task-action timeline.
+
+The backend records changing scheduling, container, and terminal Kueue verdicts
+so the dashboard and CLI retain the cause after the Pod is gone.
+"""
 
 from iris.cluster.backends.k8s.tasks import (
     _EVENT_SOURCE_CONTAINER,
@@ -37,6 +36,12 @@ from .conftest import (
     singleton_unadmitted_workload,
     unadmitted_workload,
     unevaluated_workload,
+)
+
+_ATTEMPT = RunningTaskEntry(
+    task_id=JobName.from_wire("/job/0"),
+    attempt_id=0,
+    attempt_uid="attempt-a",
 )
 
 # --- _pod_event classification -------------------------------------------------
@@ -86,12 +91,11 @@ def test_event_log_writes_once_per_verdict_and_dedups_message_drift():
     when the message's numerals drift (Total nodes: 32 -> 40)."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
     drifted = unadmitted_workload(msg=KUEUE_UNADMITTED_MSG.replace("Total nodes: 32", "Total nodes: 40"))
-    log.observe(key, _pod_event(gated_pod(), drifted))
-    log.observe(key, None)  # pod momentarily quiet — no row, verdict retained
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), drifted))
+    log.observe(_ATTEMPT, None)  # pod momentarily quiet — no row, verdict retained
 
     rows = [r for w in table.writes for r in w]
     assert len(rows) == 1
@@ -106,10 +110,9 @@ def test_event_log_records_a_severity_upgrade_under_the_same_reason():
     the dedup keys on severity too, so the admission denial is never suppressed."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(gated_pod(), unevaluated_workload()))
-    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unevaluated_workload()))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
 
     rows = [r for w in table.writes for r in w]
     assert [(r.reason, r.source, r.type) for r in rows] == [
@@ -122,10 +125,9 @@ def test_event_log_records_a_severity_upgrade_under_the_same_reason():
 def test_event_log_appends_a_row_when_the_verdict_changes():
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
-    log.observe(key, _pod_event(imagepull_pod(), None))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(_ATTEMPT, _pod_event(imagepull_pod(), None))
 
     rows = [r for w in table.writes for r in w]
     assert [(r.reason, r.source) for r in rows] == [
@@ -139,11 +141,10 @@ def test_event_log_retain_forgets_gone_attempts():
     retried attempt starts its timeline clean rather than being deduped away."""
     table = FakeStatsTable()
     log = TaskEventLog(table)
-    key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
     log.retain(set())  # attempt gone
-    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(_ATTEMPT, _pod_event(gated_pod(), unadmitted_workload()))
 
     rows = [r for w in table.writes for r in w]
     assert len(rows) == 2
@@ -188,7 +189,7 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
     try:
         task_id = JobName.from_wire("/job/0")
         _seed_gated_task(k8s, task_id)
-        entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+        entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="attempt-a")
 
         provider.sync(make_batch(running_tasks=[entry]))
 
@@ -197,6 +198,7 @@ def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
         row = rows[0]
         assert row.task_id == "/job/0"
         assert row.attempt_id == 0
+        assert row.attempt_uid == "attempt-a"
         assert row.type == "Warning"
         assert row.reason == "SchedulingGated"
         assert row.source == _EVENT_SOURCE_KUEUE
