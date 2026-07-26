@@ -739,3 +739,28 @@ Next: harvest v3; matched control leg; treatment-side overlap report against the
   read high because drops are high. The verdict number is the matched control leg.
 Confidence: 4/10
 Next: let v3 finish (~07:25Z), then submit the matched control immediately.
+
+## Check-in 2026-07-26 07:25 UTC — treatment leg complete (22.619% p50); control + treatment-profile jobs launched
+
+TREATMENT /mwittmann/ep25d4-pgle-ab-pgle-120-v3-20260726 (QB cf1.0 + adjoint + prefetch + PGLE
+file + LHS, 120 steps, 118 MFU samples, profiler window at steps 8-10):
+
+| window | n | p10 | p50 | p90 | mean | step_time p50 |
+|---|--:|--:|--:|--:|--:|--:|
+| 0-119 | 118 | 22.261 | **22.619** | 24.191 | 22.907 | 11.97 s |
+| 20-119 | 100 | 22.244 | 22.549 | 23.331 | 22.670 | 12.01 s |
+| 40-119 | 80 | 22.235 | 22.481 | 22.841 | 22.511 | 12.05 s |
+
+drops @0 0.1721 (identical to earlier legs -> same draw) @10 0.912 @30 0.444 @60 0.264 @90 0.132
+@119 0.0882, tail20 mean 0.1104. Loss last 5.634 (120 steps).
+
+Against the round-6 reference QB+adjoint 120-step draw (22.595%, drops 0.083@119) this is +0.02pp
+= a null, but the matched control is the number that decides it: SUBMITTED
+/mwittmann/ep25d4-pgle-ab-ctrl-120-v1-20260726 (identical env minus the two XLA flags, same
+profiler window) at 07:21Z, ETA ~08:00Z.
+Also submitted the treatment-side overlap report (/mwittmann/ep25d4-overlap-pgle-v1-20260726) on
+the leg's own xprof dump, 3 hosts, to compare exposed-collective time against the control table.
+Useful calibration measured on two 350-step legs: MFU rises ~+0.30pp per +0.10 drop fraction, so
+A/B deltas get drop-corrected before being read.
+Confidence: 3/10 that PGLE+LHS clears +0.5pp (treatment matches the reference draw within noise).
+Next: babysit control; harvest both overlap reports; verdict.
