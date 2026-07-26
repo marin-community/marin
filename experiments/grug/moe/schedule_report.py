@@ -40,7 +40,10 @@ TOP_COVER = 6
 
 def pick_dump(directory: pathlib.Path) -> pathlib.Path:
     """The largest post-optimization dump, which is the train step rather than a helper module."""
-    candidates = sorted(directory.glob("*after_optimizations*.txt"), key=lambda path: path.stat().st_size)
+    # The backend-specific dump (…sm_100a_gpu_after_optimizations) is the scheduled one; prefer it.
+    candidates = sorted(directory.glob("*gpu_after_optimizations*.txt"), key=lambda path: path.stat().st_size)
+    if not candidates:
+        candidates = sorted(directory.glob("*after_optimizations*.txt"), key=lambda path: path.stat().st_size)
     if not candidates:
         candidates = sorted(directory.glob("*.txt"), key=lambda path: path.stat().st_size)
     if not candidates:
@@ -60,29 +63,32 @@ def leg_of(line: str) -> str:
 def computations(lines: list[str]) -> list[tuple[str, list[tuple[str, str]]]]:
     """Split a dump into ``(computation name, [(instruction name, line)])`` in schedule order.
 
-    Computations are found by brace depth, not by matching a header pattern: ``backend_config={...}``
-    and ``calls=%foo`` put braces and parens on ordinary instruction lines, so any header regex
-    also matches instructions.
+    Computations are delimited by column: a header starts at column 0 and ends the line with an
+    open brace, and a lone ``}`` at column 0 closes it. Counting braces instead does not survive a
+    real dump -- ``backend_config``, ``replica_groups`` and metadata strings put unbalanced braces
+    on instruction lines, and one bad line desynchronizes everything after it.
     """
     result: list[tuple[str, list[tuple[str, str]]]] = []
     name: str | None = None
     body: list[tuple[str, str]] = []
-    depth = 0
     for line in lines:
-        opens, closes = line.count("{"), line.count("}")
-        if depth == 0 and opens > closes:
+        indented = line[:1].isspace()
+        if not indented and line.rstrip().endswith("{"):
             header = line.split("{")[0]
             match = COMPUTATION_NAME.search(header)
             name = match.group(1) if match else (header.strip() or "?")
             body = []
-        elif depth > 0:
-            instruction = INSTRUCTION.match(line)
-            if instruction:
-                body.append((instruction.group(1), line))
-        depth += opens - closes
-        if depth <= 0 and name is not None:
-            result.append((name, body))
-            name, body, depth = None, [], 0
+            continue
+        if not indented and line.strip() == "}":
+            if name is not None:
+                result.append((name, body))
+            name, body = None, []
+            continue
+        if name is None:
+            continue
+        instruction = INSTRUCTION.match(line)
+        if instruction:
+            body.append((instruction.group(1), line))
     return result
 
 
