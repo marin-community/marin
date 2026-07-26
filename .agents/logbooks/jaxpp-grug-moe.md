@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's device-ragged symmetric arena before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-141437`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's production-sized device-ragged symmetric range before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-142530`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3469,3 +3469,20 @@ author: dlwh
   - The third parent is the first launch containing both the host-seed and stage-context fixes.
 - Next action:
   - Require every rank to complete warmup before DIME initialization, then all 12 link prewarms, no symmetric-allocation failure, and finite L8 metrics. Run the fixed `0.002` loss/every-gradient parity gate only after that functional gate.
+
+### 2026-07-26 07:25 PDT - tiny ragged warmup is insufficient; match production payload
+- Hypothesis: The tiny warmup completed but reserved too small a symmetric range; exercising the production forward and transpose payload before DIME will reserve the range required by stage backward.
+- Commit Hash: `14c6ff2e3d` (`[grug] Match ragged warmup to production payload`).
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-141437` ran the tiny stage-local warmup followed by full ordered DIME prewarming.
+  - Parent `/dlwh/iris-run-job-20260726-142530` runs the same matched L8 treatment with a production-shaped warmup.
+- Results:
+  - The tiny treatment verified its intended ordering on every rank: `4/4` device-ragged warmups completed before the first local DIME creation, followed by `12/12` prewarm confirmations across links 0->1, 1->2, and 2->3.
+  - Rank 2 then reproduced the exact stage-2-backward NCCL allocation failure at `14:17:30Z`: `size=0xcde000000 within limit=0x1400000000`, or 51.469 GiB inside the 80 GiB symmetric arena. No loss or MFU was emitted.
+  - Parent and child are terminal killed; all ranks exited zero after termination and no live descendant remains. W&B contains metadata only: <https://wandb.ai/marin-community/marin_moe/runs/ragged-warm-then-dime-stagemesh-20260726-141423>.
+  - `14c6ff2e3d` changes the warmup from eight scalar rows per GPU to the exact balanced target geometry: 65,536 BF16 assignment rows by 2,560 features per GPU. A squared-output gradient exercises both the forward and transpose ragged collectives before DIME.
+- Interpretation:
+  - Initialization order alone is insufficient. A successful tiny device collective does not reserve the full symmetric range later requested by the production backward executable.
+  - The production-shaped warmup is the smallest remaining preallocation test that can plausibly reserve the same collective buffers before CuPy/DIME fragments the address space.
+- Next action:
+  - Require all four production warmups to report `65536 assignments/device x 2560` before DIME, followed by all 12 link logs and finite L8 steps. Classify warmup-time OOM separately from a repeated post-DIME 51.469 GiB failure.
