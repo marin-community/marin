@@ -188,3 +188,20 @@ Next: arm-2 exit ~23:55 -> submit arm 3 (gamma=0.01); keep polling arm-1 logs.
 
 Confidence: 4/10 g=0.5, 1/10 g0.001 (measured), 3/10 g0.01
 Next: babysit arm 3 via poller; arm-1 log polls; arm-1 rerun decision at ~01:45.
+
+## Check-in 2026-07-26 01:05 UTC — arm 3 decaying toward its own plateau
+
+- ARM 3 SERIES (gamma=0.01): 0.912(30) 0.741(70) 0.662(110) 0.619(136). Decline rate
+  decaying: -0.0043/step (30-70) -> -0.0020 (70-110) -> -0.0016 (110-136). Same shape as
+  gamma=0.001 stretched ~10x. Drops-vs-bias-travel is strongly sublinear: gamma=0.001
+  plateaued 0.60 at travel 0.35; gamma=0.01 sits at 0.62 with travel 1.36 — ~4x the
+  travel, same drops. Fixed-rate integral travel always lags the first-5-steps collapse
+  (peak 0.89-0.91 in both draws); the stock rule works BECAUSE it is proportional (huge
+  corrections while imbalance is large). Family-level read forming: integral sign rules
+  cannot service this horizon at any practical gamma.
+- Arm-1 logs: 0 child rows at 01:00 (4.5h GB200 worker shipping outage). Rerun decision
+  at arm-3 exit (~01:45): if dark, rerun g=0.5 with poller from step 0.
+- Mutations: submissions only.
+
+Confidence: 4/10 g=0.5, 1/10 g0.001, 1.5/10 g0.01
+Next: arm-3 completion ~01:45 -> arm-1 rerun decision; keep polling logs.
