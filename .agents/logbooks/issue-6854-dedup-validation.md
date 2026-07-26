@@ -1483,6 +1483,51 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T06:49:25Z — 104,102 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0642-v150` independently
+  revalidated three p3 decision-file 100 checkpoints at semantic offsets 3,456
+  through 3,712. Their 384 baseline pairs contain 269 false positives, 114 true
+  duplicates, and one unresolved outcome. All 937 judgments and requests were
+  valid on their first attempt; 382 pairs used direct review and two used
+  chunked review. The outcome Parquet SHA-256 values are
+  `b736146772891e5418c3f889374e1305225d78ebcce224709b277c00f25b9eff`,
+  `816c15a99eace15b8317e84321eb1e11e20823d8f2ca205b0295137490afe417`,
+  and
+  `b4ec9986d58a8259df9f64cd637443b21be0b1a70392f847855da377ce12622b`.
+- `/rav/datakit-6854-inspect-row5848-0644-v151` read both complete
+  same-source college-SEO texts and all three model judgments. The
+  1,345-character member and 827-character canonical have SHA-256
+  `f2644d391643dd08210c76c2332402af01a2cc7578d913577036d9550d586437`
+  and
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`,
+  with character and line sequence ratios of 0.580110 and 0.250000.
+  Institution, location, and program names are low-value slot substitutions,
+  but the member also adds distinct propositions absent from the canonical:
+  a biomedical-engineering degree requirement involving biotechnology or
+  biology and mechanical-design and surgical-practice electives, plus
+  separate corporate-internship advice. Deleting those claims loses content,
+  so the pair is a false positive.
+- `/rav/datakit-6854-publish-manual-0647-v152` published the hash-bound manual
+  record, and `/rav/datakit-6854-verify-manual-0648-v153` separately reread
+  the source pair, semantic checkpoint, manual row, Parquet bytes, and
+  completion marker. The semantic-evidence, manual-record, and manual-Parquet
+  SHA-256 values are
+  `6210b11bceee642342436712cce88b3482abac5a50754b1083d9fcf2b787f957`,
+  `3acd3cbc58328a803aad195d014f979ee1a5ebd9be8063ac048de4f300982ee7`,
+  and
+  `9ae2ad4313870f2598d120ebe58f022506f720cbc037b4ad28d7360b371797ac`.
+- Across the stable 819-checkpoint snapshot, all 117 unresolved model outcomes
+  are covered by 89 true-duplicate and 28 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 84,314 pairs, 53,567 false positives, 30,747 true duplicates;
+  - treatment: 19,788 pairs, 10,216 false positives, 9,572 true duplicates;
+  - combined: 104,102 pairs, 63,783 false positives, 40,319 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T06:41:20Z — 103,718 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0640-v149` independently
