@@ -404,3 +404,8 @@ Canary flipped (multi-arch log-shipper fixed, controller restarted). Resubmitted
 /mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = QB-on cf1.0 adjoint + drops, 120 steps. Poller bs63gv65n
 does an EARLY log-flow probe once running (>=3 metric lines around step ~5) so we catch any loss before harvest,
 then harvests at terminal. Treatment (+SCALE_A2A_BATCH_EXPERTS=1) goes back-to-back after control terminates.
+
+## R6-1 control harvested + treatment submitted 20:16
+CONTROL /mwittmann/ep25d1-qbon-adj-control-120-0725-1823: p50 22.66% (p10 22.34 / p90 24.23, 119 samples),
+drops 113-119 = 0.094/0.087/0.092/0.080/0.080/0.088, loss 5.614. In d4's QB-on cf1.0 band (22.595/22.002). VALID.
+TREATMENT submitted: /mwittmann/ep25d1-qbon-batch-120-0725-2016 = control + SCALE_A2A_BATCH_EXPERTS=1. Polling inline to terminal.
