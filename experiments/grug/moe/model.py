@@ -457,8 +457,13 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        # A selectively preserved FP32 master gate keeps its cancellation-heavy
+        # gradient out of BF16 while leaving the activation wire dtype unchanged.
+        if self.attn_gate.dtype == jnp.float32 and x.dtype != jnp.float32:
+            gate_logits = jnp.einsum("bsd,dn->bsn", x.astype(jnp.float32), self.attn_gate)
+            gate = (2 * jax.nn.sigmoid(gate_logits)).astype(attn_out.dtype)[..., None]
+        else:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(

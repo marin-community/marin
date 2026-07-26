@@ -87,6 +87,24 @@ _DIRECT_REFERENCE_DEVICE_PAIRS = ("0,1", "2,3", "4,5", "6,7")
 _PRECOMPILE_LOCAL_ENV = "GRUG_JAXPP_PRECOMPILE_LOCAL"
 
 
+@dataclass(frozen=True)
+class _AttentionGateFp32Policy:
+    base: Any
+
+    def cast_to_param(self, tree):
+        return self.base.cast_to_param(tree)
+
+    def cast_to_compute(self, tree):
+        casted = self.base.cast_to_compute(tree)
+        return grug_train._restore_attention_gate_parameters(tree, casted)
+
+    def cast_to_output(self, tree):
+        return self.base.cast_to_output(tree)
+
+
+_PARITY_MIXED_PRECISION = _AttentionGateFp32Policy(eager_parity._MIXED_PRECISION)
+
+
 def _event(process_id: int, event: str, **fields: Any) -> None:
     print(json.dumps({"event": event, "process_id": process_id, **fields}, sort_keys=True), flush=True)
 
@@ -374,7 +392,7 @@ def _standalone_direct_reference(process_id: int, device_pair: str, output_path:
             direct_state = grug_train.initial_state(
                 _model_config(),
                 optimizer=optimizer,
-                mp=eager_parity._MIXED_PRECISION,
+                mp=_PARITY_MIXED_PRECISION,
                 key=jax.random.PRNGKey(0),
                 ema_beta=None,
             )
@@ -383,6 +401,7 @@ def _standalone_direct_reference(process_id: int, device_pair: str, output_path:
                 functools.partial(
                     eager_parity._direct_microbatch_mean,
                     precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+                    mixed_precision_policy=_PARITY_MIXED_PRECISION,
                 )
             )
             direct_loss, direct_gradients = direct_step(direct_state.params, direct_batch)
@@ -518,7 +537,7 @@ def _run_initialized_worker(
             initial_state = grug_train.initial_state(
                 _model_config(),
                 optimizer=optimizer,
-                mp=eager_parity._MIXED_PRECISION,
+                mp=_PARITY_MIXED_PRECISION,
                 key=jax.random.PRNGKey(0),
                 ema_beta=None,
             )
@@ -554,7 +573,7 @@ def _run_initialized_worker(
                         direct_state = grug_train.initial_state(
                             _model_config(),
                             optimizer=optimizer,
-                            mp=eager_parity._MIXED_PRECISION,
+                            mp=_PARITY_MIXED_PRECISION,
                             key=jax.random.PRNGKey(0),
                             ema_beta=None,
                         )
@@ -563,6 +582,7 @@ def _run_initialized_worker(
                             functools.partial(
                                 eager_parity._direct_microbatch_mean,
                                 precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+                                mixed_precision_policy=_PARITY_MIXED_PRECISION,
                             )
                         )
                         direct_result = direct_step(direct_state.params, direct_batch)
@@ -587,7 +607,7 @@ def _run_initialized_worker(
         _event(process_id, "explicit_lower_start", stage_index=local_stage_index)
         explicit_step = grug_train._make_explicit_mpmd_train_step(
             optimizer,
-            eager_parity._MIXED_PRECISION,
+            _PARITY_MIXED_PRECISION,
             z_loss_weight=0.0,
             pipeline=pipeline,
             mpmd_mesh=mpmd_mesh,

@@ -220,10 +220,11 @@ def _loss(
     *,
     pipeline_stages: int | None,
     precision: PrecisionMode,
+    mixed_precision_policy: Any = _MIXED_PRECISION,
 ) -> jax.Array:
     model = grug_train._replace_router_biases(params, fixed_router_biases)
     if precision is PrecisionMode.PRODUCTION_MIXED:
-        model = grug_train._cast_preserving_overwrites(model, _MIXED_PRECISION.cast_to_compute)
+        model = grug_train._cast_preserving_overwrites(model, mixed_precision_policy.cast_to_compute)
     return model.next_token_loss(
         microbatch.tokens,
         microbatch.loss_weight,
@@ -240,6 +241,7 @@ def _direct_microbatch_mean(
     batch: GrugLmExample,
     *,
     precision: PrecisionMode,
+    mixed_precision_policy: Any = _MIXED_PRECISION,
 ) -> tuple[jax.Array, Transformer]:
     pipeline_params, fixed_router_biases = grug_train._detach_router_biases(params)
     losses = []
@@ -252,6 +254,7 @@ def _direct_microbatch_mean(
             microbatch=microbatch,
             pipeline_stages=None,
             precision=precision,
+            mixed_precision_policy=mixed_precision_policy,
         )
         loss, gradient = jax.value_and_grad(microbatch_loss)(pipeline_params)
         losses.append(loss)

@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import pytest
+from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import check_jaxpp_explicit_mpmd_std1f1b_ragged_parity as parity
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import DEFAULT_TOLERANCE
@@ -80,6 +81,41 @@ def test_gradient_capture_optimizer_preserves_params_and_returns_every_gradient(
     assert recovered.keys() == expected_gradients.keys()
     assert jnp.array_equal(recovered["first"], expected_gradients["first"])
     assert jnp.array_equal(recovered["nested"]["second"], expected_gradients["nested"]["second"])
+
+
+def test_parity_mixed_precision_preserves_only_attention_gates_in_fp32():
+    mesh = parity.grug_train._compact_or_pipeline_grug_mesh(
+        expert_axis_size=1,
+        replica_axis_size=1,
+        pipeline=None,
+    )
+    with jax.set_mesh(mesh):
+        model = parity.grug_train.initial_state(
+            parity._model_config(),
+            optimizer=gradient_capture_optimizer(),
+            mp=parity._PARITY_MIXED_PRECISION,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        ).params
+        compute_model = parity.grug_train._cast_preserving_overwrites(
+            model,
+            parity._PARITY_MIXED_PRECISION.cast_to_compute,
+        )
+        hidden = jnp.ones(
+            (1, parity.SEQUENCE_LENGTH, parity._model_config().hidden_dim),
+            dtype=jnp.bfloat16,
+        )
+        attention_output = compute_model.blocks[0].attn(
+            hidden,
+            AttentionMask.causal(),
+            use_pko=False,
+            disable_rope=False,
+        )
+
+    assert compute_model.blocks[0].attn.attn_gate.dtype == jnp.float32
+    assert compute_model.blocks[0].attn.w_q.dtype == jnp.bfloat16
+    assert compute_model.token_embed.dtype == jnp.bfloat16
+    assert attention_output.dtype == jnp.bfloat16
 
 
 def test_stage_report_rejects_one_finite_gradient_leaf_above_fixed_tolerance():

@@ -970,6 +970,22 @@ def _cast_preserving_overwrites(tree, cast_fn):
     return eqx.combine(overwrites, cast_fn(ordinary), is_leaf=_is_overwrite)
 
 
+def _restore_attention_gate_parameters(
+    original: Transformer | TransformerPipelineStage,
+    casted: Transformer | TransformerPipelineStage,
+) -> Transformer | TransformerPipelineStage:
+    """Restore FP32 master attention gates after a mixed-precision tree cast."""
+    if type(original) is not type(casted):
+        raise TypeError(f"attention-gate restore requires matching tree types, got {type(original)} and {type(casted)}")
+    for block_index, block in enumerate(original.blocks):
+        casted = eqx.tree_at(
+            lambda tree, block_index=block_index: tree.blocks[block_index].attn.attn_gate,
+            casted,
+            block.attn.attn_gate,
+        )
+    return casted
+
+
 def _accumulate_microbatch_tree(accumulated, value):
     """Add ordinary leaves and max delayed-scaling state across microbatches."""
     if accumulated is None:
