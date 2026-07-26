@@ -180,6 +180,26 @@ the trial — without it the lowered plan is printed and nothing runs.
 v5p-8 has actually been obtained, waiting otherwise), not a capacity reservation
 — it does not hold or guarantee capacity.
 
+### Comparing capacity-overflow (dropped-token) fractions
+
+`SCALE_REPORT_DROPS=1` logs `moe/drop_fraction` per step. Three rules, each of which was learned by
+getting it wrong:
+
+- **Compare only at the same fraction of the LR schedule, and state the run length next to every
+  drop number.** The LR schedule spans `num_train_steps`, so step 119 is 99% through a 120-step run
+  and 34% through a 350-step run — LR ~6% of peak versus ~68%. A high LR churns the router and
+  drives drops up; an annealed LR lets it settle. The same configuration read 0.083 at step 119 of a
+  120-step run and 0.175 at step 119 of a 350-step run. That is a schedule effect, not noise.
+- **Prefer a tail window to any single step.** Drops decline throughout training, so a single late
+  step is the low point of its own run rather than a steady state.
+- **Fetch logs with an explicit `--max-lines`.** The default truncates to 1000 lines, which for a
+  still-declining metric biases the estimate low — a last-7-step mean read 0.033 against a true
+  100-step mean of 0.037. See `lib/iris/OPS.md`.
+
+A misfiled systematic effect is not a harmless labelling error. Calling the schedule effect "draw
+variance" made the drop record look noisier than it was and hid real structure, which is the
+opposite of the usual failure and correspondingly easy to miss.
+
 ### Monitoring
 
 Runs may take time to find a TPU, and 5–10 minutes to start once scheduled.

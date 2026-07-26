@@ -212,6 +212,19 @@ mechanism that spends index or compute work to buy fidelity is close to free, wh
 that adds bytes to the collectives is expensive no matter how well implemented. Spill's 0.213pp and
 the collective-bound ceiling are the two measurements behind that claim.
 
+A second error ran in the opposite direction to the usual one. Drop fractions from runs of
+different lengths were compared at the same step number and the disagreement was attributed to
+allocation variance — the same configuration reads 0.083 at step 119 of a 120-step run and 0.175 at
+step 119 of a 350-step run, and that was recorded as noise. It is not noise: the LR schedule spans
+`num_train_steps`, so step 119 is 99% through the first run and 34% through the second, at roughly
+6% and 68% of peak LR. A churning router drops more; an annealed one drops less. Filing that
+systematic effect as variance inflated the apparent uncertainty of the whole drop record and hid
+real structure. The correction made the data better than it had been claimed to be, which is worth
+saying plainly because the usual direction of error is the reverse and a reader will not be looking
+for this one. The practical rules — compare only at equal fractions of the LR schedule, prefer a
+tail window to any single step, state the run length beside every drop number — are in
+`experiments/grug/moe/agent.md`.
+
 One error nearly escaped, and its shape is worth recording because it is not the kind that
 provenance checks catch. An earlier version of this document, and a summary derived from it, both
 stated that QB + cf1.15 was "the only measured 3%-compliant config" while reporting that same
