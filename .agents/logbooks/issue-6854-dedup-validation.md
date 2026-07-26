@@ -1483,6 +1483,81 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T11:15:10Z — 124,551 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1110-v284` independently
+  revalidated six p0 decision-file 5 checkpoints at semantic offsets 2,816
+  through 3,456 and six p3 decision-file 101 checkpoints at offsets 2,560
+  through 3,200. Their 1,536 baseline pairs contain 791 model false positives,
+  743 model true duplicates, and two unresolved outcomes. Five pairs were
+  chunked and 1,531 were direct. All 3,627 judgments were valid on their first
+  attempts. The outcome Parquet SHA-256 values, in p0 then p3 frontier order,
+  are:
+
+  - `3d288519beb0b9b638aa873b8eca91eafe670a0e0fc93493f5cd41e6993a1cd3`;
+  - `a4c5acb3c0339cc988dc33e8508e798179b707fb11916c56787a2d8937c718ae`;
+  - `f97e20eb5df28e03cf8679f40c32368ea836e4c5565f8677283a2bab897622e9`;
+  - `59441b64ed5f170da5712990553fab464180ba2371bc08915c079572387f70aa`;
+  - `a9447b7ccecc96f376cf8415c6c6ee519c8601a4ba4535f7e5dcb7d5b9d3292a`;
+  - `cb7c772dd7b92b59f4924fea2dea85d74b4085accf54c4e088995d54e80b9563`;
+  - `4d794431cdf9084b2d4f09ce5d9cd69b9fb71d9768b203c2e4596acf4df90144`;
+  - `9c2c8063ca6f1d2d9b01b32dbc1a75eaa029eb16cd3b3134eb0835113d6c9ef8`;
+  - `6ea2662613cc9d687f1b64b71aefec1ba159269f52ac86a09e47632a3b6d5b2d`;
+  - `881d791e885cdad13b3cbc7c2c83896bfc66948bfde1e63e16cd228fb9cf00f7`;
+  - `8d1111751a8e671c5b5da8b3b94217aaf28186f839925267f0eeb9ac9c17c271`;
+  - `6d139334a7015b9acad78e79fced98e1d534c6b6cbcb642e36e70a4ee82ea022`.
+
+- Complete-text review resolves both ambiguities as false positives:
+
+  - `part-00101-of-00128.parquet:4159` contains two variants of a George
+    Soros chain letter. Across all 12,986 member and 14,257 canonical
+    characters, the member has substantive body passages absent or truncated
+    in the canonical: the Soros birth and Esperanto paragraph, the
+    malignant-narcissist sentence, the full shadow-government passage, and a
+    distinct Patrick Henry closing. Character, line, and word-sequence
+    similarity are 0.833755, 0.522523, and 0.836657. The member/canonical text
+    and inspection-artifact SHA-256 values are
+    `27c0d3c911373fe54cc4f716d75ae0bf36566b899c93555fe9ac58424e4d5591`,
+    `fa2df97057756a52ab960cb52e04cbd4c6fe264587665a56793b56d1517ff62d`,
+    and `e60d8b62127107e7cbb52aacda907f1a7bbcf5e918c9b8b58289d01e900846c7`.
+  - `part-00101-of-00128.parquet:4380` is a 1,410-character college-template
+    member against an 827-character canonical. The member uniquely states
+    biomedical-engineering degree requirements, mechanical and surgical
+    electives, and business-internship benefits, beyond its different school
+    names. Character, line, and word-sequence similarity are 0.389808,
+    0.250000, and 0.451807. The member/canonical text and inspection-artifact
+    SHA-256 values are
+    `8f03fb2ebd36c0cc88dd47d86ed741c2abd09188fc6ea5fbdc21d724313b1aa5`,
+    `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`,
+    and `7698f7738c79fb0fd88cd5efb755ec62dd81b9956ba068ffc379713341351920`.
+
+- `/rav/datakit-6854-publish-rows4159-4380-1117-v286` wrote both immutable
+  false-positive records, and
+  `/rav/datakit-6854-verify-rows4159-4380-1117-v287` separately reread both
+  source pairs, semantic checkpoints, inspection artifacts, records,
+  deterministic Parquet bytes, and completion markers. In pair order, the
+  semantic-evidence, manual-record, and manual-Parquet SHA-256 values are:
+
+  - `e2f6bcfc5d7026198e67aa5f7f5eb0620ca32f60edf23f84f4fb7c933b830aea`,
+    `e96a69023b9d2bba55e9a369b8cb7aba6aa18a07469e4a1ce07786ae6b2db8e6`,
+    and `f509a24ab27768df60ec33804e4c8cdc4263dd50ce53e04ebdf7edfeadc8aae3`;
+  - `8f53a21331863f70630f054264e9ca7ece97821d0d7dd0e66242929a0f08712a`,
+    `63534d8ee366f55b5d17393a5bbb1a0ded14c56547ae270823ddf1135518ae3b`,
+    and `cd75b5af195450573df5018d5de910bec800400366673c65ae80ca0e5213c1cc`.
+
+- Across the stable 980-checkpoint snapshot, all 139 unresolved model outcomes
+  are covered by 105 true-duplicate and 34 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 101,138 pairs, 64,136 false positives, 37,002 true duplicates;
+  - treatment: 23,413 pairs, 12,032 false positives, 11,381 true duplicates;
+  - combined: 124,551 pairs, 76,168 false positives, 48,383 true duplicates.
+
+- The next audit frontiers are p0 `(5, 3,584)`, p1 `(37, 0)`, p2 `(69, 0)`,
+  and p3 `(101, 3,328)`. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T11:07:10Z — 123,015 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1101-v280` independently
