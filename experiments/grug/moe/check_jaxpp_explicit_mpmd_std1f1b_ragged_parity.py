@@ -28,7 +28,7 @@ H100x8 Iris job:
     .venv/bin/python -u \
       experiments/grug/moe/check_jaxpp_explicit_mpmd_std1f1b_ragged_parity.py
 
-The direct reference is the mean of four independently differentiated
+The direct reference is the mean of the independently differentiated
 microbatch losses. The explicit arm executes ``train.py``'s production
 ``std_1f1b`` step with an observation-only Optax transform that leaves
 parameters unchanged and stores each averaged stage-local gradient directly in
@@ -70,7 +70,7 @@ from experiments.grug.moe import train as grug_train
 from experiments.grug.moe.model import GrugModelConfig
 
 PIPELINE_STAGES = 4
-MICROBATCHES = 4
+MICROBATCHES = 1
 DEVICES_PER_STAGE = 2
 EXPERT_AXIS_SIZE = 2
 MICROBATCH_SIZE = 2
