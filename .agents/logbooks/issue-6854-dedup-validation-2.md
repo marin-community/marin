@@ -16,6 +16,46 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T16:39:00Z — 159,901 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1644-v447` independently
+  revalidated ten checkpoints: five p1 decision-file 38 checkpoints spanning
+  semantic offsets 768 through 1,280 and five p2 decision-file 70 checkpoints
+  spanning semantic offsets 4,480 through 4,992. Their 1,280 pairs contain
+  992 false positives, 288 true duplicates, and no unresolved outcomes. Three
+  pairs were chunked and 1,277 were direct. All 2,693 judgments were valid on
+  their first request attempt.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p1:
+    `07a7ef2ba108dc3dcb26ec0aa4fd329ae417b01995205c52ce64f8e2eafc27f4`,
+    `7fa6a2564d3181854703f1979a4ec4285883673d60d1c55fe849f02b1aa9d0ae`,
+    `a7c30b9c318c4c377d92121cc84b36a11433cf01e1bff1a1dfb9ccdd96d1d139`,
+    `cf7e17ee304cc6a35739ef1f65d33ac18ae8068ae3b3e0e2f888e903e72b064c`,
+    and
+    `9b1ccdeb8d6a6087bdcd3a8bff5cdc7d87ca1e9bde19a5b3c12ba30357ba5fd2`;
+  - p2:
+    `841b455e0101d3bf92875ca67310e97207c0130a12d3e9439cb7a6859761be4e`,
+    `2bb5bd484cd9d38415f0e0a61f20101dc9b63b9649a45ed597793ab87caeca80`,
+    `67e7e54ec690c7922fc258cc785e1bd3b1828aea171dc42919413cd67aa3d192`,
+    `d625c078bb0f2da1647566fd9fe517c0cd1c0779be0e861aac21663038981f95`,
+    and
+    `45acd40ed245f6f7897ecba8705ad849bab7763eefad34236a6fdbc1dd083f4f`.
+
+- Across the stable 1,258-checkpoint snapshot, all 176 unresolved model
+  outcomes remain covered by 137 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 128,562 pairs, 81,828 false positives, 46,734 true duplicates;
+  - treatment: 31,339 pairs, 16,266 false positives, 15,073 true duplicates;
+  - combined: 159,901 pairs, 98,094 false positives, 61,807 true duplicates.
+
+- The next audit frontiers are p0 `(7, 0)`, p1 `(38, 1,408)`,
+  p2 `(70, 5,120)`, and p3 `(103, 128)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T16:36:30Z — 158,621 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1640-v443` independently
