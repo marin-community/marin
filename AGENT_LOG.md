@@ -341,3 +341,49 @@ own limit.
 /mwittmann/ep25d5-d6144-e256-bf16-120-0726-1023-v4 = v3 + `SCALE_RAM=600g` (the knob added this
 session). Note the two are otherwise identical, so if v4 clears init this is a clean attribution.
 Stopped v3 before resubmitting; it was crashlooping the rack to no purpose.
+
+## TRIAGE RECIPE — three failure modes that all look like "another task died"
+
+Lift this out of the log; it is not specific to my direction. On this cluster a rack job dying with
+every task reporting `Terminating process because the JAX distributed service detected fatal errors ...
+another task died` has at least three distinct causes with completely different fixes. All three have
+occurred THIS session, and this thread and peers have repeatedly mistaken them for bugs in the code
+under test. Classification takes two minutes.
+
+Fetch the log once at warning level (the default 1000-line window is too small and will hide the
+primary cause; `--level warning` keeps it manageable):
+
+    iris --cluster=marin job logs <JOB> --level warning --max-lines 40000 > /tmp/j.log
+
+Then run all three greps. The combination of what IS and ISN'T present is the classifier:
+
+| grep | class | reading |
+|---|---|---|
+| `grep -c "failed to allocate" /tmp/j.log` | 3. device HBM OOM | any hit => HBM. The adjacent `Stats: Limit / InUse / MaxInUse` lines and the `allocator.cc:71` histogram give the whole picture; the histogram sums to InUse and its entries can be matched to tensor shapes. |
+| `grep -c "SIGTERM caught" /tmp/j.log` | 1. preemption | hits, especially several tasks within the same instant, => eviction, not a crash. `ResourceConfig.with_gpu` sets `preemptible: true`, so exposure scales with COMPILE time. |
+| all three of the above zero, plus no traceback | 2. container host-memory OOM | a process died by kernel SIGKILL, which leaves no log. Suspect immediately when host offload or other large pinned host allocations are in play. |
+
+Confirm class 2 positively by finding the task that is NOT in the victim list: every other task logs
+"another task died", so the one absent from that set went first. Its own log will show it already back
+at `[iris setup]` with no error of its own.
+
+    grep -oE "grug-train-[^ ]*/[0-9]+ \|" /tmp/j.log | grep -f <(echo "another task died") ...
+    # simpler in practice: list the task indices that logged the victim message and diff against 0..N-1
+
+Fixes by class:
+1. preemption — resubmit with a `-vN` suffix; nothing is wrong with the code. Shorten the compile if you
+   can, but NOT via the JAX persistent compilation cache: a leader process starting with a populated
+   cache deadlocks NCCL clique init on GB200 and presents as a HANG, which is a fourth look-alike.
+2. host-memory OOM — raise the per-node request. `SCALE_RAM` (added this session) does it without a
+   code edit; see the launcher limitation below.
+3. HBM OOM — the allocator report tells you the resident set and the failing request; decide between
+   offload, remat, fewer per-GPU tokens, or more sharding from those numbers.
+
+### Launcher limitation this exposed (ops item, one-line-fix shaped)
+
+`experiments/grug/moe/launch_cw_scale.py` hardcoded `ram="256g"` in `ResourceConfig.with_gpu`, while a
+`gb200-4x` node has 960 GB of LPDDR5X (`lib/iris/config/cw-us-east-08a.yaml`: 144 vCPU, 960GB). With
+`SCALE_PROCESSES_PER_TASK` defaulting to 1, ONE container per node holds all 4 GPUs' host-offloaded
+optimizer state — ~162 GiB at d6144 4-of-256 — so roughly 800 GB per node sits idle while the container
+hits a cap it did not choose. Any workload combining `SCALE_OFFLOAD_OPT_STATE=1` with this model scale
+will hit it. Now overridable via `SCALE_RAM` (default unchanged at 256g).
