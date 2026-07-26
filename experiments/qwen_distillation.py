@@ -60,6 +60,8 @@ SCREEN_TOKENS = 100_000_000
 SCREEN_STEPS = math.ceil(SCREEN_TOKENS / (SEQ_LEN * BATCH_SIZE))
 SMOKE_STEPS = 12
 SCREEN_SEEDS = (0, 1)
+ALL_STUDENT_ANCHORS = tuple(range(28))
+ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
 SAMPLE_0P1B = ArtifactStep.adopt(
     "qwen-distillation/raw/datakit-0p1b",
@@ -290,6 +292,16 @@ def training_step(
                 teacher_initialize_from_hf=teacher_path,
                 teacher_use_hf_model_config=True,
                 teacher_initialization=arm_config.initialization,
+                student_anchor_indices=(
+                    ALL_STUDENT_ANCHORS
+                    if arm_config.objective == DistillationObjective.PROJECTED_HIDDEN
+                    else (6, 13, 20, 27)
+                ),
+                teacher_anchor_indices=(
+                    ALL_TEACHER_ANCHORS
+                    if arm_config.objective == DistillationObjective.PROJECTED_HIDDEN
+                    else (15, 31, 47, 63)
+                ),
             )
 
         return TrainLmOnPodConfig(

@@ -33,7 +33,7 @@ The local scaffold and all nine experiment arms are implemented and pass 12 focu
 
 ### Active
 
-- `QD-001`: Projected hidden-state loss on selected mapped layers improves early held-out NLL over logits-only KD. The all-layer variant is an ablation because direct decoder-LLM evidence is weak.
+- `QD-001`: Projected hidden-state loss on every student block, mapped uniformly into the 64-layer teacher, improves early held-out NLL over logits-only KD. A four-anchor variant is the throughput ablation because direct decoder-LLM evidence for dense layer matching is weak.
 - `QD-002`: Low-rank factorization followed by coordinate-preserving teacher submatrix selection gives a step-0 and early-training advantage over scratch initialization.
 - `QD-003`: TAID's adaptive interpolation reduces the optimization penalty from the roughly 50-fold teacher/student capacity gap.
 - `QD-004`: Weight-saliency-ranked, coordinate-preserving depth/width inheritance retains more useful function than independent per-weight factorization.
@@ -57,6 +57,7 @@ None.
 - 2026-07-26: Promote a treatment only if its two-seed mean final NLL is at least 0.5% below `QD-C1`, both seeds improve directionally, and the predefined zero-shot suite stays within task tolerances. Add a third seed near the threshold.
 - 2026-07-26: Extend promoted treatments and all four controls to approximately 1.8B tokens. The shared token cap, not a validation plateau, is the primary stopping condition.
 - 2026-07-26: Rank structured inherited coordinates by teacher weight energy. Activation-derived rotations do not commute through Qwen's RMSNorm and SwiGLU blocks without a more invasive model rewrite.
+- 2026-07-26: Make all 28 mapped student layers the primary `QD-001` treatment to test the user's per-layer hypothesis directly. Retain four anchors only as a throughput ablation.
 
 ## Negative results index
 
