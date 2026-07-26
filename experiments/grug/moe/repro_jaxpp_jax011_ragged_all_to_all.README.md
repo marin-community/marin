@@ -134,7 +134,21 @@ Corrected job
   `202`.
 - No watchdog, phase failure, nonzero exit, retry, or signal occurred.
 
-The minimum primitive composition does not reproduce the L8 training deadlock.
+The four-stage extensions also succeeded:
+
+- `/dlwh/jaxpp-jax011-ragged-four-stage-r1-20260726-124203` passed the
+  one-microbatch transfer and ragged cases exactly with checksum `202`.
+- `/dlwh/jaxpp-jax011-ragged-four-stage-m16-r2-20260726-124630` passed both
+  16-microbatch cases exactly with checksum `3,232`. The transfer control
+  completed 96 logical transfers, and the ragged treatment completed 128 stage
+  tasks.
+- Every rank returned from initialization, lowering, evaluation, barrier, and
+  shutdown. Neither job emitted a watchdog stack, phase failure, nonzero exit,
+  retry, or signal.
+
+The primitive compositions do not reproduce the L8 training deadlock, even
+with four bidirectional ranks, repeated receive-buffer reuse, 16 microbatches,
+96 transfers, and 128 stage tasks.
 The smallest known failing programs remain the four-stage L8/d2560/e64/top-k4
 jobs `/dlwh/iris-run-job-20260726-111423` (GPipe) and
 `/dlwh/iris-run-job-20260726-113121` (standard 1F1B with transfer priority).
@@ -147,14 +161,13 @@ the JAX 0.11 inline patch, direct ragged-all-to-all, JaxPP task transfer, and
 their smallest composition. Any smaller case would remove either an MPMD stage
 or the two-device collective axis.
 
-The four-stage cases are the next delta-debug boundary. The transfer control
-runs four two-H100 MPMD ranks through three forward transfers and three reverse
-transfers. Each rank executes one forward and one backward stage task. The
-ragged treatment replaces every identity stage task with an exact two-device
-ragged exchange. Eight exchanges restore the original payload. The
-`--microbatches 16` pair repeats the full chain, accumulates all returned
-payloads on stage 0, and forces 96 transfers plus 128 stage tasks to remain
-live. The base cases must finish with checksum `202`; the repeated cases must
-finish with checksum `3,232`. Every case requires zero mismatches.
+The four-stage transfer control runs four two-H100 MPMD ranks through three
+forward transfers and three reverse transfers. Each rank executes one forward
+and one backward stage task. The ragged treatment replaces every identity stage
+task with an exact two-device ragged exchange. Eight exchanges restore the
+original payload. The `--microbatches 16` pair repeats the full chain,
+accumulates all returned payloads on stage 0, and forces 96 transfers plus 128
+stage tasks to remain live. The base cases require checksum `202`; the repeated
+cases require checksum `3,232`. Every case requires zero mismatches.
 
 Part of #7024.
