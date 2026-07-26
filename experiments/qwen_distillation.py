@@ -82,7 +82,7 @@ SMOKE_DATA_VERSION = "2026.07.26.4"
 EXTENDED_DATA_VERSION = "2026.07.26.11"
 SMOKE_DATA_DOCUMENTS = 1_000
 EXTENDED_DATA_DOCUMENTS_PER_SHARD = 15_000
-SCREEN_EVAL_VERSION = "2026.07.26.12"
+SCREEN_EVAL_VERSION = "2026.07.26.13"
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
@@ -185,7 +185,7 @@ ZERO_SHOT_TASKS = (
     TaskConfig(task="arc_easy", num_fewshot=0),
     TaskConfig(task="hellaswag", num_fewshot=0),
     TaskConfig(task="piqa", num_fewshot=0),
-    TaskConfig(task="winogrande", num_fewshot=0),
+    TaskConfig(task="winogrande", dataset_path="allenai/winogrande", num_fewshot=0),
 )
 
 

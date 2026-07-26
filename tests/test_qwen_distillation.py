@@ -3,7 +3,7 @@
 
 import pytest
 
-from experiments.qwen_distillation import Arm, screen_checkpoint_subpath
+from experiments.qwen_distillation import ZERO_SHOT_TASKS, Arm, screen_checkpoint_subpath
 
 
 @pytest.mark.parametrize(
@@ -15,3 +15,8 @@ from experiments.qwen_distillation import Arm, screen_checkpoint_subpath
 )
 def test_screen_checkpoint_subpath(arm: Arm, expected: str):
     assert screen_checkpoint_subpath(arm) == expected
+
+
+def test_winogrande_uses_namespaced_dataset():
+    winogrande = next(task for task in ZERO_SHOT_TASKS if task.task == "winogrande")
+    assert winogrande.dataset_path == "allenai/winogrande"
