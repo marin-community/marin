@@ -16,6 +16,119 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T18:36:30Z — 170,794 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1822-v518` independently
+  revalidated four checkpoints: p0 decision-file 7 semantic offsets 768 and
+  896, and p3 decision-file 103 semantic offsets 4,480 and 4,608. Their 512
+  pairs contain 372 model false positives, 135 model true duplicates, and five
+  unresolved outcomes. Four pairs were chunked and 508 were direct. The audit
+  reread 1,157 judgments and 1,177 request attempts: 1,148 attempts were
+  valid, 29 were invalid, and 10 judgments required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p0:
+    `a3cd53c64914aa3a259fbc5f525a7abd1081f23aae41443bccb36be836d0e2af`
+    and
+    `190cc7fe5be52db2e58d74711e5ba83b21d631c9611e872d2c22a3fed169cc1c`;
+  - p3:
+    `f8572eb1453dc1fd307af7a3fb505fc26d6957486ba95eea55af2e05e2eeb758`
+    and
+    `b31954e49499397f9fc4f5f853e6f6d616c3b073252979c92a91d04003bd5ab2`.
+
+- Complete-text inspection resolves all five ambiguities as true duplicates:
+
+  - p0 row 1,532 contains the same MathOverflow binomial-transform question,
+    definitions, positivity conjecture, supporting facts, derivative identity,
+    heuristic, author, and date. Differences are LaTeX formatting, headings,
+    and a non-substantive generated summary. The 1,510/1,718-character records
+    have character, line, and word-sequence similarities 0.786865, 0.186047,
+    and 0.838499. Member/canonical SHA-256 values are
+    `2b35d68001c4085fc4af835f5fff74da680fbb4b2ee57e00091e35a0b649da22`
+    and
+    `2ac76eaee4972955498d05a900679580bcaf15d12e2f16b2823a8a3a11ed038e`.
+  - p3 rows 7,532, 7,538, 7,542, and 7,545 are otherwise identical SFT
+    records whose sole changed line is the final boxed answer with or without
+    a LaTeX text wrapper. They cover emotional intelligence, WTO renewable
+    energy subsidies, life expectancy, and team cohesion, respectively. Their
+    character similarities are 0.999161, 0.999838, 0.999757, and 0.999334;
+    their member/canonical character counts are 4,176/4,169,
+    21,583/21,576, 14,406/14,399, and 5,260/5,253.
+  - In row order, the four SFT member/canonical SHA-256 pairs are
+    `7bebc87158a22973a7bb65f8ca321d46589d7ba44c80dac446cd03d1e7ec9c16` /
+    `bdcc42ec9168b8f36c2e176ed755e351d224cfeb20346d4e4ad2a8e8e928a110`,
+    `cc8de6e10afb62dd7879b4921e7af91693d61b670e3b473fcded5f4ccc73d759` /
+    `ee1f5094dbba22e2d4782746c946c24c4b92fef014340a5dd0fcfdea3c69ec06`,
+    `59d3f629855e29e17b08a8499132720a9f1b08214fc005d99484927573907a64` /
+    `c77ed3b7cbbd34b6f899132a848bc9241fe29bdf7b35fbeee131c568c83169fb`,
+    and
+    `4851f487eb74ad62d5dffb14a9dfd81384bba0334e4893c67a76246fa4ca1e29` /
+    `1b5a8d02437b4637a9a87e968c4861cd7cb42732956be799451bbe1fd5dbee4c`.
+
+- The inspection jobs were
+  `/rav/datakit-6854-inspect-row1532-1823-v519`,
+  `/rav/datakit-6854-inspect-row7532-1824-v520`,
+  `/rav/datakit-6854-inspect-row7538-1825-v521`,
+  `/rav/datakit-6854-inspect-row7542-1826-v522`, and
+  `/rav/datakit-6854-inspect-row7545-1827-v523`. Their inspection SHA-256
+  values in the same order are
+  `28bfc624430e62274a3c4273b598fdfd6d844a7816f85b73731a76c552073ddc`,
+  `d5d322f246e7c1c2d8dc7bb6010da1f5fa8e961324c3e582875b4df29b59b6b3`,
+  `bab3c6f3847f96be39b52b860f0933f66af02e7c7c1db03f59978a6c850b09c5`,
+  `3d0dea8028d0d66005347737782e483ac95ff3e75270199ec4d8ed0e418ea623`,
+  and
+  `a4006978d4f0c8149908fbd482b7ca61a3f44e340bb5eb810d164fe56f62919a`.
+  The corresponding semantic-judgment SHA-256 values are
+  `595d7cd14bd58141b2875928430063d547af10252a17d2dd9db93990a0879c10`,
+  `6e6012a495bdbb20965fa7da44349436db298898614305432a0649a07b07a47f`,
+  `a7d1f6eb8e96b5891c8a1d2440c1b7d95a049dbfdde3a028d9b77e136cfa3912`,
+  `81d2d23ea0b197a7979ac7288879539dcde9f116f801c857f418bec95399f223`,
+  and
+  `53804c1b471205dcedee728a6304aa1554dca3058e8c8b4cf7b172dd8d17e571`.
+
+- The publication jobs were
+  `/rav/datakit-6854-publish-row1532-1828-v524`,
+  `/rav/datakit-6854-publish-row7532-1829-v525`,
+  `/rav/datakit-6854-publish-row7538-1830-v526`,
+  `/rav/datakit-6854-publish-row7542-1831-v527`, and
+  `/rav/datakit-6854-publish-row7545-1832-v528`. Separate verify-only jobs
+  `/rav/datakit-6854-verify-row1532-1837-v533`,
+  `/rav/datakit-6854-verify-row7532-1836-v532`,
+  `/rav/datakit-6854-verify-row7538-1835-v531`,
+  `/rav/datakit-6854-verify-row7542-1834-v530`, and
+  `/rav/datakit-6854-verify-row7545-1833-v529` independently reread the
+  source pairs, semantic checkpoints, inspections, deterministic Parquet
+  bytes, and completion markers.
+
+- In row order, the manual-Parquet SHA-256 values are
+  `f332db501a4853ca46f70345e92dfd9a1ad0f706409676d3865a1c335201643e`,
+  `409708b71fe09532650892188c1f3b76320f53e6a716f4fed98ff453ef3dc372`,
+  `fb727d115c7397ba8ff1b141cbf7c7b52dcc6eaaafb57d30e7d6f2e1a53ae0ba`,
+  `5cc65dfb3e87bfdebaee62069384169b491c615981c1781d57851b9070132165`,
+  and
+  `605b3eb2312395fa37eae0133de8adc336c8df51401104a71b66c63598c2e887`.
+  Their marker SHA-256 values are
+  `b611dff5cbde9d54a5d35e623d6d6bae3e21a80e6947f755396482170a714212`,
+  `eb1b63df6dc7c14a88e3baaa894c59e4d787b6b4e35eb5b300482c18cf6d209b`,
+  `79a0b4da949e57ad25779d9a21a14fd3212c85e47205fcfe90d3a20f0d6e5ad2`,
+  `25b209a5b354ec1e940ded51292861727fac7bf23fffdfd567002f83579a792c`,
+  and
+  `5fba4905723ae09da04121f17c03079a44091381bef2a64feee0ca40ad52b897`.
+
+- Across the stable 1,344-checkpoint snapshot, all 193 unresolved model
+  outcomes are covered by 153 true-duplicate and 40 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 137,478 pairs, 87,300 false positives, 50,178 true duplicates;
+  - treatment: 33,316 pairs, 17,234 false positives, 16,082 true duplicates;
+  - combined: 170,794 pairs, 104,534 false positives, 66,260 true duplicates.
+
+- The next audit frontiers are p0 `(7, 1,024)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(103, 4,736)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:20:55Z — 170,282 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1816-v514` independently
