@@ -18,6 +18,7 @@ Optional overrides:
     NESTED_BATCH        global batch size (default: 256)
     NESTED_NODES        four-GPU GB200 nodes (default: 16)
     NESTED_EXPERT_AXIS  expert-parallel axis size (default: 64)
+    NESTED_CAPACITY_FACTOR  expert dispatch capacity factor (default: 1.0)
     NESTED_ATTENTION    attention backend (default: gpu_fa4_thd)
     NESTED_HIDDEN_DIM   model width (default: 1280)
     NESTED_SEQUENCE_LENGTH  sequence length (default: 8192)
@@ -139,6 +140,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
 
     hidden_dim = env_int("NESTED_HIDDEN_DIM", _DEFAULT_HIDDEN_DIM)
     sequence_length = env_int("NESTED_SEQUENCE_LENGTH", _DEFAULT_SEQUENCE_LENGTH)
+    capacity_factor = float(os.environ.get("NESTED_CAPACITY_FACTOR", "1.0"))
     heuristic = MoeHeuristic()
     base_model, _, _, _ = build_from_heuristic(
         budget=_BUDGET,
@@ -147,7 +149,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         target_steps=_TARGET_STEPS,
         seq_len=sequence_length,
     )
-    model = _arm_model(base_model, arm)
+    model = _arm_model(dataclasses.replace(base_model, capacity_factor=capacity_factor), arm)
     nodes = env_int("NESTED_NODES", _DEFAULT_NODES)
     expert_axis = env_int("NESTED_EXPERT_AXIS", _DEFAULT_EXPERT_AXIS)
     batch_size = env_int("NESTED_BATCH", _DEFAULT_BATCH)

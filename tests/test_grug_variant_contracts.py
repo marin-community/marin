@@ -273,6 +273,7 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     monkeypatch.setenv("NESTED_HIDDEN_DIM", "768")
     monkeypatch.setenv("NESTED_SEQUENCE_LENGTH", "2048")
     monkeypatch.setenv("NESTED_BATCH", "1024")
+    monkeypatch.setenv("NESTED_CAPACITY_FACTOR", "1.25")
     monkeypatch.setenv("NESTED_RUN_SUFFIX", "finite")
     monkeypatch.setenv("NESTED_MP", "params=float32,compute=float32,output=float32")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -290,6 +291,7 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     assert config.model.hidden_dim == 768
     assert config.model.max_seq_len == 2048
     assert config.batch_size == 1024
+    assert config.model.capacity_factor == 1.25
     assert config.optimizer.warmup == 5
     assert config.run_id.endswith("-finite")
     assert config.mp == "params=float32,compute=float32,output=float32"

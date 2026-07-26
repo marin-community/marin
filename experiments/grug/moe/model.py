@@ -50,7 +50,6 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _INELIGIBLE_ROUTER_LOGIT = -1e9
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -120,6 +119,8 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    capacity_factor: float = 1.0
+    """Expert-parallel dispatch capacity relative to the average assignment load."""
     nested_expert_count: int | None = None
     """Fixed extractable expert subset size. Experts are interleaved across the
     full bank so the subset remains balanced over expert-parallel ranks."""
@@ -165,6 +166,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.capacity_factor <= 0.0:
+            raise ValueError("capacity_factor must be positive")
         if not 0.0 <= self.nested_batch_fraction <= 1.0:
             raise ValueError("nested_batch_fraction must be between 0 and 1")
         if self.nested_expert_count is None:
@@ -236,6 +239,7 @@ class GrugModelConfig:
             ),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            capacity_factor=float(_hf_config_attr(hf_config, ("capacity_factor",), 1.0)),
             nested_expert_count=_hf_config_attr(hf_config, ("nested_expert_count",)),
             nested_batch_fraction=float(_hf_config_attr(hf_config, ("nested_batch_fraction",), 0.0)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
@@ -272,6 +276,7 @@ class GrugModelConfig:
             # MoE — most common public spelling per field
             "num_experts": self.num_experts,
             "num_experts_per_tok": self.num_experts_per_token,
+            "capacity_factor": self.capacity_factor,
             "nested_expert_count": self.nested_expert_count,
             "nested_batch_fraction": self.nested_batch_fraction,
             "moe_intermediate_size": self.intermediate_dim,
@@ -600,7 +605,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )
