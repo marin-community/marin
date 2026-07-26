@@ -12,6 +12,7 @@ PARITY_MODE=${PARITY_MODE:-strict}
 NCCLEP_OVERFLOW_POLICY=${NCCLEP_OVERFLOW_POLICY:-trap}
 NCCLEP_COMBINE_DTYPE=${NCCLEP_COMBINE_DTYPE:-bf16}
 NCCLEP_DISPATCH_DTYPE=${NCCLEP_DISPATCH_DTYPE:-bf16}
+NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION=${NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION:-native}
 RING_COMBINE_DTYPE=${RING_COMBINE_DTYPE:-bf16}
 XLA_PREALLOC_FRACTION=${XLA_PREALLOC_FRACTION:-0.65}
 
@@ -30,6 +31,8 @@ Environment overrides:
   NCCLEP_OVERFLOW_POLICY    trap or drop (trap)
   NCCLEP_COMBINE_DTYPE      bf16 or fp32 (bf16)
   NCCLEP_DISPATCH_DTYPE     bf16 or fp32 (bf16)
+  NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION
+                           native or hybrid_combine_forward (native)
   RING_COMBINE_DTYPE        bf16 or fp32 (bf16)
   XLA_PREALLOC_FRACTION    XLA allocation fraction, must be <= 0.70 (0.65)
   NCCL_DEBUG               NCCL log level (WARN)
@@ -62,10 +65,11 @@ NCCL_EP full routed-MLP H100x8 A/B dry run
   overflow policy: $NCCLEP_OVERFLOW_POLICY
   combine dtype: $NCCLEP_COMBINE_DTYPE
   dispatch dtype: $NCCLEP_DISPATCH_DTYPE
+  token gradient implementation: $NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION
   ring combine dtype: $RING_COMBINE_DTYPE
-  parity: rtol=0.1, atol=0.0002 for loss/output/x/routing/w13/w2 gradients
+  parity: rtol=0.1, atol=0.0002 diagnostics; required loss/grad relative-L2 <=0.002
   loss: mean over tokens after summing squared hidden activations
-  decision: TE value_and_grad p50 >= 1.10x ring and all parity/finite checks pass
+  decision: TE value_and_grad p50 >= 1.12x ring and all parity/finite checks pass
   XLA preallocation fraction: $XLA_PREALLOC_FRACTION
 
 Runtime phases:
@@ -95,6 +99,12 @@ if [[ "$NCCLEP_COMBINE_DTYPE" != "bf16" && "$NCCLEP_COMBINE_DTYPE" != "fp32" ]];
 fi
 if [[ "$NCCLEP_DISPATCH_DTYPE" != "bf16" && "$NCCLEP_DISPATCH_DTYPE" != "fp32" ]]; then
   echo "FATAL: NCCLEP_DISPATCH_DTYPE must be bf16 or fp32, got '$NCCLEP_DISPATCH_DTYPE'" >&2
+  exit 64
+fi
+if [[ "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "native" \
+  && "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" != "hybrid_combine_forward" ]]; then
+  echo "FATAL: NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION must be native or hybrid_combine_forward," \
+    "got '$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION'" >&2
   exit 64
 fi
 if [[ "$RING_COMBINE_DTYPE" != "bf16" && "$RING_COMBINE_DTYPE" != "fp32" ]]; then
@@ -157,7 +167,8 @@ PY
 echo "runtime NCCL integer version: $NCCL_VERSION"
 
 echo "=== build: task-local Transformer Engine wheel ==="
-if [[ "$NCCLEP_OVERFLOW_POLICY" == "drop" ]]; then
+if [[ "$NCCLEP_OVERFLOW_POLICY" == "drop" \
+  || "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" == "hybrid_combine_forward" ]]; then
   export NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH=1
 else
   export NVTE_ENABLE_NCCL_EP_OVERFLOW_DROP_PATCH=0
@@ -196,4 +207,5 @@ exec uv run --package marin-iris --extra worker python -m iris.hooks.multigpu_ma
   --overflow-policy "$NCCLEP_OVERFLOW_POLICY" \
   --combine-dtype "$NCCLEP_COMBINE_DTYPE" \
   --dispatch-dtype "$NCCLEP_DISPATCH_DTYPE" \
+  --token-gradient-implementation "$NCCLEP_TOKEN_GRADIENT_IMPLEMENTATION" \
   --ring-combine-dtype "$RING_COMBINE_DTYPE"

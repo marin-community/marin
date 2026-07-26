@@ -32,12 +32,21 @@ RECV_CAPACITY_PER_RANK = int(CAPACITY_FACTOR * ASSIGNMENTS_PER_DESTINATION)
 DISPATCH_ALIGNMENT = 16
 BF16_RTOL = 0.1
 BF16_ATOL = 2e-4
-PROMOTION_SPEEDUP = 1.10
+PROMOTION_SPEEDUP = 1.12
 DEFAULT_WARMUP = 6
 DEFAULT_ITERATIONS = 20
 OVERFLOW_POLICIES = ("trap", "drop")
 COMBINE_DTYPES = ("bf16", "fp32")
 DISPATCH_DTYPES = ("bf16", "fp32")
+TOKEN_GRADIENT_IMPLEMENTATIONS = ("native", "hybrid_combine_forward")
+RELATIVE_L2_PROMOTION_LIMIT = 0.002
+RELATIVE_L2_PROMOTION_TENSORS = (
+    "loss",
+    "gradient.tokens",
+    "gradient.routing_weights",
+    "gradient.w13",
+    "gradient.w2",
+)
 SUMMARY_EVENT = "ncclep_h100_full_mlp_ab"
 ARM_RING = "marin_bulk_ring"
 ARM_TE = "transformer_engine_nccl_ep"
@@ -167,8 +176,9 @@ def build_summary(
     te_median = timings[ARM_TE].median_ms
     speedup = ring_median / te_median
     parity_passed = bool(parity["passed"])
+    relative_l2_passed = bool(parity["relative_l2_criterion"]["passed"])
     finite_passed = all(all(bool(value) for value in arm_checks.values()) for arm_checks in finite.values())
-    promoted = parity_passed and finite_passed and speedup >= PROMOTION_SPEEDUP
+    promoted = parity_passed and relative_l2_passed and finite_passed and speedup >= PROMOTION_SPEEDUP
     return {
         "event": SUMMARY_EVENT,
         "schema_version": 1,
@@ -203,6 +213,9 @@ def build_summary(
         "promotion_criterion": {
             "minimum_ring_over_te_speedup": PROMOTION_SPEEDUP,
             "all_parity_checks_must_pass": True,
+            "maximum_required_relative_l2_error": RELATIVE_L2_PROMOTION_LIMIT,
+            "relative_l2_required_tensors": list(RELATIVE_L2_PROMOTION_TENSORS),
+            "relative_l2_checks_must_pass": True,
             "all_finite_checks_must_pass": True,
             "passed": promoted,
         },
@@ -223,6 +236,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--combine-dtype", choices=COMBINE_DTYPES, default="bf16")
     parser.add_argument("--ring-combine-dtype", choices=COMBINE_DTYPES, default="bf16")
     parser.add_argument("--dispatch-dtype", choices=DISPATCH_DTYPES, default="bf16")
+    parser.add_argument(
+        "--token-gradient-implementation",
+        choices=TOKEN_GRADIENT_IMPLEMENTATIONS,
+        default="native",
+        help="native TE dispatch backward, or TE combine-forward for token gradients",
+    )
     args = parser.parse_args(argv)
     if args.warmup < 1:
         parser.error("--warmup must be at least 1")
@@ -424,6 +443,77 @@ def _compiled_te_forward(
     return jax.jit(forward)
 
 
+def _dispatch_with_token_gradient(
+    jax: Any,
+    jnp: Any,
+    te_ep: Any,
+    te_cpp_ep: Any,
+    te_sharding: Any,
+    implementation: str,
+) -> Callable[..., Any]:
+    if implementation == "native":
+        return te_ep.ep_dispatch
+    if implementation != "hybrid_combine_forward":
+        raise ValueError(f"unknown token-gradient implementation: {implementation!r}")
+
+    @partial(jax.custom_vjp, nondiff_argnums=(0, 4))
+    def hybrid_dispatch(
+        layer_config: Any,
+        routes: Any,
+        tokens: Any,
+        weights: Any,
+        recv_capacity: int,
+    ) -> tuple[Any, ...]:
+        return te_ep.ep_dispatch(layer_config, routes, tokens, weights, recv_capacity)
+
+    def hybrid_dispatch_fwd(
+        layer_config: Any,
+        routes: Any,
+        tokens: Any,
+        weights: Any,
+        recv_capacity: int,
+    ) -> tuple[tuple[Any, ...], tuple[Any, tuple[int, ...]]]:
+        outputs = te_ep.ep_dispatch(layer_config, routes, tokens, weights, recv_capacity)
+        return outputs, (outputs[2], tuple(tokens.shape[:-1]))
+
+    def hybrid_dispatch_bwd(
+        layer_config: Any,
+        recv_capacity: int,
+        residual: tuple[Any, tuple[int, ...]],
+        output_cotangents: tuple[Any, ...],
+    ) -> tuple[None, Any, Any]:
+        del recv_capacity
+        handle_memory, output_leading_shape = residual
+        output_partition_spec = te_ep._default_out_partition_spec()
+        sharding = jax.sharding.PartitionSpec(*output_partition_spec)
+        recv_token_cotangent = te_sharding.with_sharding_constraint(output_cotangents[0], sharding)
+        recv_weight_cotangent = te_sharding.with_sharding_constraint(output_cotangents[1], sharding)
+
+        _, weight_cotangent = te_cpp_ep.ep_dispatch_bwd(
+            layer_config,
+            handle_memory,
+            recv_token_cotangent,
+            recv_weight_cotangent,
+            output_leading_shape,
+            out_partition_spec=output_partition_spec,
+        )
+        token_cotangent = te_cpp_ep.ep_combine_fwd(
+            layer_config,
+            handle_memory,
+            recv_token_cotangent.astype(jnp.float32),
+            output_leading_shape,
+            out_partition_spec=output_partition_spec,
+        )
+        token_cotangent = te_sharding.with_sharding_constraint(
+            token_cotangent.astype(recv_token_cotangent.dtype),
+            sharding,
+        )
+        return None, token_cotangent, weight_cotangent
+
+    hybrid_dispatch.defvjp(hybrid_dispatch_fwd, hybrid_dispatch_bwd)
+    return hybrid_dispatch
+
+
 def _loss_with_aux(forward: Callable[..., Any], *inputs: Any) -> tuple[Any, tuple[Any, Any]]:
     output, dropped = forward(*inputs)
     jnp = importlib.import_module("jax.numpy")
@@ -484,6 +574,23 @@ def _array_parity(actual: Any, expected: Any, jax: Any, jnp: Any) -> dict[str, A
     }
 
 
+def relative_l2_promotion_report(tensors: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Report the fixed promotion gate over loss and all differentiated inputs."""
+    observed = {name: float(tensors[name]["relative_l2_error"]) for name in RELATIVE_L2_PROMOTION_TENSORS}
+    failures = [
+        name
+        for name, relative_l2 in observed.items()
+        if not math.isfinite(relative_l2) or relative_l2 > RELATIVE_L2_PROMOTION_LIMIT
+    ]
+    return {
+        "maximum_relative_l2_error": RELATIVE_L2_PROMOTION_LIMIT,
+        "required_tensors": list(RELATIVE_L2_PROMOTION_TENSORS),
+        "observed": observed,
+        "failures": failures,
+        "passed": not failures,
+    }
+
+
 def _parity_report(te_result: Any, ring_result: Any, jax: Any, jnp: Any) -> dict[str, Any]:
     (te_loss, (te_output, te_dropped)), te_gradients = te_result
     (ring_loss, (ring_output, ring_dropped)), ring_gradients = ring_result
@@ -500,6 +607,8 @@ def _parity_report(te_result: Any, ring_result: Any, jax: Any, jnp: Any) -> dict
         ARM_TE: int(np.asarray(jax.device_get(te_dropped))),
     }
     failures = [name for name, metrics in tensors.items() if not metrics["allclose"]]
+    relative_l2_criterion = relative_l2_promotion_report(tensors)
+    failures.extend(f"relative_l2:{name}" for name in relative_l2_criterion["failures"])
     if dropped[ARM_RING] != 0 or dropped[ARM_TE] != 0:
         failures.append("dropped_assignments")
     return {
@@ -512,6 +621,7 @@ def _parity_report(te_result: Any, ring_result: Any, jax: Any, jnp: Any) -> dict
         },
         "dropped_assignments": dropped,
         "tensors": tensors,
+        "relative_l2_criterion": relative_l2_criterion,
     }
 
 
@@ -553,6 +663,7 @@ def run_ab(args: argparse.Namespace) -> int:
     # client. Dynamic imports preserve that ordering.
     transformer_engine = importlib.import_module("transformer_engine")
     te_ep = importlib.import_module("transformer_engine.jax.ep")
+    te_cpp_ep = importlib.import_module("transformer_engine.jax.cpp_extensions.ep")
     te_sharding = importlib.import_module("transformer_engine.jax.sharding")
 
     jax = importlib.import_module("jax")
@@ -582,7 +693,11 @@ def run_ab(args: argparse.Namespace) -> int:
             recv_capacity_per_rank=RECV_CAPACITY_PER_RANK,
             hidden_dim=HIDDEN_DIM,
         )
-        if args.combine_dtype == "fp32" or args.dispatch_dtype == "fp32":
+        if (
+            args.combine_dtype == "fp32"
+            or args.dispatch_dtype == "fp32"
+            or args.token_gradient_implementation == "hybrid_combine_forward"
+        ):
             bootstrap_kwargs["max_token_dtype"] = jnp.float32
         if args.overflow_policy == "drop":
             bootstrap_kwargs["overflow_policy"] = "drop"
@@ -593,12 +708,20 @@ def run_ab(args: argparse.Namespace) -> int:
         )
         inputs = _make_inputs(jax, jnp, mesh, routes)
         ring_forward = _compiled_ring_forward(jax, mesh, ring_local, combine_dtype=args.ring_combine_dtype)
+        ep_dispatch = _dispatch_with_token_gradient(
+            jax,
+            jnp,
+            te_ep,
+            te_cpp_ep,
+            te_sharding,
+            args.token_gradient_implementation,
+        )
         te_forward = _compiled_te_forward(
             jax,
             jnp,
             mesh,
             layer_config=layer_config,
-            ep_dispatch=te_ep.ep_dispatch,
+            ep_dispatch=ep_dispatch,
             ep_combine=te_ep.ep_combine,
             ragged_dot=ragged_dot,
             combine_dtype=args.combine_dtype,
@@ -620,6 +743,34 @@ def run_ab(args: argparse.Namespace) -> int:
         validation_results = {arm: jax.block_until_ready(compiled_fn(*inputs)) for arm, compiled_fn in compiled.items()}
         finite = {arm: _finite_report(result, jax, jnp) for arm, result in validation_results.items()}
         parity = _parity_report(validation_results[ARM_TE], validation_results[ARM_RING], jax, jnp)
+        runtime = {
+            "rank_count": world,
+            "local_devices_per_rank": 1,
+            "gpu": str(jax.local_devices()[0].device_kind),
+            "jax_version": jax.__version__,
+            "transformer_engine_version": transformer_engine.__version__,
+            "te_sha": os.environ["NCCLEP_TE_SHA"],
+            "nccl_runtime_version": os.environ["NCCLEP_NCCL_RUNTIME_VERSION"],
+            "xla_flags": os.environ.get("XLA_FLAGS", ""),
+            "xla_preallocation_fraction": float(os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]),
+            "ragged_dot_implementation": os.environ.get("RAGGED_DOT_IMPL", ""),
+            "ragged_dot_triton_block_k": int(os.environ["HALIAX_RAGGED_DOT_TRITON_BLOCK_K"]),
+            "ragged_dot_triton_num_warps": int(os.environ["HALIAX_RAGGED_DOT_TRITON_NUM_WARPS"]),
+            "timing_order": "alternating_ring_first_then_te_first",
+            "sample_aggregation": "slowest_rank_per_sample",
+            "warmup_pairs": args.warmup,
+            "measured_pairs": args.iterations,
+            "parity_mode": args.parity_mode,
+            "overflow_policy": args.overflow_policy,
+            "combine_dtype": args.combine_dtype,
+            "ring_combine_dtype": args.ring_combine_dtype,
+            "dispatch_dtype": args.dispatch_dtype,
+            "token_gradient_implementation": args.token_gradient_implementation,
+            "hybrid_token_gradient_combine_dtype": (
+                "fp32" if args.token_gradient_implementation == "hybrid_combine_forward" else None
+            ),
+            "loss_reduction": "mean_tokens_sum_hidden",
+        }
         finite_passed = all(all(checks.values()) for checks in finite.values())
         if not finite_passed or (not parity["passed"] and args.parity_mode == "strict"):
             validation_summary = {
@@ -629,12 +780,16 @@ def run_ab(args: argparse.Namespace) -> int:
                 "stop_reason": "strict_parity_failed" if not parity["passed"] else "non_finite_values",
                 "finite": finite,
                 "parity": parity,
+                "runtime": runtime,
                 "routing_capacity": routing,
                 "stablehlo": stablehlo,
                 "timings": None,
                 "promotion_criterion": {
                     "minimum_ring_over_te_speedup": PROMOTION_SPEEDUP,
                     "all_parity_checks_must_pass": True,
+                    "maximum_required_relative_l2_error": RELATIVE_L2_PROMOTION_LIMIT,
+                    "relative_l2_required_tensors": list(RELATIVE_L2_PROMOTION_TENSORS),
+                    "relative_l2_checks_must_pass": True,
                     "all_finite_checks_must_pass": True,
                     "passed": False,
                 },
@@ -654,30 +809,6 @@ def run_ab(args: argparse.Namespace) -> int:
         )
 
     timings = {arm: summarize_times(arm_samples) for arm, arm_samples in samples.items()}
-    runtime = {
-        "rank_count": world,
-        "local_devices_per_rank": 1,
-        "gpu": str(jax.local_devices()[0].device_kind),
-        "jax_version": jax.__version__,
-        "transformer_engine_version": transformer_engine.__version__,
-        "te_sha": os.environ["NCCLEP_TE_SHA"],
-        "nccl_runtime_version": os.environ["NCCLEP_NCCL_RUNTIME_VERSION"],
-        "xla_flags": os.environ.get("XLA_FLAGS", ""),
-        "xla_preallocation_fraction": float(os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]),
-        "ragged_dot_implementation": os.environ.get("RAGGED_DOT_IMPL", ""),
-        "ragged_dot_triton_block_k": int(os.environ["HALIAX_RAGGED_DOT_TRITON_BLOCK_K"]),
-        "ragged_dot_triton_num_warps": int(os.environ["HALIAX_RAGGED_DOT_TRITON_NUM_WARPS"]),
-        "timing_order": "alternating_ring_first_then_te_first",
-        "sample_aggregation": "slowest_rank_per_sample",
-        "warmup_pairs": args.warmup,
-        "measured_pairs": args.iterations,
-        "parity_mode": args.parity_mode,
-        "overflow_policy": args.overflow_policy,
-        "combine_dtype": args.combine_dtype,
-        "ring_combine_dtype": args.ring_combine_dtype,
-        "dispatch_dtype": args.dispatch_dtype,
-        "loss_reduction": "mean_tokens_sum_hidden",
-    }
     summary = build_summary(
         timings=timings,
         parity=parity,
