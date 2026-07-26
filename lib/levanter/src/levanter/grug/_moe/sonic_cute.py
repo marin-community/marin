@@ -33,6 +33,9 @@ from levanter.grug._moe.quack_moe_cute import (
     quack_grouped_wgrad,
 )
 
+_ROUTED_GEMM_TILE_MN = (256, 256)
+_ROUTED_GEMM_CLUSTER_MNK = (2, 1, 1)
+
 
 def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
@@ -48,27 +51,62 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    _gu, h = quack_gated_grouped_gemm(
+        x_dispatch,
+        w13_il,
+        cu,
+        return_preact=True,
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
+    return quack_grouped_gemm(
+        h,
+        moe_w2,
+        cu,
+        b_major="n",
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
 
 
 def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    gu, h = quack_gated_grouped_gemm(
+        x_dispatch,
+        w13_il,
+        cu,
+        return_preact=True,
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
+    y = quack_grouped_gemm(
+        h,
+        moe_w2,
+        cu,
+        b_major="n",
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
     return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
 def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
     # Down backward: dh is a transposed contraction; dw2 is a variable-K grouped GEMM.
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
+    dh = quack_grouped_gemm(
+        dy,
+        moe_w2,
+        cu,
+        b_major="k",
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
     if os.environ.get("SCALE_QUACK_GROUPED_WGRAD") == "1":
         dw2 = quack_grouped_wgrad(
             h,
             dy,
             cu,
-            tile_mn=(256, 512),
-            cluster_mnk=(2, 1, 1),
+            tile_mn=_ROUTED_GEMM_TILE_MN,
+            cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
         )
     else:
         (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
@@ -80,14 +118,21 @@ def _expert_mlp_bwd(res, dy):
     dup = dh * silu
     d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
     # Gate/up backward: dx is a transposed contraction; dw13 is a variable-K grouped GEMM.
-    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = quack_grouped_gemm(
+        d_gu,
+        w13_il,
+        cu,
+        b_major="k",
+        tile_mn=_ROUTED_GEMM_TILE_MN,
+        cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
+    )
     if os.environ.get("SCALE_QUACK_GROUPED_WGRAD") == "1":
         dw13_il = quack_grouped_wgrad(
             x_dispatch,
             d_gu,
             cu,
-            tile_mn=(128, 256),
-            cluster_mnk=(1, 2, 1),
+            tile_mn=_ROUTED_GEMM_TILE_MN,
+            cluster_mnk=_ROUTED_GEMM_CLUSTER_MNK,
         )
     else:
         (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
