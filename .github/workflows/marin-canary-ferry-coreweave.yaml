@@ -55,9 +55,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
-      # No trailing slash: object-store keys are not normalized, so a doubled
-      # separator after a path join addresses a different key (#6904).
-      MARIN_PREFIX: s3://marin-na/marin
+      # marin-us-west-04a is the CoreWeave AI Object Storage bucket co-located
+      # with this cluster (config/coreweave.yaml, cw-us-west-04a.yaml task_env).
+      # The deprecated marin-na R2 bucket 403s from the CoreWeave pod egress
+      # (#7504). No trailing slash: object-store keys are not normalized, so a
+      # doubled separator after a path join addresses a different key (#6904).
+      MARIN_PREFIX: s3://marin-us-west-04a/marin
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
       CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'gpu_fa4_cute' }}
@@ -153,17 +156,15 @@ jobs:
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
-            -e AWS_ACCESS_KEY_ID "$CW_KEY_ID" \
-            -e AWS_SECRET_ACCESS_KEY "$CW_KEY_SECRET" \
-            -e AWS_ENDPOINT_URL "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com" \
             -- python -m experiments.ferries.canary_ferry)
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
+        # Object-storage auth is not passed per-job: `cluster start` folds the
+        # CoreWeave creds + cwlota endpoint + FSSPEC_S3 into the iris-ci
+        # iris-task-env Secret, which every task pod inherits via envFrom.
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          CW_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          CW_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
 
       # Keep the wait below the job timeout (180) so a hung ferry fails this
@@ -186,11 +187,15 @@ jobs:
       - name: Validate canary metrics
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
+        # Runs on the GitHub runner (outside CoreWeave), so it reads
+        # marin-us-west-04a through the external cwobject.com endpoint.
+        # validate_canary_metrics.py calls configure_coreweave_s3(), which turns
+        # these CW_* creds into the AWS_*/FSSPEC_S3 config (virtual-hosted
+        # addressing, region "auto") that CoreWeave object storage requires.
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
 
       - name: Summarize GPU canary profile
         continue-on-error: true
