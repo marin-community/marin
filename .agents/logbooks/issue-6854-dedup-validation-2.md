@@ -16,6 +16,94 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T18:47:10Z — 173,459 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1840-v535` independently
+  revalidated nine checkpoints: six p0 decision-file 7 checkpoints at semantic
+  offsets 1,792 through 2,432, and the final three p3 decision-file 103
+  checkpoints at offsets 5,504, 5,632, and 5,760. Their 1,129 pairs contain
+  550 model false positives, 577 model true duplicates, and two unresolved
+  outcomes. Three pairs were chunked and 1,126 were direct. The audit reread
+  2,523 judgments and 2,529 request attempts: 2,520 attempts were valid, nine
+  were invalid, and three judgments required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p0:
+    `2957ce09e606c135c57056c2324f2dc82b1e68f66bc3efc4738666cc1fd10a55`,
+    `b1429558788b6d6d00aeb17cf85ccda7b01cefeb7888b0413f911e0e0a0fcad1`,
+    `6f3518fa5f5f59b5f1ec81380f3b22429147db72467a35f40bbc03c736a3a835`,
+    `fc6f2dc0246426f3652bee2666b88cd9032b527329ebc5e3f2e45e4e74a0fe24`,
+    `3a4ccf8348dfa408da368cd51436c616ec919d3ef1e4e7a7386756ac0f7710ff`,
+    and
+    `0eeedb9c5bf827d9335c7e1e745c13318377b241e02483ed125dd2691e3588f6`;
+  - p3:
+    `cde773f3140f8f37f3437b075b1224cfe0d51ec6309dc22e4fc6a4226042a44b`,
+    `922b42922dbf2ab8468821d05019fbdb7e1adae9682a4d7b99bfb713cbf9a97e`,
+    and
+    `151992ee53ac3670cb59bbefb134995d212b3fea2df61cfcc91d5ab1bdb75cb6`.
+
+- Complete-text inspection resolves p0 row 3,386 as a false positive. The
+  5,312/4,837-character BetterHelp pages share a sentence-spun review
+  scaffold, but the member alone cites what 20,000-plus people mention in
+  reviews, explicitly advises contacting a local emergency hotline, and adds
+  matching and time-zone guidance. These are substantive claims and advice,
+  not merely the page's SEO title and brand slots. Character, line, and
+  word-sequence similarities are 0.745886, 0.360656, and 0.696629.
+  Member/canonical text SHA-256 values are
+  `96794dcfa37532db6197c7d4d2d22d5f1f589306758b1c563f4b476dd48706b6`
+  and
+  `2fda9594f514b18ab24999d6a83a0c071100a57c5bb84e51064d5da0ab61ebae`.
+
+- Complete-text inspection resolves treatment row 8,912 as a true duplicate.
+  Both 306-line SFT records have the same comparative-negligence question,
+  choices, reasoning, conclusion, and final choice H. Their sole changed line
+  is the final boxed answer with or without a LaTeX text wrapper. The
+  14,631/14,638-character records have character, line, and word-sequence
+  similarities 0.999761, 0.996732, and 0.999793. Member/canonical text
+  SHA-256 values are
+  `5e9399fec624da65655707cca62d11481fc9ff27edd76e37f4284c74aba2fc0f`
+  and
+  `bf6c454d888d93e98d1bd7bf2a9b89d1a38829f71db1d0191d3a1b879936a7f8`.
+
+- `/rav/datakit-6854-inspect-row3386-1842-v536` and
+  `/rav/datakit-6854-inspect-row8912-1843-v537` persisted the complete pairs
+  and diffs with inspection SHA-256 values
+  `a2a6dd59f7d795a2a138a94bebecc422f900f4dd98827b99a07eba649f3cfa02`
+  and
+  `7b7dc8b12e5769392fa133fc0f64b9123ec9296a5d80114a3ed9c4937b13d40b`.
+  Their semantic-judgment SHA-256 values are
+  `edf97f35d7b19dc7a299bfa35440706d52c7e4a583c75507556d24423d8fed01`
+  and
+  `d1fd511fb37158deaa521a041ee4d111f8d245e20507ac179651c8e349314d5b`.
+
+- `/rav/datakit-6854-publish-row3386-1844-v538` and
+  `/rav/datakit-6854-publish-row8912-1845-v539` wrote the immutable manual
+  records. Separate jobs `/rav/datakit-6854-verify-row3386-1847-v541` and
+  `/rav/datakit-6854-verify-row8912-1846-v540` independently reread the source
+  pairs, semantic checkpoints, inspections, deterministic Parquet bytes, and
+  completion markers. Their manual-Parquet SHA-256 values are
+  `24b1059c0b7c4a4972f24e5b4dcb0e7d07c2afa2058cd024275b7b3cc9bce72b`
+  and
+  `481057d7e4011d7e975a3f6752c8feaa147af28be625813c5afa9554bc9b900a`;
+  their marker SHA-256 values are
+  `be4e4249a6c6fc5b169cd1f71b46fe26936abaed5f41ddf284f136d39efb9b9f`
+  and
+  `5885cfd60ec9816e4bead1f7b1787a74f727976df5635ac162269cf03a5aa7a0`.
+
+- Across the stable 1,365-checkpoint snapshot, all 195 unresolved model
+  outcomes are covered by 154 true-duplicate and 41 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 139,014 pairs, 88,239 false positives, 50,775 true duplicates;
+  - treatment: 34,445 pairs, 17,811 false positives, 16,634 true duplicates;
+  - combined: 173,459 pairs, 106,050 false positives, 67,409 true duplicates.
+
+- The next audit frontiers are p0 `(7, 2,560)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(104, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:39:30Z — 172,330 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1838-v534` independently
