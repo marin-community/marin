@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import functools
 import importlib
+import itertools
 import logging
 import math
 import os
@@ -68,10 +69,12 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 try:
     import jaxpp.api as jaxpp
     import jaxpp.core as jaxpp_core
+    import jaxpp.dime2 as jaxpp_dime2
     from jaxpp.experimental import mpmd as jaxpp_explicit_mpmd
 except ModuleNotFoundError:
     jaxpp = None
     jaxpp_core = None
+    jaxpp_dime2 = None
     jaxpp_explicit_mpmd = None
 
 logger = logging.getLogger(__name__)
@@ -371,6 +374,55 @@ def _require_jaxpp_explicit_mpmd():
             "jaxpp.experimental.mpmd is required when GrugTrainerConfig.pipeline.implementation='explicit_mpmd'."
         )
     return jaxpp_explicit_mpmd
+
+
+def _prewarm_jaxpp_dime(mpmd_mesh: Any) -> None:
+    """Create adjacent-stage DIME resources in one global order."""
+    if jaxpp_dime2 is None:
+        raise ModuleNotFoundError("jaxpp.dime2 is required for GRUG_JAXPP_PREWARM_DIME")
+
+    stage_devices = [tuple(stage_mesh.devices.flat) for stage_mesh in mpmd_mesh.unstack]
+    devices_per_stage = len(stage_devices[0])
+    if any(len(devices) != devices_per_stage for devices in stage_devices):
+        raise ValueError("JaxPP DIME prewarming requires equally sized pipeline stages")
+
+    process_index = jax.process_index()
+    client = jaxpp_dime2.get_distributed_client()
+    timeout = jaxpp_dime2.env_vars.jaxpp_client_timeout.value
+    for source_stage, (source_devices, target_devices) in enumerate(itertools.pairwise(stage_devices)):
+        for source_device, target_device in zip(source_devices, target_devices, strict=True):
+            participant_processes = {source_device.process_index, target_device.process_index}
+            if process_index not in participant_processes:
+                continue
+
+            devices = jaxpp_dime2.UniqueSortedDevices(source_device, target_device)
+            jaxpp_dime2.get_or_create_comm(devices)
+            local_is_source = source_device.process_index == process_index
+            local_device, remote_device = (
+                (source_device, target_device) if local_is_source else (target_device, source_device)
+            )
+            jaxpp_dime2.get_or_create_stream(
+                local_device,
+                remote_device,
+                is_send=local_is_source,
+            )
+            jaxpp_dime2.get_or_create_stream(
+                local_device,
+                remote_device,
+                is_send=not local_is_source,
+            )
+
+        target_stage = source_stage + 1
+        client.wait_at_barrier(
+            f"grug_jaxpp_dime_prewarm_{source_stage}_{target_stage}",
+            timeout,
+        )
+        logger.info(
+            "Prewarmed JaxPP DIME link %d->%d across %d device lanes",
+            source_stage,
+            target_stage,
+            devices_per_stage,
+        )
 
 
 def _load_nccl_ep_modules() -> tuple[Any, Any]:
@@ -3096,6 +3148,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             _install_jaxpp_bind_meshes_patch()
             if os.environ.get("GRUG_JAXPP_PATCH_CONST_SHARDINGS", "false").lower() in ("1", "true", "yes", "on"):
                 _install_jaxpp_const_sharding_patch()
+        elif os.environ.get("GRUG_JAXPP_PREWARM_DIME", "false").lower() in ("1", "true", "yes", "on"):
+            _prewarm_jaxpp_dime(mpmd_mesh)
 
     explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
     automatic_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "auto"
