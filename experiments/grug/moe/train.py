@@ -427,6 +427,50 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None
         )
 
 
+def _warm_jaxpp_device_ragged(mpmd_mesh: Any) -> None:
+    """Reserve stage-local device-ragged symmetric memory before DIME starts."""
+    stage_mesh = mpmd_mesh.my_mpmd_group_mesh
+    expert_size = int(stage_mesh.shape["expert"])
+    rows = NamedSharding(stage_mesh, P("expert", None))
+
+    def local_ragged(values: jax.Array) -> jax.Array:
+        source = jax.lax.axis_index("expert")
+        offsets = jnp.arange(expert_size, dtype=jnp.int32)
+        sizes = jnp.ones((expert_size,), dtype=jnp.int32)
+        output_offsets = jnp.full((expert_size,), source, dtype=jnp.int32)
+        return jax.lax.ragged_all_to_all(
+            values,
+            jnp.zeros_like(values),
+            offsets,
+            sizes,
+            output_offsets,
+            sizes,
+            axis_name="expert",
+        )
+
+    warm = jax.jit(
+        jax.shard_map(
+            local_ragged,
+            mesh=stage_mesh,
+            in_specs=P("expert", None),
+            out_specs=P("expert", None),
+            check_vma=False,
+        ),
+        in_shardings=rows,
+        out_shardings=rows,
+    )
+    values = jax.device_put(
+        jnp.arange(expert_size * expert_size, dtype=jnp.int32)[:, None],
+        rows,
+    )
+    jax.block_until_ready(warm(values))
+    logger.info(
+        "Warmed device-ragged symmetric memory for JaxPP stage %d across %d experts",
+        mpmd_mesh.my_mpmd_axis_index,
+        expert_size,
+    )
+
+
 def _load_nccl_ep_modules() -> tuple[Any, Any]:
     """Import NCCL_EP before Trainer initialization registers the CUDA client."""
     try:
@@ -3219,6 +3263,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 pipeline=config.trainer.pipeline,
                 mpmd_mesh=mpmd_mesh,
             )
+            if os.environ.get("GRUG_JAXPP_WARM_DEVICE_RAGGED", "false").lower() in ("1", "true", "yes", "on"):
+                _warm_jaxpp_device_ragged(mpmd_mesh)
             prewarm_dime = os.environ.get("GRUG_JAXPP_PREWARM_DIME")
             if prewarm_dime is not None:
                 if prewarm_dime not in ("streams", "all"):
