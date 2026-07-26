@@ -1483,6 +1483,71 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T05:09:39Z — 93,372 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0502-v104` independently
+  revalidated ten additional baseline checkpoints. Their 1,280 pairs contain
+  583 model false positives, 695 model true duplicates, and two unresolved
+  outcomes. All 2,970 judgments were valid on the first request. Five pairs
+  were chunked and 1,275 were direct.
+- The p0 decision-file 4 outcome Parquet SHA-256 values for offsets 1,664,
+  1,792, 1,920, 2,048, and 2,176 are
+  `27ee2503e2bb7c76c3db6386e0c68432f616b0e2924e4494c64914438db6a4ef`,
+  `8275a24e597709f17a9817d28ef1cf8495ab090d721076d650efe0ddeb4f2258`,
+  `0f47c2085a0d1dbfe684fc3135ea8232201c6c39dace716bbc7e12017f081b87`,
+  `f4c020174f635c05f87367eb8172ed1ae6e1b4b4658af5d9a7ede5cc8196cc3b`,
+  and
+  `3346ec6d323a7ba001b0ff4af9dd6a96b5d787511fb7bc23a0ab1bd81e17d44a`.
+  The p1 decision-file 35 values for offsets 1,792, 1,920, 2,048, 2,176, and
+  2,304 are
+  `c74f75e250042a89c568aae1f51a17656a48aeb819d2367f15aef7fbc532465e`,
+  `479cd70f0d972fe9a549f8efe8f2624feb9ba2a7b661effbee3f7df33755dde3`,
+  `35a5f2b0bd0349c1d18b4d5781c129b4d30fee741e7a2a1578139c5aab2762c2`,
+  `65550ba0c7ef6650f2e85a00279bbece0486f3f56e085fedc87e22ee87275349`,
+  and
+  `57314c700ff6c61d81541ff827af29e27f487714be460c757eea95a4917c8a32`.
+- Complete-text inspection resolves `part-00004-of-00128.parquet:2633` as a
+  false positive. The 2,905-character member and 4,239-character canonical
+  share fragments of a BetterHelp article but have character similarity only
+  0.477044 and line similarity 0.400000. The member alone includes claims
+  about a free seven-day trial, fast weekend responses, editable messages, and
+  a Talkspace comparison. Member/canonical text SHA-256:
+  `200d35ba0c45f842e0ede8cf478ebed2fe0d614350049fd6aeca3d5997119b2d` /
+  `e756fcd33cf056fce930638d25a896c7519c2693c7f1faaf3eaa561a7fa9866a`.
+- Complete-text inspection resolves `part-00004-of-00128.parquet:3376` as a
+  true duplicate under the explicit low-value-template boundary. Both rows
+  contain the same substantive sentence about teaching colors. The member's
+  Pooh Bear title and publication date versus the canonical's playground-swing
+  title are superficial slots unsupported by the shared Dora body. The texts
+  contain 279 / 241 characters with 0.861538 character similarity.
+  Member/canonical text SHA-256:
+  `bb966ef213a7afeab6d2958ba42f868acccc34996716cec632ab7378c73b2775` /
+  `3f0a88a725970caefc23c8df46ec4c743f862b09cc4b1d669bfe212707813543`.
+- The false-positive and true-duplicate manual records have Parquet SHA-256
+  `385f196eb03d9a912f1a51e4eac2905b39c497f99bd2c3afb57e820d9b1269e9`
+  and
+  `c3b214234412bb717ed6612f1962b5a8d54dd81de7f4a7a9c31c856046a458ee`.
+  Their semantic-judgments SHA-256 values are
+  `5290ca22ef081d0c0a9064099945eef15d032f89d24c61e1098463d75f5359c6`
+  and
+  `f852c93f8aec953540de6f4a18f732aba317234275590958a88d7f06ef19c177`.
+  `/rav/datakit-6854-verify-manual-0509-v107` independently reread both source
+  pairs, semantic checkpoints, manual rows, Parquet bytes, record hashes, and
+  completion markers with exit 0 and no failures.
+- Across the stable 734-checkpoint snapshot, all 98 unresolved model outcomes
+  have manual records: 76 true duplicates and 22 false positives. The adjusted
+  totals are:
+
+  - baseline: 75,982 pairs, 48,390 false positives, 27,592 true duplicates;
+  - treatment: 17,390 pairs, 8,955 false positives, 8,435 true duplicates;
+  - combined: 93,372 pairs, 57,345 false positives, 36,027 true duplicates.
+
+- Published and verified the
+  [92,092-pair heartbeat](https://github.com/marin-community/marin/issues/6854#issuecomment-5082130212)
+  on the coordinating issue.
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T05:01:30Z — 92,092 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0454-v100` independently
