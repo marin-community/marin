@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import random
+import sys
 import tempfile
 import time
 import typing
@@ -77,18 +78,23 @@ from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_d
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
-# The pinned lm-eval fork registers a vision model through this Transformers 4 name at import
-# time. Levanter's harness is text-only, so the generic auto-model placeholder is never
-# instantiated; it only keeps the fork importable with Transformers 5.
-transformers.AutoModelForVision2Seq = transformers.AutoModel  # type: ignore[attr-defined]
-
 # An absent optional dependency or another import failure still leaves the training path usable.
+_LM_EVAL_IMPORT_ERROR: Exception | None = None
 try:
+    # Importing pipelines finishes Transformers' lazy module initialization. The pinned lm-eval
+    # fork then registers a vision model through a Transformers 4 name. Levanter's harness is
+    # text-only, so the generic placeholder is never instantiated.
+    import transformers.pipelines  # noqa: F401
+
+    transformers_module = sys.modules["transformers"]
+    transformers_module.AutoModelForVision2Seq = transformers_module.AutoModel  # type: ignore[attr-defined]
+
     from lm_eval import evaluator
     from lm_eval.api.instance import Instance
     from lm_eval.api.model import TemplateLM
     from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
-except (ImportError, AttributeError):
+except (ImportError, AttributeError) as exc:
+    _LM_EVAL_IMPORT_ERROR = exc
     TemplateLM = object
     Instance = object
     evaluator = object
@@ -1320,7 +1326,7 @@ def run_lm_eval_harness(
     if evaluator is object:
         raise RuntimeError(
             "lm-eval is unavailable. Install the marin-levanter lm-eval extra and inspect any import error."
-        )
+        ) from _LM_EVAL_IMPORT_ERROR
 
     # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
