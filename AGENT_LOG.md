@@ -291,3 +291,29 @@ is interesting on its own terms because a shared bottleneck across layers is a d
 
 I am recording it now, before the results, so it cannot be read as a post-hoc explanation of whatever
 the legs return.
+
+## Check-in 6 — a cluster-wide instability window at 21:28-21:40Z hit both later legs; classification says it is not my code
+
+Triaged with d5's recipe. Neither latent leg has reached step 0 yet; both were killed mid-compile.
+
+| leg | event | class |
+|---|---|---|
+| matched-work | 21:10Z, 11 x `SIGTERM caught` | 1 — preemption |
+| matched-work | 21:28Z, 9 x `another task died`, no primary | 1/2 — gang abort |
+| matched-work | 21:40Z, 26 x `another task died`, 2 x SIGTERM (tasks 0 and 15) | 1 — leader evicted |
+| param-preserving | 21:29Z, 14 x `another task died` | 1/2 — gang abort |
+
+Zero hits on `failed to allocate`, `RESOURCE_EXHAUSTED`, `ncclAlltoAll` and `Cuda failure` across all
+of them, so this is NOT a memory result and specifically NOT the OOM the prior work saw on the
+matched-work arm. The important observation is the CLUSTERING: two independent jobs with different
+configurations died inside a twelve-minute window, while the dense leg — which had already cleared
+compile before that window — ran through it untouched. That is a cluster event, not a property of
+either latent configuration. Per the standing policy, operational friction closes nothing.
+
+Both jobs are auto-restarting. What makes this more than routine friction is the interaction with
+compile time: a d6144/48L compile is ~20 minutes on preemptible workers, so an eviction costs the
+whole compile and a run can be evicted repeatedly without ever reaching step 0 — the matched-work
+leg has now spent three compiles and produced no steps. Added `SCALE_PREEMPTIBLE` to the launcher
+(default unchanged) so the non-preemptible pool is one env away if the retries keep losing; I have
+not used it yet, because switching pools changes placement and I would rather not add a variable to
+the primary arm while a plain retry might land.
