@@ -45,6 +45,17 @@ def _wire_quantize(x: jax.Array, fp8_dtype) -> tuple[jax.Array, jax.Array]:
     """
     xf = x.astype(jnp.float32)
     amax = jnp.max(jnp.abs(xf), axis=-1)
+    if os.environ.get("SCALE_A2A_FP8_AMAX_PROBE") == "1":
+        # Calibration for the supplied-scale variant: a constant scale is only faithful if the
+        # real amax is stable across steps and layers, and the e4m3 forward and e5m2 backward
+        # magnitudes may differ by orders of magnitude.
+        jax.debug.print(
+            "fp8-amax-probe dtype={d} tensor_amax={a} p99_row={p} median_row={m}",
+            d=jnp.dtype(fp8_dtype).name,
+            a=jnp.max(amax),
+            p=jnp.quantile(amax, 0.99),
+            m=jnp.median(amax),
+        )
     scale = jnp.maximum(amax, _WIRE_EPS) / _FP8_WIRE_MAX[jnp.dtype(fp8_dtype).type]
     q = (xf / scale[..., None]).astype(fp8_dtype)
     return q, scale
