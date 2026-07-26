@@ -427,18 +427,40 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None
         )
 
 
-def _warm_jaxpp_device_ragged(mpmd_mesh: Any) -> None:
+def _warm_jaxpp_device_ragged(
+    mpmd_mesh: Any,
+    *,
+    global_microbatch_tokens: int,
+    hidden_dim: int,
+    top_k: int,
+) -> None:
     """Reserve stage-local device-ragged symmetric memory before DIME starts."""
     stage_mesh = mpmd_mesh.my_mpmd_group_mesh
     expert_size = int(stage_mesh.shape["expert"])
+    if global_microbatch_tokens % expert_size != 0:
+        raise ValueError(
+            f"device-ragged warmup tokens={global_microbatch_tokens} must be divisible by expert size={expert_size}"
+        )
+    assignments_per_device = global_microbatch_tokens // expert_size * top_k
+    if assignments_per_device % expert_size != 0:
+        raise ValueError(
+            f"device-ragged warmup assignments={assignments_per_device} must be divisible by expert size={expert_size}"
+        )
+    assignments_per_destination = assignments_per_device // expert_size
+    global_assignments = assignments_per_device * expert_size
+
     with set_mesh(stage_mesh):
         rows = NamedSharding(stage_mesh, P("expert", None))
 
         def local_ragged(values: jax.Array) -> jax.Array:
             source = jax.lax.axis_index("expert")
-            offsets = jnp.arange(expert_size, dtype=jnp.int32)
-            sizes = jnp.ones((expert_size,), dtype=jnp.int32)
-            output_offsets = jnp.full((expert_size,), source, dtype=jnp.int32)
+            offsets = jnp.arange(expert_size, dtype=jnp.int32) * assignments_per_destination
+            sizes = jnp.full((expert_size,), assignments_per_destination, dtype=jnp.int32)
+            output_offsets = jnp.full(
+                (expert_size,),
+                source * assignments_per_destination,
+                dtype=jnp.int32,
+            )
             return jax.lax.ragged_all_to_all(
                 values,
                 jnp.zeros_like(values),
@@ -449,9 +471,13 @@ def _warm_jaxpp_device_ragged(mpmd_mesh: Any) -> None:
                 axis_name="expert",
             )
 
+        def ragged_loss(values: jax.Array) -> jax.Array:
+            output = local_ragged(values).astype(jnp.float32)
+            return jnp.mean(jnp.square(output))
+
         warm = jax.jit(
             jax.shard_map(
-                local_ragged,
+                jax.grad(ragged_loss),
                 mesh=stage_mesh,
                 in_specs=P("expert", None),
                 out_specs=P("expert", None),
@@ -460,15 +486,17 @@ def _warm_jaxpp_device_ragged(mpmd_mesh: Any) -> None:
             in_shardings=rows,
             out_shardings=rows,
         )
-        values = jax.device_put(
-            np.arange(expert_size * expert_size, dtype=np.int32)[:, None],
-            rows,
+        make_values = jax.jit(
+            lambda: jnp.zeros((global_assignments, hidden_dim), dtype=jnp.bfloat16),
+            out_shardings=rows,
         )
-        jax.block_until_ready(warm(values))
+        jax.block_until_ready(warm(make_values()))
     logger.info(
-        "Warmed device-ragged symmetric memory for JaxPP stage %d across %d experts",
+        "Warmed device-ragged symmetric memory for JaxPP stage %d across %d experts with %d assignments/device x %d",
         mpmd_mesh.my_mpmd_axis_index,
         expert_size,
+        assignments_per_device,
+        hidden_dim,
     )
 
 
@@ -3265,7 +3293,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mpmd_mesh=mpmd_mesh,
             )
             if os.environ.get("GRUG_JAXPP_WARM_DEVICE_RAGGED", "false").lower() in ("1", "true", "yes", "on"):
-                _warm_jaxpp_device_ragged(mpmd_mesh)
+                max_batch_size = max(batch_schedule.unique_batch_sizes())
+                if max_batch_size % config.trainer.pipeline.microbatches != 0:
+                    raise ValueError(
+                        f"device-ragged warmup batch size={max_batch_size} must be divisible by "
+                        f"microbatches={config.trainer.pipeline.microbatches}"
+                    )
+                _warm_jaxpp_device_ragged(
+                    mpmd_mesh,
+                    global_microbatch_tokens=(
+                        max_batch_size // config.trainer.pipeline.microbatches * config.model.max_seq_len
+                    ),
+                    hidden_dim=config.model.hidden_dim,
+                    top_k=config.model.num_experts_per_token,
+                )
             prewarm_dime = os.environ.get("GRUG_JAXPP_PREWARM_DIME")
             if prewarm_dime is not None:
                 if prewarm_dime not in ("streams", "all"):
