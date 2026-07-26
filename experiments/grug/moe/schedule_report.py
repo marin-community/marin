@@ -23,6 +23,16 @@ INSTRUCTION = re.compile(r"^\s*%?([\w.\-]+)\s*=\s")
 COMPUTATION = re.compile(r"^\s*(ENTRY\s+)?%?([\w.\-]+)\s*[\({]")
 COLLECTIVE = re.compile(r"all-to-all|all-gather|all-reduce|reduce-scatter|collective-permute|async-start|async-done")
 TOP_COVER = 5
+OP_NAME = re.compile(r'op_name="([^"]*)"')
+
+
+def leg_of(line: str) -> str:
+    """The jaxpr scope tail (e.g. dispatch/all_to_all) plus fwd/bwd, from HLO metadata."""
+    match = OP_NAME.search(line)
+    if not match:
+        return "?"
+    name = match.group(1)
+    return ("bwd " if "transpose(" in name else "fwd ") + "/".join(name.split("/")[-2:])
 
 
 def pick_dump(directory: pathlib.Path) -> pathlib.Path:
@@ -55,7 +65,7 @@ def main() -> None:
             order.append((index, computation, instruction.group(1).lstrip("%"), line))
 
     starts: dict[str, tuple[int, str, str]] = {}
-    print(f"\n{'computation':<26}{'instruction':<28}{'state':<10}{'cover':>6}  covering ops")
+    print(f"\n{'leg':<26}{'instruction':<28}{'state':<10}{'cover':>6}  covering ops")
     for position, (_, computation, name, line) in enumerate(order):
         # XLA writes native collectives with hyphens (all-to-all-start) and shard_map-wrapped
         # ones with underscores (all_to_all.112-start); match either spelling.
@@ -73,10 +83,15 @@ def main() -> None:
             ]
             real = [(n, l) for n, l in between if not any(op in l for op in NOP_OPCODES)]
             cover = ", ".join(n for n, _ in real[:TOP_COVER]) or "-"
-            print(f"{start_computation[:26]:<26}{done.group(1)[:28]:<28}{'async':<10}{len(real):>6}  {cover}")
+            # The GPU pass keeps collapsed pairs in the schedule and only tags the start, so
+            # "async" here means the pair survived; is_sync marks the ones executed inline.
+            state = "SYNC" if '"is_sync":true' in start_line else "async"
+            print(
+                f"{leg_of(start_line)[:26]:<26}{done.group(1)[:28]:<28}{state:<10}{len(real):>6}  {cover}"
+            )
         elif needle.replace("_", "-") in flat and "-done" not in flat:
-            state = "SYNC" if '"is_sync":true' in line or '"is_sync": true' in line else "plain"
-            print(f"{computation[:26]:<26}{name[:28]:<28}{state:<10}{'-':>6}")
+            state = "SYNC" if '"is_sync":true' in line else "plain"
+            print(f"{leg_of(line)[:26]:<26}{name[:28]:<28}{state:<10}{'-':>6}")
 
     for name, (_, computation, _) in starts.items():
         print(f"{computation[:26]:<26}{name[:28]:<28}{'unmatched':<10}")
