@@ -770,3 +770,33 @@ CONSEQUENCES:
    = better-balanced router), not above.
 4. General rule for this work: only compare drop fractions at the same fraction of the LR schedule, and prefer
    a tail window over any single step.
+
+## cf1.15 LANDED 06:00 — it IS compliant at steady state, and the published claim was right for the wrong reason
+/mwittmann/ep25d1-cf115-m0-350-0726-0434, provenance verified in-log ("capacity_factor": 1.15), 349 samples.
+| config | p50 MFU | TRUE tail-100 | clears 3%? |
+| cf1.0  m=0 | 22.062 | 0.0710 | no |
+| cf1.0  m=2 | 21.872 | 0.0414 | no |
+| cf1.0  m=3 | 21.849 | 0.0366 | no |
+| cf1.15 m=0 | 20.416 | 0.0260 | YES |
+THE RECORD REPAIR RESOLVES AS "CONFIRM THE CONCLUSION, REPLACE THE EVIDENCE": QB+cf1.15 IS 3%-compliant -
+2.60% at steady state. But the number the published comment cited for that claim (0.037, i.e. 3.7%) is ABOVE
+the bar and was an end-of-anneal 120-step reading. So the claim was accidentally correct: the cited evidence
+never supported it, and the true supporting evidence did not exist until this leg. Both the original error and
+its sibling (the "draw variance" misattribution) stand corrected, and the headline conclusion survives.
+SECOND CORRECTION: cf1.15's MFU is 20.416%, not the 20.85% on the record - it is 0.43pp MORE expensive than
+believed. So the price of compliance via capacity is higher than the ledger says.
+PRE-REGISTERED TEST, stated either way as promised: predicted 2.3%, measured 2.60%, error +0.30pp (+13%).
+The model is OPTIMISTIC on the capacity axis but only mildly.
+MODEL CALIBRATION SPLITS CLEANLY BY AXIS - the useful diagnostic:
+  capacity axis: 1.03x (cf1.0 m0), 1.13x (cf1.15 m0)  -> well calibrated
+  spill axis:    1.36x (m=2), 1.54x (m=3)             -> optimistic, and grows with m
+So the model's weakness is specifically its idealization of how many free buckets later spill attempts find;
+its capacity response is trustworthy. That is exactly the split that makes the combination prediction usable.
+COMBINATION CANDIDATES (spill-axis K applied, capacity interpolated ~1.03):
+  m=2 @ cf1.05: MFU 21.29%, drops ~1.78%  -> +0.87pp over measured cf1.15
+  m=3 @ cf1.05: MFU 21.27%, drops ~1.24%  -> +0.85pp over measured cf1.15
+Both are predicted compliant with real margin, and both beat the only measured compliant config by ~0.9pp
+(better than the +0.44pp I estimated when cf1.15 was believed to be 20.85%).
+RECOMMENDATION for the final leg: m=3 @ cf1.05. Same MFU as m=2 within 0.02pp but 0.54pp more compliance
+margin, which is worth having given the spill axis is the optimistic one. If it lands at ~1.2% that is a
+signal there is headroom to lower cf further, and cf1.02 (est. 21.62%, ~2.3%) becomes the follow-up.
