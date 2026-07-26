@@ -16,6 +16,116 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T21:30:20Z — 185,235 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2115-v624` independently
+  revalidated four p1 decision-file 39 checkpoints at semantic offsets 1,920
+  through 2,304 and six p2 checkpoints spanning decision-file 71 offsets 5,120
+  through 5,760. Their 1,275 pairs contain 531 model false positives, 739 model
+  true duplicates, and five unresolved outcomes. The arm split is 512 baseline
+  pairs with 250 false positives and 262 true duplicates, plus 763 treatment
+  pairs with 281 false positives, 477 true duplicates, and five unresolved
+  outcomes. Three pairs were chunked and 1,272 were direct. The 2,841 judgments
+  required 2,853 request attempts: 2,836 were valid, and 17 invalid JSON
+  attempts occurred across six retried judgments.
+
+- The outcome Parquet SHA-256 values are
+  `2639d7e0221305162c4fc4c30222bbd8a8aff01c704f8903950d57aef3f6ee76`,
+  `bc615594a8885362b7befc5f24cf97a0736a3edcedfad4e7816f3c7207cee634`,
+  `8241bca3907d5662570a058302feb65d1239cbd66684bb70cf8e05a1441a3253`,
+  `c4b1f0f7602c38c9a9fa9fa7824cbdede3dc461b3faf2e3736600039fd46b6be`,
+  `5eb520a24e97ca4855f1b0b152ed6c794ee58e8b83923f00e3cca09a0a6d8c63`,
+  `f0415545a50484f9d644b56c78d0f98a8e6d5016fccfc8b03df5e60956eef11d`,
+  `0431ce0a33a0224b54dbbdf862d51c4a86d8a3f5e23ba26627b41329e008efbc`,
+  `0ed62fc9042f36eaf907b3d881581e6965f3d068396d77b60e25c5890bce7dcc`,
+  `6c2f3ef19b994cb7798fe3b96a626f0cc0d8622ae48d7920432a0e309417fc2c`,
+  and
+  `f1f36c92bd184a0e2c790b1b43d241acab67c1960d365da5148dbf80340d5a12`.
+
+- Five separate inspection jobs read, hash-bound, and persisted every complete
+  unresolved pair:
+
+  - Row 8,461 is a 104-character member and 84-character canonical with
+    character, line, and word-sequence similarity 0.851064, 0, and 0.85. They
+    are overlapping truncations of the same sentence. The member's trailing
+    "basis are made and more" and the canonical's leading "but" do not form a
+    separate fact, request, or answer. The manual label is true duplicate.
+  - Row 8,640 is a 1,681-character member and 2,064-character canonical with
+    similarity 0.768491, 0.076923, and 0.737190. The moving pages share an SEO
+    template but describe Mound City, Missouri and Waggoner, Illinois. The
+    member uniquely contains zip 64470 and an identity-theft warning; the
+    canonical instead contains corporate-moving advice and a quiz. The manual
+    label is false positive.
+  - Row 9,015 is an 11,214-character member and 11,221-character canonical with
+    similarity 0.999688, 0.996441, and 0.999740. The complete hypertension
+    answers differ only by `\boxed{B}` versus `\boxed{\text{B}}`. The manual
+    label is true duplicate.
+  - Row 9,016 is a 5,541-character member and 5,548-character canonical with
+    similarity 0.999369, 0.986486, and 0.999389. The complete supply-chain
+    answers differ only by `\boxed{C}` versus `\boxed{\text{C}}`. The manual
+    label is true duplicate.
+  - Row 9,041 is a 9,333-character member and 9,326-character canonical with
+    similarity 0.999625, 0.994505, and 0.999673. The complete
+    Aristotelian-metaphysics answers differ only by `\boxed{\text{A}}` versus
+    `\boxed{A}`. The manual label is true duplicate.
+
+- The inspection jobs for rows 8,461, 8,640, 9,015, 9,016, and 9,041 are
+  `/rav/datakit-6854-inspect-row8461-2117-v625`,
+  `/rav/datakit-6854-inspect-row8640-2117-v626`,
+  `/rav/datakit-6854-inspect-row9015-2118-v627`,
+  `/rav/datakit-6854-inspect-row9016-2118-v628`, and
+  `/rav/datakit-6854-inspect-row9041-2119-v629`. Their inspection SHA-256
+  values, in the same order, are
+  `a5bf803c93873587cffc1885de68eaf6addbed1d6399a486b2d0c3e52f1681cb`,
+  `e9e147c28dc8b41b5ca85a04fbcb81c584222eceb2916b6170908d78a3668231`,
+  `97096eb82c405071e73f76e5354d74f2fc9bd1f88b0f8836dabbd946b9e8d02b`,
+  `5373e791bcc0bfd230d25195ad6db76edce01250c33dc4ecba29e996896314a5`,
+  and
+  `74bf9e3e9ad78ab09c3471926140f4e5a307c5d5d6e7fb29fd6831fe19fbbcec`.
+  Their semantic-judgment SHA-256 values are
+  `386e76940c2dccfc8e2677b8a02a7ea9d3819ed60f9e703e8cc1690420a618d0`,
+  `5e3d1159ff55ba6bf8b42f87ea624a3d8ac4e7bb13e97e25ba318384047fb901`,
+  `358a13739d1bb52632b110ac976dd994a7e84b866671e302eee6c19d9021fcd6`,
+  `8514811a3ff135198c46d64c3f84f541ccbb614fe169af6059b2e7d4c6aa319c`,
+  and
+  `b800171ebe1788beb4fcf1d2a9f9953ac0fb045ea2e0b1d0a139d8c4ee16ddc0`.
+
+- The five publish jobs wrote manual Parquet and completion-marker pairs. Their
+  manual SHA-256 values are
+  `58720e4febef41b5059dbee187c39a7fa7836d197d537ca41bf1113d7fc52978`,
+  `0530f1397cbd01e42ffcab9209ff1161297d52c7fe1fbb33acbeba6b41c6d9fd`,
+  `330b39e8edd435413ffb69779fbbbfa8ade7e96eae9ff1a661c48d6aeb989158`,
+  `8d46281c33926dfbdc94e6269bcb7eaddd90ca676e23dccf72121f81ea623698`,
+  and
+  `d2d270e5f5f5242b70a1a441b045f7cd258795439eede0e0a4530dd26506bdc0`.
+  Their marker SHA-256 values are
+  `fc78a3394913fa4bc243a4eb9881d7d77042e84c771d5f2cc65d540c2abc31f2`,
+  `7249138731b73fff7a9968f0f57758649602024eb40d8d964389d434538a085f`,
+  `d002b65d5ddd83f595620b28166126204ecfec0436f494948392d7ccf43894ed`,
+  `61ae7b752b6cfb038a3083532a556a36a621ec5fe7a22650c6af23f3559871b0`,
+  and
+  `8050c315aa686c07f492a0f4ff934d635355f71f8d5fd5b6f65c29c25707b7dc`.
+  `/rav/datakit-6854-verify-row8461-2129-v639`,
+  `/rav/datakit-6854-verify-row8640-2128-v638`,
+  `/rav/datakit-6854-verify-row9015-2128-v637`,
+  `/rav/datakit-6854-verify-row9016-2127-v636`, and
+  `/rav/datakit-6854-verify-row9041-2127-v635` independently fetched and
+  verified the exact artifacts.
+
+- Across the stable 1,458-checkpoint snapshot, all 210 unresolved model
+  outcomes are covered by 163 true-duplicate and 47 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 148,396 pairs, 94,306 false positives, 54,090 true duplicates;
+  - treatment: 36,839 pairs, 19,053 false positives, 17,786 true duplicates;
+  - combined: 185,235 pairs, 113,359 false positives, 71,876 true duplicates.
+
+- The next audit frontiers are p0 `(8, 0)`, p1 `(39, 2,432)`, p2 `(72, 0)`,
+  and p3 `(104, 128)`. P1's next baseline batch has 155 review units and 310
+  minimum model requests, including one oversized pair. All four
+  batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T21:13:45Z — 183,960 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2107-v620` independently
