@@ -3270,3 +3270,20 @@ author: dlwh
   - No L24 promotion or MFU claim is valid until a reduced schedule completes finite steps. The fixed relative-L2 ceiling remains `0.002` for loss and every gradient.
 - Next action:
   - Test GPipe with the functional no-autotune graph because its non-overlapped transfer ordering may avoid the standard-1F1B deadlock. In parallel, package a self-contained JaxPP transfer plus ragged-all-to-all reproducer and file only a linked Marin issue for upstream review.
+
+### 2026-07-26 04:50 PDT - GPipe and transfer priority retain the device-ragged deadlock
+- Hypothesis: GPipe's non-overlapped execution or standard 1F1B's transfer-priority mode will impose a consistent NCCL launch order and avoid the JaxPP transfer plus device-ragged-all-to-all wait.
+- Commands:
+  - GPipe parent `/dlwh/iris-run-job-20260726-111423`.
+  - Standard 1F1B transfer-priority parent `/dlwh/iris-run-job-20260726-113121`.
+  - Both used L8/d2560/e64/top-k4/seq4096/b512/m16, four H100x8 stages, JAX `0.11.1.dev20260725`, NCCL `2.30.7`, device ragged-all-to-all, reference attention, XLA expert GEMM, and disabled XLA autotuning/cuBLASLt/Triton GEMM rewriting.
+- Results:
+  - GPipe made no progress after rank-3 compiler diagnostics. Two unchanged captures showed rank 0 in `enqueue_nccl_transfer_group -> ncclGroupEnd`, ranks 1-2 in `recv_done_impl`, and rank 3 in `backend_compile_and_load`.
+  - Transfer priority changed rank placement but not the failure: ranks 0-1 blocked in DIME `enqueue_nccl_transfer_group`, rank 2 remained in `backend_compile_and_load`, and rank 3 remained inside PJRT execution.
+  - Both runs held approximately `56.8-57.6 GiB` per active GPU with 0% memory activity and only `114-141W`. Reported 100% core utilization on selected ranks did not correspond to productive work.
+  - Neither run emitted loss, duration, throughput, MFU, or a finished W&B summary. Every parent, child, and task is terminal killed with no running descendants.
+- Interpretation:
+  - The deadlock is not specific to standard 1F1B overlap, GPipe ordering, or accumulation-before-transfer ordering. Explicit JaxPP inter-stage transfers and nightly device ragged-all-to-all do not currently coexist in this four-stage program.
+  - Stop L24 promotion and schedule variants. The direct collective's `7.4349x` transport gain cannot be converted into a training result until the reduced distributed regression is fixed.
+- Next action:
+  - Land the smallest JaxPP transfer plus ragged-all-to-all regression package, file only a Marin issue linked to #7024, and provide upstream-ready evidence without filing externally.
