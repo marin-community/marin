@@ -32,7 +32,31 @@ Keep every preregistered experimental variable fixed.
 
 ## Results
 
-Pending corrected smoke runs.
+Five focused nested/attention contract tests passed and the generated
+experiment config resolved `gpu_fa4_thd`; the accelerator-only lowering test
+was skipped on the local CPU host. Commit `03bcd5c74b` contains the fallback.
+The four failed jobs were stopped after zero optimizer steps and the corrected
+smokes were resubmitted as `r2` coordinators.
+
+## Hypothesis 2
+
+The `r2` jobs selected the THD backend but failed before compilation because
+`Transformer.__call__` reconstructed its layer masks from `segment_ids` and
+dropped the input mask's fixed-shape THD metadata. The prepacked dataset had
+already created that metadata.
+
+## Changes to make
+
+Route layer-mask construction through `_layer_attention_masks`, preserving the
+metadata while retaining the intended 2,048-token short layers and
+full-causal long layers. Extend the contract test to assert both windows and
+metadata identity.
+
+## Results
+
+Six focused mask/nested contract tests passed after the change. Pyrefly
+reported only the two unchanged model-file errors recorded in the research
+logbook. Corrected smoke runs remain pending.
 
 ## Future work
 

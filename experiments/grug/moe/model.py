@@ -91,7 +91,7 @@ def _partition_spec_of(x: jax.Array) -> P | None:
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+    return mask.with_sliding_window(sliding_window), mask.with_sliding_window(None)
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -796,9 +796,9 @@ class Transformer(eqx.Module):
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        if not isinstance(mask, AttentionMask):
+            raise NotImplementedError("Grug MoE requires a structured attention mask.")
+        short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)

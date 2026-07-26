@@ -156,3 +156,42 @@ author: Marin research
 - GPU cost: zero; no child training job was created.
 - Next action: publish a corrected snapshot and submit `r1` coordinators with
   the same preregistered configs.
+
+### 2026-07-26 19:38 - Gate 1 attention fallback
+
+- Result: all four `r1` smoke jobs received their 16-node allocations. The
+  E256 and E128 controls failed before step 0 after the FA4/CuTe backward path
+  imported `quack`; `cutlass.cute.core.ThrMma` was absent from the installed
+  dependency stack. The other arms were stopped before they could repeat the
+  same architecture-independent fault.
+- Evidence: no W&B history rows or checkpoints were written; Iris reported no
+  preemptions or hardware diagnostics. The traceback is recorded in
+  `.agents/ops/2026-07-26-nested-moe-fa4-cute.md`.
+- Change: use the supported `gpu_fa4_thd` backend. Five focused tests passed
+  locally, the GPU-only lowering test skipped on the CPU host, and the
+  experiment plan resolves the corrected backend.
+- Commit hash: `03bcd5c74b`.
+- Canonical corrected coordinators:
+  - `/power/nest-moe-001-smoke-r2-coord`
+  - `/power/nest-moe-002-smoke-r2-coord`
+  - `/power/nest-moe-003-smoke-r2-coord`
+  - `/power/nest-moe-004-smoke-r2-coord`
+- Interpretation: the fallback changes only the attention kernel
+  implementation shared by every arm; it does not alter a preregistered
+  treatment variable.
+- Next action: require finite step telemetry from all four `r2` runs before
+  freezing the production token target.
+
+### 2026-07-26 19:43 - Preserve THD metadata in layer masks
+
+- Result: all four `r2` attempts failed before compilation because the Grug
+  transformer discarded fixed-shape THD segment metadata while deriving its
+  per-layer masks. This was a shared model bug, not a treatment effect.
+- Change: `_layer_attention_masks` now preserves the incoming structured mask,
+  uses the intended 2,048-token short window and full-causal long window, and
+  is called by the model forward pass. The contract test asserts both window
+  values and metadata identity.
+- Validation: six focused layer-mask/nested tests passed. Focused Pyrefly
+  reported only the two unchanged model-file errors already recorded at Gate
+  0.
+- Next action: snapshot the fix and submit one final four-arm smoke attempt.

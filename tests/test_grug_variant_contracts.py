@@ -148,6 +148,8 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
 
     short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
 
+    assert short_mask.sliding_window == 12
+    assert long_mask.sliding_window is None
     assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert short_mask.segment_ids is mask.segment_ids
