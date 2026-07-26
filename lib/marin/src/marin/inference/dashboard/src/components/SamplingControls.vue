@@ -24,16 +24,6 @@ const system = defineModel<string>('system', { default: '' })
       />
     </label>
     <label class="flex flex-col gap-1 text-xs text-text-muted">
-      Max tokens
-      <input
-        v-model.number="params.maxTokens"
-        type="number"
-        min="1"
-        step="1"
-        class="w-28 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text"
-      />
-    </label>
-    <label class="flex flex-col gap-1 text-xs text-text-muted">
       Top-p
       <input
         v-model.number="params.topP"

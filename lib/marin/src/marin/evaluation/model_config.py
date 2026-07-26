@@ -31,9 +31,7 @@ class ResourceHint:
     ``{"H100": 8}``. A CLI accelerator override may change the GPU shape but cannot move a
     GPU-required model onto TPU.
 
-    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults. They are
-    hints attached to the model because large object-store exports can require substantially more host
-    memory while staging shards.
+    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults.
     """
 
     hbm_gb: int | None = None
@@ -64,8 +62,8 @@ class ResourceHint:
 class ServeConfig:
     """Model-server behavior independent of scheduler placement.
 
-    ``backend`` selects vLLM or Levanter. Parallelism and context fields become first-class inference
-    model settings. The remaining typed fields map onto ``vllm serve`` flags through
+    ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
+    inference settings. The remaining typed vLLM fields map onto ``vllm serve`` flags through
     :func:`serve_config_vllm_args`; ``vllm_extra_args`` is the escape hatch for flags without a typed
     field and wins when it names the same option.
 
@@ -78,6 +76,8 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     max_model_len: int | None = None
+    max_num_batched_tokens: int | None = None
+    max_num_seqs: int | None = None
     hf_overrides: str | None = None
     limit_mm_per_prompt: str | None = None
     tool_call_parser: str | None = None
@@ -137,9 +137,10 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     ``reasoning_parser``, ``data_parallel_size``) come first, then the explicit ``vllm_extra_args``
     escape hatch. An explicit ``vllm_extra_args`` entry wins: a typed knob is skipped when its flag is
     already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
-    ``max_model_len``, and ``chat_template`` are omitted -- they are first-class serve fields the
-    launcher passes through the served-model config, not extra flags. ``--trust-remote-code`` is not
-    rendered here: the native server forces it on for every evaluated model.
+    ``max_model_len``, ``max_num_batched_tokens``, ``max_num_seqs``, ``chat_template``, and
+    ``auto_overrides`` are consumed by serving configuration or lowering rather than rendered as
+    extra flags. ``--trust-remote-code`` is not rendered here: the native server forces it on for
+    every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []
