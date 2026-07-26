@@ -1483,6 +1483,81 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T00:49:00Z — 71,766 pairs verified
+
+- Ten additional checkpoints passed independent validation: 1,280 pairs,
+  787 model false positives, 490 model true duplicates, and three unresolved
+  outcomes. They contain 2,733 valid responses across 2,742 attempts; nine
+  invalid JSON responses were the three exhausted attempts for each of three
+  judgments. One pair was chunked and 1,279 were direct. This block includes
+  1,271 baseline pairs and the next nine treatment pairs.
+- Complete issue and trajectory diff resolves the 17,585-character versus
+  32,589-character same-repository SWE pair as a false positive. The member
+  asks for an `addEsMetadataFields` flag on `SearchResult.getHits`; the
+  canonical asks to parse and expose Elasticsearch `matched_queries`. The
+  issue specifications, APIs, and exploration trajectories differ despite
+  the shared harness and repository snapshot. Pair location:
+  `part-00003-of-00128.parquet:7880`; member/canonical text SHA-256:
+  `b74a2725c2c1c341b23e90539d1f0ccdd3755c22e74c577342d7ef93cbfffe79` /
+  `28da14a7a0ab3d177f2b2532a7df63264303bc3aef0054660b28db61b6777429`.
+- Complete line-by-line comparison resolves the cross-source Thirty Years'
+  War SFT pair as a true duplicate. All 226 lines contain the same question,
+  choices, reasoning, and boxed answer B. The only changed spans add `\text{`
+  and its closing `}` around B. Character similarity is 0.999619 and line
+  similarity is 0.995575. Pair location:
+  `part-00066-of-00128.parquet:7555`; member/canonical text SHA-256:
+  `77da9a4e147b049bfdf18fa5967b95772c7b092bd5c7a3e8e147db9b9e59d744` /
+  `8f6c457b9b616272d5ad6d7b19f1e3dd8fc38b385285bbab152af3f1632f76ec`.
+- Complete paragraph comparison resolves the 2,845-character versus
+  3,151-character escape-room SEO pair as a true duplicate under the explicit
+  low-value-template boundary. The five member body paragraphs are direct
+  word-spun counterparts of the canonical. The canonical has an extra
+  introduction; the member's extra title and backlink headline add no
+  substantive information. Pair location:
+  `part-00099-of-00128.parquet:5089`; member/canonical text SHA-256:
+  `860356f684edcb1f8e2610c35658658c6b50ebf7d0e5458cb8878374cbb2ddf6` /
+  `67d499f9b4fdc95f8ae9739e6505abcbd3b52e68fbfc55e3277499ec08a8d146`.
+- The exact semantic judgments have SHA-256 values
+  `67a0da567c09e7a55a4a80be4307e557968c0783390f9c65a6b03809594f54cd`,
+  `412f18121aebb4cbfa70bb229ff1b6d39738832a52ab22839125ecc8c53e7381`,
+  and
+  `134fd68e67baf92aa833901fffed65b5834d340088c055addf5128033db3d79f`.
+  The three hash-bound manual records have Parquet SHA-256 values
+  `c9bb2e7dce9114b21dab5e95d45442261380f6a2e9e6d9d35efed28df4df148e`,
+  `44ee775f65116b69660514bbe5a86104cc78e069234238d4461f676ade17f3e5`,
+  and
+  `07204b08f5868154cca604d3f54b6fa0d286fd3297a79e63a5e05c5cc6a5b34b`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  all three source cases, semantic checkpoints, manual rows, Parquet bytes,
+  and completion markers.
+- The ten outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 4352, 4480, and 4608:
+    `4774e1c37f60bcb350055710d16e7b05e80c4ee7dc835aa90175ccafd5f3f6c9`,
+    `5d0086a873ffda5c549c2d881a55a8ed6544f4b1c8984428f5a58866047943ce`,
+    and
+    `7ceeba7a4be99dafa3ad468c505667669b806b532602c101c63573ebefabeb73`;
+  - p2 decision-file 66 offsets 4224, 4352, and 4480:
+    `92c1fc06aef69b9f94869bd6d5c78896ab19c3934713bb795e06f912f6bbc142`,
+    `6ce25ab14615c6f88ee9cb3b974bd0a76783bbee958c54dc8f4042f10d2abc0d`,
+    and
+    `54f8611dcb327a5e5d54093ccbc99e8d7b20eda43556fb3a2911da19bcb6cdcc`;
+  - p3 decision-file 99 offsets 2816 through 3200:
+    `64b6f14f7d11617afd973fe95418cdfc7a31cda73db4f04e85aec5c58e1dfd26`,
+    `a8ba0506150ff001c64f4cac0f23b219478ee7e6379b90e7bb6a982b80d2d3fb`,
+    `e884d323f37b40d54c15a4f67241d067711c67e788070d380338953fdf0cc82e`,
+    and
+    `73a4bdbd083ef75fc482288c5e20f503d7f028e2627acb1689035e1d110183ae`.
+
+- Across the stable 563-checkpoint snapshot, all 71 manual records leave:
+
+  - baseline: 59,720 pairs, 37,827 false positives, 21,893 true duplicates;
+  - treatment: 12,046 pairs, 6,282 false positives, 5,764 true duplicates;
+  - combined: 71,766 pairs, 44,109 false positives, 27,657 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:39:35Z — 70,486 pairs verified
 
 - Eighteen additional baseline checkpoints passed independent validation:
