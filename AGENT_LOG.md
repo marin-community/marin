@@ -288,3 +288,30 @@ offload is new at this size: it parks ~40.5 GiB of optimizer state per GPU in PI
 4 GPUs/node x 40.5 = ~162 GiB of pinned RAM against the launcher's `ram="256g"` request. If v3 dies
 the same way, a host-memory OOM is the first thing to check, and the answer is either a larger RAM
 request or the 4-of-128 fallback.
+
+## Check-in 10 — operational finding worth lifting out of this direction: rack workers are preemptible
+
+`ResourceConfig.with_gpu` in `experiments/grug/moe/launch_cw_scale.py` sets `preemptible: true` (visible
+in every run's hparams dump), so rack GPU workers on this cluster are evictable. That gives every job an
+eviction window proportional to its COMPILE time, and a 707B model's ~30-minute compile is close to the
+worst case anyone here runs. My v2 leg produced unambiguous evidence rather than an inference:
+
+    09:23:02.720759 - 09:23:02.721244Z, tasks 3, 12, 2, 6, 0: `preemption_notifier.cc:90 SIGTERM caught`
+
+Five tasks receiving SIGTERM within 500 microseconds is an eviction, not a crash. Worth noting for the
+wider session: an evicted task that comes back carries a NEW incarnation, and a peer still holding the
+old one reports exactly the "unexpectedly tried to connect with a different incarnation" gang-abort that
+has been hitting several agents and rav all session. That does not prove the two are the same
+phenomenon, but it is a concrete mechanism that produces the observed symptom, and it is testable by
+grepping any suspect job's logs for `preemption_notifier` before blaming the code under test.
+
+Deliberately NOT attempted, per the known GB200 failure: enabling the JAX persistent compilation cache
+to shorten the exposure window. A leader process starting with a populated cache is necessary and
+sufficient to deadlock NCCL clique init on this hardware, and it presents as a HANG at init — which is
+indistinguishable at a glance from the gang aborts above and would have cost hours to separate.
+Confirmed clean: no submission of mine sets a cache directory, and every run's hparams shows
+`jax_compilation_cache_dir: null`.
+
+Added `SCALE_RAM` (default 256g, unchanged) so the host-memory request can be raised without a code
+edit at submit time; verified it flows through to the ResourceConfig. Host offload parks ~40.5 GiB per
+GPU in pinned host memory = ~162 GiB per 4-GPU node against the 256g default.
