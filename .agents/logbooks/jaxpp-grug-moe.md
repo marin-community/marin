@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, and NCCL implicit launch ordering. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: globally ordered DIME prewarming after stage-state allocation in parent `/dlwh/iris-run-job-20260726-133417`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, and NCCL implicit launch ordering. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: DIME stream-only prewarming in parent `/dlwh/iris-run-job-20260726-133926`; communicators remain lazy so each stage initializes device-ragged symmetric memory first. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3386,3 +3386,19 @@ author: dlwh
   - The ordinary lazy path creates stage state before DIME and does not hit this allocation failure. `c224c3d442` preserves that allocator order while moving only communicator creation ahead of task lowering.
 - Next action:
   - Babysit post-state-prewarm parent `/dlwh/iris-run-job-20260726-133417`. Require all three link barriers, no repeated symmetric-memory failure, and finite L8 steps before the `0.002` parity gate.
+
+### 2026-07-26 06:41 PDT - full DIME prewarm is allocator-incompatible; isolate streams
+- Hypothesis: Allocating stage state before all-link DIME prewarming will reserve XLA memory early enough to preserve NCCL's device-ragged symmetric arena.
+- Commit Hash: `0cc1f0e539` replaces the boolean prewarm with explicit `streams` and `all` modes.
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-133417` ran full DIME prewarming after stage-local state allocation.
+  - Parent `/dlwh/iris-run-job-20260726-133926` runs stream-only prewarming with communicator creation left lazy.
+- Results:
+  - The post-state full prewarm completed all three link barriers on every rank, then reproduced the exact `0xcde000000`-within-`0x1400000000` NCCL allocation failure at `13:37:11Z` in `jit_grug_1f1b_mb0_stage2_backward`.
+  - No finite loss or MFU was emitted. The parent and all four child tasks are terminal killed with no live descendant. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ragged-poststate-prewarm-l8-e64k4-b512-s4096-p4m16-20260726-1334>.
+  - The stream-only treatment is allocated and has initialized W&B. Its monitoring owner is subagent `019f9ea7-1497-73e2-8300-cc78691b00fd`.
+- Interpretation:
+  - Stage-state allocation is not sufficient. Creating every inter-stage NCCL communicator before each rank executes its first device-ragged MoE fragments the 51.469 GiB symmetric reservation.
+  - Stream-only mode targets rank 1's repeated `cuStreamCreate` wait but leaves communicator creation interleaved with each stage's first forward, which is the only observed non-OOM order.
+- Next action:
+  - Require stream-only link barriers, no communicator logs during prewarm, no symmetric-memory failure, and finite L8 steps. If it fails, isolate receive-buffer reuse next.
