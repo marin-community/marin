@@ -875,11 +875,6 @@ def _same_expert_cloned_fixed_a2a_core(
                 assignments_per_shard,
                 max_receiver_segments,
             )
-            valid_transport_rows = jnp.arange(expert_inputs.shape[0], dtype=jnp.int32) < jnp.sum(
-                transport_group_sizes, dtype=jnp.int32
-            )
-            expert_inputs = jnp.where(valid_transport_rows[:, None], expert_inputs, 0)
-            dispatched_probabilities = jnp.where(valid_transport_rows, dispatched_probabilities, 0)
             expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
         elif use_mnnvl_transport:
             if not echo_dispatch:
@@ -1010,9 +1005,15 @@ def _same_expert_cloned_fixed_a2a_core(
             group_sizes = receiver_group_sizes[receiver_index]
 
     with jax.named_scope("moe_up_down"):
-        valid_rows = jnp.sum(group_sizes, dtype=jnp.int32)
-        group_sizes = group_sizes.at[-1].add(receiver_capacity - valid_rows)
         moe_dim = global_w2.shape[1]
+        use_hybridep_device_counts = (
+            use_hybridep_transport and os.environ.get("SCALE_A2A_HYBRID_EP_DEVICE_COUNTS") == "1"
+        )
+        if use_hybridep_device_counts and os.environ.get("SCALE_A2A_CLONE_SONIC_CUTE") != "1":
+            raise ValueError("SCALE_A2A_HYBRID_EP_DEVICE_COUNTS=1 requires SCALE_A2A_CLONE_SONIC_CUTE=1")
+        if not use_hybridep_device_counts:
+            valid_rows = jnp.sum(group_sizes, dtype=jnp.int32)
+            group_sizes = group_sizes.at[-1].add(receiver_capacity - valid_rows)
         if os.environ.get("SCALE_A2A_CLONE_SONIC_CUTE") == "1":
             # QuACK/CuTeDSL is an optional Blackwell-only dependency.
             from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
