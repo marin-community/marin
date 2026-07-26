@@ -2,16 +2,17 @@
 members = ["pyext"]
 resolver = "2"
 
+# No LTO: parallel codegen and a short link over a runtime few-percent we don't
+# need. Matches finelog's release profile.
 [profile.release]
-lto = "thin"
+lto = false
 codegen-units = 16
 strip = "symbols"
 
-# Match finelog's dev/test deployment profile: keep parallel optimized codegen
-# while avoiding LTO's slow final link.
+# Even-faster iteration profile for dev/test deploys: lowers opt-level to 2 on
+# top of release's non-LTO parallel codegen. Matches finelog's `fast`.
 [profile.fast]
 inherits = "release"
-lto = false
 opt-level = 2
 
 [package]

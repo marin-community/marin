@@ -34,7 +34,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 WORKDIR /build/iris-native
 COPY lib/iris/rust/ ./
 # Direct Docker builds use release. Iris CLI builds default to fast, which
-# keeps optimized parallel codegen but skips LTO.
+# lowers opt-level to 2; neither profile uses LTO.
 ARG CARGO_PROFILE=release
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
@@ -214,6 +214,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     git \
     build-essential \
+    sccache \
+    mold \
     ffmpeg \
     lldb \
     libibverbs1 \

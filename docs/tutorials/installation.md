@@ -126,6 +126,13 @@ no Rust toolchain needed. `uv sync` fetches the wheels from PyPI automatically.
 To switch to **source builds** (requires Cargo), use the Makefile targets:
 
 ```bash
+# Source builds cache compiles with sccache and, on Linux, link with mold.
+# Install both before enabling dev mode: mold from your package manager (Linux
+# only — macOS builds use the default linker), then sccache from crates.io with
+# the repo cargo wrapper disabled so it can bootstrap before sccache exists.
+sudo apt-get install -y mold          # Linux only; skip on macOS
+CARGO_BUILD_RUSTC_WRAPPER= cargo install sccache --locked
+
 # Check current mode and Cargo availability
 make rust-status
 

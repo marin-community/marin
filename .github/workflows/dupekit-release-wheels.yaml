@@ -34,6 +34,7 @@ on:
     # already covers them. Nightly/tag/dispatch are unaffected by this filter
     # (the stale check below scopes broadly to all of lib/dupekit/).
     paths:
+      - ".cargo/config.toml"
       - "lib/dupekit/rust/**"
       - "lib/dupekit/pyproject.toml"
       - "lib/dupekit/build_package.py"
@@ -45,6 +46,9 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   resolve:
@@ -134,6 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels

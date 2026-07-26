@@ -1,0 +1,14 @@
+[build]
+rustc-wrapper = "sccache"
+
+# Link native Linux builds with mold (a fast, multi-threaded linker) to cut
+# link time. Fail-closed like the sccache wrapper above: every native cargo
+# build in the tree needs mold on PATH (installed in Rust CI, the Iris task
+# image, and per docs/tutorials/installation.md for local source builds). The
+# zig-cross release-wheel builds supply their own linker and can't consume this
+# flag, so they clear RUSTFLAGS in lib/{finelog,dupekit}/build_package.py.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
