@@ -16,6 +16,33 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T23:17:00Z — 193,960 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2316-v720` independently
+  revalidated three p3 decision-file 104 checkpoints at semantic offsets 4,736
+  through 4,992. Their 384 treatment pairs contain 284 false positives and 100
+  true duplicates, with no unresolved outcomes. One pair was chunked and 383
+  were direct. All 802 judgments and request attempts were valid on their
+  first attempt. The outcome Parquet SHA-256 values are
+  `30ea982fbbe02e07621367ce4ee1a2d5691dac836a1f89b463c9c8e0b69238c6`,
+  `b31afaeedf2683875558d1f4b2864f7f222b4226796d68a8f9c90a9c6405a6f0`,
+  and
+  `5723e9c2a0405d3fd563f1ecb69b20f462efe639efa0961eab01a8149c58851f`.
+
+- Across the stable 1,527-checkpoint snapshot, all 228 unresolved model
+  outcomes remain covered by 177 true-duplicate and 51 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 155,547 pairs, 98,836 false positives, 56,711 true duplicates;
+  - treatment: 38,413 pairs, 19,957 false positives, 18,456 true duplicates;
+  - combined: 193,960 pairs, 118,793 false positives, 75,167 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(40, 0)`, p2 `(72, 128)`,
+  and p3 `(104, 5,120)`. P3's next treatment batch has 128 direct pairs
+  requiring 256 minimum model requests. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T23:15:05Z — 193,576 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2311-v716` independently
