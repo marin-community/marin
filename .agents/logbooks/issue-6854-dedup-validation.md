@@ -1483,6 +1483,52 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T02:12:35Z — 77,736 pairs verified
+
+- Six additional baseline checkpoints passed independent validation: 768
+  pairs, 514 model false positives, 253 model true duplicates, and one
+  unresolved outcome. All 2,489 judgments were valid on the first attempt,
+  with no retries. Fourteen pairs were chunked and 754 were direct.
+- Complete inspection resolves the ambiguity as a false positive. The
+  479-line member and 319-line canonical are separate renderings of the same
+  academic CV and publication page, but the member includes 40 prose
+  summaries of individual publications that do not occur anywhere in the
+  canonical. The summaries were enumerated and inspected in full; their
+  joined SHA-256 is
+  `6fd821437b6a0eccaec55f2f285a4249981c0e0814ce55140c53e0a121999510`.
+  Character similarity is 0.632220 and line similarity is 0.263158. Pair
+  location: `part-00034-of-00128.parquet:1280`; member/canonical text
+  SHA-256:
+  `01d4854c750a9a89d69fd13b9ea19bfe13fa179688fa2452d1b869e60bf76449`
+  /
+  `e9a8793028e7c7f30b06090e4d56d8d0ca79227420ad331a07132c97554de71f`.
+- The loss pass correctly identified distinct member content. The duplication
+  pass incorrectly asserted containment, and the low-confidence tiebreak was
+  truncated and self-contradictory. The semantic-judgment SHA-256 is
+  `ea18fb964a66b89428c6d92cf731bf78f83d77ae9ba6c4e5e56659be2905750b`.
+  The hash-bound manual record has Parquet SHA-256
+  `645d3ce98831fa9ff4b883129dc1313131f36ef7cb8802e24b2fda2738611fbc`.
+  A separate read-only batch-priority Iris job exactly reread the source
+  pair, all 40 summaries, semantic checkpoint, manual row, Parquet bytes, and
+  completion marker.
+- The six outcome Parquet SHA-256 values for decision-file 34 offsets 256
+  through 896 are
+  `92f1bb2f4aa5d878f2ea928aeb4f3b3457c02eb7c54d90a8404dbe5a9c7b2b96`,
+  `5d931ea65ad5888fcac2cee0539bb222c603438db922057137a766e17c60482d`,
+  `753ae21c2e5bb5ace7db45509241d37cb475fed8fd2eea61f1992dcf62db98b6`,
+  `a5f8bb9ccbb864f7d75f5df71ee6bc4bf36399970b569923e2f8e4786de1bc80`,
+  `17e79dea370f9b33dadfbbc1693a1e34f3a930c17d163dfa884d775f6b9b851b`,
+  and
+  `3353adac38553fb01a3eff11d3abc83dc0b547768146a339e143b71f36ce39f2`.
+- Across the stable 611-checkpoint snapshot, all 84 manual records leave:
+
+  - baseline: 62,100 pairs, 39,562 false positives, 22,538 true duplicates;
+  - treatment: 15,636 pairs, 8,109 false positives, 7,527 true duplicates;
+  - combined: 77,736 pairs, 47,671 false positives, 30,065 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T01:41:23Z — 76,968 pairs verified
 
 - One additional baseline checkpoint passed independent validation: 128
