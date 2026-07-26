@@ -16,6 +16,63 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T18:52:45Z — 173,971 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1848-v542` independently
+  revalidated four p0 decision-file 7 checkpoints at semantic offsets 2,560
+  through 2,944. Their 512 pairs contain 252 model false positives, 259 model
+  true duplicates, and one unresolved outcome. Three pairs were chunked and
+  509 were direct. All 1,217 judgments and request attempts were valid on
+  their first attempt.
+
+- The outcome Parquet SHA-256 values are
+  `bb9645cce9c357a12e9f31a71f6f2bc72a59af1a025686aa524dd8d77ca65385`,
+  `7164f0ab2326169b2c67df7812261c0ac9ca1fd9bcece550f478ac7a271c2ebd`,
+  `4bcbad84cdfa3effdb2de90343ca067eb7bc05832e0e803ff4b098881c514827`,
+  and
+  `e8c73c56688139b09e039962dd65d4ae222bf8536ade5cdb2d725787c3c63daa`.
+
+- Complete-text inspection resolves row 5,053 as a true duplicate under the
+  established low-value-template boundary. Both 29-line casino SEO pages
+  contain the same sentence-spun paragraphs about casino selection, games,
+  and responsible gambling. Differences are synonym spins and malformed Thai
+  keyword slots: the member inserts `คาสิโน` ("casino"), while the canonical
+  inserts `แทงบอล` ("sports betting"). The model judgments incorrectly
+  described both tokens as member-only; the complete texts show one in each
+  document. Neither token adds a distinct fact or instruction in context. The
+  4,307/4,333-character records have character, line, and word-sequence
+  similarities 0.799769, 0.551724, and 0.706957. Member/canonical SHA-256
+  values are
+  `8f310f0b0e02f7d5e3bd34083e680cc29cf005b04d084d80ba80172f9ec04b9a`
+  and
+  `4a47f4ad86945f7a9ef16467514e35bd0cc9ab4b7a4106186d2191dcfd04f68d`.
+
+- `/rav/datakit-6854-inspect-row5053-1849-v543` persisted the complete pair
+  and diff with inspection SHA-256
+  `e21c15f632f67e9904b8798d6b219f4c68e10db42ecd559f3d222fa37d4973b3`.
+  `/rav/datakit-6854-publish-row5053-1851-v544` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row5053-1852-v545`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The
+  semantic-judgment, manual-Parquet, and marker SHA-256 values are
+  `de4af28e9bb0d0d96bb88ec2700fc29de0e30d60cdde638d58ccc2daaaf8460f`,
+  `006015d544d19ca510a13851d2f7ac50242ce02b18c02602d6cd53a84b7c8758`,
+  and
+  `8d552dd7d64a29eae8fdcd4c588963f1781d57a4a2df7a2df904cf05de585219`.
+
+- Across the stable 1,369-checkpoint snapshot, all 196 unresolved model
+  outcomes are covered by 155 true-duplicate and 41 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 139,526 pairs, 88,491 false positives, 51,035 true duplicates;
+  - treatment: 34,445 pairs, 17,811 false positives, 16,634 true duplicates;
+  - combined: 173,971 pairs, 106,302 false positives, 67,669 true duplicates.
+
+- The next audit frontiers are p0 `(7, 3,072)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(104, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:47:10Z — 173,459 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1840-v535` independently
