@@ -37,8 +37,8 @@ DATABASE = "context"
 # database users, so the organization-wide group represents *@openathena.ai at the
 # database boundary.
 OPENATHENA_GROUP = "eng-all@openathena.ai"
-# Kept as an inert database user until m0001's fresh-stack grant and m0003's revoke can
-# run in order. It receives no IAM login roles or IAP access.
+# The bootstrap migration chain requires this role to exist from its initial grants
+# through their revocation. It receives no IAM login roles or IAP access.
 LEGACY_ECHO_GROUP = "echo@openathena.ai"
 # The Cloud Run runtime service accounts (created by their components as <name>@<project>).
 SYNC_SA = f"echo-sync@{PROJECT}.iam.gserviceaccount.com"
