@@ -994,3 +994,30 @@ Next: rack request pending with the coordinator; no rack submissions until appro
   The scheduled GPU HLO only comes from `--xla_dump_to`.
 Confidence: 4/10 that the overlap-limit flag alone moves MFU; 7/10 that the schedule dump explains the dispatch-vs-combine asymmetry.
 Next: poll both; report the verdict two ways (MFU delta AND inline count) as instructed.
+
+## Check-in 2026-07-26 09:45 UTC — schedule dump working; rack leg fighting the incarnation flake
+
+- RACK LEG /mwittmann/ep25d4-ovlim4-120-v1-20260726 has NOT reached step 0 in 38 minutes.
+  Cause is the known gang flake, not the new flag: `failures=2`, 48 `[iris setup] step 1/3` lines
+  (three attempts x 16 tasks), first abort at 09:08:03 with the usual
+  "5 unexpectedly tried to connect with a different incarnation". Iris is retrying on its own and
+  the current attempt came up at ~09:39, so first step should land ~09:50. Not resubmitting while
+  the job is running, per protocol.
+- EP4 SCHEDULE DUMP now works (free 1-node job, ~3 min with a warm compile cache). Two tooling bugs
+  found and fixed on the way, both worth recording: HLO instruction lines cannot be parsed by
+  `name = <shape> opcode(` because tuple shapes contain spaces and nested parens (match the name
+  only and classify off substrings), and shard_map-wrapped collectives are spelled `all_to_all.112`
+  with underscores while native ones are `all-to-all-start` with hyphens.
+- FIRST STRUCTURAL RESULT from the dump, and it confirms the collapse mechanism end to end:
+  `instructions tagged is_sync=true: 20` in the EP4 module, and the a2a start/done pairs split
+  cleanly into two populations — most have **cover 0** (nothing at all between start and done) while
+  a minority carry 1-5 small fusions (`loop_add_fusion`, `input_reduce_fusion`, one `custom-call`).
+  Cover 0 is exactly the condition `GpuConvertAsyncCollectivesToSync` collapses on. Note for anyone
+  reading a dump later: the GPU pass does NOT delete the pair, it tags the start with
+  `"is_sync":true` and re-emits start/done adjacently, so a collapsed collective still *looks* async
+  in the HLO text — the tag and the zero cover are the tells.
+- Rerunning the dump (v5) with the report now printing the is_sync tag per pair and each
+  collective's MoE leg from HLO `metadata={op_name=...}`, so the dispatch-vs-combine asymmetry can
+  be read directly off the schedule rather than inferred from the timeline.
+Confidence: 8/10 on the collapse mechanism; 4/10 on the overlap-limit flag moving MFU.
+Next: harvest v5; then the rack leg's MFU delta AND inline-instruction count.
