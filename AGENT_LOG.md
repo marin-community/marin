@@ -1344,3 +1344,42 @@ cheap work rides). Per-token scaling on activations only. This route additionall
 WEIGHTS (per-expert scalar), which is a numerics change beyond wire-only and must be in the
 loss-parity verdict, not assumed away.
 Confidence: 9/10 that the fp8 GEMM lowers as probed; 6/10 that the full path clears +1pp e2e; 8/10 that no kernel work is required.
+
+## Check-in 2026-07-26 12:00 UTC — GATE 1 PASSED, with one finding that changes the fidelity story
+
+Seven CPU tests in lib/levanter/tests/grug/test_fp8_wire_gemm.py, all passing.
+
+**Identity holds.** Scaling the GEMM output rows equals scaling the input rows to 1.6e-5 relative
+(pure fp32 accumulation rounding) at 512x256 @ 256x128. So moving the per-token scale past the dot
+— the whole reason this route can produce an `__cublas$lt$matmul$f8` — is exact.
+
+**Error decomposition (the finding).** Against an fp32 reference, on deliberately hostile data
+(per-token dynamic range spanning e^-4..e^4):
+
+| configuration | mean relative error |
+|---|--:|
+| activations e4m3 only | 0.0264 |
+| weights e4m3, per-expert scalar scale, only | 0.0262 |
+| both (scale on output) | 0.0375 |
+| both (scale on input) | 0.0375 |
+| both, weights scaled per COLUMN instead | 0.0374 |
+
+Two things follow. First, activation and weight quantization contribute equally and add in
+quadrature (0.0264 (+) 0.0262 -> 0.0372 predicted vs 0.0375 measured), so **weight quantization is
+not a second-order concern to be waved through — it is half the error budget**, which is why loss
+parity has to be the verdict and not a formality. Second, and this is the useful part: a per-column
+weight scale buys **nothing** (0.0374 vs 0.0375). The limit is e4m3's 3-bit mantissa, not scale
+granularity. So the per-expert *scalar* scale that the fp8 rewriter requires is free — we are not
+trading fidelity for the fast path, which was the obvious worry about this design.
+
+Also gated: per-token scales change only their own row when a neighbour is perturbed 1000x; padded
+capacity slots quantize to exact zero (dropped assignments contribute nothing to the GEMM);
+e5m2 survives cotangents of 5000 (e4m3 saturates at 448); the straight-through QDQ gradient is
+finite, correctly shaped and non-zero.
+
+Note the error figures are an upper bound by construction — the fixture's per-token range is far
+wider than real MoE activations. The number that matters is the loss trajectory at gate 3.
+
+Gate 2 next: confirm `__cublas$lt$matmul$f8` appears for the REAL dispatch path, not just probe
+shapes. If it silently falls back there, stop and report.
+Confidence: 9/10 on the identity; 6/10 on end-to-end loss parity (weights are half the error budget).
