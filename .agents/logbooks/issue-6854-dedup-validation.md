@@ -1483,6 +1483,92 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T06:07:30Z — 100,902 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0601-v130` independently
+  revalidated seven additional checkpoints containing 746 pairs: 384 baseline
+  and 362 treatment. Raw labels are 480 false positives, 261 true duplicates,
+  and five unresolved. The 2,259 judgments used 2,285 requests: 2,249 valid
+  and 36 invalid attempts, with 15 judgments retried. Eight pairs were chunked
+  and 738 were direct.
+- The p0 outcome Parquet SHA-256 values are
+  `1d623b02dfe1275dc15e0a3bfd8b07508bc2113044e3d294d370bdb395269232`
+  and
+  `c327da68a2c325ca1080495019a99e6211b43d6414384e811ba8963ea940c6ec`
+  for decision-file 4 offsets 5,504 and 5,632, followed by
+  `4a1ca91cdaa1aaa8ff3d9090fd8ef4c9b99cb752c59ce8052b6f58a1839412fe`
+  for its final 45-pair offset 5,760. The p1 decision-file 35 final 61-pair
+  offset 5,760 is
+  `fda095c8a7f9a7134e9254cfefdba29ed790e29ebf108527df95dae93bac5a12`.
+  The p3 decision-file 100 values for offsets 384, 512, and 640 are
+  `fd81fb9e352657077471885d88b2ec565b3e27a793233e2c4fba48a124fe9fa6`,
+  `9c90a20feea9d8eefa3c23fa0951feb69eb6ded6771228e84257f5877f63781b`,
+  and
+  `6a2d4f61d43681482546f18a4010ccc474bb9b112e010daedef70b4df7c8e13c`.
+- `/rav/datakit-6854-inspect-unresolved-0604-v131` hashed and compared every
+  character of all ten documents in the five unresolved cross-source SFT
+  pairs. Every comparison has exactly two edit spans totaling seven
+  characters: insertion or deletion of `\text{` and the matching `}` around
+  the same final boxed answer. All five therefore resolve as true duplicates:
+
+  - row 9,016: 17,796/17,803 characters across 470 lines, ratio 0.999803,
+    member/canonical SHA-256
+    `e21e8880ead4d637c4c06640f168214d4f15803ddc68a32f5b273b52d133ae60`
+    /
+    `7c69a2c509b03c85a834c3fcba56a77226b96fff73e164fb26d9ec3e3268bf86`;
+  - row 9,040: 6,896/6,889 characters across 99 lines, ratio 0.999492,
+    `6dd24105a5e72f5947ad63893389aa774727ba8233a2ee5d23b12a4d9cd57ed0`
+    /
+    `0e8e38d02e119df203133eb1e1cb0e02432bbeac0560f78b27c91672e278fcab`;
+  - row 9,043: 12,825/12,818 characters across 258 lines, ratio 0.999727,
+    `f0d1bf4f6f3e4977caa2f7ff3e97c00835184ec432d792f4532a8fea836ad87f`
+    /
+    `79eaf75685cd818c11831f696e64a3fb6328bb12e88e8e5ec74d0489363904c2`;
+  - row 9,044: 5,408/5,401 characters across 64 lines, ratio 0.999352,
+    `0bfb8c79f0875bfd69a3509a7463142693055fc5d0225f82a9ee2a4701b4ad3a`
+    /
+    `9d6350e224689518024c26a8fb3bfcddc404633a18f4fe1ad92ad70c57e5db04`;
+  - row 9,047: 6,471/6,464 characters across 68 lines, ratio 0.999459,
+    `ca36448949bb1cdce13ff7827866b1f42716e075e655bc4bd7d50d5b9e536d13`
+    /
+    `7d3df671af58301d5f4f864c5b341b64dd0eaabcde19ce8f6b5d99a825e206f6`.
+
+- `/rav/datakit-6854-publish-manual-0606-v132` published the five hash-bound
+  true-duplicate decisions, and the separate
+  `/rav/datakit-6854-verify-manual-0607-v133` job reread the exact pairs,
+  semantic checkpoint, records, Parquet bytes, and completion markers. Their
+  semantic-evidence SHA-256 values are
+  `7c1fddb98c1b8725a11854dc5e33333c407ea0a0427bda1aa109a59836ef017b`,
+  `4d80255aa4cd60741f495f7a35c6d313cc0c90402d205e388a3a950dcaef6369`,
+  `c90a42bb60567bf6e87f494497c66b6e2e14417e1cfda519c2c660c6b962208b`,
+  `484192a33b069551fc928157f50a41fdb8cefa1ea1cb3e8c614c8b7eeb59228c`,
+  and
+  `3bcfb2ca76132480a54959e1f38c1ebdbd827ddf9979c0ee7209e6f22d421220`.
+  Their Parquet SHA-256 values are
+  `9367658b7ea7e03d03ca205d9e8a0cea2fb554a7f80dc351f9d82bfa5bd21602`,
+  `5fbd0e976ba6908edf5edaf9c9fe52e2355cf32e4d71c133bc6f2e0ea19368bd`,
+  `5ec81302c48da4538553aeca22056d71824ec8356c2735c0e2e53430042a7f7a`,
+  `cdba7cdba792c4172c6a6213513fef57b7603621f01b2bb8961f75ee19734827`,
+  and
+  `5a404c341fd81da3872b26e4616beba3152c6ff8b7b47990eeb61ec8e73a2149`.
+  Their record SHA-256 values are
+  `2fa826e4f7bc7d740e331bab4cae5a685fa3f239c2d76c33a26b695b71209678`,
+  `ef49199d2e7a738b24574f711d77a29468c1b2073ad53ea33ffff0c6b7af98eb`,
+  `34aa7f70981c40a54829c2c85777c797fcf27d9478d7c2b0d3f8d7b860f9f2f8`,
+  `09811219129ecd9b9b8c42260644acba35f3ef12585fe2f6cf95ed84fcff2797`,
+  and
+  `50de0ed36a0396e88167aa9d8e9ead737df9542984a11f6b87d296dd2fdb0474`.
+- Across the stable 794-checkpoint snapshot, all 113 unresolved model outcomes
+  are covered by 89 true-duplicate and 24 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 81,114 pairs, 51,614 false positives, 29,500 true duplicates;
+  - treatment: 19,788 pairs, 10,216 false positives, 9,572 true duplicates;
+  - combined: 100,902 pairs, 61,830 false positives, 39,072 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T05:59:51Z — 100,156 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0549-v124` independently
