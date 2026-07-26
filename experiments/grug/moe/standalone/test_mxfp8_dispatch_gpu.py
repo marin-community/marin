@@ -117,8 +117,10 @@ def check_operands(args):
     w2 = (jax.random.normal(keys[2], (e, i, d), jnp.float32) * 0.02).astype(jnp.bfloat16)
 
     payload, scales = quantize_mxfp8_rows(x.astype(jnp.float32))
-    ctl = jax.jit(lambda a, b, c: _forward_pipeline(op, a, b, c, group_sizes))(x, w13, w2)
-    trt = jax.jit(lambda p, s, b, c: _forward_pipeline_quantized(op, p, s, b, c, group_sizes))(payload, scales, w13, w2)
+    # Not jitted: the pipelines return their whole intermediate dict, including
+    # non-array fields, and these shapes are small enough to run eagerly.
+    ctl = _forward_pipeline(op, x, w13, w2, group_sizes)
+    trt = _forward_pipeline_quantized(op, payload, scales, w13, w2, group_sizes)
 
     same_q = bool(jnp.all(ctl["x_q"].view(jnp.uint8) == trt["x_q"].view(jnp.uint8)))
     same_sf = bool(jnp.all(ctl["x_sf"].view(jnp.uint8) == trt["x_sf"].view(jnp.uint8)))
