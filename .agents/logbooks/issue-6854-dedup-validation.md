@@ -1483,6 +1483,80 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T11:23:05Z — 125,831 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1118-v288` independently
+  revalidated six p0 decision-file 5 checkpoints at semantic offsets 3,584
+  through 4,224 and four p3 decision-file 101 checkpoints at offsets 3,328
+  through 3,712. Their 1,280 baseline pairs contain 916 model false positives,
+  362 model true duplicates, and two unresolved outcomes. Four pairs were
+  chunked and 1,276 were direct. The audit checked 2,854 judgments across
+  2,858 request attempts. Six invalid responses affected two retried
+  judgments; every accepted judgment validates. The outcome Parquet SHA-256
+  values, in p0 then p3 frontier order, are:
+
+  - `8506b4c09d9f89085ece129437f838b337b6560b55dd67cdcb16f121949bfe08`;
+  - `fa8d9c86fd58ad71850cd38c0e2f44f76ae4996211d60f9a1e11461a351219b1`;
+  - `e39c9aa1af331c69e14abb4cdabebe911dacec7d6219213f4894405da992507c`;
+  - `731ee44876a096cec2c15a6499baf353154697c33e40ed55df08debda573dbe8`;
+  - `7bab2ba20d1aadea24ccbe35b81a16fe022efad1288f2cff5d268d8531470b35`;
+  - `94f939f91819494c24be4eca5b5dabc360f7eb3f00c49c3f6b73df112ee68188`;
+  - `3af829262e2d34bfc5f1c61657af221b825f74ff3a9c99695267230e7a5dc82b`;
+  - `d9e7ac4a4a053a4d77d051026c31d3b68e5249b7e994b4cae5041bc4126a974e`;
+  - `bbd50e94a14efe92d1d63b111a3d6ac11e9a487985217510309e3a13ec402163`;
+  - `4de132e5976d4c7ccf10568fabbfd159a7318c6b753262cdc431297227615037`.
+
+- Complete-text review resolves the two ambiguities:
+
+  - `part-00005-of-00128.parquet:6383` is a false positive. The
+    Billingshurst and Swinmore location-specific brothel-guide variants have
+    different Q&A training examples. The member uniquely asks about two
+    selection factors, the target audience, and online research, and contains
+    a complete definition section missing from the canonical. Across all
+    6,582/7,013 member/canonical characters, character, line, and word-sequence
+    similarity are 0.378227, 0.438356, and 0.609976. The member/canonical text
+    and inspection-artifact SHA-256 values are
+    `a8280e08dd1cc8043f794cf01376c46ea8527131e8ab819200043ccebafaad25`,
+    `c1218b02a35c8f7601b8998be8049b6f2000734a44ba8bd64140be6ac4749710`,
+    and `dc91577e36d8d23688464702ad8acb979fe9c84f9ea80109f78b6de2a6255a4e`.
+  - `part-00005-of-00128.parquet:7445` is a true duplicate. Every one of
+    its 240 lines contains the same software-bug question, ten options,
+    reasoning, conclusion, and answer. Replacing canonical
+    `\boxed{\text{J}}` with member `\boxed{J}` makes the complete texts byte
+    identical. Their character, line, and word-sequence similarity are
+    0.999712, 0.995833, and 0.999490. The member/canonical text and
+    inspection-artifact SHA-256 values are
+    `0454156d7f426811580e2418bb1c8dd3b808a2dce29aab11d9ab52eb1b4ac675`,
+    `0afdb59578c3ccc65df3d61b41c9bf6a9884b5de5ceb55b4701b40984921f136`,
+    and `f697b5fc3ae9d9eb8bba7d97310d47183791fb0405cb378583a63462faf4f2ce`.
+
+- `/rav/datakit-6854-publish-rows6383-7445-1124-v290` wrote the immutable
+  false-positive and true-duplicate records, and
+  `/rav/datakit-6854-verify-rows6383-7445-1124-v291` separately reread both
+  source pairs, semantic checkpoints, inspection artifacts, records,
+  deterministic Parquet bytes, and completion markers. In pair order, the
+  semantic-evidence, manual-record, and manual-Parquet SHA-256 values are:
+
+  - `57b66dc7afc322e122fe4ecc4b85cabb409f6e25614d33fe690a831cb809dd1f`,
+    `3790f94c9c72c31471e6508dd66cbd30177ec0a02add1536289cea3afc98e2c2`,
+    and `0f80bfb35eacdbff1e036e956a4dd5d98fbb54c79847238a0d68efcd00df10c0`;
+  - `e261afe76f9542e818c85983fb70ac4dde485942fd2927fbdb4b504ae90a7e30`,
+    `d895875291548fbc182e5d3777ccf88410470ceec8b9d8071be1e5f498ed2bd1`,
+    and `58315c4e8b499daca210a541694f042291e12bbce19a94c8fca74b4acfa10062`.
+
+- Across the stable 990-checkpoint snapshot, all 141 unresolved model outcomes
+  are covered by 106 true-duplicate and 35 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 102,418 pairs, 65,053 false positives, 37,365 true duplicates;
+  - treatment: 23,413 pairs, 12,032 false positives, 11,381 true duplicates;
+  - combined: 125,831 pairs, 77,085 false positives, 48,746 true duplicates.
+
+- The next audit frontiers are p0 `(5, 4,352)`, p1 `(37, 0)`, p2 `(69, 0)`,
+  and p3 `(101, 3,840)`. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T11:15:10Z — 124,551 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1110-v284` independently
