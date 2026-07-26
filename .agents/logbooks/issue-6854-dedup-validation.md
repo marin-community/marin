@@ -1483,6 +1483,40 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T05:12:34Z — 94,652 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0511-v108` independently
+  revalidated ten additional baseline checkpoints. Their 1,280 pairs contain
+  615 false positives and 665 true duplicates, with no unresolved outcomes.
+  All 2,935 judgments were valid on the first request. Four pairs were chunked
+  and 1,276 were direct.
+- The p0 decision-file 4 outcome Parquet SHA-256 values for offsets 2,304,
+  2,432, 2,560, 2,688, and 2,816 are
+  `3c0051128815e25a7cd7b3c989af0f52ba1bc018002f8532bf47fb4f8dccd606`,
+  `d15eecc81f99f379d919fa874178a558ff94b19930fe01f465b320206ed97bcb`,
+  `925a35ee2d9f544b77a83cebb724a9df7fb7f3f7378bfae55261c86955586746`,
+  `ea8302d227fae458b7b90ba1ae1309f3cd6ddce6659e34ad869a60035c93a23b`,
+  and
+  `d2b4ebb41198845619c1cfbbcb78f241091ed21d4c0c8c2f9696326d32f59331`.
+  The p1 decision-file 35 values for offsets 2,432, 2,560, 2,688, 2,816, and
+  2,944 are
+  `8cd7e62ddf21c5ecf18e0bcde9facfa40b943d929939a39297faebc94df81216`,
+  `750d46d4ad7bce5bd0ee7305eb5f9a207e6553e2bd5073649baadc93b652bb8e`,
+  `0b7e8c3580436e891426d8fbf1aec03b750f1a1a32b435b79790146e8164951d`,
+  `a7f63dc5d4cdb36fb2619ca366f75dce0bb800a04349d44f199e5d5bad0fa993`,
+  and
+  `ca9fd373690e7165d0acc536bd3e08d51670cbd4d4ed7dbaeface00872d9f85a`.
+- Across the stable 744-checkpoint snapshot, all 98 unresolved model outcomes
+  remain covered by 76 true-duplicate and 22 false-positive manual records.
+  The adjusted totals are:
+
+  - baseline: 77,262 pairs, 49,005 false positives, 28,257 true duplicates;
+  - treatment: 17,390 pairs, 8,955 false positives, 8,435 true duplicates;
+  - combined: 94,652 pairs, 57,960 false positives, 36,692 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T05:09:39Z — 93,372 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0502-v104` independently
