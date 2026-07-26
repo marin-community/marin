@@ -935,6 +935,17 @@ def _tree_named_shardings_on_mesh(mesh: Mesh, tree):
     return jax.tree.map(leaf_sharding, tree)
 
 
+def _automatic_jaxpp_output_shardings(mesh: Mesh, state):
+    return (
+        _tree_named_shardings_on_mesh(mesh, state),
+        {
+            "train/loss": NamedSharding(mesh, P()),
+            "qb_beta_per_layer": None,
+        },
+        None,
+    )
+
+
 def _localize_automatic_jaxpp_shardings(compiled, mpmd_mesh):
     """Bind automatic JaxPP runtime shardings to this process's stage mesh."""
     if not mpmd_mesh.jax_mesh.is_multi_process:
@@ -2809,6 +2820,7 @@ def _make_train_step(
     pipeline: GrugJaxPPConfig | None = None,
     mpmd_mesh=None,
     in_shardings=None,
+    out_shardings=None,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -2832,6 +2844,7 @@ def _make_train_step(
             pp.mpmd_jit_with_loop,
             mpmd_mesh=mpmd_mesh,
             in_shardings=in_shardings,
+            out_shardings=out_shardings,
             donate_argnums=(0,),
             static_argnames=("compute_watch",),
         )
@@ -3362,6 +3375,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 _tree_named_shardings_on_mesh(mesh, state),
                                 _tree_named_shardings_on_mesh(mesh, pipeline_batch),
                             ),
+                            out_shardings=_automatic_jaxpp_output_shardings(mesh, state),
                             watch_config=watch_config if watch_config.is_enabled else None,
                         )
                     validate_task_phases = os.environ.get("GRUG_JAXPP_VALIDATE_TASK_PHASES", "false").lower() in (

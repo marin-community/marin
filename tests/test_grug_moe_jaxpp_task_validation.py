@@ -147,3 +147,20 @@ def test_localize_automatic_jaxpp_shardings_expands_replicated_output_rank():
 
     assert localized.in_info.out_shardings[0].spec == P(None, None)
     assert localized.in_info.out_shardings[1].spec == P("device", None)
+
+
+def test_automatic_jaxpp_output_shardings_preserve_expert_axis():
+    mesh = Mesh(np.asarray(jax.devices()), ("expert",))
+    state = {
+        "expert_weight": jax.device_put(
+            jnp.zeros((1, 2, 3), dtype=jnp.float32),
+            NamedSharding(mesh, P("expert", None, None)),
+        )
+    }
+
+    state_shardings, metric_shardings, watch_shardings = grug_train._automatic_jaxpp_output_shardings(mesh, state)
+
+    assert state_shardings["expert_weight"].spec == P("expert", None, None)
+    assert metric_shardings["train/loss"].spec == P()
+    assert metric_shardings["qb_beta_per_layer"] is None
+    assert watch_shardings is None
