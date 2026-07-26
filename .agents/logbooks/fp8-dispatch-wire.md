@@ -161,3 +161,25 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   sees uint8.
 - **Next action:** implement against that constraint, and add a gradient-nonzero assertion
   to the parity tests so a future refactor back to a uint8 carrier fails loudly.
+
+### 2026-07-26 15:25 - FP8W-004: collective and gather dtype support for the payload
+
+- **Hypothesis:** the payload must be float8-typed at the op boundary (FP8W-003), so the
+  question is whether the backend's collective and gather accept that dtype, or whether a
+  uint8 bitcast pair is needed around the collective.
+- **Command:** ad-hoc CPU check, `jax.lax.all_gather(..., tiled=True)` under `shard_map`
+  on a one-device mesh with `check_rep=False`, plus `jnp.take`.
+- **Result:** `jnp.take` on `float8_e4m3fn` returns `float8_e4m3fn`. `all_gather(tiled=True)`
+  lowers for `bfloat16`, `uint8`, and `float8_e4m3fn` alike.
+- **Interpretation:** on CPU the backend can carry a float8-typed packed buffer end to end,
+  which is the simplest shape: the op returns `[T, H + H/32]` float8 (e4m3 payload followed
+  by e8m0 scale bytes reinterpreted as e4m3, recovered by bitcast on arrival), and the
+  backend applies its existing collective and gather to it unchanged. This is untested on
+  GPU, where NCCL datatype support is the open question and is the stated reason the
+  existing `fp8_wire` bitcasts to uint8. Fallback if NCCL rejects fp8: wrap
+  `bitcast -> collective -> bitcast` in a small dtype-generic `custom_vjp` on the levanter
+  side, so the uint8 window does not straddle an autodiff boundary. Keeping the collective
+  itself on uint8 would otherwise reintroduce the FP8W-003 silent-zero failure in the
+  middle of the backend.
+- **Next action:** implement, then verify the collective dtype on the first sm100 job
+  alongside the H7 zero-block probe.
