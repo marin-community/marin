@@ -26,11 +26,10 @@ COMMON_ENV=(
   -e SCALE_DISABLE_CHECKPOINT 1 -e SCALE_TRACKER json_logger
 )
 
-if [[ "$ALLOC" == cuda_async ]]; then
-  MEM_ENV=(-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
-else
-  MEM_ENV=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
-fi
+# The cuda_async allocator honors XLA_PYTHON_CLIENT_MEM_FRACTION too: the first d6144 leg reported
+# "Limit: 138.22GiB" = 0.75 x 184.3 GiB physical. So the two knobs compose and both are always passed.
+MEM_ENV=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
+[[ "$ALLOC" == cuda_async ]] && MEM_ENV+=(-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
 [[ "$OFFLOAD" == 1 ]] && MEM_ENV+=(-e SCALE_OFFLOAD_OPT_STATE 1)
 
 case "$MODE" in
