@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: shrink the XLA pool from `0.65` to `0.50` while preserving production-sized ragged warmup before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-143746`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all clears the direct transport gate and now completes the reduced four-stage JaxPP graph when the XLA pool is reduced from `0.65` to `0.50` after production-shaped ragged warmup and ordered DIME initialization. Functional evidence: parent `/dlwh/iris-run-job-20260726-143746` completed three finite L8/d2560/e64/top-k4/seq4096/b512/m16 steps without NCCL allocation failure or ordinary OOM. Current test: authoritative parity job `/dlwh/jaxpp-ragged-parity-20260726-1444`. Promote to L24 only if loss and every gradient leaf have relative-L2 at most `0.002`.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3501,3 +3501,19 @@ author: dlwh
   - The failed size is approximately the configured `0.65` preallocated device pool, so pool size is now the direct controlled variable.
 - Next action:
   - At `0.50`, distinguish an ordinary model-memory failure from a smaller NCCL symmetric request. Promote only a finite L8 result to the fixed `0.002` loss/every-gradient parity gate.
+
+### 2026-07-26 07:46 PDT - lower XLA pool clears the reduced functional gate
+- Hypothesis: Reducing XLA preallocation from `0.65` to `0.50` shrinks the symmetric span enough to coexist with DIME while retaining sufficient ordinary HBM for the L8 model.
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-143746` ran the matched production-warm/DIME-prewarm treatment at XLA fraction `0.50`.
+  - Parity job `/dlwh/jaxpp-ragged-parity-20260726-1444` runs the fixed BF16/FP32 explicit-standard-1F1B versus direct-reference check on one H100x8 host.
+- Results:
+  - All four stages completed production-shaped warmup before DIME, followed by all 12 ordered adjacent-link confirmations.
+  - No NCCL symmetric allocation warning and no ordinary OOM occurred. Parent and child succeeded; all four ranks exited zero after three training iterations.
+  - Final W&B metrics were loss `8.599660873413086`, MFU `5.388614388031251`, and duration `5.855198530945927s`. W&B finished normally.
+  - No resource remains live. The parity gate is submitted with relative-L2 fixed at `0.002` for loss and every gradient leaf.
+- Interpretation:
+  - The allocator failure is controlled by XLA pool size, not merely ordering or collective payload. A `0.50` pool is the first configuration where production warmup, deterministic DIME initialization, stage backward, and updates coexist.
+  - This is a functional milestone, not a performance result. The three-step MFU includes short-run compilation/warmup effects and remains below the matched ring baseline.
+- Next action:
+  - Require every stage's loss and every corresponding gradient leaf to pass `0.002`. If parity passes, launch L24/b512/m16 at `0.50` before any batch scaling.
