@@ -16,6 +16,86 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T16:57:00Z — 161,508 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1655-v454` independently
+  revalidated five checkpoints: p1 decision-file 38 semantic offsets 1,920,
+  2,048, and 2,176 and p2 decision-file 70 semantic offsets 5,632 and 5,760.
+  Their 583 pairs contain 317 model false positives, 264 model true
+  duplicates, and two unresolved outcomes. Two pairs were chunked and 581
+  were direct. The audit reread all 1,424 judgments and their 1,432 request
+  attempts: 1,422 attempts were valid, ten were invalid, and five judgments
+  required retries.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p1:
+    `7d7d4551af7bcc4e93a91a5fc89c28273d2e433f937d9fa7095e768b10dc6553`,
+    `23ecf803cb3c7167fb9b543907b607864b4a1d3e23941a2bf20c6ba2e574d791`,
+    and
+    `c4a7c7d2ee7b20ffe4250c8eca14e7cfe193a80e63b212dc5de11539ead8b9fa`;
+  - p2:
+    `da70c1832c76d6421b911f51698ddeed18bb54055bfb248f38dfce50d1a760c4`
+    and
+    `587582d4744b06faa1b5aafdb17a5a40282441e05b255b6eb9a6d4b4fceb1330`.
+
+- Complete-text inspection resolves both treatment ambiguities as true
+  duplicates:
+
+  - `part-00070-of-00128.parquet:8953` compares 74-line SFT records with
+    identical memory-consolidation questions, choices, reasoning,
+    neuroscience facts, conclusions, and answers. The sole changed line is
+    `\boxed{E}` versus `\boxed{\text{E}}`. The 4,532/4,539-character records
+    have character, line, and word-sequence similarities 0.999228, 0.986486,
+    and 0.999274. Member/canonical text SHA-256 values are
+    `2a1f7cab12334d9048903fd84b6486c2d0572f3647b24144a4533b0ccbf6010c`
+    and
+    `a5883f3d95e57452b2b4d4b8305596b21ee7a5d1032bb53806044231a72352c8`.
+  - `part-00070-of-00128.parquet:8972` compares 72-line SFT records with
+    identical moral-relativism questions, choices, reasoning, metaethics
+    facts, conclusions, and answers. The sole changed line is
+    `\boxed{\text{C}}` versus `\boxed{C}`. The 6,069/6,062-character records
+    have character, line, and word-sequence similarities 0.999423, 0.986111,
+    and 0.999471. Member/canonical text SHA-256 values are
+    `1db6b64a04ff06098ba12ab4aaaa49ec6f61181ceeacd6c9ddaa758f788cbd40`
+    and
+    `071d1c09490ce5624f2b2e1bb0ee9da930c7d0075678beb3217f73c2c8e5af47`.
+
+- The row-8953 inspection, semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `dad6ad8e517c30598db8657b2552d9e6f2be8e2b3fa38789f2348b6bc84bf4d0`,
+  `f1da252a7ecd4d29cda54e468d6344b824d820fffba7bdca4d5d933434f193fe`,
+  `c77dd00703fc181f9c2d985b080daad189d02c32a1586af0e54dcf9943c22a1f`,
+  and `f9432429b31afd1ecda0579192ffa8aadb76c5d1dae275d80ada4920439a27c5`.
+  `/rav/datakit-6854-inspect-row8953-1656-v455`,
+  `/rav/datakit-6854-publish-row8953-1658-v457`, and
+  `/rav/datakit-6854-verify-row8953-1701-v460` persisted and independently
+  verified those artifacts.
+
+- The row-8972 inspection, semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `1c64326b8aca9de1b4898e67e465703d64e6f3ded228ce60dfcdc548e5db2adb`,
+  `09da662fa2758bbfff744e699344aa51e78aa2481f93a0c901b9471d4d826874`,
+  `0f678053817067ed19dba2a0b20ae68829ff72074edae7b7f1c221a809039c0c`,
+  and `148e9576e29de8ac64f1fcc39f0959e6ab2eabd0d1d703567427493a1a79fe74`.
+  `/rav/datakit-6854-inspect-row8972-1657-v456`,
+  `/rav/datakit-6854-publish-row8972-1659-v458`, and
+  `/rav/datakit-6854-verify-row8972-1700-v459` persisted and independently
+  verified those artifacts.
+
+- Across the stable 1,271-checkpoint snapshot, all 179 unresolved model
+  outcomes are covered by 140 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 129,458 pairs, 82,286 false positives, 47,172 true duplicates;
+  - treatment: 32,050 pairs, 16,566 false positives, 15,484 true duplicates;
+  - combined: 161,508 pairs, 98,852 false positives, 62,656 true duplicates.
+
+- The next audit frontiers are p0 `(7, 0)`, p1 `(38, 2,304)`,
+  p2 `(71, 0)`, and p3 `(103, 128)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T16:49:30Z — 160,925 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1650-v450` independently
