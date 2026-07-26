@@ -370,6 +370,8 @@ at `[iris setup]` with no error of its own.
     grep -oE "grug-train-[^ ]*/[0-9]+ \|" /tmp/j.log | grep -f <(echo "another task died") ...
     # simpler in practice: list the task indices that logged the victim message and diff against 0..N-1
 
+| `grep -cE "ncclAlltoAll\|unhandled cuda error\|Cuda failure 2" /tmp/j.log` | 5. NCCL memory starvation | **THE INVERSION — read this before reaching for headroom.** NCCL allocates transport buffers OUTSIDE the XLA arena, so a class-3 XLA OOM says RAISE `XLA_PYTHON_CLIENT_MEM_FRACTION` while a class-5 NCCL OOM says LOWER it. The class-3 grep (`failed to allocate`) returns ZERO for class 5, so the natural diagnostic silently points the wrong way: anyone who OOMs at EP scale, greps for "failed to allocate", finds nothing, and reaches for more headroom will reproduce this failure exactly. Concretely at 184.3 GiB HBM: fraction 0.90 leaves ~18 GiB for NCCL + cuBLAS workspaces + CUDA context combined; 0.75 leaves ~46 GiB. At EP64 the all-to-all does not fit in 18. |
+
 Fixes by class:
 1. preemption — resubmit with a `-vN` suffix; nothing is wrong with the code. Shorten the compile if you
    can, but NOT via the JAX persistent compilation cache: a leader process starting with a populated
@@ -377,7 +379,9 @@ Fixes by class:
 2. host-memory OOM — raise the per-node request. `SCALE_RAM` (added this session) does it without a
    code edit; see the launcher limitation below.
 3. HBM OOM — the allocator report tells you the resident set and the failing request; decide between
-   offload, remat, fewer per-GPU tokens, or more sharding from those numbers.
+   offload, remat, fewer per-GPU tokens, or more sharding from those numbers. Raising the fraction is
+   the tempting fix and at EP scale it can convert this into class 5; prefer the structural options.
+5. NCCL OOM — LOWER the fraction back toward the 0.75 default. Do not confuse with class 3.
 
 ### Launcher limitation this exposed (ops item, one-line-fix shaped)
 
