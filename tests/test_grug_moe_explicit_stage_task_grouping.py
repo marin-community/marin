@@ -21,8 +21,6 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
     grouped_block_value_and_grads,
-    grouped_moe_pair_value_and_grads,
-    grouped_moe_preparation_and_routes,
     joined_final_head_loss_and_grads,
     joined_moe_pair_value_and_grads,
     ordered_attention_value_and_grads,
@@ -453,15 +451,10 @@ def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:
             jax.jit(lambda hidden, mask=mask: block.attention_residual(hidden, mask))(hidden)
             for hidden, mask in zip(hiddens, masks, strict=True)
         )
-        grouped_preparation = jax.jit(grouped_moe_preparation_and_routes)(block, post_attention)
-        ordered_preparation = jax.jit(ordered_moe_preparation_and_routes)(block, post_attention)
         joined = jax.jit(joined_moe_pair_value_and_grads)(block, post_attention, cotangents)
-        grouped = jax.jit(grouped_moe_pair_value_and_grads)(block, post_attention, cotangents)
         ordered = jax.jit(ordered_moe_pair_value_and_grads)(block, post_attention, cotangents)
 
-    _assert_tree_rel_l2(grouped_preparation, ordered_preparation)
     _assert_tree_rel_l2(joined, ordered)
-    _assert_tree_rel_l2(grouped, ordered)
 
 
 def test_grouped_block_remat_modes_match_no_checkpoint() -> None:
@@ -517,6 +510,8 @@ def test_packed_reference_attention_value_and_vjp_match_ordered_calls() -> None:
                 hidden_pair,
                 cotangent_pair,
                 packed_mask,
+                use_pko=False,
+                disable_rope=False,
             )
         )(stage.blocks[0], hiddens, cotangents)
         ordered = jax.jit(
@@ -525,10 +520,17 @@ def test_packed_reference_attention_value_and_vjp_match_ordered_calls() -> None:
                 hidden_pair,
                 cotangent_pair,
                 masks,
+                use_pko=False,
+                disable_rope=False,
             )
         )(stage.blocks[0], hiddens, cotangents)
+        packed_preparation = jax.jit(ordered_moe_preparation_and_routes)(stage.blocks[0], packed[1])
+        ordered_preparation = jax.jit(ordered_moe_preparation_and_routes)(stage.blocks[0], ordered[1])
 
     _assert_tree_rel_l2(packed, ordered)
+    _assert_tree_rel_l2(packed_preparation[0], ordered_preparation[0])
+    for packed_routes, ordered_routes in zip(packed_preparation[1], ordered_preparation[1], strict=True):
+        np.testing.assert_array_equal(packed_routes, ordered_routes)
 
 
 def test_final_norm_head_pair_vag_matches_separate_weighted_losses() -> None:

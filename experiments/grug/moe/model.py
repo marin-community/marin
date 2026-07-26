@@ -824,33 +824,6 @@ class Block(eqx.Module):
         return x, router_stats
 
     @named_call
-    def grouped_moe_residual(
-        self,
-        x: Float[Array, "B S D"],
-    ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
-        """Run dense MLP preparation once and exact ring routing per microbatch."""
-        if self.mlp.expert_mlp.implementation != "ring":
-            raise ValueError("grouped MoE residual requires the exact bulk-ring implementation")
-        if x.shape[0] % 2:
-            raise ValueError(f"grouped MoE residual requires an even batch dimension, got {x.shape[0]}")
-
-        microbatch_size = x.shape[0] // 2
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        grouped_mlp_in = jnp.reshape(mlp_in, (microbatch_size, 2, *mlp_in.shape[1:]))
-        microbatch_shape = (microbatch_size, *mlp_in.shape[1:])
-        first_mlp_in = jnp.reshape(jax.lax.slice_in_dim(grouped_mlp_in, 0, 1, axis=1), microbatch_shape)
-        second_mlp_in = jnp.reshape(jax.lax.slice_in_dim(grouped_mlp_in, 1, 2, axis=1), microbatch_shape)
-        first_out, first_stats = self.mlp(first_mlp_in)
-        second_out, second_stats = self.mlp(second_mlp_in)
-        mlp_out = jnp.reshape(
-            jnp.stack((first_out, second_out), axis=1),
-            x.shape,
-        )
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        return x + mlp_out, (first_stats, second_stats)
-
-    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -870,7 +843,20 @@ class Block(eqx.Module):
         disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
         x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
-        return self.grouped_moe_residual(x)
+        if self.mlp.expert_mlp.implementation != "ring":
+            raise ValueError("grouped block requires the exact bulk-ring implementation")
+        if x.shape[0] % 2:
+            raise ValueError(f"grouped block requires an even batch dimension, got {x.shape[0]}")
+
+        microbatch_size = x.shape[0] // 2
+        grouped_hidden = jnp.reshape(x, (microbatch_size, 2, *x.shape[1:]))
+        microbatch_shape = (microbatch_size, *x.shape[1:])
+        first_hidden = jnp.reshape(jax.lax.slice_in_dim(grouped_hidden, 0, 1, axis=1), microbatch_shape)
+        second_hidden = jnp.reshape(jax.lax.slice_in_dim(grouped_hidden, 1, 2, axis=1), microbatch_shape)
+        first_output, first_stats = self.moe_residual(first_hidden)
+        second_output, second_stats = self.moe_residual(second_hidden)
+        output = jnp.reshape(jnp.stack((first_output, second_output), axis=1), x.shape)
+        return output, (first_stats, second_stats)
 
 
 def _run_block_with_remat(
