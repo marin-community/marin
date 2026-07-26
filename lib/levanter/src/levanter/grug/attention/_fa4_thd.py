@@ -326,19 +326,20 @@ def _upstream_fa4_thd_forward_launcher(
             use_clc_scheduler=False,
         )
 
-    @cute.jit
-    def _launch_upstream_fa4_thd_forward(
-        stream: cuda.CUstream,
-        q: cute.Tensor,
-        k: cute.Tensor,
-        v: cute.Tensor,
-        cu_seqlens: cute.Tensor,
-        out: cute.Tensor,
-        lse: cute.Tensor,
-        *,
-        softmax_scale: cutlass.Float32,
-    ):
-        if sliding_window is None:
+    if sliding_window is None:
+
+        @cute.jit
+        def _launch_upstream_fa4_thd_forward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            cu_seqlens: cute.Tensor,
+            out: cute.Tensor,
+            lse: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
             flash_fwd(
                 q,
                 k,
@@ -350,7 +351,22 @@ def _upstream_fa4_thd_forward_launcher(
                 cu_seqlens,
                 stream=stream,
             )
-        else:
+
+    else:
+        window_left = sliding_window - 1
+
+        @cute.jit
+        def _launch_upstream_fa4_thd_forward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            cu_seqlens: cute.Tensor,
+            out: cute.Tensor,
+            lse: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
             flash_fwd(
                 q,
                 k,
@@ -363,7 +379,7 @@ def _upstream_fa4_thd_forward_launcher(
                 None,
                 None,
                 None,
-                sliding_window - 1,
+                window_left,
                 0,
                 None,
                 None,
@@ -497,31 +513,32 @@ def _upstream_fa4_thd_backward_launcher(
 
     zero_fill = _Float32ZeroFill(128)
 
-    @cute.jit
-    def _launch_upstream_fa4_thd_backward(
-        stream: cuda.CUstream,
-        q: cute.Tensor,
-        k: cute.Tensor,
-        v: cute.Tensor,
-        out: cute.Tensor,
-        dout: cute.Tensor,
-        lse: cute.Tensor,
-        cu_seqlens: cute.Tensor,
-        dq: cute.Tensor,
-        dk: cute.Tensor,
-        dv: cute.Tensor,
-        dpsum: cute.Tensor,
-        lse_log2: cute.Tensor,
-        dq_accum: cute.Tensor,
-        dk_accum: cute.Tensor,
-        dv_accum: cute.Tensor,
-        *,
-        softmax_scale: cutlass.Float32,
-    ):
-        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, cu_seqlens, None, None, stream)
-        zero_fill(dk_accum, stream)
-        zero_fill(dv_accum, stream)
-        if sliding_window is None:
+    if sliding_window is None:
+
+        @cute.jit
+        def _launch_upstream_fa4_thd_backward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            out: cute.Tensor,
+            dout: cute.Tensor,
+            lse: cute.Tensor,
+            cu_seqlens: cute.Tensor,
+            dq: cute.Tensor,
+            dk: cute.Tensor,
+            dv: cute.Tensor,
+            dpsum: cute.Tensor,
+            lse_log2: cute.Tensor,
+            dq_accum: cute.Tensor,
+            dk_accum: cute.Tensor,
+            dv_accum: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, cu_seqlens, None, None, stream)
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
             backward(
                 q,
                 k,
@@ -537,7 +554,37 @@ def _upstream_fa4_thd_backward_launcher(
                 cu_seqlens,
                 stream=stream,
             )
-        else:
+            dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
+            dk_postprocess(dk_accum, dk, softmax_scale, cu_seqlens, None, stream)
+            dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), cu_seqlens, None, stream)
+
+    else:
+        window_left = sliding_window - 1
+
+        @cute.jit
+        def _launch_upstream_fa4_thd_backward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            out: cute.Tensor,
+            dout: cute.Tensor,
+            lse: cute.Tensor,
+            cu_seqlens: cute.Tensor,
+            dq: cute.Tensor,
+            dk: cute.Tensor,
+            dv: cute.Tensor,
+            dpsum: cute.Tensor,
+            lse_log2: cute.Tensor,
+            dq_accum: cute.Tensor,
+            dk_accum: cute.Tensor,
+            dv_accum: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, cu_seqlens, None, None, stream)
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
             backward(
                 q,
                 k,
@@ -553,7 +600,7 @@ def _upstream_fa4_thd_backward_launcher(
                 cu_seqlens,
                 None,
                 None,
-                sliding_window - 1,
+                window_left,
                 0,
                 None,
                 None,
@@ -562,9 +609,9 @@ def _upstream_fa4_thd_backward_launcher(
                 None,
                 stream,
             )
-        dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
-        dk_postprocess(dk_accum, dk, softmax_scale, cu_seqlens, None, stream)
-        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), cu_seqlens, None, stream)
+            dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
+            dk_postprocess(dk_accum, dk, softmax_scale, cu_seqlens, None, stream)
+            dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), cu_seqlens, None, stream)
 
     return _launch_upstream_fa4_thd_backward
 
