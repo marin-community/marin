@@ -197,6 +197,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             tag_prefix="finelog-v",
             source_patterns=(
+                "lib/finelog/config/**",
                 "lib/finelog/src/**",
                 "lib/finelog/rust/**",
                 "rust/finelog/**",
@@ -872,15 +873,20 @@ def _verify_command(args: argparse.Namespace) -> None:
     print(json.dumps({"artifacts": manifest, "missing": sorted(missing)}, indent=2, sort_keys=True))
 
 
+def requirement_paths_for_packages(package_names: Iterable[str]) -> tuple[Path, ...]:
+    """Return each native compatibility-floor path once."""
+    paths = set()
+    for name in package_names:
+        build = PACKAGES[name].build
+        if isinstance(build, NativeBuild):
+            paths.add(build.requirement_path)
+    return tuple(sorted(paths))
+
+
 def _bump_releases_command(args: argparse.Namespace) -> None:
     versions = json.loads(args.versions)
     selected = [name for name in sorted(versions) if isinstance(PACKAGES[name].build, NativeBuild)]
-    requirement_paths = []
-    for name in selected:
-        build = PACKAGES[name].build
-        assert isinstance(build, NativeBuild)
-        requirement_paths.append(build.requirement_path)
-    requirement_paths.sort()
+    requirement_paths = requirement_paths_for_packages(selected)
     before = {path: (args.repo_root / path).read_text() for path in requirement_paths}
     for name in selected:
         bump_native_requirement(name, versions[name]["version"], args.repo_root)

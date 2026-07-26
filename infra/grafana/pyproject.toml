@@ -7,7 +7,7 @@ name = "marin-infra-grafana"
 version = "0.1.0"
 description = "Grafana over finelog: a metric-API bridge and the provisioned dashboards it serves."
 requires-python = ">=3.12,<3.14"
-# marin-finelog ships to PyPI after native source changes (native-release-wheels.yaml) as
+# marin-finelog ships to PyPI after package source changes (marin-release-libs-wheels.yaml) as
 # development releases; the automated compatibility PR locks the exact release. The
 # bridge needs only the pure-python client (LogClient.query -> pa.Table), not
 # the native server extension.

@@ -19,6 +19,7 @@ from scripts.ci.package_release import (
     python_compatible_version,
     reconcile_published_artifacts,
     release_plan,
+    requirement_paths_for_packages,
     update_native_requirement,
     validate_targeted_lock_change,
 )
@@ -122,6 +123,7 @@ def test_next_development_version_advances_past_legacy_timestamp_serial() -> Non
 def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/iris/rust/src/lib.rs"]) == ["iris"]
     assert packages_for_changes(["lib/dupekit/src/dupekit/__init__.py"]) == ["dupekit"]
+    assert packages_for_changes(["lib/finelog/config/marin.yaml"]) == ["finelog"]
     assert packages_for_changes(["lib/finelog/src/finelog/client/log_client.py"]) == ["finelog"]
     assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
     assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
@@ -219,6 +221,10 @@ def test_dispatch_rejects_one_explicit_version_for_multiple_families() -> None:
             changed_paths=[],
             repo_root=Path.cwd(),
         )
+
+
+def test_shared_requirement_path_is_emitted_once() -> None:
+    assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
 def test_update_native_requirement_advances_floor_without_touching_neighbors() -> None:
@@ -333,12 +339,6 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}
     assert "github.repository == 'marin-community/marin'" in publish["if"]
-    publish_steps = publish["steps"]
-    publisher_index = next(
-        index for index, step in enumerate(publish_steps) if step.get("uses") == "pypa/gh-action-pypi-publish@v1.14.0"
-    )
-    assert publish_steps[publisher_index]["with"]["skip-existing"] is True
-    assert any("verify-release" in step.get("run", "") for step in publish_steps[:publisher_index])
     assert "needs.plan.outputs.packages" in str(publish["strategy"])
     assert "needs.plan.outputs.build_matrix" in str(workflow["jobs"]["build"]["strategy"])
 

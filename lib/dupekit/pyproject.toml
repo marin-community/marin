@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marin-dupekit"
-# Canonical version for the released pair; native_package_release.py stamps the resolved
+# Canonical version for the released pair; package_release.py stamps the resolved
 # version into this file and rust/Cargo.toml so both dists agree.
 version = "0.1.2"
 description = "Optimized text de-duplication kernels (Rust) with a pure-Python surface."
@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 # `import dupekit` re-exports the native `dupekit_native` extension, which ships
 # as the companion marin-dupekit-native platform wheel (maturin, rust/), built
-# in lockstep by native-release-wheels.yaml. It is a hard runtime dependency —
+# in lockstep by marin-release-libs-wheels.yaml. It is a hard runtime dependency —
 # the pure package is only the proxy/type surface. The `>= X.Y.Z.dev0` floor
 # opts uv into development wheels; `scripts/rust_mode.py dev` swaps the
 # [tool.uv.sources] entry below to the local rust/ tree so it builds from source.

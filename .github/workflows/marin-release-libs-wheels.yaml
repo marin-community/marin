@@ -30,6 +30,7 @@ on:
     paths:
       - "lib/dupekit/src/**"
       - "lib/dupekit/rust/**"
+      - "lib/finelog/config/**"
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/rust/**"
@@ -40,6 +41,7 @@ on:
     paths:
       - "lib/dupekit/src/**"
       - "lib/dupekit/rust/**"
+      - "lib/finelog/config/**"
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/rust/**"
