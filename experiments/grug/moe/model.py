@@ -890,8 +890,11 @@ class Transformer(eqx.Module):
                     if cfg.mtp_dense
                     else Block.init(mtp_cfg, key=mtp_block_key)
                 )
+            # FSDP-shard the [2D, D] projection over data (grad reduce-scatters, Muon distributes, opt
+            # state shards) -- like every other big weight here; the head gathers it to replicated for the
+            # local matmul. Replicated would waste ~0.75-1.2 GiB/device on this one matrix.
             mtp_proj = reshard(
-                _init_weight(mtp_proj_key, (2 * cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)
+                _init_weight(mtp_proj_key, (2 * cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std), P("data", None)
             )
             mtp_hidden_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
             mtp_embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
@@ -1012,28 +1015,45 @@ class Transformer(eqx.Module):
         out = self.final_norm(hidden)
         mtp_hidden = None
         if cfg.mtp_depth:
-            # DeepSeek-V3 MTP depth-1, entirely outside the trunk scan: combine the trunk hidden with the
-            # embedding of the next token t_{i+1} and project [2D,D]. Then optionally run one transformer
-            # block (global+NoPE by default, or a lighter local sliding+RoPE head) before the shared head;
-            # mtp_head_only skips the block entirely (projection -> head), isolating the block's cost.
-            next_ids = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
-            next_embed = self.mtp_embed_norm(_embedding_gather(self.token_embed, next_ids))
-            combined = jnp.concatenate([self.mtp_hidden_norm(hidden), next_embed], axis=-1)
-            h_proj = jnp.einsum("bst,td->bsd", combined, self.mtp_proj, out_sharding=_batch_spec())
-            if self.mtp_block is None:
-                mtp_h = h_proj
+            # DeepSeek-V3 MTP depth-1, outside the trunk scan. The WHOLE head -- embed gather, projection,
+            # norms, and the block -- is wrapped in one recompute_all checkpoint so only its input `hidden`
+            # is saved, not the intermediate residuals (norms/proj/embed/block). The FA4 bounds are built
+            # here, OUTSIDE the remat, so the pure_callback stays out of the recompute. mtp_head_only skips
+            # the block (projection -> head); mtp_head_global picks full-document+NoPE vs a lighter local
+            # sliding+RoPE head. The head always recomputes at policy=None regardless of the trunk's
+            # remat_mode (so save_moe never pins the MTP block's MoE dispatch tensors).
+            if cfg.mtp_head_global:
+                mtp_lb, _ = fa4_cute_segment_bounds(
+                    causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+                )
+                mtp_mask = causal_mask.with_fa4_bounds(_batch_reshard(mtp_lb), sliding_valid)
+                mtp_flag = jnp.asarray(True)  # full-context + NoPE
             else:
-                if cfg.mtp_head_global:
-                    mtp_lb, _ = fa4_cute_segment_bounds(
-                        causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
-                    )
-                    mtp_mask = causal_mask.with_fa4_bounds(_batch_reshard(mtp_lb), sliding_valid)
-                    mtp_flag = jnp.asarray(True)  # full-context + NoPE
-                else:
-                    mtp_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
-                    mtp_flag = jnp.asarray(False)  # local sliding window + RoPE
-                mtp_h, _ = eqx.filter_checkpoint(self.mtp_block, policy=remat_policy)(h_proj, mtp_mask, mtp_flag)
-            mtp_hidden = self.mtp_final_norm(mtp_h)
+                mtp_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
+                mtp_flag = jnp.asarray(False)  # local sliding window + RoPE
+            next_ids = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+            d = cfg.hidden_dim
+
+            def _mtp_head(head_hidden, token_embed, proj, block, hidden_norm, embed_norm, final_norm):
+                next_embed = embed_norm(_embedding_gather(token_embed, next_ids))
+                # Gather the FSDP-sharded projection to replicated for the local matmul (grad reduce-
+                # scatters back). Split [2D,D] into its two D-blocks so the [B,S,2D] concat is never
+                # materialised: proj[:D] acts on the trunk hidden, proj[D:] on the next-token embedding.
+                pr = reshard(proj, P(None, None))
+                h_proj = jnp.einsum("bsd,de->bse", hidden_norm(head_hidden), pr[:d], out_sharding=_batch_spec())
+                h_proj = h_proj + jnp.einsum("bsd,de->bse", next_embed, pr[d:], out_sharding=_batch_spec())
+                mtp_h = h_proj if block is None else block(h_proj, mtp_mask, mtp_flag)[0]
+                return final_norm(mtp_h)
+
+            mtp_hidden = eqx.filter_checkpoint(_mtp_head)(
+                hidden,
+                self.token_embed,
+                self.mtp_proj,
+                self.mtp_block,
+                self.mtp_hidden_norm,
+                self.mtp_embed_norm,
+                self.mtp_final_norm,
+            )
         return out, qb_beta_per_layer, mtp_hidden
 
     @named_call
