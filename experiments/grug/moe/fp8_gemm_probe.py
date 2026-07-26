@@ -37,28 +37,42 @@ def bf16(x, w, scale):
 
 
 def fp8_unscaled(x, w, scale):
-    return x.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16) @ w.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16)
+    return x.astype(jnp.bfloat16) @ w.astype(jnp.bfloat16)
 
 
 def fp8_out_scaled(x, w, scale):
-    out = x.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16) @ w.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16)
-    return out * scale[:, None].astype(jnp.bfloat16)
+    return (x.astype(jnp.bfloat16) @ w.astype(jnp.bfloat16)) * scale[:, None].astype(jnp.bfloat16)
 
 
 def fp8_in_scaled(x, w, scale):
-    lhs = x.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16) * scale[:, None].astype(jnp.bfloat16)
-    return lhs @ w.astype(jnp.float8_e4m3fn).astype(jnp.bfloat16)
+    return (x.astype(jnp.bfloat16) * scale[:, None].astype(jnp.bfloat16)) @ w.astype(jnp.bfloat16)
 
 
-VARIANTS = (bf16, fp8_unscaled, fp8_out_scaled, fp8_in_scaled)
+def fp8_mixed_bwd(x, w, scale):
+    """Backward wire dtype: e5m2 cotangent against e4m3 weights."""
+    return x.astype(jnp.bfloat16) @ w.astype(jnp.bfloat16)
+
+
+VARIANTS = (bf16, fp8_unscaled, fp8_out_scaled, fp8_in_scaled, fp8_mixed_bwd)
+# The GEMM operands must already BE fp8 when they reach the dot, which is the real situation after
+# an fp8 wire: quantizing inline from bf16 lets XLA fuse the convert and the rewriter then sees a
+# fusion, not `convert(f8)`. Each variant is lowered with the dtypes it would actually receive.
+INPUT_DTYPES = {
+    "bf16": (jnp.bfloat16, jnp.bfloat16),
+    "fp8_unscaled": (jnp.float8_e4m3fn, jnp.float8_e4m3fn),
+    "fp8_out_scaled": (jnp.float8_e4m3fn, jnp.float8_e4m3fn),
+    "fp8_in_scaled": (jnp.float8_e4m3fn, jnp.float8_e4m3fn),
+    "fp8_mixed_bwd": (jnp.float8_e5m2, jnp.float8_e4m3fn),
+}
 
 
 def main() -> None:
     print(f"jax {jax.__version__} devices: {jax.devices()}")
-    x = jnp.ones((TOKENS, HIDDEN), jnp.bfloat16)
-    w = jnp.ones((HIDDEN, FFN), jnp.bfloat16)
     scale = jnp.ones((TOKENS,), jnp.float32)
     for variant in VARIANTS:
+        x_dtype, w_dtype = INPUT_DTYPES[variant.__name__]
+        x = jnp.ones((TOKENS, HIDDEN), jnp.bfloat16).astype(x_dtype)
+        w = jnp.ones((HIDDEN, FFN), jnp.bfloat16).astype(w_dtype)
         text = jax.jit(variant).lower(x, w, scale).compile().as_text()
         calls = text.count(FP8_CALL)
         gemms = text.count("__cublas$lt$matmul")
