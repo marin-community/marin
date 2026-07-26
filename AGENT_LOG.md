@@ -1121,3 +1121,30 @@ use it. That retro-explains the prefetch null one level deeper than the previous
 gate supplied slack, and a budget of 1 forbade spending it.
 Confidence: 9/10 on the budget explanation (cover evidence both directions, plus the flip); 5/10 that it is a net rack win, because the reshard collectives collapse in exchange.
 Next: free sweep at limit=2 and 8 in flight; then a rack-leg request with the best setting.
+
+## Check-in 2026-07-26 10:40 UTC — budget sweep done for free; the EP4 trade does NOT exist at rack scale
+
+MoE all-to-alls left synchronous on the EP4 harness, by `parallel_collective_overlap_limit`:
+
+| limit | fwd dispatch | fwd combine | bwd dispatch | bwd combine | **MoE SYNC** | reshard SYNC |
+|---|--:|--:|--:|--:|--:|--:|
+| 1 (default) | 3 | 0 | 4 | 3 | **10** | 6 |
+| 2 | 0 | 0 | 2 | 1 | **3** | 14 |
+| 4 | 0 | 0 | 0 | 0 | **0** | 14 |
+| 8 | 0 | 0 | 0 | 1 | **1** | 14 |
+
+limit=2 already clears the whole forward pass; limit=4 clears everything; limit=8 is no better
+(and marginally worse), so 4 is the setting to buy a rack leg for.
+
+The apparent cost — 14 reshard all-to-alls collapsing in the entry computation — **is an artifact
+of the harness, not a real trade**: re-checking the rack-scale attribution, all 24 SendRecv
+instructions at the operating point are `shard_map/dispatch` or `shard_map/combine`, and the
+string "reshard" appears zero times. The tiny mesh (4 shards, data axis 1) manufactures entry-level
+reshard a2as that the EP64 mesh does not have. So at the operating point the budget increase has
+nothing to pay back with.
+
+Rack case, sized off my own measurements: ~2980 ms of inline SendRecv per 3-step window = ~1 s of a
+~12 s step, 0% covered today. The harness says all of it becomes async and GEMM-covered at limit=4.
+Confidence: 9/10 that the census result transfers (same code, same legs, same pass); 5/10 that it converts to >=0.5pp MFU, since async-and-covered in the schedule is necessary but not sufficient for wall-clock overlap on the device.
+Next: rack-leg request with the coordinator (one leg, PGLE+LHS arm + limit=4, control already
+pinned twice at 22.549 / 22.530).
