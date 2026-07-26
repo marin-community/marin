@@ -32,6 +32,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.paloma import paloma_datasets
@@ -152,9 +153,11 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         eval_batch_size = 64 if phase == "smoke" else 256
+        data = mixture(ctx, {train_data: 1.0}, validation=validation, shuffle=_SHUFFLE)
+        data = with_pack(data, 1)
         return GrugMoeLaunchConfig(
             model=model,
-            data=mixture(ctx, {train_data: 1.0}, validation=validation, shuffle=_SHUFFLE),
+            data=data,
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),

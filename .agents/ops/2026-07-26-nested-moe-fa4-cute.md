@@ -58,6 +58,24 @@ Six focused mask/nested contract tests passed after the change. Pyrefly
 reported only the two unchanged model-file errors recorded in the research
 logbook. Corrected smoke runs remain pending.
 
+## Hypothesis 3
+
+The `r3` forward preserved its input mask correctly, but the text-LM mixture's
+default `pack=None` selected `CausalLmDataset`, which does not attach static THD
+segment metadata. Marin's THD canary explicitly applies `with_pack(data, 1)` to
+select the fixed-shape one-document representation.
+
+## Changes to make
+
+Apply `with_pack(data, 1)` to the complete training/validation mixture. Add a
+launcher contract test that materializes the resolved caches and checks every
+component's pack setting.
+
+## Results
+
+Seven focused launcher/mask/nested tests passed. Corrected smoke runs remain
+pending.
+
 ## Future work
 
 - [ ] Repair or repin the FA4/CuTe dependency stack separately from this

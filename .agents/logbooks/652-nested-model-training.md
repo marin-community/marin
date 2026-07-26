@@ -195,3 +195,16 @@ author: Marin research
   reported only the two unchanged model-file errors already recorded at Gate
   0.
 - Next action: snapshot the fix and submit one final four-arm smoke attempt.
+
+### 2026-07-26 19:48 - Select fixed-shape THD examples
+
+- Result: the `r3` model preserved its input mask, but the default text mixture
+  selected the streaming causal dataset, whose examples do not carry static
+  THD metadata. All arms stopped before compilation and before step 0.
+- Change: apply `with_pack(data, 1)` to the resolved train/validation mixture,
+  matching the production THD canary. This preserves one document per example
+  while adding the required fixed-size segment representation.
+- Validation: seven focused launcher/mask/nested tests passed, including a new
+  materialized-config assertion that every nested experiment component has
+  `pack=1`.
+- Next action: snapshot and relaunch the four smoke arms.

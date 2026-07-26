@@ -41,6 +41,7 @@ from marin.execution.lazy import materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.grug.moe import launch_nested_experts
 from experiments.llama import llama3_tokenizer
 
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
@@ -219,6 +220,21 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tm
 
     # build() reads the env at call time, so set it above before resolving the config.
     step = canary_ferry.build()
+    _seed_cache_records(step, str(tmp_path))
+    data = materialized_config(step, str(tmp_path)).data
+
+    components = list(data.components.values())
+    assert components
+    assert all(isinstance(component, DatasetComponent) for component in components)
+    assert {component.pack for component in components} == {1}
+
+
+def test_nested_moe_launcher_uses_fixed_shape_thd_segments(monkeypatch, tmp_path):
+    monkeypatch.setenv("NESTED_ARM", "nested25")
+    monkeypatch.setenv("NESTED_PHASE", "smoke")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
     _seed_cache_records(step, str(tmp_path))
     data = materialized_config(step, str(tmp_path)).data
 
