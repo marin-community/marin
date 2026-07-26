@@ -1483,6 +1483,62 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T09:46:25Z — 117,036 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0942-v250` independently
+  revalidated p1 decision-file 36 semantic offsets 4,480 through 4,992. Their
+  640 pairs contain 467 model false positives, 172 model true duplicates, and
+  one unresolved outcome. The block comprises 152 baseline pairs (145 false
+  positives and seven true duplicates) and 488 treatment pairs (322 false
+  positives, 165 true duplicates, and one unresolved). Of the pairs, 639 were
+  direct and one was chunked. All 1,418 judgments were valid on their first
+  attempts. Outcome Parquet SHA-256 values, in offset order, are:
+
+  - `454f17ef117cf3e3f3714cc10ef39113d67495380b193adab03e1de0105d79b3`;
+  - `0b5ed97c9568466d99603b7e564c1f75d949470811251c4cc9394a2d65ba87dd`;
+  - `596b81956eaff2051bbf8747054efaaaff69093c3e0547117477abe9bbda2bbd`;
+  - `6dea2fcd5faf4cf5625fbbc1209f65645426895f75e85fdcadc114d702d91ef6`;
+  - `b5723b699d2ba7ad1b664c2368d44f5928699d471107de363e9810e51f53d897`.
+
+- Complete-text inspection resolves the treatment ambiguity as a true
+  duplicate. `part-00036-of-00128.parquet:7810` contains two instances of the
+  same explicitly automated Wikiteam welcome-message boilerplate. Their
+  substantive body is identical. The differences are a username and timestamp
+  in the thread header, the generic member-only salutation `Welcome`, and
+  trailing whitespace. These are source metadata, template boilerplate, and
+  formatting rather than a distinct request, fact, instruction, or training
+  example. The member/canonical texts have 266/255 characters, five/four
+  lines, and character, line, and word-sequence similarity 0.921305, 0.444444,
+  and 0.963855. Their SHA-256 values are
+  `52cec00fda64dabbc5a0e74241e07d498af04bf9b71ec1cea0ccae8655c0adc7` /
+  `19953c25d01df09648766416deb366bc2a5c6bdf812a060e6f92b1bfa4a5d707`;
+  inspection-artifact SHA-256 is
+  `c3a446a2d79f0e286fe93ffb5150a1f7ebb07a257eeaedd760f3e00333cc5ac7`.
+
+- `/rav/datakit-6854-inspect-row7810-0944-v251` persisted the complete source
+  texts, semantic evidence, and diff.
+  `/rav/datakit-6854-publish-row7810-0946-v252` wrote the immutable manual
+  record, and `/rav/datakit-6854-verify-row7810-0946-v253` separately reread
+  the source pair, semantic checkpoint, inspection artifact, record,
+  deterministic Parquet bytes, and completion marker. Semantic-evidence,
+  manual-record, and manual-Parquet SHA-256 values are
+  `f8b728cb97bc5bb2002b5b81ea850a07476b4deb1e090ed152f3e5aa8ca27226`,
+  `aacca10408b292950a7907a87eb36ae210773cdfa688aa524485ca7b704ec57d`,
+  and `24bb054a9a2ec6fff3092f597fe27ee2ff38ab7cb5847260d6ae045005fc5578`.
+
+- Across the stable 921-checkpoint snapshot, all 134 unresolved model outcomes
+  are covered by 104 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 94,354 pairs, 60,118 false positives, 34,236 true duplicates;
+  - treatment: 22,682 pairs, 11,760 false positives, 10,922 true duplicates;
+  - combined: 117,036 pairs, 71,878 false positives, 45,158 true duplicates.
+
+- The next audit frontiers are p0 `(5, 128)`, p1 `(36, 5120)`, p2 `(69, 0)`,
+  and p3 `(101, 0)`. All four batch-priority 2-H100 workers continue serving
+  requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T09:40:06Z — 116,396 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0932-v243` independently
