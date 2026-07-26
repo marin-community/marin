@@ -149,6 +149,9 @@ class GrugModelConfig:
     # runs entirely outside the trunk scan. 0 (default) = off. Only depth 1 is supported.
     mtp_depth: int = 0
     mtp_loss_weight: float = 0.3
+    # Expert count for the MTP block; 0 (default) = same as the trunk. Fewer experts shrinks the MTP
+    # block's params + expert-gather transient, which otherwise OOMs the HBM-bound trunk.
+    mtp_num_experts: int = 0
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -822,9 +825,18 @@ class Transformer(eqx.Module):
             # Derive MTP keys off the base key so the trunk block RNG is unchanged when MTP is off.
             mtp_block_key, mtp_proj_key = random.split(random.fold_in(key, 0x4D5450), 2)
             # A plain MoE block: no QB (avoids threading its load-balance stat back), no global/hetero
-            # interleave (single block, called with is_global=None). Other features follow cfg.
+            # interleave (single block, called with is_global=None), optionally fewer experts to fit
+            # HBM. Other features follow cfg.
+            mtp_experts = cfg.mtp_num_experts or cfg.num_experts
             mtp_cfg = dataclasses.replace(
-                cfg, qb_routing=False, global_every=0, local_kv_heads=None, global_kv_heads=None, mtp_depth=0
+                cfg,
+                qb_routing=False,
+                global_every=0,
+                local_kv_heads=None,
+                global_kv_heads=None,
+                mtp_depth=0,
+                num_experts=mtp_experts,
+                num_experts_per_token=min(cfg.num_experts_per_token, mtp_experts),
             )
             mtp_block = Block.init(mtp_cfg, key=mtp_block_key)
             mtp_proj = reshard(
