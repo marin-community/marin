@@ -16,6 +16,61 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T22:48:30Z — 191,784 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2244-v697` independently
+  revalidated three p3 decision-file 104 checkpoints at semantic offsets 2,560
+  through 2,816. Their 384 baseline pairs contain 177 model false positives,
+  206 model true duplicates, and one unresolved outcome. One pair was chunked
+  and 383 were direct. All 896 judgments and request attempts were valid on
+  their first attempt. The outcome Parquet SHA-256 values are
+  `b82e095b17fb37368194b7a0b51fe908abba48180154831edc9f1f478e851525`,
+  `481e3ff680cf3c7b2963645751739bbea4ab13fd2c618cb0a6c150f8fe2015b5`,
+  and
+  `a26bfbf9ba957d9983345e9e4429d04fd352126e77f9df2a74b3daa77856442e`.
+
+- `/rav/datakit-6854-inspect-row4724-2246-v698` read both complete keto
+  advertorials and all three model judgments. The 7,991-character member and
+  8,200-character canonical have character, line, and word-sequence
+  similarities 0.736335, 0.484211, and 0.671647. They are sentence-spun
+  copies with the same diet claims, Rachel Roberts program description,
+  named testimonials, and sales narrative. `Chicken Recipes` versus
+  `Cocktails` is an injected SEO keyword rather than topical content. The
+  model tiebreak cited a five-item benefit list as member-only, but complete
+  inspection shows that list only in the canonical. The member adds no
+  distinct recipe, cocktail, factual claim, or advice, so the manual label is
+  true duplicate. Member/canonical text SHA-256 values are
+  `6d4ab6aa4e99075f44be92dedd22cc07abcd470a4945b4097ad8628ad8b522e0`
+  and
+  `0cd1d367b6951316b678c0904375093bebe77db50dfee852c2d5268559bc5fc0`.
+
+- The persisted inspection and semantic-judgment SHA-256 values are
+  `1dcda5f1511aa08702eddcfb819c3ca8590b402848aa31ad325033bb07a3fac9`
+  and
+  `38079e094aa86b824694862fe7041bcb699a21c665ad8903bc167a61ac7a57ca`.
+  `/rav/datakit-6854-publish-row4724-2247-v699` published the hash-bound
+  true-duplicate record, and
+  `/rav/datakit-6854-verify-row4724-2248-v700` independently reread the source
+  pair, semantic checkpoint, inspection, deterministic Parquet bytes, and
+  completion marker. The manual-record and marker SHA-256 values are
+  `27db4ef3aeccf9673efc85bdf3bd69ae5df8509109cb2ee839fe5b7d4c7e04ef`
+  and
+  `c5c1ccf4368ea76cec0f34a175fd0592f008cc15e3c00b6845e381536c4d6f4d`.
+
+- Across the stable 1,510-checkpoint snapshot, all 226 unresolved model
+  outcomes are covered by 175 true-duplicate and 51 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 153,755 pairs, 97,642 false positives, 56,113 true duplicates;
+  - treatment: 38,029 pairs, 19,673 false positives, 18,356 true duplicates;
+  - combined: 191,784 pairs, 117,315 false positives, 74,469 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(40, 0)`, p2 `(72, 128)`,
+  and p3 `(104, 2,944)`. P3's next baseline batch has 128 pairs, including two
+  oversized pairs, and requires 366 minimum model requests. All four
+  batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T22:43:15Z — 191,400 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2237-v693` independently
