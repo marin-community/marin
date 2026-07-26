@@ -757,3 +757,109 @@ number does rule out is the specific worry that a rank-3072 bottleneck shared ac
 visibly damages optimization at this width — it does not, at this horizon. Anyone testing quality
 properly needs a longer run and a parameter-matched pair, and should note that "matched work" and
 "matched capability" are different controls.
+
+---
+
+# FINAL RESULT — ep25-d6
+
+All three rack legs completed 120/120 on one GB200 rack, EP64, d6144, 48 layers, top-4, batch 1024,
+seq 4096, QB-on, cf1.0, custom adjoint + gather dispatch, drops on, host offload on, default BFC
+allocator at the default 0.75 fraction, sliding window 2048, 3-step profiler window at step 20.
+
+## The headline
+
+**Halving the dispatched activation width does exactly what the collective-bytes thesis says it
+should — and latent MoE loses anyway.**
+
+Steady tail, steps 90-119, arch-aware MFU throughout (each arm's own analytic FLOPs/token):
+
+| arm | **FLOPs/token** | MFU p10 | **MFU p50** | MFU p90 | sd | **tok/s p50** | step p50 | drops@119 | loss@119 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| **dense** (128 x i3072) | **48.186 G** | 24.719 | **24.842** | 24.978 | 0.103 | 274,954 | 15.266 s | 0.091 | 5.654 |
+| **matched-work** (128 x i6144, L3072) | **51.810 G** | 24.477 | **24.610** | 24.748 | 0.102 | **253,332 (-7.9%)** | 16.570 s | 0.082 | 5.364 |
+| **param-preserving** (256 x i3072, L3072) | **41.014 G** | 23.288 | **23.425** | 23.577 | 0.118 | **304,612 (+10.8%)** | 13.771 s | 0.098 | 5.308 |
+
+    matched-work:      -0.23pp arch-aware MFU, -7.9% tok/s   <- the honest wire test
+    param-preserving:  -1.42pp arch-aware MFU, +10.8% tok/s  <- needed +17.5% tok/s for iso-MFU
+
+Routed parameters are identical (347.892 B) on all three. The dense control reproduces d5's reference
+leg (24.594% / 276,413 tok/s / drops 0.089 / loss 5.59) to +0.25pp.
+
+## Why this is not a null result about the mechanism
+
+The profile pair (3-step window at step 20, GPU:0, ms):
+
+| | dense | matched-work | param-preserving |
+|---|--:|--:|--:|
+| **expert a2a occupancy** | **6,886** | **4,809 (-30%)** | **5,010 (-27%)** |
+| **expert a2a EXPOSED** | **2,104** | **969 (-54%)** | **1,147 (-45%)** |
+| other collectives, occupancy | 5,363 | 8,371 (+56%) | 5,464 (+2%) |
+| other collectives, exposed | 1,989 | 2,680 (+35%) | 1,580 (-21%) |
+| total exposed collective | 4,126 | 3,728 (-9.6%) | 2,759 (-33%) |
+| compute stream busy | 38,700 | 42,893 (+10.8%) | 36,378 (-6.0%) |
+| span (3 steps) | 42,198 | 46,285 | 38,767 |
+
+Halving the payload cut a2a exposure by 54% and 45% on the two arms — the prediction was 50%, made
+before either leg ran. **The byte thesis is confirmed a second time, quantitatively.** What fails is
+the vehicle:
+
+1. **The matched-work arm gives the saving straight back.** Its replicated `[d, L]` projections —
+   1.812 B parameters on every GPU — need their gradients all-reduced across the batch axes every
+   step and get Newton-Schulz'd replicated. `AllReduce bf16` goes 168 -> 1,170 ms, `AllReduce f32`
+   +91%, `AllGather` +29%. Total collective occupancy RISES 8% even though the a2a fell 30%, and net
+   exposed collective falls only 9.6% instead of the 18% the a2a alone delivered. Then compute rises
+   10.8% against 7.52% more analytic work, and the step gets longer.
+2. **The param-preserving arm's win is capability, not engineering.** It keeps its collective saving
+   (total exposed -33%) but does 14.9% less analytic work per token and 6% less compute. It is a
+   smaller model wearing an optimization's clothes, which is exactly what the FLOPs/token column is
+   there to expose.
+
+## The ceiling that makes this predictable rather than unlucky
+
+From the dense baseline alone, before any latent leg: **only 51% of exposed collective time is the
+expert all-to-all.** The rest is FSDP `AllGather`/`ReduceScatter` and the QB `AllReduce`, which latent
+does not touch. So the entire mechanism was competing for at most ~351 ms of a 15.3 s step (2.3%),
+against a projection cost of 285-570 ms/step. **The best case was already the size of the overhead.**
+Any future "reduce the dispatch bytes" proposal should be checked against that 51% first.
+
+## What to do instead, ranked by the same profile
+
+1. **Three of the twelve `all_to_all` HLO ops are scheduled INLINE on the compute stream at 0.0%
+   overlap** (`all_to_all.40.1` bwd dispatch, `.46.1` bwd combine, `.56.1` fwd dispatch; 1,266 ms per
+   3 steps = **422 ms of every step**, 31% of all exposed collective time, consistent across all four
+   GPUs to 1%). The other nine are on the async stream and 85% hidden. Recovering those three costs no
+   bytes and no arithmetic and is worth more than the entire latent mechanism's best case.
+2. **A latent projection SHARED across all 48 layers** would keep the full wire saving while cutting
+   the added gradient traffic and Newton-Schulz work 48x. That is the version of this idea the result
+   argues for; it is a different architecture, not a tuning knob, and it needs a quality answer.
+3. Sharding the projections over the expert axis is the cheaper, more conservative version of (2):
+   it fixes the 6.75 GiB/GPU replicated memory but not much of the collective traffic.
+
+## Caveats, signed
+
+- **AGAINST latent**: the matched-work arm is matched on routed work but the projections add 7.52%
+  analytic FLOPs/token, so it was never work-neutral. That is priced explicitly above, not hidden.
+- **FOR latent**: its drops run slightly LIGHTER than dense (0.082 vs 0.091 at the same schedule
+  position), and this session established that heavier drops read HIGHER MFU. So the -0.23pp is, if
+  anything, a touch generous to the control.
+- **AGAINST the param-preserving arm**: its drops run heavier (halved bucket mean), so its -1.42pp is
+  understated.
+- **Quality is not measured.** The matched-work arm reaches a lower loss at 120 steps (5.364 vs
+  5.654), but it also has more active parameters, and 120 steps settles nothing. It does argue against
+  the specific worry that a shared rank-3072 bottleneck visibly damages optimization at this width.
+- The `I` doubling in the matched-work arm reshapes the expert GEMM at constant FLOPs; matched work is
+  not automatically matched achieved efficiency, and the +10.8% compute against +7.52% work is partly
+  this and partly the replicated Newton-Schulz.
+
+## Operational finding worth lifting out
+
+Five preemptible rack attempts across two latent configurations produced ZERO steps; the same two
+configurations landed first try with `SCALE_PREEMPTIBLE=0`. The primary error, visible only in the
+full log and not the warning stream, is
+`ALREADY_EXISTS: Aborted connect attempt as there is a request from a newer incarnation` on
+`CoordinationService/RegisterTask` — an evicted task returning with a new incarnation, which is
+precisely the mechanism d5 inferred from preemption evidence, now confirmed by the error text. A
+~20-minute d6144/48L compile restarts from scratch on every eviction, so long-compile jobs on this
+cluster can lose indefinitely. `SCALE_PREEMPTIBLE` and `SCALE_RAM` are now launcher env knobs.
+Also recorded as a FAILED prediction of mine: raising the host-memory request 256g -> 600g changed
+nothing, the second independent falsification of that branch of the triage recipe.
