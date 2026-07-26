@@ -9,7 +9,7 @@ author: dlwh
 ## Scope
 - Goal: Implement and debug an NVIDIA/JaxPP-based pipeline-parallel training path for `experiments/grug/moe/train.py`, then test it on 4x 8xH100 CoreWeave nodes with the May d=2560 shape.
 - Primary metric(s): A pipelined train step can compile/run on the intended NVIDIA GPU environment; optimizer/loss semantics match the non-pipelined path for equivalent global batches; MFU is captured for relevant JaxPP schedules.
-- Constraints: Keep default Grug MoE behavior unchanged when pipeline config is unset; do not add broad dependency churn until the runtime environment decision is explicit.
+- Constraints: Keep default Grug MoE behavior unchanged when pipeline config is unset; do not add broad dependency churn until the runtime environment decision is explicit; require relative-L2 error at most `0.002` for loss and every gradient leaf.
 - Coordinating issue/PR: https://github.com/marin-community/marin/issues/7024
 
 ## Current TL;DR
@@ -44,6 +44,7 @@ author: dlwh
 - Transformer Engine NCCL_EP is no longer a pipeline candidate under the accepted numerical policy. Exact 524,288-row transport reaches only `5.0245%` MFU on the reduced pipeline versus `9.4180%` ring. Bounded 81,920-row transport is `1.37-1.45x` faster than ring in the direct full-MLP gate, but its best FP32-reference token-gradient relative-L2 is `0.2909%`, above the accepted `0.2%` ceiling. Replacing dispatch backward's token dgrad with FP32 TE combine-forward reproduces the same `0.2909485%` error exactly, so that hybrid is not a distinct numerical path.
 - Cross-microbatch exact-ring fusion does not justify grouped JaxPP stage tasks. At group size 2, fused value-and-grad is numerically exact but only `1.0889x` faster than asynchronously queued single-microbatch calls, below the `1.11x` gate and projecting about `19.65` MFU after the four-stage bubble cost. Group size 4 falls to `1.0819x`, below its `1.134x` target, while shared W13/W2 gradient errors rise to `0.3518%`/`0.3375%`, above the accepted `0.2%`. Explicit dispatch/expert/combine phasing also regresses forward to `0.943-0.946x`.
 - CUTLASS DSL 4.5.2's generated `_isa` helper caused the JaxPP-localized CuTe FA4 full-block exit `139` by constructing MLIR type wrappers while probing their type. Replacing that probe with the `isinstance` check used by CUTLASS DSL 4.6 clears both matched two-rank BF16 and FP8 full-block gates. The production JaxPP setup now applies the guard to a private venv copy so it cannot mutate UV's shared package cache. Integration snapshot: `30183d2d4f`.
+- JAX 0.11's public device-initiated ragged-all-to-all is bitwise exact and `7.4349x` faster than the private-memory control at the target EP8 payload, but it does not complete reduced four-stage JaxPP training. Standard 1F1B, GPipe, and transfer-priority ordering all stop with ranks split between DIME transfer waits, receive waits, compilation, and PJRT execution. The minimum two-rank JaxPP transfer plus device-ragged composition passes exactly, so the known failing boundary remains the larger four-stage training graph. Marin bug #7655 contains the pinned lower-bound package; no NVIDIA issue was filed.
 
 ## Hypothesis Queue
 
@@ -54,6 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, and transfer-priority ordering. The minimum primitive composition passes. Blocker: isolate the additional four-stage graph condition and fix #7655. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3287,3 +3289,21 @@ author: dlwh
   - Stop L24 promotion and schedule variants. The direct collective's `7.4349x` transport gain cannot be converted into a training result until the reduced distributed regression is fixed.
 - Next action:
   - Land the smallest JaxPP transfer plus ragged-all-to-all regression package, file only a Marin issue linked to #7024, and provide upstream-ready evidence without filing externally.
+
+### 2026-07-26 05:34 PDT - device-ragged boundary packaged and numerical gate confirmed
+- Hypothesis: The minimum JaxPP transfer plus device-ragged-all-to-all composition will reproduce the L8 transfer deadlock and provide a self-contained upstream boundary.
+- Commit Hash: `0cabe5f74b` (`[grug] Add JaxPP ragged all-to-all regression boundary`).
+- Command:
+  - H100x4 job `/dlwh/jaxpp-jax011-ragged-minimal-r2-20260726-121552` ran direct ragged-all-to-all, JaxPP transfer-only, and JaxPP transfer plus ragged-all-to-all using the command in `experiments/grug/moe/repro_jaxpp_jax011_ragged_all_to_all.README.md`.
+- Results:
+  - Direct ragged-all-to-all returned in `0.863855s` with zero mismatches and checksum `202`.
+  - JaxPP transfer-only returned from `eval_local` in `1.242563s` on rank 0 and `2.206070s` on rank 1 with zero mismatches and checksum `202`.
+  - JaxPP plus ragged-all-to-all returned from `eval_local` in `1.425364s` on rank 0 and `2.447640s` on rank 1 with zero mismatches and checksum `202`.
+  - All cases completed in one attempt without watchdog output, signals, retries, or nonzero exits. No H100 resource remains live.
+  - Filed Marin bug https://github.com/marin-community/marin/issues/7655 with `bug` and `agent-generated`; no NVIDIA issue was filed.
+  - Human acceptance decision: relative-L2 error up to `0.2%` is acceptable for this work. The operational gate is `<=0.002` for loss and every gradient leaf; values above `0.002` fail promotion.
+- Interpretation:
+  - The minimum primitive composition is a passing lower-bound regression package, not a reproducer of the deadlock itself. The failure requires additional context from the four-stage L8 training graph.
+  - The direct collective remains the only exact transport candidate with enough measured headroom to close the MFU gap, but it cannot be promoted to L24 until #7655 is fixed.
+- Next action:
+  - Use #7655 to minimize the additional four-stage condition. Require finite L8 steps and the fixed `0.002` loss/gradient gate before any L24 performance run.
