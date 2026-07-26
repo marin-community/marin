@@ -1483,6 +1483,76 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T11:56:38Z — 129,946 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1150-v302` independently
+  revalidated p2 decision-file 69 semantic offset 256 and the final three p3
+  decision-file 101 checkpoints at offsets 5,632, 5,760, and 5,888. Their 476
+  pairs contain 273 model false positives, 201 model true duplicates, and two
+  unresolved outcomes. Nine pairs were chunked and 467 were direct. The audit
+  checked 1,741 judgments across 1,753 attempts: 1,735 valid and 18 invalid
+  responses affecting six retried judgments. The outcome Parquet SHA-256
+  values, in p2 then p3 frontier order, are:
+
+  - `cd3c274b3b753af22fb4545e35696fb133f480fa9b70209a274d728e056fcdec`;
+  - `7510fc71325b091124d10c84d4cb4cb3bbc9b65364189feeacc12ed7094f7e36`;
+  - `6f8114211076f5a47b856d819e65e3ee06765f5fcaa12494938fd2ee469aeb50`;
+  - `06f87c0cfa3a39710988c67696deb93d3de65c44c4a446143c7e6bb340b5f143`.
+
+- Complete-text review resolves both treatment ambiguities as true duplicates:
+
+  - `part-00101-of-00128.parquet:9127` contains the same 96-line
+    computational-mechanics question, ten methods, full method-by-method
+    analysis, conclusion, and answer. Its only changed span formats the final
+    answer as `\boxed{\text{B}}` instead of `\boxed{B}`. Member/canonical
+    character counts are 6,455/6,448 and character, line, and word-sequence
+    similarity are 0.999457, 0.989583, and 0.998974. The member/canonical text
+    and inspection SHA-256 values are
+    `891843a878e6a64ad081d9111542e3835c14d833c3f44d08f5ceed742891b3c4`,
+    `59f635555f10a4b29629b8376dde0d913549b3c2c60c1765fe7c2ac44eb1874b`,
+    and `13f4f4a1dec6078ed306521a591b72d17f1410330813a41464994f37a1497931`.
+  - `part-00101-of-00128.parquet:9128` contains the same 76-line
+    customer-loyalty question, ten strategies, full strategy-by-strategy
+    analysis, conclusion, and answer. Its only changed span formats the final
+    answer as `\boxed{\text{C}}` instead of `\boxed{C}`. Member/canonical
+    character counts are 5,712/5,705 and character, line, and word-sequence
+    similarity are 0.999387, 0.986842, and 0.998761. The member/canonical text
+    and inspection SHA-256 values are
+    `061f4f2164a2ccf82fa361a77727c8708d50a566157374a3d442f2c778bbf307`,
+    `124f1d5603ae142c41c19533240c29208e477491598464a8192b396e06ad179e`,
+    and `ae11bc3473d028d2a854793a6510d3e5308b733e2080a49dcc20fe0a8dac5750`.
+
+- All nine semantic attempts for each pair were invalid because the model put
+  unescaped control characters into JSON strings. The complete persisted
+  source diff for each pair contains exactly one changed line.
+  `/rav/datakit-6854-publish-manual-rows9127-9128-1155-v304` wrote the
+  immutable true-duplicate records, and
+  `/rav/datakit-6854-verify-manual-rows9127-9128-1156-v305` separately reread
+  both source pairs, semantic checkpoint, judgment hashes, inspection
+  artifacts, records, deterministic Parquet bytes, and completion markers.
+  In pair order, semantic-evidence, manual-Parquet, and marker SHA-256 values
+  are:
+
+  - `3490ba0b4e4d20e1df9f1eb53e6351acee1c13615615929079a5f614ecbedb6f`,
+    `886736e5ccada4a75599abf4cfd7b146761d5f2988b6431c52ae021f9d4a3bb0`,
+    and `df5c4addfe962f6aab5b24a95cdfeab170c029cedfbee212e4d499047d3211b7`;
+  - `3eeb70a1ce03cd83dd1959f0245e69aba3116e824bd32429703a31d4a550b60a`,
+    `b022f321c5788e63a14827b7de6ee874aa461a320d94ea44f0f9bff9a506b587`,
+    and `fc9a0e165f66ef01b31d181c6c607a1468b0adaad9c09ca6a4e4dcf4133fb8b1`.
+
+- Across the stable 1,023-checkpoint snapshot, all 146 unresolved model
+  outcomes are covered by 111 true-duplicate and 35 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 104,090 pairs, 66,277 false positives, 37,813 true duplicates;
+  - treatment: 25,856 pairs, 13,313 false positives, 12,543 true duplicates;
+  - combined: 129,946 pairs, 79,590 false positives, 50,356 true duplicates.
+
+- The next audit frontiers are p0 `(6, 0)`, p1 `(37, 0)`, p2 `(69, 384)`,
+  and p3 `(102, 0)`. All four batch-priority 2-H100 workers continue serving
+  requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T11:47:11Z — 129,470 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1147-v301` independently
