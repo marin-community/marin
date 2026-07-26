@@ -192,3 +192,13 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: the run failed on the same 3.91 GiB allocation at the same point after loading all teacher shards. Microbatching did not change the allocation.
 - Interpretation: the peak is independent of batch activations. The distillation entry point retains its original concrete random 32B `initial_model` after `Trainer.initial_state` creates a mixed-precision state and while the checkpoint teacher is loaded.
 - Next action: pass a lazy model factory into the trainer so the original concrete teacher is not retained, keep microbatch size four, and repeat the smoke.
+
+### 2026-07-26 17:30 - Lazy initialization clears the device smoke
+
+- Hypothesis: constructing the 32B initialization only inside `Trainer.initial_state` will release it before the checkpoint teacher is loaded and remove the batch-independent 3.91 GiB allocation.
+- Commit hash: `f8672e5abd`.
+- Job: `/power/qwen-distill-smoke-f8672e` on one `GB200x4` node.
+- Config: exact forward KL, sequence length 2,048, effective batch 8, microbatch 4, 12 steps.
+- Result: the task completed all 12 steps, logged finite training loss, and saved `step-11`. The allocator OOM disappeared. Validation metrics were nonfinite because padded zero-weight positions used multiplication rather than explicit masking.
+- Interpretation: the online 32B-to-0.6B system fits one `GB200x4` node. Evaluation must mask ignored positions before accumulation so undefined losses on padding cannot contaminate validation aggregates.
+- Next action: land the evaluator regression fix and repeat the smoke, requiring finite validation loss and a resumable checkpoint before starting the paired screen.

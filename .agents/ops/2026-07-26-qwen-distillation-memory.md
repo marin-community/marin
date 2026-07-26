@@ -52,11 +52,35 @@ the first compiled step.
 
 ## Results
 
-Pending the lazy-initialization smoke.
+The lazy-initialization smoke completed all 12 steps on one `GB200x4` node,
+saved `checkpoints/step-11`, and exited successfully. The first training step
+took 15.7 seconds including compilation. Subsequent training loss was finite.
+
+- Job: `/power/qwen-distill-smoke-f8672e`
+- Task: `run_levanter_distill_lm-25bf5d8d`
+- Commit: `f8672e5abd`
+- Checkpoint:
+  `s3://marin-us-east-02a/marin/qwen-distillation/smoke/qd-c1-seed-0/2026.07.26.5/checkpoints/step-11`
+
+This confirms that retaining the random 32B initialization, rather than the
+online objective itself, caused the first-step OOM.
+
+## Hypothesis 3
+
+Training loss remained finite, but all validation metrics were `NaN`.
+Validation batches contain padded positions whose loss weight is zero. The
+evaluator multiplied per-position loss by its weight, so a nonfinite loss on a
+padded position propagated through `NaN * 0`.
+
+## Changes to make
+
+Use an explicit zero-weight mask before accumulating tagged and labeled
+evaluation losses. Add regression tests whose ignored positions contain
+nonfinite losses, then repeat the smoke and require finite validation metrics.
 
 ## Future work
 
-- [ ] Measure step throughput and peak device memory at microbatch sizes 4 and
-  2 if size 4 remains over capacity.
+- [ ] Record steady-state step throughput after the corrected evaluation
+  smoke.
 - [ ] Inspect whether excluding frozen teacher leaves from the differentiated
   model reduces compiler memory further.

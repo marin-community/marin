@@ -185,6 +185,29 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
     assert "grug" in result.tag_micro_losses
 
 
+def test_tagged_evaluator_ignores_nonfinite_unweighted_losses():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = [GrugLmExample.causal(jnp.array([1, 2, 3, 4], dtype=jnp.int32)) for _ in range(EvalBatch.size)]
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        losses = jnp.where(batch.loss_weight != 0, 1.0, jnp.nan)
+        return losses, batch.loss_weight, jnp.roll(batch.tokens, -1, axis=-1)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(ListAsyncDataset(examples), ["grug"])],
+            loss_fn=loss_fn,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    np.testing.assert_allclose(result.micro_avg_loss, 1.0)
+    np.testing.assert_allclose(result.tag_micro_losses["grug"], 1.0)
+
+
 def test_labeled_evaluator_aggregates_exclusive_loss_labels():
     EvalBatch = Axis("batch", len(jax.devices()))
 
@@ -238,6 +261,37 @@ def test_labeled_evaluator_aggregates_exclusive_loss_labels():
     np.testing.assert_allclose(result.label_losses["tool_observation"], 4.0)
     np.testing.assert_allclose(result.label_token_counts["assistant"], EvalBatch.size * 2)
     assert "dont_score" not in result.label_losses
+
+
+def test_labeled_evaluator_ignores_nonfinite_unscored_losses():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = [
+        LabeledLmExample(
+            tokens=jnp.array([1, 2, 3, 4], dtype=jnp.int32),
+            loss_labels=jnp.array([1, 1, 1, 0], dtype=jnp.int32),
+        )
+        for _ in range(EvalBatch.size)
+    ]
+    label_spec = LossLabelSpec(id_to_name={0: "dont_score", 1: "assistant"})
+
+    def loss_fn(_model, batch: LabeledLmExample) -> LabeledLossFnOutput:
+        losses = jnp.where(batch.loss_labels != 0, 2.0, jnp.nan)
+        return losses, batch.loss_labels, jnp.roll(batch.tokens, -1, axis=-1)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = LabeledEvaluator(
+            EvalBatch=EvalBatch,
+            eval_set=ListAsyncDataset(examples),
+            label_spec=label_spec,
+            loss_fn=loss_fn,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    np.testing.assert_allclose(result.label_losses["assistant"], 2.0)
+    np.testing.assert_allclose(result.label_token_counts["assistant"], EvalBatch.size * 3)
 
 
 def test_labeled_lm_evaluator_accepts_labeled_lm_examples():
