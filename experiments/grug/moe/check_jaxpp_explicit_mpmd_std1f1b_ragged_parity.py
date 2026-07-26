@@ -6,8 +6,10 @@
 This is an authoritative production-mixed-precision check for the
 device-initiated ``ragged_all_to_all`` path. The production gate runs as four
 Iris tasks with two H100s each, so every pipeline rank owns an isolated
-``expert=2`` mesh. The single-host fallback self-spawns four JAX processes on
-one H100x8 host and serializes only their direct-reference executions.
+``expert=2`` mesh. Each task computes its direct reference in a short
+single-process child before initializing the distributed JAX runtime. The
+single-host fallback self-spawns four JAX processes on one H100x8 host and
+serializes only their direct-reference executions.
 
 After installing the pinned JAX/JaxPP runtime with ``jaxpp_setup_scripts()``
 from ``train.py``, run the command below in every task of a four-replica
@@ -217,9 +219,86 @@ def _wait_at_jaxpp_barrier(name: str) -> None:
     client.wait_at_barrier(name, dime2.env_vars.jaxpp_client_timeout.value)
 
 
+def _standalone_direct_reference(process_id: int, connection: Any) -> None:
+    try:
+        _event(process_id, "standalone_direct_reference_start")
+        pipeline = _pipeline_config()
+        optimizer = gradient_capture_optimizer()
+        mesh = grug_train._compact_or_pipeline_grug_mesh(
+            expert_axis_size=EXPERT_AXIS_SIZE,
+            replica_axis_size=1,
+            pipeline=None,
+        )
+        with jax.set_mesh(mesh):
+            direct_state = grug_train.initial_state(
+                _model_config(),
+                optimizer=optimizer,
+                mp=eager_parity._MIXED_PRECISION,
+                key=jax.random.PRNGKey(0),
+                ema_beta=None,
+            )
+            direct_batch = _batch_for_mesh(mesh)
+            direct_step = jax.jit(
+                functools.partial(
+                    eager_parity._direct_microbatch_mean,
+                    precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+                )
+            )
+            direct_loss, direct_gradients = direct_step(direct_state.params, direct_batch)
+            direct_stage_gradient = direct_gradients.split_for_pipeline(
+                pipeline.stages,
+                pipeline.stage_layer_counts,
+            )[process_id]
+            host_result = jax.device_get((direct_loss, direct_stage_gradient))
+        connection.send(("ok", host_result))
+        _event(process_id, "standalone_direct_reference_complete")
+    except BaseException as error:
+        connection.send(("error", (type(error).__name__, str(error))))
+        traceback.print_exc()
+        raise
+    finally:
+        connection.close()
+
+
+def _standalone_direct_reference_result(process_id: int):
+    context = mp.get_context("spawn")
+    receive_connection, send_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_standalone_direct_reference,
+        args=(process_id, send_connection),
+        name=f"jaxpp-ragged-parity-direct-reference-{process_id}",
+    )
+    process.start()
+    send_connection.close()
+    try:
+        if not receive_connection.poll(600):
+            raise TimeoutError("standalone direct reference exceeded 600 seconds")
+        status, payload = receive_connection.recv()
+    except BaseException:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=10)
+        raise
+    finally:
+        receive_connection.close()
+
+    process.join(timeout=30)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=10)
+        raise TimeoutError("standalone direct reference did not exit after returning its result")
+    if status == "error":
+        error_type, error = payload
+        raise RuntimeError(f"standalone direct reference failed with {error_type}: {error}")
+    if process.exitcode != 0:
+        raise RuntimeError(f"standalone direct reference exited with status {process.exitcode}")
+    return payload
+
+
 def _run_initialized_worker(
     process_id: int,
     direct_reference_barrier: Any | None,
+    standalone_direct_result: tuple[Any, Any] | None = None,
 ) -> None:
     faulthandler.dump_traceback_later(120, repeat=True)
     completed = False
@@ -260,52 +339,57 @@ def _run_initialized_worker(
         )
         stage_batches = _stage_batches(mpmd_mesh, batch)
 
-        def run_direct_reference():
-            _event(process_id, "direct_reference_start", stage_index=local_stage_index)
-            with jax.set_mesh(stage_mesh):
-                direct_state = grug_train.initial_state(
-                    _model_config(),
-                    optimizer=optimizer,
-                    mp=eager_parity._MIXED_PRECISION,
-                    key=jax.random.PRNGKey(0),
-                    ema_beta=None,
-                )
-                direct_batch = _batch_for_mesh(stage_mesh)
-                direct_step = jax.jit(
-                    functools.partial(
-                        eager_parity._direct_microbatch_mean,
-                        precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
-                    )
-                )
-                result = direct_step(direct_state.params, direct_batch)
-                jax.block_until_ready(result)
-            _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
-            return result
-
-        if direct_reference_barrier is None:
-            direct_result = run_direct_reference()
+        if standalone_direct_result is not None:
+            direct_loss, direct_stage_gradient = standalone_direct_result
+            _event(process_id, "standalone_direct_reference_loaded", stage_index=local_stage_index)
+            grug_train._warm_jaxpp_device_ragged(
+                mpmd_mesh,
+                global_microbatch_tokens=MICROBATCH_SIZE * SEQUENCE_LENGTH,
+                hidden_dim=_model_config().hidden_dim,
+                top_k=_model_config().num_experts_per_token,
+            )
+            _event(process_id, "device_ragged_warmup_complete", stage_index=local_stage_index)
         else:
+            if direct_reference_barrier is None:
+                raise ValueError("a local direct-reference barrier is required without a standalone result")
             direct_result = None
             for active_process_id in range(PIPELINE_STAGES):
                 direct_reference_barrier.wait()
                 if process_id == active_process_id:
-                    direct_result = run_direct_reference()
+                    _event(process_id, "direct_reference_start", stage_index=local_stage_index)
+                    with jax.set_mesh(stage_mesh):
+                        direct_state = grug_train.initial_state(
+                            _model_config(),
+                            optimizer=optimizer,
+                            mp=eager_parity._MIXED_PRECISION,
+                            key=jax.random.PRNGKey(0),
+                            ema_beta=None,
+                        )
+                        direct_batch = _batch_for_mesh(stage_mesh)
+                        direct_step = jax.jit(
+                            functools.partial(
+                                eager_parity._direct_microbatch_mean,
+                                precision=eager_parity.PrecisionMode.PRODUCTION_MIXED,
+                            )
+                        )
+                        direct_result = direct_step(direct_state.params, direct_batch)
+                        jax.block_until_ready(direct_result)
+                    _event(process_id, "direct_reference_complete", stage_index=local_stage_index)
                 direct_reference_barrier.wait()
 
             if direct_result is None:
                 raise RuntimeError(f"process {process_id} did not execute its direct reference")
-        direct_loss, direct_gradients = direct_result
+            direct_loss, direct_gradients = direct_result
+            direct_stage_gradient = direct_gradients.split_for_pipeline(
+                pipeline.stages,
+                pipeline.stage_layer_counts,
+            )[local_stage_index]
 
-        _wait_at_jaxpp_barrier("grug_ragged_parity_direct_reference_complete")
-        _event(process_id, "direct_reference_barrier_complete", stage_index=local_stage_index)
+        _wait_at_jaxpp_barrier("grug_ragged_parity_ragged_ready")
+        _event(process_id, "device_ragged_barrier_complete", stage_index=local_stage_index)
         _event(process_id, "dime_prewarm_start", stage_index=local_stage_index)
         grug_train._prewarm_jaxpp_dime(mpmd_mesh, "all")
         _event(process_id, "dime_prewarm_complete", stage_index=local_stage_index)
-
-        direct_stage_gradients = direct_gradients.split_for_pipeline(
-            pipeline.stages,
-            pipeline.stage_layer_counts,
-        )
 
         _event(process_id, "explicit_lower_start", stage_index=local_stage_index)
         explicit_step = grug_train._make_explicit_mpmd_train_step(
@@ -339,7 +423,7 @@ def _run_initialized_worker(
             explicit_loss=explicit_loss,
             direct_loss=direct_loss_host,
             explicit_gradients=explicit_gradients,
-            direct_gradients=direct_stage_gradients[local_stage_index],
+            direct_gradients=direct_stage_gradient,
         )
         print(
             json.dumps(
@@ -425,9 +509,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     job_info = get_job_info()
     if job_info is not None and job_info.num_tasks > 1:
+        standalone_direct_result = _standalone_direct_reference_result(job_info.task_index)
         initialize_jax()
         _event(jax.process_index(), "distributed_initialize_complete")
-        _run_initialized_worker(jax.process_index(), None)
+        _run_initialized_worker(jax.process_index(), None, standalone_direct_result)
         return 0
 
     context = mp.get_context("spawn")
