@@ -883,3 +883,30 @@ recommendation - it demonstrably invalidates it at the case that matters most. I
 I will mark SCALE_CAPACITY_TILE unvalidated in the writeup and say the knob does not help where it would
 most often be used, rather than leaving a plausible-looking feature for someone to find and trust.
 PREDICTION restated, to be reported first: ~21.6-21.8% MFU at drops below 1.72% if alignment is the cause.
+
+## ALIGNMENT HYPOTHESIS FALSIFIED 09:00 — SCALE_CAPACITY_TILE is UNVALIDATED
+/mwittmann/ep25d1-spill3-cf10625-350-0726-0730 ("capacity_factor": 1.0625), 349 samples.
+PRE-REGISTERED TEST:
+  MFU:   predicted 21.6-21.8%   measured 20.708%   -> MISSED. Hypothesis FALSIFIED.
+  drops: predicted <1.72%       measured 1.44%     -> hit (more capacity does reduce drops, as expected)
+Going from an ODD capacity (2151) to a 128-ALIGNED one (2176) moved MFU by +0.038pp. That is noise. The
+128-alignment story is wrong.
+CONSEQUENCE I COMMITTED TO IN ADVANCE, honoured: SCALE_CAPACITY_TILE=128 does NOT help at cf1.05 - the single
+case anyone would most likely enable it for. Because "cf1.05 + tile 128" and "cf1.0625 + no tile" are the same
+capacity (2176, verified through the shipped code), this leg IS the feature's test, and the feature FAILED it.
+The knob stays default-0 and must be marked UNVALIDATED in the writeup, with the null stated plainly rather
+than left as a plausible-looking feature for someone to find and trust. I am not deleting it - the code is
+correct and cheap, and it may matter at a boundary I have not identified - but nothing currently justifies
+turning it on.
+WHAT THE CLIFF IS NOT, AND WHAT IS STILL OPEN: the cliff is real and large (cf1.0 m=3 21.849 -> cf1.05 m=3
+20.670 = -1.179pp) and everything above cf1.0 is flat (cf1.05 -> cf1.0625 +0.038pp; cf1.0625 -> cf1.15 is
+-0.29pp across an m difference). So the penalty is paid ONCE on leaving cf1.0 and is not a function of
+capacity thereafter. Two hypotheses I did NOT test, offered as hypotheses:
+  (a) the boundary is coarser than 128. 2048 is the only capacity in my set divisible by 256 or 512;
+      2176 is 128-aligned but NOT 256-aligned. A test at capacity 2304 (=9x256, cf1.125) would separate this.
+  (b) something keyed to capacity == the exact mean load (cf 1.0) rather than to capacity's factorization.
+I am NOT chasing these. I have spent four legs on this axis, the remaining prize is ~1pp on a config that is
+already compliant, and the honest position is that the cliff's cause is unknown.
+FRONTIER UNCHANGED IN ITS CONCLUSION: cf1.0625 m=3 (20.708%, 1.44% drops) is a marginally better compliant
+config than cf1.05 m=3 (20.670%, 1.72%) and both beat cf1.15 m=0 (20.416%, 2.60%) on both axes. The best
+compliant config is ~20.7% at ~1.4-1.7% drops, roughly +0.3pp over the capacity-only route.
