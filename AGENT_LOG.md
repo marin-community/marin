@@ -2061,3 +2061,46 @@ what makes the guard affordable in a probe config — it just was not the fix th
 - Docstring now says the guard belongs in a probe config and why, so the next agent does not
   spend a third leg on it.
 Confidence: 9/10 on the mechanism (bare-callback control isolates effect from data); 7/10 that v5 now fits, since the local model is CPU and only the direction of each delta transfers.
+
+## READING (a) UNDERFLOW TELEMETRY 2026-07-26 16:32 UTC — forward clean, BACKWARD IS NOT
+
+/mwittmann/ep25d4-underflow-probe-v1-20260726 (succeeded, 12 steps, calibration-probe shape, all
+five quantization sites at FWD 4.5 / BWD 1.0e-07). 2304 observations per wire.
+
+| wire | p50 | p90 | max | mean | frac > 0.5 | frac > 0.05 |
+|---|--:|--:|--:|--:|--:|--:|
+| e4m3 forward @ 4.5 | 5.9e-06 | 2.2e-04 | **0.0003** | 0.0001 | 0.000 | 0.000 |
+| e5m2 backward @ 1.0e-07 | 1.4e-05 | 3.7e-01 | **1.0000** | 0.1088 | 0.069 | 0.413 |
+
+**The forward constant is confirmed directly for the first time** — worst case 3 in 10,000 values
+zeroed. That is the reading the guard was built for and it passes.
+
+**The backward constant does not pass.** 41% of observations lose more than 5% of their non-zero
+cotangents and 6.9% lose more than half, with whole tensors zeroing outright.
+
+**And it drifts, monotonically, within 12 steps:**
+
+| twelfth of run | 0 | 2 | 4 | 6 | 8 | 11 |
+|---|--:|--:|--:|--:|--:|--:|
+| mean zeroed_fraction | 0.0155 | 0.0245 | 0.0993 | 0.1435 | 0.1676 | 0.1642 |
+| frac > 0.5 | 0.000 | 0.000 | 0.089 | 0.094 | 0.099 | 0.104 |
+
+Rises 1.5% -> 16.4% and plateaus.
+
+**This overturns my predecessor's cotangent-stability argument, and the reason is worth stating
+because it is a general trap.** That argument measured tensor *amax* over 50 steps, saw no decay,
+and concluded a constant was safe. amax tracks the LARGEST value; underflow is a property of the
+SMALLEST. They move independently, and here they moved differently — amax flat while the small
+tail sank through the format floor. **A stable amax is not evidence of underflow safety.** Only
+this instrument could see it, which is the case for having built it.
+
+**Caveat that must ride with the number:** the fraction is over non-zero inputs, so a tensor whose
+cotangents are all ~1e-18 reads 1.0 while carrying no recoverable signal anyway. A high fraction
+is not automatically lost gradient. What it does establish is that the backward constant is not
+demonstrably safe, and that the v2 loss-parity result was obtained *with* part of the backward
+wire already zeroed — which weakens "delayed scaling preserves the loss" into the narrower "a
+constant that zeroes a growing minority of the backward wire still held the loss for 120 steps".
+Production delayed scaling, which re-derives the scale from an amax history every step, tracks
+this drift by construction; a constant cannot. The route is not damaged by this, but the
+*constant* is a scaffold, not a result.
+Confidence: 9/10 on the measurements; 7/10 on how much of the zeroed mass is real signal, which needs the cotangent magnitude distribution rather than the count.
