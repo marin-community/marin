@@ -50,6 +50,10 @@ MEM_ENV=()
 # MuonH momentum in pinned host memory -- ~27 GiB per GPU more than the dense arm, i.e. ~108 GiB per
 # 4-GPU node against the 256g default. A gb200-4x node has 960 GB.
 [[ -n "${SCALE_RAM_REQ:-}" ]] && MEM_ENV+=(-e SCALE_RAM "$SCALE_RAM_REQ")
+# NONPREEMPTIBLE=1 asks for non-preemptible workers. A d6144/48L compile is ~20 minutes, which is a
+# long eviction window; an evicted task returns with a new incarnation and the peers gang-abort with
+# "Aborted connect attempt as there is a request from a newer incarnation".
+[[ "${NONPREEMPTIBLE:-0}" == 1 ]] && MEM_ENV+=(-e SCALE_PREEMPTIBLE 0)
 PROFILE_ENV=()
 [[ "$PROFILE_STEPS" != 0 ]] && PROFILE_ENV+=(-e SCALE_PROFILER_STEPS "$PROFILE_STEPS"
                                              -e SCALE_PROFILER_START "${PROFILE_START:-20}")
