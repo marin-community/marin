@@ -4,9 +4,9 @@
 from collections.abc import Iterator
 
 import pytest
-
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+
 from scripts.ci.wait_for import EventKind, EventSpec, IrisJobSource
 
 
