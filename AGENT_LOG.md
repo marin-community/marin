@@ -393,3 +393,21 @@ of my own zombie v2 (logged). Zero stops/kills/kicks on others' jobs.
 Confidence: 1/10 that any global-controller variant reaches <3% (family closed);
 4/10 that v1's g=0.5 series, when readable, shows a meaningfully smoother plateau than g=1
 Next: 20-min polls for pipeline/fabric recovery; fill in the g=0.5 line; stand by.
+
+## Check-in 2026-07-26 07:05 UTC — still down; ops log written; slow watch
+
+- Incidents unchanged at ~07:00: v1 child rows still 0 (10.5h log outage); d1's v2 leg
+  (03:26 submit, 120 steps) reads 0% GPU 3.5h in — every rack job in the fleet is stuck.
+  d4's pgle-ab and rav's qbdrv-off2 have exited the running list (no completion
+  announcements visible because logs are dark).
+- v3 (my canary) terminally failed at ~03:40 (incarnation mismatch, budget exhausted) —
+  NOT resubmitting while the fabric rejects cliques; will resubmit the g=0.5 cross-check
+  the moment any fleet gang shows GPU>0.
+- Ops log committed: .agents/ops/2026-07-26-gb200-log-outage-nccl-wave.md (timeline,
+  diagnosis ladders, telltale bypass, OPS.md suggestions).
+- Moving to a 30-45 min watch cadence. The R6-2 verdict stands as committed: integral
+  family negative at both gammas (measured), g<1 fixed-point-capped (argument + v1
+  pending), global-controller route closed; sender-local (d4) is the only route.
+
+Confidence: 1/10 global variants; 4/10 g=0.5 smoother plateau when readable
+Next: watch cycle; resubmit g=0.5 cross-check on fabric heal; harvest v1 on log heal.
