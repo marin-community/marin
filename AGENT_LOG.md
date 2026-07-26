@@ -726,3 +726,34 @@ The two arms fail differently, and the contrast is the useful part:
 Neither is a wire win. The first shows the wire saving being consumed by the mechanism's own
 overhead; the second shows a wire saving that is real but bought with capability rather than with
 engineering.
+
+## Check-in 13 — PRIMARY ARM COMPLETE, 120/120. The falsification holds on the steady tail.
+
+`/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1630-v3` — 120/120 steps.
+
+| steady tail 90-119 | FLOPs/token | MFU p10 | **MFU p50** | MFU p90 | sd | tok/s p50 | step p50 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| dense control | 48.186 G | 24.719 | **24.842** | 24.978 | 0.103 | 274,954 | 15.266 s |
+| matched-work latent | 51.810 G | 24.477 | **24.610** | 24.748 | 0.102 | 253,332 | 16.570 s |
+
+**-0.23pp arch-aware MFU and -7.9% tok/s**, with non-overlapping p10/p90 bands on the MFU (dense p10
+24.719 > latent p90 24.748 is marginal, but the tok/s gap is 8% against sd ~0.1pp, so the throughput
+difference is unambiguous). The early-window read (-0.02pp, -7.1%) and the steady-tail read (-0.23pp,
+-7.9%) agree in sign and magnitude, so this is not a window artifact.
+
+MATCHED REGIME CONFIRMED, which is what makes this arm the honest test: drops track the dense control
+throughout and end at **0.082@119 versus dense 0.091@119** (both 120-step runs, so both at
+end-of-anneal — the comparison is at the same schedule position). No drop artifact is available to
+explain either direction.
+
+### One observation on quality, recorded but NOT claimed
+
+Loss at step 119: **matched-work latent 5.364 vs dense 5.654**. The latent arm reaches a lower loss.
+Two things must be said about it. First, it is 120 steps — nothing about final quality follows, and
+the brief's warning that "equal parameters is not equal quality" is not answered by this. Second, the
+arms are NOT quality-matched: the matched-work arm carries 1.812 B extra (projection) parameters and
+22.687 B active versus 20.875 B, so it should be expected to fit faster at equal steps. What the
+number does rule out is the specific worry that a rank-3072 bottleneck shared across all experts
+visibly damages optimization at this width — it does not, at this horizon. Anyone testing quality
+properly needs a longer run and a parameter-matched pair, and should note that "matched work" and
+"matched capability" are different controls.
