@@ -1483,6 +1483,54 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T10:01:20Z — 117,895 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0951-v255` independently
+  revalidated the final two checkpoints in p1 decision-file 36. Semantic
+  offsets 5,632 and 5,760 contain 219 treatment pairs: 140 model false
+  positives, 78 model true duplicates, and one unresolved outcome. The first
+  checkpoint contains 128 pairs and has outcome Parquet SHA-256
+  `edf0ab60504dc6103ad5f8bf5e6e10fd969b1e9f527755242441885a127dca69`;
+  the final partial checkpoint contains 91 pairs and has SHA-256
+  `631d04064d16c16a7bed3a605c2fd005bf659f734dfbcb2c5c2e63fc05b79ca9`.
+- Of the pairs, 218 were direct and one was chunked. The audit checked 457
+  judgments across 461 request attempts. Four hundred fifty-six judgments
+  produced valid responses; five invalid attempts affected two retried
+  judgments and caused the one unresolved outcome.
+- Complete-text comparison resolves `part-00036-of-00128.parquet:8957` as a
+  true duplicate. Both SFT records contain the same protein-secondary-structure
+  question, ten answer choices, 73-line reasoning, conclusion, and answer.
+  Their only difference is equivalent final-answer LaTeX:
+  `\boxed{B}` versus `\boxed{\text{B}}`. The member/canonical texts have
+  5,668/5,675 characters and character, line, and word-sequence similarity
+  0.999383, 0.986301, and 0.998788. Their SHA-256 values are
+  `28c2e76d3640417b72ebc39150013010c423a40438a75bcc6e848f5f148a2a39` /
+  `3c2ccaab237a099e1f2c840d93c18583a588c3295deb407c20db2161f7d8c25f`;
+  inspection-artifact SHA-256 is
+  `f41ffa5624a48d57e0031fc59f6662a11bcdd9b06dfa732444ed2c9da6067b45`.
+- `/rav/datakit-6854-inspect-row8957-0955-v257` persisted the complete source
+  texts, semantic evidence, and diff.
+  `/rav/datakit-6854-publish-row8957-0959-v260` wrote the immutable manual
+  record, and `/rav/datakit-6854-verify-row8957-1000-v261` separately reread
+  the source pair, semantic checkpoint, inspection artifact, record,
+  deterministic Parquet bytes, and completion marker. Semantic-evidence,
+  manual-record, and manual-Parquet SHA-256 values are
+  `d078b97e5138f60e6ad52f1462a204e99bd368153c4c862228c9db053bb64b38`,
+  `cfa5d08215e1f08321303569d4b984d064a977c1012afdcd218c43ee8dc7826c`,
+  and `87b1678b0f65c78b444066ae1d6f187596c2283da383d44babed423c873ac946`.
+- Across the stable 928-checkpoint snapshot, all 135 unresolved model outcomes
+  are covered by 105 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 94,482 pairs, 60,238 false positives, 34,244 true duplicates;
+  - treatment: 23,413 pairs, 12,032 false positives, 11,381 true duplicates;
+  - combined: 117,895 pairs, 72,270 false positives, 45,625 true duplicates.
+
+- The next audit frontiers are p0 `(5, 128)`, p1 `(37, 0)`, p2 `(69, 0)`,
+  and p3 `(101, 128)`. All four batch-priority 2-H100 workers continue serving
+  requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T09:49:16Z — 117,676 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0948-v254` independently
