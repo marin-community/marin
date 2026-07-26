@@ -223,3 +223,20 @@ author: Marin research
   wheel.
 - Next action: require a single-GB200 import canary to pass before relaunching
   the four-arm smoke.
+
+### 2026-07-26 20:05 - Gate 1 dependency pair identified
+
+- Result: CUTLASS 4.5.2 passed the import canary, but all four `r5` arms failed
+  during the first train-step compilation with
+  `TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'`.
+  Iris retried each child once; the retries and coordinators were stopped
+  explicitly. No arm wrote a metric row or checkpoint.
+- Diagnosis: the inverse incompatibility is JAX 0.11 with CUTLASS 4.5. The
+  repository's CUTLASS 4.6 upgrade retained Quack 0.5.0 in the lock, although
+  Quack 0.6.1 is the release line that requires CUTLASS 4.6.0. FA4's package
+  constraint accepts Quack 0.6.1.
+- Change: restore the current CUTLASS 4.6.0 pin and require
+  `quack-kernels>=0.6.1,<0.7`. Add a one-GPU test that JIT-compiles both the
+  FA4 THD forward and backward kernels rather than testing import alone.
+- Next action: require the forward/backward canary to pass before another
+  four-rack smoke.

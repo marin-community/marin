@@ -32,6 +32,7 @@ from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.attention._fa4_thd import _jax_fa4_thd_attention, _thd_kernel_config
 from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -192,6 +193,26 @@ def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
         out_shape = eqx.filter_eval_shape(forward)
 
     assert out_shape.shape == (8, 16, cfg.hidden_dim)
+
+
+def test_grug_fa4_thd_forward_and_backward_compile_on_gpu():
+    if jax.default_backend() != "gpu":
+        pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
+
+    tokens = 128
+    q = jnp.zeros((tokens, 4, 128), dtype=jnp.bfloat16)
+    k = jnp.zeros((tokens, 1, 128), dtype=jnp.bfloat16)
+    v = jnp.zeros((tokens, 1, 128), dtype=jnp.bfloat16)
+    cu_seqlens = jnp.array([0, tokens], dtype=jnp.int32)
+    kernel_config = _thd_kernel_config(128)
+
+    def loss(q, k, v):
+        out = _jax_fa4_thd_attention(q, k, v, cu_seqlens, 128**-0.5, kernel_config, None)
+        return jnp.sum(out.astype(jnp.float32))
+
+    value, gradients = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2)))(q, k, v)
+    assert jnp.isfinite(value)
+    assert all(jnp.all(jnp.isfinite(gradient)) for gradient in gradients)
 
 
 def _seed_cache_records(step, prefix: str) -> None:

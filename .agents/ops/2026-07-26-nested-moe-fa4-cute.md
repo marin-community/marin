@@ -91,8 +91,26 @@ exact import on one GB200 before another multi-rack allocation.
 
 ## Results
 
-Pending the single-GPU import canary.
+The single-GPU import canary passed under CUTLASS 4.5.2, but the four-arm `r5`
+smoke failed during actual kernel compilation. CUTLASS 4.5 is not compatible
+with the JAX 0.11 compiler integration.
+
+## Hypothesis 5
+
+The repository's CUTLASS 4.6 upgrade left Quack 0.5.0 pinned transitively.
+Quack 0.5 imports the CUTLASS 4.5 `ThrMma` API, while Quack 0.6.1 explicitly
+requires CUTLASS 4.6.0. FA4 4.0.0b16 permits Quack 0.6.1.
+
+## Changes to make
+
+Restore CUTLASS DSL 4.6.0 and require `quack-kernels>=0.6.1,<0.7` in the GPU
+extras. Add a single-GPU integration test that compiles and executes both FA4
+THD forward and backward kernels.
+
+## Results
+
+Pending the forward/backward compilation canary.
 
 ## Future work
 
-- [ ] Upgrade the FA4/Quack stack before reintroducing CUTLASS DSL 4.6.
+- [ ] Keep Quack and CUTLASS release lines constrained as a tested pair.
