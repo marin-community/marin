@@ -141,7 +141,9 @@ def test_latent_moe_lowers_analytic_flops_per_token_by_the_expected_amount():
         6 * 3072 * 3072 * 4  # latent routed GLU
         + 4 * 6144 * 3072  # the two [D, L] projections
         + 2 * 6144 * 128  # the router doubles with the expert count
-    ) - (6 * 6144 * 3072 * 4)  # dense routed GLU
+    ) - (
+        6 * 6144 * 3072 * 4
+    )  # dense routed GLU
     assert latent_fpt == pytest.approx(dense_fpt + 48 * per_layer_delta)
     assert latent_fpt < dense_fpt
 
