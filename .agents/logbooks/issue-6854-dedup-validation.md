@@ -1483,6 +1483,67 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T07:03:53Z — 105,126 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0657-v158` independently
+  revalidated three p3 decision-file 100 checkpoints at semantic offsets 4,480
+  through 4,736. Their 384 pairs contain 288 false positives, 94 true
+  duplicates, and two unresolved outcomes. The 831 judgments used 839
+  requests: 828 valid and 11 invalid attempts, with five judgments retried.
+  There were 383 direct pairs and one chunked pair. The batch includes 255
+  baseline and 129 treatment pairs; both unresolved outcomes are baseline. The
+  outcome Parquet SHA-256 values are
+  `cd305e4db6e590c3a3d3fb03eb6b9ddb609f0278bdb4e8d4559940e5615fa7c1`,
+  `2c1d8c3a756a14ae1438613fb986f7c8b1e266cf8ee667bf9eac29ef16e4cc8d`,
+  and
+  `78664e686e13250d6a8f062f387886de2ce2d2474c1a40239cb7194815e3153d`.
+- `/rav/datakit-6854-inspect-rows7691-7692-0659-v159` read both complete
+  cross-source SFT pairs and every persisted model attempt. Exhaustive diffs
+  across all 232 lines found one seven-character LaTeX formatting difference
+  in each pair and no other changed content:
+
+  - row 7,691 has 10,122- and 10,115-character texts with member/canonical
+    SHA-256
+    `ba9f41d5984393a28b6a684e9bc71a47b0a2f848bbee00a14a0d93fe6d5561e5` /
+    `4537ecf91a9dd859e66ff0f86011a2a92b968f74cec321b4a5b28520e277d3a8`.
+    The final answer changes only from `\boxed{C}` to `\boxed{\text{C}}`;
+    character and line sequence ratios are 0.999654 and 0.993333.
+  - row 7,692 has 6,115- and 6,108-character texts with member/canonical
+    SHA-256
+    `05ee4cc26e2ebbc6302bd8c61ea02d6955c4f3c969a08887d0ae80c3e8e88ef0` /
+    `ba441d6e7e6874ad81a38484bb8a7e3921171b3443203fcb1b2d7d202af87ee4`.
+    The final answer changes only from `\boxed{H}` to `\boxed{\text{H}}`;
+    character and line sequence ratios are 0.999427 and 0.987805.
+
+  Both are true duplicates because every question, choice, reasoning passage,
+  factual claim, and answer is otherwise represented.
+- `/rav/datakit-6854-publish-manual-0702-v160` published both hash-bound
+  true-duplicate records, and `/rav/datakit-6854-verify-manual-0703-v161`
+  separately reread the source pairs, semantic checkpoint, manual rows,
+  Parquet bytes, and completion markers. Their semantic-evidence SHA-256
+  values are
+  `97d99071c3d9210b927009f5cf0c9a12037b4a23155bd2c73cb6c5ab8495d1fd`
+  and
+  `d2dbca74e26472d105ae24317cb610a99bb2903d9bd511f383ecd7eb85357e62`;
+  their manual-record SHA-256 values are
+  `284528bd55b8ce091320caa8734b1484f37f40995433e7640c6a7819aa3555a0`
+  and
+  `931500140897fd7d5be97bbe0280503c06f36cda4d4bd6f70293d4cc06847349`;
+  their manual-Parquet SHA-256 values are
+  `0b8a8936f8ae81f70fc7065fc4940b14524fb28b9a69a2e0b516e591228b7e49`
+  and
+  `c3f261f86e722c5ce99a223841b61634e7c73775dc3db8324e9a053818a7ed64`.
+- Across the stable 827-checkpoint snapshot, all 121 unresolved model outcomes
+  are covered by 92 true-duplicate and 29 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 85,209 pairs, 54,246 false positives, 30,963 true duplicates;
+  - treatment: 19,917 pairs, 10,288 false positives, 9,629 true duplicates;
+  - combined: 105,126 pairs, 64,534 false positives, 40,592 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T06:56:32Z — 104,742 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0650-v154` independently
