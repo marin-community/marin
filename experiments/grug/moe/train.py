@@ -152,6 +152,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    nested_experts: bool = False,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -173,12 +174,18 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
+        nested_rows = None
+        if nested_experts:
+            if model.config.nested_expert_count is None:
+                raise ValueError("nested expert evaluation requires nested_expert_count")
+            nested_rows = jnp.ones((batch.tokens.shape[0],), dtype=jnp.bool_)
         per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
+            nested_rows=nested_rows,
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
@@ -316,6 +323,12 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        nested_rows = _training_nested_rows(
+            qb_params.config,
+            batch_size=batch.tokens.shape[0],
+            step=state.step,
+        )
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -325,10 +338,13 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                nested_rows=nested_rows,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
+        if nested_rows is not None:
+            metrics["train/nested/sequence_fraction"] = jnp.mean(nested_rows.astype(jnp.float32))
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
@@ -370,6 +386,21 @@ def _make_train_step(
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _training_nested_rows(
+    model_config: GrugModelConfig,
+    *,
+    batch_size: int,
+    step: jax.Array,
+) -> jax.Array | None:
+    fraction = model_config.nested_batch_fraction
+    if fraction == 0.0:
+        return None
+    if fraction == 1.0:
+        return jnp.ones((batch_size,), dtype=jnp.bool_)
+    period = round(1.0 / fraction)
+    return (jnp.arange(batch_size, dtype=jnp.int32) + step) % period == 0
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -453,6 +484,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
+        nested_evaluator = None
         if eval_cfg is not None:
             evaluator = build_tagged_evaluator(
                 data_config=config.data,
@@ -460,6 +492,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mesh=mesh,
                 eval_cfg=eval_cfg,
             )
+            if config.model.nested_expert_count is not None:
+                nested_evaluator = build_tagged_evaluator(
+                    data_config=config.data,
+                    max_seq_len=config.model.max_seq_len,
+                    mesh=mesh,
+                    eval_cfg=eval_cfg,
+                    nested_experts=True,
+                )
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=trainer.num_train_steps)
@@ -503,6 +543,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ),
                     every=interval,
                 )
+                if nested_evaluator is not None:
+                    state_callbacks.add_hook(
+                        cb_tagged_evaluate(
+                            nested_evaluator,
+                            prefix=f"{eval_cfg.prefix}/nested",
+                            eval_current=eval_cfg.eval_current,
+                            eval_ema=eval_ema,
+                        ),
+                        every=interval,
+                    )
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0

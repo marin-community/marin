@@ -1,6 +1,6 @@
 # Nested model training: research brief and preregistration
 
-Status: draft for independent review
+Status: revision 2; Claude Fable review requested, no review content returned
 
 Experiment series: `NEST-MOE`
 
@@ -19,16 +19,17 @@ that a useful smaller model can be co-trained inside a larger model.
 For Marin's 300B–700B MoE decision, the lowest-cost test is not a masked dense
 matrix. A masked full-width forward still pays for the full matrix, while a
 separate small forward has a different hidden-state trajectory and adds roughly
-the small model's FLOPs. Instead, we can nest the *expert bank*. A fixed prefix
-of experts forms the small model; the full pool forms the large model. Each
-training sequence is assigned to the prefix or full branch and keeps that
-assignment through every layer. Both branches run together in one normal
-top-k MoE batch. The small checkpoint is obtained by deleting the outer experts
-and router columns.
+the small model's FLOPs. Instead, we can nest the *expert bank*. A fixed,
+evenly interleaved subset of experts forms the small model; the full pool forms
+the large model. Each training sequence is assigned to the subset or full
+branch and keeps that assignment through every layer. Both branches run
+together in one normal top-k MoE batch. Interleaving avoids concentrating the
+small branch on only some expert-parallel ranks. The small checkpoint selects
+and compacts the subset's expert weights and router columns.
 
 The primary test compares four runs: conventional 256-expert large,
 conventional 128-expert small, and 256-expert models with 25% or 50% of
-sequences restricted to the first 128 experts. All use the same top-k and
+sequences restricted to an interleaved set of 128 experts. All use the same top-k and
 active width. The nested arms therefore target less than 10% measured training
 overhead, not the roughly 100% cost of training a second model. We promote only
 if the full model remains within 0.01 Paloma macro loss of the large control,
@@ -47,7 +48,7 @@ for that second objective.
 Can one pretraining process yield:
 
 1. a full MoE that is competitive with a conventionally trained large model;
-2. a fixed, extractable expert-prefix model that is competitive with a
+2. a fixed, extractable expert-subset model that is competitive with a
    conventionally trained smaller MoE; and
 3. both checkpoints for less than 10% additional training cost over the large
    model alone?
@@ -188,15 +189,18 @@ Relevant durable references:
 
 ## Proposed architecture: branch-conditioned expert-bank nesting
 
-Let the full routed expert bank contain `E_L` experts and the fixed small prefix
-contain experts `[0, E_S)`, where `E_S = E_L / 2` in the proxy experiment.
-Both use the same shared expert, attention, embeddings, hidden width, depth,
+Let the full routed expert bank contain `E_L` experts and the fixed small subset
+contain `E_S` experts, where `E_S = E_L / 2` in the proxy experiment. The proxy
+uses even-numbered experts, not a contiguous prefix. With four experts per
+expert-parallel rank, this places two small-subset experts on every rank.
+Extraction compacts the selected experts into a contiguous `E_S` bank. Both
+models use the same shared expert, attention, embeddings, hidden width, depth,
 expert width, and top-k.
 
 For each packed training sequence, choose a branch bit `z`:
 
-- `z = small`: set router logits for experts `[E_S, E_L)` to negative infinity
-  at every MoE layer;
+- `z = small`: set router logits outside the fixed interleaved subset to
+  negative infinity at every MoE layer;
 - `z = full`: leave all router logits available.
 
 The bit is fixed for every token and every layer in that sequence. Small and
@@ -212,8 +216,10 @@ sequences. This is the mechanism most closely aligned with the proposed
 claim semantic novelty from routing counts alone; only loss and held-out
 evaluation can support the usefulness claim.
 
-Extraction deletes the outer expert weights and corresponding router columns.
-The shared expert and dense backbone are unchanged.
+Extraction selects and compacts the subset's expert weights and router columns.
+The shared expert and dense backbone are unchanged. A contiguous prefix is
+explicitly rejected for the proxy because expert-axis sharding would place it
+on only half of the ranks and create a systems artifact.
 
 ## Preregistered hypotheses
 
@@ -278,19 +284,22 @@ Fixed proxy shape:
 - routed expert intermediate dimension: 640;
 - shared expert intermediate dimension: 1280;
 - top-k: 4;
-- sequence length: 4096;
-- large total parameters: approximately 8.5B;
-- small total parameters: approximately 4.4B;
+- sequence length: 8192;
+- large total parameters: 8.64B;
+- small total parameters: 4.54B;
 - active parameters: approximately 0.6B, excluding the LM head;
+- global batch: 256 sequences, or 2,097,152 tokens per step;
+- common pretraining target: 5,275 steps, or 11.06B tokens per arm;
 - one 64-GPU GB200 rack per arm, four arms concurrently, batch priority;
 - project: `marin-community/marin_moe`;
 - group: `NEST-MOE-20260726`.
 
-The exact batch and step count will be selected after a 20-step compile and
-throughput smoke. The final token target is the largest common target all four
-arms can reach by 06:00 UTC while reserving three hours for breakout cooldown,
-SFT/evaluation, analysis, and termination. No arm receives a larger token
-budget because it started earlier or ran faster.
+The 20-step compile and throughput smoke can lower the common target if
+observed throughput would not finish by 06:00 UTC, but it cannot increase it.
+The final token target is the largest common target all four arms can reach
+while reserving three hours for breakout cooldown, SFT/evaluation, analysis,
+and termination. No arm receives a larger token budget because it started
+earlier or ran faster.
 
 ## Gates
 
@@ -298,9 +307,10 @@ budget because it started earlier or ran faster.
 
 Run local/small-device behavior tests before cluster launch:
 
-- a zero prefix fraction is exactly equal to the existing full router;
-- an all-prefix E256 forward matches an E128 model loaded from the same prefix
+- a zero subset fraction is exactly equal to the existing full router;
+- an all-subset E256 forward matches an E128 model loaded from the same subset
   weights, within the existing bf16 numerical tolerance;
+- the nested subset is evenly represented on every expert-parallel rank;
 - outer-expert gradients are zero on an all-prefix batch;
 - full-branch gradients remain nonzero in both core and outer banks;
 - per-sequence branch assignments remain fixed through all layers;
@@ -409,6 +419,16 @@ a separate model. A result below 10% with H1 passing is viable. Between 10% and
 - At 08:15 UTC, stop new work and collect final checkpoints and metrics.
 - At 09:00 UTC, terminate any experiment jobs still running, publish the final
   report and negative results, and close Weaver issue #652.
+
+## Review record
+
+The artifact was sent twice to `claude --model fable`: first with the relevant
+Grug files and then with an artifact-only bounded prompt. Both processes
+remained alive without returning review content and were stopped after bounded
+waits. An asynchronous Loom launch with the same Fable model returned HTTP 405.
+No review findings were received. The interleaved-subset correction above came
+from the subsequent code-grounded implementation review. This failed review
+lane is an operational limitation, not evidence that the plan passed review.
 
 ## Decision rules
 

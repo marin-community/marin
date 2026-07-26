@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -118,6 +119,11 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    nested_expert_count: int | None = None
+    """Fixed extractable expert subset size. Experts are interleaved across the
+    full bank so the subset remains balanced over expert-parallel ranks."""
+    nested_batch_fraction: float = 0.0
+    """Fraction of training rows restricted to ``nested_expert_count``."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -158,6 +164,22 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if not 0.0 <= self.nested_batch_fraction <= 1.0:
+            raise ValueError("nested_batch_fraction must be between 0 and 1")
+        if self.nested_expert_count is None:
+            if self.nested_batch_fraction != 0.0:
+                raise ValueError("nested_batch_fraction requires nested_expert_count")
+        else:
+            if self.nested_expert_count < self.num_experts_per_token + 1:
+                raise ValueError("nested_expert_count must exceed num_experts_per_token for QB top-k")
+            if self.nested_expert_count >= self.num_experts:
+                raise ValueError("nested_expert_count must be smaller than num_experts")
+            if self.num_experts % self.nested_expert_count != 0:
+                raise ValueError("num_experts must be divisible by nested_expert_count")
+            if self.nested_batch_fraction not in (0.0, 1.0):
+                period = round(1.0 / self.nested_batch_fraction)
+                if not math.isclose(self.nested_batch_fraction, 1.0 / period):
+                    raise ValueError("nested_batch_fraction must be zero, one, or the reciprocal of an integer")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         resolve_moe_implementation(self.moe_implementation)
@@ -213,6 +235,8 @@ class GrugModelConfig:
             ),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            nested_expert_count=_hf_config_attr(hf_config, ("nested_expert_count",)),
+            nested_batch_fraction=float(_hf_config_attr(hf_config, ("nested_batch_fraction",), 0.0)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -247,6 +271,8 @@ class GrugModelConfig:
             # MoE — most common public spelling per field
             "num_experts": self.num_experts,
             "num_experts_per_tok": self.num_experts_per_token,
+            "nested_expert_count": self.nested_expert_count,
+            "nested_batch_fraction": self.nested_batch_fraction,
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             # grug-specific (no public equivalent)
@@ -476,6 +502,20 @@ def _routing_stats(
     }
 
 
+def nested_expert_eligibility(num_experts: int, nested_expert_count: int) -> jax.Array:
+    """Return an evenly interleaved fixed expert subset.
+
+    Interleaving keeps every expert-parallel rank eligible for the nested
+    branch. Extraction compacts these experts into a contiguous smaller bank.
+    """
+    if nested_expert_count <= 0:
+        raise ValueError("nested_expert_count must be positive")
+    if num_experts % nested_expert_count != 0:
+        raise ValueError("num_experts must be divisible by nested_expert_count")
+    stride = num_experts // nested_expert_count
+    return jnp.arange(num_experts) % stride == 0
+
+
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
@@ -494,7 +534,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
+        "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
@@ -568,13 +608,24 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        nested_rows: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
+        eligible_router_logits = router_logits
+        if nested_rows is not None:
+            if self.cfg.nested_expert_count is None:
+                raise ValueError("nested_rows requires nested_expert_count")
+            if nested_rows.shape != (b,):
+                raise ValueError(f"nested_rows must have shape {(b,)}, got {nested_rows.shape}")
+            nested_tokens = jnp.repeat(nested_rows.astype(jnp.bool_), s)
+            nested_experts = nested_expert_eligibility(self.cfg.num_experts, self.cfg.nested_expert_count)
+            ineligible = nested_tokens[:, None] & ~nested_experts[None, :]
+            eligible_router_logits = jnp.where(ineligible, -jnp.inf, router_logits)
+        biased_logits = eligible_router_logits + jax.lax.stop_gradient(self.router_bias)
+        router_probs = jax.nn.softmax(eligible_router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
@@ -589,13 +640,13 @@ class MoEMLP(eqx.Module):
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
-            router_logits,
+            eligible_router_logits,
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+        s_minus_alpha = reshard(eligible_router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
@@ -605,6 +656,10 @@ class MoEMLP(eqx.Module):
         def _local_qb_beta(s_ma):
             topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
             beta = topk_vals[:, -1]
+            # A fully nested batch has no eligible observations for outer
+            # experts. Keep their bias unchanged instead of propagating
+            # ``-inf`` into the next step.
+            beta = jnp.where(jnp.isfinite(beta), beta, 0.0)
             return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
         router_stats["qb_beta"] = shard_map(
@@ -662,11 +717,12 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
+        nested_rows: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out, router_stats = self.mlp(mlp_in, nested_rows=nested_rows)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -729,6 +785,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        nested_rows: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -757,7 +814,7 @@ class Transformer(eqx.Module):
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
+                hidden, layer_mask, use_pko, disable_rope, nested_rows
             )
             moe_router_stats.append(router_stats)
 
@@ -777,9 +834,10 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        nested_rows: jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask)
+        hidden, _ = self(token_ids, mask=mask, nested_rows=nested_rows)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
@@ -795,8 +853,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        nested_rows: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, nested_rows=nested_rows)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -816,10 +875,80 @@ class Transformer(eqx.Module):
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
+            if self.config.nested_expert_count is not None:
+                nested_experts = nested_expert_eligibility(
+                    self.config.num_experts,
+                    self.config.nested_expert_count,
+                )
+                routing_counts = router_metrics["routing_counts_per_layer"].astype(jnp.float32)
+                core_counts = jnp.sum(routing_counts * nested_experts[None, :], axis=-1)
+                outer_counts = jnp.sum(routing_counts * ~nested_experts[None, :], axis=-1)
+                core_mean = core_counts / self.config.nested_expert_count
+                outer_mean = outer_counts / (self.config.num_experts - self.config.nested_expert_count)
+                nested_counts = jnp.where(nested_experts[None, :], routing_counts, jnp.nan)
+                outer_expert_counts = jnp.where(~nested_experts[None, :], routing_counts, jnp.nan)
+                summarized_metrics["train/router/nested_assignment_fraction"] = jnp.mean(
+                    core_counts / jnp.maximum(core_counts + outer_counts, 1.0)
+                )
+                summarized_metrics["train/router/outer_to_nested_assignment_ratio"] = jnp.mean(
+                    outer_mean / jnp.maximum(core_mean, 1.0)
+                )
+                summarized_metrics["train/router/nested_assignment_cv"] = jnp.nanmean(
+                    jnp.nanstd(nested_counts, axis=-1) / jnp.maximum(core_mean, 1.0)
+                )
+                summarized_metrics["train/router/outer_assignment_cv"] = jnp.nanmean(
+                    jnp.nanstd(outer_expert_counts, axis=-1) / jnp.maximum(outer_mean, 1.0)
+                )
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
+
+
+def extract_nested_expert_model(model: Transformer) -> Transformer:
+    """Compact a configured nested expert subset into a standalone model."""
+    nested_expert_count = model.config.nested_expert_count
+    if nested_expert_count is None:
+        raise ValueError("model does not configure nested_expert_count")
+
+    nested_experts = nested_expert_eligibility(model.config.num_experts, nested_expert_count)
+    nested_indices = jnp.nonzero(nested_experts, size=nested_expert_count)[0]
+    extracted_config = dataclasses.replace(
+        model.config,
+        num_experts=nested_expert_count,
+        nested_expert_count=None,
+        nested_batch_fraction=0.0,
+    )
+
+    extracted_blocks: list[Block] = []
+    for block in model.blocks:
+        expert_mlp = MoEExpertMlp(
+            w_gate=block.mlp.expert_mlp.w_gate.at[nested_indices].get(out_sharding=P("expert", "data", "model")),
+            w_up=block.mlp.expert_mlp.w_up.at[nested_indices].get(out_sharding=P("expert", "data", "model")),
+            w_down=block.mlp.expert_mlp.w_down.at[nested_indices].get(out_sharding=P("expert", "model", "data")),
+            implementation=block.mlp.expert_mlp.implementation,
+            activation=block.mlp.expert_mlp.activation,
+            capacity_factor=block.mlp.expert_mlp.capacity_factor,
+        )
+        mlp = MoEMLP(
+            router=block.mlp.router.at[:, nested_indices].get(out_sharding=P(None, None)),
+            router_bias=block.mlp.router_bias.at[nested_indices].get(out_sharding=P(None)),
+            expert_mlp=expert_mlp,
+            cfg=extracted_config,
+        )
+        extracted_blocks.append(
+            dataclasses.replace(
+                block,
+                attn=dataclasses.replace(block.attn, cfg=extracted_config),
+                mlp=mlp,
+            )
+        )
+
+    return dataclasses.replace(
+        model,
+        blocks=tuple(extracted_blocks),
+        config=extracted_config,
+    )
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
@@ -917,5 +1046,7 @@ __all__ = [
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
+    "extract_nested_expert_model",
     "grugmoe_inference_state_dict",
+    "nested_expert_eligibility",
 ]

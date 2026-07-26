@@ -92,3 +92,31 @@ author: Marin research
   snapshot while Gate 0 implementation proceeds; do not launch cluster jobs
   until that review returns or a bounded review deadline is reached.
 - Next action: snapshot the preregistration and start the asynchronous review.
+
+### 2026-07-26 19:20 - Gate 0 passed and preregistration frozen
+
+- Hypothesis: interleaving the fixed E128 subset over the E256 expert bank
+  preserves ordinary full routing, defines an exactly extractable model, and
+  remains compatible with the existing sharded training step.
+- Commit hash: Gate 0 implementation snapshot pending.
+- Commands: focused nested tests; complete
+  `tests/test_grug_variant_contracts.py`; launcher lowering for the nested
+  smoke arm; changed-file pre-commit; focused Pyrefly.
+- Config: d1280/L13, sequence length 8192, E256/E128, top-4, global batch 256,
+  EP64 over 16 four-GPU GB200 nodes.
+- Result: the restricted E256 and extracted E128 logits match within `1e-5`;
+  all-prefix outer gradients are exactly zero; full rows are bitwise unchanged
+  and update both banks; the balanced row schedule and nested train step lower.
+  The complete variant contract suite passed with 17 tests and one
+  accelerator-only skip. The launcher resolves 5,275 steps and 11.06B tokens
+  for the full phase. Focused Pyrefly passes for the launcher, trainer, and
+  tests; checking the model still reports two unchanged pre-existing errors
+  (`jax.shard_map` import discovery and the existing HF converter bound).
+- Interpretation: Gate 0 passes. Pin child resources to `cw-us-east-08a`;
+  child jobs inherit the batch band from their parent coordinator.
+- Review: an asynchronous `loom ... --agent claude --model fable` launch also
+  returned HTTP 405. No Fable content was received before the bounded review
+  deadline. Revision 2 records this failed lane and the implementation review's
+  interleaved-subset correction.
+- Next action: publish revision 2, snapshot the implementation, then launch the
+  four 20-step batch smokes.

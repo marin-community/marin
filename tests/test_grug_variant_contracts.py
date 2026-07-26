@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -31,7 +32,7 @@ from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -362,6 +363,145 @@ def test_grug_moe_model_init_against_single_expert_mesh():
         state_shape = eqx.filter_eval_shape(build)
 
     assert state_shape.params is not None
+
+
+def _nested_grug_model_config(model_module):
+    return model_module.GrugModelConfig(
+        vocab_size=48,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_experts=8,
+        num_experts_per_token=2,
+        nested_expert_count=4,
+        nested_batch_fraction=0.5,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=8,
+        moe_implementation="ring",
+    )
+
+
+def test_grug_moe_nested_experts_are_interleaved_across_expert_ranks():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    eligible = np.asarray(model_module.nested_expert_eligibility(8, 4))
+
+    assert eligible.tolist() == [True, False, True, False, True, False, True, False]
+    assert np.all(eligible.reshape(4, 2).sum(axis=1) == 1)
+
+
+def test_grug_moe_extracted_nested_model_matches_restricted_forward():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = _nested_grug_model_config(model_module)
+    tokens = jnp.arange(16, dtype=jnp.int32).reshape(2, 8) % config.vocab_size
+    nested_rows = jnp.ones((tokens.shape[0],), dtype=jnp.bool_)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        model = model_module.Transformer.init(config, key=jax.random.PRNGKey(0))
+        restricted_logits = model.logits(tokens, nested_rows=nested_rows)
+        extracted_model = model_module.extract_nested_expert_model(model)
+        extracted_logits = extracted_model.logits(tokens)
+
+    np.testing.assert_allclose(restricted_logits, extracted_logits, atol=1e-5, rtol=1e-5)
+    assert extracted_model.config.num_experts == config.nested_expert_count
+    assert extracted_model.config.nested_expert_count is None
+
+
+def test_grug_moe_full_rows_preserve_router_and_reach_both_expert_banks():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = _nested_grug_model_config(model_module)
+    assert config.nested_expert_count is not None
+    x = jax.random.normal(jax.random.PRNGKey(1), (8, 8, config.hidden_dim))
+    full_rows = jnp.zeros((x.shape[0],), dtype=jnp.bool_)
+    nested_experts = np.asarray(model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
+        original_out, original_stats = mlp(x)
+        full_out, full_stats = mlp(x, nested_rows=full_rows)
+        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, nested_rows=full_rows)[0]))(mlp)
+
+    np.testing.assert_array_equal(original_out, full_out)
+    np.testing.assert_array_equal(original_stats["routing_counts"], full_stats["routing_counts"])
+    assert np.any(np.asarray(grads.expert_mlp.w_gate)[nested_experts] != 0)
+    assert np.any(np.asarray(grads.expert_mlp.w_gate)[~nested_experts] != 0)
+    assert np.any(np.asarray(grads.router)[:, nested_experts] != 0)
+    assert np.any(np.asarray(grads.router)[:, ~nested_experts] != 0)
+
+
+def test_grug_moe_nested_forward_has_no_outer_expert_gradients():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    config = _nested_grug_model_config(model_module)
+    assert config.nested_expert_count is not None
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 4, config.hidden_dim))
+    nested_rows = jnp.ones((x.shape[0],), dtype=jnp.bool_)
+    nested_experts = np.asarray(model_module.nested_expert_eligibility(config.num_experts, config.nested_expert_count))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        mlp = model_module.MoEMLP.init(config, key=jax.random.PRNGKey(2))
+        grads = jax.grad(lambda candidate: jnp.sum(candidate(x, nested_rows=nested_rows)[0]))(mlp)
+
+    assert np.any(np.asarray(grads.expert_mlp.w_gate)[nested_experts] != 0)
+    assert np.all(np.asarray(grads.expert_mlp.w_gate)[~nested_experts] == 0)
+    assert np.any(np.asarray(grads.router)[:, nested_experts] != 0)
+    assert np.all(np.asarray(grads.router)[:, ~nested_experts] == 0)
+
+
+def test_grug_moe_nested_row_schedule_is_fixed_and_step_balanced():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = _nested_grug_model_config(model_module)
+
+    step_zero = train_module._training_nested_rows(config, batch_size=8, step=jnp.array(0))
+    step_one = train_module._training_nested_rows(config, batch_size=8, step=jnp.array(1))
+
+    assert step_zero is not None
+    assert step_one is not None
+    assert step_zero.tolist() == [True, False, True, False, True, False, True, False]
+    assert step_one.tolist() == [False, True, False, True, False, True, False, True]
+
+
+def test_grug_moe_nested_train_step_lowers():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    config = _nested_grug_model_config(model_module)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((32, 8), dtype=jnp.int32),
+        loss_weight=jnp.ones((32, 8), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(
+            config,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_state, metrics, watch_stats = eqx.filter_eval_shape(one_step)
+
+    assert next_state.step.shape == ()
+    assert metrics["train/nested/sequence_fraction"].shape == ()
+    assert metrics["train/router/nested_assignment_cv"].shape == ()
+    assert metrics["train/router/outer_assignment_cv"].shape == ()
+    assert watch_stats is None
 
 
 @pytest.mark.parametrize(
