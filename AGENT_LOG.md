@@ -166,3 +166,59 @@ params and bucket mean all identical to `smoke-dense`).
 
 Confidence: 9/10 on the port; 9/10 that the amendment's MFU criterion needs the correction above
 (it is arithmetic, not judgement); 4/10 that the matched-work arm shows a real wire win at EP64.
+
+## Check-in 3 — all three smokes clean, and the EP4 smoke pair turns out to be a WIRE-NULL CONTROL
+
+All three EP4 4-GPU 4-layer 40-step smokes completed 40/40 with descending loss. Deliverable 1
+(correctness) is answered: latent trains, drops and QB behave, and the arms are configured as
+intended (hparams confirm `intermediate_dim 6144 / moe_latent_dim 3072 / num_experts 64` on the
+matched arm). Window steps 10-39.
+
+| smoke arm | GFLOP/token | MFU p50 | tok/s p50 | step p50 | drops @39 | loss @39 |
+|---|--:|--:|--:|--:|--:|--:|
+| dense (64 x i3072) | 16.371 | 9.215 | 56,286 | 1.1646 s | 0.148 | 6.732 |
+| matched-work (64 x i6144, L3072) | 17.277 | **10.098** | **58,448** | 1.1221 s | 0.146 | 6.786 |
+| param-preserving (128 x i3072, L3072) | 14.569 | 8.486 | 58,246 | 1.1262 s | 0.179 | 6.790 |
+
+Two things fall out, one expected and one useful.
+
+EXPECTED: the drop series confirm the regime claim. Matched-work tracks dense almost exactly
+(0.146 vs 0.148 at step 39, and the whole series within ~0.02), while the param-preserving arm runs
+consistently heavier (0.179) because its bucket mean halved. So comparisons against the
+param-preserving arm are cross-drop-regime and comparisons against the matched-work arm are not.
+
+USEFUL, AND IT CHANGES HOW I WILL READ THE RACK LEG: the matched-work smoke is +3.84% tok/s AND
++0.88pp MFU over dense **at EP4, where the all-to-all is intra-node NVLink and the wire is nearly
+irrelevant**. It did 5.54% more analytic work in 3.65% less time — a ~9.5% swing in work-per-second
+that the wire cannot explain at this scale. The available explanations are that the two latent
+projections and the reshaped expert GEMM ([rows, 3072] x [3072, 12288] instead of
+[rows, 6144] x [6144, 6144]) simply run at higher efficiency than the kernels they replace.
+
+That makes the EP4 pair an empirical handle on exactly the confound my check-in-2 model had to
+parameterize by hand as "efficiency e". **The EP4 smoke is a wire-null control.** The rack test
+becomes a difference-in-differences rather than a single comparison:
+
+    wire contribution ~= (matched-work advantage at EP64) - (matched-work advantage at EP4)
+
+If the rack leg also lands near +3.8% tok/s, the wire added nothing and the thesis is falsified
+despite a positive-looking headline. If it lands materially above, the excess is the wire.
+Caveat, and it is a real one: at 4 layers the lm_head and embedding are a much larger share of the
+step than at 48, and the batch is 64x smaller, so the EP4 number is a qualitative control on the
+sign and rough size of the efficiency effect, not a quantitative subtraction. The profile remains
+the decisive measurement; this control is what keeps the endpoint number honest if the profile is
+ambiguous.
+
+Rack legs in flight, both mine, both with a 3-step profiler window at step 20 (excluded from the
+90-119 steady tail, so the headline is uncontaminated) so each yields both a throughput series and
+an xspace for the mechanism comparison:
+- `/mwittmann/ep25d6-d6144-e128-dense-120-0726-1440` — matched control, byte-for-byte d5's
+  reference configuration plus the profiler window.
+- `/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1455` — PRIMARY arm.
+
+Also carried d4's `xplane_overlap.py` / `xplane_op_detail.py` onto this branch; they read the xprof
+dump straight from S3 and run as an iris CPU job, which is how the exposed-collective number gets
+measured without S3 credentials in this sandbox.
+
+Confidence: 9/10 the port is correct (three clean smokes); 3/10 that the wire shows a measurable
+win at EP64 once the EP4 efficiency control is subtracted — down from 4/10, because the smoke shows
+the efficiency confound is real and comparable in size to the wire effect I am looking for.
