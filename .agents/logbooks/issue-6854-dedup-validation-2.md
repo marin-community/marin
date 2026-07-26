@@ -16,6 +16,60 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T16:29:00Z — 157,725 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1636-v439` independently
+  revalidated p1 decision-file 38 semantic offset 256 and five p2
+  decision-file 70 checkpoints spanning semantic offsets 3,456 through 3,968.
+  Their 768 baseline pairs contain 572 model false positives, 195 model true
+  duplicates, and one unresolved outcome. Six pairs were chunked and 762 were
+  direct. All 2,061 judgments were valid on their first request attempt.
+- In checkpoint order, the outcome Parquet SHA-256 values are
+  `fc42716f50e29155521cc4c5e3605fe70362b1ddc81d9b1058d75211a69d96b8`,
+  `ed09e471e130301851506044d65ed1d3b0d65a3e9a2fdc20827c0ba08b014dd8`,
+  `52b42bb2911608108a5bf02b4c7204b7815879e532ffdc436eef87bab2fb3207`,
+  `f3fb86f1aba4748390e7fa2fad77a9fbc860d723b3645666dfcb72b7246b0c02`,
+  `5164ca016f0fd2cf58793c5051c91cd89807d765ad3c6be5ddd246b8845d3f89`,
+  and
+  `96772e752871cc5e8174cca0c6f28643791dd14b985fa76a896d38e660e40fe1`.
+
+- Complete-text inspection resolves the synthetic-text ambiguity as a true
+  duplicate. The member is a sentence-level paraphrase of the canonical with
+  the same electrical-safety advice, switch wiring details, ceiling-fan
+  instructions, and circuit-breaker warning. Its only unique strings are
+  malformed SEO/image metadata (`#6407`, `1056x9`, and title fragments), not
+  distinct actionable content. The 3,739/3,245-character records have 17/15
+  lines and character, line, and word-sequence similarities 0.707904,
+  0.437500, and 0.652210. Member/canonical text SHA-256 values are
+  `bd228d9538aec218157df7ac92dc69d894d3258a135e82fabf1c36ab35a21287`
+  and
+  `25e885aaab0033f1cd6c05d4736768911004be12a4e19dcf1bfe517e9cc32d2f`.
+
+- `/rav/datakit-6854-inspect-row6258-1637-v440` persisted the complete pair and
+  diff with inspection SHA-256
+  `59e2a8ab404567fb38aa7f7bbbe7f10036bd47335d3bd915a0defc80d6f3c232`.
+  `/rav/datakit-6854-publish-row6258-1638-v441` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row6258-1639-v442`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `ec6f4cc0de3475f94d0ad9633b682ffa5607b95dfe0285b9505f754c3833025c`,
+  `32f133c67cb4418985fd8e3384594c00256058fa877a5b608c3f40c9cd277957`,
+  and `76d13125afd58455a5edc77d33e7e97651436578d2b741bc9df498cce257c279`.
+
+- Across the stable 1,241-checkpoint snapshot, all 175 unresolved model
+  outcomes are covered by 136 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 126,895 pairs, 80,544 false positives, 46,351 true duplicates;
+  - treatment: 30,830 pairs, 15,910 false positives, 14,920 true duplicates;
+  - combined: 157,725 pairs, 96,454 false positives, 61,271 true duplicates.
+
+- The next audit frontiers are p0 `(7, 0)`, p1 `(38, 384)`,
+  p2 `(70, 4,096)`, and p3 `(103, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T16:22:50Z — 156,957 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1632-v435` independently
