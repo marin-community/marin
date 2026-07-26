@@ -15,7 +15,6 @@ from experiments.grug.moe.benchmark_ep_ring import (
     _selected_experts,
     _validate_args,
 )
-from experiments.grug.moe.repro_quack_grouped_mlp_numerics import _error_metrics
 from levanter.grug._moe.common import resolve_moe_implementation
 
 
@@ -189,22 +188,6 @@ def test_diagnostic_parity_pass_is_still_non_promotable() -> None:
     assert status["passed"] is True
     assert status["promotable"] is False
     assert status["non_promotable_reason"] == "diagnostic parity mode"
-
-
-def test_quack_numerics_reproducer_reports_absolute_and_relative_error() -> None:
-    expected = jnp.asarray([0.0, 2.0, -4.0], dtype=jnp.float32)
-    actual = jnp.asarray([0.001, 2.5, -3.0], dtype=jnp.float32)
-
-    metrics = _error_metrics(actual, expected)
-
-    assert metrics["allclose"] is False
-    assert metrics["mismatch_count"] == 3
-    assert metrics["mismatch_fraction"] == pytest.approx(1.0)
-    assert metrics["mean_abs_error"] == pytest.approx((0.001 + 0.5 + 1.0) / 3)
-    assert metrics["max_abs_error"] == pytest.approx(1.0)
-    assert metrics["relative_l2_error"] == pytest.approx(
-        np.linalg.norm(np.asarray([0.001, 0.5, 1.0])) / np.linalg.norm(expected)
-    )
 
 
 def test_approximate_quack_ring_requires_explicit_backend_name() -> None:
