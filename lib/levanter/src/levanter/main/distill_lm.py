@@ -29,7 +29,6 @@ from levanter.distillation import (
     TaidState,
     distillation_loss,
     distillation_trainable_filter,
-    hard_label_next_token_loss,
     projected_hidden_distillation_loss,
     taid_loss_with_state_update,
 )
@@ -41,6 +40,7 @@ from levanter.distillation_initialization import (
 )
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
 from levanter.models.lm_model import LmConfig, LmExample
+from levanter.models.loss import materialized_next_token_nll
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -286,7 +286,7 @@ def main(config: TrainLmDistillationConfig) -> None:
                 student_model = trainer.mp.cast_to_compute(student_model)
                 example = _named_eval_example(batch, EvalBatch=trainer.EvalBatch, Pos=Pos)
                 logits = student_model(example.tokens, example.attn_mask)
-                per_position = hard_label_next_token_loss(
+                per_position = materialized_next_token_nll(
                     logits,
                     example.tokens,
                     Vocab=student_model.Vocab,

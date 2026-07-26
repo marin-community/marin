@@ -211,3 +211,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: explicit masking did not change validation. The run again completed and checkpointed; step-11 distillation loss was `9.1567`, student gradient and parameter norms were finite, and steady-state throughput reached 27,515 tokens/s. Only the unreduced fused hard-label NLL was nonfinite.
 - Interpretation: the student is not corrupted. Replace the validation-only fused linear cross-entropy with the stable identity `logsumexp(logits) - logits[target]`, using the same full-logit shape already validated by online KL.
 - Next action: test and device-smoke the stable validation NLL, then run an explicit checkpoint continuation before launching the screen.
+
+### 2026-07-26 17:51 - Systems smoke passes
+
+- Hypothesis: materialized float32 validation logits avoid the nonfinite unreduced fused cross-entropy result without changing the hard-label NLL definition.
+- Commit hash: `8dd74b043b`.
+- Job: `/power/qwen-distill-smoke-8dd74b` on one `GB200x4` node.
+- Result: all 12 training steps and every evaluation completed. Validation NLL decreased monotonically at the observed points from `11.210` to `8.679`; the final checkpoint committed at step 11.
+- Interpretation: online Qwen3-32B-to-0.6B KL, model sharding, microbatch accumulation, held-out NLL, and checkpoint serialization are device-valid. Both hard-label controls now select the same materialized NLL implementation.
+- Next action: launch the 18 paired 100M-token screen runs at batch priority and monitor each arm through its first evaluation and terminal checkpoint.

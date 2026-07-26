@@ -62,6 +62,7 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    eval_loss_implementation: levanter.eval.LmEvalLossImplementation = levanter.eval.LmEvalLossImplementation.FUSED
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -363,6 +364,7 @@ def main(config: TrainLmConfig):
                 max_eval_examples_per_ds,
                 mp=config.trainer.mp,
                 checkpoint_path=checkpoint_path,
+                loss_implementation=config.eval_loss_implementation,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 

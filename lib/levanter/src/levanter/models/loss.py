@@ -142,6 +142,21 @@ def next_token_loss(
     )
 
 
+def materialized_next_token_nll(
+    logits: NamedArray,
+    tokens: NamedArray,
+    *,
+    Vocab: hax.Axis,
+    Pos: hax.Axis,
+) -> NamedArray:
+    """Compute unreduced next-token NLL from materialized logits."""
+    logits = logits.astype(jnp.float32)
+    target_ids = hax.roll(tokens, -1, Pos)
+    log_normalizers = hax.nn.logsumexp(logits, Vocab)
+    target_logits = logits.take(Vocab, target_ids)
+    return log_normalizers - target_logits
+
+
 def cross_entropy_and_logsumexp_penalty(
     Vocab: hax.Axis,
     pred_y: NamedArray,

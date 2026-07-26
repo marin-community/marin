@@ -105,6 +105,20 @@ logit shape successfully, and the student-only evaluation has lower peak
 memory than the training step. Keep explicit masking in the evaluator as a
 separate correctness fix.
 
+## Results
+
+The stable validation path completed on device. NLL was finite at every
+evaluation and decreased from `11.210` after the first update to `8.679` at
+step 11. The run saved and committed its final checkpoint.
+
+- Job: `/power/qwen-distill-smoke-8dd74b`
+- Commit: `8dd74b043b`
+- Checkpoint:
+  `s3://marin-us-east-02a/marin/qwen-distillation/smoke/qd-c1-seed-0/2026.07.26.7/checkpoints/step-11`
+
+The full experiment matrix uses the materialized validation NLL for both
+hard-label controls as well, preserving a common evaluation implementation.
+
 ## Future work
 
 - [ ] Record steady-state step throughput after the corrected evaluation

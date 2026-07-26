@@ -25,6 +25,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.distillation import DistillationObjective
 from levanter.distillation_initialization import TeacherInitialization
+from levanter.eval import LmEvalLossImplementation
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.main.distill_lm import TrainLmDistillationConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -281,6 +282,7 @@ def training_step(
                 initialize_from_hf=student_checkpoint if arm_config.student_base else False,
                 use_hf_model_config=arm_config.student_base,
                 pad_tokenizer_to_match_model=True,
+                eval_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
             )
         else:
             teacher_path = ctx.artifact_path(teacher_checkpoint)

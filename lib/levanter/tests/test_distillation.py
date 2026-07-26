@@ -19,7 +19,6 @@ from levanter.distillation import (
     distillation_loss,
     distillation_trainable_filter,
     forward_kl_loss,
-    hard_label_next_token_loss,
     model_with_layer_anchors,
     projected_hidden_loss,
     taid_loss_with_state_update,
@@ -28,6 +27,7 @@ from levanter.distillation import (
 )
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
+from levanter.models.loss import materialized_next_token_nll
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.trainer_state import TrainerState, saveable_training_mask
@@ -90,7 +90,7 @@ def test_hard_label_next_token_loss_matches_reference():
     )
     tokens = hax.named(jnp.asarray([[0, 2, 3], [3, 1, 0]], dtype=jnp.int32), (Batch, Pos))
 
-    actual = hard_label_next_token_loss(logits, tokens, Vocab=Vocab, Pos=Pos)
+    actual = materialized_next_token_nll(logits, tokens, Vocab=Vocab, Pos=Pos)
 
     target_ids = jnp.roll(tokens.array, -1, axis=-1)
     expected = -jnp.take_along_axis(
