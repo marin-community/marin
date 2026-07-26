@@ -265,3 +265,26 @@ So the prediction is that 4-of-128 fits one rack at EP64 with no offload and no 
 4-of-128 candidate is a 1-rack command and their 4-of-256 candidate is a 2-rack command. The EP64 path
 hits the same wall at the same place as their FSDP path, which is a coherence check on both.
 Ready to fire as `./submit_d5.sh rack-e128` if the offload rung fails.
+
+## Check-in 9 — offload rung: NO OOM, but two infra deaths; resubmitted v3
+
+/mwittmann/ep25d5-d6144-e256-bf16-120-0726-0219-v2 (offload + fraction 0.90) reached `worker_failed`
+without ever producing a step, and the important negative is that it never OOM'd: ZERO
+"failed to allocate" lines across the full 20,346-line warning stream, versus 16/16 tasks reporting one
+within 9 minutes on the no-offload leg. So the offload rung did what the accounting predicted; the
+deaths were infra.
+
+Two of them, both during the long compile:
+- 09:23:02Z — `preemption_notifier.cc:90 SIGTERM caught` on tasks 0/2/3/6/12 simultaneously, i.e. an
+  eviction, not a crash. Note `ResourceConfig.with_gpu` sets `preemptible: true`, so these rack workers
+  are evictable; the ~30 minute compile at 707B is a long exposure window.
+- 09:53:28Z — gang abort. All 15 other tasks logged "another task died"; task 6 is the only one absent
+  from that list and its log shows it back at `[iris setup] step 2/3` at 09:54, i.e. it went first with
+  no primary error of its own. This is the known transient the brief describes.
+
+Per the standing policy (operational friction never closes a direction) resubmitted unchanged as
+/mwittmann/ep25d5-d6144-e256-bf16-120-0726-1000-v3. One hypothesis to watch on this attempt, since
+offload is new at this size: it parks ~40.5 GiB of optimizer state per GPU in PINNED HOST memory, so
+4 GPUs/node x 40.5 = ~162 GiB of pinned RAM against the launcher's `ram="256g"` request. If v3 dies
+the same way, a host-memory OOM is the first thing to check, and the answer is either a larger RAM
+request or the 4-of-128 fallback.
