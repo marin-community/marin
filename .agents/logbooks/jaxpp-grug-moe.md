@@ -3222,3 +3222,26 @@ author: dlwh
   - Larger fused groups change the BF16 shared-gradient accumulation order enough to violate the accepted numerical policy and worsen the net pipeline projection.
 - Next action:
   - Keep the benchmark and production-preserving ring phase refactor as reproducible evidence, but do not add grouped JaxPP tasks or run an L24 confirmation. Resume with a mechanism that changes stage rendezvous or collective execution rather than graph-level fusion of otherwise identical ring calls.
+
+### 2026-07-26 01:52 PDT - public device ragged all-to-all clears the direct gate
+- Hypothesis: The public OpenXLA device-initiated ragged-all-to-all in JAX nightly will remove the private-memory collective bottleneck at the exact EP8 assignment geometry without changing values, then remain usable through JaxPP's explicit MPMD path.
+- Commit Hashes:
+  - `d5e0cd05f8` adds an opt-in exact JAX CUDA 13 nightly install while preserving the locked JAX 0.10.1 default.
+  - `8582f9b122` patches pinned JaxPP to canonicalize its raw `inline` boolean to JAX 0.11's `Inline` enum.
+- Commands:
+  - Direct H100x8 gate `/dlwh/xla-ragged-a2a-device-nightly-ep8-20260726-0130` used JAX, jaxlib, CUDA 13 plugin, and PJRT `0.11.1.dev20260725`; 65,536 assignments per rank; d2560; 30 measured iterations; symmetric ragged-all-to-all mode; and the experimental device kernel.
+  - First reduced integration parent `/dlwh/iris-run-job-20260726-083256` used L8/d2560/e64/top-k4/seq4096/b512/m16, four H100x8 stages, explicit MPMD standard 1F1B, CuTe FA4, Triton grouped GEMM, and the same nightly.
+  - The CPU reproducer constructs JaxPP `PjitKwargs`, binds `jax._src.pjit.jit_p` through `apply_task`, and executes one sharded add on JAX `0.11.1.dev20260725`.
+- Results:
+  - The direct device-kernel gate was bitwise exact with mismatch count `0` and checksum `3,623,878,656`.
+  - Device-kernel median latency was `2.2801355ms`, mean `2.2773135ms`, minimum `2.185928ms`, and maximum `2.345059ms`. The matched private-memory baseline was `16.952521ms`, for a `7.4349x` speedup and `86.55%` latency reduction.
+  - The requested `ragged_all_to_all_thunk` VLOG selection line did not emit. Symmetric 80 GB virtual address spaces on every rank, successful GIN/RMA setup, absence of fallback errors, exact values, and the latency discontinuity are strong but indirect device-path evidence.
+  - The first reduced integration reached JaxPP's first stage task on every rank, then failed before compilation or training with `AttributeError: 'bool' object has no attribute 'value'`. JAX 0.11's `pjit` lowering dereferenced `inline.value`, while pinned JaxPP passed raw `False` directly to the primitive instead of using JAX's public JIT canonicalization.
+  - The compatibility patch converts booleans to `jax._src.api.Inline` only on JAX 0.11 or newer. The minimized reproducer now executes with `Inline.AUTO`; the project JAX 0.10.1 path still returns raw booleans. Changed-file precommit passes.
+  - The failed parent and all four child tasks are terminal killed with no retries, failures, metrics, or live resources. Reduced retry parent `/dlwh/iris-run-job-20260726-084810` is running from `8582f9b122`.
+- Interpretation:
+  - The public transport mechanism is the first exact EP8 candidate with enough direct headroom to plausibly close the remaining target MFU gap.
+  - The first integrated failure was a narrow, reproducible JaxPP/JAX private-API compatibility break rather than an XLA collective, compiler, memory, or numerical failure.
+  - The fixed acceptance policy remains relative-L2 at most `0.002` for loss and every gradient.
+- Next action:
+  - Require finite reduced retry metrics and a clear gain over the matched `9.4180%` ring reference. If it passes, launch the four-stage L24/b512/m16 target before scaling batch further.
