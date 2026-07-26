@@ -623,10 +623,27 @@ Methodological note: I projected ~70 GiB and measured 90.64, a 20 GiB miss. The 
 informative than a correct projection would have been — a projection that had matched would have told
 us nothing about WHY, whereas the miss forced the decomposition that produced this finding.
 
-## R7. Open, and what would close it
+## R7. RESOLVED — EP64 beats FSDP at the one-rack hero candidate shape
 
-The 4-of-128 EP64 leg (/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1100) is the direct EP-versus-FSDP
-test at the shape most likely to be chosen. #7201's comparators are 22.7% (QB-off chunk-2) and 23.1%
+/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1140-v3 completed 120/120 steps, 16/16 tasks.
+STEADY TAIL (steps 90-119): p50 **24.594%**, p10 24.434 / p90 24.771, sd 0.118, 276,413 tok/s,
+15.174 s/step, drops ~9-13%, loss 5.59. Against #7201's 4-of-128 FSDP rows (22.7% QB-off, 23.1% QB-on
+full-feature, both 12-step probes): **+1.5pp and +8.3% tok/s** on the honest steady-state number, which
+is also the only steady-state number that exists at this shape. On a like-for-like measurement window
+(mine at steps 10-24, the regime a 12-step probe actually samples) it reads 27.04%.
+All surviving caveats point the same way — sw2048 vs the candidate's sw512 + 5:1, and no
+XSA/attn-gate/GatedNorm where the 23.1% row has them — so the advantage is CONSERVATIVE. Offload is on
+in both; default allocator and default fraction, so no memory-knob caveat. Compliant configuration
+(cf1.05 + spill m=1..2, about -0.65pp) lands near ~23.9%, still above the FSDP row.
+Full detail in the RESULT section at the end of this log.
+
+### Still open
+
+The 4-of-256 shape has no MFU number and will not get one on a single rack (R4). Spill is unmeasured
+live at any d6144 shape — R1-R3 are kernel-exact but not a training leg. The original framing for this
+section, retained because it was written before the result and states the falsification cleanly:
+
+The 4-of-128 EP64 leg is the direct EP-versus-FSDP test at the shape most likely to be chosen. #7201's comparators are 22.7% (QB-off chunk-2) and 23.1%
 (QB-on full-feature), both 1-rack FSDP 12-step probes. If the EP64 number beats 23.1%, that is the
 first evidence EP plus the custom adjoint wins at the candidate shape and is the headline of this
 effort. If it lands below, that is equally important and must be reported just as prominently: it
