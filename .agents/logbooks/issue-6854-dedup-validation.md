@@ -1483,6 +1483,81 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T01:09:21Z — 74,326 pairs verified
+
+- Eleven additional checkpoints passed independent validation: 1,408 pairs,
+  872 model false positives, 533 model true duplicates, and three unresolved
+  outcomes. They contain 6,341 valid responses across 6,356 attempts; 15
+  invalid JSON responses affected seven retried judgments. Twenty-nine pairs
+  were chunked and 1,379 were direct. This block includes 512 baseline pairs
+  and 896 treatment pairs.
+- Complete-text review resolves the 8,054-character versus 8,002-character
+  treatment wiki/code pair as a false positive. The member alone contains the
+  executable `find . -type f -name '*.lua' -print0 | xargs -0 sed -i
+  '/^[ \t]*--/d'` command for stripping Lua comments; the canonical ends the
+  corresponding defaultconfig advice without it. Character similarity is
+  0.961136 and line similarity is 0.702929. Pair location:
+  `part-00066-of-00128.parquet:7940`; member/canonical text SHA-256:
+  `9335f10db4cddb0a056306773f48890a335d6252338913c13dbf787744ce59a4` /
+  `3a0d069d9c4ce3ef8f04c22f48a4ce8ad46af3c2aaba172e3a1b6c5864ed853a`.
+- Exact character comparison resolves the 163-line cross-source SFT pair as a
+  true duplicate. All 10,633 member characters equal the corresponding
+  canonical characters; the canonical's only seven additional characters are
+  `\text{` and `}` around the same boxed answer A. Pair location:
+  `part-00099-of-00128.parquet:7421`; member/canonical text SHA-256:
+  `d9de3b0c40d335ef504f2d1405f4f81ee3738b4715f1d043af9c0a310a59a361` /
+  `5b4e0665d494bf2541300bda8049c60e07452a302f7d09079a37ef471a4404f7`.
+- Complete-text comparison resolves the 1,427-character versus
+  1,312-character inequality SFT pair as a true duplicate. Both contain the
+  same positive-real constraint, target inequality, sum-of-cubes identity,
+  substitution, three-term sum-of-squares argument, and boxed conclusion.
+  The changes are prose and LaTeX formatting, not mathematical content. Pair
+  location: `part-00099-of-00128.parquet:7474`; member/canonical text SHA-256:
+  `290a41e3723cbc65f25e338873bc15c4fa99547913c3d468b7485e0865a6b4b0` /
+  `2c23f6524f14bec5e342831b464e8212d46411119fcb6d1636a4eff09f6c4017`.
+- The exact semantic judgments have SHA-256 values
+  `78cd5a820a89294377ddd22c35edc001516df4699fdf6e0603f5e29af3e90190`,
+  `b4c31ecbe58bb9673368b0a777875054c843d27c55418949a69f18ee13c4034a`,
+  and
+  `59e2a52277dc38a787bf5e9974047710ad6cad4e40dfa9d08f38a00b79bd38b7`.
+  The three hash-bound manual records have Parquet SHA-256 values
+  `1c7ac544abbfa24d9bc46a5c873c8c43caeb7a3f94ffba06d6dd08d27012f4af`,
+  `07586cfbb92130cef604b88a4f50bf56d386c162f1e2d769ecaf1083cc1e7e89`,
+  and
+  `88d74f152894cfcee3ca624a725b792674d3b3883ccc3a2d4d4f4b701ff16083`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  all three source cases, semantic checkpoints, manual rows, Parquet bytes,
+  and completion markers.
+- The 11 outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 5120, 5248, and 5376:
+    `5f5fa8ffc7ec489ac1fd0d1ef151fbc131056029913dea2a3695b80922dc115b`,
+    `a655cb4d9eb48fc83280b6b1e47e29bd36e6cb939d30600d6a7d9d5ffdc6c430`,
+    and
+    `6ccda91a6d409f87b1d4b832a3738c7e0fa649804f9ca254e88886dd663a1652`;
+  - p1 decision-file 34 offset 0:
+    `0023a0cefae9bc1edfe1d2b675ebfc233e027d333dbca3425223a7b6e0bf1f59`;
+  - p2 decision-file 66 offsets 4736 through 5120:
+    `6e503143f7093b286271d6e43d89e65cb0019ebe3bf247fa76d6ec85cccba9cb`,
+    `1b35cc00233069e1936e3120a045b805235bcce7f8ad7f0e0828b4afc7d4c403`,
+    `691d81b97d1c99407481e925f1e1893e2279dea3031404f4fb1424d89e76e116`,
+    and
+    `e96a2f5c238ffce531d112fda15b53a0be830d2b6a18175fd5695adaa77035c4`;
+  - p3 decision-file 99 offsets 3968, 4096, and 4224:
+    `72841ba4f78f7e0c80a3ab70ab1e94e8925f92dea873e4dfbb87e03f08873aae`,
+    `b474dd0f6c38af08af21b7b748fb12ccc4e12d2cc755ae3ed945d37de894e1d8`,
+    and
+    `f6ddfacfbd18ee41e8c095ab1a7659c5ac98c6436911c6c987afa559a66120d1`.
+
+- Across the stable 583-checkpoint snapshot, all 74 manual records leave:
+
+  - baseline: 60,919 pairs, 38,740 false positives, 22,179 true duplicates;
+  - treatment: 13,407 pairs, 7,067 false positives, 6,340 true duplicates;
+  - combined: 74,326 pairs, 45,807 false positives, 28,519 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:52:01Z — 72,918 pairs verified
 
 - Nine additional checkpoints passed independent validation: 1,152 pairs,
