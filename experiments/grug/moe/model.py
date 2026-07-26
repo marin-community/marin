@@ -137,6 +137,12 @@ class GrugModelConfig:
     # multiply+concat. Drops the concat on the (large) q/k activation. Different pair convention --
     # fine from scratch, not checkpoint-compatible with the split-half path.
     rope_fused: bool = False
+    # Heterogeneous GQA: give the global (full-causal) layers fewer distinct KV heads than the local
+    # sliding layers. All layers store w_k/w_v at ``stored_kv_heads`` = max(local, global); the narrower
+    # layer type slices projected K/V to its logical head count and repeats each head back to the stored
+    # width, so every layer feeds FA4 one static shape. Both None (default) = uniform ``num_kv_heads``.
+    local_kv_heads: int | None = None
+    global_kv_heads: int | None = None
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -216,6 +222,13 @@ class GrugModelConfig:
         if self.rope_fraction >= 1.0:
             return head_dim
         return (int(head_dim * self.rope_fraction) // 2) * 2
+
+    @property
+    def stored_kv_heads(self) -> int:
+        """KV-head width w_k/w_v are stored at: max(local, global) for heterogeneous GQA, else num_kv_heads."""
+        if self.local_kv_heads is None or self.global_kv_heads is None:
+            return self.num_kv_heads
+        return max(self.local_kv_heads, self.global_kv_heads)
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
@@ -323,7 +336,7 @@ class CausalSelfAttention(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _QKV_SPEC),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _QKV_SPEC),
@@ -341,7 +354,7 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        disable_rope: jax.Array | None = None,
+        is_global: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -367,6 +380,23 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
 
+        # Heterogeneous GQA: on the global layers use fewer distinct KV heads. Slice K/V to the logical
+        # head count and repeat each head back to the stored width (so FA4 sees one static shape), then
+        # select per layer. The stored-width (usually local) side is a no-op.
+        if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None and is_global is not None:
+            stored = self.cfg.stored_kv_heads
+
+            def _logical_kv(proj: jax.Array, num_kv: int) -> jax.Array:
+                if num_kv == stored:
+                    return proj
+                return align_kv_heads(proj[:, :, :num_kv, :], num_q_heads=stored)
+
+            local_k, local_v = _logical_kv(k, self.cfg.local_kv_heads), _logical_kv(v, self.cfg.local_kv_heads)
+            global_k, global_v = _logical_kv(k, self.cfg.global_kv_heads), _logical_kv(v, self.cfg.global_kv_heads)
+            k = jnp.where(is_global, global_k, local_k)
+            v = jnp.where(is_global, global_v, local_v)
+
+        disable_rope = is_global if (is_global is not None and self.cfg.disable_long_rope) else None
         q = rms_norm(q)
         k = rms_norm(k)
         # Partial RoPE: rotate only the leading rotary_dim of each head, pass the tail through. When
@@ -691,7 +721,7 @@ class Block(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, disable_rope: jax.Array | None = None
+        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, is_global: jax.Array | None = None
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
@@ -717,7 +747,7 @@ class Block(eqx.Module):
         attn_in = self.rms_attn(x)
         if self.attn_gated_norm is not None:
             attn_in = self.attn_gated_norm(attn_in)
-        attn_out = self.attn(attn_in, mask, disable_rope)
+        attn_out = self.attn(attn_in, mask, is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -845,10 +875,9 @@ class Transformer(eqx.Module):
                 layer, layer_is_global = layer_and_flag
                 lower_bounds = jnp.where(layer_is_global, global_lb, sliding_lb)
                 layer_mask = causal_mask.with_fa4_bounds(lower_bounds, sliding_valid)
-                # NoPE on the global layers when enabled; otherwise rope on every layer (disable_rope=None).
-                disable_rope = layer_is_global if cfg.disable_long_rope else None
+                # Pass the per-layer global flag; the block derives NoPE / heterogeneous-KV behaviour.
                 new_hidden, qb_beta = eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, layer_mask, disable_rope
+                    carry_hidden, layer_mask, layer_is_global
                 )
                 return new_hidden, qb_beta
 
