@@ -1483,6 +1483,47 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T07:18:37Z — 106,353 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0710-v164` independently
+  revalidated the final p3 decision-file 100 treatment checkpoint at semantic
+  offset 5,888. Its 75 pairs contain 34 model false positives, 39 model true
+  duplicates, and two unresolved outcomes. The checkpoint contains 167 valid
+  responses across 176 requests; nine invalid responses affected three
+  retried judgments. Seventy-four pairs used direct review and one used
+  chunked review. The outcome Parquet SHA-256 is
+  `7776601afd4be4a73b4a5e3bc0f158d2ae3d38b9c56012573760595a580e1b14`.
+- Complete source-document comparison resolves both ambiguities as true
+  duplicates:
+
+  - row 9,138 has 10,941 / 10,948 characters and 206 / 206 lines. Its only
+    changed span is `\boxed{\text{D}}` versus `\boxed{D}`; character
+    similarity is 0.999680 and line similarity is 0.995146. Its
+    semantic-evidence SHA-256 is
+    `dcb691138d622559abbf991925a70419b6b0a597832c96006f47969582a28950`.
+  - row 9,167 has 4,762 / 4,755 characters and 78 / 78 lines. Its only changed
+    span is `\boxed{B}` versus `\boxed{\text{B}}`; character similarity is
+    0.999264 and line similarity is 0.987179. Its semantic-evidence SHA-256 is
+    `f118a75e07e0ac29113437ae72355c7e23cafeacaaa270a8f0ad3114fec434f0`.
+
+- The hash-bound manual records have Parquet SHA-256 values
+  `44599f78e21ccdadab00f0357a56efd1a737b4efcd93fddbf63af102fa6bdae1`
+  and
+  `c51620cc257c963dacae18d824b9c7867cdcbbac4824855c0763cab9d4f4428a`.
+  `/rav/datakit-6854-verify-manual-0715-v167` separately reread and exactly
+  checked both source cases, the semantic checkpoint, judgment hashes, manual
+  rows, Parquet bytes, and completion markers.
+- Across the stable 837-checkpoint snapshot, all 123 unresolved model outcomes
+  remain covered by 94 true-duplicate and 29 false-positive manual records.
+  The adjusted totals are:
+
+  - baseline: 85,337 pairs, 54,332 false positives, 31,005 true duplicates;
+  - treatment: 21,016 pairs, 10,849 false positives, 10,167 true duplicates;
+  - combined: 106,353 pairs, 65,181 false positives, 41,172 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T07:09:45Z — 106,278 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0708-v163` independently
