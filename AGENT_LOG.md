@@ -1537,3 +1537,49 @@ operand (prior art exists in the fp8 ragged-dot lineage — mine it rather than 
 the cotangent quantize into the combine epilogue. Whether the remaining ~2.5 s/step of QDQ can be
 driven under the 2761 ms/3-step exposure saving is the question that decides this route.
 Confidence: 9/10 on all four readings; 6/10 that a fused-QDQ variant turns this positive.
+
+## ATTRIBUTION 2026-07-26 13:15 UTC — ONE cost dominates: the per-token amax reductions are ~all of it
+
+Compute-stream op deltas, fp8 leg vs limit=4 control, GPU:0, same 3-step windows:
+
+| op | control | fp8 | delta |
+|---|--:|--:|--:|
+| `loop_reduce_fusion_2` | 409.6 ms | 4806.6 ms | **+4397 ms** |
+| `loop_reduce_fusion` | not in top-30 | 2693.6 ms | **+2694 ms** |
+| `loop_convert_fusion_5/23/26` | not in top-30 | 1559.7 ms | +1560 ms |
+
+The two reduce fusions alone are **~7500 ms per 3-step window = ~2500 ms/step**, which is the
+entire ~2.5 s/step of added non-collective compute. These are the per-token amax passes: a full
+reduction over the activation tensor on send, and a second over the cotangent in the backward.
+The convert fusions (the casts themselves) are ~520 ms/step, secondary. Caveat on method: the
+tool reports each leg's top-30 ops, so an op absent from the control's list reads as 0 and its
+delta is an upper bound; `loop_reduce_fusion_2` is the reliable one because it appears in both.
+
+**This is the >60% single-cost case, not the three-way split.** The backward dequant of `received`
+for the bf16 wgrad — the cost I most expected to dominate — does not appear at the top at all.
+
+### The number the fix has to beat (sanity-checked)
+
+- exposure saving: 2761 ms per 3 steps = **920 ms/step**
+- added QDQ compute: span grew 1592 ms/step, exposure fell 920 ms/step, so compute grew
+  1592 + 920 = **2512 ms/step**
+- **break-even requires QDQ to fall 2512 -> 920 ms/step, a 2.73x reduction**
+- full elimination gives step 11.94 - 0.92 = 11.02 s, i.e. MFU 22.674 x 11.94/11.02 =
+  **24.57%, or +1.90pp** over the limit=4 control
+
+The targeted fix follows directly from the attribution: **delayed scaling removes the amax passes
+outright** — use the previous step's per-tensor amax instead of reducing the current activation —
+and it is causally safe by the established rule since the scale does not depend on the current
+batch. That is one change addressing ~100% of the measured overhead rather than three changes
+addressing a third each. Prior art exists in the fp8 ragged-dot lineage and should be mined rather
+than rebuilt; the known trap is that an amax cotangent under `shard_map` must reduce with **pmax,
+not psum**. Per-token current-scaling would have to be traded for delayed per-tensor scaling on the
+quantized operands, which is a fidelity change that needs its own loss verdict.
+
+### Strategic framing, so nobody infers more than this route offers
+
+Even a fully optimized fp8 wire lands the honest configuration near **24.4-24.6%**, and near
+**24.2% at 3.66% drops** once spill is included for fidelity. That is a real improvement and the
+largest remaining speed lever, but it is **short of 25% with a strict 3% drop bar at this shape**.
+This route should be pursued on its merits, not as a path that closes the goal.
+Confidence: 8/10 on the attribution (one op measured in both legs carries it; the rest are upper bounds); 9/10 on the break-even arithmetic.
