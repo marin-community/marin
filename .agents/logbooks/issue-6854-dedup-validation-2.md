@@ -16,6 +16,54 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T16:22:50Z — 156,957 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1632-v435` independently
+  revalidated p1 decision-file 38 semantic offset 128 and p2 decision-file 70
+  semantic offset 3,328. Their 256 baseline pairs contain 140 model false
+  positives, 115 model true duplicates, and one unresolved outcome. Twenty-two
+  pairs were chunked and 234 were direct. All 2,231 judgments were valid on
+  their first request attempt. The outcome Parquet SHA-256 values are
+  `9de5ee0e60e36ca9906c24167be796e5b25cb6f911588c8a35188866d086bd31`
+  and `76be7da0148044907c1bdc0c79831be5e29e213f06f43ed58e2e876f0a1a633c`.
+
+- Complete-text inspection resolves the Wikiteam ambiguity as a true duplicate
+  under the established low-value-template boundary. Both user-talk pages are
+  the same FamilySearch Wiki welcome template. Their variations are username,
+  signer, timestamp, capitalization, one blank line, and semantically
+  equivalent contributor-help link text; those instance slots add no
+  substantive training content. The 415/414-character documents have 20/19
+  lines and character, line, and word-sequence similarities 0.878166,
+  0.717949, and 0.809160. Member/canonical text SHA-256 values are
+  `228c7e08604193460d84474a8e7b9ad786cc35fdde03c0df23a6eaa32b57b92b`
+  and
+  `6a44946d0660ab2dac1961d401a52d06766132522e2ec5adf8f86ab73146f9b2`.
+
+- `/rav/datakit-6854-inspect-row292-1633-v436` persisted the complete pair and
+  diff with inspection SHA-256
+  `2712f374ed7309ad23543a91d227d8f7b078d3b0224d954d8d1f7584d84729a4`.
+  `/rav/datakit-6854-publish-row292-1634-v437` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row292-1635-v438`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `04a0576d00fcaa2997540a83512bd2226660b22bbb1f717cb1370892bddaa3b4`,
+  `1849452e23b818cb62d2e1652dc5aa5f5771411514a842d1bee06cab8759e8ed`,
+  and `b51cf1fc1fb170aa24e61bac96e3f447672dbdc06f59f25c1344aee797cb26a8`.
+
+- Across the stable 1,235-checkpoint snapshot, all 174 unresolved model
+  outcomes are covered by 135 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 126,127 pairs, 79,972 false positives, 46,155 true duplicates;
+  - treatment: 30,830 pairs, 15,910 false positives, 14,920 true duplicates;
+  - combined: 156,957 pairs, 95,882 false positives, 61,075 true duplicates.
+
+- The next audit frontiers are p0 `(7, 0)`, p1 `(38, 256)`,
+  p2 `(70, 3,456)`, and p3 `(103, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T16:15:40Z — 156,701 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1631-v434` independently
