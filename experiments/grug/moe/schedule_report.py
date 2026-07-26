@@ -98,9 +98,17 @@ def main() -> None:
     lines = dump.read_text(errors="replace").splitlines()
     print(f"instructions tagged is_sync: {sum(1 for line in lines if IS_SYNC in line)}")
 
+    parsed = computations(lines)
+    print(
+        f"computations: {len(parsed)}, instructions: {sum(len(b) for b in (body for _, body in parsed))}, "
+        f"largest: {max((len(body) for _, body in parsed), default=0)}, "
+        f"raw start lines matching {needle!r}: "
+        f"{sum(1 for line in lines if needle in line.replace('_', '-') and '-start' in line.replace('_', '-'))}"
+    )
+
     census: Counter[tuple[str, str]] = Counter()
     cover_rows: list[tuple[str, str, str, int, str]] = []
-    for computation, body in computations(lines):
+    for computation, body in parsed:
         for index, (name, line) in enumerate(body):
             # Match on the defined name, not the line: a done line names its start as an operand.
             flat_name = name.replace("_", "-")
