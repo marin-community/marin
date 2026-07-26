@@ -632,3 +632,41 @@ only; racks were held during the incident per standing orders and resumed on can
 
 Confidence: 3/10 that any bias-controller variant reaches <3% at cf1.0; 8/10 in the
 burstiness diagnosis (two-sided evidence: closed-loop positive + live null).
+
+## Check-in 2026-07-26 02:50 UTC — R6-5 (manual-PGLE x prefetch) accepted; capture in flight
+
+- Plan: (1) capture job IN FLIGHT /mwittmann/ep25d4-pgle-capture-30-v1-20260726 (operating config + QB + adjoint + PREFETCH so the profiled HLO matches the PGLE leg; 3-step window from step 8; command buffers off per the baseline profile template); (2) pgle_convert.py committed (0-cred harvest path: xplane -> ProfiledInstructionsProto -> gzip+b64 via job logs) — conversion API verified in this jax (jax._src.lib._profiler.get_profiled_instructions_proto); (3) proto file ships in the workspace bundle (git add -f) at /app/..., PGLE leg gets XLA_FLAGS="--xla_gpu_pgle_profile_file_or_directory_path=... --xla_gpu_enable_latency_hiding_scheduler=true"; (4) matched control = same env minus the two flags. Both QB-on + drops (matched regime).
+- Verdict criteria: MFU delta (>=0.5pp to matter) + does the dispatch a2a overlap the GEMM in a follow-up trace of the PGLE leg. Prior: low-medium (auto-PGLE/LHS sealed null; the untested piece is REAL latencies + provably-free dataflow from my prefetch gate).
+Confidence: 4/10
+Next: babysit capture; then conversion job; then legs.
+
+## Check-in 2026-07-26 03:05 UTC — PGLE file built and shipping; treatment leg in flight
+
+- Capture job succeeded (16 hosts, steps 8-11). Conversion required mirroring jax's PGLEProfiler flow exactly: raw-xspace aggregation returns an EMPTY proto; the correct pipeline is get_fdo_profile(xspace) per host (297KB each, all 16 identical-size) then aggregate_profiled_instructions(fdo_list, p90). pgle_convert.py fixed accordingly (2 iterations, operational friction checkpointed per instructions).
+- Proto harvested through job logs (gzip+b64, no s3 creds needed), verified to contain real instruction costs (input_reduce_fusion.*, custom-call.*), committed at experiments/grug/moe/pgle/ep64-qb-adjoint-prefetch.pb (3a73ca1b5) — ships in the workspace bundle at /app/... for --xla_gpu_pgle_profile_file_or_directory_path.
+- TREATMENT LEG SUBMITTED: /mwittmann/ep25d4-pgle-ab-pgle-120-v1-20260726 (QB+adjoint+prefetch+drops + PGLE file + LHS). Control (same minus the two XLA flags) follows back-to-back. Note: remote compilation cache keys include XLA flags, so no stale-schedule hazard.
+Confidence: 4/10
+Next: babysit treatment (watch for early XLA parse errors); then control.
+
+## Check-in 2026-07-26 06:50 UTC — v1 failure DIAGNOSED as infra flake; treatment v2 resubmitted with a profile window
+
+- Session resumed on a fresh model after the prior one ran out of credits. Context reconstructed from ROUND6_BRIEF.md + AGENT_LOG tail; working tree clean apart from this log.
+- v1 POST-MORTEM (child job logs, /mwittmann/ep25d4-pgle-ab-pgle-120-v1-20260726/grug-train-...):
+  first fatal at 03:04:55, i.e. ~40 s after task start and BEFORE any XLA compilation —
+  `ABORTED: 5 unexpectedly tried to connect with a different incarnation` on the JAX
+  coordination service, then a 125-attempt gang restart loop through 04:21 until iris gave up.
+  hparams had already logged correctly (d5120/E256/top8/48L/b1024/seq4096/EP64/steps120,
+  qb_routing true), so config and bundle were fine. NOT an XLA flag/proto parse error, NOT
+  an OOM — this is the cluster-wide incarnation-mismatch class rav is chasing. Per policy,
+  operational friction closes nothing: resubmitted.
+- TREATMENT v2 IN FLIGHT: /mwittmann/ep25d4-pgle-ab-pgle-120-v2-20260726 (06:46Z). Identical
+  to v1 plus SCALE_PROFILER_STEPS=3 / SCALE_PROFILER_START=8, so the same job yields both the
+  MFU series and a treatment-side xspace for the overlap (mechanism) question. Steps 8-10 are
+  excluded from the MFU read; the control leg will carry the same profile window so the two
+  legs stay matched.
+- Mechanism plan: the control-side xspace already exists from the capture job
+  (s3://marin-us-east-02a/tmp/ttl=30d/xprof/ep25d4-pgle-capture-30-v1-20260726/plugins/profile/steps-8-to-11/,
+  16 hosts, ~216 MB each, same QB+adjoint+prefetch config, no PGLE/LHS). Comparing the two
+  device timelines answers whether the dispatch a2a actually moves under the expert GEMM.
+Confidence: 4/10 on the direction (unchanged); 8/10 that v1 was infra, not code.
+Next: verify log flow + PGLE-consumption messages around step 5; build the xspace overlap reader while the leg runs.
