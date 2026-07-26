@@ -92,6 +92,7 @@ def jax_nightly_setup_scripts(*, version: str) -> tuple[str, ...]:
         f"jaxlib=={version}",
         f"jax-cuda13-plugin[with-cuda]=={version}",
         f"jax-cuda13-pjrt=={version}",
+        f"nvidia-nccl-cu13=={NCCL_EP_RUNTIME_VERSION}",
     )
     return (
         "\n".join(
@@ -102,7 +103,9 @@ def jax_nightly_setup_scripts(*, version: str) -> tuple[str, ...]:
                 f"echo 'installing JAX CUDA 13 nightly {version}'",
                 "uv pip install --link-mode symlink "
                 f"--prerelease allow --index {JAX_NIGHTLY_INDEX} " + " ".join(repr(package) for package in packages),
-                "python -c 'import jax, jaxlib; print(\"JAX nightly active\", jax.__version__, jaxlib.__version__)'",
+                "python -c 'import importlib.metadata as m; import jax, jaxlib; "
+                'print("JAX nightly active", jax.__version__, jaxlib.__version__, '
+                '"NCCL", m.version("nvidia-nccl-cu13"))\'',
             ]
         )
         + "\n",
