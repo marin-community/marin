@@ -361,7 +361,7 @@ Then run all three greps. The combination of what IS and ISN'T present is the cl
 |---|---|---|
 | `grep -c "failed to allocate" /tmp/j.log` | 3. device HBM OOM | any hit => HBM. The adjacent `Stats: Limit / InUse / MaxInUse` lines and the `allocator.cc:71` histogram give the whole picture; the histogram sums to InUse and its entries can be matched to tensor shapes. |
 | `grep -c "SIGTERM caught" /tmp/j.log` | 1. preemption | hits, especially several tasks within the same instant, => eviction, not a crash. `ResourceConfig.with_gpu` sets `preemptible: true`, so exposure scales with COMPILE time. |
-| all three of the above zero, plus no traceback | 2. container host-memory OOM | a process died by kernel SIGKILL, which leaves no log. Suspect immediately when host offload or other large pinned host allocations are in play. |
+| all three of the above zero, plus no traceback | 2. container host-memory OOM (SUSPECT, then TEST) | a process died by kernel SIGKILL, which leaves no log. Suspect when host offload or other large pinned host allocations are in play — but confirm by raising the request and re-running, because in my own case raising 256g -> 600g changed nothing, so this branch also covers residual transient gang aborts. |
 
 Confirm class 2 positively by finding the task that is NOT in the victim list: every other task logs
 "another task died", so the one absent from that set went first. Its own log will show it already back
