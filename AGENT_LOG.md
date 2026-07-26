@@ -598,6 +598,31 @@ where EP64 would give 4 x 65,536, and a 4-layer model dilutes the MoE share. The
 - The three-way triage recipe for look-alike gang aborts is above; class 2 is "suspect, then test",
   because raising 256g -> 600g did not fix my case.
 
+## R8. Expert-count reduction is NOT the memory lever it looks like — per-GPU tokens is
+
+Two MEASURED temp-arena sizes at EP64, same batch, same layers, same everything but expert count:
+
+    d6144 4-of-256 (4 local experts/GPU):  106.63 GiB
+    d6144 4-of-128 (2 local experts/GPU):   90.64 GiB     -> halving experts cut the arena 15%
+
+The arena is dominated by the token-scaled bf16 residual stack — 36.0 GiB, IDENTICAL at both shapes,
+because it is [L, tokens_per_shard, H] and neither L, tokens nor H changed. The expert-scaled fp32
+gradient accumulators DO halve (40.5 -> 20.25 GiB) and that accounts for essentially the whole 16 GiB
+delta. Nothing else moved.
+
+So anyone who sees 4-of-256 fail to fit and reaches for 4-of-128 as the memory fix is reaching for a
+knob that moves 15% of the problem. The levers that actually move it, in order:
+1. per-GPU tokens — scales the residual stack (36.0 GiB) and most of the per-layer working set;
+   halving the batch would take roughly 18 GiB out of the arena at either shape.
+2. residual offload / more aggressive remat — attacks the same 36.0 GiB.
+3. optimizer-state host offload — ~40.5 GiB at 4-of-256, ~20.25 at 4-of-128, but note this comes off
+   the RESIDENT set, not the arena, so it helps the total without touching the peak intermediate.
+4. expert count — the intuitive one, and the weakest.
+
+Methodological note: I projected ~70 GiB and measured 90.64, a 20 GiB miss. The pair is more
+informative than a correct projection would have been — a projection that had matched would have told
+us nothing about WHY, whereas the miss forced the decomposition that produced this finding.
+
 ## R7. Open, and what would close it
 
 The 4-of-128 EP64 leg (/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1100) is the direct EP-versus-FSDP
