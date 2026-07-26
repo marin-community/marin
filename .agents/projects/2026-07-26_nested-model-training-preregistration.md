@@ -475,6 +475,22 @@ same value is used in smoke and production; it avoids changing the schedule
 after Gate 1. All model arms are amended together. No usable validation
 checkpoint was produced before this correction.
 
+### Final fp32 feasibility gate
+
+The finite-sentinel and warmup correction did not make the bf16 reference
+backend stable. E128 produced a finite first gradient, but the E256 control and
+both nested treatments produced nonfinite gradient norms; every final
+validation loss was nonfinite. Iris recorded zero task failures and zero
+preemptions.
+
+One last feasibility gate changes no architecture treatment: run the E256
+control and primary nested25 arm with batch 256 and
+`params=float32,compute=float32,output=float32`. Both must produce three finite
+updates, a finite Paloma macro loss, capacity overflow at or below 1%, and a
+checkpoint. If either fails, Gate 1 closes as blocked and no production arms
+launch. If both pass, the four production arms use this policy and batch size,
+with a step count frozen before launch from the measured steady-state rate.
+
 ## Decision rules
 
 Promote:

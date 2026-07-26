@@ -22,6 +22,7 @@ Optional overrides:
     NESTED_HIDDEN_DIM   model width (default: 1280)
     NESTED_SEQUENCE_LENGTH  sequence length (default: 8192)
     NESTED_RUN_SUFFIX   optional retry suffix for output and W&B IDs
+    NESTED_MP           jmp policy (default: bf16 compute)
 """
 
 import dataclasses
@@ -65,9 +66,11 @@ _DEFAULT_HIDDEN_DIM = 1280
 _DEFAULT_SEQUENCE_LENGTH = 8192
 _SMOKE_STEPS = 20
 _PROXY_WARMUP_STEPS = 5
+_PROXY_EVAL_INTERVAL = 100
 _OUTPUT_SUBDIR = "experiments/nested-moe"
 _SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 _ATTENTION_IMPLEMENTATIONS = ("gpu_fa4_thd", "reference")
+_DEFAULT_MP = "params=float32,compute=bfloat16,output=bfloat16"
 
 
 class NestedArm(StrEnum):
@@ -198,7 +201,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             steps=steps,
             batch_size=batch_size,
             seed=0,
-            mp="params=float32,compute=bfloat16,output=bfloat16",
+            mp=os.environ.get("NESTED_MP", _DEFAULT_MP),
             tracker=WandbConfig(
                 project="marin_moe",
                 tags=["moe", "nested-moe", arm.experiment_id, phase, "gb200"],
@@ -216,7 +219,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             ),
             eval=GrugEvalConfig(
                 eval_batch_size=eval_batch_size,
-                steps_per_eval=steps if phase == "smoke" else 1000,
+                steps_per_eval=steps if phase == "smoke" else _PROXY_EVAL_INTERVAL,
                 max_eval_batches=1,
                 eval_current=True,
                 eval_ema=False,

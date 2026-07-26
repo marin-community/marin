@@ -229,6 +229,12 @@ zero, and nested rows propagated an infinite router sentinel through QB
 arithmetic. The final proxy uses a finite zero-probability router sentinel and
 five explicit warmup steps, matching 1% of the bounded 500-step schedule.
 
+Those corrections did not stabilize bf16 reference training: the E256 control
+and both nested arms still produced nonfinite gradients, and all validation
+losses were nonfinite. The final bounded feasibility gate therefore compares
+only E256 control and nested25 at batch 256 under full-fp32 compute. Production
+arms launch only if both produce three finite updates and finite Paloma loss.
+
 At d1280 and length 8,192, one reference-attention step took about 262 seconds.
 The four arms were therefore uniformly reduced to the d768, length-2,048 proxy
 above while preserving tokens per step. This amendment was made before any

@@ -317,3 +317,16 @@ author: Marin research
   full-row tests passed; the required pre-commit entry point passed.
 - Next action: publish the amended snapshot and repeat the common four-arm
   smoke. No arm is promoted without three finite updates.
+
+### 2026-07-26 21:35 - Final fp32 feasibility gate
+
+- Result: the corrected r10 E128 arm produced a finite first gradient. The
+  E256 control and nested arms produced NaN or infinite gradient norms, and
+  every final validation loss was NaN. Iris reported zero failures and zero
+  preemptions.
+- Interpretation: no architecture arm promotes. The bf16 reference backend is
+  not a stable scientific vehicle for this E256 proxy.
+- Final bounded test: E256 control and nested25 at batch 256 with full-fp32
+  compute. Both require three finite updates, finite Paloma, overflow at or
+  below 1%, and a saved checkpoint. Failure of either closes Gate 1 without
+  production launches.
