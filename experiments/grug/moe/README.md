@@ -216,6 +216,14 @@ mesh is chosen so `num_experts / expert_axis` matches the rack's local expert co
 census taken this way against the rack profile before trusting it: a small mesh manufactures
 entry-level reshard collectives that the large mesh does not have.
 
+### Changes under `lib/` need `git add -f`
+
+A global gitignore covers `lib/`, so `git add` on a NEW file there is silently refused. It never
+reaches the commit and therefore never ships in the Iris workspace bundle — a rack job then runs
+stale code while the local tree looks correct, which is the worst version of this failure because
+nothing errors. Always `git add -f` new files under `lib/*`, and check `git status` before
+submitting a job that depends on them.
+
 ### Diagnostics that lie toward giving up
 
 Two checks on this stack report "nothing here" when the thing is in fact present. Both would have
