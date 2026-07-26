@@ -84,3 +84,85 @@ regime (the latent arm doubles experts, so its bucket mean halves exactly as it 
 Confidence: 9/10 that the port is correct (unit-tested, and the FLOPs path cross-validates against
 the reference leg's own emitted number); 5/10 that latent clears the +17.5% arch-aware-MFU breakeven
 at EP64; ~8/10 that it clears the standalone's +16% tok/s.
+
+## Check-in 2 — brief amendment folded in: the PRIMARY arm is now matched-work, and the amendment's own criterion needs one correction
+
+Coordinator amendment received and written into `D6_BRIEF.md`. It is right, and it changes the
+headline: the prior latent result's +16.0% tok/s is fully accounted for by a 15.2% work cut, so it
+never tested the wire at all. Timing note for the record: I had already submitted the two EP4
+4-GPU correctness smokes before it arrived; no rack time had been spent, so nothing was wasted.
+
+### The three arms, all resolved through `build_scale_model()` and the shipping `_compute_flops`
+
+| arm | E | I | latent | FLOPs/token | routed params | a2a send buffer | bucket mean |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| **dense** (the reference) | 128 | 3072 | — | **48.186 G** | 347.892 B | 3.000 GiB | 2048 |
+| **matched-work** (PRIMARY) | 128 | 6144 | 3072 | **51.810 G** (+7.52%) | 347.892 B | **1.500 GiB** | 2048 |
+| **param-preserving** (secondary) | 256 | 3072 | 3072 | **41.014 G** (-14.9%) | 347.892 B | **1.500 GiB** | 1024 |
+
+The matched-work arm holds THREE things fixed that the e256 arm does not: routed parameters, routed
+expert FLOPs (`3*L*I` per expert unchanged), and the per-(sender,expert) bucket mean. That third one
+matters more than it looks: this session established that heavy-drop runs read HIGHER MFU, because
+dropped assignments gather a zero pad row. The e256 arm halves the bucket mean, so it changes the
+drop regime at the same time as the wire. The matched-work arm does not. It is the right primary.
+
+### CORRECTION to the amendment's falsification criterion: "higher MFU" is satisfied by the NULL too
+
+The amendment says a real wire win must show up as higher tok/s AND higher arch-aware MFU. The
+second half does not discriminate on this arm, and the reason is in the table above: the
+matched-work arm is matched on *routed* work but the two latent projections ADD work —
+`4*d*L` per layer, i.e. **+7.52% analytic FLOPs/token**, not zero. Those projections are large,
+well-shaped dense GEMMs that run well above the step-average efficiency, so they raise the analytic
+numerator faster than they raise step time, and MFU rises even if the wire buys nothing.
+
+Quantified, so it can be checked rather than asserted. Added projection work per token is
+`3 x 4 x 6144 x 3072 x 48 = 1.0872e10` FLOP, i.e. `7.126e14` FLOP per device per step at 65,536
+tokens/device. At an achieved efficiency `e` of the 2.5e15 per-GPU peak that costs `0.285/e` seconds.
+Take the reference step as `T = 15.408 s` (see the discrepancy note below) and EP25's measured 12.9%
+exposed-collective share, so `X_ref = 1.99 s` and compute `C_ref = 13.42 s`:
+
+| | e = 0.246 (step average, pessimistic) | e = 0.50 (realistic for these GEMMs) |
+|---|---|---|
+| added projection time | 1.158 s | 0.570 s |
+| **NULL** (wire buys nothing) | tok/s **-7.0%**, MFU **+0.00pp** | tok/s **-3.6%**, MFU **+0.91pp** |
+| **THESIS** (exposed collective halves) | tok/s **-1.0%**, MFU **+1.58pp** | tok/s **+2.8%**, MFU **+2.60pp** |
+
+So the null already predicts MFU flat-to-up-0.9pp. The discriminating readouts are:
+1. **tok/s**, which flips sign between the hypotheses (null -3.6..-7.0%, thesis -1.0..+2.8%), and
+2. **the profile**, which measures both terms directly rather than assuming either.
+
+PRE-REGISTERED, before any rack leg: I will read the verdict off the profile pair, and use tok/s as
+the endpoint check. Exposed collective time on the matched-work arm should fall to roughly half the
+dense arm's. If collective bytes are confirmed halved (they are, by construction: 3.000 -> 1.500 GiB
+of send buffer) and exposed collective time does NOT fall, the thesis is falsified regardless of
+what MFU does, and I will report that as the result.
+
+### A discrepancy in the reference leg's own numbers, flagged rather than papered over
+
+d5's steady-tail row reads `p50 MFU 24.594% | 276,413 tok/s | 15.174 s/step`. Those three cannot all
+be true: MFU is exactly `tokens_per_step x 3 x FLOPs_per_token / (duration x peak)`, so 15.174 s
+implies 276,414 tok/s and **24.97%**, while 24.594% implies 272,210 tok/s and 15.408 s/step. The
+step-119 log line is internally consistent (270,378 tok/s / 15.513 s / 24.428%), so the arithmetic is
+sound and it is the summary row that mixes windows. I use `24.594% <-> 272,210 tok/s <-> 15.408 s`
+above, and I am running my own dense leg so the comparison rests on a matched pair I measured rather
+than on that row.
+
+### Named confounds on the matched-work arm
+
+- `I` doubles from 3072 to 6144, so the expert GEMM changes shape ([rows, 3072] x [3072, 12288]
+  instead of [rows, 6144] x [6144, 6144]) at identical FLOPs. Matched *work* is not automatically
+  matched *achieved efficiency*; the profile's per-kernel occupancy will show whether it is.
+- The expert intermediate buffer scales with `2I`, so it doubles (3.0 -> 6.0 GiB) while the two a2a
+  buffers halve (3.0 -> 1.5 GiB each). Net memory should be near-neutral, but the prior work OOM'd
+  this arm at a 181.34 GiB plan on the standalone harness at replica axis 1 with no offload. Here it
+  gets host offload and the default 0.75 fraction. If it still does not fit I will record the plan
+  number rather than substitute the e256 arm.
+- Quality is not measured. Every routed token now passes a rank-3072 bottleneck shared across all
+  experts and each expert sees half the input width. 120 steps cannot settle that.
+
+Jobs: added `smoke-matched` / `rack-matched` to `submit_d6.sh` and submitted
+`/mwittmann/ep25d6-smoke-matched-0726-1425` (EP4, 64 experts, I6144, L3072 — routed work, routed
+params and bucket mean all identical to `smoke-dense`).
+
+Confidence: 9/10 on the port; 9/10 that the amendment's MFU criterion needs the correction above
+(it is arithmetic, not judgement); 4/10 that the matched-work arm shows a real wire win at EP64.

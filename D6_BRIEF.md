@@ -41,6 +41,43 @@ EP scaling is essentially unmeasured.
 changes the denominator, so an MFU-only readout is not interpretable. This is the single most
 important reporting requirement in this brief.
 
+## AMENDMENT (coordinator, 2026-07-26) — the primary arm changes
+
+Working through the FLOP accounting on the prior latent matrix shows its headline result does **not**
+support the collective-bytes thesis. The param-preserving arm (L3072/I3072/e256) got +16.0% tok/s
+while analytic work/token fell 15.2% (47.58 -> 40.33 GFLOP/token). Those nearly cancel, which is
+exactly why arch-aware MFU came out flat at -0.28pp. The measured gain is fully accounted for by
+doing less work. If halving the dispatch payload were paying off on top, MFU would have risen.
+
+That matrix ran `ring_cute` at EP4, where collective exposure is a much smaller share of the step
+than in the EP64 fixed-capacity a2a configuration (where exposure filled essentially all compute
+idle). So the mechanism has room here that it did not have there — but treat it as **untested**, not
+as supported.
+
+1. **ADD the matched-work arm and treat it as PRIMARY: L3072, I6144, e128, top-4.** It preserves
+   routed params (347.9B) *and* active routed-expert FLOPs, so per-expert params `3*L*I` are
+   unchanged and any throughput delta is attributable to the halved wire alone. The param-preserving
+   e256 arm confounds wire bytes with a 15% work cut.
+   This arm OOM'd in the prior work at a 181.34 GiB XLA plan — but at replica axis 1 on the
+   standalone harness, before the EP25 stack, with no host offload. Retry it here with
+   `SCALE_OFFLOAD_OPT_STATE=1` and the default BFC allocator at the default 0.75 fraction (do NOT
+   raise the fraction — that is the NCCL-starvation knob). If it still does not fit after honest
+   effort, say so and record the plan number; do not silently substitute the e256 arm for it.
+2. **KEEP the param-preserving e256 arm** as a secondary throughput-at-equal-params result, not as
+   the thesis test.
+3. **FALSIFICATION CRITERION.** For the matched-work arm, routed work is constant, so a real wire win
+   must show up as higher tok/s and higher arch-aware MFU together with a measured drop in exposed
+   collective time in the profile. Flat MFU with confirmed-halved collective bytes falsifies the
+   thesis. That is a publishable negative — report it fast and with the same confidence as a positive.
+4. **Report analytic FLOPs/token as a number for every arm**, including the baseline, so a reader can
+   redo this arithmetic. Formula: routed term `6*L*I*topk` per layer, plus latent projections
+   `4*d*L` per layer.
+
+Outside what short legs can measure, but flag it in the writeup: "equal parameters" is not "equal
+quality". Every routed token now passes through a rank-L bottleneck shared across all experts, and
+each expert sees half the input width. The prior work measured throughput only. Record anything the
+loss curves bear on this; do not overclaim from 120 steps.
+
 ## The port
 
 The standalone implementation is compact and transfers directly. In `MoEMLP.__call__`

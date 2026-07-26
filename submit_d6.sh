@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # ep25-d6 submission helper. Usage:
-#   ./submit_d6.sh smoke-dense | smoke-latent | rack-dense | rack-latent [suffix]
+#   ./submit_d6.sh smoke-{dense,matched,e256} | rack-{dense,matched,e256} [suffix]
 #
 # Every arm is d5's hero-shape configuration (submit_d5.sh rack-e128 with ALLOC=bfc OFFLOAD=1),
-# which produced the 24.594% reference leg. The latent arms change exactly two things: the expert
-# count doubles (128 -> 256) and SCALE_MOE_LATENT_DIM halves the dispatch width (6144 -> 3072), so
-# routed parameters are preserved (347.892B either way) while the all-to-all payload halves.
+# which produced the 24.594% reference leg. All three arms hold routed parameters at 347.892B.
 #
-# Latent moves the analytic FLOPs/token: 48.186 G dense vs 41.014 G latent. Report tok/s beside MFU.
+#   arm      experts  I     latent  FLOPs/token  a2a buffer  bucket mean
+#   dense    128      3072  --      48.186 G     3.0 GiB     2048   (the reference)
+#   matched  128      6144  3072    51.810 G     1.5 GiB     2048   PRIMARY: routed work and the
+#                                                                   drop regime both held fixed, so
+#                                                                   only the wire changes
+#   e256     256      3072  3072    41.014 G     1.5 GiB     1024   secondary: equal params, but
+#                                                                   15% less work and a halved
+#                                                                   bucket mean confound the wire
+#
+# Latent moves the analytic FLOPs/token in BOTH directions, so report tok/s beside MFU always.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -52,11 +59,19 @@ case "$MODE" in
     SHAPE=(-e SCALE_GPU_REPLICAS 1 -e SCALE_EXPERT_AXIS 4 -e SCALE_NUM_EXPERTS 64 -e SCALE_TOP_K 4
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 4 -e SCALE_BATCH 16 -e SCALE_STEPS 40)
     ;;
-  smoke-latent)
+  smoke-e256)
     NAME="ep25d6-smoke-latent-${SUFFIX}"
     SHAPE=(-e SCALE_GPU_REPLICAS 1 -e SCALE_EXPERT_AXIS 4 -e SCALE_NUM_EXPERTS 128 -e SCALE_TOP_K 4
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 4 -e SCALE_BATCH 16 -e SCALE_STEPS 40
            -e SCALE_MOE_LATENT_DIM 3072)
+    ;;
+  # Matched-work smoke: same expert count as smoke-dense, doubled intermediate, halved dispatch
+  # width. Routed work, routed params and the bucket mean all match smoke-dense exactly.
+  smoke-matched)
+    NAME="ep25d6-smoke-matched-${SUFFIX}"
+    SHAPE=(-e SCALE_GPU_REPLICAS 1 -e SCALE_EXPERT_AXIS 4 -e SCALE_NUM_EXPERTS 64 -e SCALE_TOP_K 4
+           -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 4 -e SCALE_BATCH 16 -e SCALE_STEPS 40
+           -e SCALE_MOE_LATENT_DIM 3072 -e SCALE_INTERMEDIATE 6144)
     ;;
   # 16 nodes / 64 GPUs, EP64. rack-dense reproduces d5's 24.594% reference leg byte-for-byte.
   rack-dense)
@@ -65,8 +80,18 @@ case "$MODE" in
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
            "${MEM_ENV[@]}" "${PROFILE_ENV[@]}")
     ;;
-  # The arm that matters: routed params preserved, dispatch width halved.
-  rack-latent)
+  # PRIMARY: routed params AND routed work AND the bucket mean all held at the reference values;
+  # the dispatch width alone halves. Any delta is attributable to the wire.
+  rack-matched)
+    NAME="ep25d6-d6144-e128-matched-i6144-L3072-120-${SUFFIX}"
+    SHAPE=(-e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 128 -e SCALE_TOP_K 4
+           -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
+           -e SCALE_MOE_LATENT_DIM 3072 -e SCALE_INTERMEDIATE 6144
+           "${MEM_ENV[@]}" "${PROFILE_ENV[@]}")
+    ;;
+  # Secondary: routed params preserved by doubling the expert count, so work falls 14.9% and the
+  # bucket mean halves alongside the wire.
+  rack-e256)
     NAME="ep25d6-d6144-e256-latent3072-120-${SUFFIX}"
     SHAPE=(-e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 4
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
