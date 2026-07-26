@@ -2184,3 +2184,70 @@ attribution said would fix it has now been executed completely and changed nothi
 is not closed by scoping, but its central mechanism claim is measured false, and no further
 variant should be run until the reduce fusions are identified from the HLO.
 Confidence: 9/10 on every number here (two independent accounting methods agree; drops matched; the falsification is 17x, not marginal).
+
+## CORRECTION + CLOSE-OUT 2026-07-26 17:05 UTC (agent d6) — the underflow trend contradicts the loss parity, and the loss is the weaker instrument
+
+Two readings above were filed in separate sections as if they were independent. They are not, and
+letting them sit apart was the mistake.
+
+**The tension.** Reading (a) says a tenth of backward cotangents quantize to zero, rising
+monotonically to 16.4% within 12 steps. Reading (b) says the 120-step loss trajectory is at parity
+with the control. If gradient signal through those legs is being partially destroyed, both cannot
+be comfortably true at once. Something has to give, and it is not the underflow measurement — that
+is a direct count.
+
+**What gives is the loss.** A 120-step curve is not sensitive enough to detect partial gradient
+damage; at that horizon the trajectory is dominated by the bulk of the gradient and by the drop
+regime, and a degraded minority of the backward wire can hide inside run-to-run variation. So the
+conclusion inherited from the previous leg — "fidelity is not the obstacle" — was resting on
+exactly this short-horizon evidence, and now has a *measured mechanism* that could undermine it.
+
+**Restated, and this is the version that should be carried forward:**
+> Fidelity was not *observed* to be an obstacle at 120 steps, with a measured backward-underflow
+> trend that a longer run would need to rule out.
+
+The caveat belongs beside it, not in a footnote: the fraction is over non-zero inputs, so a tensor
+whose cotangents are uniformly ~1e-18 reads 1.0 while carrying no recoverable signal. Some of the
+zeroed mass is certainly of that kind. How much is unknown, and separating the two requires the
+cotangent *magnitude* distribution, not the count. Until that exists, the underflow trend is a
+live risk to the fidelity claim rather than a refutation of it.
+
+**This also retires the cotangent-stability argument properly.** That argument measured amax over
+50 steps, saw it flat, and concluded a constant scale was safe. amax is the largest value;
+underflow is a property of the smallest; they moved differently here, and only the underflow
+instrument could see it. **A stable amax is not evidence of underflow safety.** That generalizes
+to anyone reasoning about low-precision dynamic range from max statistics alone.
+
+### Durable trap: print-based debugging inside a rematerialized scan body is memory-unsafe at scale
+
+Filed here because it will outlive this direction and it cost two rack legs to find.
+
+A side effect inside a rematerialized scan body defeats remat. Measured on the real kernel under
+shard_map + checkpoint + scan: a bare `jax.debug.print` touching **no tensor at all** costs
+**1.41x** compiled temp, while the guard's two actual reductions with the callback removed cost
+**0.97x**. The expensive part of the telemetry was the part that computed nothing.
+
+Corollary, and the reason this is worth a paragraph rather than a line: **this is not specific to
+the fp8 guard.** Any `jax.debug.print` inside a scanned, rematerialized body carries the same cost,
+so print-based debugging is memory-unsafe at scale generally on this stack. Instrument in a small
+probe configuration, or return the value as an output and log it through the metrics path the way
+`dropped_total` already does. Do not reach for a print inside the training step and assume it is
+free because it only emits a scalar.
+
+### Close-out
+
+- **Falsification:** both pre-registered clauses fired. Added compute +2182 ms/step against a 127
+  prediction and a 920 break-even (threshold 400, so 17x); the reduce fusions moved 1.1% and 0.7%
+  in a leg where all five amax reductions are demonstrably gone. Falsification at the premise, not
+  a tuning miss.
+- **Exonerated by direct temp-size measurement:** five-site routing and the deleted scale
+  collective, 0.97x. They never caused the OOM.
+- **Delivered:** the byte thesis is sound — exposure saving measures **936 ms/step**, 64% of the
+  available idle-fill budget, and the deleted collective is genuinely absent from the op list.
+- **Fidelity:** parity at 120 steps, drops matched (0.2655 vs 0.2670), with the underflow caveat
+  above attached.
+- **Next step for whoever continues:** name the reduce fusions from an HLO dump (`--xla_dump_to`),
+  not from profile names or from source inference. That inference has been wrong three times in a
+  row and each miss cost a rack leg.
+- **No further rack work on this direction.** All four of my jobs are terminal; nothing in flight.
+Confidence: 9/10 on the measured readings; 8/10 that short-horizon loss insensitivity is what reconciles the tension, since the alternative — that the zeroed mass is entirely negligible cotangents — is not excluded and needs the magnitude distribution to settle.
