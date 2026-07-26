@@ -222,3 +222,46 @@ measured without S3 credentials in this sandbox.
 Confidence: 9/10 the port is correct (three clean smokes); 3/10 that the wire shows a measurable
 win at EP64 once the EP4 efficiency control is subtracted — down from 4/10, because the smoke shows
 the efficiency confound is real and comparable in size to the wire effect I am looking for.
+
+## Check-in 4 — the dense baseline's mechanism number, MEASURED: 4.13 s exposed collective per 3 steps
+
+`/mwittmann/ep25d6-d6144-e128-dense-120-0726-1440` is the matched control — d5's reference
+configuration plus a 3-step profiler window at step 20 (steady tail 90-119 is untouched). hparams
+confirm the shape (`intermediate_dim 3072 / moe_latent_dim null / num_experts 128 / 48 layers`) and
+the emitted denominator is 144.5588 GFLOP/token = 3 x 48.186 G, i.e. exactly what check-in 1
+predicted. Early window (steps 0-29, drop-heavy): MFU p50 27.150%, 300,496 tok/s, 13.964 s/step —
+which reproduces d5's early-window 27.04% and is the first cross-session confirmation that this
+configuration is stable.
+
+Ran d4's `xplane_overlap` against the uploaded xprof dump as an iris CPU job (the sandbox has no S3
+credentials). Steps 20-22, one host, all four GPUs:
+
+| GPU | trace span | collective total | concurrent | **exposed** | exposed % of span |
+|---|--:|--:|--:|--:|--:|
+| 0 | 42,198 ms | 12,287 | 8,161 | **4,126** | 9.8% |
+| 1 | 42,198 | 12,005 | 7,621 | **4,384** | 10.4% |
+| 2 | 42,198 | 12,980 | 8,152 | **4,828** | 11.4% |
+| 3 | 42,198 | 12,543 | 7,788 | **4,755** | 11.3% |
+
+Compute stream busy 38,700 ms of the 42,198 ms span on GPU:0 = 91.7%, so 3,498 ms idle against
+4,126 ms exposed collective. **Exposed collective time again almost exactly fills compute idle**,
+which is the EP25 finding reproduced at the hero shape rather than at the d5120 proxy — the premise
+of this whole direction now has a measurement at the shape it is being applied to.
+
+THE NUMBER THE PRIMARY ARM HAS TO MOVE: 4.13-4.83 ms per GPU per 3 steps, i.e. **~1.4-1.6 s of every
+14.1 s step**. Halving the wire should take roughly 0.7-0.8 s per step out of that if the thesis is
+right. Note this is a smaller share than my check-in-2 model assumed (I used EP25's 12.9% from the
+proxy; the hero shape measures 9.8-11.4%), so the thesis-side predictions in that table are
+optimistic by about 20% and I am re-deriving them against this measurement rather than the proxy's:
+
+    predicted saving if exposed collective halves: ~0.69 s/step (GPU:0) to ~0.80 s/step (GPU:2)
+    added latent-projection cost at e=0.5:         ~0.57 s/step
+    => the two nearly CANCEL. The matched-work arm's expected tok/s change is within a couple of
+       percent of zero EITHER WAY, and MFU rises ~+1 to +2pp mostly because the denominator moved.
+
+That is a sharper statement of check-in 2's correction and it makes the profile, not the endpoint,
+the deciding evidence. I will compare exposed collective time directly between the two profiles.
+
+Legs in flight: matched-work (`...-matched-i6144-L3072-120-0726-1455`, restarted once after 11
+`SIGTERM caught` = a preemption per d5's triage class 1, not a code fault) and the secondary
+param-preserving arm (`...-e256-latent3072-120-0726-1530`), both with the same profiler window.
