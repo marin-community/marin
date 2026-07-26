@@ -606,3 +606,29 @@ architecture consideration absent from the tracker's current candidate compariso
 / TPS). Holds regardless of how my own m=3 leg lands.
 NOTE the last row is analytical (weight-share arithmetic), not measured; the first four rows are
 measured/derived.
+
+## SPILL FINAL FRONTIER 03:12 — m=3 lands 3.29%, bar NOT cleared but 91% of excess removed
+/mwittmann/ep25d1-spill3-cf100-350-0726-0149: 349 measured samples, then failed at TEARDOWN after step 349
+(same completed-training-then-coordination-teardown pattern as the original baseline A/B; all 349 samples valid,
+mfu_sample_count=349, no incarnation/OOM string in the window).
+| m | p50 MFU | p10/p90 | steady drops | loss@349 |
+| 0 (d4 baseline) | 22.002 | - | 0.064@349 | 3.335 |
+| 2 | 21.872 | 21.74/22.71 | 0.0373 | 3.3225 |
+| 3 | 21.849 | 21.73/22.81 | 0.0329 | 3.3196 |
+(steady drops for m=2/3 are the mean over the last 7 logged steps, 343-349 - the iris log window is ~1000 lines
+so a true tail-100 is not recoverable from logs; correcting my earlier "tail-100" label for m=2, which was in
+fact this same 7-step window.)
+MARGINAL DECOMPOSITION: m0->m2 MFU -0.130pp, drops -42%, loss -0.0125 | m2->m3 MFU -0.023pp, drops -12%,
+loss -0.0029 | total m0->m3 MFU -0.153pp, drops -49%, loss -0.0154 (loss BETTER at every step).
+Per-attempt MFU cost: ~0.065pp each for the first two, 0.023pp for the third - cost falls because later attempts
+process fewer surviving assignments. Benefit also falls (-42% then -12%), so returns diminish faster than cost.
+VERDICT: spill does NOT clear the 3% bar at cf1.0 (3.29% vs 3.0%). But it removes 91% of the baseline's excess
+over the bar (3.40pp of excess -> 0.29pp) at -0.153pp MFU with loss BETTER at every m. Extrapolating the -12%
+per-attempt trend, m=4/5 would land ~2.9-3.0% - i.e. the bar is reachable but only just, and 8-of-256 has the
+attempts in reserve to try (m_max=7) whereas 4-of-256 does not (m_max=3).
+COMPLIANT-FRONTIER CAVEAT I CANNOT RESOLVE: QB+cf1.15's steady-state drop was never measured at 350 steps (only
+0.037@119), so a strict compliant-vs-compliant comparison against spill's 21.85%/3.29% is not on the record. The
+honest claim is: spill buys ~+1.0pp over cf1.15's 20.85% at comparable (not proven-better) fidelity. Closing that
+needs one 350-step QB+cf1.15 leg.
+Confidence: 9/10 spill is a real fidelity mechanism (drops halved, loss better at every m, ~free); 3/10 that
+m<=3 alone clears a strict 3% bar at cf1.0.
