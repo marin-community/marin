@@ -216,6 +216,26 @@ mesh is chosen so `num_experts / expert_axis` matches the rack's local expert co
 census taken this way against the rack profile before trusting it: a small mesh manufactures
 entry-level reshard collectives that the large mesh does not have.
 
+### Diagnostics that lie toward giving up
+
+Two checks on this stack report "nothing here" when the thing is in fact present. Both would have
+closed a live direction if believed.
+
+- **An fp8 GEMM probe that quantizes inline reports zero fp8 calls.** XLA's GEMM rewriter matches
+  `convert(f8_value)` as a dot operand. If the fp8 array is produced from bf16 in the same
+  computation, XLA fuses the convert and the rewriter sees a *fusion*, so no
+  `__cublas$lt$matmul$f8` appears and the module looks like plain bf16. Feed operands that are
+  already fp8 — which is what an fp8 wire actually delivers — and the same code lowers to the fp8
+  call. See [`fp8_gemm_probe.py`](./fp8_gemm_probe.py), whose first version returned a false
+  negative for exactly this reason.
+- **A collapsed collective still looks async in HLO text** (see below): the post-scheduling pass
+  tags `is_sync` and keeps the start/done pair rather than deleting it.
+
+Related rewriter rule worth knowing before designing any fp8 path here: operand scales must be
+**scalars**. A per-token scale applied to a GEMM *input* silently blocks the fp8 rewrite and the
+dot falls back to bf16; applied to the GEMM *output* it does not, because row-linearity lets the
+scale move past the dot.
+
 ### Dump-reading traps
 
 These cost real debugging time; the parsing ones are covered by
