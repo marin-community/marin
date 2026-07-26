@@ -1483,6 +1483,59 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T06:30:01Z — 102,054 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0616-v137` independently
+  revalidated two p3 decision-file 100 checkpoints at semantic offsets 1,664
+  and 1,792. The 256 baseline pairs contain 122 false positives, 132 true
+  duplicates, and two unresolved outcomes. All 534 direct-review requests were
+  valid on their first attempt. The outcome Parquet SHA-256 values are
+  `8288321d5f57770c4bae0a3151566ddcb0c1425ba2236e4e7a5d76e86ded9b7d`
+  and
+  `6298b834a28c7640187888befdbd0808479e5adc108db26ff6a8dd36cb775ecb`.
+- `/rav/datakit-6854-inspect-row2772-0622-v140` compared every character in
+  the first unresolved cross-source gardening pair. The 2,883-character member
+  and 3,381-character canonical have SHA-256
+  `d28d9108bdc017220bf0b3ccbe70c6ed4440f2671e3b03771d9b10e18c907b41`
+  and
+  `254364d1470b663c667e6462a702ce96b67e817943653341c94737ac33ac7f56`,
+  with a 0.884100 sequence ratio. In addition to its title, the member alone
+  instructs readers to dilute worm-compost tea five-to-one. That substantive
+  gardening guidance is absent from the canonical, so this is a false
+  positive.
+- `/rav/datakit-6854-inspect-row2787-0624-v141` compared every character in
+  the second unresolved same-source SEO pair. The 2,289-character member and
+  2,249-character canonical have SHA-256
+  `960968ff987aa2e3939003b93967055e218e6058279cc67cb19b6c143fc6cd63`
+  and
+  `c36eab9dec05adae252d5b44c915216dfc5f9419f25f1dd8d0c2bc0beac1b127`,
+  with a 0.706479 sequence ratio. URL and keyword substitutions are
+  non-substantive under the low-value-template boundary, but the member alone
+  states that the FDA estimates 50% of generic-drug production is by
+  companies. Deleting that fact loses substantive content, so this is also a
+  false positive.
+- `/rav/datakit-6854-publish-manual-0627-v143` published both hash-bound manual
+  records, and `/rav/datakit-6854-verify-manual-0629-v144` separately reread
+  the source pairs, semantic checkpoint, manual rows, Parquet bytes, and
+  completion markers. The semantic-evidence SHA-256 values are
+  `04d6b663cb9fdc88996bd45e693b446eae040af556f831e4c11675186e95f6d7`
+  and
+  `9452ecca57fd22b73ed238bca0380016f4cef14222a26768617830e1dca9c039`.
+  The manual Parquet SHA-256 values are
+  `8f5d401b22c6a3aef9c14d17ebdb4fb239da23d094d091786e1918e46c163cbb`
+  and
+  `ea91f5aa1691c761e634a52d83a37fc8a8d6da4aa34f9ba435dcfc14049a4101`.
+- Across the stable 803-checkpoint snapshot, all 115 unresolved model outcomes
+  are covered by 89 true-duplicate and 26 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 82,266 pairs, 52,423 false positives, 29,843 true duplicates;
+  - treatment: 19,788 pairs, 10,216 false positives, 9,572 true duplicates;
+  - combined: 102,054 pairs, 62,639 false positives, 39,415 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T06:13:47Z — 101,798 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0612-v136` independently
