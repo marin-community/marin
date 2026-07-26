@@ -21,6 +21,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
+from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import component_structure
 from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
     grouped_block_value_and_grads,
     joined_attention_pair_value_and_grads,
@@ -622,6 +623,10 @@ def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention()
     router_calls = [name for name in name_stacks if name.endswith("_paired_moe_calls/MoEMLP/td,de->te")]
     assert len(router_calls) == 2
     assert not any("Attention" in name or "_BlockAttentionView" in name for name in name_stacks)
+    structure = component_structure(closed_jaxpr)
+    assert structure["ring_body_count"] == 2
+    assert structure["router_call_count"] == 2
+    assert structure["attention_inside_joined_moe_count"] == 0
 
 
 def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:
