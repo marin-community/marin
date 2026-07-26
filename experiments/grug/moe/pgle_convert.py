@@ -31,13 +31,27 @@ def main() -> None:
         raise FileNotFoundError(f"no .xplane.pb under {root}")
     print(f"found {len(xplanes)} xplane files:", *xplanes, sep="\n  ")
 
+    spaces = []
+    for p in xplanes:
+        with fs.open(p, "rb") as f:
+            data = f.read()
+        one = _profiler.aggregate_profiled_instructions([data], 90)
+        print(f"{p}: xspace {len(data)} bytes -> single-file proto {len(one)} bytes")
+        spaces.append(data)
+    proto = _profiler.aggregate_profiled_instructions(spaces, 90)
+    if isinstance(proto, str):
+        proto = proto.encode()
+
     with tempfile.TemporaryDirectory() as tmp:
-        # get_profiled_instructions_proto walks a tensorboard-style dir tree.
+        # Fallback path for comparison: the tensorboard-tree walker.
         for p in xplanes:
             dest = Path(tmp) / "plugins" / "profile" / "run" / Path(p).name
             dest.parent.mkdir(parents=True, exist_ok=True)
             fs.get(p, str(dest))
-        proto = _profiler.get_profiled_instructions_proto(str(Path(tmp)))
+        walker = _profiler.get_profiled_instructions_proto(str(Path(tmp)))
+        print(f"walker proto bytes: {len(walker)}")
+        if len(walker) > len(proto):
+            proto = walker
 
     print(f"proto bytes: {len(proto)}")
     payload = base64.b64encode(gzip.compress(proto)).decode()
