@@ -1,14 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from jax.extend import core as jax_core
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe import train as grug_train
+
+
+@dataclass(frozen=True)
+class _AutomaticJaxPPInfo:
+    in_shardings: tuple[NamedSharding, ...]
+    out_shardings: tuple[NamedSharding, ...]
+    out_avals: tuple[jax.ShapeDtypeStruct, ...]
+
+
+@dataclass(frozen=True)
+class _AutomaticJaxPPCompiled:
+    in_info: _AutomaticJaxPPInfo
 
 
 def test_jaxpp_task_call_jaxpr_validation_accepts_closed_task():
@@ -105,3 +121,29 @@ def test_replace_jaxpp_captured_meshes_preserves_abstract_shard_map():
     assert replaced.jaxpr.eqns[0].outvars == shard_map_equation.outvars
     assert replaced.jaxpr.eqns[0].params["mesh"] == shard_map_equation.params["mesh"]
     jax_core.check_jaxpr(replaced.jaxpr)
+
+
+def test_localize_automatic_jaxpp_shardings_expands_replicated_output_rank():
+    mesh = Mesh(np.asarray(jax.devices()), ("device",))
+    compiled = _AutomaticJaxPPCompiled(
+        in_info=_AutomaticJaxPPInfo(
+            in_shardings=(NamedSharding(mesh, P()),),
+            out_shardings=(
+                NamedSharding(mesh, P()),
+                NamedSharding(mesh, P("device")),
+            ),
+            out_avals=(
+                jax.ShapeDtypeStruct((2, 3), jnp.float32),
+                jax.ShapeDtypeStruct((2, 3), jnp.float32),
+            ),
+        )
+    )
+    mpmd_mesh = SimpleNamespace(
+        jax_mesh=SimpleNamespace(is_multi_process=True),
+        lowering_mesh=lambda: mesh,
+    )
+
+    localized = grug_train._localize_automatic_jaxpp_shardings(compiled, mpmd_mesh)
+
+    assert localized.in_info.out_shardings[0].spec == P(None, None)
+    assert localized.in_info.out_shardings[1].spec == P("device", None)

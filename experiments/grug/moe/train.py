@@ -935,15 +935,18 @@ def _tree_named_shardings_on_mesh(mesh: Mesh, tree):
     return jax.tree.map(leaf_sharding, tree)
 
 
-def _localize_automatic_jaxpp_input_shardings(compiled, mpmd_mesh):
-    """Bind automatic JaxPP runtime inputs to this process's pipeline-stage mesh."""
+def _localize_automatic_jaxpp_shardings(compiled, mpmd_mesh):
+    """Bind automatic JaxPP runtime shardings to this process's stage mesh."""
     if not mpmd_mesh.jax_mesh.is_multi_process:
         return compiled
 
     stage_mesh = mpmd_mesh.lowering_mesh()
 
-    def localize(sharding: NamedSharding) -> NamedSharding:
-        localized = NamedSharding(stage_mesh, sharding.spec)
+    def localize(sharding: NamedSharding, *, ndim: int | None = None) -> NamedSharding:
+        spec = sharding.spec
+        if ndim is not None and len(spec) < ndim:
+            spec = P(*(tuple(spec) + (None,) * (ndim - len(spec))))
+        localized = NamedSharding(stage_mesh, spec)
         if sharding.memory_kind is not None:
             localized = localized.with_memory_kind(sharding.memory_kind)
         return localized
@@ -953,6 +956,14 @@ def _localize_automatic_jaxpp_input_shardings(compiled, mpmd_mesh):
         in_info=dataclasses.replace(
             compiled.in_info,
             in_shardings=tuple(localize(sharding) for sharding in compiled.in_info.in_shardings),
+            out_shardings=tuple(
+                localize(sharding, ndim=len(aval.shape))
+                for sharding, aval in zip(
+                    compiled.in_info.out_shardings,
+                    compiled.in_info.out_avals,
+                    strict=True,
+                )
+            ),
         ),
     )
 
@@ -3370,7 +3381,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             state,
                             pipeline_batch,
                         )
-                    compiled_pipeline_train_step = _localize_automatic_jaxpp_input_shardings(
+                    compiled_pipeline_train_step = _localize_automatic_jaxpp_shardings(
                         compiled_pipeline_train_step,
                         mpmd_mesh,
                     )
