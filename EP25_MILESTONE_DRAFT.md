@@ -227,6 +227,21 @@ one that trusts the model whole is not. Both the split and its mechanism were on
 live points existed on both axes — a single-axis sweep would have shown a model that looked either
 fine or uniformly optimistic, and neither reading would have been right.
 
+**The capacity price is a tiling cliff, not a slope.** Three same-length measurements pin it:
+capacity factor 1.00 to 1.05 costs 1.18pp of MFU, while 1.05 to 1.15 costs 0.127pp per +0.05.
+The cause is alignment. Capacity is `ceil(capacity_factor * assignments_per_shard / num_experts)`
+and becomes the M dimension of the expert GEMM. At capacity factor 1.0 that is exactly 2048, or 16
+tiles of 128; at 1.05 it is 2151, which is odd; at 1.15 it is 2356, divisible only by 4. The cost is
+paid on leaving alignment and almost nothing is paid for growing capacity afterwards — consistent
+with a collective-bound step, where extra padded compute is cheap but a badly shaped GEMM is not.
+
+The fix is not to prefer one lucky capacity factor. It is to round capacity up to a tile-aligned
+value whatever factor is requested, so a run asking for 1.05 silently gets 2176 rather than 2151.
+The extra capacity is itself a fidelity gain, since a larger bucket drops fewer assignments, so the
+alignment is free on both axes. `SCALE_CAPACITY_TILE=N` does this; the recommended production
+setting is 128, and buckets at or below one tile are left alone so small configurations are
+unaffected.
+
 **Why this was cheap, and what that predicts.** The step is collective-volume-bound: exposed
 collective time almost exactly fills compute idle, so the remaining speed lever is reducing
 collective bytes. Spill adds no collective bytes and no matmul work — the expert GEMMs run on
@@ -236,6 +251,16 @@ form is worth stating, because it ranks work that has not been tried yet: on thi
 mechanism that spends index or compute work to buy fidelity is close to free, while a mechanism
 that adds bytes to the collectives is expensive no matter how well implemented. Spill's 0.213pp and
 the collective-bound ceiling are the two measurements behind that claim.
+
+Three extrapolations failed in this work, and they failed the same way. A steady-state estimate
+read from a truncated log window; drop fractions compared at equal step numbers across runs of
+different lengths; and a capacity price interpolated linearly between two capacity factors. Each
+looked like a smooth quantity and each was actually crossing a discretization boundary — a fixed
+log-window size, a schedule defined over total steps, a capacity rounded to an integer that then
+has to tile a GEMM. The generalisation is worth more than any of the three: on this stack, the
+interpolations that break are the ones that cross a boundary the hardware or the harness has
+quantised, and the cheap defence is to measure at both sides of the boundary rather than to fit
+through it.
 
 A second error ran in the opposite direction to the usual one. Drop fractions from runs of
 different lengths were compared at the same step number and the disagreement was attributed to
