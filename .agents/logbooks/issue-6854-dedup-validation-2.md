@@ -16,6 +16,78 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T19:39:28Z — 176,915 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1932-v567` independently
+  revalidated two p0 decision-file 7 checkpoints at semantic offsets 5,632 and
+  5,760. Their 256 treatment pairs contain 149 model false positives, 105
+  model true duplicates, and two unresolved outcomes. All pairs were direct.
+  The audit reread 525 judgments and 536 request attempts: 520 attempts were
+  valid, 16 were invalid, and six judgments required retries.
+
+- The outcome Parquet SHA-256 values are
+  `d9aecf809b3c9ed03edf9e24ba1f1ed334facee2053e134ec2e0db7aef298ac3`
+  and
+  `943ba2a3a9d9f60dcc9f67ac9bcbef706deaa7b0862c9906828706868f56b2c7`.
+
+- Complete-text inspection resolves both ambiguities as true duplicates:
+
+  - row 9,117 compares 11,386- and 11,379-character social-media SFT
+    examples. All 276 lines, the question, reasoning, and answer are identical
+    except that the member ends with a text-wrapped boxed `C` and the canonical
+    boxes `C` directly. Character, line, and word-sequence similarities are
+    0.999693, 0.996377, and 0.999740. Member/canonical SHA-256 values are
+    `8081d0f6e06d2f4f0ac28208834a0f864e072a56579ffd39c8ad944400414b05`
+    and
+    `ecdfddf42e04419f57aeb648f2f3993924fbec5852a4f0fd318125503adb88e3`.
+  - row 9,118 compares 12,912- and 12,905-character e-waste SFT examples.
+    All 316 lines, the question, reasoning, and answer are identical except
+    for the same text-wrapper difference around boxed `G`. Character, line,
+    and word-sequence similarities are 0.999729, 0.996835, and 0.999737.
+    Member/canonical SHA-256 values are
+    `ebd1d8615455ac208bf1956ebfe4863e01569a2bf845da88aad270fc2f56c096`
+    and
+    `fe99efb824e39d5c07db42df5f79ef1649b1408b46d16c79d2341b1458f582ee`.
+
+- `/rav/datakit-6854-inspect-row9117-1933-v568` and
+  `/rav/datakit-6854-inspect-row9118-1934-v569` persisted the complete pairs
+  and diffs with inspection SHA-256 values
+  `bdcf3cdb544d2cb13697cfd1f33177527a52c49a8228207b161267d651ca949b`
+  and
+  `9a0039c130bdb8d50a4826ff13e03018311eb8a6404d37f2d6a9970104329c72`.
+  Their semantic-judgment SHA-256 values are
+  `e6cf23b675b858c9542fbbfc3e704822453854d41e149f89f3612a5832f0af39`
+  and
+  `f8655e1dfb560dc2a0be96dc985dd8a27b47a47e1d3e3883be5995be069860ef`.
+
+- `/rav/datakit-6854-publish-row9117-1936-v571` and
+  `/rav/datakit-6854-publish-row9118-1935-v570` wrote immutable
+  true-duplicate records. Separate jobs
+  `/rav/datakit-6854-verify-row9117-1938-v572` and
+  `/rav/datakit-6854-verify-row9118-1939-v573` independently reread the source
+  pairs, semantic checkpoints, inspections, deterministic Parquet bytes, and
+  completion markers. Their manual-Parquet SHA-256 values are
+  `d1a2bdc9f2cbe480bf14dfd779800eb52ab7735b88768b4fe0e8ca7f7295c235`
+  and
+  `257bdac32b1fa7a649c05760174cf8163865bf201315e87ca20cb3d9ab2de97a`;
+  their marker SHA-256 values are
+  `102990986e74c32037961c4e6163da6c638d92a954aada5583ec003a39c0dc31`
+  and
+  `924930227d4a397f95e0581431044c1ab8a3f510e8088c83b12bb8b61d77d8e6`.
+
+- Across the stable 1,392-checkpoint snapshot, all 200 unresolved model
+  outcomes are covered by 157 true-duplicate and 43 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 141,273 pairs, 89,705 false positives, 51,568 true duplicates;
+  - treatment: 35,642 pairs, 18,450 false positives, 17,192 true duplicates;
+  - combined: 176,915 pairs, 108,155 false positives, 68,760 true duplicates.
+
+- The next audit frontiers are p0 `(7, 5,888)`, p1 `(39, 0)`,
+  p2 `(71, 128)`, and p3 `(104, 0)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T19:30:55Z — 176,659 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1930-v566` independently
