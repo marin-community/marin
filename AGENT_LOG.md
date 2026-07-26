@@ -416,3 +416,22 @@ different incarnation. It has likely restarted" = JAX distributed gang-abort fro
 at startup. NOT a batched-code bug: my sentinel loaded on task 13, no OOM/ResourceExhausted in logs, no step ran,
 and rav's batched run succeeded at EP64. Transient node/preemption flake. Resubmitted as /mwittmann/ep25d1-qbon-batch-120-0725-2026-v2.
 Control /mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = p50 22.66% stands as the matched control.
+
+## R6-1 treatment WEDGED 21:13 local — batched path not completing at EP64
+- CONTROL /mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = p50 22.66% (p10 22.34/p90 24.23), drops ~0.088@119,
+  loss 5.614. SOLID matched control.
+- TREATMENT (+SCALE_A2A_BATCH_EXPERTS=1) has NOT produced a single step in two attempts:
+  v1 (2016): gang-abort at init (incarnation mismatch), ~7 min.
+  v2 (2026): compiled ~23 min (03:28->03:51), then "ABORTED: another task died / incarnation mismatch" fatal at
+  03:51:40; job now JOB_STATE_RUNNING but logs FROZEN at 03:51:53 for 21 min = WEDGED (post-fatal clique hang,
+  matches the known GB200 fast-restart deadlock).
+- No explicit OOM/ResourceExhausted string, but incarnation-mismatch = a worker process died (OS OOM-kill or
+  crash shows this way). Two batched failures vs zero non-batched (control succeeded on same cluster) points at
+  the batched code. Two hypotheses: (a) memory regression — my full a2a+GEMM batching raises the peak (one 5.4GB
+  send_x + received + grouped-GEMM intermediates simultaneously) past the 0.75 HBM wall at d5120 EP64; (b) the
+  batched einsum/split_axis=1 a2a triggers a ~23-min pathological XLA compile that widens the transient-flake
+  window. rav's batched 25.39% run predates the infra incident, so his success doesn't disprove either.
+- Kernel parity is bit-exact (65e3ca50d) so the FORWARD/BACKWARD math is right; the problem is runtime/memory at
+  scale, not correctness.
+- NOT killing the wedged rack job without coordinator approval (rule). Asking for the call + whether to try a
+  memory-lighter variant (batch GEMM only, keep per-expert a2a) or defer.
