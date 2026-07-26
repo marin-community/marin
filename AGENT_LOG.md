@@ -829,6 +829,11 @@ The compliant figure is the more robust claim precisely because it prices the fi
 leaving it as an unpriced difference between the two sides of the comparison — and it still clears the
 23.1% FSDP row.
 
+ONE-JOB FIX AVAILABLE: anyone rerunning the #7201 FSDP rows should apply the drop-metric fix
+(d1's 2d4a87395) FIRST. Those runs already compute the per-layer drop count; only the tracker emission
+is missing. One job's cost would resolve this ambiguity permanently, and it currently sits on the most
+decision-relevant comparison in the effort.
+
 ### Q2. Every drop figure must carry its run length
 
 d1 established that the LR schedule is defined over `num_train_steps`, so step 119 of my 120-step run
