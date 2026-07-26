@@ -1483,6 +1483,47 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T04:00:50Z — 85,761 pairs verified
+
+- Two additional p2 baseline checkpoints passed independent validation. Their
+  256 pairs contain 120 model false positives, 135 model true duplicates, and
+  one unresolved outcome. All 550 judgments were valid on the first attempt,
+  and all 256 pairs were direct. The decision-file 67 outcome Parquet SHA-256
+  values for offsets 2688 and 2816 are
+  `5ee9ac61049be2ed72d72070cc9b65ea53efd375c13d240e14c77a1164fca76c`
+  and
+  `71d019fc4218a5c2bda4c701f68d285254e7f1b28302a27ead400127022a0279`.
+- Complete-text review resolves pair-file row 4604 as a true duplicate. Both
+  documents are thesaurus-spun Hemant Enterprises court-marriage SEO pages
+  with the same legal claims and workflow. The member-only material is the
+  Kanjurmarg West/Maharashtra location slot, vendor framing, and the incomplete
+  heading `Required Documents (Witness) for` with no document list. The audit
+  contract treats locations substituted into the same low-value SEO scaffold
+  as superficial fields.
+- The member/canonical texts contain 3,259 / 3,140 characters, have sequence
+  similarity 0.765120, character-5-gram Jaccard 0.477076, and word-5-gram
+  Jaccard 0.127485. Their SHA-256 values are
+  `cca2efac3fe2cf0a181c918cee7dce1454a0fe0cdb74de03e67c682bfb762b8f`
+  and
+  `a8af5c41186b0879c642b1f095802df9a086dba039831271a82ce3a158f9c84c`.
+  They share one baseline bucket and no treatment bucket.
+- The manual decision binds semantic-judgment SHA-256
+  `adde39f23f867799a8673e7852350388959c782503cf3bb83996debe301d5283`.
+  Its Parquet SHA-256 is
+  `37769d017a4b7ad77e850e677999c4901bd64b3d3c0df828b6af7eed4e7f0c14`.
+  A separate batch-priority Iris process exactly reread the source pair,
+  semantic outcome, manual row, Parquet bytes, and completion marker.
+- Across the stable 674-checkpoint snapshot, all 90 unresolved model outcomes
+  have manual records: 70 true duplicates and 20 false positives. The adjusted
+  totals are:
+
+  - baseline: 68,942 pairs, 43,855 false positives, 25,087 true duplicates;
+  - treatment: 16,819 pairs, 8,711 false positives, 8,108 true duplicates;
+  - combined: 85,761 pairs, 52,566 false positives, 33,195 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T03:49:27Z — 85,505 pairs verified
 
 - Three additional p2 baseline checkpoints passed independent validation.
