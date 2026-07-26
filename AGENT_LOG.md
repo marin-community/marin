@@ -822,3 +822,32 @@ which is unmoved. Single pair so far -- a +0.33pp claim needs a second pair.
 Confidence: 6/10 that the sign is real and ~+0.3pp; 8/10 that the source is FSDP collectives, not the a2a.
 Next: second matched pair in the REVERSED order (control first, then treatment) to cancel any
 time-ordering / placement drift.
+
+## Check-in 2026-07-26 08:25 UTC — control reproduces to 0.00pp; pair-2 treatment in flight
+
+Second pair, reversed order (control first). CONTROL v2
+(/mwittmann/ep25d4-pgle-ab-ctrl-120-v2-20260726): p50 22.318 (0-119) / 22.200 (20-119) /
+22.141 (40-119), step 12.14 s, drops 0.0873@119, tail20 0.1062, loss tail20 5.7385.
+
+Control v1 was 22.273 / **22.200** / 22.115. The 20-119 p50 reproduces to the third decimal
+across two allocations 33 minutes apart, so control-side placement noise on this config is
+<=0.05pp, far below the +0.35pp treatment delta. That materially strengthens the pair-1 result
+before pair 2's treatment leg even lands.
+
+Also harvested the overlap report from the pair-1 CONTROL LEG's own xprof (same draw as the
+treatment, better than the earlier capture job) — it confirms the capture-job table:
+SendRecv async 6870 ms @87.1% (treatment 7400 @86.8%), SendRecv inline on the compute stream
+2980 ms @0% (treatment 2961 @0%), ReduceScatter 759 ms @65.4% (treatment 537 @100%),
+AllGather 1544 @66.3% (treatment 2262 @82.7%), AllReduce f32 306 @12.2% (treatment 1160 @63.5%),
+exposed collectives 4932 ms / 14.5% of span (treatment 4750 / 14.2%).
+
+Coordinator framing to carry into the writeup (acknowledged): the reduce-scatter result closes
+David Hall's original candidate-1c lead from the first XProf read ("the final reduce-scatter looks
+like it could be overlapped with next layer and isn't — reduce-scatter.10"). It is NOT scan-blocked
+as an earlier analysis concluded; it is scheduler-gated, and real measured latencies alone are
+enough for XLA to hide it (65.4% -> 100% hidden), with no structural change. And the negative half
+is the four-way convergent one: rotation, prefetch, token-chunk overlap, and now real-latency PGLE
+all fail to move the expert a2a, so the a2a legs are not hideable on this stack by any scheduling
+or dataflow means we have.
+Confidence: 7/10 on the +0.33pp sign and magnitude (pending pair 2); 8/10 on both mechanism halves.
+Next: harvest treatment v4 (~09:00Z), pool both pairs, write the verdict.
