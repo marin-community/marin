@@ -112,6 +112,13 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
+    # Latent MoE: project the MoE input from hidden_dim down to moe_latent_dim before the expert
+    # call and back up afterwards. Dispatch (and therefore the expert-parallel all-to-all payload)
+    # happens inside the expert call, so the collective carries moe_latent_dim-wide rows instead of
+    # hidden_dim-wide ones. None (default) keeps the expert MLP at hidden_dim.
+    moe_latent_dim: int | None = None
+    # Apply an RMSNorm to the latent before dispatch. Requires moe_latent_dim.
+    moe_latent_norm: bool = False
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -170,6 +177,13 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
+        if self.moe_latent_norm and self.moe_latent_dim is None:
+            raise ValueError("moe_latent_norm requires moe_latent_dim")
+        if self.moe_latent_dim is not None:
+            if self.moe_latent_dim <= 0 or self.moe_latent_dim >= self.hidden_dim:
+                raise ValueError("moe_latent_dim must be positive and smaller than hidden_dim")
+            if self.hidden_dim % self.moe_latent_dim != 0:
+                raise ValueError("hidden_dim must be divisible by moe_latent_dim")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -433,11 +447,23 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    # Latent MoE projections (cfg.moe_latent_dim), replicated: down is [D, L], up is [L, D].
+    moe_down: jax.Array | None
+    moe_up: jax.Array | None
+    moe_latent_rms: RMSNorm | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        latent = cfg.moe_latent_dim
+        if latent is None:
+            k_router, k_expert = random.split(key, 2)
+            moe_down = moe_up = moe_latent_rms = None
+        else:
+            k_router, k_expert, k_down, k_up = random.split(key, 4)
+            moe_down = reshard(_init_weight(k_down, (cfg.hidden_dim, latent), cfg.initializer_std), P(None, None))
+            moe_up = reshard(_init_weight(k_up, (latent, cfg.hidden_dim), cfg.initializer_std), P(None, None))
+            moe_latent_rms = RMSNorm.init(latent, cfg.layer_norm_eps) if cfg.moe_latent_norm else None
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -450,7 +476,7 @@ class MoEMLP(eqx.Module):
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=d if latent is None else latent,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -458,6 +484,9 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
             ),
+            moe_down=moe_down,
+            moe_up=moe_up,
+            moe_latent_rms=moe_latent_rms,
             cfg=cfg,
         )
 
@@ -496,8 +525,15 @@ class MoEMLP(eqx.Module):
         # fidelity bar. The count is threaded up unconditionally (a cheap int32 through the scan);
         # only the overflow computation is gated, so the default path is unchanged in cost.
         report_drops = os.environ.get("SCALE_REPORT_DROPS") == "1"
+        # Latent MoE: everything above (router, QB) stays at hidden_dim; only the expert input is
+        # projected, so the dispatch inside expert_mlp -- and its all-to-all -- runs at moe_latent_dim.
+        expert_in = x_flat
+        if self.moe_down is not None:
+            expert_in = jnp.einsum("td,dl->tl", x_flat, self.moe_down, out_sharding=P(_BATCH_AXES, None))
+            if self.moe_latent_rms is not None:
+                expert_in = self.moe_latent_rms(expert_in)
         moe_out = self.expert_mlp(
-            x_flat,
+            expert_in,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
@@ -509,6 +545,8 @@ class MoEMLP(eqx.Module):
             routed_flat, dropped = moe_out
         else:
             routed_flat, dropped = moe_out, jnp.zeros((), jnp.int32)
+        if self.moe_up is not None:
+            routed_flat = jnp.einsum("tl,ld->td", routed_flat, self.moe_up, out_sharding=P(_BATCH_AXES, None))
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         return reshard(routed, _batch_spec()), qb_beta, dropped
 

@@ -25,6 +25,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_MOE_LATENT_DIM  latent MoE dispatch width L (must divide hidden_dim and be
+                          smaller than it); 0/unset dispatches at hidden_dim. Halving L
+                          halves the expert-parallel all-to-all payload.
+    SCALE_MOE_LATENT_NORM  1 = RMSNorm the latent before dispatch (needs LATENT_DIM)
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
@@ -147,6 +151,9 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
+        # Latent MoE: dispatch width for the expert-parallel all-to-all. 0/unset = dispatch at hidden.
+        moe_latent_dim=env_int("SCALE_MOE_LATENT_DIM", 0) or None,
+        moe_latent_norm=os.environ.get("SCALE_MOE_LATENT_NORM") == "1",
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),

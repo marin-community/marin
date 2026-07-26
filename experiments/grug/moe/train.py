@@ -202,9 +202,8 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
+    flop_kwargs = dict(
         hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
@@ -216,6 +215,21 @@ def _compute_flops(
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
     )
+    if model_config.moe_latent_dim is None:
+        flops_per_token = lm_flops_per_token(intermediate_dim=model_config.intermediate_dim, **flop_kwargs)
+    else:
+        # Latent MoE changes the analytic denominator: the routed experts run at moe_latent_dim, not
+        # hidden_dim, and each layer adds the two [D, L] latent projections. Zeroing intermediate_dim
+        # drops only the routed-expert term (the shared expert carries its own width), so the routed
+        # GLU (2 x 3 x L x I x topk) and the projections (2 x 2 x D x L) are added back explicitly.
+        flops_without_routed_experts = lm_flops_per_token(intermediate_dim=0, **flop_kwargs)
+        routed_expert_flops = (
+            6 * model_config.moe_latent_dim * model_config.intermediate_dim * model_config.num_experts_per_token
+        )
+        latent_projection_flops = 4 * model_config.hidden_dim * model_config.moe_latent_dim
+        flops_per_token = flops_without_routed_experts + model_config.num_layers * (
+            routed_expert_flops + latent_projection_flops
+        )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
