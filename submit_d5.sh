@@ -8,6 +8,11 @@ cd "$(dirname "$0")"
 MODE="$1"
 SUFFIX="${2:-$(date +%m%d-%H%M)}"
 VERSION="ep25d5-dev"
+# Memory ladder for the 707B shape. ALLOC=cuda_async (default) sidesteps the BFC fraction entirely;
+# ALLOC=bfc uses the BFC allocator at MEM_FRACTION instead. Record whichever was used with the result.
+ALLOC="${ALLOC:-cuda_async}"
+MEM_FRACTION="${MEM_FRACTION:-0.90}"
+OFFLOAD="${OFFLOAD:-0}"
 
 COMMON_ENV=(
   -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_WATCH_INTERVAL 0 -e SCALE_CHECKPOINTS local
@@ -20,6 +25,13 @@ COMMON_ENV=(
   -e SCALE_SCAN_LAYERS 1 -e SCALE_REMAT recompute_all
   -e SCALE_DISABLE_CHECKPOINT 1 -e SCALE_TRACKER json_logger
 )
+
+if [[ "$ALLOC" == cuda_async ]]; then
+  MEM_ENV=(-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
+else
+  MEM_ENV=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
+fi
+[[ "$OFFLOAD" == 1 ]] && MEM_ENV+=(-e SCALE_OFFLOAD_OPT_STATE 1)
 
 case "$MODE" in
   # 1 node / 4 GPUs, EP4. 64 experts x top-4 keeps the per-(sender,expert) bucket mean at 1024,
@@ -35,7 +47,7 @@ case "$MODE" in
     NAME="ep25d5-d6144-e256-${MODE#rack-}-120-${SUFFIX}"
     SHAPE=(-e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 256 -e SCALE_TOP_K 4
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
-           -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
+           "${MEM_ENV[@]}")
     [[ "$MODE" == rack-mxfp8 ]] && SHAPE+=(-e SCALE_MOE_MXFP8 1)
     ;;
   # Fallback primary shape if 707B does not fit: 4-of-128, 359.6B total, same 22.6B active.
@@ -43,7 +55,7 @@ case "$MODE" in
     NAME="ep25d5-d6144-e128-bf16-120-${SUFFIX}"
     SHAPE=(-e SCALE_GPU_REPLICAS 16 -e SCALE_EXPERT_AXIS 64 -e SCALE_NUM_EXPERTS 128 -e SCALE_TOP_K 4
            -e SCALE_HIDDEN_DIM 6144 -e SCALE_NUM_LAYERS 48 -e SCALE_BATCH 1024 -e SCALE_STEPS 120
-           -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
+           "${MEM_ENV[@]}")
     ;;
   *) echo "unknown mode $MODE" >&2; exit 2 ;;
 esac
