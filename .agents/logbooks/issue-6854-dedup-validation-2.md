@@ -16,6 +16,55 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T22:37:00Z — 190,888 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2231-v689` independently
+  revalidated the p3 decision-file 104 checkpoint at semantic offset 1,920.
+  Its 128 direct baseline pairs contain 57 model false positives, 70 model
+  true duplicates, and one unresolved outcome. All 275 judgments and request
+  attempts were valid on their first attempt. The outcome Parquet SHA-256 is
+  `c893a8dbe0a025826a839c038e57bf7d5fd89c5c5a1a2ee5452e2be741ae4a20`.
+
+- `/rav/datakit-6854-inspect-row2886-2232-v690` read both complete lawn-care
+  texts and all three model judgments. The 3,884-character member and
+  3,446-character canonical have character, line, and word-sequence
+  similarities 0.715689, 0.080000, and 0.645849. They share a sentence-spun
+  lawn-care article, but the member adds a complete paragraph claiming that
+  lawn cleanliness prevents disease and family death, attracts visitors, and
+  protects against insects and parasites. Those member-only propositions
+  exceed the low-value location and business-footer slots, so deleting the
+  member loses distinct substantive content. The manual label is false
+  positive. Member/canonical text SHA-256 values are
+  `23e3ca8b884205c37325c639c00373cedee92f467a4d7670ea9700c3fe3f0ba0`
+  and
+  `3f81f41ce459abbaf54560a3a548f2f31c39d034cfc27358f78c70c61afe7a5d`.
+
+- The persisted inspection and semantic-judgment SHA-256 values are
+  `3ee8cf51c73a0b06c0f89b965231ffafecf52cc3c96e64d4c9a59262d6389eb5`
+  and
+  `83491e79d9efcc19077c8ad8780dd00553069ee601dd356f40b6ec6759a748e0`.
+  `/rav/datakit-6854-publish-row2886-2234-v691` published the hash-bound
+  false-positive record, and
+  `/rav/datakit-6854-verify-row2886-2236-v692` independently reread the source
+  pair, semantic checkpoint, inspection, deterministic Parquet bytes, and
+  completion marker. The manual-record and marker SHA-256 values are
+  `5ececc9b7560081630636768c7500885a3b5f827d6cdd78c4fb94c6df3e52c57`
+  and
+  `168316f249a7b298382f5e94f3e5ce95c8d93b70cf96773f34c4e16fc41933a1`.
+
+- Across the stable 1,503-checkpoint snapshot, all 224 unresolved model
+  outcomes are covered by 173 true-duplicate and 51 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 152,859 pairs, 97,229 false positives, 55,630 true duplicates;
+  - treatment: 38,029 pairs, 19,673 false positives, 18,356 true duplicates;
+  - combined: 190,888 pairs, 116,902 false positives, 73,986 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(40, 0)`, p2 `(72, 128)`,
+  and p3 `(104, 2,048)`. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T22:29:40Z — 190,760 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2228-v687` and
