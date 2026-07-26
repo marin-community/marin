@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import cast
 
 import equinox as eqx
@@ -58,6 +59,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 
+class InitializationMode(StrEnum):
+    """Checkpoint initialization behavior after own-run resume is attempted."""
+
+    FULL_STATE = "full_state"
+    WEIGHTS_ONLY = "weights_only"
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -78,8 +86,7 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
-    sft_weights_only_init: bool = False
-    """Load only base weights for SFT while retaining the fresh optimizer and step."""
+    initialization_mode: InitializationMode = InitializationMode.FULL_STATE
 
 
 @dataclass(frozen=True)
@@ -543,14 +550,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        if config.trainer.sft_weights_only_init:
-            state = restore_grug_state_from_checkpoint(
-                state,
-                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-                load_checkpoint_setting=trainer.load_checkpoint,
-                mesh=mesh,
-                allow_partial=trainer.allow_partial_checkpoint,
-            )
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
+        if config.trainer.initialization_mode is InitializationMode.WEIGHTS_ONLY:
             if int(state.step) == 0 and trainer.initialize_from is not None:
                 state = init_weights_only_from_checkpoint(
                     state,
@@ -558,14 +565,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     mesh=mesh,
                     load_ema=config.trainer.ema_beta is not None,
                 )
-        else:
-            state = restore_grug_state_from_checkpoint(
-                state,
-                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-                load_checkpoint_setting=trainer.load_checkpoint,
-                mesh=mesh,
-                allow_partial=trainer.allow_partial_checkpoint,
-            )
         nested_init_fields = (config.nested_init_from, config.nested_init_source_model)
         if (nested_init_fields[0] is None) != (nested_init_fields[1] is None):
             raise ValueError("nested_init_from and nested_init_source_model must be set together")

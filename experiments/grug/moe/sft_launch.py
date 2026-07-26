@@ -10,7 +10,6 @@ from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
@@ -22,8 +21,14 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem import prefix_join
 
+from experiments.grug.moe.launch import resolve_tracker
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
+    InitializationMode,
+    run_grug,
+)
 from experiments.sft.launcher import SFTSpec
 
 
@@ -43,11 +48,8 @@ class GrugMoeSFTConfig:
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     init_from_path: str
-    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
-    eval: GrugEvalConfig | None = None
     expert_parallel: int = 1
-    checkpointer: CheckpointerConfig | None = None
     checkpoint_keep: list[dict] | None = None
     save_interval_minutes: int = 30
     per_device_parallelism: int = -1
@@ -65,15 +67,13 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         train_batch_size=config.batch_size,
         per_device_parallelism=config.per_device_parallelism,
         num_train_steps=config.steps,
-        profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
-        tracker=_resolve_tracker(config.tracker, config.run_id),
+        tracker=resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         mesh=MeshConfig(axes={"expert": config.expert_parallel}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=config.checkpointer
-        or CheckpointerConfig(
+        checkpointer=CheckpointerConfig(
             base_path=prefix_join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
@@ -88,7 +88,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         config.grug_trainer,
         trainer=trainer,
         expert_axis_size=config.expert_parallel,
-        sft_weights_only_init=True,
+        initialization_mode=InitializationMode.WEIGHTS_ONLY,
     )
     run_grug(
         GrugRunConfig(
@@ -97,15 +97,9 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
             resources=config.resources,
             optimizer=config.optimizer,
             trainer=grug_trainer,
-            eval=config.eval,
+            eval=None,
         )
     )
-
-
-def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
-    if isinstance(tracker, WandbConfig):
-        return dataclasses.replace(tracker, name=run_id)
-    return tracker
 
 
 @dataclass(frozen=True)
@@ -114,7 +108,7 @@ class GrugModel:
 
     model: GrugModelConfig
     tokenizer_path: str
-    init_from: str | ArtifactStep
+    init_from_path: str
     expert_parallel: int
     replica_axis: int = 1
     per_device_parallelism: int = -1
@@ -139,7 +133,7 @@ class GrugModel:
         return run_grug_moe_sft_trial
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
+        return ()
 
     def build_train_config(
         self,
@@ -149,11 +143,6 @@ class GrugModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> GrugMoeSFTConfig:
-        init_from_path = (
-            prefix_join(ctx.artifact_path(self.init_from), "checkpoints")
-            if isinstance(self.init_from, ArtifactStep)
-            else self.init_from
-        )
         run_id = spec.name.split("/")[-1]
         return GrugMoeSFTConfig(
             model=dataclasses.replace(self.model, max_seq_len=spec.seq_len),
@@ -172,7 +161,7 @@ class GrugModel:
                 name=run_id,
             ),
             optimizer=spec.optimizer,
-            init_from_path=init_from_path,
+            init_from_path=self.init_from_path,
             expert_parallel=self.expert_parallel,
             per_device_parallelism=self.per_device_parallelism,
             save_interval_minutes=self.save_interval_minutes,

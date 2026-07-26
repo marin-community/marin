@@ -265,7 +265,8 @@ def initialize_jax(
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
-        endpoint_name: Name under which the coordinator registers.
+        endpoint_name: Base coordinator registration name. Retried gangs append
+            their attempt number so workers cannot discover a stale attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort

@@ -141,7 +141,8 @@ def _resolve_run_id(default_run_id: str) -> str:
     return run_id
 
 
-def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+def resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
+    """Apply the dispatched run identity to trackers that support naming."""
     if isinstance(tracker, WandbConfig):
         return dataclasses.replace(tracker, name=run_id)
     return tracker
@@ -162,7 +163,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         num_train_steps=config.steps,
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
-        tracker=_resolve_tracker(config.tracker, config.run_id),
+        tracker=resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

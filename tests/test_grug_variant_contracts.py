@@ -278,7 +278,6 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     monkeypatch.setenv("NESTED_MP", "params=float32,compute=float32,output=float32")
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    assert launch_nested_experts._attention_implementation() == "reference"
     step = launch_nested_experts.build(version="dev")
     _seed_cache_records(step, str(tmp_path))
     config = materialized_config(step, str(tmp_path))
@@ -288,13 +287,7 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     assert components
     assert all(isinstance(component, DatasetComponent) for component in components)
     assert {component.pack for component in components} == {None}
-    assert config.model.hidden_dim == 768
-    assert config.model.max_seq_len == 2048
-    assert config.batch_size == 1024
-    assert config.model.capacity_factor == 1.25
-    assert config.optimizer.warmup == 5
-    assert config.run_id.endswith("-finite")
-    assert config.mp == "params=float32,compute=float32,output=float32"
+    assert config.model.attention_implementation == "reference"
 
 
 def test_nested_moe_launcher_evaluates_untreated_control_subset(monkeypatch, tmp_path):

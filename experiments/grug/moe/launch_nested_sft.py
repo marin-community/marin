@@ -77,15 +77,15 @@ def _model(arm: SFTArm):
     )
     base_model = dataclasses.replace(base_model, capacity_factor=_CAPACITY_FACTOR)
     if arm is SFTArm.LARGE:
-        model = _arm_model(base_model, NestedArm.LARGE)
+        model = _arm_model(base_model, NestedArm.LARGE, "reference")
     elif arm in (SFTArm.SMALL, SFTArm.BREAKOUT):
-        model = _arm_model(base_model, NestedArm.SMALL)
+        model = _arm_model(base_model, NestedArm.SMALL, "reference")
     else:
         model = dataclasses.replace(
-            _arm_model(base_model, NestedArm.NESTED_25),
+            _arm_model(base_model, NestedArm.NESTED_25, "reference"),
             nested_batch_fraction=0.0,
         )
-    return dataclasses.replace(model, attention_implementation="reference")
+    return model
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
@@ -101,7 +101,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     model_source = GrugModel(
         model=_model(arm),
         tokenizer_path=llama3_tokenizer,
-        init_from=init_from,
+        init_from_path=init_from,
         expert_parallel=_EXPERT_PARALLEL,
         replica_axis=1,
         per_device_parallelism=-1,

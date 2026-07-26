@@ -509,11 +509,7 @@ def _routing_stats(
 
 
 def nested_expert_eligibility(num_experts: int, nested_expert_count: int) -> jax.Array:
-    """Return an evenly interleaved fixed expert subset.
-
-    Interleaving keeps every expert-parallel rank eligible for the nested
-    branch. Extraction compacts these experts into a contiguous smaller bank.
-    """
+    """Return the eligibility mask for an evenly interleaved expert subset."""
     if nested_expert_count <= 0:
         raise ValueError("nested_expert_count must be positive")
     if num_experts % nested_expert_count != 0:

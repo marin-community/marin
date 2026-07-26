@@ -14,7 +14,8 @@ Required environment:
 
 Optional overrides:
 
-    NESTED_STEPS        optimizer steps (phase default: 20 or 5275)
+    NESTED_STEPS        optimizer steps (phase defaults: 20 smoke, compute-derived
+                        full, 50 cooldown)
     NESTED_BATCH        global batch size (default: 256)
     NESTED_NODES        four-GPU GB200 nodes (default: 16)
     NESTED_EXPERT_AXIS  expert-parallel axis size (default: 64)
@@ -96,6 +97,12 @@ class NestedArm(StrEnum):
         }[self]
 
 
+class _NestedPhase(StrEnum):
+    SMOKE = "smoke"
+    FULL = "full"
+    COOLDOWN = "cooldown"
+
+
 def _required_env(key: str) -> str:
     value = os.environ.get(key)
     if value is None:
@@ -110,9 +117,13 @@ def _attention_implementation() -> GrugAttentionImplementation:
     return cast(GrugAttentionImplementation, value)
 
 
-def _arm_model(base_model: GrugModelConfig, arm: NestedArm) -> GrugModelConfig:
+def _arm_model(
+    base_model: GrugModelConfig,
+    arm: NestedArm,
+    attention_implementation: GrugAttentionImplementation,
+) -> GrugModelConfig:
     common = dict(
-        attention_implementation=_attention_implementation(),
+        attention_implementation=attention_implementation,
         moe_implementation="ring",
         remat_mode="recompute_all",
     )
@@ -140,12 +151,11 @@ def _arm_model(base_model: GrugModelConfig, arm: NestedArm) -> GrugModelConfig:
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build one preregistered nested-MoE arm."""
     arm = NestedArm(_required_env("NESTED_ARM"))
-    phase = _required_env("NESTED_PHASE")
-    if phase not in ("smoke", "full", "cooldown"):
-        raise ValueError("NESTED_PHASE must be 'smoke', 'full', or 'cooldown'")
-    if (arm is NestedArm.BREAKOUT_25) != (phase == "cooldown"):
+    phase = _NestedPhase(_required_env("NESTED_PHASE"))
+    if (arm is NestedArm.BREAKOUT_25) != (phase is _NestedPhase.COOLDOWN):
         raise ValueError("breakout25 and cooldown must be selected together")
 
+    attention_implementation = _attention_implementation()
     hidden_dim = env_int("NESTED_HIDDEN_DIM", _DEFAULT_HIDDEN_DIM)
     sequence_length = env_int("NESTED_SEQUENCE_LENGTH", _DEFAULT_SEQUENCE_LENGTH)
     capacity_factor = float(os.environ.get("NESTED_CAPACITY_FACTOR", "1.0"))
@@ -157,7 +167,11 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         target_steps=_TARGET_STEPS,
         seq_len=sequence_length,
     )
-    model = _arm_model(dataclasses.replace(base_model, capacity_factor=capacity_factor), arm)
+    model = _arm_model(
+        dataclasses.replace(base_model, capacity_factor=capacity_factor),
+        arm,
+        attention_implementation,
+    )
     eval_expert_count = os.environ.get("NESTED_EVAL_EXPERTS")
     if eval_expert_count is not None:
         if arm is not NestedArm.LARGE:
@@ -182,9 +196,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     )
     optimizer = dataclasses.replace(optimizer, warmup=_PROXY_WARMUP_STEPS)
     full_steps = max(1, round(compute_optimal_tokens / (batch_size * sequence_length)))
-    if phase == "smoke":
+    if phase is _NestedPhase.SMOKE:
         default_steps = _SMOKE_STEPS
-    elif phase == "cooldown":
+    elif phase is _NestedPhase.COOLDOWN:
         default_steps = _COOLDOWN_STEPS
     else:
         default_steps = full_steps
@@ -216,7 +230,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     validation = list(paloma_datasets(tokenizer=llama3_tokenizer).values())
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
-        eval_batch_size = 64 if phase == "smoke" else 256
+        eval_batch_size = 64 if phase is _NestedPhase.SMOKE else 256
         nested_init_from = None
         nested_init_source_model = None
         if arm is NestedArm.BREAKOUT_25:
@@ -224,6 +238,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             nested_init_source_model = _arm_model(
                 dataclasses.replace(base_model, capacity_factor=capacity_factor),
                 NestedArm.NESTED_25,
+                attention_implementation,
             )
         data = mixture(ctx, {train_data: 1.0}, validation=validation, shuffle=_SHUFFLE)
         if model.attention_implementation == "gpu_fa4_thd":
@@ -236,7 +251,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
             resources=ctx.runtime_arg("train_resources"),
             steps=steps,
             batch_size=batch_size,
-            seed=1 if phase == "cooldown" else 0,
+            seed=1 if phase is _NestedPhase.COOLDOWN else 0,
             mp=os.environ.get("NESTED_MP", _DEFAULT_MP),
             tracker=WandbConfig(
                 project="marin_moe",
@@ -257,8 +272,8 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 eval_batch_size=eval_batch_size,
                 steps_per_eval=(
                     steps
-                    if phase == "smoke"
-                    else _COOLDOWN_EVAL_INTERVAL if phase == "cooldown" else _PROXY_EVAL_INTERVAL
+                    if phase is _NestedPhase.SMOKE
+                    else _COOLDOWN_EVAL_INTERVAL if phase is _NestedPhase.COOLDOWN else _PROXY_EVAL_INTERVAL
                 ),
                 max_eval_batches=1,
                 eval_current=True,

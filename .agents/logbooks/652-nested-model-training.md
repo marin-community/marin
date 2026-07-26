@@ -500,3 +500,24 @@ author: Marin research
 - Verification: the changed-file pre-commit suite passed. Repository-wide
   pytest collection is blocked by the existing Flax/JAX environment mismatch:
   installed Flax references `jax.core.Effect`, which JAX 0.11 removed.
+
+### 2026-07-26 23:55 - Final branch review
+
+- Result: the required branch-wide lint review completed. Concrete findings
+  were fixed: launcher phase values and checkpoint initialization are enums,
+  attention selection occurs at the environment boundary, checkpoint restore
+  logic is no longer duplicated, the SFT model source has one concrete
+  checkpoint-path type, tracker naming reuses the existing MoE launcher
+  helper, stale docstrings were corrected, and result histories now use a
+  typed record with immutable run maps.
+- Disposition: the remaining environment and function-size findings describe
+  the intended experiment entrypoint boundary. `build()` resolves one
+  reproducible arm from launch-time environment variables and assembles its
+  Iris artifact; it is not a reusable configuration API. Splitting that
+  orchestration after the completed runs would add indirection without changing
+  the scientific result.
+- Verification: seven directly affected nested/extraction contracts passed.
+  The 26 SFT, chat-template, and Iris retry tests passed. A wider 52-test run
+  had 49 passes, two skips, and one unrelated failure in the Grug base CPU
+  metric smoke: JAX explicit sharding rejected concatenation of
+  `P(('replica_dcn', 'data'), None)` with `P(None, None)`.
