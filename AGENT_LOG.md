@@ -571,3 +571,64 @@ disappears — compare against the low-drop regime expectation, not the raw base
 Confidence: 6/10
 Next: idle on racks; poll the canary condition via job list + a small log probe when the
 coordinator signals the fix shipped.
+
+## Check-in 2026-07-26 00:15 UTC
+
+- Idle on racks per standing orders. Canary still dark: newest grug-train children (larry x3, 23:5x-00:1x) all return 0 log lines — fix not shipped yet. Sentinel commit 5bf934717 + rerun package logged (7f8ded7b7). Nothing in flight from me.
+Confidence: 6/10
+Next: keep polling the canary ~every 10 min; rerun ep25d4-sqb-cf100-350-v2 the moment it flips.
+
+## Check-in 2026-07-26 00:52 UTC — canary flipped; verdict leg rerun in flight
+
+- Canary: larry gkv4-opt grug-train child (submitted ~00:45Z) returns log lines — shipper fix live.
+- RERUN SUBMITTED: /mwittmann/ep25d4-sqb-cf100-350-v2-20260725 (identical to lost v1: sender-QB, cf1.0, adjoint, drops, 350 steps). ETA ~02:15Z.
+Confidence: 6/10
+Next: babysit; verify "QB sender-local bias active: senders=64" sentinel once training tasks boot.
+
+## Check-in 2026-07-26 01:25 UTC
+
+- v2 verdict leg mid-run, sentinels confirmed (senders=64). Drop trajectory: 0.376 (~step 40) -> 0.264 (~100) -> 0.169 (~150) -> 0.135 (~170). Tracking near-but-slightly-better-than the g=1 baseline at matched steps (g=1: 0.126@150-200) — NOT the instant collapse of the fixed-router closed loop; the live router is still training into balance during the early phase. The discriminating question remains the 250-350 tail (g=1 leveled at 0.073 mean / 0.064@349).
+- Window MFU ~23.0 (drop-regime-confounded; final matched-regime read at harvest).
+Confidence: 5/10 (tail behavior is genuinely open)
+Next: babysit to ~02:20Z, harvest, verdict, session wrap.
+
+## FINAL (R6-3 sender-local balancing) 2026-07-26 02:35 UTC — SCOPING NEGATIVE, with the cause narrowed
+
+Verdict leg /mwittmann/ep25d4-sqb-cf100-350-v2-20260725 (sender-QB, cf1.0, adjoint, drops,
+350 steps, 349 samples, sentinel "senders=64 experts=256" confirmed on-rack):
+
+| step | 30 | 60 | 90 | 119 | 150 | 200 | 250 | 300 | 349 | tail-100 mean |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| sender-QB | 0.537 | 0.272 | 0.227 | 0.173 | 0.140 | 0.125 | 0.099 | 0.082 | 0.079 | 0.0856 |
+| global-QB (g=1 baseline) | 0.524 | 0.271 | 0.233 | 0.175 | 0.126 | 0.126 | 0.089 | 0.070 | 0.064 | 0.0732 |
+
+- The two trajectories are statistically IDENTICAL (differences within QB draw variance,
+  which we know spans 0.083-0.175 at step 119 across g=1 draws). Sender-local bias does
+  NOT beat the global controller in live training. cf1.0 still does NOT cross 3%.
+- MFU p50 22.545% (vs baseline 22.002, same nominal config +/- draw; sender mode also
+  deletes the per-layer beta pmean collective — cannot attribute the +0.5pp at 1 draw).
+  Loss tail20 3.3357 vs 3.3434 — parity. So the mechanism is FREE, just not effective.
+- INTERPRETATION (the valuable part): combined with the closed-loop result (sender-QB
+  demolishes STATIC sender-correlated hotspots that global QB provably cannot touch,
+  0.773-stuck vs 0.016), live-training equality means the real steady-state drops are NOT
+  persistent sender-local hotspots. They are batch-stochastic: within-batch routing
+  burstiness (a document's tokens routing together into the same shard's buckets) that
+  decorrelates step to step — invisible to ANY one-step-delayed bias controller, global or
+  per-sender. This kills the whole delayed-bias controller family for the last ~5pp of
+  drops (d3's damped/integral variants should expect the same null at steady state, though
+  they may still smooth the early transient).
+- Remaining routes to cf1.0 fidelity, now sharply scoped: structural headroom (cf1.15,
+  priced at -1.75pp), receiver-side pooling across senders (rav's destpool arm — the right
+  idea under this diagnosis: pooled capacity averages out per-sender burstiness), or
+  same-step spill/rerouting (needs kernel interface change, K+m candidates).
+- Bonus: this run is the second draw of the 350-step cf1.0 QB trajectory — the ~6-8%
+  plateau is now confirmed across 2 draws and 2 controller granularities.
+
+Deliverable answered: sender-local balancing does NOT take cf1.0 under 3% (nor move it at
+all); mechanism validated correct + zero-cost; hypothesis falsified in the live regime;
+cause narrowed to batch-stochastic burstiness. Commits: 50748b995, 5bf934717, 7f8ded7b7.
+Jobs: sqb smoke, v1 (metrics lost to the log-shipper incident), v2 (verdict). Submissions
+only; racks were held during the incident per standing orders and resumed on canary flip.
+
+Confidence: 3/10 that any bias-controller variant reaches <3% at cf1.0; 8/10 in the
+burstiness diagnosis (two-sided evidence: closed-loop positive + live null).
