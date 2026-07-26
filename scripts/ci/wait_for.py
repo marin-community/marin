@@ -57,11 +57,13 @@ from enum import StrEnum
 from typing import NamedTuple, Protocol
 
 import click
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.client import IrisClient
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.types import JobName, is_job_finished
-from iris.rpc.errors import format_connect_error
+from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error, is_retryable_error
 from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
 
@@ -427,7 +429,7 @@ class Source:
 
 
 class IrisJobClient(Protocol):
-    def job_state(self, job_id: JobName) -> int: ...
+    def get_job_states_once(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]: ...
 
 
 def _parse_pr(arg: str) -> str:
@@ -564,7 +566,13 @@ class IrisJobSource(Source):
             raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
 
     def check(self) -> dict | None:
-        state = self.client.job_state(self.job_id)
+        states = self.client.get_job_states_once([self.job_id])
+        wire_id = self.job_id.to_wire()
+        if wire_id not in states:
+            # LaunchJob returns only after the controller registers the job, so
+            # a missing target is invalid rather than a transient launch state.
+            raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
+        state = states[wire_id]
         state_name = job_state_friendly(state)
         self.last_status = state_name
         if not is_job_finished(state):
@@ -676,7 +684,9 @@ def select_loop(sources: list[Source], *, deadline: float | None, backoff: Backo
                 return _timeout_result(sources)
         try:
             result = next_arm.source.check()
-        except (GhError, OSError, subprocess.SubprocessError) as exc:
+        except (GhError, OSError, subprocess.SubprocessError, ConnectError) as exc:
+            if isinstance(exc, ConnectError) and not is_retryable_error(exc):
+                raise
             next_arm.errors += 1
             click.echo(
                 f"[wait_for] {next_arm.source.label}: {exc} (error {next_arm.errors}/{MAX_SOURCE_ERRORS})", err=True
@@ -711,13 +721,17 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     return [parse_spec(s) for s in raw]
 
 
-def _iris_client_from_job_info() -> IrisClient:
+def _iris_client_from_job_info() -> RemoteClusterClient:
     info = get_job_info()
     if info is None:
         raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")
     if not info.controller_address:
         raise click.ClickException("iris.job requires a controller address in the current Iris job metadata")
-    return IrisClient.in_cluster(info.controller_address, bundle_id=info.bundle_id)
+    return RemoteClusterClient(
+        info.controller_address,
+        bundle_id=info.bundle_id,
+        use_controller_proxy=False,
+    )
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -773,7 +787,9 @@ def main(
             ignored = set(ignore_authors)
             if needs_authors and not include_self:
                 ignored.add(authenticated_user())
-            iris_client = resources.enter_context(_iris_client_from_job_info()) if needs_iris else None
+            iris_client = _iris_client_from_job_info() if needs_iris else None
+            if iris_client is not None:
+                resources.callback(iris_client.shutdown, wait=False)
             sources = [
                 build_source(
                     s,
