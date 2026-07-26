@@ -22,6 +22,7 @@ from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
 from jax import random, shard_map
+from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
@@ -51,7 +52,11 @@ _ROUTING_RENORM_SUM = 2.5
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["recompute_all", "save_moe", "offload_residual"]
+
+# Name for the per-layer input residual; a remat policy offloads just this to pinned host
+# (offload_residual) so the ~[L,B,S,D] carry the scan holds in HBM moves off-device.
+_CHECKPOINT_LAYER_INPUT = "grug_layer_input"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -739,6 +744,9 @@ class Block(eqx.Module):
     def __call__(
         self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array, is_global: jax.Array | None = None
     ) -> tuple[Float[Array, "B S D"], jax.Array]:
+        # Name the per-layer input residual so offload_residual's remat policy can offload it to pinned
+        # host. Inert under every other remat_mode (the name is simply never referenced).
+        x = checkpoint_name(x, _CHECKPOINT_LAYER_INPUT)
         # SCALE_MOE_HOIST_CHUNK0: reshard chunk-0's routed-expert weights to replicated HERE, before the
         # attention call, so the all-gather is emitted ahead of attention and XLA overlaps it forward
         # (it will not hoist a collective backward across the whole attention block). Threaded into the
@@ -945,6 +953,17 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        elif cfg.remat_mode == "offload_residual":
+            # recompute_all schedule (everything inside the layer recomputes), but the one activation the
+            # scan would otherwise hold in HBM -- the per-layer input residual (~[L,B,S,D], ~43 GiB) -- is
+            # offloaded to pinned host instead. Frees HBM headroom (e.g. for the MTP head) without the
+            # partial-offload schedule that overflowed. Pairs with the pipelined-host-offload XLA flags.
+            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                names_which_can_be_saved=(),
+                names_which_can_be_offloaded=(_CHECKPOINT_LAYER_INPUT,),
+                offload_src="device",
+                offload_dst="pinned_host",
+            )
         else:
             remat_policy = None
 

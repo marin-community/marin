@@ -128,8 +128,8 @@ def build_scale_model() -> GrugModelConfig:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
-    if remat_mode not in ("recompute_all", "save_moe"):
-        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    if remat_mode not in ("recompute_all", "save_moe", "offload_residual"):
+        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be recompute_all, save_moe, or offload_residual")
     # SCALE_MOE_IMPL selects the expert-GEMM backend (e.g. "sonic_cute" = QuACK SM100 on B200);
     # None keeps the config default. SCALE_ATTN_IMPL likewise overrides the attention backend.
     moe_impl_env = os.environ.get("SCALE_MOE_IMPL")
