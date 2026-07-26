@@ -17,6 +17,7 @@ from draccus.utils import DataclassInstance
 from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.main.distill_lm import TrainLmDistillationConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
@@ -529,6 +530,24 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     config, train_config, env = _prepare_training_run(config)
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_dpo").main(train_config)
+
+
+def run_levanter_distill_lm(config: TrainLmOnPodConfig):
+    """Run online-teacher LM distillation in the current process."""
+    config, train_config, env = _prepare_training_run(config)
+    if not isinstance(train_config, TrainLmDistillationConfig):
+        raise TypeError(f"Expected TrainLmDistillationConfig, got {type(train_config).__name__}")
+
+    logger.info(
+        "Distillation config: student=%s teacher=%s seq_len=%d batch=%s device=%s",
+        type(train_config.student_model).__name__,
+        type(train_config.teacher_model).__name__,
+        train_config.train_seq_len or train_config.student_model.max_seq_len,
+        train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
+    _apply_env_to_process(env)
+    importlib.import_module("levanter.main.distill_lm").main(train_config)
 
 
 def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:
