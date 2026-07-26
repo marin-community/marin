@@ -226,3 +226,21 @@ Next: arm-3 completion ~01:45 -> arm-1 rerun decision; keep polling logs.
 
 Confidence: 4/10 g=0.5, 1/10 both integral arms (measured)
 Next: attach poller to arm-1 v2; babysit to ~03:30; assemble final verdict.
+
+## Check-in 2026-07-26 02:50 UTC — arm-1 v2 in NCCL boot-retry loop (iris handling)
+
+- v2 child task: attempt 0 failed 133/SIGTRAP at NCCL clique init ("ResetTask" connect
+  error — the brief's boot-hang class), gang atomically rescheduled 4x so far. Attempt 5
+  now starting; GPU still 0%, no metrics yet. This is infrastructure retry, NOT my code
+  (v1 ran the identical config cleanly to completion this evening). No mutation from me —
+  the retry budget absorbs it; only if the job terminally fails do I resubmit as v3.
+- telltale_poll.sh hardened: re-resolves the endpoint address every cycle (reschedules
+  change pod IP/port — v2 has cycled three addresses already).
+- Full baseline g=1 drop series extracted to 4 decimals for the final table (350 pts;
+  tail 250-349 fluctuates 0.064-0.089, last 0.064).
+- Baseline loss checkpoints for the loss-parity read: 6.828(60) 5.559(119) 4.214(200)
+  3.736(250) 3.335(349). Arm-3 loss tracked close mid-run (4.111@214 vs ~4.0) but ended
+  +0.14 — the gap opens late when the balanced baseline keeps improving.
+
+Confidence: 4/10 g=0.5, 1/10 integral family (measured, two gammas)
+Next: v2 healthy clique -> poller first reads ~03:10; final verdict assembly ~03:45.
