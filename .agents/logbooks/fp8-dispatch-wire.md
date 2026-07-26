@@ -53,7 +53,8 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
 | H1 | Quantizing before the dispatch is bit-identical to quantizing after, so the forward operand is free. | **confirmed** (FP8W-001, CPU) |
 | H2 | The wgrad column operand can be rebuilt from the arrived payload without material loss. | **confirmed** (FP8W-001, CPU) |
 | H3 | Packing scales inside the payload buffer keeps the collective count unchanged at 33/64 of bf16 bytes. | proposed; **revised** by FP8W-003 — the packed uint8 buffer must stay inside the wire's `custom_vjp` |
-| H8 | The quantized payload can cross the op boundary as a differentiated argument, so the quantize need not be fused into the op's VJP. | **confirmed, with a constraint** (FP8W-003) |
+| H8 | The quantized payload can cross the op boundary as a differentiated argument, so the quantize need not be fused into the op's VJP. | **FALSIFIED** (FP8W-005). FP8W-003's confirmation was an artifact of a hand-written backward; both carrier dtypes corrupt a real cotangent. Fusing is required. |
+| H9 | Packing payload and scales into one uint8 buffer keeps the byte ratio at 33/64 and the collective count at one. | **confirmed** (FP8W-005, unit test) |
 | H4 | Relocating the quantize reduces producer volume by ~topk x cf (8.5x at 8-of-256, cf1.0625). | proposed |
 | H5 | The net effect is positive at layer level inside the real step with remat on. | proposed, blocked on implementation |
 | H6 | Most of #7279's -2.02pp was the round trip, not the per-token scaling granularity. | proposed (control arm) |
@@ -183,3 +184,51 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   middle of the backend.
 - **Next action:** implement, then verify the collective dtype on the first sm100 job
   alongside the H7 zero-block probe.
+
+### 2026-07-26 16:05 - FP8W-005: wire primitive landed; H8 falsified, fusing is required
+
+- **Hypothesis:** H3, H9 (packing and byte ratio), and a re-test of H8 under a real
+  downstream consumer rather than the hand-written backward FP8W-003 used.
+- **Commit hash:** see the commit adding `lib/levanter/src/levanter/grug/_moe/mxfp8_wire.py`.
+- **Command:**
+  `XLA_FLAGS=--xla_force_host_platform_device_count=4 PYTHONPATH=$(ls -d lib/*/src | tr '\n' ':')
+  .venv/bin/python -m pytest experiments/grug/moe/test_mxfp8_wire_parity.py
+  lib/levanter/tests/grug/test_mxfp8_wire.py -q -n 0` — 17 passed. The device-count flag is
+  required: the sharded tests skip under two devices, so a default CPU run silently covers
+  only the unsharded half.
+- **Result:**
+  - The quantizer is bit-exact against the vendored `mxfp8_grouped.quantize` reference the
+    expert kernels use, over three seeds of heavy-tailed activations.
+  - Quantize-then-gather equals gather-then-quantize through a routing-shaped gather, now
+    as a unit test rather than a study script. Masking a row after quantization equals
+    quantizing a masked row.
+  - Packing gives exactly `33/64` of bf16 bytes (asserted on `nbytes`), one collective.
+  - **H8 is falsified.** FP8W-003 concluded a float8 carrier propagates the cotangent
+    correctly. It propagates, but JAX matches the cotangent to the primal's tangent type,
+    so a bf16 `dx` handed back through the payload is downcast to *unscaled* e4m3. A
+    downstream `custom_vjp` returning a 1e-6 bf16 gradient — ordinary for a cotangent —
+    gets flushed to exactly zero, since 1e-6 is below e4m3's smallest subnormal. Pinned as
+    `test_a_cotangent_crossing_the_payload_is_silently_corrupted`.
+- **Interpretation:** FP8W-003's probe was wrong because I wrote the backward by hand and
+  returned bf16 directly, so nothing downstream ever produced a cotangent *of the payload*;
+  the cast never happened. Under a real consumer it does. Both carrier dtypes therefore
+  fail, differently and silently: uint8 zeroes the gradient outright, float8 quantizes it
+  to a format with no range. The design's modular boundary does not survive, and the wire
+  must be fused — quantize through expert MLP under one `custom_vjp`, bf16 on both sides.
+  That is the shape Hopper's H3/H4 used, and this is presumably why.
+
+  The fused wrapper cannot call the op's `custom_vjp` either, for the same reason: its
+  activation input would be the quantized payload. It has to drive `_forward_pipeline` and
+  `_backward_pipeline` in `experiments/grug/moe/mxfp8.py` directly, which those are already
+  factored as module-level functions for. That is a larger protocol change than
+  `quantize_source`, so it is not written yet; the module ships the verified primitive with
+  `mxfp8_all_gather` documented as non-differentiable.
+
+  Two process notes. A default CPU pytest run skips every sharded test, so the corruption
+  would not have been caught without forcing the device count. And the worktree has no
+  `.venv`, so `pre-commit.py` reports ~1,465 repo-wide missing-import errors; ruff was run
+  directly instead and pyrefly still needs a real run before any PR.
+- **Next action:** write the fused `custom_vjp` against the pipeline seams, then the layer
+  A/B. GB200 capacity is available on `cw-us-east-08a` (the earlier 0/0 worker reading was
+  wrong — the config has on-demand `gb200-4x` scale groups and jobs were completing during
+  this session).
