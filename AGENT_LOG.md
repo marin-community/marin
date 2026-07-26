@@ -409,3 +409,10 @@ then harvests at terminal. Treatment (+SCALE_A2A_BATCH_EXPERTS=1) goes back-to-b
 CONTROL /mwittmann/ep25d1-qbon-adj-control-120-0725-1823: p50 22.66% (p10 22.34 / p90 24.23, 119 samples),
 drops 113-119 = 0.094/0.087/0.092/0.080/0.080/0.088, loss 5.614. In d4's QB-on cf1.0 band (22.595/22.002). VALID.
 TREATMENT submitted: /mwittmann/ep25d1-qbon-batch-120-0725-2016 = control + SCALE_A2A_BATCH_EXPERTS=1. Polling inline to terminal.
+
+## R6-1 treatment v1 FAILED (transient), resubmitted v2 20:26
+/mwittmann/ep25d1-qbon-batch-120-0725-2016 FAILED during init: "ABORTED: 7 unexpectedly tried to connect with a
+different incarnation. It has likely restarted" = JAX distributed gang-abort from one worker (task 7) restarting
+at startup. NOT a batched-code bug: my sentinel loaded on task 13, no OOM/ResourceExhausted in logs, no step ran,
+and rav's batched run succeeded at EP64. Transient node/preemption flake. Resubmitted as /mwittmann/ep25d1-qbon-batch-120-0725-2026-v2.
+Control /mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = p50 22.66% stands as the matched control.
