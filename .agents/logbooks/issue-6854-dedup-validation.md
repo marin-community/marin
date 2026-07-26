@@ -1483,6 +1483,88 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T08:28:02Z — 111,217 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0819-v196` independently
+  revalidated six p2 decision-file 68 checkpoints at semantic offsets 4,224
+  through 4,864. Their 768 pairs contain 543 model false positives, 222 model
+  true duplicates, and three unresolved outcomes. All 767 direct and one
+  chunked pair were covered by 1,603 judgments and 1,611 requests; 1,599
+  attempts were valid and 12 invalid attempts affected four retried judgments.
+  The six outcome Parquet SHA-256 values, in offset order, are
+  `b4f5b8342139da6da47e020da5d13e05e5966f6bb86406f8b22011b49d912744`,
+  `c2468d02d9a60af552e207ec2904e5811bcd81b5c03cad680ad021df4e3a81aa`,
+  `bc876927ab91b49b16cac9ce7bd52d29db1058ba1cb221c97393847dd9cb6ba1`,
+  `61b300b910df34055eba89da2397eadc9d685ccbe5c055b0b4c962e38db55318`,
+  `3a28923806f93a170a76621e9f9ab7c87348b8348d9125664fe8185b110acecc`,
+  and
+  `a4e97cab76b61b2a895ee1074931ba7a715a89c8bc72d269032a8775baca758f`.
+- Three parallel batch-priority jobs read every character and judgment for the
+  ambiguous pairs:
+
+  - `/rav/datakit-6854-inspect-row7480-0822-v197` compared the complete
+    1,224- and 1,315-character math SFT records. Both ask the same limit
+    problem and give the same Riemann-sum derivation: `x^2` on `[0,1]`,
+    endpoints `k/n`, width `1/n`, the integral of `x^2` from 0 to 1,
+    antiderivative `x^3/3`, and result `1/3`. Their different LaTeX layout and
+    explanatory phrasing add no distinct problem, method, fact, or answer, so
+    the pair is a true duplicate. Pair location
+    `part-00068-of-00128.parquet:7480`; member/canonical text SHA-256
+    `d4e44dec91d5b9a5b6a4b36341f2fd5f630e47b99ac754238ab040827aebc915` /
+    `0b8ac053f1f77c7085bf293c9bb30cdaa9d6ddc10cb4b1eb32e2b4e905e45f53`;
+    inspection-artifact SHA-256
+    `09959f2d5adb1bd8d7f80483948e49d0d58a806516e531ddbf2b2b70fdec471d`.
+  - `/rav/datakit-6854-inspect-row7538-0822-v198` proved that the complete
+    9,777- and 9,770-character customer-service SFT texts are identical except
+    for final `\boxed{\text{G}}` versus `\boxed{G}` formatting, so the pair is
+    a true duplicate. Pair location `part-00068-of-00128.parquet:7538`;
+    member/canonical text SHA-256
+    `7efec9dfd355b3f18e844383034f33742ef2a67ea17e1e38b86118c6050d86fd` /
+    `0ee4257462dea2888aaac7b8e610d2ddd51184d40f8b40fecc117638f06997c4`;
+    inspection-artifact SHA-256
+    `498c780c2794de47d0c695be451bf2cba75a3f796a195a68027a8cf518983201`.
+  - `/rav/datakit-6854-inspect-row7541-0822-v199` proved that the complete
+    7,745- and 7,738-character personality-traits SFT texts are identical
+    except for final `\boxed{\text{B}}` versus `\boxed{B}` formatting, so the
+    pair is a true duplicate. Pair location
+    `part-00068-of-00128.parquet:7541`; member/canonical text SHA-256
+    `f19a36e0de03b3189a260e99044de3ec79a59c299f63f9c7d52bfe1b5b13b792` /
+    `726131c9c410ac09789baee5d15176a85cd24bf848f276751eecabd51d2b10cd`;
+    inspection-artifact SHA-256
+    `49efe240cae224cf139a2342b5d7d56f8691869d761316911ca0977443a2aeb3`.
+
+- Three publisher jobs wrote the immutable hash-bound manual records. Separate
+  jobs `/rav/datakit-6854-verify-row7480-0827-v203`,
+  `/rav/datakit-6854-verify-row7538-0827-v204`, and
+  `/rav/datakit-6854-verify-row7541-0827-v205` reread the source pairs,
+  semantic checkpoints, inspection artifacts, records, deterministic Parquet
+  bytes, and completion markers. In pair order, their semantic-evidence
+  SHA-256 values are
+  `7d90df23055ad118d5f9f2258e711ae1b865d6f3ffa3839f5b7e79d0946c7ec7`,
+  `28f4b027cc77678968ff5b4477a7bf4b25d7ba092a39978a662b7a08c059d2cf`,
+  and
+  `175129e26059cbb0244e8bea7ba336f068fd73a0f40150ce951b2abe62f7f070`;
+  manual-record SHA-256 values are
+  `ec4299ff1c0c6b8e5a6e1464bc07843489878612fd4fd50bc31dc09b7e47bc60`,
+  `53d957b3b080f88cbac61d3b5c70a01377a4f40c49994a1b68aaea0b98aceeab`,
+  and
+  `e8f06db509471865d40170449c046d07e8c72412a4eb67bd50c78893ac6eab69`;
+  manual-Parquet SHA-256 values are
+  `cfae4d4ca97e9f7c7e8f241b80121c7effbb7b07ffc022c96dc6cbdcd8b2cb90`,
+  `da49cd52644d5971462fa63017734233e0b620db4f9efdfd53792ad105e5038f`,
+  and
+  `4ab021d47ababb2bb6fa3eba62472088ab9c139a5794efbf5d1a0b9c72d80e7c`.
+- Across the stable 875-checkpoint snapshot, all 128 unresolved model outcomes
+  are covered by 98 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 89,722 pairs, 57,115 false positives, 32,607 true duplicates;
+  - treatment: 21,495 pairs, 11,181 false positives, 10,314 true duplicates;
+  - combined: 111,217 pairs, 68,296 false positives, 42,921 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T08:18:00Z — 110,449 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0806-v190` independently
