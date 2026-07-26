@@ -9,7 +9,6 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -42,6 +41,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.attention import AttentionMask, ThdSegmentMetadata
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -1045,31 +1045,156 @@ def _sum_microbatch_group(values: tuple[Any, ...]):
     return total
 
 
-def _stack_microbatch_group(values: tuple[Any, ...]):
+def _require_microbatch_pair(values: tuple[Any, ...], *, name: str) -> None:
     if len(values) != 2:
-        raise ValueError(f"stacked stage tasks require exactly two microbatches, got {len(values)}")
-    return jax.tree.map(lambda *leaves: jnp.stack(leaves, axis=0), *values)
+        raise ValueError(f"grouped stage tasks require exactly two {name}, got {len(values)}")
 
 
-def _unstack_microbatch_group(stacked):
-    return tuple(jax.tree.map(lambda leaf, index=index: leaf[index], stacked) for index in range(2))
+def _pack_microbatch_pair(values: tuple[jax.Array, ...], *, name: str) -> jax.Array:
+    _require_microbatch_pair(values, name=name)
+    first, second = values
+    if first.ndim < 2 or second.ndim < 2:
+        raise ValueError(f"grouped {name} must have a batch dimension")
+    if first.shape != second.shape:
+        raise ValueError(f"grouped {name} must have equal shapes, got {first.shape} and {second.shape}")
+    return jnp.reshape(
+        jnp.stack(values, axis=1),
+        (first.shape[0] * 2, *first.shape[1:]),
+    )
 
 
-def _vmap_microbatch_group(
-    function: Callable[..., Any],
-    *,
-    unmapped_args: tuple[Any, ...],
-    mapped_groups: tuple[tuple[Any, ...], ...],
-):
-    if not mapped_groups:
-        raise ValueError("stacked stage tasks require at least one mapped argument")
-    stacked_args = tuple(_stack_microbatch_group(group) for group in mapped_groups)
-    in_axes = (None,) * len(unmapped_args) + (0,) * len(stacked_args)
-    return jax.vmap(function, in_axes=in_axes)(*unmapped_args, *stacked_args)
+def _unpack_microbatch_pair(value: jax.Array) -> tuple[jax.Array, jax.Array]:
+    if value.ndim < 2 or value.shape[0] % 2:
+        raise ValueError(f"packed microbatch pair requires an even batch dimension, got {value.shape}")
+    microbatch_size = value.shape[0] // 2
+    grouped = jnp.reshape(value, (microbatch_size, 2, *value.shape[1:]))
+    output_shape = (microbatch_size, *value.shape[1:])
+    first = jnp.reshape(jax.lax.slice_in_dim(grouped, 0, 1, axis=1), output_shape)
+    second = jnp.reshape(jax.lax.slice_in_dim(grouped, 1, 2, axis=1), output_shape)
+    return first, second
 
 
-def _sum_stacked_microbatch_group(stacked):
-    return _sum_microbatch_group(_unstack_microbatch_group(stacked))
+def _batched_mask_ids(value: jax.Array, batch_size: int) -> jax.Array:
+    if value.ndim == 1:
+        return jnp.broadcast_to(value[None, :], (batch_size, value.shape[0]))
+    if value.ndim != 2 or value.shape[0] != batch_size:
+        raise ValueError(f"grouped attention segment IDs must have batch size {batch_size}, got {value.shape}")
+    return value
+
+
+def _batched_segment_lengths(value: jax.Array, batch_size: int) -> jax.Array:
+    if value.ndim == 1:
+        return jnp.broadcast_to(value[None, :], (batch_size, value.shape[0]))
+    if value.ndim != 2 or value.shape[0] != batch_size:
+        raise ValueError(f"grouped THD segment lengths must have batch size {batch_size}, got {value.shape}")
+    return value
+
+
+def _batched_num_segments(value: jax.Array, batch_size: int) -> jax.Array:
+    if value.ndim == 0:
+        return jnp.broadcast_to(value[None], (batch_size,))
+    if value.ndim != 1 or value.shape[0] != batch_size:
+        raise ValueError(f"grouped THD segment counts must have batch size {batch_size}, got {value.shape}")
+    return value
+
+
+def _pack_group_attention_mask(batches: tuple[GrugLmExample, ...]) -> AttentionMask:
+    _require_microbatch_pair(batches, name="batches")
+    first_batch, second_batch = batches
+    first_mask = first_batch.attn_mask
+    second_mask = second_batch.attn_mask
+    if first_mask.is_causal != second_mask.is_causal or first_mask.sliding_window != second_mask.sliding_window:
+        raise ValueError("grouped attention masks must have matching causal and sliding-window settings")
+
+    batch_sizes = (first_batch.tokens.shape[0], second_batch.tokens.shape[0])
+    if first_mask.segment_ids is None and second_mask.segment_ids is None:
+        segment_ids = None
+    elif first_mask.segment_ids is None or second_mask.segment_ids is None:
+        raise ValueError("grouped attention masks must either both provide segment IDs or both omit them")
+    else:
+        segment_ids = tuple(
+            _pack_microbatch_pair(
+                (
+                    _batched_mask_ids(first_ids, batch_sizes[0]),
+                    _batched_mask_ids(second_ids, batch_sizes[1]),
+                ),
+                name="attention segment IDs",
+            )
+            for first_ids, second_ids in zip(first_mask.segment_ids, second_mask.segment_ids, strict=True)
+        )
+
+    if first_mask.thd_segment_metadata is None and second_mask.thd_segment_metadata is None:
+        thd_segment_metadata = None
+    elif first_mask.thd_segment_metadata is None or second_mask.thd_segment_metadata is None:
+        raise ValueError("grouped attention masks must either both provide THD metadata or both omit it")
+    else:
+        thd_segment_metadata = ThdSegmentMetadata(
+            segment_lengths=_pack_microbatch_pair(
+                (
+                    _batched_segment_lengths(
+                        first_mask.thd_segment_metadata.segment_lengths,
+                        batch_sizes[0],
+                    ),
+                    _batched_segment_lengths(
+                        second_mask.thd_segment_metadata.segment_lengths,
+                        batch_sizes[1],
+                    ),
+                ),
+                name="THD segment lengths",
+            ),
+            num_segments=jnp.reshape(
+                jnp.stack(
+                    (
+                        _batched_num_segments(first_mask.thd_segment_metadata.num_segments, batch_sizes[0]),
+                        _batched_num_segments(second_mask.thd_segment_metadata.num_segments, batch_sizes[1]),
+                    ),
+                    axis=1,
+                ),
+                (batch_sizes[0] * 2,),
+            ),
+        )
+
+    return AttentionMask(
+        is_causal=first_mask.is_causal,
+        segment_ids=segment_ids,
+        thd_segment_metadata=thd_segment_metadata,
+        sliding_window=first_mask.sliding_window,
+    )
+
+
+_GROUPED_ROUTER_SUM_KEYS = frozenset(
+    (
+        "routing_counts_per_layer",
+        "capacity_overflow_per_layer",
+        "qb_beta_per_layer",
+    )
+)
+_GROUPED_ROUTER_MEAN_KEYS = frozenset(
+    (
+        "routing_entropy_per_layer",
+        "load_balancing_loss_per_layer",
+        "router_z_loss_per_layer",
+    )
+)
+
+
+def _combine_grouped_router_metrics(
+    metrics: tuple[dict[str, jax.Array], dict[str, jax.Array]],
+) -> dict[str, jax.Array]:
+    first, second = metrics
+    if first.keys() != second.keys():
+        raise ValueError("grouped router metrics must have matching fields")
+    unknown_keys = first.keys() - _GROUPED_ROUTER_SUM_KEYS - _GROUPED_ROUTER_MEAN_KEYS
+    if unknown_keys:
+        raise ValueError(f"unknown grouped router metric fields: {sorted(unknown_keys)}")
+    return {
+        key: (
+            first[key] + second[key]
+            if key in _GROUPED_ROUTER_SUM_KEYS
+            else (first[key] + second[key]) * jnp.asarray(0.5, dtype=first[key].dtype)
+        )
+        for key in first
+    }
 
 
 def explicit_std_1f1b_stage_schedule(
@@ -1599,6 +1724,174 @@ def _stack_stage_router_metrics(router_stats: tuple[dict[str, jax.Array], ...]) 
     }
 
 
+def _grouped_stage_block_range(
+    compute_params: TransformerPipelineStage,
+    packed_hidden: jax.Array,
+    batches: tuple[GrugLmExample, GrugLmExample],
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+]:
+    _require_microbatch_pair(batches, name="batches")
+    first_batch_size = batches[0].tokens.shape[0]
+    second_batch_size = batches[1].tokens.shape[0]
+    if first_batch_size != second_batch_size:
+        raise ValueError(
+            f"grouped stage tasks require equal microbatch sizes, got {first_batch_size} and {second_batch_size}"
+        )
+    if packed_hidden.shape[0] != first_batch_size + second_batch_size:
+        raise ValueError(
+            "grouped hidden batch dimension must equal the two microbatch sizes, "
+            f"got hidden shape {packed_hidden.shape}"
+        )
+
+    attention_mask = _pack_group_attention_mask(batches)
+    router_stats: tuple[list[dict[str, jax.Array]], list[dict[str, jax.Array]]] = ([], [])
+    for local_index in range(len(compute_params.blocks)):
+        packed_hidden, block_router_stats = compute_params.run_grouped_block(
+            local_index,
+            packed_hidden,
+            attention_mask,
+        )
+        router_stats[0].append(block_router_stats[0])
+        router_stats[1].append(block_router_stats[1])
+
+    hiddens = _unpack_microbatch_pair(packed_hidden)
+    return hiddens, (
+        _stack_stage_router_metrics(tuple(router_stats[0])),
+        _stack_stage_router_metrics(tuple(router_stats[1])),
+    )
+
+
+def _grouped_stage0_forward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    batches: tuple[GrugLmExample, GrugLmExample],
+    mp: jmp.Policy,
+) -> tuple[tuple[jax.Array, jax.Array], jax.Array]:
+    compute_params = _compute_stage(params, qb_betas, mp)
+    tokens = _pack_microbatch_pair(tuple(batch.tokens for batch in batches), name="token batches")
+    packed_hidden = compute_params.embed_tokens(tokens)
+    hiddens, router_metrics = _grouped_stage_block_range(compute_params, packed_hidden, batches)
+    combined_metrics = _combine_grouped_router_metrics(router_metrics)
+    return hiddens, combined_metrics["qb_beta_per_layer"]
+
+
+def _grouped_stage_forward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    mp: jmp.Policy,
+) -> tuple[tuple[jax.Array, jax.Array], jax.Array]:
+    compute_params = _compute_stage(params, qb_betas, mp)
+    packed_hidden = _pack_microbatch_pair(hiddens, name="hidden batches")
+    hiddens, router_metrics = _grouped_stage_block_range(compute_params, packed_hidden, batches)
+    combined_metrics = _combine_grouped_router_metrics(router_metrics)
+    return hiddens, combined_metrics["qb_beta_per_layer"]
+
+
+def _grouped_stage0_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    batches: tuple[GrugLmExample, GrugLmExample],
+    d_hiddens: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+):
+    _require_microbatch_pair(d_hiddens, name="output cotangents")
+
+    def activation_projection(stage_params):
+        hiddens, _ = _grouped_stage0_forward(stage_params, qb_betas, batches, mp)
+        packed_hidden = _pack_microbatch_pair(hiddens, name="hidden batches")
+        packed_d_hidden = _pack_microbatch_pair(d_hiddens, name="output cotangents")
+        return jnp.sum(packed_hidden.astype(jnp.float32) * packed_d_hidden.astype(jnp.float32))
+
+    return jax.grad(activation_projection)(params)
+
+
+def _grouped_stage_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    d_hiddens: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+):
+    _require_microbatch_pair(d_hiddens, name="output cotangents")
+
+    def activation_projection(stage_params, stage_hiddens):
+        output_hiddens, _ = _grouped_stage_forward(stage_params, qb_betas, stage_hiddens, batches, mp)
+        packed_hidden = _pack_microbatch_pair(output_hiddens, name="hidden batches")
+        packed_d_hidden = _pack_microbatch_pair(d_hiddens, name="output cotangents")
+        return jnp.sum(packed_hidden.astype(jnp.float32) * packed_d_hidden.astype(jnp.float32))
+
+    return jax.grad(activation_projection, argnums=(0, 1))(params, hiddens)
+
+
+def _grouped_last_stage_loss(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    mp: jmp.Policy,
+    *,
+    logsumexp_weight: float | None,
+) -> tuple[jax.Array, jax.Array]:
+    compute_params = _compute_stage(params, qb_betas, mp)
+    packed_hidden = _pack_microbatch_pair(hiddens, name="hidden batches")
+    output_hiddens, router_metrics = _grouped_stage_block_range(compute_params, packed_hidden, batches)
+
+    losses = []
+    qb_betas_next = []
+    for hidden, batch, microbatch_router_metrics in zip(
+        output_hiddens,
+        batches,
+        router_metrics,
+        strict=True,
+    ):
+        final_hidden = compute_params.finalize_hidden(hidden)
+        loss, metrics = compute_params.hidden_next_token_loss(
+            final_hidden,
+            batch.tokens,
+            batch.loss_weight,
+            microbatch_router_metrics,
+            reduction="mean",
+            logsumexp_weight=logsumexp_weight,
+            return_router_metrics=True,
+        )
+        losses.append(loss)
+        qb_betas_next.append(metrics["qb_beta_per_layer"])
+
+    return _sum_microbatch_group(tuple(losses)), _sum_microbatch_group(tuple(qb_betas_next))
+
+
+def _grouped_last_stage_loss_and_grads(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+    mp: jmp.Policy,
+    *,
+    logsumexp_weight: float | None,
+):
+    def loss_fn(stage_params, stage_hiddens):
+        return _grouped_last_stage_loss(
+            stage_params,
+            qb_betas,
+            stage_hiddens,
+            batches,
+            mp,
+            logsumexp_weight=logsumexp_weight,
+        )
+
+    (loss, qb_betas_next), (grads, d_hiddens) = jax.value_and_grad(
+        loss_fn,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hiddens)
+    return loss, qb_betas_next, grads, d_hiddens
+
+
 def _stage_input_gradient_backward(
     params: TransformerPipelineStage,
     qb_betas: jax.Array,
@@ -1958,48 +2251,25 @@ def _make_explicit_mpmd_train_step(
         return loss, qb_betas_next, grads, d_hidden
 
     def grouped_stage0_forward(params, qb_betas, batches):
-        hiddens, qb_betas_next = _vmap_microbatch_group(
-            stage0_forward,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(batches,),
-        )
-        return _unstack_microbatch_group(hiddens), _sum_stacked_microbatch_group(qb_betas_next)
+        return _grouped_stage0_forward(params, qb_betas, batches, mp)
 
     def grouped_stage_forward(params, qb_betas, hiddens, batches):
-        hiddens, qb_betas_next = _vmap_microbatch_group(
-            stage_forward,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(hiddens, batches),
-        )
-        return _unstack_microbatch_group(hiddens), _sum_stacked_microbatch_group(qb_betas_next)
+        return _grouped_stage_forward(params, qb_betas, hiddens, batches, mp)
 
     def grouped_stage0_backward(params, qb_betas, batches, d_hiddens):
-        grads = _vmap_microbatch_group(
-            stage0_backward,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(batches, d_hiddens),
-        )
-        return _sum_stacked_microbatch_group(grads)
+        return _grouped_stage0_backward(params, qb_betas, batches, d_hiddens, mp)
 
     def grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens):
-        grads, d_hiddens = _vmap_microbatch_group(
-            stage_backward,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(hiddens, batches, d_hiddens),
-        )
-        return _sum_stacked_microbatch_group(grads), _unstack_microbatch_group(d_hiddens)
+        return _grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens, mp)
 
     def grouped_last_stage_loss_and_grads(params, qb_betas, hiddens, batches):
-        losses, qb_betas_next, grads, d_hiddens = _vmap_microbatch_group(
-            last_stage_loss_and_grads,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(hiddens, batches),
-        )
-        return (
-            _sum_stacked_microbatch_group(losses),
-            _sum_stacked_microbatch_group(qb_betas_next),
-            _sum_stacked_microbatch_group(grads),
-            _unstack_microbatch_group(d_hiddens),
+        return _grouped_last_stage_loss_and_grads(
+            params,
+            qb_betas,
+            hiddens,
+            batches,
+            mp,
+            logsumexp_weight=z_loss,
         )
 
     def last_stage_backward(

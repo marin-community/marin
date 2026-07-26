@@ -3679,3 +3679,18 @@ author: dlwh
   - The fixed relative-L2 `0.002` policy remains unchanged. No numerical gate was reached, so no FP8 group-2 or L24 run is allowed from this implementation.
 - Next action:
   - Keep the opt-in code as a reproducible compile boundary. Before another H100 run, identify a MoE-only grouping boundary that preserves separate attention/stage programs and prove through lowering that it does not duplicate the whole transformer graph.
+
+### 2026-07-26 13:26 PDT - whole-stage vmap is blocked by CuTe FA4 batching
+- Hypothesis: Stacking two microbatches and applying one `jax.vmap` around each complete stage task will reduce duplicated HLO enough to avoid the tuple-unrolled group-2 compile cliff while preserving the original per-microbatch semantics.
+- Commit Hash: `47808c0002` replaces tuple-unrolled paired stage calls with stacked inputs, whole-stage `jax.vmap`, and explicit output unstacking/reduction. Focused validation reports `30 passed`; changed-files precommit including Pyrefly passes.
+- Command: Parent `/dlwh/iris-run-job-20260726-201628` launched an L4/d2560/e64/top-k4/seq4096/b128/m4 exact-ring, CuTe FA4, BF16-wire group-2 smoke. Child: `/dlwh/iris-run-job-20260726-201628/grug-train-jaxpp-rno2a-ring-stagegroup2-vmap-l4-e64k4-b128-s4096-p4m4-20260726-1315`.
+- Results:
+  - The job failed during JaxPP `make_jaxpr` tracing, before XLA lowering or compilation.
+  - Stage 0 reached CuTe FA4 and raised `NotImplementedError: cutlass_call does not support batching with jax.vmap. Please use jax.custom_batching.custom_vmap for applying vmap.`
+  - Iris retried the same deterministic failure three times. No training history row, loss, gradient, or MFU was emitted.
+  - The parent was stopped after classification. Parent and child are terminal killed, all tasks are terminal, and the Kubernetes resource probe returns `404`; no live allocation remains.
+- Interpretation:
+  - Whole-stage `vmap` is not a viable graph-size reduction with the current CuTe FA4 custom call. This is a frontend batching limitation, distinct from the earlier active XLA compile cliff.
+  - The fixed acceptance policy remains relative-L2 `<=0.002` for loss and every gradient leaf. This run did not reach the numerical gate.
+- Next action:
+  - Concatenate each pair along the ordinary batch dimension so attention remains one supported CuTe call, but split inside every MoE invocation and execute exact ring routing separately for each original microbatch. Sum the two loss/QB/gradient contributions in original-microbatch units, then prove JIT value/VJP parity before another H100 smoke.

@@ -824,6 +824,33 @@ class Block(eqx.Module):
         return x, router_stats
 
     @named_call
+    def grouped_moe_residual(
+        self,
+        x: Float[Array, "B S D"],
+    ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+        """Run dense MLP preparation once and exact ring routing per microbatch."""
+        if self.mlp.expert_mlp.implementation != "ring":
+            raise ValueError("grouped MoE residual requires the exact bulk-ring implementation")
+        if x.shape[0] % 2:
+            raise ValueError(f"grouped MoE residual requires an even batch dimension, got {x.shape[0]}")
+
+        microbatch_size = x.shape[0] // 2
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        grouped_mlp_in = jnp.reshape(mlp_in, (microbatch_size, 2, *mlp_in.shape[1:]))
+        microbatch_shape = (microbatch_size, *mlp_in.shape[1:])
+        first_mlp_in = jnp.reshape(jax.lax.slice_in_dim(grouped_mlp_in, 0, 1, axis=1), microbatch_shape)
+        second_mlp_in = jnp.reshape(jax.lax.slice_in_dim(grouped_mlp_in, 1, 2, axis=1), microbatch_shape)
+        first_out, first_stats = self.mlp(first_mlp_in)
+        second_out, second_stats = self.mlp(second_mlp_in)
+        mlp_out = jnp.reshape(
+            jnp.stack((first_out, second_out), axis=1),
+            x.shape,
+        )
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        return x + mlp_out, (first_stats, second_stats)
+
+    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -833,6 +860,17 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
         return self.moe_residual(x)
+
+    @named_call
+    def grouped_call(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+        x = self.attention_residual(x, mask, use_pko=use_pko, disable_rope=disable_rope)
+        return self.grouped_moe_residual(x)
 
 
 def _run_block_with_remat(
@@ -859,6 +897,27 @@ def _run_block_with_remat(
     if remat_mode == "save_moe":
         remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
     return eqx.filter_checkpoint(block, policy=remat_policy)(hidden, mask, use_pko, disable_rope)
+
+
+def _run_grouped_block_with_remat(
+    block: Block,
+    hidden: Float[Array, "B S D"],
+    mask: AttentionMask | jax.Array,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(Block.grouped_call, policy=remat_policy)(
+        block,
+        hidden,
+        mask,
+        use_pko,
+        disable_rope,
+    )
 
 
 class TransformerPipelineStage(eqx.Module):
@@ -923,6 +982,38 @@ class TransformerPipelineStage(eqx.Module):
             disable_rope=is_long and self.config.disable_long_rope,
             remat_mode=self.config.remat_mode,
             effectful_moe=self.config.moe_implementation == "deepep",
+        )
+
+    @named_call
+    def run_grouped_block(
+        self,
+        local_index: int,
+        hidden: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+        """Run attention once and exact ring MoE separately for two microbatches."""
+        if mask is None:
+            mask = AttentionMask.causal()
+        if not 0 <= local_index < len(self.blocks):
+            raise ValueError(f"local block index must be in [0, {len(self.blocks)}), got {local_index}")
+
+        layer_index = self.start_layer + local_index
+        is_last = layer_index == self.config.num_layers - 1
+        is_long = layer_index % 4 == 3 or is_last
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        layer_mask = AttentionMask(
+            is_causal=True,
+            sliding_window=None if is_long else self.config.sliding_window,
+            segment_ids=segment_ids,
+            thd_segment_metadata=mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None,
+        )
+        return _run_grouped_block_with_remat(
+            self.blocks[local_index],
+            hidden,
+            layer_mask,
+            use_pko=is_long and not self.config.disable_pko,
+            disable_rope=is_long and self.config.disable_long_rope,
+            remat_mode=self.config.remat_mode,
         )
 
     @named_call

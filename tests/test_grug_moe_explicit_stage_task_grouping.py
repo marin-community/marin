@@ -1,30 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 import subprocess
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 import pytest
 from fray.cluster import ResourceConfig
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
     GrugRunConfig,
     GrugTrainerConfig,
     _accumulate_microbatch_tree,
     _average_microbatch_tree,
+    _combine_grouped_router_metrics,
+    _compute_stage,
+    _grouped_last_stage_loss_and_grads,
+    _pack_group_attention_mask,
+    _pack_microbatch_pair,
     _sum_microbatch_group,
-    _sum_stacked_microbatch_group,
-    _unstack_microbatch_group,
-    _vmap_microbatch_group,
+    _unpack_microbatch_pair,
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
     unpack_fp8_pipeline_wire,
@@ -240,57 +248,187 @@ def test_grouped_gradient_sums_average_over_original_microbatch_count() -> None:
     np.testing.assert_allclose(actual_average["bias"], reference_average["bias"])
 
 
-def test_stacked_vmap_group_matches_ordered_value_and_gradients_under_jit() -> None:
-    batches = (
-        GrugLmExample.causal(jnp.asarray([1, 2, 3, 4], dtype=jnp.int32)),
-        GrugLmExample.causal(jnp.asarray([4, 3, 2, 1], dtype=jnp.int32)),
-    )
-    hiddens = (
-        jnp.asarray([0.25, -0.5, 0.75, -1.0], dtype=jnp.float32),
-        jnp.asarray([-1.0, 0.75, -0.5, 0.25], dtype=jnp.float32),
-    )
-    params = {"weight": jnp.asarray([1.5, -0.75, 0.5, 2.0], dtype=jnp.float32)}
-    qb_betas = jnp.asarray([0.125, -0.25, 0.375, -0.5], dtype=jnp.float32)
-
-    def single_loss_and_grads(params, qb_betas, hidden, batch):
-        def loss_fn(stage_params, stage_hidden):
-            prediction = stage_params["weight"] * stage_hidden + qb_betas
-            target = batch.tokens.astype(jnp.float32)
-            loss = jnp.sum(jnp.square(prediction - target) * batch.loss_weight)
-            return loss, prediction
-
-        (loss, qb_next), (grads, d_hidden) = jax.value_and_grad(
-            loss_fn,
-            argnums=(0, 1),
-            has_aux=True,
-        )(params, hidden)
-        return loss, qb_next, grads, d_hidden
-
-    @jax.jit
-    def stacked_group(params, qb_betas, hiddens, batches):
-        losses, qb_next, grads, d_hiddens = _vmap_microbatch_group(
-            single_loss_and_grads,
-            unmapped_args=(params, qb_betas),
-            mapped_groups=(hiddens, batches),
-        )
-        return (
-            _sum_stacked_microbatch_group(losses),
-            _sum_stacked_microbatch_group(qb_next),
-            _sum_stacked_microbatch_group(grads),
-            _unstack_microbatch_group(d_hiddens),
-        )
-
-    actual = stacked_group(params, qb_betas, hiddens, batches)
-    ordered = tuple(
-        single_loss_and_grads(params, qb_betas, hidden, batch) for hidden, batch in zip(hiddens, batches, strict=True)
-    )
-    expected = (
-        _sum_microbatch_group(tuple(value[0] for value in ordered)),
-        _sum_microbatch_group(tuple(value[1] for value in ordered)),
-        _sum_microbatch_group(tuple(value[2] for value in ordered)),
-        tuple(value[3] for value in ordered),
-    )
-
+def _assert_tree_rel_l2(actual, expected, *, tolerance: float = 0.002) -> None:
     assert jax.tree.structure(actual) == jax.tree.structure(expected)
     for actual_leaf, expected_leaf in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
-        np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=1e-6, atol=1e-6)
+        actual_array = np.asarray(actual_leaf, dtype=np.float64)
+        expected_array = np.asarray(expected_leaf, dtype=np.float64)
+        assert np.all(np.isfinite(actual_array))
+        assert np.all(np.isfinite(expected_array))
+        if np.array_equal(actual_array, expected_array):
+            continue
+        denominator = max(float(np.linalg.norm(expected_array.ravel())), 1e-12)
+        relative_l2 = float(np.linalg.norm((actual_array - expected_array).ravel())) / denominator
+        assert relative_l2 <= tolerance
+
+
+def _tiny_grouped_last_stage(remat_mode: str):
+    config = GrugModelConfig(
+        vocab_size=16,
+        hidden_dim=8,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_experts=2,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=4,
+        sliding_window=4,
+        router_z_loss_coef=0.1,
+        attention_implementation="reference",
+        moe_implementation="ring",
+        loss_implementation="reference",
+        remat_mode=remat_mode,
+    )
+    mesh = Mesh(
+        np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    with jax.set_mesh(mesh):
+        model = Transformer.init(config, key=jax.random.PRNGKey(0))
+    return mesh, model.split_for_pipeline(2)[1]
+
+
+def _shard_group_batch(batch: GrugLmExample, mesh: Mesh) -> GrugLmExample:
+    token_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+    return dataclasses.replace(
+        batch,
+        tokens=jax.device_put(batch.tokens, token_sharding),
+        loss_weight=jax.device_put(batch.loss_weight, token_sharding),
+    )
+
+
+def _shard_group_hidden(value: jax.Array, mesh: Mesh) -> jax.Array:
+    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+    return jax.device_put(value, sharding)
+
+
+def test_grouped_pair_pack_round_trips_local_batch_order() -> None:
+    first = jnp.asarray([[1, 2], [3, 4]], dtype=jnp.int32)
+    second = jnp.asarray([[10, 20], [30, 40]], dtype=jnp.int32)
+
+    packed = jax.jit(_pack_microbatch_pair, static_argnames=("name",))((first, second), name="test values")
+    unpacked = jax.jit(_unpack_microbatch_pair)(packed)
+
+    np.testing.assert_array_equal(packed, jnp.asarray([[1, 2], [10, 20], [3, 4], [30, 40]]))
+    np.testing.assert_array_equal(unpacked[0], first)
+    np.testing.assert_array_equal(unpacked[1], second)
+
+    batches = (
+        GrugLmExample(
+            tokens=first,
+            loss_weight=first.astype(jnp.float32),
+            attn_mask=AttentionMask.causal().with_segment_ids(first),
+        ),
+        GrugLmExample(
+            tokens=second,
+            loss_weight=second.astype(jnp.float32),
+            attn_mask=AttentionMask.causal().with_segment_ids(second),
+        ),
+    )
+    packed_mask = jax.jit(_pack_group_attention_mask)(batches)
+    assert packed_mask.segment_ids is not None
+    np.testing.assert_array_equal(packed_mask.segment_ids[0], packed)
+    np.testing.assert_array_equal(packed_mask.segment_ids[1], packed)
+
+
+def test_grouped_router_metric_reduction_preserves_sum_and_mean_semantics() -> None:
+    first = {
+        "routing_counts_per_layer": jnp.asarray([[1.0, 2.0]]),
+        "capacity_overflow_per_layer": jnp.asarray([3.0]),
+        "qb_beta_per_layer": jnp.asarray([[4.0, 5.0]]),
+        "routing_entropy_per_layer": jnp.asarray([6.0]),
+        "load_balancing_loss_per_layer": jnp.asarray([7.0]),
+        "router_z_loss_per_layer": jnp.asarray([8.0]),
+    }
+    second = jax.tree.map(lambda value: value + 10.0, first)
+
+    combined = jax.jit(_combine_grouped_router_metrics)((first, second))
+
+    for key in ("routing_counts_per_layer", "capacity_overflow_per_layer", "qb_beta_per_layer"):
+        np.testing.assert_array_equal(combined[key], first[key] + second[key])
+    for key in ("routing_entropy_per_layer", "load_balancing_loss_per_layer", "router_z_loss_per_layer"):
+        np.testing.assert_array_equal(combined[key], (first[key] + second[key]) * 0.5)
+
+
+@pytest.mark.parametrize("remat_mode", ("recompute_all", "save_moe"))
+def test_grouped_last_stage_matches_ordered_value_and_vjp_under_jit(remat_mode: str) -> None:
+    mesh, stage = _tiny_grouped_last_stage(remat_mode)
+    mp = jmp.get_policy("f32")
+    qb_betas = jnp.asarray([[0.2, -0.1]], dtype=jnp.float32)
+    batches = (
+        _shard_group_batch(
+            GrugLmExample(
+                tokens=jnp.asarray([[1, 2, 3, 4]], dtype=jnp.int32),
+                loss_weight=jnp.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=jnp.float32),
+                attn_mask=AttentionMask.causal(),
+            ),
+            mesh,
+        ),
+        _shard_group_batch(
+            GrugLmExample(
+                tokens=jnp.asarray([[4, 3, 2, 1]], dtype=jnp.int32),
+                loss_weight=jnp.asarray([[1.0, 1.0, 1.0, 0.0]], dtype=jnp.float32),
+                attn_mask=AttentionMask.causal(),
+            ),
+            mesh,
+        ),
+    )
+    hiddens = tuple(_shard_group_hidden(jax.random.normal(jax.random.PRNGKey(key), (1, 4, 8)), mesh) for key in (1, 2))
+
+    def ordered_loss_and_grads(params, stage_hiddens, stage_batches):
+        losses = []
+        qb_betas_next = []
+        grads = []
+        d_hiddens = []
+        for hidden, batch in zip(stage_hiddens, stage_batches, strict=True):
+
+            def loss_fn(stage_params, stage_hidden, batch=batch):
+                compute_params = _compute_stage(stage_params, qb_betas, mp)
+                output_hidden, router_metrics = compute_params.block_range(stage_hidden, mask=batch.attn_mask)
+                final_hidden = compute_params.finalize_hidden(output_hidden)
+                loss, metrics = compute_params.hidden_next_token_loss(
+                    final_hidden,
+                    batch.tokens,
+                    batch.loss_weight,
+                    router_metrics,
+                    reduction="mean",
+                    logsumexp_weight=0.01,
+                    return_router_metrics=True,
+                )
+                return loss, metrics["qb_beta_per_layer"]
+
+            (loss, qb_next), (grad, d_hidden) = jax.value_and_grad(
+                loss_fn,
+                argnums=(0, 1),
+                has_aux=True,
+            )(params, hidden)
+            losses.append(loss)
+            qb_betas_next.append(qb_next)
+            grads.append(grad)
+            d_hiddens.append(d_hidden)
+        return (
+            _sum_microbatch_group(tuple(losses)),
+            _sum_microbatch_group(tuple(qb_betas_next)),
+            _sum_microbatch_group(tuple(grads)),
+            tuple(d_hiddens),
+        )
+
+    grouped_fn = jax.jit(
+        lambda params, stage_hiddens, stage_batches: _grouped_last_stage_loss_and_grads(
+            params,
+            qb_betas,
+            stage_hiddens,
+            stage_batches,
+            mp,
+            logsumexp_weight=0.01,
+        )
+    )
+    ordered_fn = jax.jit(ordered_loss_and_grads)
+    with jax.set_mesh(mesh):
+        actual = grouped_fn(stage, hiddens, batches)
+        expected = ordered_fn(stage, hiddens, batches)
+
+    _assert_tree_rel_l2(actual, expected)
