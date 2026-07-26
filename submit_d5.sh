@@ -11,7 +11,7 @@ VERSION="ep25d5-dev"
 # Memory ladder for the 707B shape. ALLOC=cuda_async (default) sidesteps the BFC fraction entirely;
 # ALLOC=bfc uses the BFC allocator at MEM_FRACTION instead. Record whichever was used with the result.
 ALLOC="${ALLOC:-cuda_async}"
-MEM_FRACTION="${MEM_FRACTION:-0.90}"
+MEM_FRACTION="${MEM_FRACTION-}"   # empty = leave the 0.75 default alone
 OFFLOAD="${OFFLOAD:-0}"
 
 COMMON_ENV=(
@@ -28,7 +28,11 @@ COMMON_ENV=(
 
 # The cuda_async allocator honors XLA_PYTHON_CLIENT_MEM_FRACTION too: the first d6144 leg reported
 # "Limit: 138.22GiB" = 0.75 x 184.3 GiB physical. So the two knobs compose and both are always passed.
-MEM_ENV=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
+# MEM_FRACTION="" leaves the default 0.75 alone. Do NOT raise it blindly: NCCL allocates its transport
+# buffers OUTSIDE the XLA allocator, so a high fraction starves them and the a2a fails with
+# "ncclAlltoAll ... unhandled cuda error / Cuda failure 2 'out of memory'" instead of an XLA OOM.
+MEM_ENV=()
+[[ -n "$MEM_FRACTION" ]] && MEM_ENV+=(-e XLA_PYTHON_CLIENT_MEM_FRACTION "$MEM_FRACTION")
 [[ "$ALLOC" == cuda_async ]] && MEM_ENV+=(-e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async)
 [[ "$OFFLOAD" == 1 ]] && MEM_ENV+=(-e SCALE_OFFLOAD_OPT_STATE 1)
 

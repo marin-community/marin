@@ -605,3 +605,39 @@ overstated; I run no XSA / attn-gate / GatedNorm / host offload where the 23.1% 
 than the default 0.75, which a peer measured as performance-neutral on this workload.
 Also unmeasured: spill live at any d6144 shape — everything in R1-R3 is kernel-exact but not a live
 training leg.
+
+## Check-in 15 — a FIFTH failure class, and this one was my own configuration error
+
+The 4-of-128 leg compiled, reached execution, and then died with a REAL primary error — the first one
+in five rack attempts:
+
+    jax.errors.JaxRuntimeError: INTERNAL: NCCL operation ncclAlltoAll(...) failed: unhandled cuda
+    error ... Last NCCL warning(error) log entry 'Cuda failure 2 'out of memory''
+    [executable_name='jit_train_step']
+
+reported by many tasks at 11:08:08Z, i.e. inside the a2a. NCCL allocates its transport buffers OUTSIDE
+the XLA allocator. I had set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.90` "for headroom", which with the BFC
+allocator pre-reserves 90% of HBM at startup and leaves ~18 GiB for NCCL, cuBLAS workspaces and the
+CUDA context combined. At EP64 the all-to-all needs more than that, so I starved it. The default 0.75
+leaves ~46 GiB.
+
+This is a fifth class for the triage recipe and it is worth as much as the other four, because the
+signature actively misleads: an XLA-allocator grep (`failed to allocate`) returns ZERO — the memory
+failure is inside NCCL, and it surfaces as an INTERNAL NCCL error naming the collective.
+
+    grep -c "ncclAlltoAll\|unhandled cuda error\|Cuda failure 2" j.log
+    non-zero => memory starvation OUTSIDE the XLA allocator. LOWER XLA_PYTHON_CLIENT_MEM_FRACTION,
+    do not raise it. Raising the fraction to fix an XLA OOM can CAUSE this one.
+
+Fixed the submitter so `MEM_FRACTION` is empty by default (leave 0.75 alone) rather than 0.90, with the
+mechanism documented in the script. Resubmitted as
+/mwittmann/ep25d5-d6144-e128-bf16-120-0726-1125-v2 at the DEFAULT fraction and the DEFAULT BFC
+allocator, no offload — which is now byte-for-byte d1's d5120 control configuration with only the
+model shape changed, the cleanest possible comparison. My projection (~119 GiB against the 138.22 GiB
+limit at 0.75) says it fits without the headroom I was trying to buy.
+
+Retrospective worth noting: v2/v3/v4 at 4-of-256 ALSO ran at fraction 0.90. They died with no primary
+error, which is not this signature, but I can no longer rule out that the 0.90 fraction contributed —
+a process killed inside a CUDA/NCCL allocation failure can die before it logs. That is a HYPOTHESIS,
+not a finding, and it does not touch the 4-of-256 memory result, which was measured at the DEFAULT
+0.75 fraction on the very first leg with an explicit XLA allocator report.
