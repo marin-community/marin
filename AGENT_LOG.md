@@ -722,3 +722,20 @@ overlap, which raises the prior on this probe back up. Treatment v3 is mid-compi
 throwing "very slow compile" alarms on all 16 hosts, no failures).
 Confidence: 4/10 that PGLE+LHS clears +0.5pp; 9/10 that the exposed-collective measurement is sound.
 Next: harvest v3; matched control leg; treatment-side overlap report against the table above.
+
+## Check-in 2026-07-26 07:00 UTC (late entry) — v3 training; PGLE profile does cover the a2a
+
+- PGLE proto audit (local parse of experiments/grug/moe/pgle/ep64-qb-adjoint-prefetch.pb):
+  8989 cost entries, including 24 `all_to_all.*` (2.2-4.6 ms each), 20 `all-gather-start`,
+  19 `all-reduce-start`, 2185 `custom-call`. So the scheduler gets measured costs for the
+  expert dispatch a2a itself. Note the naming asymmetry: the FSDP/optimizer collectives appear
+  as async `*-start` ops while the a2a appears as a plain (synchronous) `all_to_all` — matching
+  the profile observation that ~2.7 s per 3-step window of SendRecv runs inline on the compute
+  stream. Async-ifying that op is exactly what LHS could change; that is the live hypothesis.
+- v3 is past compile and stepping (first samples at 06:58Z). drops@0 = 0.1721, byte-identical to
+  the sqb 350-step leg's step-0 value, so the data draw matches the earlier legs.
+- Early window (steps 0-7, drop-heavy regime, includes the profiler window at 8-10):
+  MFU p50 24.33%, step time 11.18 s. NOT comparable to the 22.6% references yet — early steps
+  read high because drops are high. The verdict number is the matched control leg.
+Confidence: 4/10
+Next: let v3 finish (~07:25Z), then submit the matched control immediately.
