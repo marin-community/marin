@@ -1786,3 +1786,38 @@ inside the tolerance, and a short amax history — or even a constant — repres
 faithfully at this shape. That is direct evidence for the `amax_history_length=32` choice rather
 than an assumption.
 Confidence: 9/10 on the calibration (real model, real shapes, stable across steps); 9/10 that the running leg's loss is invalid and its throughput is not.
+
+## COTANGENT TRAJECTORY 2026-07-26 14:15 UTC — no decay over 50 steps; a constant is defensible for e5m2
+
+50-step free probe, cotangent amax sampled through training (every 12th observation):
+
+6.1e-08, 6.3e-08, 4.4e-09, 6.9e-08, 4.6e-09, 4.5e-09, 7.4e-08, 5.0e-09, 9.6e-08, 9.2e-08,
+4.7e-09, 9.6e-08, 5.0e-09, 5.6e-09
+
+Two findings. First, values fall into two clusters ~15-20x apart (~5e-09 and ~7-9e-08) that
+INTERLEAVE rather than succeed one another, so this is two different tensors (the dispatch and
+combine backward legs) and not a time trend. Second, and this is what the coordinator asked for:
+**there is no systematic decay across the 50-step window** — the last observations sit in the same
+range as the first. The feared order-of-magnitude drift over training does not appear at this
+horizon. It may still appear over thousands of steps; this measurement bounds only what a 120-step
+leg will see.
+
+**Why a constant is defensible for the backward wire specifically:** e5m2 spends five bits on the
+exponent, so its representable range spans roughly nine orders of magnitude. With amax 1e-07 the
+scale is ~1.7e-12, and a cotangent of 5e-09 quantizes to ~2900 — comfortably inside the range. A
+scale 10x or even 100x off therefore SHIFTS values within the exponent range rather than clipping
+them at the top or flushing them to zero. That is precisely the property e5m2 exists for, and it is
+the reason a fixed backward constant is a reasonable stand-in at all. The forward e4m3 case is the
+opposite — three exponent bits, so it needs the calibration it now has.
+
+**Pre-registered asymmetry of the resubmitted leg's loss verdict**, stated before the result so it
+cannot be over-read either way:
+- A **positive** loss result is CONCLUSIVE for delayed scaling. If a fixed constant preserves the
+  loss trajectory, production delayed scaling — which adapts every step — certainly will.
+- A **negative** loss result is PROVISIONAL and calibration-suspect first. A constant cannot track
+  drift; adaptive scaling can. A negative would need the real amax-history form before delayed
+  scaling itself could be blamed.
+
+Resubmission knobs: `SCALE_A2A_FP8_AMAX_FWD=4.5` (measured max 4.03) and
+`SCALE_A2A_FP8_AMAX_BWD=1.0e-07` (measured max 9.6e-08). The single shared knob is gone.
+Confidence: 9/10 that the constants are safe over a 120-step leg; 6/10 that they would hold over thousands of steps.
