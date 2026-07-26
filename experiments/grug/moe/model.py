@@ -138,6 +138,9 @@ class GrugModelConfig:
     # layer N's weight all-gather with layer N-1's compute (cross-iteration) -- at the risk of the
     # #7407 CUBIN-load bug that scan-collective pipelining hit on the grug model at d6144.
     scan_unroll: int = 1
+    # Expert-parallel capacity factor: per-(sender, expert) bucket size is
+    # capacity_factor * assignments_per_shard / num_experts. 1.0 sets capacity to the mean load.
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -165,6 +168,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be positive")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -451,7 +456,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )

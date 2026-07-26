@@ -71,7 +71,13 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.heuristic import MoeHeuristic
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
+from experiments.grug.moe.launch import (
+    GrugMoeLaunchConfig,
+    env_float,
+    env_int,
+    run_grug_moe_trial,
+    slimpajama_6b_dataset,
+)
 from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
@@ -144,6 +150,7 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         num_shared_experts=env_int("SCALE_NUM_SHARED_EXPERTS", 1),
         sliding_window=env_int("SCALE_SLIDING_WINDOW", 0),
+        capacity_factor=env_float("SCALE_CAPACITY_FACTOR", 1.0),
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
         xsa=os.environ.get("SCALE_XSA") == "1",
