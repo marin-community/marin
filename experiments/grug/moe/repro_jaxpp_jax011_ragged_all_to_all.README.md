@@ -39,7 +39,7 @@ The script rejects any other package versions or an unpatched JaxPP runtime.
 
 ## H100 command
 
-Run all five cases on one eight-H100 Iris task. The direct and transfer-only
+Run the five base cases and the 16-microbatch four-stage pair on one eight-H100 Iris task. The direct and transfer-only
 controls must pass before interpreting the combined cases. The two four-stage
 cases isolate rank count and bidirectional transfer structure before adding a
 device ragged collective to every stage task.
@@ -104,6 +104,12 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
       --case jaxpp-four-stage-ragged --coordinator-port 5834 \
       --timeout 180 --stack-after 30
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
+      --case jaxpp-four-stage-transfer --microbatches 16 \
+      --coordinator-port 5835 --timeout 300 --stack-after 30
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
+      --case jaxpp-four-stage-ragged --microbatches 16 \
+      --coordinator-port 5836 --timeout 300 --stack-after 30
   '
 ```
 
@@ -145,7 +151,10 @@ The four-stage cases are the next delta-debug boundary. The transfer control
 runs four two-H100 MPMD ranks through three forward transfers and three reverse
 transfers. Each rank executes one forward and one backward stage task. The
 ragged treatment replaces every identity stage task with an exact two-device
-ragged exchange. Eight exchanges restore the original payload, so both cases
-must finish with zero mismatches and checksum `202` on stage 0.
+ragged exchange. Eight exchanges restore the original payload. The
+`--microbatches 16` pair repeats the full chain, accumulates all returned
+payloads on stage 0, and forces 96 transfers plus 128 stage tasks to remain
+live. The base cases must finish with checksum `202`; the repeated cases must
+finish with checksum `3,232`. Every case requires zero mismatches.
 
 Part of #7024.

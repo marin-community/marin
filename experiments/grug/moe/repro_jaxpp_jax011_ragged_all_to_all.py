@@ -171,6 +171,7 @@ def check_environment(case: Case) -> dict[str, Any]:
 class Config:
     case: Case
     coordinator_port: int
+    microbatches: int
     stack_after: float
     timeout: float
 
@@ -217,9 +218,9 @@ def mpmd_ranks(case: Case) -> int:
     return TWO_STAGE_MPMD_RANKS
 
 
-def local_transfer_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+def local_transfer_check(x: jax.Array, *, expected_scale: int = 1) -> tuple[jax.Array, jax.Array]:
     source = jax.lax.axis_index("fsdp")
-    expected = source * 100 + jnp.arange(LOCAL_ROWS, dtype=jnp.int32)
+    expected = (source * 100 + jnp.arange(LOCAL_ROWS, dtype=jnp.int32)) * expected_scale
     mismatches = jnp.sum(x[:, 0] != expected, dtype=jnp.int32)
     checksum = jnp.sum(x, dtype=jnp.int32)
     return jax.lax.psum(mismatches, "fsdp"), jax.lax.psum(checksum, "fsdp")
@@ -250,7 +251,13 @@ def local_ragged_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     return jax.lax.psum(mismatches, "fsdp"), jax.lax.psum(checksum, "fsdp")
 
 
-def exact_check(result: tuple[jax.Array, jax.Array], *, case: Case, process_id: int) -> None:
+def exact_check(
+    result: tuple[jax.Array, jax.Array],
+    *,
+    case: Case,
+    process_id: int,
+    expected_checksum: int = EXPECTED_CHECKSUM,
+) -> None:
     mismatches, checksum = (int(value) for value in jax.device_get(result))
     event(
         "exact_check",
@@ -258,12 +265,12 @@ def exact_check(result: tuple[jax.Array, jax.Array], *, case: Case, process_id: 
         process_id=process_id,
         mismatch_count=mismatches,
         checksum=checksum,
-        expected_checksum=EXPECTED_CHECKSUM,
+        expected_checksum=expected_checksum,
     )
     if mismatches != 0:
         raise AssertionError(f"{case}: {mismatches} payload elements differ")
-    if checksum != EXPECTED_CHECKSUM:
-        raise AssertionError(f"{case}: expected checksum {EXPECTED_CHECKSUM}, got {checksum}")
+    if checksum != expected_checksum:
+        raise AssertionError(f"{case}: expected checksum {expected_checksum}, got {checksum}")
 
 
 def run_direct_ragged(config: Config) -> None:
@@ -334,38 +341,53 @@ def four_stage_program(
     stage_scalars: tuple[NamedSharding, ...],
     x: jax.Array,
     *,
+    microbatches: int,
     ragged: bool,
 ) -> tuple[jax.Array, jax.Array]:
     stage_tasks = tuple(stage_payload_task(mesh, ragged=ragged) for mesh in stage_meshes)
-    value = jaxpp_mpmd.task(
-        stage_tasks[0],
-        name="stage0_forward",
-        out_shardings=stage_rows[0],
-    )(x)
-    for stage_index in range(1, len(stage_meshes)):
-        value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+    accumulated = None
+    for microbatch_index in range(microbatches):
         value = jaxpp_mpmd.task(
-            stage_tasks[stage_index],
-            name=f"stage{stage_index}_forward",
-            out_shardings=stage_rows[stage_index],
-        )(value)
+            stage_tasks[0],
+            name=f"mb{microbatch_index}_stage0_forward",
+            out_shardings=stage_rows[0],
+        )(x)
+        for stage_index in range(1, len(stage_meshes)):
+            value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+            value = jaxpp_mpmd.task(
+                stage_tasks[stage_index],
+                name=f"mb{microbatch_index}_stage{stage_index}_forward",
+                out_shardings=stage_rows[stage_index],
+            )(value)
 
-    value = jaxpp_mpmd.task(
-        stage_tasks[-1],
-        name=f"stage{len(stage_meshes) - 1}_backward",
-        out_shardings=stage_rows[-1],
-    )(value)
-    for stage_index in reversed(range(len(stage_meshes) - 1)):
-        value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
         value = jaxpp_mpmd.task(
-            stage_tasks[stage_index],
-            name=f"stage{stage_index}_backward",
-            out_shardings=stage_rows[stage_index],
+            stage_tasks[-1],
+            name=f"mb{microbatch_index}_stage{len(stage_meshes) - 1}_backward",
+            out_shardings=stage_rows[-1],
         )(value)
+        for stage_index in reversed(range(len(stage_meshes) - 1)):
+            value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+            value = jaxpp_mpmd.task(
+                stage_tasks[stage_index],
+                name=f"mb{microbatch_index}_stage{stage_index}_backward",
+                out_shardings=stage_rows[stage_index],
+            )(value)
+
+        if accumulated is None:
+            accumulated = value
+        else:
+            accumulated = jaxpp_mpmd.task(
+                lambda left, right: left + right,
+                name=f"mb{microbatch_index}_stage0_accumulate",
+                out_shardings=stage_rows[0],
+            )(accumulated, value)
+
+    if accumulated is None:
+        raise ValueError("four-stage program requires at least one microbatch")
 
     def stage0_check(value: jax.Array) -> tuple[jax.Array, jax.Array]:
         return jax.shard_map(
-            local_transfer_check,
+            lambda local_value: local_transfer_check(local_value, expected_scale=microbatches),
             mesh=stage_meshes[0],
             in_specs=P("fsdp", None),
             out_specs=(P(), P()),
@@ -376,7 +398,7 @@ def four_stage_program(
         stage0_check,
         name="stage0_exact_check",
         out_shardings=(stage_scalars[0], stage_scalars[0]),
-    )(value)
+    )(accumulated)
 
 
 def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int]) -> None:
@@ -421,6 +443,7 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
                     stage_rows,
                     stage_scalars,
                     x,
+                    microbatches=config.microbatches,
                     ragged=config.case == "jaxpp-four-stage-ragged",
                 )
 
@@ -468,7 +491,15 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
             result = lowered(x)
             jax.block_until_ready(result)
         if mpmd_mesh.my_mpmd_axis_index == result_stage_index:
-            exact_check(result, case=config.case, process_id=process_id)
+            expected_checksum = EXPECTED_CHECKSUM * (
+                config.microbatches if config.case.startswith("jaxpp-four-stage-") else 1
+            )
+            exact_check(
+                result,
+                case=config.case,
+                process_id=process_id,
+                expected_checksum=expected_checksum,
+            )
 
         with phase("completion_barrier", process_id=process_id):
             multihost_utils.sync_global_devices(f"{config.case}_complete")
@@ -556,9 +587,14 @@ def parse_args() -> Config:
         required=True,
     )
     parser.add_argument("--coordinator-port", type=int, default=5831)
+    parser.add_argument("--microbatches", type=int, default=1)
     parser.add_argument("--stack-after", type=float, default=30.0)
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
+    if args.microbatches < 1:
+        parser.error("--microbatches must be positive")
+    if not args.case.startswith("jaxpp-four-stage-") and args.microbatches != 1:
+        parser.error("--microbatches is supported only by four-stage cases")
     return Config(**vars(args))
 
 
