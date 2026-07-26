@@ -4,6 +4,8 @@ Status: running
 
 Coordinating issue: https://github.com/marin-community/marin/issues/6854
 
+Continued in [issue-6854-dedup-validation-2.md](issue-6854-dedup-validation-2.md).
+
 ## Objective
 
 Compare the pre-fix fuzzy-dedup implementation with the proposed word-shingle,
