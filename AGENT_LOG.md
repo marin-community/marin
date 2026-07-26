@@ -715,3 +715,31 @@ sound and the combination ranking stands. Materially higher => the cf axis is op
 combination candidate needs the same discount, which would push the pick toward higher cf.
 RECOMMENDATION: run cf1.15 next as planned, then pick the combination leg with BOTH axes calibrated -
 most likely m=2 @ cf1.05 (~21.29%, beats cf1.15's 20.85% by +0.44pp with a 1.3pp compliance margin).
+
+## DE-CONFOUNDED FRONTIER 04:35 — same-draw m=0 lands; spill cost is HIGHER than I published
+/mwittmann/ep25d1-qbon-cf115-350-0726-0313 SUCCEEDED (it ran cf1.0 because its bundle predates my knob fix;
+confirmed by the ABSENCE of capacity_factor in its logged hparams). So it is a clean same-draw m=0 baseline.
+| m | p50 MFU | TRUE tail-100 (n=100) | vs m=0 |
+| 0 | 22.062 | 0.0710 | - |
+| 2 | 21.872 | 0.0414 | -41.7% |
+| 3 | 21.849 | 0.0366 | -48.4% |
+CORRECTION TO MY MOST-QUOTED NUMBER: spill's MFU cost is -0.190pp (m=2) and -0.213pp (m=3) against a SAME-DRAW
+baseline, not the -0.130/-0.153pp I published against d4's cross-draw 22.002. The true cost is ~0.06pp HIGHER,
+i.e. spill is slightly more expensive than I reported. Still far inside the 0.5pp budget, and the qualitative
+claim (drops halved for a fifth of a point) is unchanged.
+WHAT THE DE-CONFOUNDING ALSO SHOWED: d4's baseline was sound. Their tail-100 0.073 vs my same-draw 0.0710
+(0.002 apart) and their p50 22.002 vs my 22.062 (0.06pp apart). Draw variance here was much smaller than the
+brief's +-2-4pp worst case - but it was still the same order as the effect I was reporting, which is exactly
+why the cross-draw comparison was not safe.
+RANKING IS ROBUST TO THE CORRECTION: baseline rose +0.060 and spill cost rose +0.060, so every candidate's
+absolute MFU is within 0.01pp of my earlier ranking. m=5@cf1.0 ~21.82, m=2@cf1.05 ~21.29, m=3@cf1.05 ~21.27.
+The pick does not change.
+MODEL over-prediction ALSO unchanged: measured reclaim 41.7%/48.4% vs model 56.1%/65.7%; abs ratio 1.36x/1.54x.
+
+## cf1.15 leg submitted 04:34 (record repair + first live validation of the model's capacity axis)
+/mwittmann/ep25d1-cf115-m0-350-0726-0434 with SCALE_CAPACITY_FACTOR=1.15 through my new knob.
+RUNTIME VERIFICATION METHOD (not trusting the env var): capacity_factor is now a GrugModelConfig field, so it
+is serialized into the logged hparams. I will grep '"capacity_factor": 1.15' in the leg's hparams before
+trusting any number from it. The m=0 leg above demonstrates the negative control - the field is ABSENT there
+because that bundle predates the fix.
+PRE-REGISTERED (restated): model m=0 @ cf1.15 = 0.0230 -> predict tail-100 ~2.3%.
