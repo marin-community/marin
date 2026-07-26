@@ -21,6 +21,7 @@ Optional overrides:
     NESTED_ATTENTION    attention backend (default: gpu_fa4_thd)
     NESTED_HIDDEN_DIM   model width (default: 1280)
     NESTED_SEQUENCE_LENGTH  sequence length (default: 8192)
+    NESTED_RUN_SUFFIX   optional retry suffix for output and W&B IDs
 """
 
 import dataclasses
@@ -175,6 +176,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         replicas=nodes,
     )
     run_id = f"{arm.experiment_id.lower()}-{phase}-d{hidden_dim}-s{sequence_length}-e{model.num_experts}"
+    run_suffix = os.environ.get("NESTED_RUN_SUFFIX")
+    if run_suffix:
+        run_id = f"{run_id}-{run_suffix}"
     step_name = f"{_OUTPUT_SUBDIR}/{run_id}"
     version = resolve_version(step_name, version)
     train_data = slimpajama_6b_dataset()
