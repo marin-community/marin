@@ -170,3 +170,68 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
         use_static_tensors=False,
     )
     return call(a, w, cu_seqlens.astype(jnp.int32))
+
+
+def _build_grouped_wgrad_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mD):
+        gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=False)
+        epi_args = GemmDefaultEpiMixin.EpilogueArguments()
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(None, mCuSeqlens, None)
+        gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+def quack_grouped_wgrad(
+    lhs,
+    rhs,
+    cu_seqlens,
+    *,
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+):
+    """Compute per-group ``lhs.T @ rhs`` with QuACK's SM100 variable-K GEMM.
+
+    ``lhs`` and ``rhs`` share a token-major leading dimension and are grouped by
+    ``cu_seqlens``. The result has shape ``[num_groups, lhs_width, rhs_width]``.
+    Physical token-major inputs are exposed to CuTe as logical M-major/N-major
+    operands without materializing transposes.
+    """
+    total_k, m = lhs.shape
+    rhs_total_k, n = rhs.shape
+    if rhs_total_k != total_k:
+        raise ValueError(f"lhs rows={total_k} must equal rhs rows={rhs_total_k}")
+    if lhs.dtype != rhs.dtype:
+        raise ValueError(f"lhs dtype={lhs.dtype} must equal rhs dtype={rhs.dtype}")
+    num_groups = cu_seqlens.shape[0] - 1
+    a_dtype = _cute_dtype(lhs.dtype)
+    try:
+        max_active_clusters = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
+    except Exception:
+        max_active_clusters = 148
+    launcher = _build_grouped_wgrad_launcher(
+        a_dtype=a_dtype,
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=max_active_clusters,
+        max_swizzle=max_swizzle,
+    )
+    ts = cjax.TensorSpec
+    # lhs/rhs are physically [total_k, width]. mode=(1, 0) exposes them as
+    # logical [width, total_k] with unit stride along M/N as varlen-K requires.
+    a_spec = ts(mode=(1, 0), divisibility=(1, 8), static=False)
+    b_spec = ts(mode=(1, 0), divisibility=(1, 8), static=False)
+    cu_spec = ts(static=False)
+    # Physical [group, M, N] is logical [M, N, group] for the GEMM kernel.
+    d_spec = ts(mode=(1, 2, 0), divisibility=(1, 1, 8), static=False)
+    call = cjax.cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((num_groups, m, n), lhs.dtype),
+        input_spec=(a_spec, b_spec, cu_spec),
+        output_spec=(d_spec,),
+        use_static_tensors=False,
+    )
+    return call(lhs, rhs, cu_seqlens.astype(jnp.int32))

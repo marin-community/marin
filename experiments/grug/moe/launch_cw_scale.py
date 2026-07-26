@@ -227,6 +227,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             append_run_id_to_base_path=False,
             save_interval=None,
             keep=None,
+            save_final_checkpoint=False,
         )
     elif checkpoint_mode == "s3":
         checkpointer = None

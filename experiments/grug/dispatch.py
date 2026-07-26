@@ -4,12 +4,14 @@
 import logging
 import os
 import re
+import sys
 from collections.abc import Callable
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
@@ -29,6 +31,19 @@ ConfigT = TypeVar("ConfigT")
 # Newton-Schulz layout and fixed-capacity expert all-to-all settings.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+
+_HYBRIDEP_SETUP_SCRIPT = r"""
+set -e
+export PYTHONPATH="$IRIS_WORKDIR/scripts/hybridep_build_probe${PYTHONPATH:+:$PYTHONPATH}"
+"$IRIS_VENV/bin/python" - <<'PY'
+from pathlib import Path
+
+from restore_torch_bundle import restore_cuda13_toolkit, restore_hybridep_bundle
+
+restore_cuda13_toolkit()
+restore_hybridep_bundle(Path("/tmp"))
+PY
+"""
 
 
 def _forwarded_env_vars() -> dict[str, str]:
@@ -63,11 +78,20 @@ def dispatch_grug_training_run(
         return
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    extras = extras_for_resources(resources)
+    setup_scripts = None
+    if os.environ.get("SCALE_A2A_HYBRID_EP") == "1":
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        setup_scripts = [
+            default_setup_script(extras=extras, python_version=python_version),
+            cuda_toolchain_setup_script(),
+            _HYBRIDEP_SETUP_SCRIPT,
+        ]
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(env_vars=env_vars, extras=extras, setup_scripts=setup_scripts),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,

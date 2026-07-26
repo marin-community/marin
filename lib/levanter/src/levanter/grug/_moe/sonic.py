@@ -10,6 +10,7 @@ SonicMoE is also Apache-2.0.
 """
 
 from collections.abc import Callable
+import math
 import os
 
 import jax
@@ -181,6 +182,38 @@ if triton is not None and tl is not None:
             tl.store(out_ptr + output_row * stride_outm + h_idx * stride_outh, values, mask=h_mask)
 
     @triton.jit
+    def _sonic_unique_row_scatter_kernel(
+        rows_ptr,  # (M, H)
+        destinations_ptr,  # (M,) int32; output_rows denotes a dropped row
+        out_ptr,  # (T, H), zero-initialized
+        output_rows: tl.constexpr,
+        rows: tl.constexpr,
+        h: tl.constexpr,
+        stride_rowsm: tl.constexpr,
+        stride_rowsh: tl.constexpr,
+        stride_outt: tl.constexpr,
+        stride_outh: tl.constexpr,
+        block_h: tl.constexpr,
+    ):
+        source_row = tl.program_id(axis=0).to(tl.int64)
+        destination = tl.load(destinations_ptr + source_row).to(tl.int64)
+        destination_is_valid = destination < output_rows
+
+        for h_tile in tl.static_range(triton.cdiv(h, block_h)):
+            h_idx = (h_tile * block_h + tl.arange(0, block_h)).to(tl.int64)
+            h_mask = h_idx < h
+            values = tl.load(
+                rows_ptr + source_row * stride_rowsm + h_idx * stride_rowsh,
+                mask=h_mask,
+                other=0.0,
+            )
+            tl.store(
+                out_ptr + destination * stride_outt + h_idx * stride_outh,
+                values,
+                mask=destination_is_valid & h_mask,
+            )
+
+    @triton.jit
     def _sonic_slot_weighted_grad_kernel(
         dout_ptr,  # (M, H)
         x_ptr,  # (M, H)
@@ -216,6 +249,41 @@ if triton is not None and tl is not None:
             tl.store(dx_ptr + slot * stride_xm + h_idx * stride_xh, dout * weight, mask=h_mask)
             dw += tl.sum(dout * x, axis=0)
         tl.store(dw_ptr + slot, dw)
+
+    @triton.jit
+    def _sonic_clone_weight_reduce_kernel(
+        clone_grads_ptr,  # (P, F)
+        packed_experts_ptr,  # (P,) int32; local_experts denotes padding
+        local_grads_ptr,  # (E, F)
+        packed_count: tl.constexpr,
+        local_experts: tl.constexpr,
+        features: tl.constexpr,
+        block_features: tl.constexpr,
+        accumulate_in_bf16: tl.constexpr,
+    ):
+        local_expert = tl.program_id(axis=0)
+        feature_offsets = tl.program_id(axis=1) * block_features + tl.arange(0, block_features)
+        feature_mask = feature_offsets < features
+        accumulator = tl.zeros([block_features], dtype=tl.float32)
+
+        for packed_index in tl.range(0, packed_count):
+            packed_expert = tl.load(packed_experts_ptr + packed_index)
+            belongs_to_expert = packed_expert == local_expert
+            values = tl.load(
+                clone_grads_ptr + packed_index * features + feature_offsets,
+                mask=belongs_to_expert & feature_mask,
+                other=0.0,
+            ).to(tl.float32)
+            if accumulate_in_bf16:
+                accumulator = (accumulator + values).to(tl.bfloat16).to(tl.float32)
+            else:
+                accumulator += values
+
+        tl.store(
+            local_grads_ptr + local_expert * features + feature_offsets,
+            accumulator,
+            mask=(local_expert < local_experts) & feature_mask,
+        )
 
     @triton.jit
     def _sonic_unpermute_i32_kernel(
@@ -314,7 +382,9 @@ else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
     _sonic_dispatch_gather_kernel = None
+    _sonic_unique_row_scatter_kernel = None
     _sonic_slot_weighted_grad_kernel = None
+    _sonic_clone_weight_reduce_kernel = None
     _sonic_unpermute_i32_kernel = None
     _sonic_expert_local_rank_kernel = None
     _sonic_refill_rank_and_occupancy_kernel = None
@@ -328,7 +398,9 @@ def _require_sonic_deps() -> None:
         or _sonic_token_gather_sum_kernel is None
         or _sonic_token_gather_sum_bwd_kernel is None
         or _sonic_dispatch_gather_kernel is None
+        or _sonic_unique_row_scatter_kernel is None
         or _sonic_slot_weighted_grad_kernel is None
+        or _sonic_clone_weight_reduce_kernel is None
         or _sonic_unpermute_i32_kernel is None
         or _sonic_expert_local_rank_kernel is None
         or _sonic_refill_rank_and_occupancy_kernel is None
@@ -387,6 +459,49 @@ def sonic_dispatch_gather(
     )
 
 
+def sonic_unique_row_scatter(
+    rows: Float[Array, "M H"],
+    destinations: Int[Array, "M"],
+    *,
+    output_rows: int,
+) -> Float[Array, "T H"]:
+    """Scatter rows to unique shard-local destinations without atomics.
+
+    Valid destination ids must be unique. ``output_rows`` is also the sentinel
+    destination for dropped rows. The output is zero-filled before the kernel
+    writes valid rows.
+    """
+    _require_sonic_deps()
+    if destinations.shape != (rows.shape[0],):
+        raise ValueError(f"destinations must have shape {(rows.shape[0],)}, got {destinations.shape}")
+    if destinations.dtype != jnp.int32:
+        raise ValueError(f"destinations must be int32, got {destinations.dtype}")
+    if output_rows < 1:
+        raise ValueError(f"output_rows must be positive, got {output_rows}")
+
+    source_rows, hidden_dim = rows.shape
+    block_h, _block_k, num_warps = _sonic_kernel_config(hidden_dim)
+    output_shape = jax.ShapeDtypeStruct((output_rows, hidden_dim), rows.dtype)
+    return jt.triton_call(
+        rows,
+        destinations,
+        kernel=_sonic_unique_row_scatter_kernel,
+        out_shape=output_shape,
+        zeroed_outputs=(0,),
+        grid=(source_rows,),
+        num_warps=num_warps,
+        num_stages=4,
+        output_rows=output_rows,
+        rows=source_rows,
+        h=hidden_dim,
+        stride_rowsm=hidden_dim,
+        stride_rowsh=1,
+        stride_outt=hidden_dim,
+        stride_outh=1,
+        block_h=block_h,
+    )
+
+
 def sonic_slot_weighted_grad(
     dout: Float[Array, "M H"],
     x: Float[Array, "M H"],
@@ -424,6 +539,54 @@ def sonic_slot_weighted_grad(
         stride_xh=1,
         block_h=block_h,
     )
+
+
+def sonic_clone_weight_reduce(
+    clone_grads: Float[Array, "P *W"],
+    packed_experts: Int[Array, "P"],
+    *,
+    local_experts: int,
+    block_features: int = 1024,
+) -> Float[Array, "E *W"]:
+    """Reduce received clone gradients into the shard-local owned experts.
+
+    The caller invokes this inside the EP ``shard_map`` after the transpose of
+    the clone-weight ragged all-to-all, so both inputs are fully shard-local.
+    Each output element owns its reduction and reads only the packed rows for
+    that expert; no atomics or cross-device communication occur here.
+    """
+    _require_sonic_deps()
+    if clone_grads.shape[0] != packed_experts.shape[0]:
+        raise ValueError(
+            "clone_grads and packed_experts must have the same leading dimension, "
+            f"got {clone_grads.shape[0]} and {packed_experts.shape[0]}"
+        )
+    if packed_experts.dtype != jnp.int32:
+        raise ValueError(f"packed_experts must be int32, got {packed_experts.dtype}")
+    if local_experts < 1:
+        raise ValueError(f"local_experts must be positive, got {local_experts}")
+    if block_features < 1 or block_features & (block_features - 1):
+        raise ValueError(f"block_features must be a positive power of two, got {block_features}")
+
+    packed_count = clone_grads.shape[0]
+    features = math.prod(clone_grads.shape[1:])
+    clone_grads_flat = clone_grads.reshape(packed_count, features)
+    output_shape = jax.ShapeDtypeStruct((local_experts, features), clone_grads.dtype)
+    local_grads = jt.triton_call(
+        clone_grads_flat,
+        packed_experts,
+        kernel=_sonic_clone_weight_reduce_kernel,
+        out_shape=output_shape,
+        grid=(local_experts, triton.cdiv(features, block_features)),
+        num_warps=8,
+        num_stages=2,
+        packed_count=packed_count,
+        local_experts=local_experts,
+        features=features,
+        block_features=block_features,
+        accumulate_in_bf16=clone_grads.dtype == jnp.bfloat16,
+    )
+    return local_grads.reshape((local_experts, *clone_grads.shape[1:]))
 
 
 def sonic_unpermute_i32(

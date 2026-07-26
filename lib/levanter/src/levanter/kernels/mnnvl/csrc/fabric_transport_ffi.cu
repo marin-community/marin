@@ -106,9 +106,8 @@ __global__ void SendRowsKernel(
       reinterpret_cast<int32_t*>(peer + slot_epoch_offset)[slot] = epoch;
     }
   }
-  // Every lane owns part of each row. Publish all lanes' remote stores before
-  // the subsequent signal kernel tells receivers that this sender is complete.
-  __threadfence_system();
+  // The following signal kernel runs after this kernel on the same stream and
+  // publishes these peer writes with a system fence before notifying receivers.
 }
 
 __global__ void SignalPeersKernel(

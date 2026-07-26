@@ -1,13 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import dataclasses
 import functools
 import logging
 import math
 import os
+import sysconfig
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import equinox as eqx
 import fsspec
@@ -20,6 +23,14 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.hooks.multigpu import (
+    IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+    IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+)
+from iris.runtime.jax_init import _poll_for_coordinator
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -330,10 +341,15 @@ _OFFLOAD_OPT_STATE = os.environ.get("SCALE_OFFLOAD_OPT_STATE") == "1"
 def _initialize_mnnvl_transport(config: GrugRunConfig) -> None:
     if os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") != "1":
         return
-    if os.environ.get("SCALE_A2A_SAME_EXPERT_CLONES") != "1":
-        raise ValueError("SCALE_A2A_MNNVL_TRANSPORT=1 requires SCALE_A2A_SAME_EXPERT_CLONES=1")
-    if os.environ.get("SCALE_A2A_CLONE_POOLED") != "1":
-        raise ValueError("SCALE_A2A_MNNVL_TRANSPORT=1 requires SCALE_A2A_CLONE_POOLED=1")
+    same_expert_clones = os.environ.get("SCALE_A2A_SAME_EXPERT_CLONES") == "1"
+    receiver_clipping = os.environ.get("SCALE_A2A_RECEIVER_CLIP") == "1"
+    if same_expert_clones == receiver_clipping:
+        raise ValueError(
+            "SCALE_A2A_MNNVL_TRANSPORT=1 requires exactly one of "
+            "SCALE_A2A_SAME_EXPERT_CLONES=1 or SCALE_A2A_RECEIVER_CLIP=1"
+        )
+    if same_expert_clones and os.environ.get("SCALE_A2A_CLONE_POOLED") != "1":
+        raise ValueError("MNNVL same-expert clones require SCALE_A2A_CLONE_POOLED=1")
 
     expert_shards = config.trainer.expert_axis_size
     global_batch = config.trainer.trainer.batch_schedule.batch_size_at_step(0)
@@ -343,18 +359,100 @@ def _initialize_mnnvl_transport(config: GrugRunConfig) -> None:
             f"global MoE assignments={global_assignments} must be divisible by devices={jax.device_count()}"
         )
     assignments_per_shard = global_assignments // jax.device_count()
-    token_padding_experts = max(
-        int(os.environ.get("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "1")),
-        0,
-    )
-    sender_destination_capacity = (
-        math.ceil(assignments_per_shard / expert_shards) + token_padding_experts * config.model.num_experts
-    )
-    send_rows = expert_shards * sender_destination_capacity
+    if same_expert_clones:
+        token_padding_experts = max(
+            int(os.environ.get("SCALE_A2A_CLONE_TOKEN_PADDING_EXPERTS", "1")),
+            0,
+        )
+        sender_destination_capacity = (
+            math.ceil(assignments_per_shard / expert_shards) + token_padding_experts * config.model.num_experts
+        )
+        buffer_rows = max(assignments_per_shard, expert_shards * sender_destination_capacity)
+    else:
+        receiver_capacity = max(
+            math.ceil(config.model.moe_capacity_factor * assignments_per_shard),
+            config.model.num_experts // expert_shards,
+        )
+        buffer_rows = max(assignments_per_shard, receiver_capacity)
     ensure_mnnvl_runtime(
-        buffer_rows=max(assignments_per_shard, send_rows),
+        buffer_rows=buffer_rows,
         row_bytes=config.model.hidden_dim * jnp.dtype(jnp.bfloat16).itemsize,
     )
+
+
+def _initialize_hybridep_transport(config: GrugRunConfig) -> None:
+    if os.environ.get("SCALE_A2A_HYBRID_EP") != "1":
+        return
+    if os.environ.get("SCALE_A2A_ECHO_CLONES") != "1":
+        raise ValueError("SCALE_A2A_HYBRID_EP=1 requires SCALE_A2A_ECHO_CLONES=1")
+    if os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") == "1":
+        raise ValueError("MNNVL and HybridEP token transports are mutually exclusive")
+
+    cuda_home = Path(sysconfig.get_paths()["purelib"]) / "nvidia" / "cu13"
+    if not (cuda_home / "bin" / "nvcc").is_file():
+        raise FileNotFoundError(f"HybridEP CUDA compiler is missing: {cuda_home / 'bin' / 'nvcc'}")
+    os.environ["CUDA_HOME"] = str(cuda_home)
+
+    # HybridEP's staged runtime is the only Grug path that depends on Torch.
+    import torch  # noqa: PLC0415
+    import torch.distributed as dist  # noqa: PLC0415
+    from levanter.kernels.hybridep import (  # noqa: PLC0415
+        ensure_hybridep_runtime,
+        shutdown_hybridep_runtime,
+    )
+
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("HybridEP training must run inside an Iris job")
+    device_ids = os.environ[IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV].split(",")
+    if len(device_ids) != 1:
+        raise ValueError(f"HybridEP expects one device per process, got {device_ids}")
+    rank = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
+    world_size = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+    device_index = int(device_ids[0])
+
+    endpoint_name = f"hybridep-{job_info.job_id.to_safe_token()}-attempt-{job_info.attempt_id}"
+    address = f"{job_info.advertise_host}:{job_info.ports.get('jax', 8476) + 1}"
+    if rank == 0:
+        endpoint_id = iris_ctx().registry.register(endpoint_name, address)
+        atexit.register(iris_ctx().registry.unregister, endpoint_id)
+    else:
+        address = _poll_for_coordinator(
+            iris_ctx().resolver,
+            endpoint_name,
+            timeout=600,
+            poll_interval=1,
+        )
+    dist.init_process_group(
+        backend="nccl",
+        init_method=f"tcp://{address}",
+        world_size=world_size,
+        rank=rank,
+        device_id=torch.device(f"cuda:{device_index}"),
+    )
+    atexit.register(dist.destroy_process_group)
+
+    global_batch = config.trainer.trainer.batch_schedule.batch_size_at_step(0)
+    global_tokens = global_batch * config.model.max_seq_len
+    if global_tokens % world_size != 0:
+        raise ValueError(f"global tokens={global_tokens} must be divisible by HybridEP ranks={world_size}")
+    tokens_per_rank = global_tokens // world_size
+    os.environ["HYBRID_EP_MAX_LOCAL_EXPERT_TOKENS"] = str(tokens_per_rank * config.model.num_experts_per_token)
+    max_receiver_segments = max(
+        int(os.environ.get("SCALE_A2A_CLONE_MAX_RECEIVER_EXPERTS", "16")),
+        1,
+    )
+    ensure_hybridep_runtime(
+        dist.group.WORLD,
+        rank=rank,
+        world_size=world_size,
+        device_index=device_index,
+        source_root=Path(os.environ.get("SCALE_HYBRID_EP_SOURCE", "/tmp/DeepEP")),
+        hidden_dim=config.model.hidden_dim,
+        tokens_per_rank=tokens_per_rank,
+        local_experts=max_receiver_segments,
+    )
+    atexit.register(shutdown_hybridep_runtime)
 
 
 def _opt_state_to_memory_kind(tree, kind: str):
@@ -538,6 +636,9 @@ def _make_train_step(
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
+    # HybridEP's fabric-backed buffers must be reserved before Trainer queries the
+    # JAX devices and triggers XLA's HBM preallocation.
+    _initialize_hybridep_transport(config)
     trainer.initialize()
     _initialize_mnnvl_transport(config)
     levanter.tracker.log_configuration(config)

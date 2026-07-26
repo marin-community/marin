@@ -28,11 +28,13 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.sonic import (
+    sonic_clone_weight_reduce,
     sonic_dispatch_gather,
     sonic_expert_local_rank,
     sonic_gather_sum,
     sonic_gather_sum_bf16_accum,
     sonic_slot_weighted_grad,
+    sonic_unique_row_scatter,
     sonic_unpermute_i32,
 )
 from levanter.grug.sharding import _batch_axes
@@ -130,6 +132,24 @@ def _moe_mlp_ep_fixed_a2a_local(
             raise ValueError("precomputed dispatch slots cannot be combined with receiver clipping")
         if chunks != 1:
             raise ValueError("SCALE_A2A_RECEIVER_CLIP=1 currently requires SCALE_A2A_CHUNKS=1")
+        if os.environ.get("SCALE_A2A_RECEIVER_DESTINATION_POOL") == "1":
+            sender_destination_capacity_factor = float(
+                os.environ.get(
+                    "SCALE_A2A_RECEIVER_DESTINATION_CAPACITY_FACTOR",
+                    str(_DEFAULT_RECEIVER_SENDER_CAPACITY_FACTOR),
+                )
+            )
+            return _receiver_destination_pooled_fixed_a2a_core(
+                x_local,
+                selected_experts_local,
+                combine_weights_local,
+                moe_w13_local,
+                moe_w2_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+                sender_destination_capacity_factor=sender_destination_capacity_factor,
+            )
         sender_capacity_factor = float(
             os.environ.get(
                 "SCALE_A2A_RECEIVER_SENDER_CAPACITY_FACTOR",
@@ -313,6 +333,167 @@ def _same_expert_pooled_dispatch_metadata(
     return transport_position, receiver_slot, receiver_group_sizes, overflow
 
 
+def _same_expert_echo_dispatch_metadata(
+    flat_experts: Int[Array, "TK"],
+    all_group_sizes: Int[Array, "S E"],
+    sender_index: Int[Array, ""],
+    *,
+    receiver_capacity: int,
+    max_receiver_segments: int | None = None,
+) -> tuple[Int[Array, "TK"], Int[Array, "TK"], Int[Array, "S E"], Int[Array, ""]]:
+    """Keep home-expert work in place and clone only receiver-rank overflow.
+
+    Each hot receiver retains exactly its pooled capacity, while assignments
+    above that load are packed into cold receivers' spare capacity. Assignments
+    still execute the originally selected expert; only its execution rank
+    changes.
+    """
+    expert_shards, num_experts = all_group_sizes.shape
+    if num_experts % expert_shards != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert_shards={expert_shards}")
+    local_experts = num_experts // expert_shards
+
+    global_group_sizes = jnp.sum(all_group_sizes, axis=0, dtype=jnp.int32)
+    home_group_sizes = global_group_sizes.reshape(expert_shards, local_experts)
+    home_loads = jnp.sum(home_group_sizes, axis=1, dtype=jnp.int32)
+
+    # Proportionally retain each hot rank's home experts, then distribute the
+    # at-most-local_experts rounding remainder in stable expert order.
+    retained_target = jnp.minimum(home_loads, receiver_capacity)
+    retention_scale = retained_target.astype(jnp.float32) / jnp.maximum(home_loads, 1).astype(jnp.float32)
+    retained_home = jnp.floor(home_group_sizes.astype(jnp.float32) * retention_scale[:, None]).astype(jnp.int32)
+    retained_remainder = retained_target - jnp.sum(retained_home, axis=1, dtype=jnp.int32)
+    can_increment = retained_home < home_group_sizes
+    increment_rank = jnp.cumsum(can_increment.astype(jnp.int32), axis=1, dtype=jnp.int32) - 1
+    retained_home = retained_home + jnp.logical_and(
+        can_increment,
+        increment_rank < retained_remainder[:, None],
+    ).astype(jnp.int32)
+    retained_group_sizes = retained_home.reshape(num_experts)
+
+    overflow_group_sizes = global_group_sizes - retained_group_sizes
+    overflow_group_offsets = jnp.cumsum(overflow_group_sizes, dtype=jnp.int32) - overflow_group_sizes
+    receiver_spare = receiver_capacity - jnp.sum(retained_home, axis=1, dtype=jnp.int32)
+    receiver_spare_offsets = jnp.cumsum(receiver_spare, dtype=jnp.int32) - receiver_spare
+
+    # The global overflow stream is expert-major. Intersect it with receiver
+    # spare-capacity bins to obtain expert-grouped clone segments.
+    overflow_start = overflow_group_offsets[None, :]
+    overflow_end = overflow_start + overflow_group_sizes[None, :]
+    receiver_start = receiver_spare_offsets[:, None]
+    receiver_end = receiver_start + receiver_spare[:, None]
+    cloned_group_sizes = jnp.maximum(
+        jnp.minimum(receiver_end, overflow_end) - jnp.maximum(receiver_start, overflow_start),
+        0,
+    )
+    receiver_indices = jnp.arange(expert_shards, dtype=jnp.int32)[:, None]
+    expert_home = jnp.arange(num_experts, dtype=jnp.int32)[None, :] // local_experts
+    receiver_group_sizes = cloned_group_sizes + jnp.where(
+        receiver_indices == expert_home,
+        retained_group_sizes[None, :],
+        0,
+    )
+
+    retained_group = receiver_group_sizes > 0
+    if max_receiver_segments is not None:
+        receiver_group_position = jnp.cumsum(retained_group.astype(jnp.int32), axis=1, dtype=jnp.int32) - 1
+        retained_group = jnp.logical_and(
+            retained_group,
+            receiver_group_position < max_receiver_segments,
+        )
+        receiver_group_sizes = jnp.where(retained_group, receiver_group_sizes, 0)
+
+    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    assignment_group_sizes = all_group_sizes[:, flat_experts]
+    completed_round_assignments = jnp.sum(
+        jnp.minimum(assignment_group_sizes, local_rank[None, :]),
+        axis=0,
+        dtype=jnp.int32,
+    )
+    sender_indices = jnp.arange(expert_shards, dtype=jnp.int32)
+    preceding_sender_in_round = jnp.sum(
+        jnp.logical_and(
+            assignment_group_sizes > local_rank[None, :],
+            sender_indices[:, None] < sender_index,
+        ),
+        axis=0,
+        dtype=jnp.int32,
+    )
+    global_expert_rank = completed_round_assignments + preceding_sender_in_round
+
+    retained = retained_group_sizes[flat_experts]
+    stays_home = global_expert_rank < retained
+    overflow_position = overflow_group_offsets[flat_experts] + global_expert_rank - retained
+    receiver_spare_ends = receiver_spare_offsets + receiver_spare
+    overflow_destination = jnp.searchsorted(
+        receiver_spare_ends,
+        overflow_position,
+        side="right",
+    ).astype(jnp.int32)
+    home_destination = flat_experts // local_experts
+    destination = jnp.where(stays_home, home_destination, overflow_destination)
+    safe_destination = jnp.minimum(destination, expert_shards - 1)
+
+    receiver_group_offsets = jnp.cumsum(receiver_group_sizes, axis=1, dtype=jnp.int32) - receiver_group_sizes
+    overflow_segment_start = jnp.maximum(
+        overflow_group_offsets[flat_experts],
+        receiver_spare_offsets[safe_destination],
+    )
+    rank_in_receiver_group = jnp.where(
+        stays_home,
+        global_expert_rank,
+        overflow_position - overflow_segment_start,
+    )
+    receiver_slot = receiver_group_offsets[safe_destination, flat_experts] + rank_in_receiver_group
+
+    within_capacity = jnp.logical_and(
+        destination < expert_shards,
+        receiver_slot < receiver_capacity,
+    )
+    within_capacity = jnp.logical_and(
+        within_capacity,
+        retained_group[safe_destination, flat_experts],
+    )
+    destination = jnp.where(within_capacity, destination, expert_shards)
+    receiver_slot = jnp.where(within_capacity, receiver_slot, receiver_capacity)
+    overflow = jnp.sum(jnp.logical_not(within_capacity), dtype=jnp.int32)
+    return destination, receiver_slot, receiver_group_sizes, overflow
+
+
+def _same_expert_hybridep_routing(
+    destination: Int[Array, "TK"],
+    flat_experts: Int[Array, "TK"],
+    combine_weights: Float[Array, "T K"],
+    receiver_group_sizes: Int[Array, "S E"],
+    *,
+    max_receiver_segments: int,
+) -> tuple[jax.Array, Float[Array, "T Esynthetic"]]:
+    """Encode exact ECHO destinations as HybridEP-owned synthetic experts."""
+    tokens_per_shard, topk = combine_weights.shape
+    expert_shards, num_experts = receiver_group_sizes.shape
+    synthetic_experts = expert_shards * max_receiver_segments
+
+    receiver_group_position = jnp.cumsum((receiver_group_sizes > 0).astype(jnp.int32), axis=1, dtype=jnp.int32) - 1
+    safe_destination = jnp.minimum(destination, expert_shards - 1)
+    segment = receiver_group_position[safe_destination, flat_experts]
+    synthetic_expert = safe_destination * max_receiver_segments + segment
+    keep = jnp.logical_and(destination < expert_shards, segment < max_receiver_segments)
+    synthetic_expert = jnp.where(keep, synthetic_expert, synthetic_experts)
+
+    token_index = jnp.repeat(jnp.arange(tokens_per_shard, dtype=jnp.int32), topk)
+    routing_map = (
+        jnp.zeros((tokens_per_shard, synthetic_experts), dtype=jnp.bool_)
+        .at[token_index, synthetic_expert]
+        .set(True, mode="drop")
+    )
+    probabilities = (
+        jnp.zeros((tokens_per_shard, synthetic_experts), dtype=jnp.float32)
+        .at[token_index, synthetic_expert]
+        .set(combine_weights.reshape(-1).astype(jnp.float32), mode="drop")
+    )
+    return routing_map, probabilities
+
+
 def _sparse_clone_weight_metadata(
     receiver_group_sizes: Int[Array, "S E"],
     receiver_index: Int[Array, ""],
@@ -383,6 +564,103 @@ def _sparse_clone_weight_metadata(
     )
 
 
+@partial(jax.custom_vjp, nondiff_argnums=(2,))
+def _pack_sparse_clone_weights(
+    local_weights: jax.Array,
+    packed_local_experts: Int[Array, "Msend"],
+    local_experts: int,
+) -> jax.Array:
+    padded_local_weights = jnp.concatenate(
+        [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
+        axis=0,
+    )
+    return padded_local_weights[packed_local_experts]
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(2,))
+def _sonic_unique_row_gather(
+    values: Float[Array, "Tin H"],
+    source_rows: Int[Array, "Tout"],
+    input_rows: int,
+) -> Float[Array, "Tout H"]:
+    """Gather rows whose valid source ids are unique, with a direct-scatter adjoint."""
+    if input_rows != values.shape[0]:
+        raise ValueError(f"input_rows must equal values.shape[0] ({values.shape[0]}), got {input_rows}")
+    return sonic_dispatch_gather(values, source_rows)
+
+
+def _sonic_unique_row_gather_fwd(
+    values: Float[Array, "Tin H"],
+    source_rows: Int[Array, "Tout"],
+    input_rows: int,
+) -> tuple[Float[Array, "Tout H"], Int[Array, "Tout"]]:
+    return _sonic_unique_row_gather(values, source_rows, input_rows), source_rows
+
+
+def _sonic_unique_row_gather_bwd(
+    input_rows: int,
+    source_rows: Int[Array, "Tout"],
+    output_grad: Float[Array, "Tout H"],
+) -> tuple[Float[Array, "Tin H"], None]:
+    input_grad = sonic_unique_row_scatter(
+        output_grad,
+        source_rows,
+        output_rows=input_rows,
+    )
+    return input_grad, None
+
+
+_sonic_unique_row_gather.defvjp(
+    _sonic_unique_row_gather_fwd,
+    _sonic_unique_row_gather_bwd,
+)
+
+
+def _pack_sparse_clone_weights_fwd(
+    local_weights: jax.Array,
+    packed_local_experts: Int[Array, "Msend"],
+    local_experts: int,
+) -> tuple[jax.Array, Int[Array, "Msend"]]:
+    return (
+        _pack_sparse_clone_weights(local_weights, packed_local_experts, local_experts),
+        packed_local_experts,
+    )
+
+
+def _pack_sparse_clone_weights_bwd(
+    local_experts: int,
+    packed_local_experts: Int[Array, "Msend"],
+    clone_grads: jax.Array,
+) -> tuple[jax.Array, None]:
+    block_features = max(
+        int(os.environ.get("SCALE_A2A_CLONE_WEIGHT_GRAD_BLOCK", "512")),
+        1,
+    )
+    local_grads = sonic_clone_weight_reduce(
+        clone_grads,
+        packed_local_experts,
+        local_experts=local_experts,
+        block_features=block_features,
+    )
+    return local_grads, None
+
+
+_pack_sparse_clone_weights.defvjp(
+    _pack_sparse_clone_weights_fwd,
+    _pack_sparse_clone_weights_bwd,
+)
+
+
+def _use_sonic_slot_gather(site: str) -> bool:
+    if os.environ.get("SCALE_A2A_CLONE_SONIC_SLOT_GATHER") == "1":
+        return True
+    if site == "dispatch":
+        return os.environ.get("SCALE_A2A_CLONE_SONIC_DISPATCH_SLOT_GATHER") == "1"
+    if site == "combine":
+        return os.environ.get("SCALE_A2A_CLONE_SONIC_COMBINE_SLOT_GATHER") == "1"
+    raise ValueError(f"unknown slot-gather site: {site}")
+
+
 def _sparse_clone_weight_exchange(
     local_weights: jax.Array,
     packed_local_experts: Int[Array, "Msend"],
@@ -394,11 +672,19 @@ def _sparse_clone_weight_exchange(
     max_receiver_segments: int,
 ) -> jax.Array:
     """Move only expert weights needed by this receiver's clone segments."""
-    padded_local_weights = jnp.concatenate(
-        [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
-        axis=0,
-    )
-    send_weights = padded_local_weights[packed_local_experts]
+    local_experts = local_weights.shape[0]
+    if os.environ.get("SCALE_A2A_CLONE_SONIC_WEIGHT_GRAD") == "1":
+        send_weights = _pack_sparse_clone_weights(
+            local_weights,
+            packed_local_experts,
+            local_experts,
+        )
+    else:
+        padded_local_weights = jnp.concatenate(
+            [local_weights, jnp.zeros((1, *local_weights.shape[1:]), dtype=local_weights.dtype)],
+            axis=0,
+        )
+        send_weights = padded_local_weights[packed_local_experts]
     output_shape = jnp.zeros((max_receiver_segments, *local_weights.shape[1:]), dtype=local_weights.dtype)
     return jax.lax.ragged_all_to_all(
         send_weights,
@@ -441,6 +727,7 @@ def _same_expert_cloned_fixed_a2a_core(
     expert_shards = num_experts // local_experts
     pooled_dispatch = os.environ.get("SCALE_A2A_CLONE_POOLED") == "1"
     sparse_clone_weights = pooled_dispatch and os.environ.get("SCALE_A2A_CLONE_SPARSE_WEIGHTS") == "1"
+    echo_dispatch = os.environ.get("SCALE_A2A_ECHO_CLONES") == "1"
     max_receiver_segments = None
     if sparse_clone_weights:
         max_receiver_segments = max(
@@ -463,6 +750,15 @@ def _same_expert_cloned_fixed_a2a_core(
     )
     send_size = expert_shards * sender_destination_capacity
     use_mnnvl_transport = os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") == "1"
+    use_hybridep_transport = os.environ.get("SCALE_A2A_HYBRID_EP") == "1"
+    if use_mnnvl_transport and use_hybridep_transport:
+        raise ValueError("MNNVL and HybridEP token transports are mutually exclusive")
+    if use_hybridep_transport and not echo_dispatch:
+        raise ValueError("SCALE_A2A_HYBRID_EP=1 requires SCALE_A2A_ECHO_CLONES=1")
+    if echo_dispatch and not (
+        pooled_dispatch and sparse_clone_weights and (use_mnnvl_transport or use_hybridep_transport)
+    ):
+        raise ValueError("SCALE_A2A_ECHO_CLONES=1 requires pooled sparse clone weights and a fabric transport")
 
     use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
     if use_barrier:
@@ -472,7 +768,19 @@ def _same_expert_cloned_fixed_a2a_core(
     local_group_sizes = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     all_group_sizes = jax.lax.all_gather(local_group_sizes, "expert")
     receiver_index = jax.lax.axis_index("expert")
-    if pooled_dispatch:
+    if echo_dispatch:
+        destination, receiver_slot, receiver_group_sizes, overflow = _same_expert_echo_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            receiver_index,
+            receiver_capacity=receiver_capacity,
+            max_receiver_segments=max_receiver_segments,
+        )
+        send_size = assignments_per_shard
+        transport_position = jnp.arange(send_size, dtype=jnp.int32)
+        keep = destination < expert_shards
+        transport_position = jnp.where(keep, transport_position, send_size)
+    elif pooled_dispatch:
         transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_pooled_dispatch_metadata(
             flat_experts,
             all_group_sizes,
@@ -489,22 +797,48 @@ def _same_expert_cloned_fixed_a2a_core(
             sender_destination_capacity=sender_destination_capacity,
             receiver_capacity=receiver_capacity,
         )
-    keep = transport_position < send_size
+        keep = transport_position < send_size
+    if not echo_dispatch:
+        keep = transport_position < send_size
     dispatch_positions = transport_position.reshape(tokens_per_shard, topk)
     keep_by_token = keep.reshape(tokens_per_shard, topk)
 
     with jax.named_scope("dispatch"):
-        send_receiver_slot = (
-            jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
-            .at[transport_position]
-            .set(receiver_slot, mode="drop")
-            .reshape(expert_shards, sender_destination_capacity)
-        )
-        if use_mnnvl_transport:
-            send_destination = jnp.broadcast_to(
-                jnp.arange(expert_shards, dtype=jnp.int32)[:, None],
-                send_receiver_slot.shape,
-            ).reshape(send_size)
+        if echo_dispatch:
+            send_destination = destination
+            send_receiver_slot = receiver_slot
+        else:
+            send_receiver_slot = (
+                jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
+                .at[transport_position]
+                .set(receiver_slot, mode="drop")
+                .reshape(expert_shards, sender_destination_capacity)
+            )
+        if use_hybridep_transport:
+            assert max_receiver_segments is not None
+            from levanter.kernels.hybridep import hybridep_dispatch  # noqa: PLC0415
+
+            routing_map, routing_probabilities = _same_expert_hybridep_routing(
+                destination,
+                flat_experts,
+                combine_weights_local,
+                receiver_group_sizes,
+                max_receiver_segments=max_receiver_segments,
+            )
+            expert_inputs, dispatched_probabilities, transport_group_sizes, transport_handle = hybridep_dispatch(
+                x_local,
+                routing_map,
+                routing_probabilities,
+                assignments_per_shard,
+                max_receiver_segments,
+            )
+            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
+        elif use_mnnvl_transport:
+            if not echo_dispatch:
+                send_destination = jnp.broadcast_to(
+                    jnp.arange(expert_shards, dtype=jnp.int32)[:, None],
+                    send_receiver_slot.shape,
+                ).reshape(send_size)
             token_sources = _fixed_dispatch_token_sources(dispatch_positions, send_size=send_size)
             expert_inputs, receiver_source_rank, receiver_source_slot = _mnnvl_dispatch_gather(
                 x_local,
@@ -560,11 +894,18 @@ def _same_expert_cloned_fixed_a2a_core(
                 .at[received_slot_flat]
                 .set(jnp.arange(send_size, dtype=jnp.int32), mode="drop")
             )
-            padded_received_x = jnp.concatenate(
-                [received_x_flat, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
-                axis=0,
-            )
-            expert_inputs = padded_received_x[receiver_sources]
+            if _use_sonic_slot_gather("dispatch"):
+                expert_inputs = _sonic_unique_row_gather(
+                    received_x_flat,
+                    receiver_sources,
+                    send_size,
+                )
+            else:
+                padded_received_x = jnp.concatenate(
+                    [received_x_flat, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+                    axis=0,
+                )
+                expert_inputs = padded_received_x[receiver_sources]
 
     with jax.named_scope("clone_weights"):
         if sparse_clone_weights:
@@ -603,6 +944,8 @@ def _same_expert_cloned_fixed_a2a_core(
                 max_receiver_segments=max_receiver_segments,
             )
             overflow = overflow + weight_envelope_overflow
+            if use_hybridep_transport:
+                group_sizes = transport_group_sizes
         else:
             global_w13 = jax.lax.all_gather(
                 moe_w13_local,
@@ -643,48 +986,76 @@ def _same_expert_cloned_fixed_a2a_core(
             expert_outputs = ragged_dot(activation_fn(gate) * up, global_w2, group_sizes)
 
     with jax.named_scope("combine"):
-        if use_mnnvl_transport:
-            returned_x = mnnvl_combine(
-                expert_outputs,
-                receiver_source_rank,
-                receiver_source_slot,
-                send_destination,
-                send_receiver_slot.reshape(send_size),
-                send_size,
+        if use_hybridep_transport:
+            assert max_receiver_segments is not None
+            from levanter.kernels.hybridep import hybridep_combine  # noqa: PLC0415
+
+            weighted_outputs = (expert_outputs.astype(jnp.float32) * dispatched_probabilities[:, None]).astype(
+                x_local.dtype
             )
+            out_local = hybridep_combine(
+                weighted_outputs,
+                routing_map,
+                routing_probabilities,
+                transport_handle,
+                max_receiver_segments,
+            )
+            out_local = tree_checkpoint_name(out_local, _CHECKPOINT_MOE_OUTPUT)
         else:
-            received_valid = received_slot_flat < receiver_capacity
-            returned_x = expert_outputs[jnp.minimum(received_slot_flat, receiver_capacity - 1)]
-            returned_x = jnp.where(received_valid[:, None], returned_x, 0)
-            returned_x = returned_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
-            returned_x = jax.lax.all_to_all(
-                returned_x,
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
-        returned_x = tree_checkpoint_name(returned_x, _CHECKPOINT_MOE_OUTPUT).reshape(send_size, hidden_dim)
-        if os.environ.get("SCALE_A2A_SONIC_COMBINE") == "1":
-            masked_combine_weights = jnp.where(
-                keep_by_token,
-                combine_weights_local,
-                0,
-            )
-            out_local = sonic_gather_sum(
-                returned_x,
-                dispatch_positions,
-                masked_combine_weights,
-            ).astype(x_local.dtype)
-        else:
-            gathered = returned_x[jnp.minimum(dispatch_positions, send_size - 1)]
-            gathered = jnp.where(keep_by_token[:, :, None], gathered, 0)
-            out_local = jnp.einsum(
-                "tkh,tk->th",
-                gathered,
-                combine_weights_local.astype(gathered.dtype),
-                preferred_element_type=jnp.float32,
-            ).astype(x_local.dtype)
+            if use_mnnvl_transport:
+                returned_x = mnnvl_combine(
+                    expert_outputs,
+                    receiver_source_rank,
+                    receiver_source_slot,
+                    send_destination,
+                    send_receiver_slot.reshape(send_size),
+                    send_size,
+                )
+            else:
+                received_valid = received_slot_flat < receiver_capacity
+                if _use_sonic_slot_gather("combine"):
+                    safe_received_slots = jnp.where(
+                        received_valid,
+                        received_slot_flat,
+                        receiver_capacity,
+                    ).astype(jnp.int32)
+                    returned_x = _sonic_unique_row_gather(
+                        expert_outputs,
+                        safe_received_slots,
+                        receiver_capacity,
+                    )
+                else:
+                    returned_x = expert_outputs[jnp.minimum(received_slot_flat, receiver_capacity - 1)]
+                    returned_x = jnp.where(received_valid[:, None], returned_x, 0)
+                returned_x = returned_x.reshape(expert_shards, sender_destination_capacity, hidden_dim)
+                returned_x = jax.lax.all_to_all(
+                    returned_x,
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+            returned_x = tree_checkpoint_name(returned_x, _CHECKPOINT_MOE_OUTPUT).reshape(send_size, hidden_dim)
+            if os.environ.get("SCALE_A2A_SONIC_COMBINE") == "1":
+                masked_combine_weights = jnp.where(
+                    keep_by_token,
+                    combine_weights_local,
+                    0,
+                )
+                out_local = sonic_gather_sum(
+                    returned_x,
+                    dispatch_positions,
+                    masked_combine_weights,
+                ).astype(x_local.dtype)
+            else:
+                gathered = returned_x[jnp.minimum(dispatch_positions, send_size - 1)]
+                gathered = jnp.where(keep_by_token[:, :, None], gathered, 0)
+                out_local = jnp.einsum(
+                    "tkh,tk->th",
+                    gathered,
+                    combine_weights_local.astype(gathered.dtype),
+                    preferred_element_type=jnp.float32,
+                ).astype(x_local.dtype)
         overflow_total = jax.lax.psum(
             overflow,
             _batch_axes(jax.sharding.get_abstract_mesh()),
@@ -1110,6 +1481,349 @@ def _receiver_clipped_dispatch_metadata(
     return receiver_keep, transport_keep, clipped_group_sizes, receiver_dropped, envelope_overflow
 
 
+def _receiver_clipped_mnnvl_dispatch_metadata(
+    flat_experts: Int[Array, "TK"],
+    all_group_sizes: Int[Array, "S E"],
+    sender_index: Int[Array, ""],
+    *,
+    local_experts: int,
+    receiver_capacity: int,
+) -> tuple[jax.Array, Int[Array, "TK"], Int[Array, "TK"], Int[Array, "S E"], Int[Array, ""]]:
+    """Map ragged-accepted assignments directly into expert-owner receiver slots."""
+    expert_shards, num_experts = all_group_sizes.shape
+    if num_experts % local_experts != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by local_experts={local_experts}")
+    if num_experts // local_experts != expert_shards:
+        raise ValueError(
+            f"sender/receiver shard mismatch: senders={expert_shards}, receivers={num_experts // local_experts}"
+        )
+
+    clipped_group_sizes = _clip_receiver_group_sizes(
+        all_group_sizes,
+        local_expert_size=local_experts,
+        receiver_capacity=receiver_capacity,
+    )
+    accepted_group_sizes = clipped_group_sizes[sender_index]
+    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    keep = local_rank < accepted_group_sizes[flat_experts]
+
+    global_group_sizes = jnp.sum(clipped_group_sizes, axis=0, dtype=jnp.int32)
+    receiver_group_sizes = global_group_sizes.reshape(expert_shards, local_experts)
+    receiver_group_offsets = jnp.cumsum(receiver_group_sizes, axis=1, dtype=jnp.int32) - receiver_group_sizes
+    preceding_senders = jnp.arange(expert_shards, dtype=jnp.int32) < sender_index
+    sender_prefix = jnp.sum(
+        jnp.where(preceding_senders[:, None], clipped_group_sizes, 0),
+        axis=0,
+        dtype=jnp.int32,
+    )
+
+    destination = (flat_experts // local_experts).astype(jnp.int32)
+    local_expert = (flat_experts % local_experts).astype(jnp.int32)
+    receiver_slot = receiver_group_offsets[destination, local_expert] + sender_prefix[flat_experts] + local_rank
+    destination = jnp.where(keep, destination, expert_shards)
+    receiver_slot = jnp.where(keep, receiver_slot, receiver_capacity)
+    receiver_dropped = flat_experts.shape[0] - jnp.sum(keep, dtype=jnp.int32)
+    return keep, destination, receiver_slot, clipped_group_sizes, receiver_dropped
+
+
+def _receiver_destination_pooled_dispatch_metadata(
+    flat_experts: Int[Array, "TK"],
+    all_group_sizes: Int[Array, "S E"],
+    sender_index: Int[Array, ""],
+    *,
+    local_experts: int,
+    receiver_capacity: int,
+    sender_destination_capacity: int,
+) -> tuple[jax.Array, Int[Array, "TK"], Int[Array, "S E"], Int[Array, ""], Int[Array, ""]]:
+    """Pack ragged-accepted assignments into one fixed pool per destination."""
+    expert_shards, num_experts = all_group_sizes.shape
+    if num_experts != expert_shards * local_experts:
+        raise ValueError(
+            f"expected num_experts={expert_shards * local_experts} for "
+            f"expert_shards={expert_shards}, local_experts={local_experts}; got {num_experts}"
+        )
+
+    clipped_group_sizes = _clip_receiver_group_sizes(
+        all_group_sizes,
+        local_expert_size=local_experts,
+        receiver_capacity=receiver_capacity,
+    )
+    accepted_group_sizes = clipped_group_sizes[sender_index]
+    accepted_by_destination = accepted_group_sizes.reshape(expert_shards, local_experts)
+    destination_group_offsets = jnp.cumsum(accepted_by_destination, axis=1, dtype=jnp.int32) - accepted_by_destination
+
+    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+    destination = (flat_experts // local_experts).astype(jnp.int32)
+    local_expert = (flat_experts % local_experts).astype(jnp.int32)
+    destination_slot = destination_group_offsets[destination, local_expert] + local_rank
+    receiver_keep = local_rank < accepted_group_sizes[flat_experts]
+    transport_keep = jnp.logical_and(
+        receiver_keep,
+        destination_slot < sender_destination_capacity,
+    )
+
+    send_size = expert_shards * sender_destination_capacity
+    dispatch_position = jnp.where(
+        transport_keep,
+        destination * sender_destination_capacity + destination_slot,
+        send_size,
+    )
+    receiver_dropped = flat_experts.shape[0] - jnp.sum(receiver_keep, dtype=jnp.int32)
+    envelope_overflow = jnp.sum(
+        jnp.logical_and(receiver_keep, destination_slot >= sender_destination_capacity),
+        dtype=jnp.int32,
+    )
+    return transport_keep, dispatch_position, clipped_group_sizes, receiver_dropped, envelope_overflow
+
+
+def _receiver_destination_compact_positions(
+    local_clipped_group_sizes: Int[Array, "S Elocal"],
+    *,
+    sender_destination_capacity: int,
+    receiver_capacity: int,
+) -> tuple[Int[Array, "S C"], jax.Array, Int[Array, "Elocal"]]:
+    """Map sender-major destination pools to receiver-local expert-major rows."""
+    expert_shards, local_experts = local_clipped_group_sizes.shape
+    sender_group_ends = jnp.cumsum(local_clipped_group_sizes, axis=1, dtype=jnp.int32)
+    sender_group_offsets = sender_group_ends - local_clipped_group_sizes
+    sender_loads = sender_group_ends[:, -1]
+
+    sender_slots = jnp.arange(sender_destination_capacity, dtype=jnp.int32)[None, :]
+    local_expert = jnp.sum(
+        sender_slots[:, :, None] >= sender_group_ends[:, None, :],
+        axis=-1,
+        dtype=jnp.int32,
+    )
+    valid = jnp.logical_and(
+        sender_slots < sender_loads[:, None],
+        local_expert < local_experts,
+    )
+    safe_local_expert = jnp.minimum(local_expert, local_experts - 1)
+    sender_indices = jnp.arange(expert_shards, dtype=jnp.int32)[:, None]
+    rank_within_expert = sender_slots - sender_group_offsets[sender_indices, safe_local_expert]
+
+    receiver_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
+    receiver_group_offsets = jnp.cumsum(receiver_group_sizes, dtype=jnp.int32) - receiver_group_sizes
+    preceding_sender_sizes = jnp.cumsum(local_clipped_group_sizes, axis=0, dtype=jnp.int32) - local_clipped_group_sizes
+    compact_position = (
+        receiver_group_offsets[safe_local_expert]
+        + preceding_sender_sizes[sender_indices, safe_local_expert]
+        + rank_within_expert
+    )
+    compact_position = jnp.where(valid, compact_position, receiver_capacity)
+    return compact_position, valid, receiver_group_sizes
+
+
+def _receiver_destination_pooled_fixed_a2a_core(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    sender_destination_capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Fixed all-to-all with exact receiver clipping and destination-pooled envelopes."""
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
+    if sender_destination_capacity_factor < 1.0:
+        raise ValueError(
+            "sender_destination_capacity_factor must be at least 1.0, " f"got {sender_destination_capacity_factor}"
+        )
+
+    tokens_per_shard, hidden_dim = x_local.shape
+    expert_shards = num_experts // local_experts
+    topk = selected_experts_local.shape[1]
+    assignments_per_shard = tokens_per_shard * topk
+    receiver_capacity = max(int(math.ceil(capacity_factor * assignments_per_shard)), local_experts)
+    sender_destination_capacity = max(
+        int(math.ceil(sender_destination_capacity_factor * assignments_per_shard / expert_shards)),
+        local_experts,
+    )
+    send_size = expert_shards * sender_destination_capacity
+
+    use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
+    if use_barrier:
+        x_local, combine_weights_local = jax.lax.optimization_barrier((x_local, combine_weights_local))
+
+    flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
+    group_sizes = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
+    all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
+    sender_index = jax.lax.axis_index("expert")
+    (
+        transport_keep,
+        dispatch_position,
+        clipped_group_sizes,
+        receiver_dropped,
+        envelope_overflow,
+    ) = _receiver_destination_pooled_dispatch_metadata(
+        flat_experts,
+        all_group_sizes,
+        sender_index,
+        local_experts=local_experts,
+        receiver_capacity=receiver_capacity,
+        sender_destination_capacity=sender_destination_capacity,
+    )
+    dispatch_positions = dispatch_position.reshape(tokens_per_shard, topk)
+    transport_keep_by_token = transport_keep.reshape(tokens_per_shard, topk)
+
+    with jax.named_scope("dispatch"):
+        if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
+            send_x = _fixed_dispatch_gather_sonic(
+                x_local,
+                dispatch_positions,
+                transport_keep_by_token,
+                send_size,
+            )
+        elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
+            send_x = _fixed_dispatch_gather_sonic_grad(
+                x_local,
+                dispatch_positions,
+                transport_keep_by_token,
+                send_size,
+            )
+        else:
+            send_x = _fixed_dispatch_gather_reference(
+                x_local,
+                dispatch_positions,
+                send_size=send_size,
+            )
+        received_x = jax.lax.all_to_all(
+            send_x.reshape(expert_shards, sender_destination_capacity, hidden_dim),
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+            tiled=True,
+        )
+        received_x = tree_checkpoint_name(received_x, _CHECKPOINT_DISPATCH_INPUT)
+
+    with jax.named_scope("moe_up_down"):
+        local_clipped_group_sizes = jax.lax.dynamic_slice_in_dim(
+            clipped_group_sizes,
+            start_index=sender_index * local_experts,
+            slice_size=local_experts,
+            axis=1,
+        )
+        compact_position, received_valid, local_group_sizes = _receiver_destination_compact_positions(
+            local_clipped_group_sizes,
+            sender_destination_capacity=sender_destination_capacity,
+            receiver_capacity=receiver_capacity,
+        )
+        transport_size = expert_shards * sender_destination_capacity
+        receiver_sources = (
+            jnp.full((receiver_capacity,), transport_size, dtype=jnp.int32)
+            .at[compact_position.reshape(-1)]
+            .set(jnp.arange(transport_size, dtype=jnp.int32), mode="drop")
+        )
+        padded_received_x = jnp.concatenate(
+            [received_x.reshape(transport_size, hidden_dim), jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+            axis=0,
+        )
+        compact_expert_inputs = padded_received_x[receiver_sources]
+
+        valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
+        padded_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
+        moe_dim = moe_w2_local.shape[1]
+        if os.environ.get("SCALE_A2A_RECEIVER_SONIC_CUTE") == "1":
+            from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+            interleaved_w13 = _interleave_gate_up(moe_w13_local, moe_dim)
+            cumulative_group_sizes = jnp.concatenate(
+                [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(padded_group_sizes, dtype=jnp.int32)]
+            )
+            compact_expert_outputs = _expert_mlp(
+                compact_expert_inputs,
+                interleaved_w13,
+                moe_w2_local,
+                padded_group_sizes,
+                cumulative_group_sizes,
+            )
+        else:
+            hidden = ragged_dot(compact_expert_inputs, moe_w13_local, padded_group_sizes)
+            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+            compact_expert_outputs = ragged_dot(
+                activation_fn(gate) * up,
+                moe_w2_local,
+                padded_group_sizes,
+            )
+
+    with jax.named_scope("combine"):
+        padded_expert_outputs = jnp.concatenate(
+            [compact_expert_outputs, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)],
+            axis=0,
+        )
+        received_outputs = padded_expert_outputs[jnp.minimum(compact_position, receiver_capacity)]
+        received_outputs = jnp.where(received_valid[:, :, None], received_outputs, 0)
+        returned_x = jax.lax.all_to_all(
+            received_outputs,
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+            tiled=True,
+        )
+        returned_x = tree_checkpoint_name(returned_x, _CHECKPOINT_MOE_OUTPUT).reshape(send_size, hidden_dim)
+        if os.environ.get("SCALE_A2A_SONIC_COMBINE") == "1":
+            out_local = sonic_gather_sum(
+                returned_x,
+                dispatch_positions,
+                jnp.where(transport_keep_by_token, combine_weights_local, 0),
+            ).astype(x_local.dtype)
+        else:
+            gathered = returned_x[jnp.minimum(dispatch_position, send_size - 1)]
+            gathered = jnp.where(transport_keep[:, None], gathered, 0).reshape(tokens_per_shard, topk, hidden_dim)
+            out_local = jnp.einsum(
+                "tkh,tk->th",
+                gathered,
+                combine_weights_local.astype(gathered.dtype),
+                preferred_element_type=jnp.float32,
+            ).astype(x_local.dtype)
+
+        receiver_dropped_total = jax.lax.psum(
+            receiver_dropped,
+            _batch_axes(jax.sharding.get_abstract_mesh()),
+        )
+        envelope_overflow_total = jax.lax.psum(
+            envelope_overflow,
+            _batch_axes(jax.sharding.get_abstract_mesh()),
+        )
+    if use_barrier:
+        out_local = jax.lax.optimization_barrier(out_local)
+
+    def fixed_result(_):
+        return out_local, receiver_dropped_total
+
+    def ragged_fallback(_):
+        return _moe_mlp_ep_ragged_a2a_core(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            moe_w13_local,
+            moe_w2_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+        )
+
+    if os.environ.get("SCALE_A2A_RECEIVER_RAGGED_FALLBACK", "1") != "1":
+        dropped_or_overflow = jnp.where(
+            envelope_overflow_total == 0,
+            receiver_dropped_total,
+            -envelope_overflow_total,
+        )
+        return out_local, dropped_or_overflow
+
+    return jax.lax.cond(
+        envelope_overflow_total == 0,
+        fixed_result,
+        ragged_fallback,
+        operand=None,
+    )
+
+
 def _receiver_clipped_fixed_a2a_core(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -1142,6 +1856,7 @@ def _receiver_clipped_fixed_a2a_core(
     receiver_capacity = max(int(math.ceil(capacity_factor * assignments_per_shard)), local_experts)
     mean_sender_expert_capacity = capacity_factor * assignments_per_shard / num_experts
     sender_expert_capacity = max(int(math.ceil(sender_capacity_factor * mean_sender_expert_capacity)), 1)
+    use_mnnvl_transport = os.environ.get("SCALE_A2A_MNNVL_TRANSPORT") == "1"
 
     use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
     if use_barrier:
@@ -1151,56 +1866,93 @@ def _receiver_clipped_fixed_a2a_core(
     group_sizes = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
     sender_index = jax.lax.axis_index("expert")
-    _, transport_keep, clipped_group_sizes, receiver_dropped, envelope_overflow = _receiver_clipped_dispatch_metadata(
-        flat_experts,
-        all_group_sizes,
-        sender_index,
-        local_experts=local_experts,
-        receiver_capacity=receiver_capacity,
-        sender_expert_capacity=sender_expert_capacity,
-    )
-    local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
-    local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
-    destination_shards = (flat_experts // local_experts).astype(jnp.int32)
-    bucket_size = expert_shards * sender_expert_capacity
-    send_size = local_experts * bucket_size
-    linear_indices = jnp.where(
-        transport_keep,
-        local_expert_indices * bucket_size + destination_shards * sender_expert_capacity + local_rank,
-        send_size,
-    )
-    dispatch_positions = linear_indices.reshape(tokens_per_shard, topk)
+    if use_mnnvl_transport:
+        (
+            transport_keep,
+            send_destination,
+            send_receiver_slot,
+            clipped_group_sizes,
+            receiver_dropped,
+        ) = _receiver_clipped_mnnvl_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            sender_index,
+            local_experts=local_experts,
+            receiver_capacity=receiver_capacity,
+        )
+        envelope_overflow = jnp.zeros((), dtype=jnp.int32)
+        send_size = assignments_per_shard
+        dispatch_positions = jnp.arange(assignments_per_shard, dtype=jnp.int32).reshape(tokens_per_shard, topk)
+    else:
+        (
+            _,
+            transport_keep,
+            clipped_group_sizes,
+            receiver_dropped,
+            envelope_overflow,
+        ) = _receiver_clipped_dispatch_metadata(
+            flat_experts,
+            all_group_sizes,
+            sender_index,
+            local_experts=local_experts,
+            receiver_capacity=receiver_capacity,
+            sender_expert_capacity=sender_expert_capacity,
+        )
+        local_rank = _stable_expert_local_rank(flat_experts, num_experts=num_experts)
+        local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
+        destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+        bucket_size = expert_shards * sender_expert_capacity
+        send_size = local_experts * bucket_size
+        linear_indices = jnp.where(
+            transport_keep,
+            local_expert_indices * bucket_size + destination_shards * sender_expert_capacity + local_rank,
+            send_size,
+        )
+        dispatch_positions = linear_indices.reshape(tokens_per_shard, topk)
     transport_keep_by_token = transport_keep.reshape(tokens_per_shard, topk)
 
     with jax.named_scope("dispatch"):
-        if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
-            send_x = _fixed_dispatch_gather_sonic(
+        if use_mnnvl_transport:
+            token_sources = jnp.arange(assignments_per_shard, dtype=jnp.int32) // topk
+            expert_inputs, receiver_source_rank, receiver_source_slot = _mnnvl_dispatch_gather(
                 x_local,
+                token_sources,
                 dispatch_positions,
                 transport_keep_by_token,
-                send_size,
+                send_destination,
+                send_receiver_slot,
+                receiver_capacity,
             )
-        elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
-            send_x = _fixed_dispatch_gather_sonic_grad(
-                x_local,
-                dispatch_positions,
-                transport_keep_by_token,
-                send_size,
-            )
+            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
         else:
-            send_x = _fixed_dispatch_gather_reference(
-                x_local,
-                dispatch_positions,
-                send_size=send_size,
+            if os.environ.get("SCALE_A2A_SONIC_DISPATCH") == "1":
+                send_x = _fixed_dispatch_gather_sonic(
+                    x_local,
+                    dispatch_positions,
+                    transport_keep_by_token,
+                    send_size,
+                )
+            elif os.environ.get("SCALE_A2A_SONIC_DISPATCH_GRAD") == "1":
+                send_x = _fixed_dispatch_gather_sonic_grad(
+                    x_local,
+                    dispatch_positions,
+                    transport_keep_by_token,
+                    send_size,
+                )
+            else:
+                send_x = _fixed_dispatch_gather_reference(
+                    x_local,
+                    dispatch_positions,
+                    send_size=send_size,
+                )
+            send_x = send_x.reshape(local_experts, expert_shards, sender_expert_capacity, hidden_dim)
+            received_by_expert = jax.lax.all_to_all(
+                send_x,
+                "expert",
+                split_axis=1,
+                concat_axis=1,
+                tiled=True,
             )
-        send_x = send_x.reshape(local_experts, expert_shards, sender_expert_capacity, hidden_dim)
-        received_by_expert = jax.lax.all_to_all(
-            send_x,
-            "expert",
-            split_axis=1,
-            concat_axis=1,
-            tiled=True,
-        )
 
     with jax.named_scope("moe_up_down"):
         local_clipped_group_sizes = jax.lax.dynamic_slice_in_dim(
@@ -1209,13 +1961,15 @@ def _receiver_clipped_fixed_a2a_core(
             slice_size=local_experts,
             axis=1,
         )
-        received_keep = (
-            jnp.arange(sender_expert_capacity, dtype=jnp.int32)[None, None, :]
-            < local_clipped_group_sizes.T[:, :, None]
-        )
-        transport_size = local_experts * bucket_size
-        expert_inputs = tree_checkpoint_name(received_by_expert, _CHECKPOINT_DISPATCH_INPUT)
-        if os.environ.get("SCALE_A2A_RECEIVER_DENSE_EXPERTS") == "1":
+        local_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
+        if not use_mnnvl_transport:
+            received_keep = (
+                jnp.arange(sender_expert_capacity, dtype=jnp.int32)[None, None, :]
+                < local_clipped_group_sizes.T[:, :, None]
+            )
+            transport_size = local_experts * bucket_size
+            expert_inputs = tree_checkpoint_name(received_by_expert, _CHECKPOINT_DISPATCH_INPUT)
+        if not use_mnnvl_transport and os.environ.get("SCALE_A2A_RECEIVER_DENSE_EXPERTS") == "1":
             # Computing the fixed envelope and masking rejected rows is value/gradient-equivalent
             # to compacting the keep mask, but preserves dense batched GEMMs.
             dense_inputs = expert_inputs.reshape(local_experts, bucket_size, hidden_dim)
@@ -1232,12 +1986,14 @@ def _receiver_clipped_fixed_a2a_core(
             )
             expert_outputs = jnp.where(received_keep[:, :, :, None], dense_outputs, 0)
         else:
-            compact_expert_inputs = _compact_by_keep_mask_to_size(
-                expert_inputs.reshape(transport_size, hidden_dim),
-                received_keep.reshape(transport_size),
-                output_size=receiver_capacity,
-            )
-            local_group_sizes = jnp.sum(local_clipped_group_sizes, axis=0, dtype=jnp.int32)
+            if use_mnnvl_transport:
+                compact_expert_inputs = expert_inputs
+            else:
+                compact_expert_inputs = _compact_by_keep_mask_to_size(
+                    expert_inputs.reshape(transport_size, hidden_dim),
+                    received_keep.reshape(transport_size),
+                    output_size=receiver_capacity,
+                )
             valid_received = jnp.sum(local_group_sizes, dtype=jnp.int32)
             local_group_sizes = local_group_sizes.at[-1].add(receiver_capacity - valid_received)
             moe_dim = moe_w2_local.shape[1]
@@ -1263,18 +2019,45 @@ def _receiver_clipped_fixed_a2a_core(
                 hidden = ragged_dot(compact_expert_inputs, moe_w13_local, local_group_sizes)
                 gate, up = jnp.split(hidden, [moe_dim], axis=-1)
                 compact_expert_outputs = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
-            expert_outputs = _expand_from_keep_mask(
-                compact_expert_outputs,
-                received_keep.reshape(transport_size),
-            ).reshape(
-                local_experts,
-                expert_shards,
-                sender_expert_capacity,
-                hidden_dim,
-            )
+            if use_mnnvl_transport:
+                expert_outputs = compact_expert_outputs
+            else:
+                expert_outputs = _expand_from_keep_mask(
+                    compact_expert_outputs,
+                    received_keep.reshape(transport_size),
+                ).reshape(
+                    local_experts,
+                    expert_shards,
+                    sender_expert_capacity,
+                    hidden_dim,
+                )
 
     with jax.named_scope("combine"):
-        if os.environ.get("SCALE_A2A_CUSTOM_DISTRIBUTED_COMBINE") == "1":
+        if use_mnnvl_transport:
+            returned = mnnvl_combine(
+                expert_outputs,
+                receiver_source_rank,
+                receiver_source_slot,
+                send_destination,
+                send_receiver_slot,
+                assignments_per_shard,
+            )
+            returned = tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT)
+            if os.environ.get("SCALE_A2A_SONIC_COMBINE") == "1":
+                out_local = sonic_gather_sum(
+                    returned,
+                    dispatch_positions,
+                    jnp.where(transport_keep_by_token, combine_weights_local, 0),
+                ).astype(x_local.dtype)
+            else:
+                gathered = returned.reshape(tokens_per_shard, topk, hidden_dim)
+                out_local = jnp.einsum(
+                    "tkh,tk->th",
+                    gathered,
+                    jnp.where(transport_keep_by_token, combine_weights_local, 0).astype(gathered.dtype),
+                    preferred_element_type=jnp.float32,
+                ).astype(x_local.dtype)
+        elif os.environ.get("SCALE_A2A_CUSTOM_DISTRIBUTED_COMBINE") == "1":
             out_local = _fixed_distributed_combine(
                 expert_outputs,
                 dispatch_positions,
@@ -1321,6 +2104,9 @@ def _receiver_clipped_fixed_a2a_core(
         )
     if use_barrier:
         out_local = jax.lax.optimization_barrier(out_local)
+
+    if use_mnnvl_transport:
+        return out_local, receiver_dropped_total
 
     def fixed_result(_):
         return out_local, receiver_dropped_total

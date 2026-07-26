@@ -1136,6 +1136,9 @@ class CheckpointerConfig:
     keep: Optional[List[dict]] = field(default_factory=lambda: [dict(every=10000)])
     """Permanent checkpoint intervals. None means only forced checkpoints, such as the final checkpoint."""
 
+    save_final_checkpoint: bool = True
+    """Whether the trainer's final forced hook writes a checkpoint."""
+
     append_run_id_to_base_path: bool = True
     delete_old_temp_checkpoints: bool = True
     """

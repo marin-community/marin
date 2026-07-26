@@ -1,0 +1,13 @@
+diff --git a/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh b/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh
+index 2e91b58..492e1fb 100644
+--- a/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh
++++ b/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh
+@@ -4954 +4954 @@ __global__ void scan(const bool* input_routing_map,
+-                                                                               current_token_id * (NUM_OF_EXPERTS_PER_RANK * NUM_OF_RANKS_PER_NODE * NUM_OF_NODES) +
++                                                                               static_cast<int64_t>(current_token_id) * (NUM_OF_EXPERTS_PER_RANK * NUM_OF_RANKS_PER_NODE * NUM_OF_NODES) +
+@@ -5336 +5336 @@ __global__ void scan(const bool* input_routing_map,
+-                                                                               current_token_id * (NUM_OF_EXPERTS_PER_RANK * NUM_OF_RANKS_PER_NODE * NUM_OF_NODES) +
++                                                                               static_cast<int64_t>(current_token_id) * (NUM_OF_EXPERTS_PER_RANK * NUM_OF_RANKS_PER_NODE * NUM_OF_NODES) +
+@@ -5506 +5506 @@ __global__ void scan(const bool* input_routing_map,
+-                                                                                ((node_rank * NUM_OF_RANKS_PER_NODE + local_rank) * num_of_tokens_per_rank + current_token_local_id) *
++                                                                                static_cast<int64_t>((node_rank * NUM_OF_RANKS_PER_NODE + local_rank) * num_of_tokens_per_rank + current_token_local_id) *
