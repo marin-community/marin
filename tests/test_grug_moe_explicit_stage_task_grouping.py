@@ -6,12 +6,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
 from fray.cluster import ResourceConfig
+from jax.extend import core as jax_core
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.datasets import LmDataConfig
@@ -31,7 +33,12 @@ from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
     ordered_moe_preparation_and_routes,
     packed_attention_value_and_grads,
 )
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import (
+    GrugModelConfig,
+    Transformer,
+    _run_block_with_remat,
+    paired_moe_component_forward,
+)
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
     GrugRunConfig,
@@ -39,6 +46,8 @@ from experiments.grug.moe.train import (
     _accumulate_microbatch_tree,
     _average_microbatch_tree,
     _combine_grouped_router_metrics,
+    _compute_block,
+    _compute_stage,
     _grouped_last_stage_loss_and_grads,
     _pack_group_attention_mask,
     _pack_microbatch_pair,
@@ -46,6 +55,8 @@ from experiments.grug.moe.train import (
     _unpack_microbatch_pair,
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
+    paired_compute_block_forward,
+    paired_compute_block_value_and_grads,
     unpack_fp8_pipeline_wire,
 )
 
@@ -440,6 +451,177 @@ def _tiny_boundary_inputs(mesh: Mesh):
         _shard_group_hidden(jax.random.normal(jax.random.PRNGKey(key), (1, 4, 8)), mesh) for key in (13, 14)
     )
     return batches, hiddens, cotangents
+
+
+def _block_projection(output: jax.Array, cotangent: jax.Array) -> jax.Array:
+    return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+
+def _ordered_master_block_value_and_grads(
+    params,
+    qb_beta,
+    hiddens,
+    masks,
+    output_cotangents,
+    mp,
+    *,
+    remat_mode,
+    router_z_loss_scale,
+):
+    losses = []
+    outputs = []
+    router_stats = []
+    block_gradients = []
+    input_gradients = []
+    for hidden, mask, output_cotangent in zip(hiddens, masks, output_cotangents, strict=True):
+
+        def projected_block(master_block, current_hidden, mask=mask, output_cotangent=output_cotangent):
+            compute_block = _compute_block(master_block, qb_beta, mp)
+            output, stats = _run_block_with_remat(
+                compute_block,
+                current_hidden,
+                mask,
+                use_pko=False,
+                disable_rope=False,
+                remat_mode=remat_mode,
+                effectful_moe=False,
+            )
+            loss = _block_projection(output, output_cotangent)
+            loss = loss + router_z_loss_scale * stats["router_z_loss"]
+            return loss, (output, stats)
+
+        (loss, (output, stats)), (block_gradient, input_gradient) = jax.value_and_grad(
+            projected_block,
+            argnums=(0, 1),
+            has_aux=True,
+        )(params, hidden)
+        losses.append(loss)
+        outputs.append(output)
+        router_stats.append(stats)
+        block_gradients.append(block_gradient)
+        input_gradients.append(input_gradient)
+    return (
+        tuple(losses),
+        tuple(outputs),
+        tuple(router_stats),
+        _sum_microbatch_group(tuple(block_gradients)),
+        tuple(input_gradients),
+    )
+
+
+@pytest.mark.parametrize("remat_mode", ("recompute_all", "save_moe"))
+def test_paired_component_block_matches_two_ordered_master_block_vjps(remat_mode: str) -> None:
+    mesh, stage = _tiny_grouped_last_stage(remat_mode, top_k=2)
+    batches, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    masks = tuple(batch.attn_mask for batch in batches)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    router_z_loss_scale = 0.1
+
+    paired_forward = jax.jit(
+        lambda block, hidden_pair: paired_compute_block_forward(
+            block,
+            qb_beta,
+            hidden_pair,
+            masks,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode=remat_mode,
+        )
+    )
+    paired_vjp = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: paired_compute_block_value_and_grads(
+            block,
+            qb_beta,
+            hidden_pair,
+            masks,
+            cotangent_pair,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode=remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
+    )
+    ordered_vjp = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: _ordered_master_block_value_and_grads(
+            block,
+            qb_beta,
+            hidden_pair,
+            masks,
+            cotangent_pair,
+            mp,
+            remat_mode=remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
+    )
+
+    with jax.set_mesh(mesh):
+        component_compute_block = _compute_block(params, qb_beta, mp)
+        production_compute_block = _compute_stage(stage, qb_beta[None, :], mp).blocks[0]
+        actual = paired_vjp(params, hiddens, output_cotangents)
+        expected = ordered_vjp(params, hiddens, output_cotangents)
+        forward_outputs, forward_stats = paired_forward(params, hiddens)
+
+    for actual_leaf, expected_leaf in zip(
+        jax.tree.leaves(component_compute_block),
+        jax.tree.leaves(production_compute_block),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual_leaf, expected_leaf)
+    _assert_tree_rel_l2(actual, expected)
+    _assert_tree_rel_l2(forward_outputs, expected[1])
+    _assert_tree_rel_l2(forward_stats, expected[2])
+    assert len(jax.tree.leaves(actual[3])) == len(jax.tree.leaves(expected[3]))
+    assert len(jax.tree.leaves(actual[4])) == 2
+    for actual_stats, expected_stats in zip(actual[2], expected[2], strict=True):
+        np.testing.assert_array_equal(actual_stats["routing_counts"], expected_stats["routing_counts"])
+        _assert_tree_rel_l2(actual_stats["qb_beta"], expected_stats["qb_beta"])
+
+
+def _closed_jaxpr_name_stacks(closed_jaxpr: jax_core.ClosedJaxpr) -> tuple[str, ...]:
+    names = []
+
+    def walk_value(value) -> None:
+        if isinstance(value, jax_core.ClosedJaxpr):
+            walk_jaxpr(value.jaxpr)
+        elif isinstance(value, jax_core.Jaxpr):
+            walk_jaxpr(value)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                walk_value(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk_value(item)
+
+    def walk_jaxpr(jaxpr: jax_core.Jaxpr) -> None:
+        for equation in jaxpr.eqns:
+            names.append(str(equation.source_info.name_stack))
+            walk_value(equation.params)
+
+    walk_jaxpr(closed_jaxpr.jaxpr)
+    return tuple(names)
+
+
+def test_paired_moe_component_jaxpr_contains_two_router_calls_and_no_attention() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, _ = _tiny_boundary_inputs(mesh)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        block = _compute_block(stage.blocks[0], qb_beta, mp)
+        mlp_inputs = tuple(block.mlp_gated_norm(block.rms_mlp(hidden)) for hidden in hiddens)
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(
+            lambda mlp, inputs: paired_moe_component_forward(mlp, inputs, remat_mode="save_moe")
+        )(block.mlp, mlp_inputs)
+
+    name_stacks = _closed_jaxpr_name_stacks(closed_jaxpr)
+    router_calls = [name for name in name_stacks if name.endswith("_paired_moe_calls/MoEMLP/td,de->te")]
+    assert len(router_calls) == 2
+    assert not any("Attention" in name or "_BlockAttentionView" in name for name in name_stacks)
 
 
 def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:

@@ -56,9 +56,13 @@ from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import (
     GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR,
+    Block,
     GrugModelConfig,
+    RematMode,
     Transformer,
     TransformerPipelineStage,
+    paired_block_forward,
+    paired_block_value_and_grads,
 )
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -1709,6 +1713,72 @@ def _compute_stage(
     mp: jmp.Policy,
 ) -> TransformerPipelineStage:
     return _cast_preserving_overwrites(_apply_stage_qb_betas(params, qb_betas), mp.cast_to_compute)
+
+
+def _compute_block(params: Block, qb_beta: jax.Array, mp: jmp.Policy) -> Block:
+    new_bias = -qb_beta
+    new_bias = new_bias - jnp.mean(new_bias)
+    mlp = eqx.tree_at(lambda module: module.router_bias, params.mlp, new_bias)
+    block = eqx.tree_at(lambda module: module.mlp, params, mlp)
+    return _cast_preserving_overwrites(block, mp.cast_to_compute)
+
+
+def paired_compute_block_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    """Run a paired component block from master parameters and the pending QB bias."""
+    compute_block = _compute_block(params, qb_beta, mp)
+    return paired_block_forward(
+        compute_block,
+        hiddens,
+        masks,
+        use_pko=use_pko,
+        disable_rope=disable_rope,
+        remat_mode=remat_mode,
+    )
+
+
+def paired_compute_block_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    Block,
+    tuple[jax.Array, jax.Array],
+]:
+    """Return a paired block VJP with gradients mapped back to master parameters."""
+    compute_block, compute_pullback = jax.vjp(lambda block: _compute_block(block, qb_beta, mp), params)
+    losses, outputs, router_stats, compute_gradient, input_gradients = paired_block_value_and_grads(
+        compute_block,
+        hiddens,
+        masks,
+        output_cotangents,
+        use_pko=use_pko,
+        disable_rope=disable_rope,
+        remat_mode=remat_mode,
+        router_z_loss_scale=router_z_loss_scale,
+    )
+    (master_gradient,) = compute_pullback(compute_gradient)
+    return losses, outputs, router_stats, master_gradient, input_gradients
 
 
 def _stack_stage_router_metrics(router_stats: tuple[dict[str, jax.Array], ...]) -> dict[str, jax.Array]:

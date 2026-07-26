@@ -859,6 +859,274 @@ class Block(eqx.Module):
         return output, (first_stats, second_stats)
 
 
+class _BlockAttentionView(eqx.Module):
+    rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm
+    attn: CausalSelfAttention
+
+    @staticmethod
+    def from_block(block: Block) -> "_BlockAttentionView":
+        return _BlockAttentionView(
+            rms_attn=block.rms_attn,
+            attn_gated_norm=block.attn_gated_norm,
+            attn=block.attn,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        hidden: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool,
+        disable_rope: bool,
+    ) -> Float[Array, "B S D"]:
+        attn_input = self.attn_gated_norm(self.rms_attn(hidden))
+        return hidden + self.attn(attn_input, mask, use_pko=use_pko, disable_rope=disable_rope)
+
+
+class _BlockMoeDenseView(eqx.Module):
+    rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm
+    shared: DenseMLP | None
+
+    @staticmethod
+    def from_block(block: Block) -> "_BlockMoeDenseView":
+        return _BlockMoeDenseView(
+            rms_mlp=block.rms_mlp,
+            mlp_gated_norm=block.mlp_gated_norm,
+            shared=block.shared,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        hidden: Float[Array, "B S D"],
+    ) -> tuple[Float[Array, "B S D"], Float[Array, "B S D"]]:
+        mlp_input = self.mlp_gated_norm(self.rms_mlp(hidden))
+        if self.shared is None:
+            return mlp_input, jnp.zeros_like(mlp_input)
+        return mlp_input, self.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+
+
+def _require_component_pair(values: tuple[Any, ...], *, name: str) -> None:
+    if len(values) != 2:
+        raise ValueError(f"{name} must contain exactly two microbatches, got {len(values)}")
+
+
+@named_call
+def _paired_moe_calls(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    first_output, first_stats = mlp(mlp_inputs[0])
+    second_output, second_stats = mlp(mlp_inputs[1])
+    return (first_output, second_output), (first_stats, second_stats)
+
+
+def paired_moe_component_forward(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    *,
+    remat_mode: RematMode,
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    """Run exactly two learned-router MoE calls under one rematerialization boundary."""
+    _require_component_pair(mlp_inputs, name="MoE inputs")
+    if mlp.expert_mlp.implementation != "ring":
+        raise ValueError("paired MoE components require the exact bulk-ring implementation")
+
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(_paired_moe_calls, policy=remat_policy)(mlp, mlp_inputs)
+
+
+def _component_projection(output: jax.Array, cotangent: jax.Array) -> jax.Array:
+    return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+
+def paired_moe_component_value_and_grads(
+    mlp: MoEMLP,
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    *,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    MoEMLP,
+    tuple[jax.Array, jax.Array],
+]:
+    """Differentiate two MoE calls jointly while retaining per-microbatch values and metrics."""
+    _require_component_pair(mlp_inputs, name="MoE inputs")
+    _require_component_pair(output_cotangents, name="MoE output cotangents")
+
+    def projected_pair(current_mlp: MoEMLP, current_inputs: tuple[jax.Array, jax.Array]):
+        outputs, router_stats = paired_moe_component_forward(
+            current_mlp,
+            current_inputs,
+            remat_mode=remat_mode,
+        )
+        losses = tuple(
+            _component_projection(output, cotangent) + router_z_loss_scale * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        return losses[0] + losses[1], (losses, outputs, router_stats)
+
+    (_, auxiliary), (mlp_gradient, input_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(mlp, mlp_inputs)
+    losses, outputs, router_stats = auxiliary
+    return losses, outputs, router_stats, mlp_gradient, input_gradients
+
+
+def paired_block_forward(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+) -> tuple[tuple[jax.Array, jax.Array], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+    """Run a block pair while joining only the two learned-router MoE calls."""
+    _require_component_pair(hiddens, name="block inputs")
+    _require_component_pair(masks, name="attention masks")
+    attention = _BlockAttentionView.from_block(block)
+    dense_moe_side = _BlockMoeDenseView.from_block(block)
+
+    post_attention = tuple(
+        attention(hidden, mask, use_pko=use_pko, disable_rope=disable_rope)
+        for hidden, mask in zip(hiddens, masks, strict=True)
+    )
+    dense_outputs = tuple(dense_moe_side(hidden) for hidden in post_attention)
+    mlp_inputs = tuple(output[0] for output in dense_outputs)
+    shared_outputs = tuple(output[1] for output in dense_outputs)
+    routed_outputs, router_stats = paired_moe_component_forward(
+        block.mlp,
+        mlp_inputs,
+        remat_mode=remat_mode,
+    )
+
+    if block.shared is None:
+        updates = routed_outputs
+    else:
+        updates = tuple(routed + shared for routed, shared in zip(routed_outputs, shared_outputs, strict=True))
+    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+    return outputs, router_stats
+
+
+def paired_block_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    Block,
+    tuple[jax.Array, jax.Array],
+]:
+    """Compose separate dense VJPs around one joined exact-ring MoE VJP."""
+    _require_component_pair(hiddens, name="block inputs")
+    _require_component_pair(masks, name="attention masks")
+    _require_component_pair(output_cotangents, name="block output cotangents")
+    if block.mlp.expert_mlp.implementation != "ring":
+        raise ValueError("paired block components require the exact bulk-ring implementation")
+
+    attention = _BlockAttentionView.from_block(block)
+    dense_moe_side = _BlockMoeDenseView.from_block(block)
+    post_attention = []
+    attention_pullbacks = []
+    for hidden, mask in zip(hiddens, masks, strict=True):
+        output, pullback = jax.vjp(
+            lambda current_attention, current_hidden, mask=mask: current_attention(
+                current_hidden,
+                mask,
+                use_pko=use_pko,
+                disable_rope=disable_rope,
+            ),
+            attention,
+            hidden,
+        )
+        post_attention.append(output)
+        attention_pullbacks.append(pullback)
+
+    dense_outputs = []
+    dense_pullbacks = []
+    for hidden in post_attention:
+        output, pullback = jax.vjp(_BlockMoeDenseView.__call__, dense_moe_side, hidden)
+        dense_outputs.append(output)
+        dense_pullbacks.append(pullback)
+
+    mlp_inputs = tuple(output[0] for output in dense_outputs)
+    shared_outputs = tuple(output[1] for output in dense_outputs)
+    _, routed_outputs, router_stats, mlp_gradient, mlp_input_gradients = paired_moe_component_value_and_grads(
+        block.mlp,
+        mlp_inputs,
+        output_cotangents,
+        remat_mode=remat_mode,
+        router_z_loss_scale=router_z_loss_scale,
+    )
+
+    dense_gradients = []
+    post_attention_gradients = []
+    for dense_pullback, mlp_input_gradient, output_cotangent in zip(
+        dense_pullbacks,
+        mlp_input_gradients,
+        output_cotangents,
+        strict=True,
+    ):
+        shared_cotangent = output_cotangent if block.shared is not None else jnp.zeros_like(output_cotangent)
+        dense_gradient, dense_hidden_gradient = dense_pullback((mlp_input_gradient, shared_cotangent))
+        dense_gradients.append(dense_gradient)
+        post_attention_gradients.append(output_cotangent + dense_hidden_gradient)
+
+    attention_gradients = []
+    input_gradients = []
+    for attention_pullback, post_attention_gradient in zip(
+        attention_pullbacks,
+        post_attention_gradients,
+        strict=True,
+    ):
+        attention_gradient, input_gradient = attention_pullback(post_attention_gradient)
+        attention_gradients.append(attention_gradient)
+        input_gradients.append(input_gradient)
+
+    attention_gradient = jax.tree.map(lambda first, second: first + second, *attention_gradients)
+    dense_gradient = jax.tree.map(lambda first, second: first + second, *dense_gradients)
+    block_gradient = Block(
+        rms_attn=attention_gradient.rms_attn,
+        attn_gated_norm=attention_gradient.attn_gated_norm,
+        attn=attention_gradient.attn,
+        rms_mlp=dense_gradient.rms_mlp,
+        mlp_gated_norm=dense_gradient.mlp_gated_norm,
+        mlp=mlp_gradient,
+        shared=dense_gradient.shared,
+    )
+
+    if block.shared is None:
+        updates = routed_outputs
+    else:
+        updates = tuple(routed + shared for routed, shared in zip(routed_outputs, shared_outputs, strict=True))
+    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+    losses = tuple(
+        _component_projection(output, cotangent) + router_z_loss_scale * stats["router_z_loss"]
+        for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+    )
+    return losses, outputs, router_stats, block_gradient, tuple(input_gradients)
+
+
 def _run_block_with_remat(
     block: Block,
     hidden: Float[Array, "B S D"],
@@ -1452,4 +1720,8 @@ __all__ = [
     "TransformerPipelineStage",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
+    "paired_block_forward",
+    "paired_block_value_and_grads",
+    "paired_moe_component_forward",
+    "paired_moe_component_value_and_grads",
 ]
