@@ -3712,3 +3712,22 @@ author: dlwh
   - This is a functional and compile positive, not yet a throughput promotion. The fixed `0.002` per-leaf policy remains in force before L24.
 - Next action:
   - Run the matched L8/b512/m16 treatment and compare clean rows against the group-1 `16.116235` MFU control. If materially positive, run the fixed GPU loss/every-gradient parity gate before composing FP8 wire or launching L24.
+
+### 2026-07-26 14:05 PDT - L8 raw throughput is lower but bubble-normalized compute is positive
+- Hypothesis: The MoE-boundary group-2 implementation will retain enough paired-stage compute gain to overcome the larger standard-1F1B bubble created by reducing 16 microbatches to eight grouped schedule slots.
+- Command: Parent `/dlwh/iris-run-job-20260726-205542` ran the matched L8/d2560/e64/top-k4/seq4096/b512/m16 treatment from code commit `cb39dc4c7c`. All settings matched the successful group-1 control except MoE-boundary group size 2. Child: `/dlwh/iris-run-job-20260726-205542/grug-train-jaxpp-rno2a-ring-moeboundary-interleaved-group2-l8-e64k4-b512-s4096-p4m16-20260726-2055`.
+- Results:
+  - Forward compilation advanced through stages 0-3 from `20:57:36Z` to approximately `20:58:24Z`; backward compilation propagated through stages 2-0, updates compiled by `21:00:22Z`, and final `keep_step` compilation completed at `21:00:32Z`.
+  - Training completed `20/20`. The established `duration <= median + 0.300s` filter excluded steps 16 and 19, leaving 16 clean rows.
+  - Clean mean/p50/p90 MFU was `15.736601/15.733484/15.782513`; duration was `2.004986/2.005367/2.011950s`; throughput was `1,045,977/1,045,770/1,049,029` tokens/s. Final loss was `6.457880974`.
+  - Versus group-1, raw mean MFU and throughput were `2.3556%` lower and duration was `2.4125%` higher. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-moeboundary-interleaved-group2-l8-e64k4-b512-s4096-p4m16-20260726-2055>.
+  - Parent and child succeeded, all four tasks exited `0`, and the final pod probe returned `404`; no resource remains live.
+- Bubble normalization:
+  - For four stages, the group-1 schedule has `16 + 3 = 19` slots while group-2 has `8 + 3 = 11`. The measured slot durations are `1.957756 / 19 = 0.1030398s` per original microbatch and `2.004986 / 11 = 0.1822715s` per pair.
+  - The grouped duration per original microbatch is therefore `0.884471` of control, a `13.0619%` compute-throughput gain before the schedule bubble.
+  - At the L24 target's 256 original microbatches, the projected step-time ratio is `(128 + 3) * 0.1822715 / ((256 + 3) * 0.1030398) = 0.894716`, or `11.7673%` higher throughput.
+  - Applied to the measured L24 exact-ring baseline `18.2583` MFU, this projects `20.4068` MFU before FP8 wire and `20.7721` MFU with the independently measured `1.79%` FP8-wire gain. This is an inference from the slot model, not a measured L24 result.
+- Interpretation:
+  - The reduced L8 A/B is a raw throughput negative because grouping nearly doubles its pipeline bubble, but it is a positive estimate for the high-microbatch L24 target. The target projection is strong enough to justify the fixed GPU numerical gate and one L24 confirmation.
+- Next action:
+  - Run a real H100 exact-ring/CuTe FA4 comparison that enforces relative-L2 `<=0.002` for loss and every parameter/input-gradient leaf. If it passes, launch L24/b8192/m256 group-2 BF16, then compose FP8 wire only after measuring the BF16 result.
