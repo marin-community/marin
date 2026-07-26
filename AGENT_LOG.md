@@ -910,3 +910,17 @@ already compliant, and the honest position is that the cliff's cause is unknown.
 FRONTIER UNCHANGED IN ITS CONCLUSION: cf1.0625 m=3 (20.708%, 1.44% drops) is a marginally better compliant
 config than cf1.05 m=3 (20.670%, 1.72%) and both beat cf1.15 m=0 (20.416%, 2.60%) on both axes. The best
 compliant config is ~20.7% at ~1.4-1.7% drops, roughly +0.3pp over the capacity-only route.
+
+## DIRECTION COMPLETE 09:30 — standing down
+Writeup finalized (EP25_MILESTONE_DRAFT.md, 4318 words, committed locally, NOT pushed, NOT posted).
+Contains: the six-row frontier table; the spill mechanism and why it is structurally cheap; the axis-split
+model calibration; top-k as the drop-recovery budget with the 8-vs-4 comparison; the design principle (index
+work cheap, collective bytes expensive, on a collective-bound step); the discretization trap catalogue stated
+as one pattern; the self-correction record including the shared-hypothesis ownership and the pre-registration
+meta-point; and complete reproduction pointers with the SCALE_CAPACITY_TILE null called out.
+SHARED OWNERSHIP RECORDED: the alignment hypothesis was proposed here, sharpened by the coordinator's
+factorization (2151 odd vs 2176 = 2^7 x 17), and agreed on that basis to be a sharp test. It was sharp, it
+came back negative, and it cost a few rack-minutes. Recorded as a shared wrong hypothesis, not a solo error.
+FINAL: best measured compliant config = spill m=3 @ capacity factor 1.0625, 20.708% p50 MFU at 1.44% drops,
+beating the capacity-only route (1.15 alone, 20.416% at 2.60%) on both axes.
+No jobs in flight. Nothing further from the rack. 67 commits on agent/ep25-d1-adjoint; never pushed.
