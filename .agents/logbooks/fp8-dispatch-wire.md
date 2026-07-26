@@ -1,0 +1,123 @@
+---
+topic: fp8-dispatch-wire
+issue: https://github.com/marin-community/marin/issues/7665
+description: MXFP8 forward-dispatch wire for expert-parallel MoE — quantize once before the dispatch collective and feed the bytes straight to the MXFP8 grouped GEMM.
+author: Claude agent (supervised by @mcwitt)
+---
+
+# FP8 forward-dispatch wire: Task Logbook
+
+## Scope
+
+- **Goal:** carry the EP forward dispatch payload as MXFP8 with no added quantization
+  compute, by relocating the expert MLP's existing post-dispatch quantize to before the
+  collective.
+- **Primary metrics:** p50 MFU at a matched drop regime; exposed collective time; added
+  quantize compute (ms/step). Fidelity gates: gradient parity vs the bf16-wire arm,
+  drop-fraction parity, backward cotangent underflow rate.
+- **Constraints:** forward dispatch leg only. Reduction legs stay bf16 (the Hopper
+  permutation-legs-only rule, #6911). Collective count must not increase — the EP64 profile
+  attributes cost to many small per-layer legs and leg-batching is one of the few measured
+  wins.
+- **Coordinating issue:** https://github.com/marin-community/marin/issues/7665
+- **ID prefix:** `FP8W`. **Tags:** `FP8W`, `7665`, `7279`, `7282`.
+
+## Baseline
+
+- **Date:** 2026-07-26
+- **Branch:** `research/mcwitt/7279-fp8-dispatch-wire`, based on
+  `research/mcwitt/7282-mxfp8-blackwell` @ `0a3785463` — the only tree carrying both
+  `MxFp8MoeMlpOp` and `levanter.grug._moe.fp8_wire`.
+- **Code refs:**
+  - `lib/levanter/src/levanter/grug/_moe/fp8_wire.py` — the round-trip wire under test as
+    the control. `_fp8_all_gather_impl` dequantizes to bf16 before returning.
+  - `lib/levanter/src/levanter/grug/_moe/ep_ring.py` — ring EP backend; `fp8_all_gather`
+    at the dispatch, `expert_mlp_op` consumes bf16 `x_dispatch`.
+  - `experiments/grug/moe/mxfp8.py` — `_forward_pipeline` calls `_dual_quantize` to build
+    both orientations from bf16; column orientation is a VJP residual for the wgrads.
+  - `experiments/grug/moe/standalone/mxfp8_grouped/quantize.py` — `quantize_mxfp8`
+    (feature axis), `quantize_mxfp8_tokens` (token axis), `build_sfa_fast` (swizzle).
+- **Baseline numbers carried in from prior threads (not re-measured here):**
+  - #7279 round-trip FP8 permutation wire, bf16 GEMMs: **-2.02pp**, with 936 ms/step of
+    exposure recovered and 2182 ms/step of quantize compute added (break-even 920).
+  - #7282 MXFP8 GEMMs with wire disabled: 1.308x clean at 64 GPUs (MXFP8-010); 0.749x at
+    EP1 D6144 in the #7201 stack; +7.2% end-to-end at the #7271 66B-token quality gate.
+  - #6911 Hopper: fused e4m3 dispatch (H3/H4) 1.467x vs round-trip wire 1.375x at EP32.
+
+## Hypothesis Queue
+
+Living queue; updated as hypotheses are proposed, blocked, falsified, or promoted.
+
+| id | hypothesis | state |
+|---|---|---|
+| H1 | Quantizing before the dispatch is bit-identical to quantizing after, so the forward operand is free. | **confirmed** (FP8W-001, CPU) |
+| H2 | The wgrad column operand can be rebuilt from the arrived payload without material loss. | **confirmed** (FP8W-001, CPU) |
+| H3 | Packing scales inside the payload buffer keeps the collective count unchanged at 33/64 of bf16 bytes. | proposed |
+| H4 | Relocating the quantize reduces producer volume by ~topk x cf (8.5x at 8-of-256, cf1.0625). | proposed |
+| H5 | The net effect is positive at layer level inside the real step with remat on. | proposed, blocked on implementation |
+| H6 | Most of #7279's -2.02pp was the round trip, not the per-token scaling granularity. | proposed (control arm) |
+| H7 | `quantize_mxfp8` NaNs on all-zero blocks on GPU as it does on XLA CPU. | proposed, needs sm100 |
+
+## Entry Log
+
+### 2026-07-26 14:20 - FP8W-001: CPU numerics study, both fidelity objections retired
+
+- **Hypothesis:** H1 and H2. MXFP8 blocks lie along the feature axis while the dispatch
+  permutes the token axis, so quantization is a per-row attribute that travels with its
+  row (H1). The wgrad's token-axis orientation cannot cross the permutation — its scale is
+  a property of a set of 32 rows and routing dissolves that set — so it must be rebuilt
+  from the arrived payload; because e8m0 scales are exact powers of two and e4m3 is a
+  floating-point grid, that rebuild should be a mantissa-preserving exponent shift rather
+  than a second rounding, diverging only into subnormals (H2).
+- **Commit hash:** see the commit adding
+  `experiments/grug/moe/standalone/study_fp8_wire_numerics.py` on this branch.
+- **Command:**
+  `uv run python experiments/grug/moe/standalone/study_fp8_wire_numerics.py`, importing
+  `mxfp8_grouped/quantize.py` unmodified. CPU jax 0.10.1. Synthetic dispatch buffers
+  `[2048, 1024]` with per-token log-normal magnitude spread and a minority of high-gain
+  feature channels, swept over four regimes from benign (sigma=0.3, no outlier channels)
+  to adversarial (sigma=3.0, 5% of channels at 1000x). Both the activation and the
+  cotangent are drawn from the regime under test.
+- **Config:** Path A (today) = `quantize_mxfp8_tokens(x)` from the bf16 original. Path B
+  (proposed) = `quantize_mxfp8(x)` -> `dequantize_mxfp8` (exactly what arrives off the
+  wire) -> `quantize_mxfp8_tokens`. The H1 test additionally applies a routing-shaped
+  gather: arbitrary order, tokens replicated to multiple slots, tokens absent, plus a
+  validity mask, comparing quantize-then-gather against gather-then-quantize.
+- **Result:**
+  - H1: **bit-identical**. All 1,726 valid rows of 2,048 matched on e4m3 bytes, e8m0
+    scales, and dequantized values.
+  - H2: added wgrad error `||B-A|| / ||A-ref||` = 2.7e-6 (benign), 6.0e-6 (typical),
+    3.1e-5 (harsh), 1.1e-3 (adversarial), against an accepted noise floor `relerr(A)` of
+    3.0e-2 to 4.2e-2 in the same arms. Value-level agreement 100.00% / 99.99% / 99.88% /
+    96.88%. Divergence confined to underflow as predicted: extra flush-to-zero +0.0002pp,
+    +0.0008pp, +0.0081pp, +0.2000pp.
+  - Incidental: `quantize_mxfp8` returns **NaN on an all-zero 32-element block** on XLA
+    CPU. `amax = 0` -> e8m0 byte 0 -> scale `2^-127`, a subnormal f32; XLA CPU flushes
+    denormal divisors, so the division is 0/0. Confirmed directly:
+    `jit(0.0 / 2**-127)` is NaN, `jit(1.0 / 2**-127)` is inf.
+- **Interpretation:** the fidelity objection to the design is retired. The forward operand
+  is free, not merely acceptable. The wgrad rebuild sits four to five orders of magnitude
+  below the quantization noise floor the recipe already accepts, so it is not a plausible
+  source of quality regression. Limitations: synthetic activations rather than captured
+  dispatch buffers, and this exercises the XLA producer's math — the CuTe producer is
+  separate code, though the exponent-shift argument does not depend on the producer.
+  The NaN finding is on the production XLA producer path (`dual_quantize_activation` calls
+  `quantize_mxfp8` and `quantize_mxfp8_tokens` on the activation) and zero rows are routine
+  between dropped slots and the 256-row pad; #7271 trained 66B tokens on this path, which
+  is strong evidence it does not bite on GPU. It should be checked, not assumed. Note the
+  wire is better behaved here: masking payload and scale bytes to zero yields exact zeros.
+- **Next action:** implement the wire (H3, H4) on the ring EP backend, then FP8W-002 layer
+  A/B. Fold the GPU NaN probe (H7) into the first sm100 job rather than paying for a
+  dedicated one.
+
+### 2026-07-26 14:45 - FP8W-002: scaffolding and compute survey
+
+- **Result:** experiment issue #7665 created; this logbook started; research branch and an
+  isolated worktree created at `/home/marin/projects/marin-fp8wire` so the primary
+  checkout's untracked work is untouched. Compute survey: `cw-us-east-08a` (GB200) and
+  `cw-us-east-02a` controllers are healthy but scaled to zero workers with no scale groups
+  configured; `marin` reports 455/455 healthy workers.
+- **Interpretation:** implementation is the blocking path and needs no accelerator. Defer
+  any sm100 request until there is something to measure, and bundle the H7 probe into it.
+- **Next action:** implement `quantize_source` on the op protocol and the packed payload
+  buffer.
