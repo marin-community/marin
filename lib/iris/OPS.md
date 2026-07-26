@@ -160,6 +160,18 @@ iris job summary /user/job-name         # per-task state, exit, duration, peak m
 
 For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
+**`iris job logs` returns only the most recent 1000 lines by default.** The cap is silent: you
+get a well-formed tail with no indication that earlier output was dropped. Pass `--max-lines N`
+(or `--since-ms` / `--since-seconds`) to fetch the full history — `--max-lines 400000` recovers a
+350-step training run's per-step metrics.
+
+This matters whenever you compute a statistic from logs. A truncated tail is not a random sample:
+for any metric that is still trending, the tail window is systematically biased in the direction
+of the trend. A steady-state estimate taken from the default window over a still-declining metric
+reads *low* — in one MoE run the last-7-step mean read 0.033 against a true 100-step mean of 0.037,
+a 10% optimistic bias that survived into a published number. Fetch with an explicit `--max-lines`,
+and state the sample count next to any figure derived from logs.
+
 ### `job run` gotchas
 
 - **Remote jobs only see env vars you put in the job spec.** The submitter's
