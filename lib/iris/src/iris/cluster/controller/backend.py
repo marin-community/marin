@@ -66,7 +66,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry, StoppingTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
@@ -288,6 +288,7 @@ class ReconcileRequest:
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    tasks_to_stop: list[StoppingTaskEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

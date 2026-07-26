@@ -1131,6 +1131,7 @@ class Controller:
                 inputs.reconcile_requests[backend_id] = ReconcileRequest(
                     tasks_to_run=drain.tasks_to_run,
                     running_tasks=drain.running_tasks,
+                    tasks_to_stop=drain.tasks_to_stop,
                 )
 
         # Dedicated control pool: the tick's snapshot must not queue behind a slow
@@ -1678,6 +1679,7 @@ class Controller:
             timeout_rows=[],
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
+            tasks_to_stop=batch.tasks_to_stop,
         )
 
     def _drain_pending_evictions(self) -> None:

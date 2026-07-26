@@ -31,7 +31,7 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
 )
 from iris.cluster.controller.backend import ProviderError, TaskTarget
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry, StoppingTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
@@ -57,6 +57,27 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+def test_sync_stop_waits_for_pod_absence(provider, k8s):
+    """A stopped attempt is acknowledged only after its pod disappears."""
+    task_id = JobName.from_wire("/test-job/0")
+    attempt_uid = "0123456789abcdef"
+    req = make_run_req(task_id.to_wire(), attempt_uid=attempt_uid)
+    provider.sync(make_batch(tasks_to_run=[req]))
+    pod_name = _pod_name(task_id, 0, attempt_uid)
+    k8s.transition_pod(pod_name, "Running")
+
+    stopping = StoppingTaskEntry(task_id=task_id, attempt_id=0, attempt_uid=attempt_uid)
+    first = provider.sync(make_batch(tasks_to_stop=[stopping]))
+
+    assert first == []
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+    [confirmed] = provider.sync(make_batch(tasks_to_stop=[stopping]))
+    assert confirmed.task_id == task_id
+    assert confirmed.attempt_id == 0
+    assert confirmed.new_state == job_pb2.TASK_STATE_KILLED
 
 
 def test_sync_propagates_non_kubectl_failure(provider, k8s):

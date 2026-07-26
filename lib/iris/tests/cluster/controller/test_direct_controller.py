@@ -926,8 +926,8 @@ def test_drain_does_not_promote_partial_gang(state):
 
 def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
     """End-to-end lockstep invariant: a transient failure bounces the whole gang to PENDING,
-    and the next drain re-promotes every sibling to the SAME next attempt_id — which is what
-    keeps the per-generation pod-group-name uniform across the gang."""
+    and the next drain re-promotes every sibling to the SAME next attempt_id after the
+    old pod generation has stopped."""
     task_event_table = FakeStatsTable()
     state._db.attach_task_event_table(task_event_table)
     _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
@@ -958,6 +958,24 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         (task_ids[1].to_wire(), "CoscheduledSiblingRequeued"),
         (task_ids[2].to_wire(), "CoscheduledSiblingRequeued"),
     ]
+
+    # The failed task's pod has stopped, but its siblings were only told to
+    # stop. Do not create replacement pods while those JAX ranks may still be
+    # connected to the old coordinator.
+    with state._db.transaction() as cur:
+        draining = dispatch.drain_for_dispatch(cur)
+    assert draining.tasks_to_run == []
+    assert {(entry.task_id, entry.attempt_id) for entry in draining.tasks_to_stop} == {
+        (task_id, 0) for task_id in task_ids[1:]
+    }
+
+    # Kubernetes confirms that the sibling pods are gone.
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_KILLED) for t in task_ids[1:]],
+            now=Timestamp.now(),
+        )
 
     # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.
     with state._db.transaction() as cur:
@@ -1005,8 +1023,24 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids)
     ), "the ASSIGNED sibling must not be stranded on the old generation"
 
-    # Re-drain: every sibling re-promotes to attempt 1 together; nothing is redriven on
-    # attempt 0 (which would mean a split pod-group generation).
+    # The old sibling pods must drain before replacement. Nothing is redriven
+    # on attempt 0, and attempt 1 is not created early.
+    with state._db.transaction() as cur:
+        draining = dispatch.drain_for_dispatch(cur)
+    assert draining.tasks_to_run == []
+    assert {entry.task_id for entry in draining.tasks_to_stop} == {task_ids[0], task_ids[2]}
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_KILLED)
+                for t in (task_ids[0], task_ids[2])
+            ],
+            now=Timestamp.now(),
+        )
+
+    # Re-drain: every sibling re-promotes to attempt 1 together.
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}

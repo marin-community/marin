@@ -50,7 +50,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry, StoppingTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -2481,8 +2481,8 @@ class K8sTaskProvider:
         Kill targets are derived here, not buffered in the controller: any
         managed pod whose ``(task_hash, attempt_id)`` is not in the desired
         set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
-        Producing transitions only need to update ``tasks.state``; the next
-        sync sees the diff.
+        ``tasks_to_stop`` remains outside that set and is acknowledged only
+        after its pod is absent from the cluster snapshot.
 
         New-pod application runs every tick so dispatch stays responsive; the
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
@@ -2566,7 +2566,11 @@ class K8sTaskProvider:
             logger.warning("Failed to query Kueue workloads: %s", e)
             workloads = []
 
-        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads)
+        updates = (
+            apply_failures
+            + self._poll_pods(request.running_tasks, managed_pods, workloads)
+            + self._poll_stopping_tasks(request.tasks_to_stop, managed_pods)
+        )
 
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
@@ -2588,9 +2592,12 @@ class K8sTaskProvider:
 
         return updates
 
-    def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
-        """Resolve a running entry to its pod, allowing the pre-uid name only when this
-        process did not dispatch the attempt."""
+    def _lookup_entry_pod(
+        self,
+        pods_by_name: dict[str, dict],
+        entry: RunningTaskEntry | StoppingTaskEntry,
+    ) -> tuple[str, dict | None]:
+        """Resolve an attempt entry to its pod, including pre-uid names when safe."""
         return _lookup_pod(
             pods_by_name,
             entry.task_id,
@@ -3198,4 +3205,27 @@ class K8sTaskProvider:
         if event_log is not None:
             event_log.retain(set(running))
 
+        return updates
+
+    def _poll_stopping_tasks(
+        self,
+        stopping: list[StoppingTaskEntry],
+        cached_pods: list[dict],
+    ) -> list[TaskUpdate]:
+        """Confirm controller-stopped attempts after their pods disappear."""
+        pods_by_name = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
+        updates: list[TaskUpdate] = []
+        for entry in stopping:
+            _, pod = self._lookup_entry_pod(pods_by_name, entry)
+            if pod is not None:
+                continue
+            self._pod_not_found_counts.pop(f"{entry.task_id.to_wire()}:{entry.attempt_id}", None)
+            updates.append(
+                TaskUpdate(
+                    task_id=entry.task_id,
+                    attempt_id=entry.attempt_id,
+                    new_state=job_pb2.TASK_STATE_KILLED,
+                    status_message="",
+                )
+            )
         return updates

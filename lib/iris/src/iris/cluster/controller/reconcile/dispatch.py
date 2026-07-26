@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from typing import NamedTuple
 
 from rigging.timing import Timestamp
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
@@ -34,8 +34,8 @@ from iris.cluster.controller.reads import (
     TaskScope,
     pending_dispatch_row,
 )
-from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
+from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks, task_attempts_table
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry, StoppingTaskEntry
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
 
@@ -45,12 +45,14 @@ class DispatchBatch:
     """The dispatch drain a cluster backend's reconcile tick consumes.
 
     Rides on :class:`~iris.cluster.controller.reads.ControlSnapshot` as
-    ``tasks_to_run`` / ``running_tasks``: tasks the controller promoted to
-    ASSIGNED this tick plus the active null-worker roster to poll.
+    ``tasks_to_run`` / ``running_tasks`` / ``tasks_to_stop``: tasks the
+    controller promoted to ASSIGNED this tick, the active null-worker roster
+    to poll, and old attempts that must disappear before a retry.
     """
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    tasks_to_stop: list[StoppingTaskEntry] = field(default_factory=list)
 
 
 DISPATCH_PROMOTION_RATE = 128
@@ -60,6 +62,13 @@ The direct provider relies on the Kubernetes scheduler (and the cloud
 autoscaler) for placement and capacity management.  Pods that cannot be
 scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
+
+
+_CURRENT_ATTEMPT_DRAINED = ~exists().where(
+    task_attempts_table.c.task_id == local_tasks.c.task_id,
+    task_attempts_table.c.attempt_id == local_tasks.c.current_attempt_id,
+    task_attempts_table.c.finished_at_ms.is_(None),
+)
 
 
 def build_run_request(
@@ -257,6 +266,40 @@ def _select_within_cap(
     return selected
 
 
+def _stopping_tasks(cur: Tx, backend_id: str | None) -> list[StoppingTaskEntry]:
+    """Return current direct-provider attempts waiting for confirmed pod removal."""
+    backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
+    stmt = (
+        select(
+            local_tasks.c.task_id,
+            local_tasks.c.current_attempt_id,
+            task_attempts_table.c.attempt_uid,
+        )
+        .select_from(
+            local_tasks.join(
+                task_attempts_table,
+                (task_attempts_table.c.task_id == local_tasks.c.task_id)
+                & (task_attempts_table.c.attempt_id == local_tasks.c.current_attempt_id),
+            )
+        )
+        .where(
+            local_tasks.c.current_worker_id.is_(None),
+            local_tasks.c.state.not_in(ACTIVE_TASK_STATES),
+            task_attempts_table.c.finished_at_ms.is_(None),
+            *backend_pred,
+        )
+        .order_by(local_tasks.c.task_id)
+    )
+    return [
+        StoppingTaskEntry(
+            task_id=row.task_id,
+            attempt_id=int(row.current_attempt_id),
+            attempt_uid=str(row.attempt_uid),
+        )
+        for row in cur.execute(stmt).all()
+    ]
+
+
 def drain_for_dispatch(
     cur: Tx,
     *,
@@ -280,10 +323,10 @@ def drain_for_dispatch(
     falls through the K8s provider's ``Pod not found`` grace path), so
     the first poll after dispatch transitions the row out of ASSIGNED.
 
-    Kill targets are not enqueued: producing transitions move
-    ``tasks.state`` directly to terminal, and the K8s provider's pod
-    diff against the desired set deletes the corresponding pod on the
-    next sync.
+    Producer transitions move ``tasks.state`` before the old pod has
+    necessarily stopped. Those unfinished direct-provider attempts populate
+    ``tasks_to_stop``; retries remain PENDING until the provider confirms pod
+    absence and finalizes the attempt.
 
     Candidates are ranked by *effective* band — the ancestor-resolved requested
     band after :func:`compute_effective_band` demotes over-budget users to
@@ -314,7 +357,12 @@ def drain_for_dispatch(
     effective_bands: dict[JobName, int] = {}
     promote_units: list[list[_RankRow]] = []
     if max_promotions > 0:
-        candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING), *backend_pred)
+        candidates = _ranking_rows(
+            cur,
+            local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING),
+            _CURRENT_ATTEMPT_DRAINED,
+            *backend_pred,
+        )
         if candidates:
             job_ids = {row.job_id for row in candidates}
             resolved_bands = reads.get_priority_bands(cur, job_ids)
@@ -371,8 +419,10 @@ def drain_for_dispatch(
         )
         for row in running_rows
     ]
+    tasks_to_stop = _stopping_tasks(cur, backend_id)
 
     return DispatchBatch(
         tasks_to_run=tasks_to_run,
         running_tasks=running_tasks,
+        tasks_to_stop=tasks_to_stop,
     )
