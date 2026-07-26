@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's production-sized device-ragged symmetric range before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-142530`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: shrink the XLA pool from `0.65` to `0.50` while preserving production-sized ragged warmup before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-143746`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3486,3 +3486,18 @@ author: dlwh
   - The production-shaped warmup is the smallest remaining preallocation test that can plausibly reserve the same collective buffers before CuPy/DIME fragments the address space.
 - Next action:
   - Require all four production warmups to report `65536 assignments/device x 2560` before DIME, followed by all 12 link logs and finite L8 steps. Classify warmup-time OOM separately from a repeated post-DIME 51.469 GiB failure.
+
+### 2026-07-26 07:37 PDT - production ragged warmup is insufficient; shrink XLA pool
+- Hypothesis: The 51.469 GiB request follows the `0.65` XLA pool rather than collective payload size; reducing preallocation to `0.50` will request a smaller symmetric span that can fit around DIME resources.
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-142530` ran the production-shaped warmup and full DIME prewarm at XLA fraction `0.65`.
+  - Parent `/dlwh/iris-run-job-20260726-143746` changes only the XLA memory fraction to `0.50`.
+- Results:
+  - Every rank completed the production-shaped warmup at `14:27:51-52Z`, reporting 65,536 assignments/device by 2,560 BF16 features. All 12 DIME link confirmations followed at `14:27:52-53Z`.
+  - Rank 2 reproduced the exact `size=0xcde000000 within limit=0x1400000000` allocation failure at `14:28:26Z` in `jit_grug_1f1b_mb0_stage2_backward`. No loss or MFU was emitted.
+  - Parent and child are terminal killed after the monitor stopped the automatic retry. All four ranks are terminal and no live descendant remains. W&B contains metadata only.
+- Interpretation:
+  - Matching the forward and transpose payload does not reserve the later executable's 51.469 GiB symmetric range. Payload size and initialization order are both closed as sufficient fixes.
+  - The failed size is approximately the configured `0.65` preallocated device pool, so pool size is now the direct controlled variable.
+- Next action:
+  - At `0.50`, distinguish an ordinary model-memory failure from a smaller NCCL symmetric request. Promote only a finite L8 result to the fixed `0.002` loss/every-gradient parity gate.
