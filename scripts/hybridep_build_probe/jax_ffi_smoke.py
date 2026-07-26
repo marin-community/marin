@@ -428,6 +428,22 @@ def main() -> None:
         rtol=2e-2,
         atol=2e-2,
     )
+
+    residual_layers = int(os.environ.get("HYBRID_EP_RESIDUAL_LAYERS", "0"))
+    if residual_layers:
+
+        def residual_layer(carry, _):
+            routed = jax.checkpoint(separated_roundtrip)(carry, probabilities_jax / topk)
+            return carry + routed * jnp.asarray(0.01, dtype=carry.dtype), None
+
+        def residual_stack(x):
+            return jax.lax.scan(residual_layer, x, None, length=residual_layers)[0]
+
+        _trace(f"residual scan gradient start layers={residual_layers}")
+        residual_gradient = jax.jit(jax.grad(lambda x: jnp.sum(residual_stack(x).astype(jnp.float32))))(hidden)
+        _trace(f"residual scan gradient done layers={residual_layers}")
+        assert np.all(np.isfinite(np.asarray(residual_gradient, dtype=np.float32)))
+
     if rank == 0:
         print(
             "HYBRID_EP_JAX_FFI_PASS "

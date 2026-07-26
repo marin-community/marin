@@ -4,6 +4,7 @@
 #include <Python.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cmath>
 #include <memory>
@@ -58,6 +59,24 @@ size_t& MaxActiveHandles() {
   return max_active_handles;
 }
 
+bool TraceHandles() {
+  static const bool enabled = std::getenv("HYBRID_EP_TRACE_HANDLES") != nullptr;
+  return enabled;
+}
+
+void TraceHandleEvent(const char* operation, int32_t handle_id) {
+  if (!TraceHandles()) {
+    return;
+  }
+  std::fprintf(
+      stderr,
+      "HybridEP JAX handle event: operation=%s handle=%d active=%zu\n",
+      operation,
+      handle_id,
+      Handles().size());
+  std::fflush(stderr);
+}
+
 std::string& LastError() {
   static std::string error;
   return error;
@@ -73,6 +92,7 @@ ffi::Error CudaError(cudaError_t status, const char* context) {
 ffi::Error ReadHandle(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32, 0> handle_token,
+    const char* consumer,
     HandleImpl* handle) {
   float encoded_handle = 0;
   cudaError_t status = cudaMemcpyAsync(
@@ -99,6 +119,7 @@ ffi::Error ReadHandle(
   }
   *handle = std::move(iterator->second);
   Handles().erase(iterator);
+  TraceHandleEvent(consumer, handle_id);
   return ffi::Error::Success();
 }
 
@@ -268,6 +289,7 @@ ffi::Error HybridEPDispatch(
     }
 
     Handles().emplace(handle_id, std::move(handle));
+    TraceHandleEvent("dispatch", handle_id);
     if (Handles().size() > MaxActiveHandles()) {
       MaxActiveHandles() = Handles().size();
       std::fprintf(
@@ -295,7 +317,7 @@ ffi::Error HybridEPCombine(
           "HybridEP JAX runtime is not initialized");
     }
     HandleImpl handle;
-    ffi::Error handle_error = ReadHandle(stream, handle_token, &handle);
+    ffi::Error handle_error = ReadHandle(stream, handle_token, "combine", &handle);
     if (handle_error.failure()) {
       return handle_error;
     }
@@ -365,7 +387,8 @@ ffi::Error HybridEPCombineWithProbabilities(
           "HybridEP JAX runtime is not initialized");
     }
     HandleImpl handle;
-    ffi::Error handle_error = ReadHandle(stream, handle_token, &handle);
+    ffi::Error handle_error =
+        ReadHandle(stream, handle_token, "combine_with_probabilities", &handle);
     if (handle_error.failure()) {
       return handle_error;
     }
