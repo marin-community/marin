@@ -1483,6 +1483,49 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T08:18:00Z — 110,449 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0806-v190` independently
+  revalidated p2 decision-file 68 baseline semantic offset 4,096. Its 128
+  direct-review pairs contain 79 model false positives, 48 model true
+  duplicates, and one unresolved outcome. The checkpoint contains 263
+  judgments across 267 requests: 262 valid attempts and five invalid attempts
+  affecting two retried judgments. The outcome Parquet SHA-256 is
+  `1510f7ed0b1ba3d546e4620cf05715fa97976b11dbd2a724a33b5e13fb74d854`.
+- `/rav/datakit-6854-inspect-row7309-0809-v191` read all 7,597 member
+  characters, all 7,604 canonical characters, and every persisted judgment for
+  pair `part-00068-of-00128.parquet:7309`. The 88-line SFT records have
+  character, line, and word sequence ratios of 0.999540, 0.988636, and
+  0.999576. Every question, option, reasoning paragraph, fact, and answer is
+  character-for-character identical; the only difference is the final
+  `\boxed{D}` versus `\boxed{\text{D}}` wrapper. The member/canonical SHA-256
+  values are
+  `3c5a65eea891d29211f296a02baad98a5d422ee83b041c48ec4daa9d7f880855`
+  and
+  `d89d6db8085aabc3f8ae30231080db4e3f3c6750dc6ffe1ebc35b2dfc137510c`.
+  The immutable full-text inspection artifact has SHA-256
+  `5e58949ba354f0bcb0fcf98ab7f156f02b20864065321ff1f9e66b6b4cab17c2`.
+  The pair is a true duplicate.
+- `/rav/datakit-6854-publish-row7309-0816-v194` published the hash-bound manual
+  record. `/rav/datakit-6854-verify-row7309-0817-v195` independently reread the
+  source pair, semantic checkpoint, inspection artifact, manual record,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-record, and manual-Parquet SHA-256 values are
+  `c5fcbb6b4da2e331c1b31c3e3065ab00ca9e829efb0df85fb5f833564d9c026f`,
+  `8d4b91037429f51d06a11088509f8c3cc836ae324a14b0fb5508ed988217475f`,
+  and
+  `1ae054b8686c59436c31c66166bba5258cf72b8fc1e5c889de34e9480f45617e`.
+- Across the stable 869-checkpoint snapshot, all 125 unresolved model outcomes
+  are covered by 95 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 89,433 pairs, 56,904 false positives, 32,529 true duplicates;
+  - treatment: 21,016 pairs, 10,849 false positives, 10,167 true duplicates;
+  - combined: 110,449 pairs, 67,753 false positives, 42,696 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T08:06:10Z — 110,321 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0804-v189` independently
