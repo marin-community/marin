@@ -16,6 +16,7 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
+from iris.cluster.controller.native_proxy_metrics import NativeProxyMetricsCollector
 from iris.managed_thread import ThreadContainer
 from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff
@@ -250,6 +251,28 @@ def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller) -
         ) == len(payload)
     finally:
         threads.stop()
+
+
+class _WheelWithoutProxyMetrics:
+    """A native proxy from a published wheel predating ``proxy_metrics_json``.
+
+    Exposes only ``rpc_metrics_json``; ``hasattr(proxy, "proxy_metrics_json")`` is
+    False, exactly as for an older ``iris_native`` build.
+    """
+
+    rpc_metrics_json = json.dumps({"series": []})
+
+
+def test_native_metrics_collector_tolerates_a_wheel_without_proxy_metrics() -> None:
+    """The pure package may lead the native wheel: a controller on an older wheel
+    must still expose ``iris_rpc_*`` and simply omit the proxy family, never crash
+    the Telltale scrape on the missing getter."""
+    collector = NativeProxyMetricsCollector()
+    collector.attach(_WheelWithoutProxyMetrics())  # type: ignore[arg-type]
+
+    names = {family.name for family in collector.collect()}
+    assert "iris_rpc_requests" in names
+    assert not any(name.startswith("iris_proxy") for name in names)
 
 
 def test_native_listener_caches_verified_jwt(make_controller) -> None:

@@ -20,7 +20,12 @@ the shipped branch diverges from it.
 - **No native wheel is published in this PR.** CI builds `marin-iris-native` from
   source via the `setup:rust` tag (the diff touches `lib/iris/rust/`); the
   requester drives the deploy/wheel rollout. The Rollout section is the contract
-  to follow then, not work done here.
+  to follow then, not work done here. Because the pure package can lead the wheel,
+  the collector reads `proxy_metrics_json` only when the native layer provides it
+  (`iris-e2e-smoke` and any deploy on the older published wheel expose only
+  `rpc_metrics_json`): it emits `iris_rpc_*` and simply omits the proxy family
+  rather than crashing the Telltale scrape on the missing getter. The panel shows
+  no proxy transport until the matching wheel lands.
 - **WS1 bounding is cap + idle eviction + overflow, cumulative counters.**
   `scope=total` is an exact, never-evicted aggregate. Per-endpoint series live in
   a map bounded to `PROXY_ENDPOINT_CAP`, evicted after

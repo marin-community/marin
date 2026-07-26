@@ -136,7 +136,14 @@ class NativeProxyMetricsCollector(Collector):
     def collect(self) -> Iterable[Metric]:
         with self._lock:
             rpc_snapshots: list[dict] = [json.loads(proxy.rpc_metrics_json) for proxy in self._proxies]
-            proxy_snapshots: list[dict] = [json.loads(proxy.proxy_metrics_json) for proxy in self._proxies]
+            # proxy_metrics_json ships in a newer native build than rpc_metrics_json.
+            # A controller still on an older published wheel exposes only the latter,
+            # so read the proxy family only where the native layer provides it rather
+            # than hard-requiring a not-yet-released wheel (the pure package can lead
+            # the wheel; the panel simply shows no proxy transport until it catches up).
+            proxy_snapshots: list[dict] = [
+                json.loads(proxy.proxy_metrics_json) for proxy in self._proxies if hasattr(proxy, "proxy_metrics_json")
+            ]
         return (*self._collect_rpc(rpc_snapshots), *self._collect_proxy(proxy_snapshots))
 
     def _collect_rpc(self, snapshots: list[dict]) -> tuple[Metric, ...]:
@@ -174,7 +181,13 @@ class NativeProxyMetricsCollector(Collector):
         Distinct from `iris_rpc_*` — a proxied Connect call appears in both and the
         two must not be summed. Each snapshot carries an exact ``aggregate`` (emitted
         as ``scope=total``) plus the bounded per-endpoint ``series`` (``scope=endpoint``).
+
+        Emits nothing when no proxy provided a snapshot — an older native wheel
+        without ``proxy_metrics_json`` yields no family at all, rather than a
+        misleading all-zero one.
         """
+        if not snapshots:
+            return ()
         total = _AggregatedProxyMetricSeries()
         by_endpoint: dict[_ProxyMetricSeriesKey, _AggregatedProxyMetricSeries] = {}
         for snapshot in snapshots:
