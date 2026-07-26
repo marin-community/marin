@@ -50,6 +50,25 @@ def _batch_experts_enabled() -> bool:
     return os.environ.get("SCALE_A2A_BATCH_EXPERTS") == "1"
 
 
+def _capacity_tile() -> int:
+    """Tile to round the per-(sender, expert) bucket capacity up to. 0 disables alignment.
+
+    Bucket capacity becomes the M dimension of the expert GEMM, so an unaligned capacity is paid
+    as tiling waste on every expert matmul. `ceil(capacity_factor * assignments / experts)` lands
+    on an arbitrary integer -- capacity factor 1.05 on a 2048-token bucket gives 2151, which is odd
+    -- while the same bucket rounded to 2176 is 17 tiles of 128. Rounding up buys a little extra
+    capacity, which strictly reduces drops, so the alignment is free on both axes.
+    """
+    return int(os.environ.get("SCALE_CAPACITY_TILE", "0"))
+
+
+def _align_capacity(capacity: int, tile: int) -> int:
+    """Round `capacity` up to a multiple of `tile`, leaving buckets at or below one tile alone."""
+    if tile <= 1 or capacity <= tile:
+        return capacity
+    return ((capacity + tile - 1) // tile) * tile
+
+
 def _spill_attempts() -> int:
     """Same-step spill attempts per dropped assignment. 0 disables spill (index composition unchanged)."""
     return int(os.environ.get("SCALE_A2A_SPILL", "0"))
@@ -273,6 +292,7 @@ def _fixed_a2a_core(
     hidden_dim = x_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
     capacity = max(int(math.ceil(capacity_factor * assignments_per_shard / num_experts)), 1)
+    capacity = _align_capacity(capacity, _capacity_tile())
 
     # Keep XLA's auto-rematerializer from materializing flash-attention scores when
     # estimating memory pressure for the full attention-plus-MoE scan body.
