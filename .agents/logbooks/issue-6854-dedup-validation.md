@@ -1483,6 +1483,73 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T09:40:06Z — 116,396 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0932-v243` independently
+  revalidated p1 decision-file 36 semantic offset 4,352. Its 128 baseline
+  pairs contain 85 model false positives, 41 model true duplicates, and two
+  unresolved outcomes. All pairs were direct. The audit checked 263 judgments
+  across 271 request attempts; 11 invalid attempts affected five retried
+  judgments. The outcome Parquet SHA-256 is
+  `9fca7c2e527f4962df6be943ef5558f5b13c24eb4455bceb0694411cb6f3e604`.
+
+- Complete-text comparison resolves both ambiguous pairs as true duplicates:
+
+  - `part-00036-of-00128.parquet:7517` contains identical 85-line astronomy
+    SFT texts: the question, choices, reasoning, option analysis, conclusion,
+    and answer all match. The sole difference is final
+    `\boxed{\text{J}}` versus `\boxed{J}` formatting. The texts have
+    7,689/7,682 characters and character, line, and word-sequence similarity
+    0.999545, 0.988235, and 0.999180. Member/canonical text SHA-256 values are
+    `9b87f5cbc13998f1152d3c68495975b1c90e0734078d3ab94172b6d84f22589e` /
+    `fcf2b2ece5a3d05c1c733e1d4b7af3f85d352b532463ff1c5afa0348b3bea6f0`;
+    inspection-artifact SHA-256 is
+    `26832cf0fe832d257f3560d7faaeeafccbb48e12fcb9c581f064d224cad61486`.
+  - `part-00036-of-00128.parquet:7523` contains identical 276-line consumer-law
+    SFT texts. The sole difference is final `\boxed{\text{A}}` versus
+    `\boxed{A}` formatting. The texts have 13,164/13,157 characters and
+    character, line, and word-sequence similarity 0.999734, 0.996377, and
+    0.999525. Member/canonical text SHA-256 values are
+    `34d33c3e231c011454d192e2197d9d69c96aed9d3977945327d17fad32c7e050` /
+    `9f3bd191706207927c0b4bf1cb9eec731bc495344f108b292fb3e6882b2bc648`;
+    inspection-artifact SHA-256 is
+    `42364787b942801203167d8cc5663fb40b9dc312b6e706fc95d5871e38a14fb9`.
+
+- Inspection jobs `/rav/datakit-6854-inspect-row7517-0934-v244` and
+  `/rav/datakit-6854-inspect-row7523-0934-v245` persisted the full source
+  texts, semantic evidence, and complete diffs. Publisher jobs
+  `/rav/datakit-6854-publish-row7517-0940-v246` and
+  `/rav/datakit-6854-publish-row7523-0940-v247` wrote immutable manual records.
+  Separate verifier jobs `/rav/datakit-6854-verify-row7517-0940-v248` and
+  `/rav/datakit-6854-verify-row7523-0940-v249` reread the source pairs,
+  semantic checkpoint, inspection artifacts, records, deterministic Parquet
+  bytes, and completion markers. In pair order, semantic-evidence SHA-256
+  values are
+  `30957fb7de32f234b8decd3bd7876017f3a758ff2f49a6bf714a79a1ca32dc14`
+  and
+  `97f04647377fba89248c4decdeccfe4cdfd47485ef79bef989861e6be51c2d06`;
+  manual-record SHA-256 values are
+  `82bb62ca28483ad7270b9df30d304e6546118edcaa85f64b54044e6a8cff9929`
+  and
+  `d67beeadedc3d5910f06993d311401c87655ad72b8e607c63e892b3e0c99f659`;
+  manual-Parquet SHA-256 values are
+  `162b2476c17098016c4a4a3d855cda17dd59324919ba01d91c4f1cddca97bd5f`
+  and
+  `ce4cdd21eb698569e8fb817ea53b513cd8fa3544588118ecb5cd1992fd854cef`.
+
+- Across the stable 916-checkpoint snapshot, all 133 unresolved model outcomes
+  are covered by 103 true-duplicate and 30 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 94,202 pairs, 59,973 false positives, 34,229 true duplicates;
+  - treatment: 22,194 pairs, 11,438 false positives, 10,756 true duplicates;
+  - combined: 116,396 pairs, 71,411 false positives, 44,985 true duplicates.
+
+- The next audit frontiers are p0 `(5, 128)`, p1 `(36, 4480)`, p2 `(69, 0)`,
+  and p3 `(101, 0)`. All four batch-priority 2-H100 workers continue serving
+  requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T09:31:19Z — 116,268 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0931-v242` independently
