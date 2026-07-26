@@ -627,14 +627,38 @@ us nothing about WHY, whereas the miss forced the decomposition that produced th
 
 /mwittmann/ep25d5-d6144-e128-bf16-120-0726-1140-v3 completed 120/120 steps, 16/16 tasks.
 STEADY TAIL (steps 90-119): p50 **24.594%**, p10 24.434 / p90 24.771, sd 0.118, 276,413 tok/s,
-15.174 s/step, drops ~9-13%, loss 5.59. Against #7201's 4-of-128 FSDP rows (22.7% QB-off, 23.1% QB-on
-full-feature, both 12-step probes): **+1.5pp and +8.3% tok/s** on the honest steady-state number, which
-is also the only steady-state number that exists at this shape. On a like-for-like measurement window
-(mine at steps 10-24, the regime a 12-step probe actually samples) it reads 27.04%.
+15.174 s/step, drops ~9-13% (120-step run, so step 119 is end-of-anneal), loss 5.59.
+
+STATE THE HEADLINE AS A PAIR. The raw number must never travel alone:
+
+    throughput frontier   24.59%   at ~9-13% drops   vs #7201's 23.1% FSDP row = +1.5pp, +8.3% tok/s
+    compliant projection  ~23.9%   at <3% drops      (cf1.05 + spill m=1..2, about -0.65pp) -- still
+                                                     above 23.1%, and this is the ROBUST version
+
+Because: **#7201's 4-of-128 rows do not report drop fractions.** Their runs compute the per-layer count
+but never emit it — the tracker-logging bug d1 found and fixed in 2d4a87395. My 24.59% is measured at
+~9-13% drops, and this session established that heavy-drop runs read HIGHER MFU (dropped assignments
+gather a zero pad row and do less real work at the same step accounting). So the EP-versus-FSDP
+comparison is CROSS-DROP-REGIME IN AN UNKNOWN DIRECTION: if their drops are materially lower than mine,
+some portion of the +1.5pp is drop artifact rather than parallelization advantage. This is the single
+largest threat to the headline — larger than any configuration caveat, all of which have a known sign —
+and a reader cannot derive it from the record, so it must be stated next to the number.
+It does not overturn the result: the compliant projection prices the fidelity and still clears 23.1%.
+RECOMMENDATION: anyone rerunning those FSDP rows should apply the drop-metric fix (2d4a87395) FIRST.
+One job's cost resolves this ambiguity permanently, and the ambiguity currently sits on the most
+decision-relevant comparison in the effort.
+
+On a like-for-like measurement window (mine at steps 10-24, the regime a 12-step probe actually
+samples) it reads 27.04%.
 All surviving caveats point the same way — sw2048 vs the candidate's sw512 + 5:1, and no
 XSA/attn-gate/GatedNorm where the 23.1% row has them — so the advantage is CONSERVATIVE. Offload is on
 in both; default allocator and default fraction, so no memory-knob caveat. Compliant configuration
 (cf1.05 + spill m=1..2, about -0.65pp) lands near ~23.9%, still above the FSDP row.
+SCOPE, stated plainly: 4-of-128 is a #7201 top candidate and is the ONE-RACK answer, but it is NOT the
+4-of-256 or 8-of-256 shape the original goal named. 4-of-256 has no MFU number and cannot get one on a
+single rack at EP64 (R4); 8-of-256 measures 22.66% at the d5120 proxy. The honest framing is "the
+one-rack candidate is both faster and EP-favorable", not "the goal is met at 256 experts".
+
 Full detail in the RESULT section at the end of this log.
 
 ### Still open
@@ -738,8 +762,12 @@ default 0.75 fraction, sliding window 2048.
 | whole run past warmup, steps 10-119 | 24.537 | 24.944 | 26.861 | 0.794 | | |
 | early window, steps 10-24 | 26.373 | 27.042 | 27.318 | 0.319 | 300,047 | 13.979s |
 
-Drop series: 0.169 @0 -> 0.859 @10 (QB warming up) -> 0.607 @30 -> 0.304 @40 -> 0.191 @60 ->
-0.128 @90 -> 0.124 @100 -> 0.103 @110 -> 0.089 @119. Tail-30 sits ~0.09-0.13.
+Drop series (120-STEP RUN — the LR schedule is defined over num_train_steps, so step 119 here is
+END-OF-ANNEAL and is NOT comparable to a 350-step run's step 119 at ~68% of peak LR):
+0.169 @0 -> 0.859 @10 (QB warming up) -> 0.607 @30 -> 0.304 @40 -> 0.191 @60 -> 0.128 @90 ->
+0.124 @100 -> 0.103 @110 -> 0.089 @119. Tail-30 sits ~0.09-0.13.
+Do not place this 0.089@119/120-step figure in the same column as the proxy's 0.071 tail-100/350-step
+figure without the annotation; they are different points on different schedules.
 Loss 10.31 @2 -> 5.59 @119, descending cleanly throughout.
 
 ### The EP-versus-FSDP comparison, both ways, honestly
