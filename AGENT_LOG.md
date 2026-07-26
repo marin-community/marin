@@ -265,3 +265,29 @@ the deciding evidence. I will compare exposed collective time directly between t
 Legs in flight: matched-work (`...-matched-i6144-L3072-120-0726-1455`, restarted once after 11
 `SIGTERM caught` = a preemption per d5's triage class 1, not a code fault) and the secondary
 param-preserving arm (`...-e256-latent3072-120-0726-1530`), both with the same profiler window.
+
+## Check-in 5 — an implementation cost the standalone work never accounted for: the projections are REPLICATED
+
+Noticed while waiting on the rack legs, and it belongs in the writeup because it is a property of the
+mechanism, not of my port. Following `50fa034cd`, the latent projections are initialised with
+`P(None, None)` — fully replicated, like the router. At the hero shape that is
+`48 layers x 2 x 6144 x 3072 = 1.812 B` parameters **on every GPU**:
+
+    fp32 params    6.75 GiB resident per GPU
+    MuonH momentum 6.75 GiB (host, since SCALE_OFFLOAD_OPT_STATE=1 is on)
+    fp32 gradient  6.75 GiB in the temp arena
+
+against a reference resident set of ~29 GiB with offload. Everything else in this model is sharded:
+expert weights over `expert`, attention over `Pfsdp = ("data", "expert")`. So latent MoE buys a
+halved wire and pays for it partly in replicated state that grows with `num_layers x d x L`.
+
+This was invisible in the standalone harness because nothing there was memory-limited, and it is a
+plausible contributor to the 181.34 GiB plan that OOM'd the matched-work arm in the prior work. It is
+also FIXABLE and I am deliberately not fixing it in this leg, so the measurement stays a faithful
+port: sharding the projections over the expert axis the way the attention projections are sharded
+would trade the replication for one small per-layer all-gather, and sharing a single projection pair
+across all layers would remove it entirely at some quality cost. Both are follow-ups, and the second
+is interesting on its own terms because a shared bottleneck across layers is a different architecture.
+
+I am recording it now, before the results, so it cannot be read as a post-hoc explanation of whatever
+the legs return.
