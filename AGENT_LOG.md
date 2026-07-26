@@ -1021,3 +1021,41 @@ Next: poll both; report the verdict two ways (MFU delta AND inline count) as ins
   be read directly off the schedule rather than inferred from the timeline.
 Confidence: 8/10 on the collapse mechanism; 4/10 on the overlap-limit flag moving MFU.
 Next: harvest v5; then the rack leg's MFU delta AND inline-instruction count.
+
+## Check-in 2026-07-26 10:00 UTC — EP4 REPRODUCES the collapse pattern (free, 3 min); rack leg still flake-blocked
+
+### The useful result: the sync/async split is reproducible on ONE node
+
+EP4 dump (16 experts / 4 shards so `local_experts = 4`, 4 layers, LHS on), collectives labelled by
+HLO `metadata={op_name=...}` and by the `"is_sync":true` tag:
+
+| leg | collapsed to SYNC | stayed async |
+|---|--:|--:|
+| fwd dispatch | **3** | 1 |
+| fwd combine | **0** | 4 |
+| bwd dispatch | 4 | 4 |
+| bwd combine | 3 | 5 |
+
+That is the same census as the 64-GPU timeline (9 of 24 inline; fwd dispatch 3 of 4; fwd combine
+0 of 4). **A free single-node job reproduces the scheduling decision that costs ~1 s per 12 s step
+at rack scale**, so fixes to the dispatch-leg dataflow can be iterated at zero rack cost and only
+the winner needs a rack leg. That is the most useful thing to come out of this round.
+
+Caveat on my own output: the "cover" column (instructions between start and done) is NOT reliable
+yet — the report filters cover candidates by computation name and my computation tracking is
+mis-parsing HLO computation headers, so cover reads 0 almost everywhere. The SYNC/async labels and
+the leg labels come straight from the HLO tag and metadata and are solid; the cover column needs a
+fix before anyone quotes it.
+
+### Rack leg: blocked by the gang flake, not by the flag
+
+/mwittmann/ep25d4-ovlim4-120-v1-20260726 has not reached step 0 in 51 minutes: `failures=8`, and a
+classification of all 49k log lines finds **only** incarnation aborts (63 "unexpectedly tried to
+connect with a different incarnation", 32 "newer incarnation") — zero XLA errors, no rejected flag,
+no OOM. So `--xla_gpu_experimental_parallel_collective_overlap_limit=4` is not implicated; the leg
+is losing to the same cluster-wide class that killed the first PGLE leg. Iris is still retrying and
+I am not touching it, but it is occupying a rack slot while d1 and d5 contend, so the coordinator
+may want to call it.
+Confidence: 9/10 that EP4 reproduces the collapse census; 9/10 that the rack leg's failures are pure infra.
+Next: coordinator decision on the rack slot; meanwhile fix the cover column so the EP4 harness can
+answer *why* the fwd dispatch legs get no slack.
