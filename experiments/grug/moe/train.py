@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -1044,6 +1045,33 @@ def _sum_microbatch_group(values: tuple[Any, ...]):
     return total
 
 
+def _stack_microbatch_group(values: tuple[Any, ...]):
+    if len(values) != 2:
+        raise ValueError(f"stacked stage tasks require exactly two microbatches, got {len(values)}")
+    return jax.tree.map(lambda *leaves: jnp.stack(leaves, axis=0), *values)
+
+
+def _unstack_microbatch_group(stacked):
+    return tuple(jax.tree.map(lambda leaf, index=index: leaf[index], stacked) for index in range(2))
+
+
+def _vmap_microbatch_group(
+    function: Callable[..., Any],
+    *,
+    unmapped_args: tuple[Any, ...],
+    mapped_groups: tuple[tuple[Any, ...], ...],
+):
+    if not mapped_groups:
+        raise ValueError("stacked stage tasks require at least one mapped argument")
+    stacked_args = tuple(_stack_microbatch_group(group) for group in mapped_groups)
+    in_axes = (None,) * len(unmapped_args) + (0,) * len(stacked_args)
+    return jax.vmap(function, in_axes=in_axes)(*unmapped_args, *stacked_args)
+
+
+def _sum_stacked_microbatch_group(stacked):
+    return _sum_microbatch_group(_unstack_microbatch_group(stacked))
+
+
 def explicit_std_1f1b_stage_schedule(
     *,
     stages: int,
@@ -1930,39 +1958,48 @@ def _make_explicit_mpmd_train_step(
         return loss, qb_betas_next, grads, d_hidden
 
     def grouped_stage0_forward(params, qb_betas, batches):
-        values = tuple(stage0_forward(params, qb_betas, batch) for batch in batches)
-        return tuple(value[0] for value in values), _sum_microbatch_group(tuple(value[1] for value in values))
+        hiddens, qb_betas_next = _vmap_microbatch_group(
+            stage0_forward,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(batches,),
+        )
+        return _unstack_microbatch_group(hiddens), _sum_stacked_microbatch_group(qb_betas_next)
 
     def grouped_stage_forward(params, qb_betas, hiddens, batches):
-        values = tuple(
-            stage_forward(params, qb_betas, hidden, batch) for hidden, batch in zip(hiddens, batches, strict=True)
+        hiddens, qb_betas_next = _vmap_microbatch_group(
+            stage_forward,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(hiddens, batches),
         )
-        return tuple(value[0] for value in values), _sum_microbatch_group(tuple(value[1] for value in values))
+        return _unstack_microbatch_group(hiddens), _sum_stacked_microbatch_group(qb_betas_next)
 
     def grouped_stage0_backward(params, qb_betas, batches, d_hiddens):
-        grads = tuple(
-            stage0_backward(params, qb_betas, batch, d_hidden)
-            for batch, d_hidden in zip(batches, d_hiddens, strict=True)
+        grads = _vmap_microbatch_group(
+            stage0_backward,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(batches, d_hiddens),
         )
-        return _sum_microbatch_group(grads)
+        return _sum_stacked_microbatch_group(grads)
 
     def grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens):
-        values = tuple(
-            stage_backward(params, qb_betas, hidden, batch, d_hidden)
-            for hidden, batch, d_hidden in zip(hiddens, batches, d_hiddens, strict=True)
+        grads, d_hiddens = _vmap_microbatch_group(
+            stage_backward,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(hiddens, batches, d_hiddens),
         )
-        return _sum_microbatch_group(tuple(value[0] for value in values)), tuple(value[1] for value in values)
+        return _sum_stacked_microbatch_group(grads), _unstack_microbatch_group(d_hiddens)
 
     def grouped_last_stage_loss_and_grads(params, qb_betas, hiddens, batches):
-        values = tuple(
-            last_stage_loss_and_grads(params, qb_betas, hidden, batch)
-            for hidden, batch in zip(hiddens, batches, strict=True)
+        losses, qb_betas_next, grads, d_hiddens = _vmap_microbatch_group(
+            last_stage_loss_and_grads,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(hiddens, batches),
         )
         return (
-            _sum_microbatch_group(tuple(value[0] for value in values)),
-            _sum_microbatch_group(tuple(value[1] for value in values)),
-            _sum_microbatch_group(tuple(value[2] for value in values)),
-            tuple(value[3] for value in values),
+            _sum_stacked_microbatch_group(losses),
+            _sum_stacked_microbatch_group(qb_betas_next),
+            _sum_stacked_microbatch_group(grads),
+            _unstack_microbatch_group(d_hiddens),
         )
 
     def last_stage_backward(

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.model import GrugModelConfig
@@ -21,6 +22,9 @@ from experiments.grug.moe.train import (
     _accumulate_microbatch_tree,
     _average_microbatch_tree,
     _sum_microbatch_group,
+    _sum_stacked_microbatch_group,
+    _unstack_microbatch_group,
+    _vmap_microbatch_group,
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
     unpack_fp8_pipeline_wire,
@@ -234,3 +238,59 @@ def test_grouped_gradient_sums_average_over_original_microbatch_count() -> None:
 
     np.testing.assert_allclose(actual_average["weight"], reference_average["weight"])
     np.testing.assert_allclose(actual_average["bias"], reference_average["bias"])
+
+
+def test_stacked_vmap_group_matches_ordered_value_and_gradients_under_jit() -> None:
+    batches = (
+        GrugLmExample.causal(jnp.asarray([1, 2, 3, 4], dtype=jnp.int32)),
+        GrugLmExample.causal(jnp.asarray([4, 3, 2, 1], dtype=jnp.int32)),
+    )
+    hiddens = (
+        jnp.asarray([0.25, -0.5, 0.75, -1.0], dtype=jnp.float32),
+        jnp.asarray([-1.0, 0.75, -0.5, 0.25], dtype=jnp.float32),
+    )
+    params = {"weight": jnp.asarray([1.5, -0.75, 0.5, 2.0], dtype=jnp.float32)}
+    qb_betas = jnp.asarray([0.125, -0.25, 0.375, -0.5], dtype=jnp.float32)
+
+    def single_loss_and_grads(params, qb_betas, hidden, batch):
+        def loss_fn(stage_params, stage_hidden):
+            prediction = stage_params["weight"] * stage_hidden + qb_betas
+            target = batch.tokens.astype(jnp.float32)
+            loss = jnp.sum(jnp.square(prediction - target) * batch.loss_weight)
+            return loss, prediction
+
+        (loss, qb_next), (grads, d_hidden) = jax.value_and_grad(
+            loss_fn,
+            argnums=(0, 1),
+            has_aux=True,
+        )(params, hidden)
+        return loss, qb_next, grads, d_hidden
+
+    @jax.jit
+    def stacked_group(params, qb_betas, hiddens, batches):
+        losses, qb_next, grads, d_hiddens = _vmap_microbatch_group(
+            single_loss_and_grads,
+            unmapped_args=(params, qb_betas),
+            mapped_groups=(hiddens, batches),
+        )
+        return (
+            _sum_stacked_microbatch_group(losses),
+            _sum_stacked_microbatch_group(qb_next),
+            _sum_stacked_microbatch_group(grads),
+            _unstack_microbatch_group(d_hiddens),
+        )
+
+    actual = stacked_group(params, qb_betas, hiddens, batches)
+    ordered = tuple(
+        single_loss_and_grads(params, qb_betas, hidden, batch) for hidden, batch in zip(hiddens, batches, strict=True)
+    )
+    expected = (
+        _sum_microbatch_group(tuple(value[0] for value in ordered)),
+        _sum_microbatch_group(tuple(value[1] for value in ordered)),
+        _sum_microbatch_group(tuple(value[2] for value in ordered)),
+        tuple(value[3] for value in ordered),
+    )
+
+    assert jax.tree.structure(actual) == jax.tree.structure(expected)
+    for actual_leaf, expected_leaf in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        np.testing.assert_allclose(actual_leaf, expected_leaf, rtol=1e-6, atol=1e-6)
