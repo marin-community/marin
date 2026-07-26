@@ -1483,6 +1483,54 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T06:37:41Z — 102,950 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0630-v145` independently
+  revalidated seven additional baseline checkpoints: p2 decision-file 68
+  offset 0 and p3 decision-file 100 offsets 1,920 through 2,560. Their 896
+  pairs contain 488 false positives, 407 true duplicates, and one unresolved
+  outcome. All 4,442 judgments and requests were valid on their first attempt;
+  863 pairs used direct review and 33 used chunked review.
+- The outcome Parquet SHA-256 values are
+  `7ac05bec11162e464249c52258a5abcdbb33eb42e5099952a3263cfdfd3296ce`,
+  `25811092f6b6f4c073c5be6ceb33b292597eac8fefff22bc90e13c05817a13c4`,
+  `84f2ea570062e9dc52204b5abc765aad6b7ee77921920553e754cbc1603aa040`,
+  `a3e58e61ed64dd8a18c6d0c225dab72db95dece046abd354e8382cfb72d1e1c9`,
+  `6ae5e081edb4fefa71c8ddae50ec34715b9b95833e190c5c462f22a4d4fa3f9e`,
+  `58f0f31c9a78ad492df033b12773572066d3e35f1067c1e2206ce7eb7d1195cc`,
+  and
+  `a82e987b2a24b0cfeb40d54a84cf79508bc93c36731e74520abf23efde557ee9`.
+- `/rav/datakit-6854-inspect-row3107-0634-v146` compared every character of
+  the unresolved same-source synthetic wiring-diagram pair. The
+  2,297-character member and 2,137-character canonical have SHA-256
+  `b6609c07b5f79d98bd3a1cd57328d08690e5c7240dedba1d8f3dd91fc5b11f1e`
+  and
+  `81f59fa98b48c305a03dc58eb42847dc845ca70192e8f680e76a010b261c1eab`,
+  with a 0.698241 sequence ratio. Beyond the repeated synthetic scaffold and
+  Rib Relay/Chopper title substitution, the member alone says diagram
+  component order is relative rather than logical and places the negative
+  supply symbol below the line. Deleting those circuit-drawing instructions
+  loses substantive content, so the pair is a false positive.
+- `/rav/datakit-6854-publish-manual-0635-v147` published the hash-bound manual
+  record, and `/rav/datakit-6854-verify-manual-0637-v148` separately reread the
+  source pair, semantic checkpoint, manual row, Parquet bytes, and completion
+  marker. The semantic-evidence, manual-record, and manual-Parquet SHA-256
+  values are
+  `21cd2e521b4d91088e8fe49b1ace377afdcf1c7135077fdf8649c60228e565fb`,
+  `19a02ef6d0cc2073c6f97552c0a4afd1d2839b4726c3bda90fe5a7df1efc10ee`,
+  and
+  `387b45e70d88a4a2a72c74f5a511182a93f1c3548dabaae1dccc403cc9a7b6ad`.
+- Across the stable 810-checkpoint snapshot, all 116 unresolved model outcomes
+  are covered by 89 true-duplicate and 27 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 83,162 pairs, 52,912 false positives, 30,250 true duplicates;
+  - treatment: 19,788 pairs, 10,216 false positives, 9,572 true duplicates;
+  - combined: 102,950 pairs, 63,128 false positives, 39,822 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T06:30:01Z — 102,054 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0616-v137` independently
