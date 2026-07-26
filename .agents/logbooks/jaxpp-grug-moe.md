@@ -3634,3 +3634,29 @@ author: dlwh
   - The `0.002` policy still applies to loss and every gradient leaf. No L24 promotion is allowed until a valid run and one exact confirmation both emit passing reports.
 - Next action:
   - Build NCCL development commit `7aea0aa7` for CUDA 13/SM90 and verify the external `libnccl.so.2` override by version and process maps. Gate it first with direct device-ragged and the passing standalone four-stage VJP case, then run matched m1 parity arms with `NCCL_RMA_EAGER_INIT=0` and `1`. Stop each hang after two identical watchdogs and leave no failed job live.
+
+### 2026-07-26 12:12 PDT - NCCL development eager init executes but corrupts stage 0
+- Hypothesis: NCCL development commit `7aea0aa7`, including the subset-rank RMA initialization fix at `e12963e1`, will remove the explicit-standard-1F1B device-ragged deadlock while preserving relative-L2 at most `0.002` for loss and every gradient leaf.
+- Commit Hashes:
+  - `b57d70053e` adds runtime inspection through `ncclGetVersion` and `/proc/self/maps`.
+  - `e8ef991769` requires the expected NCCL library to be the only resolved mapped NCCL runtime.
+- Artifact:
+  - Build job `/dlwh/nccl-dev-7aea0aa7-sm90-build-r3-20260726-1839` succeeded from NCCL `7aea0aa7d594c8380ed81274070411fd04dfd0d6` for CUDA 13 and SM90.
+  - The runtime reports NCCL `2.31.0` (`ncclGetVersion=23100`). The real library SHA-256 is `704d67d71e0c97fabc7c34bec5f38b90dc6892620ccba97c259274eeba171123`; the archive SHA-256 is `14878dd9b614b0d65dc8cec8768dbdf1299f5703bc531099bc6969d831ca3feb`.
+  - Artifact: `s3://marin-us-east-02a/marin/research/jaxpp/nccl/7aea0aa7d594c8380ed81274070411fd04dfd0d6/cuda13-sm90-x86_64/nccl-7aea0aa7-cuda13-sm90-x86_64.tar.gz`.
+- Commands:
+  - `/dlwh/jaxpp-nccl231-gate-exclusive-r4-20260726-1150` repointed the wheel's NCCL SONAME to the artifact and required runtime version `23100` plus exclusive process-map resolution.
+  - `/dlwh/jaxpp-ragged-parity-m1-nccl231-eager0-r27-20260726-1153` ran the authoritative four-rank one-microbatch parity graph with `NCCL_RMA_EAGER_INIT=0`.
+  - `/dlwh/jaxpp-ragged-parity-m1-nccl231-eager1-r28-20260726-1202` changed only `NCCL_RMA_EAGER_INIT=1`.
+- Results:
+  - The exclusive gate mapped only `/tmp/nccl-7aea0aa7/lib/libnccl.so.2.31.0`. Direct device-ragged execution was exact with checksum `202`, zero mismatches, and `1.1271s` elapsed. The standalone four-stage BF16 VJP also passed exactly: loss absolute error `0`, finite gradients, and maximum gradient absolute error `0`.
+  - Eager-off completed direct references, distributed initialization, device-ragged warmup, all DIME prewarm, local lowering, and local precompile. All ranks entered execution at `18:58:13Z`; stage 2 reached every gradient readiness event, while stages 0, 1, and 3 remained in unchanged DIME/PJRT waits across two watchdog intervals. No parity report was emitted. The stopped job is terminal with no live resource.
+  - Eager-on emitted `ncclRmaProxyConnectOnce` and `finished init RMA CE contexts` for every local communicator rank, removed the execution deadlock, and produced all four parity reports.
+  - Loss relative-L2 was exactly `0` on every stage. Stages 1, 2, and 3 passed with maximum gradient relative-L2 `0.0019305607`, `0.0019027706`, and `0.0019621250`.
+  - Stage 0 failed catastrophically. Its maximum gradient relative-L2 was `2051906.2991` at `blocks[0].rms_mlp.weight`; `token_embed` was `2.5394490`, attention weights ranged from `1.9269557` to `3.1515908`, and expert weights ranged from `0.5249459` to `0.6129699`. Only `router_bias` remained exact. The job is terminal failed because the fixed gate correctly returned nonzero; no resource remains live.
+- Interpretation:
+  - NCCL eager RMA initialization is necessary for this graph to execute with the development runtime, but it is not numerically valid. Exact loss and passing stages 1-3 localize the failure to the stage-1-to-stage-0 backward path rather than the forward graph or ordinary mixed-precision drift.
+  - The package metadata still names wheel NCCL `2.30.7`; runtime version and process maps are the authoritative provenance. Future parity JSON includes both fields directly.
+  - Do not promote device-ragged execution to L24 and do not weaken the fixed `0.002` per-leaf gate. The public device kernel remains a direct-transport positive and a JaxPP integration negative.
+- Next action:
+  - Return to the exact four-stage bulk-ring path. Rank only changes that can plausibly improve the measured `18.2583` MFU result by at least `9.54%` without violating the per-leaf numerical gate; retain this NCCL A/B as the minimized runtime evidence for #7655.

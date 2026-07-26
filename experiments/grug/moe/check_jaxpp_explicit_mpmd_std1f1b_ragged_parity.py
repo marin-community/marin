@@ -680,6 +680,8 @@ def _run_initialized_worker(
                             "jaxpp",
                             "jaxpp_revision",
                             "nvidia_nccl_cu13",
+                            "nccl_runtime_version",
+                            "nccl_mapped_libraries",
                             "xla_flags",
                         )
                     },
