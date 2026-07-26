@@ -16,6 +16,68 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T21:13:45Z — 183,960 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2107-v620` independently
+  revalidated p1 decision-file 39 semantic offsets 1,664 and 1,792 and p2
+  decision-file 71 offsets 4,864 and 4,992. Their 512 pairs contain 359 model
+  false positives, 152 model true duplicates, and one unresolved outcome. The
+  arm split is 256 baseline pairs with 129 false positives, 126 true
+  duplicates, and one unresolved outcome, plus 256 treatment pairs with 230
+  false positives and 26 true duplicates. One pair was chunked and 511 were
+  direct. All 1,086 judgments and request attempts were valid on their first
+  attempt.
+
+- The outcome Parquet SHA-256 values are
+  `95d209f45615e1d8e4da28e2fc67c61f545f89a9552c919cc56379dd92cdf517`,
+  `744780a4ae269d2dc49ec985f14324938f502da73f89b4c9645168126f0c0eb0`,
+  `659fa4fef3ed07b5439fd8e43e5562a9d3585edcabab56e3dcf6896296e66da3`,
+  and
+  `cf31a9805bd9ef72923d5ed95f1895dc5654e00631b83957d760dd6e7350d80a`.
+
+- The unresolved baseline pair is decision-file 39 row 2,836 at semantic
+  offset 1,792. `/rav/datakit-6854-inspect-row2836-2108-v621` independently
+  read and hash-bound the complete 3,848-character, 33-line member and
+  3,643-character, 18-line canonical. Their SHA-256 values are
+  `9140b8e4681141a6bbdbc72f689fbdb977b55e4f1b5c9914b215201647da9c08`
+  and
+  `e1428a7ff1e45add01e277e8bcdd83146e528793decfaa2ccd41fa2a09602ea7`.
+  Character, line, and word-sequence similarity are 0.920037, 0.588235, and
+  0.911686. Both contain the same University of Toronto salt-tolerance
+  article. The canonical ends with two questions derived from that article;
+  the member instead ends with a different recycled-water item. Although the
+  latter is truncated after "safe to reuse for", its wastewater-treatment and
+  conservation proposition is intelligible and absent from the canonical, so
+  deleting the member would lose distinct information. The manual label is
+  therefore false positive.
+
+- The inspection and semantic-judgment SHA-256 values are
+  `91b5313fc13e33a23f0436bd7668f8807546aab871726ee5d4edfbb0bd766856`
+  and
+  `2a3c0cfca94657c71d0cea4d1fc572c631f8338e6b66f4424890b6e7ef8ce334`.
+  `/rav/datakit-6854-publish-row2836-2110-v622` published the manual Parquet
+  and marker with SHA-256 values
+  `4c8b1b39c6f46329952c714f5aad6141f7da1e932be76efa7491df31fe54b6b4`
+  and
+  `270d3a6a40abb5035cf19e6ca5d31fae8ea5b066eebb2cbfd6f9ca6f130262b2`.
+  `/rav/datakit-6854-verify-row2836-2111-v623` then independently fetched and
+  verified both exact artifacts.
+
+- Across the stable 1,448-checkpoint snapshot, all 205 unresolved model
+  outcomes are covered by 159 true-duplicate and 46 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 147,884 pairs, 94,056 false positives, 53,828 true duplicates;
+  - treatment: 36,076 pairs, 18,771 false positives, 17,305 true duplicates;
+  - combined: 183,960 pairs, 112,827 false positives, 71,133 true duplicates.
+
+- The next audit frontiers are p0 `(8, 0)`, p1 `(39, 1,920)`,
+  p2 `(71, 5,120)`, and p3 `(104, 128)`. P1's next baseline batch has 152
+  review units and 304 minimum model requests, including one oversized pair.
+  P2's next treatment batch is entirely direct with 256 minimum requests. All
+  four batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T21:05:45Z — 183,448 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2105-v619` independently
