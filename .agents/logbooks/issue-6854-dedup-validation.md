@@ -1483,6 +1483,64 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T01:30:07Z — 76,840 pairs verified
+
+- Six additional treatment checkpoints passed independent validation: 709
+  pairs, 263 model false positives, 444 model true duplicates, and two
+  unresolved outcomes. They contain 1,461 valid responses across 1,476
+  attempts; 15 invalid JSON responses affected five retried judgments. All
+  709 pairs used direct review.
+- Exhaustive character comparison resolves both ambiguities as true
+  duplicates:
+
+  - `part-00099-of-00128.parquet:9034` has 15,235 / 15,242 characters
+    across 316 lines. The first 15,233 characters match, followed only by
+    insertion of `\text{` and `}` around the same boxed answer B. Character
+    similarity is 0.999770 and line similarity is 0.996835. Member/canonical
+    SHA-256 values are
+    `17331a08a1b2b1af915d387c46a7cb16b3fb53b00e90140fa9bb35b2a288f126`
+    /
+    `0e6714bcaf3ead61b7ebc20c4353953918ec070ad17332ef46e805aebc0dcaa0`.
+  - `part-00099-of-00128.parquet:9037` has 15,153 / 15,160 characters
+    across 321 lines. The first 15,151 characters match, followed only by
+    insertion of `\text{` and `}` around the same boxed answer I. Character
+    similarity is 0.999769 and line similarity is 0.996885. Member/canonical
+    SHA-256 values are
+    `eb1cdaa015c77a738912ac788296664e11410c7b6489250bbcc16ca0256f6e32`
+    /
+    `17f444058ad87c8cad14a4f191615e102d7fd673ba43c8ca8c5d939236903ca8`.
+
+- The model ambiguity was procedural. JSON parsing exhausted the initial
+  passes for both pairs; the first pair's valid tiebreak also called it a true
+  duplicate. The exact semantic-judgment SHA-256 values are
+  `020790bdf2870e8bd9bdc454dccfa29fe4269403bc18512ae1422f3d65b98f3b`
+  and
+  `a52d8e4cc6b745babd24289f84ad7539374a65c03eeb3bb967b880b3fb03edd8`.
+- The hash-bound manual-record Parquet SHA-256 values are
+  `4a99b209c57d4c57978fbec9b8ce2184c27b80e52bbf452fb08175a5675330b1`
+  and
+  `12860a8e1e18223144511cf718363a583678a0fde3c7a93b303e14bfec04d9fc`.
+  A separate read-only batch-priority Iris job reread and exactly checked
+  both source cases, all-character diffs, semantic evidence, manual rows,
+  Parquet bytes, and completion markers.
+- The six outcome Parquet SHA-256 values for p3 decision-file 99 offsets
+  5120 through 5760 are:
+  `de16d694720408be1a5133ffb2bdfd3d18ca3c23b0aca31a78e103df84257509`,
+  `53414d6f997550c95480329ab0a5483cd436204918367559a66fd665e57481a5`,
+  `97b4d37226d6da01bc4f48de572be5dc3fd9ebcb598ee50d0dbfd0d87415d65b`,
+  `ba068b0857d99a67507ecbf66b1c349a67385e619931f4b5dec8ee8a68dce0d3`,
+  `7b8f8b85da55d17558c1b01a20ab7c24932371d5915df52372426eb8a9597540`,
+  and
+  `0702b71e47c16e42b81699d188fa773a802f90d84ea3141f30597f479228c5ba`.
+- Across the stable 604-checkpoint snapshot, all 83 manual records leave:
+
+  - baseline: 61,204 pairs, 38,956 false positives, 22,248 true duplicates;
+  - treatment: 15,636 pairs, 8,109 false positives, 7,527 true duplicates;
+  - combined: 76,840 pairs, 47,065 false positives, 29,775 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T01:22:13Z — 76,131 pairs verified
 
 - Fifteen additional checkpoints passed independent validation: 1,805 pairs,
