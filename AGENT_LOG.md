@@ -1821,3 +1821,35 @@ cannot be over-read either way:
 Resubmission knobs: `SCALE_A2A_FP8_AMAX_FWD=4.5` (measured max 4.03) and
 `SCALE_A2A_FP8_AMAX_BWD=1.0e-07` (measured max 9.6e-08). The single shared knob is gone.
 Confidence: 9/10 that the constants are safe over a 120-step leg; 6/10 that they would hold over thousands of steps.
+
+## TRIAGE 2026-07-26 14:25 UTC — v1 failed as CLASS "preemption/incarnation gang abort", not code
+
+Ran d5's five-class recipe on /mwittmann/ep25d4-fp8delayed-120-v1-20260726 (40k log lines):
+
+| class | discriminator | count |
+|---|---|--:|
+| preemption | `SIGTERM` | 0 in the fetched window |
+| **gang abort / eviction** | `... unexpectedly tried to connect with a different incarnation` | **150** |
+| device OOM (cuda_async) | `failed to allocate` | 0 |
+| device OOM (BFC) | `RESOURCE_EXHAUSTED` / `Out of memory while trying to allocate` | 0 |
+| NCCL starvation outside the arena | `ncclAlltoAll` / `unhandled cuda error` / `Cuda failure 2` | 0 |
+| clique deadlock | hang with no output | no (150 aborts, logs flowing) |
+
+**Classification: the incarnation gang-abort class** — the same one that killed the first PGLE leg
+and the overlap-limit leg, which d5 traced to rack workers being marked preemptible, so the abort
+is the downstream signature of an eviction rather than an independent fault. Infra, not code.
+
+**The interesting negative:** the zeroed-cotangent hypothesis did NOT fire. All 80 apparent `nan`
+matches are `nanobind::` inside the abort stack traces (64) plus `"crash_on_nan": true` echoed in
+the hparams JSON (16). Zero genuine NaN, and the crash_on_nan guard never tripped. So a backward
+wire quantizing every cotangent to zero produced no numerical fault — it would have produced a
+silently wrong gradient, which is a much worse failure mode than a crash and is exactly why the
+calibration was worth doing before reading any loss number from that leg.
+
+Resubmitted straight to the calibrated version as instructed:
+/mwittmann/ep25d4-fp8delayed-120-v2-20260726 with `SCALE_A2A_FP8_AMAX_FWD=4.5` and
+`SCALE_A2A_FP8_AMAX_BWD=1.0e-07`. The uncalibrated leg had already given everything it honestly
+could, and it never reached a step, so it owes no throughput reading either — v2 now carries both
+the throughput verdict (against break-even 2.7x, full elimination +1.90pp / 24.57%) and the loss
+verdict (conclusive if positive, provisional if negative, per the pre-registered asymmetry).
+Confidence: 9/10 on the triage classification; the discriminators are unambiguous and mutually exclusive here.
