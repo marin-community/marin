@@ -189,6 +189,14 @@ def test_nccl_runtime_validation_requires_expected_version_and_library(tmp_path)
             runtime,
             {**expected, nccl_runtime.NCCL_LIBRARY_PATH_ENV: str(tmp_path / "other-libnccl.so.2")},
         )
+    with pytest.raises(RuntimeError, match="NCCL runtime library mismatch"):
+        nccl_runtime.validate_nccl_runtime(
+            nccl_runtime.NcclRuntime(
+                version=23100,
+                mapped_libraries=(versioned_library, tmp_path / "wheel-libnccl.so.2"),
+            ),
+            expected,
+        )
 
 
 def test_dime_prewarm_includes_terminal_metrics_link():

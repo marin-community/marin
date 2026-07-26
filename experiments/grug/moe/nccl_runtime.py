@@ -55,7 +55,7 @@ def validate_nccl_runtime(actual: NcclRuntime, expected: Mapping[str, str]) -> N
     if expected_library is not None:
         resolved_expected = Path(expected_library).resolve()
         resolved_mapped = {path.resolve() for path in actual.mapped_libraries}
-        if resolved_expected not in resolved_mapped:
+        if resolved_mapped != {resolved_expected}:
             raise RuntimeError(
                 f"NCCL runtime library mismatch: expected {resolved_expected}, "
                 f"mapped {sorted(str(path) for path in resolved_mapped)}"
