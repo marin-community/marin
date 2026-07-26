@@ -229,3 +229,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: 12 online-distillation cells entered training. `QD-C0` and `QD-C2`, both seeds, failed before step 0 because checkpoint vocabulary padding attempted to convert a regional tokenizer directory back into a Hugging Face tokenizer. `QD-003`, both seeds, failed before step 0 because TAID rejects gradient accumulation.
 - Interpretation: size the standard model vocabulary from the checkpoint configuration without changing the tokenizer. Run TAID with a full batch so its controller receives one loss update per optimizer update. Keep microbatch size four for the other online objectives.
 - Next action: snapshot the fixes and launch the six-cell `screen-retry` stage at version `2026.07.26.9`; continue monitoring the original 12 cells.
+
+### 2026-07-26 18:12 - Hard-label training loss recovery
+
+- Hypothesis: the materialized float32 next-token loss that fixed validation will also avoid the fused training-kernel NaN without changing the hard-label objective.
+- Commit hash: pending snapshot.
+- Job: `/power/qwen-distill-screen-retry-3ef219` on `cw-us-east-08a`, batch priority.
+- Result: both TAID cells completed full-batch updates at approximately 30,000 tokens/s. All four hard-label controls passed tokenizer and vocabulary setup, then failed their first optimizer update with `Loss is NaN`.
+- Interpretation: the failure is confined to the fused linear cross-entropy path shared by training and the earlier nonfinite validation path. Add an explicit training-loss implementation and use weighted materialized float32 NLL for `QD-C0` and `QD-C2`.
+- Next action: test the scalar weighted loss, snapshot it, and launch only the four CE controls as `screen-ce-retry` at version `2026.07.26.10`.

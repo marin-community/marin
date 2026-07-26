@@ -151,10 +151,33 @@ def materialized_next_token_nll(
 ) -> NamedArray:
     """Compute unreduced next-token NLL from materialized logits."""
     logits = logits.astype(jnp.float32)
+    Pos = logits.resolve_axis(Pos.name)
+    Vocab = logits.resolve_axis(Vocab.name)
     target_ids = hax.roll(tokens, -1, Pos)
     log_normalizers = hax.nn.logsumexp(logits, Vocab)
     target_logits = logits.take(Vocab, target_ids)
     return log_normalizers - target_logits
+
+
+def materialized_next_token_loss(
+    logits: NamedArray,
+    tokens: NamedArray,
+    loss_weight: NamedArray | None,
+    *,
+    Vocab: hax.Axis,
+    Pos: hax.Axis,
+    logsumexp_weight: float | None = None,
+) -> jax.Array:
+    """Compute weighted next-token loss from materialized float32 logits."""
+    Pos = logits.resolve_axis(Pos.name)
+    Vocab = logits.resolve_axis(Vocab.name)
+    logits = logits.astype(jnp.float32)
+    per_position = materialized_next_token_nll(logits, tokens, Vocab=Vocab, Pos=Pos)
+    if logsumexp_weight is not None and logsumexp_weight != 0.0:
+        log_normalizers = hax.nn.logsumexp(logits, Vocab)
+        per_position = per_position + logsumexp_weight * hax.square(log_normalizers)
+    weights = next_token_loss_weight(Pos, loss_weight).astype(jnp.float32)
+    return hax.sum(per_position * weights).scalar() / hax.sum(weights).scalar()
 
 
 def cross_entropy_and_logsumexp_penalty(

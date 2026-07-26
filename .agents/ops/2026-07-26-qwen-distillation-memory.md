@@ -148,3 +148,12 @@ version `2026.07.26.9`.
 The local Weaver endpoint stopped responding while this recovery was being
 recorded. This does not affect Iris or the running jobs; status updates must be
 replayed when the endpoint returns.
+
+The targeted retry cleared both original boundaries. TAID completed a
+full-batch first step without an allocation failure. All four hard-label
+controls then failed their first optimizer update with `Loss is NaN`. Their
+student-only training path still used fused linear cross-entropy, the same
+kernel family already isolated during validation. The standard trainer now
+supports the materialized float32 loss for training as well as evaluation. A
+`screen-ce-retry` stage selects only the four affected controls under artifact
+version `2026.07.26.10`.

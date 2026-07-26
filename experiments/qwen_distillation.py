@@ -14,6 +14,10 @@ Launch the two-seed screen from ``cw-us-east-08a`` at batch priority:
 Retry only screen arms that failed before training:
 
     python -m experiments.qwen_distillation --version dev --stage screen-retry --run --max-concurrent 6
+
+Retry the hard-label controls with materialized training loss:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-ce-retry --run --max-concurrent 4
 """
 
 import math
@@ -116,6 +120,7 @@ class Arm(StrEnum):
 
 
 SCREEN_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE, Arm.TAID)
+SCREEN_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
 
 
 @dataclass(frozen=True)
@@ -289,6 +294,7 @@ def training_step(
                 initialize_from_hf=student_checkpoint if arm_config.student_base else False,
                 use_hf_model_config=arm_config.student_base,
                 pad_tokenizer_to_match_model=True,
+                train_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
                 eval_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
             )
         else:
@@ -352,9 +358,14 @@ def build(stage: str) -> list[ArtifactStep]:
                 data=data,
             )
         ]
-    if stage in ("screen", "screen-retry"):
+    if stage in ("screen", "screen-retry", "screen-ce-retry"):
         data = qwen_datakit_cache()
-        arms = Arm if stage == "screen" else SCREEN_RETRY_ARMS
+        if stage == "screen":
+            arms = Arm
+        elif stage == "screen-retry":
+            arms = SCREEN_RETRY_ARMS
+        else:
+            arms = SCREEN_CE_RETRY_ARMS
         return [
             training_step(
                 arm,
@@ -370,7 +381,11 @@ def build(stage: str) -> list[ArtifactStep]:
 
 
 @click.command()
-@click.option("--stage", type=click.Choice(["data", "smoke", "screen", "screen-retry"]), required=True)
+@click.option(
+    "--stage",
+    type=click.Choice(["data", "smoke", "screen", "screen-retry", "screen-ce-retry"]),
+    required=True,
+)
 @build_options
 def main(stage: str):
     return build(stage)

@@ -27,7 +27,7 @@ from levanter.distillation import (
 )
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
-from levanter.models.loss import materialized_next_token_nll
+from levanter.models.loss import materialized_next_token_loss, materialized_next_token_nll
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.trainer_state import TrainerState, saveable_training_mask
@@ -99,6 +99,39 @@ def test_hard_label_next_token_loss_matches_reference():
         axis=-1,
     )[..., 0]
     np.testing.assert_allclose(actual.array, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_materialized_next_token_loss_applies_weights_and_z_loss():
+    Batch = hax.Axis("batch", 1)
+    Pos = hax.Axis("position", 3)
+    Vocab = hax.Axis("vocab", 4)
+    logits_array = jnp.asarray(
+        [[[1.0, -1.0, 0.0, 0.5], [0.0, 0.5, 1.0, -0.5], [3.0, 0.0, -2.0, 1.0]]],
+        dtype=jnp.bfloat16,
+    )
+    tokens_array = jnp.asarray([[0, 2, 3]], dtype=jnp.int32)
+    weights_array = jnp.asarray([[1.0, 0.25, 1.0]], dtype=jnp.float32)
+    logits = hax.named(logits_array, (Batch, Pos, Vocab))
+    tokens = hax.named(tokens_array, (Batch, Pos))
+    weights = hax.named(weights_array, (Batch, Pos))
+
+    actual = materialized_next_token_loss(
+        logits,
+        tokens,
+        weights,
+        Vocab=Vocab,
+        Pos=Pos,
+        logsumexp_weight=0.1,
+    )
+
+    float_logits = logits_array.astype(jnp.float32)
+    targets = jnp.roll(tokens_array, -1, axis=-1)
+    log_normalizers = jax.nn.logsumexp(float_logits, axis=-1)
+    target_logits = jnp.take_along_axis(float_logits, targets[..., None], axis=-1)[..., 0]
+    per_position = log_normalizers - target_logits + 0.1 * log_normalizers**2
+    effective_weights = weights_array.at[:, -1].set(0.0)
+    expected = jnp.sum(per_position * effective_weights) / jnp.sum(effective_weights)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_teacher_has_zero_gradient_and_is_not_saveable():

@@ -33,6 +33,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.loss import materialized_next_token_loss
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -60,6 +61,7 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    train_loss_implementation: levanter.eval.LmEvalLossImplementation = levanter.eval.LmEvalLossImplementation.FUSED
     eval_loss_implementation: levanter.eval.LmEvalLossImplementation = levanter.eval.LmEvalLossImplementation.FUSED
 
     hf_save_path: Optional[str] = None
@@ -203,7 +205,21 @@ def main(config: TrainLmConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        if config.train_loss_implementation == levanter.eval.LmEvalLossImplementation.FUSED:
+            return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        activations, aux_loss = split_activations(model.activations(example.tokens, example.attn_mask, key=key))
+        logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
+        return (
+            materialized_next_token_loss(
+                logits,
+                example.tokens,
+                example.loss_weight,
+                Vocab=model.Vocab,
+                Pos=model.Pos,
+                logsumexp_weight=config.z_loss_weight,
+            )
+            + aux_loss
+        )
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
