@@ -467,3 +467,107 @@ TEST, deliberately set up as an A/B rather than a blanket change:
 
 Recording d5's caution alongside: they raised 256g -> 600g on a different arm and it changed nothing,
 which is why their triage recipe words class 2 as "suspect, then test". This is the test.
+
+---
+
+# STANDALONE RESULTS — ep25-d6, written to survive without the narrative above
+
+Question: does latent MoE — projecting the MoE input from `d` to `L` before dispatch and back after
+combine, so the expert-parallel all-to-all carries half-width rows — win at the hero shape (d6144,
+top-4, 48 layers, EP64, one GB200 rack) on top of the EP25 stack? The thesis being tested is that the
+step is collective-BYTES-bound, which fp8 validated but could not exploit.
+
+## R1. The port, and the arithmetic every reader needs
+
+Latent MoE is now a first-class option in the grug training path (`moe_latent_dim` /
+`moe_latent_norm` on `GrugModelConfig`, `SCALE_MOE_LATENT_DIM` / `SCALE_MOE_LATENT_NORM` through
+`launch_cw_scale`). The router, QB balancing, the drop metric and spill all sit upstream of the
+projection and needed no change — verified, not assumed. `_compute_flops` replaces the routed-expert
+term with the latent-width GLU plus the two projections, so **arch-aware MFU is correct on both arms**.
+
+ANALYTIC FLOPs/TOKEN, the number that makes MFU interpretable, resolved through the shipping code:
+
+| arm | E | I | latent | **FLOPs/token** | routed params | a2a send buffer | bucket mean |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| dense (reference) | 128 | 3072 | — | **48.186 G** | 347.892 B | 3.000 GiB | 2048 |
+| matched-work (primary) | 128 | 6144 | 3072 | **51.810 G** (+7.52%) | 347.892 B | 1.500 GiB | 2048 |
+| param-preserving (secondary) | 256 | 3072 | 3072 | **41.014 G** (-14.9%) | 347.892 B | 1.500 GiB | 1024 |
+
+Latent moves the denominator in BOTH directions depending on how the arm is constructed, which is
+why tok/s and MFU must always be reported together. The matched-work arm is the honest wire test: it
+holds routed parameters, routed expert FLOPs and the drop regime fixed and changes only the wire —
+but it is NOT work-neutral, because the two projections add 7.52% analytic FLOPs/token.
+
+## R2. The dense control, and a clean reproduction of the EP25 hero-shape result
+
+`/mwittmann/ep25d6-d6144-e128-dense-120-0726-1440`, 120/120 steps, 48.186 GFLOP/token:
+
+    steady tail 90-119: MFU p50 24.842% (p10 24.719 / p90 24.978, sd 0.103), 274,954 tok/s, 15.266 s
+    early window 10-24: MFU p50 27.177%, 300,803 tok/s, 13.944 s
+    drops 0.169@0 -> 0.870@12 -> 0.296@48 -> 0.091@119 (120-step run: step 119 is end-of-anneal)
+    loss 10.31@2 -> 5.654@119
+
+d5's reference leg read 24.594% / 276,413 tok/s / drops 0.089@119 / loss 5.59. This reproduces it to
++0.25pp MFU and 0.002 drop fraction from an independent session and rack allocation. It is also
+internally consistent where d5's summary row was not (274,954 x 144.5588e9 / 1.6e17 = 24.84% exactly),
+so all comparisons here rest on a self-consistent control.
+
+## R3. THE MECHANISM MEASUREMENT, and it lowers the ceiling on this direction before any latent leg reports
+
+From the dense control's own profiler window (steps 20-22, `xplane_overlap`, one host, 4 GPUs):
+
+    exposed collective 4,126 / 4,384 / 4,828 / 4,755 ms per 3 steps = 1.38-1.61 s of every 15.3 s step
+    compute stream busy 38,700 of 42,198 ms (91.7%), i.e. 3,498 ms idle against 4,126 ms exposed
+
+Exposed collective time again almost exactly fills compute idle — EP25's premise, now measured at the
+hero shape instead of the d5120 proxy. But the decomposition is the finding:
+
+| collective | occupancy | overlap | exposed | latent's effect |
+|---|--:|--:|--:|---|
+| `SendRecv` async (expert a2a) | 5,620 ms | 85.1% | 838 ms | halves the bytes |
+| `SendRecv` INLINE on the compute stream | 1,266 ms | **0.0%** | 1,266 ms | halves the bytes |
+| `AllGather` (FSDP weights) | 1,930 | 70.7% | 566 | none |
+| `ReduceScatter` (FSDP grads) | 1,668 | 56.3% | 729 | none |
+| `AllReduce f32` (QB beta, norms) | 1,596 | 57.4% | 680 | none |
+
+**Only 51% of exposed collective time is the expert all-to-all.** The rest is FSDP and QB traffic that
+latent does not touch. So halving the dispatch payload can recover at most ~351 ms of a 15.3 s step
+(2.3%) even if a2a exposure scales perfectly with bytes — against an added latent-projection cost of
+285-570 ms/step. **The mechanism's best case is roughly the size of its own overhead.** That is a
+quantitative ceiling on the direction, derived from the baseline alone, and it holds regardless of how
+the latent legs land.
+
+## R4. An independent finding worth more than the latent question
+
+`xplane_op_detail` attributes every `SendRecv` event to `MoEExpertMlp/moe_mlp/shard_map/{dispatch,
+combine}/all_to_all` — 12 distinct HLO `all_to_all` ops, 144 events each (48 layers x 3 steps).
+**Exactly three of the twelve are scheduled on the compute stream and are 0.0% overlapped:**
+
+    all_to_all.40.1  bwd dispatch  439.18 ms      all_to_all.46.1  bwd combine  423.72 ms
+    all_to_all.56.1  fwd dispatch  402.75 ms      (per 3 steps, consistent across all 4 GPUs to 1%)
+
+The other nine are on the async stream and 85% hidden. Those three placements cost **422 ms of every
+step — 31% of all exposed collective time**, which is larger than the best case of the entire latent
+mechanism, and they cost no bytes and no arithmetic to fix. This effort has repeatedly found that
+scheduling fixes are the cheap kind; this is a concrete, localized one.
+
+## R5. Latent MoE adds 1.8 B REPLICATED parameters per GPU, and that is not free
+
+Following the standalone implementation, the projections are `P(None, None)` — replicated, like the
+router, while everything else in the model is sharded. At the hero shape that is
+`48 x 2 x 6144 x 3072 = 1.812 B` parameters on every GPU: 6.75 GiB of fp32 params, 6.75 GiB of MuonH
+momentum, 6.75 GiB of gradient. Invisible in the standalone harness, which was not memory-limited.
+Two fixes exist and neither was applied here, to keep the port faithful: shard the projections over
+the expert axis (trades replication for a small per-layer all-gather), or share one projection pair
+across all layers (removes it entirely, at a quality cost, and is a genuinely different architecture).
+
+## R6. Operational: the latent arms are harder to land than the dense arm, with a mechanism
+
+Rack tally: dense 1 submission / 1 success; latent 3 submissions / 0 successes / 6 deaths. Every
+latent death classifies as preemption or a gang abort with **no primary task** and zero hits on
+`failed to allocate`, `RESOURCE_EXHAUSTED`, `ncclAlltoAll` or `Cuda failure` — d5's class 2, i.e. a
+kernel SIGKILL, the signature of a container host-memory OOM. The mechanism follows from R5: with
+`SCALE_OFFLOAD_OPT_STATE=1` the replicated projection momentum is pinned host memory, so a latent
+node needs ~108 GiB against the dense arm's ~81 GiB, versus a launcher default of `ram="256g"` on a
+node with 960 GB. Under test as an A/B (one leg at 600g, one left at 256g).
+Added `SCALE_RAM` and `SCALE_PREEMPTIBLE` to the launcher so neither needs a code edit again.
