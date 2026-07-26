@@ -215,11 +215,21 @@ replicated embedding trio", i.e. ALL persistent state and no activations — the
 first step's temporaries. Nothing is replicated that should be sharded; the per-GPU parameter shard is
 what it should be at EP64.
 
-The 114,492,278,784-byte request is therefore not a tensor at all. It factors as
-2^11 x 3 x 13 x 1,433,447 — that trailing prime means no tensor shape produces it, and it matches no
-combination of model dimensions. It is XLA:GPU's single contiguous TEMP ALLOCATION for the executable,
-which the runtime requests once per execution, so its size is the sum of the module's live
-intermediates. Reconstructing what has to be live at the peak of one step:
+The 114,492,278,784-byte request is therefore not a tensor at all. Two independent legs, after a
+correction: my first draft called 1,433,447 prime, which is WRONG — it is 929 x 1543, so the full
+factorization is 2^11 x 3 x 13 x 929 x 1543 and the "trailing prime" argument is void. The dimensional
+argument that does hold is divisibility, verified with sympy:
+
+    as fp32: 28,623,069,696 elements = 2^9 x 3 x 13 x 929 x 1543
+    as bf16: 57,246,139,392 elements = 2^10 x 3 x 13 x 929 x 1543
+    NEITHER is divisible by H = 6144 (which needs 2^11 x 3), by T = 65,536, or by V = 128,256.
+
+Every candidate tensor in this model carries a 6144 (hidden, or 2I which is also 6144) or a 128,256
+(vocab) dimension, and every activation additionally carries the 65,536 per-shard token count. So no
+single such tensor can produce this size. That is the negative leg. The positive leg is the
+reconstruction below, which accounts for the request without residue. Together with XLA:GPU allocating
+ONE contiguous temp buffer per executable, sized as the sum of the module's live intermediates, the
+conclusion is that this is the arena. Reconstructing what has to be live at the peak of one step:
 
     fp32 expert-weight gradient accumulators (same 3 units as params)   40.5 GiB
     bf16 scan residual stack [48, 65536, 6144]                          36.0 GiB
@@ -232,3 +242,11 @@ compressible items, in order: the fp32 gradient accumulators (40.5 GiB), the sca
 is RESIDENT rather than arena — which is exactly why `SCALE_OFFLOAD_OPT_STATE=1` is the right rung:
 it takes resident 92.02 -> ~51.5 GiB, so 51.5 + 106.63 = ~158 GiB against the 165.9 GiB limit at
 fraction 0.90).
+
+### Method note (for the final report)
+
+Three confident intermediate claims on this thread have now been caught by cross-checking rather than
+by measurement: the coordinator's drop-model reframing, d1's toy-scale (mu=32) drop model, and my
+"1,433,447 is prime" argument. Each was corrected before it reached a conclusion, and in each case the
+conclusion survived on better evidence. Worth one sentence in the write-up: a reader should trust the
+surviving numbers more, not less, knowing the failed ones were caught by the same process.
