@@ -19,6 +19,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
+from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import ordered_last_stage_loss_and_grads
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
@@ -27,7 +28,6 @@ from experiments.grug.moe.train import (
     _accumulate_microbatch_tree,
     _average_microbatch_tree,
     _combine_grouped_router_metrics,
-    _compute_stage,
     _grouped_last_stage_loss_and_grads,
     _pack_group_attention_mask,
     _pack_microbatch_pair,
@@ -378,44 +378,6 @@ def test_grouped_last_stage_matches_ordered_value_and_vjp_under_jit(remat_mode: 
     )
     hiddens = tuple(_shard_group_hidden(jax.random.normal(jax.random.PRNGKey(key), (1, 4, 8)), mesh) for key in (1, 2))
 
-    def ordered_loss_and_grads(params, stage_hiddens, stage_batches):
-        losses = []
-        qb_betas_next = []
-        grads = []
-        d_hiddens = []
-        for hidden, batch in zip(stage_hiddens, stage_batches, strict=True):
-
-            def loss_fn(stage_params, stage_hidden, batch=batch):
-                compute_params = _compute_stage(stage_params, qb_betas, mp)
-                output_hidden, router_metrics = compute_params.block_range(stage_hidden, mask=batch.attn_mask)
-                final_hidden = compute_params.finalize_hidden(output_hidden)
-                loss, metrics = compute_params.hidden_next_token_loss(
-                    final_hidden,
-                    batch.tokens,
-                    batch.loss_weight,
-                    router_metrics,
-                    reduction="mean",
-                    logsumexp_weight=0.01,
-                    return_router_metrics=True,
-                )
-                return loss, metrics["qb_beta_per_layer"]
-
-            (loss, qb_next), (grad, d_hidden) = jax.value_and_grad(
-                loss_fn,
-                argnums=(0, 1),
-                has_aux=True,
-            )(params, hidden)
-            losses.append(loss)
-            qb_betas_next.append(qb_next)
-            grads.append(grad)
-            d_hiddens.append(d_hidden)
-        return (
-            _sum_microbatch_group(tuple(losses)),
-            _sum_microbatch_group(tuple(qb_betas_next)),
-            _sum_microbatch_group(tuple(grads)),
-            tuple(d_hiddens),
-        )
-
     grouped_fn = jax.jit(
         lambda params, stage_hiddens, stage_batches: _grouped_last_stage_loss_and_grads(
             params,
@@ -426,7 +388,16 @@ def test_grouped_last_stage_matches_ordered_value_and_vjp_under_jit(remat_mode: 
             logsumexp_weight=0.01,
         )
     )
-    ordered_fn = jax.jit(ordered_loss_and_grads)
+    ordered_fn = jax.jit(
+        lambda params, stage_hiddens, stage_batches: ordered_last_stage_loss_and_grads(
+            params,
+            qb_betas,
+            stage_hiddens,
+            stage_batches,
+            mp,
+            logsumexp_weight=0.01,
+        )
+    )
     with jax.set_mesh(mesh):
         actual = grouped_fn(stage, hiddens, batches)
         expected = ordered_fn(stage, hiddens, batches)

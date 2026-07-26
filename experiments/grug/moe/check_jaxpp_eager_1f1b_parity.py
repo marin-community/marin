@@ -70,7 +70,9 @@ class PrecisionMode(StrEnum):
 class ValueParity:
     reference_l2: float
     absolute_l2: float
+    max_absolute_error: float
     relative_l2: float
+    finite: bool
     passed: bool
 
 
@@ -79,7 +81,9 @@ class GradientParity:
     path: str
     reference_l2: float
     absolute_l2: float
+    max_absolute_error: float
     relative_l2: float
+    finite: bool
     passed: bool
 
 
@@ -105,14 +109,48 @@ class ParityReport:
 
 
 def relative_l2(actual: jax.Array, reference: jax.Array) -> tuple[float, float, float]:
+    reference_norm, absolute, relative, _, _ = parity_metrics(actual, reference)
+    return reference_norm, absolute, relative
+
+
+def parity_metrics(actual: jax.Array, reference: jax.Array) -> tuple[float, float, float, float, bool]:
+    """Return norms, maximum absolute error, and a joint finite-value check."""
     actual_f32 = jnp.asarray(actual, dtype=jnp.float32)
     reference_f32 = jnp.asarray(reference, dtype=jnp.float32)
-    absolute = float(jnp.linalg.norm(actual_f32 - reference_f32))
+    difference = actual_f32 - reference_f32
+    absolute = float(jnp.linalg.norm(difference))
+    max_absolute_error = float(jnp.max(jnp.abs(difference), initial=0.0))
     reference_norm = float(jnp.linalg.norm(reference_f32))
     relative = absolute / max(reference_norm, 1e-12)
-    if not math.isfinite(absolute) or not math.isfinite(reference_norm) or not math.isfinite(relative):
+    finite = bool(
+        jnp.all(jnp.isfinite(actual_f32))
+        & jnp.all(jnp.isfinite(reference_f32))
+        & jnp.isfinite(absolute)
+        & jnp.isfinite(max_absolute_error)
+        & jnp.isfinite(reference_norm)
+        & jnp.isfinite(relative)
+    )
+    if not finite:
         relative = math.inf
-    return reference_norm, absolute, relative
+    return reference_norm, absolute, relative, max_absolute_error, finite
+
+
+def build_value_parity(
+    actual: jax.Array,
+    reference: jax.Array,
+    *,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> ValueParity:
+    """Build one finite, relative-L2-gated value result."""
+    reference_l2, absolute_l2, relative, max_absolute_error, finite = parity_metrics(actual, reference)
+    return ValueParity(
+        reference_l2=reference_l2,
+        absolute_l2=absolute_l2,
+        max_absolute_error=max_absolute_error,
+        relative_l2=relative,
+        finite=finite,
+        passed=finite and relative <= tolerance,
+    )
 
 
 def build_parity_report(
@@ -122,18 +160,13 @@ def build_parity_report(
     automatic_gradients,
     direct_gradients,
     tolerance: float = DEFAULT_TOLERANCE,
+    gradient_root: str = "params",
 ) -> ParityReport:
     """Build the per-leaf parity result and enforce one relative-L2 ceiling."""
     if tolerance <= 0:
         raise ValueError(f"tolerance must be positive, got {tolerance}")
 
-    loss_reference_l2, loss_absolute_l2, loss_relative_l2 = relative_l2(automatic_loss, direct_loss)
-    loss = ValueParity(
-        reference_l2=loss_reference_l2,
-        absolute_l2=loss_absolute_l2,
-        relative_l2=loss_relative_l2,
-        passed=loss_relative_l2 <= tolerance,
-    )
+    loss = build_value_parity(automatic_loss, direct_loss, tolerance=tolerance)
 
     automatic_with_paths, automatic_tree = jax.tree.flatten_with_path(automatic_gradients)
     direct_with_paths, direct_tree = jax.tree.flatten_with_path(direct_gradients)
@@ -148,14 +181,19 @@ def build_parity_report(
     ):
         if automatic_path != direct_path:
             raise ValueError(f"automatic and direct gradient paths differ: {automatic_path} != {direct_path}")
-        reference_l2, absolute_l2, relative = relative_l2(automatic_leaf, direct_leaf)
+        reference_l2, absolute_l2, relative, max_absolute_error, finite = parity_metrics(
+            automatic_leaf,
+            direct_leaf,
+        )
         gradients.append(
             GradientParity(
-                path=f"params{jax.tree_util.keystr(automatic_path)}",
+                path=f"{gradient_root}{jax.tree_util.keystr(automatic_path)}",
                 reference_l2=reference_l2,
                 absolute_l2=absolute_l2,
+                max_absolute_error=max_absolute_error,
                 relative_l2=relative,
-                passed=relative <= tolerance,
+                finite=finite,
+                passed=finite and relative <= tolerance,
             )
         )
 
