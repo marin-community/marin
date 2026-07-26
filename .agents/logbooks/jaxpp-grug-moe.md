@@ -55,7 +55,7 @@ author: dlwh
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
-- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's device-ragged symmetric arena before globally ordered DIME creation in corrected parent `/dlwh/iris-run-job-20260726-140547`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
+- `GRUG-JAXPP-016`: Public device-initiated ragged-all-to-all has enough direct transport headroom to exceed 20 MFU, but the reduced four-stage JaxPP integration deadlocks before its first loss under standard 1F1B, GPipe, transfer-priority ordering, directional DIME communicators, NCCL implicit launch ordering, and disabled receive-buffer reuse. Synthetic two-rank and four-rank gates pass, including 16 microbatches, 96 transfers, and 128 stage tasks. Blocker: isolate the additional full-training condition and fix #7655. Current test: reserve each stage's device-ragged symmetric arena before globally ordered DIME creation in parent `/dlwh/iris-run-job-20260726-141437`. Resume when the L8/d2560/e64/top-k4/seq4096/b512/m16 gate completes finite steps with relative-L2 at most `0.002` for loss and every gradient.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
 
 ### Falsified / Dead End
@@ -3451,3 +3451,21 @@ author: dlwh
   - The corrected run is the first valid test of device-ragged reservation before DIME.
 - Next action:
   - Require every rank to log the device-ragged warmup before any DIME stream or communicator creation, followed by all 12 adjacent-link prewarm logs, no 51.469 GiB allocation error, and finite L8 steps. Run the fixed `0.002` loss/every-gradient parity gate only after a finite result.
+
+### 2026-07-26 07:14 PDT - isolate ragged warmup under the stage mesh
+- Hypothesis: The host-seeded warmup will reserve symmetric memory once its `shard_map` is traced and executed under the stage-local mesh rather than the enclosing global pipeline mesh.
+- Commit Hash: `6a98280f77` (`[grug] Enter stage mesh for ragged warmup`).
+- Commands:
+  - Parent `/dlwh/iris-run-job-20260726-140547` retried warm-then-DIME from `672c3eba00`.
+  - A forced-eight-CPU probe invoked `_warm_jaxpp_device_ragged` for a `pipeline=1,expert=2` stage from inside a `pipeline=4,expert=2` global mesh.
+  - Parent `/dlwh/iris-run-job-20260726-141437` runs the matched H100 treatment from `6a98280f77`.
+- Results:
+  - The retry allocated all four H100x8 nodes but failed on every rank during warmup tracing: the ambient `pipeline=4` mesh did not match the stage-local `pipeline=1` `shard_map` mesh. No ragged collective, DIME resource, link prewarm, compiler phase, loss, MFU, or 51.469 GiB allocation attempt occurred.
+  - Parent and child are terminal killed; all four ranks are terminal and no live descendant remains. This is another setup-invalid result.
+  - `6a98280f77` enters the stage mesh for warmup construction, placement, and execution, then restores the global mesh. The CPU probe passes the previous mesh check and reaches only the expected XLA CPU backend limitation: `ragged-all-to-all` has no CPU thunk.
+  - The focused explicit-MPMD parity suite passes all seven tests, and changed-file precommit passes.
+- Interpretation:
+  - Explicit mesh arguments on `shard_map` and `NamedSharding` do not override JAX 0.11's ambient mesh consistency check. The whole warmup operation must run inside `set_mesh(stage_mesh)`.
+  - The third parent is the first launch containing both the host-seed and stage-context fixes.
+- Next action:
+  - Require every rank to complete warmup before DIME initialization, then all 12 link prewarms, no symmetric-allocation failure, and finite L8 metrics. Run the fixed `0.002` loss/every-gradient parity gate only after that functional gate.
