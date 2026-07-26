@@ -8,6 +8,7 @@ import pytest
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe import check_jaxpp_explicit_mpmd_std1f1b_ragged_parity as parity
+from experiments.grug.moe import nccl_runtime
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import DEFAULT_TOLERANCE
 from experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity import (
     block_local_parity_outputs,
@@ -163,6 +164,31 @@ def test_local_precompile_requires_explicit_binary_opt_in():
 
     with pytest.raises(ValueError, match="must be 0 or 1"):
         local_precompile_enabled({"GRUG_JAXPP_PRECOMPILE_LOCAL": "true"})
+
+
+def test_nccl_runtime_validation_requires_expected_version_and_library(tmp_path):
+    versioned_library = tmp_path / "libnccl.so.2.31.0"
+    versioned_library.touch()
+    library_link = tmp_path / "libnccl.so.2"
+    library_link.symlink_to(versioned_library)
+    runtime = nccl_runtime.NcclRuntime(version=23100, mapped_libraries=(versioned_library,))
+    expected = {
+        nccl_runtime.NCCL_RUNTIME_VERSION_ENV: "23100",
+        nccl_runtime.NCCL_LIBRARY_PATH_ENV: str(library_link),
+    }
+
+    nccl_runtime.validate_nccl_runtime(runtime, expected)
+
+    with pytest.raises(RuntimeError, match="NCCL runtime version mismatch"):
+        nccl_runtime.validate_nccl_runtime(
+            runtime,
+            {**expected, nccl_runtime.NCCL_RUNTIME_VERSION_ENV: "23007"},
+        )
+    with pytest.raises(RuntimeError, match="NCCL runtime library mismatch"):
+        nccl_runtime.validate_nccl_runtime(
+            runtime,
+            {**expected, nccl_runtime.NCCL_LIBRARY_PATH_ENV: str(tmp_path / "other-libnccl.so.2")},
+        )
 
 
 def test_dime_prewarm_includes_terminal_metrics_link():

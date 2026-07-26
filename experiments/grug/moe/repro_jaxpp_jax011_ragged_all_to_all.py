@@ -47,6 +47,8 @@ from jax.sharding import PartitionSpec as P
 from jaxpp import jax_compat as jaxpp_compat  # pyrefly: ignore[missing-import]
 from jaxpp.experimental import mpmd as jaxpp_mpmd  # pyrefly: ignore[missing-import]
 
+from experiments.grug.moe.nccl_runtime import nccl_runtime, validate_nccl_runtime
+
 JAX_VERSION = "0.11.1.dev20260725"
 JAXPP_VERSION = "0.10.2"
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
@@ -134,6 +136,8 @@ def jaxpp_revision() -> str:
 def environment() -> dict[str, Any]:
     inline_value = jaxpp_compat.canonicalize_pjit_inline(False)
     backend = jax.extend.backend.get_backend()
+    runtime = nccl_runtime()
+    validate_nccl_runtime(runtime, os.environ)
     return {
         "python": sys.version,
         "platform": platform.platform(),
@@ -149,6 +153,8 @@ def environment() -> dict[str, Any]:
         "jaxpp_inline_value": repr(inline_value),
         "jaxpp_inline_type": type(inline_value).__qualname__,
         "nvidia_nccl_cu13": package_version("nvidia-nccl-cu13"),
+        "nccl_runtime_version": runtime.version,
+        "nccl_mapped_libraries": tuple(str(path) for path in runtime.mapped_libraries),
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
         "xla_python_client_mem_fraction": os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION", ""),
     }
