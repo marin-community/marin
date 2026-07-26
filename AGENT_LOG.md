@@ -1907,3 +1907,48 @@ ms/3-step of exposure; the quantization compute costs more than it saves and did
 one change the attribution said would fix it. Not closed, but its cost structure is now measured
 rather than assumed, and the next step is a full op-level accounting, not another variant.
 Confidence: 9/10 on all four readings; 8/10 that the top-30 truncation explains the attribution error.
+
+## FULL OP ACCOUNTING 2026-07-26 15:25 UTC — the attribution was RIGHT; my wiring was incomplete
+
+Untruncated diff (6386 vs 6408 ops, not a top-30 view), control vs delayed-scaling leg, GPU:0:
+
+| op | ctrl | fp8 delayed | delta |
+|---|--:|--:|--:|
+| `loop_reduce_fusion_1` | 816 ms | 4854 ms | **+4038** |
+| `loop_reduce_fusion_2` | 410 ms | 2709 ms | **+2299** |
+| `loop_convert_fusion_30` / `_11` | ~1 ms | 982 ms | +981 |
+| `input_reduce_fusion_14` | 4 ms | 616 ms | +612 |
+| nvjet GEMM kernels | — | — | large but mostly SUBSTITUTION (positive deltas sum to +17000 against a net +6717, so bf16 kernels vanish as fp8 ones appear) |
+
+Total non-collective: 28616 -> 35333 ms per 3 steps = **+2239 ms/step**, matching the span-based
+estimate of 2235 to within 0.2% — two independent methods agreeing.
+
+**The reduce fusions are STILL +2112 ms/step in a leg that was supposed to have removed them.**
+Cause found immediately once the full list existed: `_wire_quantize_dispatch` (the supplied-scale
+path) was wired into only TWO of the quantization sites — the dispatch GEMM forward and its dgrad.
+`_fp8_a2a_impl` at line 130, which serves the COMBINE leg forward and both backward wire
+collectives, still called `_wire_quantize` and computed a per-token amax every time.
+
+So the original attribution was correct and my *implementation* was partial: delayed scaling
+removed a minority of the amax passes, and the 11% reduction is exactly what removing a minority
+predicts. I reported "the attribution's magnitude is falsified" one step too early — the honest
+statement is that the previous leg did not test the hypothesis it was built to test.
+
+Fixed in one line (all sites now route through the supplied-scale quantizer, tests still 10/10).
+Also landed: the scale `all_to_all` is skipped entirely under a supplied scale, since a constant is
+identical on every sender and communicating it is pure waste.
+
+### Corrections to my own earlier reporting
+
+- **Loss is PARITY, not an improvement.** fp8 sitting ~0.09 below the control at step 119 over 120
+  steps is within run-to-run variation, and claiming a fidelity *gain* from a lossy transform would
+  deserve the scepticism it invited. The entitled reading is: fidelity is not the obstacle.
+- **The underflow telemetry never ran.** I built the guard and then did not set
+  `SCALE_A2A_FP8_UNDERFLOW_CHECK=1` in the submission, so its first real use is still untested and
+  the calibration is confirmed only indirectly via the loss. Process gap, not a code gap.
+- **Methodological finding worth naming:** I flagged the top-30 truncation as making those deltas
+  upper bounds, then used them to drive a quantitative prediction anyway. A correctly-labelled
+  number used outside its label — subtler than a wrong number or a wrong frame, and it cost two
+  rack legs. The tool now takes `XPLANE_TOP_OPS=0` for a full list; attribution work should never
+  use the truncated view.
+Confidence: 9/10 that the incomplete wiring explains the shortfall; the two reduce fusions are named, measured in both legs, and traced to a specific unrouted call site.
