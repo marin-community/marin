@@ -62,7 +62,7 @@ from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
 
 AMD64_IMAGE_PLATFORM = "linux/amd64"
-KUBERNETES_TASK_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
+KUBERNETES_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
 
 
 @dataclass(frozen=True)
@@ -222,19 +222,20 @@ def _build_cluster_images(
 
     controller_tag = config.controller.image
     if controller_tag:
+        controller_platforms = KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM
         _build_and_push_image(
             controller_tag,
             "controller",
             git_sha,
             verbose=verbose,
-            platform=AMD64_IMAGE_PLATFORM,
+            platform=controller_platforms,
             cargo_profile=cargo_profile,
         )
         built["controller"] = controller_tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
-        task_platforms = task_platforms or (KUBERNETES_TASK_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
+        task_platforms = task_platforms or (KUBERNETES_IMAGE_PLATFORMS if kubernetes else AMD64_IMAGE_PLATFORM)
         _build_and_push_image(
             task_tag,
             "task",

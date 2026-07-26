@@ -43,10 +43,10 @@ jobs:
   # the deps stage COPYs the root uv.lock and every workspace member's
   # pyproject.toml (plus lib/rigging source), all of which live above lib/iris.
   #
-  # The controller is pinned to amd64, and Kubernetes does not run the worker
-  # image. Only task pods need arm64 for CoreWeave GB200 Grace nodes. Each build
-  # uses a native runner and pushes an arch-suffixed tag; iris-manifests then
-  # publishes the final tags without QEMU builds.
+  # Kubernetes does not run the worker image. Task pods use the task image and
+  # the controller image as the log-shipper sidecar, so both need arm64 for
+  # CoreWeave GB200 Grace nodes. Each build uses a native runner and pushes an
+  # arch-suffixed tag; iris-manifests publishes the final tags without QEMU.
   iris-images:
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -65,6 +65,10 @@ jobs:
             target: controller
             arch: amd64
             runner: ubuntu-latest
+          - name: iris-controller
+            target: controller
+            arch: arm64
+            runner: ubuntu-24.04-arm
           - name: iris-task
             target: task
             arch: amd64
@@ -125,7 +129,8 @@ jobs:
           HASH_TAG: ${{ needs.iris-tags.outputs.hash }}
         run: |
           SOURCES=("$IMAGE:$HASH_TAG-amd64")
-          if [[ "$IMAGE" == "ghcr.io/marin-community/iris-task" ]]; then
+          if [[ "$IMAGE" == "ghcr.io/marin-community/iris-controller" ||
+                "$IMAGE" == "ghcr.io/marin-community/iris-task" ]]; then
             SOURCES+=("$IMAGE:$HASH_TAG-arm64")
           fi
           docker buildx imagetools create \
