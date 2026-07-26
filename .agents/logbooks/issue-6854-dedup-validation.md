@@ -1483,6 +1483,57 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T10:58:50Z — 121,479 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1047-v272` independently
+  revalidated p0 decision-file 5 semantic offsets 1,792 and 1,920 plus p3
+  decision-file 101 semantic offsets 1,536 and 1,664. Their 512 baseline pairs
+  contain 233 model false positives, 278 model true duplicates, and one
+  unresolved outcome. All 1,073 judgments were valid on their first attempts,
+  and every pair used direct review. The outcome Parquet SHA-256 values are
+  `d771e94cb9d93e3ecc0018e47aa31819b6d5044d9ff0a8f9b8ba52ba52cf06e4`,
+  `0121d99c81db3364c477ce7b79c6787281d386be60d70f67259c36e4cd6a26ac`,
+  `11934cf32404b28503b5ca566becd5ffe778fd54b6f944398bb9cdaaf21b64fa`,
+  and
+  `2b96161619cbf3128d17987cb335f6618df1f5b5a895736959042e2ef09311fc`.
+- Complete-text review resolves `part-00101-of-00128.parquet:2298` as a false
+  positive. The member is a Jelenich surname page reporting 51 family trees,
+  17 people in 1940, 41% female, Frank as the most common male name, 25%
+  renters, and a three-person household. The canonical is a Northrop page
+  reporting 85,172 trees, 1,996 people, salesman as the common occupation, 44
+  work hours, $1,245 income, and eight vacation weeks. Neither text contains
+  the other. Character, line, and word-sequence similarity are 0.317678,
+  0.524590, and 0.664653. The member/canonical text SHA-256 values are
+  `ed0daf573572003b4fe0a3d6c1315e6c789d4337edce991117b36bfc30a5d3c3` /
+  `d8862607bb758393fc473ddd6695e035597efd95b96b4dec5d4976926bbbb35e`;
+  inspection-artifact SHA-256 is
+  `f1d24089d109afe6db8bfe93508bd779484c272d1590ee024e2aaca907cceeae`.
+- The loss pass classified the pair as a high-confidence false positive. The
+  duplication pass treated the distinct surname statistics as template slots
+  and classified it as a high-confidence duplicate. The low-confidence
+  tiebreak again identified the Jelenich facts as unique, so the model left the
+  pair unresolved. `/rav/datakit-6854-publish-row2298-1059-v278` wrote the
+  immutable false-positive record, and
+  `/rav/datakit-6854-verify-row2298-1059-v279` separately reread the source
+  pair, semantic checkpoint, inspection artifact, record, deterministic
+  Parquet bytes, and completion marker. Semantic-evidence, manual-record, and
+  manual-Parquet SHA-256 values are
+  `2ffbfec33949372425d7b43efbea5e2ed50b097e9e4aec1ff84c124961c53f17`,
+  `7119620f315877cc4f7af0e7670723658147ae0fe30f4ad88f2e308a4990c604`,
+  and `3e1c5c13a980f09f1c83552acc549e5b013e76e56258fa9cf83120881c63dfd2`.
+- Across the stable 956-checkpoint snapshot, all 136 unresolved model outcomes
+  are covered by 105 true-duplicate and 31 false-positive manual records. The
+  adjusted totals are:
+
+  - baseline: 98,066 pairs, 62,664 false positives, 35,402 true duplicates;
+  - treatment: 23,413 pairs, 12,032 false positives, 11,381 true duplicates;
+  - combined: 121,479 pairs, 74,696 false positives, 46,783 true duplicates.
+
+- The next audit frontiers are p0 `(5, 2,048)`, p1 `(37, 0)`, p2 `(69, 0)`,
+  and p3 `(101, 1,792)`. All four batch-priority 2-H100 workers continue
+  serving requests. Their 12 root, broker, and GPU pods remain Ready with zero
+  Kubernetes restarts.
+
 ### 2026-07-26T10:44:28Z — 120,967 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1043-v271` independently
