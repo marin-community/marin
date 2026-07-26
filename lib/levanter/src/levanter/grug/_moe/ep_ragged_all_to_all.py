@@ -94,6 +94,69 @@ def _fp8_wire_a2a_bwd(_res, ct: jax.Array):
 _fp8_wire_all_to_all.defvjp(_fp8_wire_a2a_fwd, _fp8_wire_a2a_bwd)
 
 
+def _quantize_weight_scalar(w: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Quantize an expert's weights with ONE scalar scale.
+
+    XLA folds an operand scale into ``__cublas$lt$matmul$f8`` only when the scale is a scalar, and
+    weights are not token-indexed so a per-expert scalar shares nothing across tokens. Measured on
+    hostile data, a per-column scale buys nothing over this (0.0374 vs 0.0375): the binding limit
+    is e4m3's 3-bit mantissa, not scale granularity.
+    """
+    scale = jnp.maximum(jnp.max(jnp.abs(w.astype(jnp.float32))), _WIRE_EPS) / _FP8_WIRE_MAX[jnp.float8_e4m3fn]
+    return (w.astype(jnp.float32) / scale).astype(jnp.float8_e4m3fn), scale
+
+
+@jax.custom_vjp
+def _fp8_dispatch_gemm(send_block: jax.Array, w13: jax.Array) -> jax.Array:
+    """Dispatch all_to_all carrying e4m3, fused with the first expert GEMM.
+
+    The per-token scale rides the GEMM *output* rather than its input. Row-linearity makes that
+    exact, and it is what keeps the dot on the fp8 custom call: an input-side per-token scale is
+    non-scalar, which silently drops the GEMM back to bf16 (and is half of why the earlier
+    fp8-wire attempt lost). The collective and the GEMM stay in one differentiated region so the
+    fp8 payload never crosses an autodiff boundary.
+    """
+    return _fp8_dispatch_gemm_fwd(send_block, w13)[0]
+
+
+def _fp8_dispatch_gemm_fwd(send_block: jax.Array, w13: jax.Array):
+    quantized, scale = _wire_quantize(send_block, jnp.float8_e4m3fn)
+    bits = jax.lax.all_to_all(
+        jax.lax.bitcast_convert_type(quantized, jnp.uint8), "expert", split_axis=0, concat_axis=0, tiled=True
+    )
+    scales = jax.lax.all_to_all(scale[..., None], "expert", split_axis=0, concat_axis=0, tiled=True)
+    received = jax.lax.bitcast_convert_type(bits, jnp.float8_e4m3fn)
+    row_scale = scales.reshape(-1)
+    weight_q, weight_scale = _quantize_weight_scalar(w13)
+    hidden = received.reshape(-1, received.shape[-1]).astype(jnp.bfloat16) @ weight_q.astype(jnp.bfloat16)
+    hidden = hidden * (row_scale * weight_scale)[:, None].astype(jnp.bfloat16)
+    # Residuals must all be JAX types, so dtypes ride as zero-size arrays rather than as
+    # dtype objects; the tiled a2a preserves shape, so send_block's shape needs no residual.
+    dtypes = (jnp.zeros((), send_block.dtype), jnp.zeros((), w13.dtype))
+    return hidden, (received, row_scale, weight_q, weight_scale, dtypes)
+
+
+def _fp8_dispatch_gemm_bwd(residuals, ct: jax.Array):
+    received, row_scale, weight_q, weight_scale, (send_zero, weight_zero) = residuals
+    # hidden = (R @ Wq) * row * w_scale, so dL/dR = (ct * row * w_scale) @ Wq^T -- the scale sits on
+    # the OUTPUT rows again, so the cotangent GEMM is e5m2 x e4m3 with the scale applied after.
+    scaled_ct = ct.astype(jnp.float32) * (row_scale * weight_scale)[:, None]
+    ct_q, ct_scale = _wire_quantize(scaled_ct, jnp.float8_e5m2)
+    d_received = (ct_q.astype(jnp.bfloat16) @ weight_q.T.astype(jnp.bfloat16)).astype(jnp.float32)
+    d_received = d_received * ct_scale[:, None]
+    # The dequantized value is R * row, so the cotangent w.r.t. it divides the row scale back out.
+    d_dequantized = (d_received / row_scale[:, None]).reshape(received.shape)
+    d_send = _fp8_a2a_impl(d_dequantized.astype(send_zero.dtype), jnp.float8_e5m2)
+    # wgrad stays bf16: its per-token scale varies along the REDUCTION axis and cannot be hoisted
+    # out of the sum (hoisting a scalar in its place measures 87% relative error).
+    dequantized = received.reshape(-1, received.shape[-1]).astype(jnp.float32) * row_scale[:, None]
+    d_w13 = (dequantized.astype(jnp.bfloat16).T @ ct.astype(jnp.bfloat16)).astype(weight_zero.dtype)
+    return d_send, d_w13
+
+
+_fp8_dispatch_gemm.defvjp(_fp8_dispatch_gemm_fwd, _fp8_dispatch_gemm_bwd)
+
+
 @jax.custom_vjp
 def _dispatch_gather(
     x_local: Float[Array, "Tlocal H"],
@@ -375,6 +438,16 @@ def _fixed_a2a_core(
             return _fp8_wire_all_to_all(block)
         return jax.lax.all_to_all(block, "expert", split_axis=0, concat_axis=0, tiled=True)
 
+    # SCALE_A2A_FP8_GEMM=1 keeps the dispatch payload in e4m3 all the way into the first expert
+    # GEMM instead of dequantizing on arrival, with the per-token scale applied to the GEMM output.
+    # Requires the fp8 wire; it replaces the dispatch leg's dequantize-then-bf16-dot with a single
+    # fp8 dot, which is what makes the wire saving show up as speed rather than as QDQ overhead.
+    fp8_gemm = os.environ.get("SCALE_A2A_FP8_GEMM") == "1"
+    if fp8_gemm:
+        if not fp8_wire:
+            raise ValueError("SCALE_A2A_FP8_GEMM=1 requires SCALE_A2A_FP8_WIRE=1")
+        logger.info("fixed-a2a fp8 dispatch GEMM active: e4m3 operands, per-token scale on the GEMM output")
+
     def dispatch_a2a(local_expert_index: int) -> jax.Array:
         with jax.named_scope("dispatch"):
             received = wire_a2a(send_x[local_expert_index])
@@ -387,23 +460,34 @@ def _fixed_a2a_core(
     if prefetch:
         logger.info("fixed-a2a prefetch active: local_experts=%d expert_shards=%d", local_experts, expert_shards)
 
+    if fp8_gemm and prefetch:
+        # The fused op owns its collective, so the prefetch gate cannot hoist the next round's
+        # dispatch above this round's GEMM. Harmless now that the parallel-collective budget keeps
+        # every a2a async regardless, but it means the two knobs do not compose.
+        logger.info("fixed-a2a fp8 dispatch GEMM supersedes the prefetch reorder")
+
     output_parts = []
-    received = dispatch_a2a(0) if prefetch else None
+    received = dispatch_a2a(0) if prefetch and not fp8_gemm else None
     for local_expert_index in range(local_experts):
-        if prefetch:
+        if fp8_gemm:
+            pass
+        elif prefetch:
             next_received = dispatch_a2a(local_expert_index + 1) if local_expert_index + 1 < local_experts else None
         else:
             received = dispatch_a2a(local_expert_index)
-        assert received is not None
         with jax.named_scope("moe_up_down"):
-            expert_input = received.reshape(bucket_size, hidden_dim)
-            hidden = expert_input @ moe_w13_local[local_expert_index]
+            if fp8_gemm:
+                hidden = _fp8_dispatch_gemm(send_x[local_expert_index], moe_w13_local[local_expert_index])
+            else:
+                assert received is not None
+                expert_input = received.reshape(bucket_size, hidden_dim)
+                hidden = expert_input @ moe_w13_local[local_expert_index]
             gate, up = jnp.split(hidden, [moe_dim], axis=-1)
             expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
         with jax.named_scope("combine"):
             returned = wire_a2a(expert_output.reshape(expert_shards, capacity, hidden_dim))
             output_parts.append(returned)
-        if prefetch:
+        if prefetch and not fp8_gemm:
             received = next_received
 
     with jax.named_scope("combine"):

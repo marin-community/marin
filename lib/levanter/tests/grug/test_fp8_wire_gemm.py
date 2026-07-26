@@ -154,3 +154,50 @@ def test_straight_through_gradient_is_finite_and_shaped():
     assert grad.shape == x.shape
     assert jnp.isfinite(grad).all()
     assert float(jnp.max(jnp.abs(grad))) > 0.0
+
+
+def test_fused_dispatch_gemm_matches_the_bf16_reference_and_gradients_flow():
+    """Forward and both cotangents of the fused fp8 dispatch+GEMM against a bf16 reference.
+
+    Single-device expert mesh: the tiled all_to_all is the identity there, which isolates the
+    quantization and the output-side scaling from the permutation.
+    """
+    import numpy as np
+    from levanter.grug._moe.ep_ragged_all_to_all import _fp8_dispatch_gemm
+
+    shards, capacity, hidden, ffn = 1, 32, 64, 48
+    key = jax.random.PRNGKey(2)
+    x_key, w_key, ct_key = jax.random.split(key, 3)
+    send = jax.random.normal(x_key, (shards, capacity, hidden), jnp.float32) * 0.1
+    # Expert weights are sharded per device in production, not replicated, so shard them here:
+    # a replicated weight would need its cotangent psum-ed across the expert axis.
+    w13 = jax.random.normal(w_key, (shards, hidden, ffn), jnp.float32) * 0.05
+    ct = jax.random.normal(ct_key, (shards * capacity, ffn), jnp.float32)
+
+    mesh = jax.sharding.Mesh(np.array(jax.devices()[:1]), ("expert",))
+    spec = jax.sharding.PartitionSpec("expert")
+
+    def fused(s, w):
+        return jax.shard_map(
+            lambda sb, wb: _fp8_dispatch_gemm(sb, wb[0]), mesh=mesh, in_specs=(spec, spec), out_specs=spec
+        )(s, w)
+
+    def reference(s, w):
+        return s.reshape(-1, hidden) @ w[0]
+
+    value, vjp = jax.vjp(fused, send, w13)
+    ref_value, ref_vjp = jax.vjp(reference, send, w13)
+    denominator = float(jnp.mean(jnp.abs(ref_value)))
+    forward_err = float(jnp.mean(jnp.abs(value - ref_value)) / denominator)
+    assert forward_err < 0.05, f"fused fp8 forward error {forward_err:.4f}"
+
+    d_send, d_w = vjp(ct.astype(value.dtype))
+    ref_d_send, ref_d_w = ref_vjp(ct)
+    assert d_send.shape == send.shape and d_w.shape == w13.shape
+    assert jnp.isfinite(d_send).all() and jnp.isfinite(d_w).all()
+    send_err = float(jnp.mean(jnp.abs(d_send - ref_d_send)) / jnp.mean(jnp.abs(ref_d_send)))
+    w_err = float(jnp.mean(jnp.abs(d_w - ref_d_w)) / jnp.mean(jnp.abs(ref_d_w)))
+    # wgrad is computed in bf16 and should track the reference far more closely than dgrad, which
+    # crosses an e5m2 wire.
+    assert w_err < 0.05, f"wgrad error {w_err:.4f}"
+    assert send_err < 0.25, f"dgrad error {send_err:.4f}"
