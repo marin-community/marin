@@ -31,7 +31,28 @@ condition while reducing activation and logit peak memory.
 
 ## Results
 
-Pending the `microbatch_size=4` smoke.
+The `microbatch_size=4` smoke failed on the same 3.91 GiB allocation. The
+allocation size and timing were unchanged, ruling out batch-dependent
+activations as the primary cause.
+
+## Hypothesis 2
+
+The entry point constructs a concrete random 32B teacher before calling
+`Trainer.initial_state`. The trainer wraps that object in a model factory, but
+the original `initial_model` local remains live after the trainer creates its
+mixed-precision state. Loading the checkpoint teacher therefore retains an
+unneeded third teacher representation until training exits.
+
+## Changes to make
+
+Pass a lazy model factory to `Trainer.initial_state` and derive the trainable
+filter from its shape. The factory closes over configurations and keys, not
+concrete arrays, so replacing the random state teacher can release it before
+the first compiled step.
+
+## Results
+
+Pending the lazy-initialization smoke.
 
 ## Future work
 

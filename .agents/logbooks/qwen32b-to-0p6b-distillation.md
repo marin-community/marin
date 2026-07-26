@@ -183,3 +183,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: data and all 17 teacher shards loaded, W&B initialized, and the train step traced and lowered. First execution failed on every device while allocating another 3.91 GiB; no step or checkpoint completed.
 - Interpretation: the failure is a compiled-step peak rather than staging, scheduler, or HLO-lowering failure. Preserve the effective batch and exact objective, but split it into two microbatches of four.
 - Next action: resubmit the 12-step smoke with `microbatch_size=4`; reduce to 2 only if the measured peak still exceeds capacity.
+
+### 2026-07-26 17:20 - Microbatch smoke isolates retained initialization
+
+- Hypothesis: reducing the compiled microbatch from eight to four will lower the failing allocation.
+- Commit hash: `33f4237e66`.
+- Job: `/power/qwen-distill-smoke-33f423` on one `GB200x4` node.
+- Result: the run failed on the same 3.91 GiB allocation at the same point after loading all teacher shards. Microbatching did not change the allocation.
+- Interpretation: the peak is independent of batch activations. The distillation entry point retains its original concrete random 32B `initial_model` after `Trainer.initial_state` creates a mixed-precision state and while the checkpoint teacher is loaded.
+- Next action: pass a lazy model factory into the trainer so the original concrete teacher is not retained, keep microbatch size four, and repeat the smoke.

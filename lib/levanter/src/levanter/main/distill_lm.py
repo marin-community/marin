@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -191,26 +192,27 @@ def main(config: TrainLmDistillationConfig) -> None:
         train_dataset = config.data.train_set(Pos, config.trainer.batch_schedule, key=data_key)
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
-        hidden_projector = None
-        if config.objective == DistillationObjective.PROJECTED_HIDDEN:
-            hidden_projector = hnn.Linear.init(
-                In=student_config.Embed,
-                Out=teacher_config.Embed.alias("teacher_embed"),
-                key=projector_key,
-                use_bias=False,
-                out_first=True,
+        def model_init() -> DistillationModel:
+            hidden_projector = None
+            if config.objective == DistillationObjective.PROJECTED_HIDDEN:
+                hidden_projector = hnn.Linear.init(
+                    In=student_config.Embed,
+                    Out=teacher_config.Embed.alias("teacher_embed"),
+                    key=projector_key,
+                    use_bias=False,
+                    out_first=True,
+                )
+            return DistillationModel(
+                student=student_config.build(Vocab, key=model_key),
+                teacher=teacher_config.build(Vocab, key=teacher_key),
+                hidden_projector=hidden_projector,
+                taid_state=TaidState.init(config.taid) if config.objective == DistillationObjective.TAID else None,
             )
 
-        initial_model = DistillationModel(
-            student=student_config.build(Vocab, key=model_key),
-            teacher=teacher_config.build(Vocab, key=teacher_key),
-            hidden_projector=hidden_projector,
-            taid_state=TaidState.init(config.taid) if config.objective == DistillationObjective.TAID else None,
-        )
-        trainable_filter = distillation_trainable_filter(initial_model)
+        trainable_filter = distillation_trainable_filter(eqx.filter_eval_shape(model_init))
         state = trainer.initial_state(
             training_key,
-            model=initial_model,
+            model_init=model_init,
             is_trainable=trainable_filter,
         )
 
