@@ -23,13 +23,17 @@ on:
       - "finelog-v*"
       - "iris-native-v*"
     paths:
+      - "lib/dupekit/src/**"
       - "lib/dupekit/rust/**"
+      - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/rust/**"
       - "rust/**"
   pull_request:
     paths:
+      - "lib/dupekit/src/**"
       - "lib/dupekit/rust/**"
+      - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
       - "lib/iris/rust/**"
       - "rust/**"

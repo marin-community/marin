@@ -11,11 +11,10 @@ import pytest
 import yaml
 
 from scripts.ci.native_package_release import (
-    PACKAGES,
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
-    latest_stable_version,
+    latest_supported_version,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -91,14 +90,22 @@ def test_development_version_is_compatible_with_cargo_build_manifests() -> None:
     assert python_compatible_version("0.1.4+abc12345") == "0.1.4+abc12345"
 
 
-def test_latest_stable_version_ignores_development_and_unsupported_releases() -> None:
+def test_latest_supported_version_includes_development_and_ignores_unsupported_releases() -> None:
     versions = ["0.1.3", "0.1.4.dev30194118926", "0.1.2", "0.2.0rc1"]
 
-    assert latest_stable_version(versions) == "0.1.3"
+    assert latest_supported_version(versions) == "0.1.4.dev30194118926"
+
+
+def test_next_development_version_advances_past_legacy_timestamp_serial() -> None:
+    version = next_development_version("0.2.11", "0.2.12.dev202607250802", 30220111744)
+
+    assert version == "0.2.13.dev30220111744"
 
 
 def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/iris/rust/src/lib.rs"]) == ["iris"]
+    assert packages_for_changes(["lib/dupekit/src/dupekit/__init__.py"]) == ["dupekit"]
+    assert packages_for_changes(["lib/finelog/src/finelog/client/log_client.py"]) == ["finelog"]
     assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
     assert packages_for_changes(["scripts/ci/native_package_release.py"]) == [
         "dupekit",
@@ -122,9 +129,12 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
 
     assert plan.packages == ("dupekit", "finelog", "iris")
     expected_builds = {
-        (package, operating_system, operation)
-        for package in plan.packages
-        for operating_system, operation in PACKAGES[package].build_legs
+        ("dupekit", "ubuntu-latest", "linux"),
+        ("dupekit", "macos-14", "macos"),
+        ("finelog", "ubuntu-latest", "linux"),
+        ("finelog", "macos-14", "macos"),
+        ("iris", "ubuntu-latest", "linux"),
+        ("iris", "macos-14", "macos"),
     }
     actual_builds = {(entry["package"], entry["os"], entry["operation"]) for entry in plan.builds}
     assert actual_builds == expected_builds
@@ -254,10 +264,11 @@ def test_release_workflow_publishes_only_trusted_native_main_changes() -> None:
     assert "needs.plan.outputs.build_matrix" in str(workflow["jobs"]["build"]["strategy"])
 
 
-def test_release_workflow_serializes_app_authenticated_version_prs() -> None:
+def test_release_workflow_uses_app_token_for_version_pr() -> None:
     workflow = _workflow(RELEASE_WORKFLOW)
     assert workflow["permissions"] == {"contents": "read"}
     steps = workflow["jobs"]["bump"]["steps"]
-    assert any(step.get("uses") == "actions/create-github-app-token@v3" for step in steps)
-    assert any("git push --force-with-lease" in step.get("run", "") for step in steps)
-    assert any("gh pr merge" in step.get("run", "") and "--auto" in step["run"] for step in steps)
+    token_step = next(step for step in steps if step.get("id") == "app-token")
+    assert token_step["uses"] == "actions/create-github-app-token@v3"
+    pr_step = next(step for step in steps if step.get("name") == "Commit and open or update pull request")
+    assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"

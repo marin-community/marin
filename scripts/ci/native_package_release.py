@@ -118,7 +118,11 @@ PACKAGES: Mapping[str, NativePackage] = MappingProxyType(
             requirement_distribution="marin-dupekit-native",
             requirement_owner="marin-dupekit",
             tag_prefix="dupekit-v",
-            source_patterns=("lib/dupekit/rust/**", "rust/dupekit-pyext/**"),
+            source_patterns=(
+                "lib/dupekit/src/**",
+                "lib/dupekit/rust/**",
+                "rust/dupekit-pyext/**",
+            ),
             build_legs=(("ubuntu-latest", BuildOperation.LINUX), ("macos-14", BuildOperation.MACOS)),
             import_name="dupekit_native",
             native_path=Path("lib/dupekit/rust"),
@@ -139,6 +143,7 @@ PACKAGES: Mapping[str, NativePackage] = MappingProxyType(
             requirement_owner="marin-iris",
             tag_prefix="finelog-v",
             source_patterns=(
+                "lib/finelog/src/**",
                 "lib/finelog/rust/**",
                 "rust/finelog/**",
                 "rust/finelog-pyext/**",
@@ -229,17 +234,16 @@ def next_development_version(declared: str, published: str | None, serial: int) 
     return f"{major}.{minor}.{patch + 1}.dev{serial}"
 
 
-def latest_stable_version(versions: Iterable[str]) -> str | None:
-    """Return the greatest supported stable version from a PyPI release list."""
-    stable = []
+def latest_supported_version(versions: Iterable[str]) -> str | None:
+    """Return the greatest stable or development version from a PyPI release list."""
+    supported = []
     for version in versions:
         try:
             canonical = canonical_version(version)
         except ValueError:
             continue
-        if ".dev" not in canonical:
-            stable.append(canonical)
-    return max(stable, key=_version_key) if stable else None
+        supported.append(canonical)
+    return max(supported, key=_version_key) if supported else None
 
 
 def _declared_version(repo_root: Path, package: NativePackage) -> str:
@@ -254,7 +258,7 @@ def _declared_version(repo_root: Path, package: NativePackage) -> str:
 
 
 def latest_pypi_version(distribution: str) -> str | None:
-    """Return the latest stable PyPI release, or None before the first stable."""
+    """Return the latest supported PyPI release, or None before the first release."""
     url = PYPI_PROJECT_JSON_URL.format(distribution=distribution)
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
@@ -264,7 +268,7 @@ def latest_pypi_version(distribution: str) -> str | None:
             return None
         raise
     releases = data.get("releases", {})
-    return latest_stable_version(releases)
+    return latest_supported_version(releases)
 
 
 def resolve_version(
