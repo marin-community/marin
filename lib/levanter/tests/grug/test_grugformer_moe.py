@@ -660,6 +660,61 @@ def test_gather_dispatch_matches_scatter_forward_and_drops(monkeypatch: pytest.M
     assert gather_dropped > 0  # capacity_factor=0.5 must exercise the drop path
 
 
+def test_mxfp8_arm_is_selected_after_routing_and_requires_blackwell(monkeypatch: pytest.MonkeyPatch):
+    """SCALE_MOE_MXFP8 reaches the fused kernels (which reject non-sm100) rather than silently no-op."""
+    if jax.devices()[0].platform == "gpu":
+        pytest.skip("GB200 behavior is covered by the accelerator numerical ladder")
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    monkeypatch.setenv("SCALE_MOE_MXFP8", "1")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 4, 128, 128, 2, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(44),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    with pytest.raises(RuntimeError, match="SCALE_MOE_MXFP8=1 requires a Blackwell"):
+        _run_fixed_a2a_value_and_grads(
+            x=x,
+            selected_experts=selected_experts,
+            combine_weights=combine_weights,
+            w_up_gate=w_up_gate,
+            w_down=w_down,
+            seed_cotangent=jnp.zeros_like(x),
+            num_experts=num_experts,
+            capacity_factor=1.0,
+        )
+
+
+def test_mxfp8_and_batch_experts_are_mutually_exclusive(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_MOE_MXFP8", "1")
+    monkeypatch.setenv("SCALE_A2A_BATCH_EXPERTS", "1")
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(45),
+        tokens=4,
+        hidden_dim=8,
+        intermediate_dim=8,
+        num_experts=2,
+        topk=2,
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _run_fixed_a2a_value_and_grads(
+            x=x,
+            selected_experts=selected_experts,
+            combine_weights=combine_weights,
+            w_up_gate=w_up_gate,
+            w_down=w_down,
+            seed_cotangent=jnp.zeros_like(x),
+            num_experts=2,
+            capacity_factor=1.0,
+        )
+
+
 def test_custom_adjoint_matches_autodiff_gradients(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
     tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2

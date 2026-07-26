@@ -118,9 +118,8 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
-  # FA4 CuTe/THD attention backends. Bumped to 4.6.0 for the QuACK SM100 (B200)
-  # MoE backend (quack-kernels hard-pins cutlass-dsl==4.6.0).
-  "nvidia-cutlass-dsl[cu13]>=4.6.0,<4.7; sys_platform == 'linux'",
+  # FA4 CuTe/THD attention backends.
+  "nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.

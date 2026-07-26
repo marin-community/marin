@@ -50,6 +50,11 @@ def _batch_experts_enabled() -> bool:
     return os.environ.get("SCALE_A2A_BATCH_EXPERTS") == "1"
 
 
+def _mxfp8_enabled() -> bool:
+    """MXFP8 (block-scaled fp8) grouped expert GEMMs instead of the bf16 per-expert matmuls."""
+    return os.environ.get("SCALE_MOE_MXFP8") == "1"
+
+
 def _spill_attempts() -> int:
     """Same-step spill attempts per dropped assignment. 0 disables spill (index composition unchanged)."""
     return int(os.environ.get("SCALE_A2A_SPILL", "0"))
@@ -284,6 +289,8 @@ def _fixed_a2a_core(
     custom_adjoint = _custom_adjoint_enabled()
     if custom_adjoint and not gather_dispatch:
         raise ValueError("SCALE_A2A_CUSTOM_ADJOINT=1 requires SCALE_A2A_GATHER_DISPATCH=1")
+    if _mxfp8_enabled() and _batch_experts_enabled():
+        raise ValueError("SCALE_MOE_MXFP8=1 and SCALE_A2A_BATCH_EXPERTS=1 are mutually exclusive expert-GEMM arms")
 
     # Spill only rewrites which bucket slot an assignment occupies, so everything downstream --
     # the dispatch gather, the collectives, and both custom-adjoint VJPs -- is generic in
@@ -331,7 +338,42 @@ def _fixed_a2a_core(
             send_x = jnp.zeros((send_size, hidden_dim), x_local.dtype).at[linear_indices].set(repeated_x, mode="drop")
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
-    if _batch_experts_enabled():
+    if _mxfp8_enabled():
+        # All local experts dispatch first, then one MXFP8 grouped GEMM covers every local expert's
+        # bucket, then each expert's slice combines. Ported verbatim from agent/ep25-d2-bakeoff, where
+        # it measured -2.83pp at d5120/i1280; the reopening condition d2 named was fatter expert GEMMs.
+        from levanter.grug._moe.mxfp8 import mxfp8_expert_mlp  # noqa: PLC0415
+
+        expert_inputs = []
+        for local_expert_index in range(local_experts):
+            with jax.named_scope("dispatch"):
+                received = jax.lax.all_to_all(
+                    send_x[local_expert_index], "expert", split_axis=0, concat_axis=0, tiled=True
+                )
+                received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+                expert_inputs.append(received.reshape(bucket_size, hidden_dim))
+        with jax.named_scope("moe_up_down"):
+            grouped_input = jnp.concatenate(expert_inputs, axis=0)
+            group_sizes = jnp.full((local_experts,), bucket_size, dtype=jnp.int32)
+            grouped_output = mxfp8_expert_mlp(
+                grouped_input, moe_w13_local, moe_w2_local, group_sizes
+            ).reshape(local_experts, bucket_size, hidden_dim)
+        output_parts = []
+        for local_expert_index in range(local_experts):
+            with jax.named_scope("combine"):
+                returned = jax.lax.all_to_all(
+                    grouped_output[local_expert_index].reshape(expert_shards, capacity, hidden_dim),
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                output_parts.append(returned)
+        with jax.named_scope("combine"):
+            send_output = jnp.stack(output_parts, axis=0)
+            send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+            send_output = send_output.reshape(send_size, hidden_dim)
+    elif _batch_experts_enabled():
         # Process local experts in groups of `group_size`: one dispatch a2a, one grouped up/down GEMM,
         # and one combine a2a per group. The grouped-expert axis is a batch dim the a2a passes through
         # (split/concat move the expert-shard axis 1), so results match the per-expert loop. group_size
