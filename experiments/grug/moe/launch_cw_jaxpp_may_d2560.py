@@ -334,6 +334,10 @@ def build_pipeline_config() -> GrugJaxPPConfig:
             ExplicitMpmdPipelineWireFormat,
             os.environ.get("PP_EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT", "bf16"),
         ),
+        explicit_mpmd_stage_task_microbatch_group_size=env_int(
+            "PP_EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE",
+            1,
+        ),
         sonic_fsdp_materialization=cast(
             SonicFsdpMaterialization,
             os.environ.get("PP_SONIC_FSDP_MATERIALIZATION", "per_task"),

@@ -147,6 +147,7 @@ class GrugJaxPPConfig:
     stage_layer_counts: tuple[int, ...] | None = None
     explicit_mpmd_schedule_mode: JaxPPExplicitMpmdScheduleMode = "default"
     explicit_mpmd_pipeline_wire_format: ExplicitMpmdPipelineWireFormat = "bf16"
+    explicit_mpmd_stage_task_microbatch_group_size: int = 1
     sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
 
     def __post_init__(self) -> None:
@@ -160,6 +161,22 @@ class GrugJaxPPConfig:
             raise ValueError(f"stages must be positive, got {self.stages}")
         if self.microbatches <= 0:
             raise ValueError(f"microbatches must be positive, got {self.microbatches}")
+        if self.explicit_mpmd_stage_task_microbatch_group_size not in (1, 2):
+            raise ValueError(
+                "explicit MPMD stage-task microbatch group size must be 1 or 2, "
+                f"got {self.explicit_mpmd_stage_task_microbatch_group_size}"
+            )
+        if self.explicit_mpmd_stage_task_microbatch_group_size == 2:
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "grouped explicit MPMD stage tasks require " "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if self.microbatches % 2:
+                raise ValueError(
+                    "grouped explicit MPMD stage tasks require an even microbatch count, " f"got {self.microbatches}"
+                )
+            if self.explicit_mpmd_schedule_mode == "input_gradient_first":
+                raise ValueError("grouped explicit MPMD stage tasks do not support input_gradient_first")
         if self.mpmd_dim is not None and self.mpmd_dim <= 0:
             raise ValueError(f"mpmd_dim must be positive when set, got {self.mpmd_dim}")
         if self.stage_layer_counts is not None:
@@ -285,8 +302,14 @@ class GrugRunConfig:
     post_setup_scripts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        pipeline = self.trainer.pipeline
+        if (
+            pipeline is not None
+            and pipeline.explicit_mpmd_stage_task_microbatch_group_size == 2
+            and self.model.moe_implementation not in (None, "ring")
+        ):
+            raise ValueError("grouped explicit MPMD stage tasks require the exact bulk-ring MoE implementation")
         if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
-            pipeline = self.trainer.pipeline
             if pipeline is None or pipeline.implementation != "explicit_mpmd":
                 raise ValueError("NCCL_EP requires the explicit MPMD JaxPP pipeline")
             if self.processes_per_task != self.trainer.expert_axis_size:
@@ -299,7 +322,6 @@ class GrugRunConfig:
                 raise ValueError("NCCL_EP requires more than one process per task")
         if self.model.research_fp8_expert_gemm is None:
             return
-        pipeline = self.trainer.pipeline
         if pipeline is None or pipeline.implementation != "explicit_mpmd":
             raise ValueError("research FP8 expert GEMMs require the explicit MPMD JaxPP pipeline")
         if pipeline.schedule not in _RESEARCH_FP8_EXPERT_GEMM_SCHEDULES:
@@ -1010,6 +1032,43 @@ def _average_microbatch_tree(tree, microbatches: int):
     scale = jnp.asarray(1.0 / microbatches, dtype=jnp.float32)
     averaged = jax.tree.map(lambda value: value * scale, ordinary)
     return eqx.combine(overwrites, averaged, is_leaf=_is_overwrite)
+
+
+def _sum_microbatch_group(values: tuple[Any, ...]):
+    """Sum a contiguous microbatch group in program order."""
+    if not values:
+        raise ValueError("microbatch group must be non-empty")
+    total = values[0]
+    for value in values[1:]:
+        total = _accumulate_microbatch_tree(total, value)
+    return total
+
+
+def explicit_std_1f1b_stage_schedule(
+    *,
+    stages: int,
+    microbatches: int,
+    stage_index: int,
+    group_size: int,
+) -> tuple[tuple[Literal["fwd", "bwd"], tuple[int, ...]], ...]:
+    """Return a standard 1F1B schedule over contiguous microbatch groups."""
+    if stages <= 0:
+        raise ValueError(f"stages must be positive, got {stages}")
+    if stage_index < 0 or stage_index >= stages:
+        raise ValueError(f"stage_index must be in [0, {stages}), got {stage_index}")
+    if group_size <= 0 or microbatches % group_size:
+        raise ValueError(f"microbatches={microbatches} must be divisible by positive group_size={group_size}")
+
+    groups = tuple(
+        tuple(range(group_start, group_start + group_size)) for group_start in range(0, microbatches, group_size)
+    )
+    warmup = min(stages - stage_index, len(groups))
+    tasks: list[tuple[Literal["fwd", "bwd"], tuple[int, ...]]] = [("fwd", group) for group in groups[:warmup]]
+    for group_index in range(warmup, len(groups)):
+        tasks.append(("bwd", groups[group_index - warmup]))
+        tasks.append(("fwd", groups[group_index]))
+    tasks.extend(("bwd", group) for group in groups[len(groups) - warmup :])
+    return tuple(tasks)
 
 
 def _ema_update(old, new, beta: float):
@@ -1870,6 +1929,42 @@ def _make_explicit_mpmd_train_step(
         )
         return loss, qb_betas_next, grads, d_hidden
 
+    def grouped_stage0_forward(params, qb_betas, batches):
+        values = tuple(stage0_forward(params, qb_betas, batch) for batch in batches)
+        return tuple(value[0] for value in values), _sum_microbatch_group(tuple(value[1] for value in values))
+
+    def grouped_stage_forward(params, qb_betas, hiddens, batches):
+        values = tuple(
+            stage_forward(params, qb_betas, hidden, batch) for hidden, batch in zip(hiddens, batches, strict=True)
+        )
+        return tuple(value[0] for value in values), _sum_microbatch_group(tuple(value[1] for value in values))
+
+    def grouped_stage0_backward(params, qb_betas, batches, d_hiddens):
+        grads = tuple(
+            stage0_backward(params, qb_betas, batch, d_hidden)
+            for batch, d_hidden in zip(batches, d_hiddens, strict=True)
+        )
+        return _sum_microbatch_group(grads)
+
+    def grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens):
+        values = tuple(
+            stage_backward(params, qb_betas, hidden, batch, d_hidden)
+            for hidden, batch, d_hidden in zip(hiddens, batches, d_hiddens, strict=True)
+        )
+        return _sum_microbatch_group(tuple(value[0] for value in values)), tuple(value[1] for value in values)
+
+    def grouped_last_stage_loss_and_grads(params, qb_betas, hiddens, batches):
+        values = tuple(
+            last_stage_loss_and_grads(params, qb_betas, hidden, batch)
+            for hidden, batch in zip(hiddens, batches, strict=True)
+        )
+        return (
+            _sum_microbatch_group(tuple(value[0] for value in values)),
+            _sum_microbatch_group(tuple(value[1] for value in values)),
+            _sum_microbatch_group(tuple(value[2] for value in values)),
+            tuple(value[3] for value in values),
+        )
+
     def last_stage_backward(
         params: TransformerPipelineStage,
         qb_betas: jax.Array,
@@ -2379,18 +2474,6 @@ def _make_explicit_mpmd_train_step(
         metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
         return next_state, metrics, None
 
-    def std_1f1b_stage_schedule(stage_index: int) -> tuple[tuple[str, int], ...]:
-        warmup = min(num_stages - stage_index, pipeline.microbatches)
-        tasks = [("fwd", microbatch_index) for microbatch_index in range(warmup)]
-        for microbatch_index in range(warmup, pipeline.microbatches):
-            tasks.append(("bwd", microbatch_index - warmup))
-            tasks.append(("fwd", microbatch_index))
-        tasks.extend(
-            ("bwd", microbatch_index)
-            for microbatch_index in range(pipeline.microbatches - warmup, pipeline.microbatches)
-        )
-        return tuple(tasks)
-
     @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_std_1f1b_step(
         state: GrugPipelineTrainState,
@@ -2426,6 +2509,17 @@ def _make_explicit_mpmd_train_step(
             fp8_dtype: Fp8PipelineWireDtype,
             name: str,
         ):
+            if isinstance(value, tuple):
+                return tuple(
+                    send_pipeline_wire_value(
+                        item,
+                        source_stage_index,
+                        target_stage_index,
+                        fp8_dtype=fp8_dtype,
+                        name=f"{name}_item{item_index}",
+                    )
+                    for item_index, item in enumerate(value)
+                )
             if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
                 return value
             if pipeline.explicit_mpmd_pipeline_wire_format == "bf16":
@@ -2445,6 +2539,17 @@ def _make_explicit_mpmd_train_step(
             fp8_dtype: Fp8PipelineWireDtype,
             name: str,
         ):
+            if isinstance(value_or_future, tuple):
+                return tuple(
+                    receive_pipeline_wire_value(
+                        item,
+                        source_stage_index,
+                        target_stage_index,
+                        fp8_dtype=fp8_dtype,
+                        name=f"{name}_item{item_index}",
+                    )
+                    for item_index, item in enumerate(value_or_future)
+                )
             if stage_mpmd_indices[source_stage_index] == stage_mpmd_indices[target_stage_index]:
                 return value_or_future
             transferred = value_or_future.done()
@@ -2481,204 +2586,247 @@ def _make_explicit_mpmd_train_step(
                 )
             return stage_params
 
-        def ensure_forward(stage_index: int, microbatch_index: int):
-            key = (stage_index, microbatch_index)
+        def microbatch_task_data(microbatch_key: int | tuple[int, ...]):
+            indices = (microbatch_key,) if isinstance(microbatch_key, int) else microbatch_key
+            batches = tuple(batches_by_microbatch[index] for index in indices)
+            name = "_".join(str(index) for index in indices)
+            return indices, batches, name
+
+        def activation_group_shardings(stage_index: int, microbatch_indices: tuple[int, ...]):
+            return tuple(activation_shardings[stage_index] for _ in microbatch_indices)
+
+        def ensure_forward(stage_index: int, microbatch_key: int | tuple[int, ...]):
+            key = (stage_index, microbatch_key)
             if key in forward_done:
                 return
-            microbatches = batches_by_microbatch[microbatch_index]
+            microbatch_indices, microbatches, microbatch_name = microbatch_task_data(microbatch_key)
+            grouped = len(microbatch_indices) > 1
+            stage_batches = tuple(microbatch[stage_index] for microbatch in microbatches)
             stage_params = stage_compute_params(stage_index)
 
             if stage_index == 0:
-                hidden, stage_qb_betas = mpmd.task(
-                    stage0_forward,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage0_forward",
-                    out_shardings=(activation_shardings[0], qb_shardings[0]),
-                )(stage_params, qb_betas[0], microbatches[0])
+                if grouped:
+                    hidden, stage_qb_betas = mpmd.task(
+                        grouped_stage0_forward,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_forward",
+                        out_shardings=(activation_group_shardings(0, microbatch_indices), qb_shardings[0]),
+                    )(stage_params, qb_betas[0], stage_batches)
+                else:
+                    hidden, stage_qb_betas = mpmd.task(
+                        stage0_forward,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_forward",
+                        out_shardings=(activation_shardings[0], qb_shardings[0]),
+                    )(stage_params, qb_betas[0], stage_batches[0])
                 if prioritize_transfers:
-                    forward_futures[(1, microbatch_index)] = send_pipeline_wire_value(
+                    forward_futures[(1, microbatch_key)] = send_pipeline_wire_value(
                         hidden,
                         0,
                         1,
                         fp8_dtype="e4m3",
-                        name=f"grug_1f1b_mb{microbatch_index}_stage0_forward_wire",
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_forward_wire",
                     )
                 qb_betas_next[0] = accumulate_or_set(
                     qb_betas_next[0],
                     stage_qb_betas,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage0_accumulate_qb",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_qb",
                     out_shardings=qb_shardings[0],
                 )
                 if not prioritize_transfers:
-                    forward_futures[(1, microbatch_index)] = send_pipeline_wire_value(
+                    forward_futures[(1, microbatch_key)] = send_pipeline_wire_value(
                         hidden,
                         0,
                         1,
                         fp8_dtype="e4m3",
-                        name=f"grug_1f1b_mb{microbatch_index}_stage0_forward_wire",
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_forward_wire",
                     )
                 forward_done.add(key)
                 return
 
-            ensure_forward(stage_index - 1, microbatch_index)
+            ensure_forward(stage_index - 1, microbatch_key)
             hidden = receive_pipeline_wire_value(
                 forward_futures[key],
                 stage_index - 1,
                 stage_index,
                 fp8_dtype="e4m3",
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward_wire",
             )
             stage_inputs[key] = hidden
             if stage_index == num_stages - 1:
                 forward_done.add(key)
                 return
 
-            hidden, stage_qb_betas = mpmd.task(
-                stage_forward,
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward",
-                out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-            )(stage_params, qb_betas[stage_index], hidden, microbatches[stage_index])
+            if grouped:
+                hidden, stage_qb_betas = mpmd.task(
+                    grouped_stage_forward,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward",
+                    out_shardings=(
+                        activation_group_shardings(stage_index, microbatch_indices),
+                        qb_shardings[stage_index],
+                    ),
+                )(stage_params, qb_betas[stage_index], hidden, stage_batches)
+            else:
+                hidden, stage_qb_betas = mpmd.task(
+                    stage_forward,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward",
+                    out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
+                )(stage_params, qb_betas[stage_index], hidden, stage_batches[0])
             if prioritize_transfers:
-                forward_futures[(stage_index + 1, microbatch_index)] = send_pipeline_wire_value(
+                forward_futures[(stage_index + 1, microbatch_key)] = send_pipeline_wire_value(
                     hidden,
                     stage_index,
                     stage_index + 1,
                     fp8_dtype="e4m3",
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward_wire",
                 )
             qb_betas_next[stage_index] = accumulate_or_set(
                 qb_betas_next[stage_index],
                 stage_qb_betas,
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_qb",
                 out_shardings=qb_shardings[stage_index],
             )
             if not prioritize_transfers:
-                forward_futures[(stage_index + 1, microbatch_index)] = send_pipeline_wire_value(
+                forward_futures[(stage_index + 1, microbatch_key)] = send_pipeline_wire_value(
                     hidden,
                     stage_index,
                     stage_index + 1,
                     fp8_dtype="e4m3",
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward_wire",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward_wire",
                 )
             forward_done.add(key)
 
-        def ensure_backward(stage_index: int, microbatch_index: int):
+        def ensure_backward(stage_index: int, microbatch_key: int | tuple[int, ...]):
             nonlocal loss_sum
-            key = (stage_index, microbatch_index)
+            key = (stage_index, microbatch_key)
             if key in backward_done:
                 return
-            microbatches = batches_by_microbatch[microbatch_index]
+            microbatch_indices, microbatches, microbatch_name = microbatch_task_data(microbatch_key)
+            grouped = len(microbatch_indices) > 1
+            stage_batches = tuple(microbatch[stage_index] for microbatch in microbatches)
             stage_params = stage_compute_params(stage_index)
 
             if stage_index == num_stages - 1:
-                ensure_forward(stage_index, microbatch_index)
-                loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
-                    last_stage_loss_and_grads,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_loss_backward",
-                    out_shardings=(
-                        last_loss_sharding,
-                        qb_shardings[stage_index],
-                        param_shardings[stage_index],
-                        activation_shardings[stage_index],
-                    ),
-                )(
-                    stage_params,
-                    qb_betas[stage_index],
-                    stage_inputs[key],
-                    microbatches[stage_index],
-                )
+                ensure_forward(stage_index, microbatch_key)
+                if grouped:
+                    loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
+                        grouped_last_stage_loss_and_grads,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward",
+                        out_shardings=(
+                            last_loss_sharding,
+                            qb_shardings[stage_index],
+                            param_shardings[stage_index],
+                            activation_group_shardings(stage_index, microbatch_indices),
+                        ),
+                    )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches)
+                else:
+                    loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
+                        last_stage_loss_and_grads,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward",
+                        out_shardings=(
+                            last_loss_sharding,
+                            qb_shardings[stage_index],
+                            param_shardings[stage_index],
+                            activation_shardings[stage_index],
+                        ),
+                    )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0])
                 if prioritize_transfers:
-                    d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
+                    d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                         d_hidden,
                         stage_index,
                         stage_index - 1,
                         fp8_dtype="e5m2",
-                        name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
                     )
                 loss_sum = accumulate_or_set(
                     loss_sum,
                     loss,
-                    name=f"grug_1f1b_mb{microbatch_index}_accumulate_loss",
+                    name=f"grug_1f1b_mb{microbatch_name}_accumulate_loss",
                     out_shardings=last_loss_sharding,
                 )
                 qb_betas_next[stage_index] = accumulate_or_set(
                     qb_betas_next[stage_index],
                     stage_qb_betas,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_qb",
                     out_shardings=qb_shardings[stage_index],
                 )
                 grads[stage_index] = accumulate_or_set(
                     grads[stage_index],
                     stage_grads,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
                     out_shardings=param_shardings[stage_index],
                 )
                 if not prioritize_transfers:
-                    d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
+                    d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                         d_hidden,
                         stage_index,
                         stage_index - 1,
                         fp8_dtype="e5m2",
-                        name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
                     )
                 backward_done.add(key)
                 return
 
-            ensure_backward(stage_index + 1, microbatch_index)
+            ensure_backward(stage_index + 1, microbatch_key)
             d_hidden = receive_pipeline_wire_value(
                 d_hidden_futures[key],
                 stage_index + 1,
                 stage_index,
                 fp8_dtype="e5m2",
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
             )
             if stage_index == 0:
+                backward_fn = grouped_stage0_backward if grouped else stage0_backward
+                backward_batches = stage_batches if grouped else stage_batches[0]
                 stage_grads = mpmd.task(
-                    stage0_backward,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage0_backward",
+                    backward_fn,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
                     out_shardings=param_shardings[0],
-                )(stage_params, qb_betas[0], microbatches[0], d_hidden)
+                )(stage_params, qb_betas[0], backward_batches, d_hidden)
                 grads[0] = accumulate_or_set(
                     grads[0],
                     stage_grads,
-                    name=f"grug_1f1b_mb{microbatch_index}_stage0_accumulate_grads",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage0_accumulate_grads",
                     out_shardings=param_shardings[0],
                 )
                 backward_done.add(key)
                 return
 
-            ensure_forward(stage_index, microbatch_index)
-            stage_grads, d_hidden = mpmd.task(
-                stage_backward,
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward",
-                out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
-            )(
-                stage_params,
-                qb_betas[stage_index],
-                stage_inputs[key],
-                microbatches[stage_index],
-                d_hidden,
-            )
+            ensure_forward(stage_index, microbatch_key)
+            if grouped:
+                stage_grads, d_hidden = mpmd.task(
+                    grouped_stage_backward,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward",
+                    out_shardings=(
+                        param_shardings[stage_index],
+                        activation_group_shardings(stage_index, microbatch_indices),
+                    ),
+                )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches, d_hidden)
+            else:
+                stage_grads, d_hidden = mpmd.task(
+                    stage_backward,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward",
+                    out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
+                )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches[0], d_hidden)
             if prioritize_transfers:
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
+                d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                     d_hidden,
                     stage_index,
                     stage_index - 1,
                     fp8_dtype="e5m2",
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
                 )
             grads[stage_index] = accumulate_or_set(
                 grads[stage_index],
                 stage_grads,
-                name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_accumulate_grads",
                 out_shardings=param_shardings[stage_index],
             )
             if not prioritize_transfers:
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = send_pipeline_wire_value(
+                d_hidden_futures[(stage_index - 1, microbatch_key)] = send_pipeline_wire_value(
                     d_hidden,
                     stage_index,
                     stage_index - 1,
                     fp8_dtype="e5m2",
-                    name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward_wire",
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
                 )
             backward_done.add(key)
 
@@ -2838,14 +2986,24 @@ def _make_explicit_mpmd_train_step(
                     else:
                         raise ValueError(f"unexpected ZeroBubble planner task type: {task_type}")
         else:
-            stage_schedules = tuple(std_1f1b_stage_schedule(stage_index) for stage_index in range(num_stages))
-            for task_index in range(2 * pipeline.microbatches):
+            group_size = pipeline.explicit_mpmd_stage_task_microbatch_group_size
+            stage_schedules = tuple(
+                explicit_std_1f1b_stage_schedule(
+                    stages=num_stages,
+                    microbatches=pipeline.microbatches,
+                    stage_index=stage_index,
+                    group_size=group_size,
+                )
+                for stage_index in range(num_stages)
+            )
+            for task_index in range(2 * pipeline.microbatches // group_size):
                 for stage_index, stage_schedule in enumerate(stage_schedules):
-                    direction, microbatch_index = stage_schedule[task_index]
+                    direction, microbatch_group = stage_schedule[task_index]
+                    microbatch_key: int | tuple[int, ...] = microbatch_group[0] if group_size == 1 else microbatch_group
                     if direction == "fwd":
-                        ensure_forward(stage_index, microbatch_index)
+                        ensure_forward(stage_index, microbatch_key)
                     else:
-                        ensure_backward(stage_index, microbatch_index)
+                        ensure_backward(stage_index, microbatch_key)
 
         if loss_sum is None:
             raise ValueError("explicit 1F1B did not accumulate any microbatch losses")

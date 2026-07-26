@@ -23,6 +23,7 @@ SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
 EXPLICIT_MPMD_SCHEDULE_MODE="default"
 EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT="bf16"
+EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE=1
 SONIC_FSDP_MATERIALIZATION="per_task"
 PIPELINE="true"
 PHYSICAL_STAGES=4
@@ -82,6 +83,9 @@ Options:
   --explicit-mpmd-pipeline-wire-format NAME
                             bf16 or fp8; fp8 uses packed E4M3 activations and E5M2 gradients
                             with explicit-MPMD std_1f1b only (default: bf16).
+  --explicit-mpmd-stage-task-microbatch-group-size N
+                            Contiguous microbatches per explicit std_1f1b stage task: 1 or 2
+                            (default: 1).
   --sonic-fsdp-materialization NAME
                             per_task or staged_per_step (default: per_task).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
@@ -145,6 +149,10 @@ while [ "$#" -gt 0 ]; do
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
         --explicit-mpmd-schedule-mode) EXPLICIT_MPMD_SCHEDULE_MODE="$2"; shift 2 ;;
         --explicit-mpmd-pipeline-wire-format) EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT="$2"; shift 2 ;;
+        --explicit-mpmd-stage-task-microbatch-group-size)
+            EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE="$2"
+            shift 2
+            ;;
         --sonic-fsdp-materialization) SONIC_FSDP_MATERIALIZATION="$2"; shift 2 ;;
         --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
@@ -219,6 +227,32 @@ case "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT" in
     bf16|fp8) ;;
     *)
         echo "ERROR: unsupported explicit MPMD pipeline wire format: $EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT" >&2
+        exit 1
+        ;;
+esac
+
+case "$EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE" in
+    1) ;;
+    2)
+        if [ "$PIPELINE" != true ] || [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
+            echo "ERROR: grouped stage tasks require pipeline, --implementation explicit_mpmd, and --schedule std_1f1b" >&2
+            exit 1
+        fi
+        if [ "$MOE_IMPLEMENTATION" != ring ]; then
+            echo "ERROR: grouped stage tasks require --moe-implementation ring" >&2
+            exit 1
+        fi
+        if [ $((MICROBATCHES % 2)) -ne 0 ]; then
+            echo "ERROR: grouped stage tasks require an even --microbatches count" >&2
+            exit 1
+        fi
+        if [ "$EXPLICIT_MPMD_SCHEDULE_MODE" = input_gradient_first ]; then
+            echo "ERROR: grouped stage tasks do not support input_gradient_first" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "ERROR: explicit MPMD stage-task microbatch group size must be 1 or 2, got: $EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE" >&2
         exit 1
         ;;
 esac
@@ -428,6 +462,7 @@ ENV_ARGS=(
     -e PP_IMPLEMENTATION "$IMPLEMENTATION"
     -e PP_EXPLICIT_MPMD_SCHEDULE_MODE "$EXPLICIT_MPMD_SCHEDULE_MODE"
     -e PP_EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT "$EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT"
+    -e PP_EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE "$EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE"
     -e PP_SONIC_FSDP_MATERIALIZATION "$SONIC_FSDP_MATERIALIZATION"
     -e PP_SCHEDULE "$SCHEDULE"
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
@@ -531,6 +566,7 @@ schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
 explicit_mpmd_schedule_mode: $EXPLICIT_MPMD_SCHEDULE_MODE
 explicit_mpmd_pipeline_wire_format: $EXPLICIT_MPMD_PIPELINE_WIRE_FORMAT
+explicit_mpmd_stage_task_microbatch_group_size: $EXPLICIT_MPMD_STAGE_TASK_MICROBATCH_GROUP_SIZE
 sonic_fsdp_materialization: $SONIC_FSDP_MATERIALIZATION
 pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES
