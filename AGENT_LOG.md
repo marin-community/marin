@@ -696,3 +696,29 @@ Next: verify log flow + PGLE-consumption messages around step 5; build the xspac
   reorder alone measured an exact null.
 Confidence: 3/10 that PGLE+LHS clears +0.5pp (down from 4/10: the overlap headroom is measured small); 8/10 in the tooling.
 Next: harvest v3 MFU/drops; then the matched control leg; then the treatment-side overlap report.
+
+## Check-in 2026-07-26 07:05 UTC — CORRECTION: 14.3% of the step is EXPOSED collective time, not 10%
+
+Reran the overlap tool with per-stream keying (the first pass merged the same op name across
+streams and understated exposure). Control-side capture (QB + adjoint + prefetch, no PGLE/LHS),
+per GPU over a 34.07 s / 3-step window:
+
+| GPU | collective total | concurrent with compute | exposed | exposed / span |
+|---|--:|--:|--:|--:|
+| 0 | 12532 ms | 7645 ms | 4887 ms | 14.3% |
+| 1 | 12393 | 7585 | 4807 | 14.1% |
+| 2 | 13113 | 7712 | 5402 | 15.9% |
+| 3 | 11068 | 6923 | 4146 | 12.2% |
+
+Where the exposure lives (GPU:0): SendRecv splits into 6674 ms on the async stream (#159), 86.1%
+overlapped -> ~930 ms exposed, PLUS **2749 ms of SendRecv issued inline on the main compute
+stream (#50)**, which is serialized with compute by construction. AllGather 1691 ms @72.8%
+overlapped, ReduceScatter 871 ms @27.1%.
+
+So the headroom is real and larger than my previous entry claimed: ~1.6 s per ~11.4 s step.
+Hiding all of it would be worth roughly 22.6 -> ~26% MFU. The inline SendRecv block is exactly
+the class a latency-hiding scheduler with real latencies is supposed to convert to async and
+overlap, which raises the prior on this probe back up. Treatment v3 is mid-compile (LHS is
+throwing "very slow compile" alarms on all 16 hosts, no failures).
+Confidence: 4/10 that PGLE+LHS clears +0.5pp; 9/10 that the exposed-collective measurement is sound.
+Next: harvest v3; matched control leg; treatment-side overlap report against the table above.
