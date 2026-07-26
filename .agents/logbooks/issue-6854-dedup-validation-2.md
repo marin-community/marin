@@ -16,6 +16,60 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T20:27:39Z — 179,864 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2023-v590` independently
+  revalidated two p2 decision-file 71 checkpoints at semantic offsets 2,560
+  and 2,688. Their 256 direct-review baseline pairs contain 124 model false
+  positives, 131 model true duplicates, and one unresolved outcome. All 552
+  judgments and request attempts were valid on their first attempt. The
+  outcome Parquet SHA-256 values are
+  `10af3b1415d40d80502d39c1b41f466247959320e0d871e502b78e1878a3a7a7`
+  and
+  `ae90356deb04dfa81d5b91cdc9b5b838e00686e8321bf30c96531aec93b71e90`.
+
+- `/rav/datakit-6854-inspect-row4167-2024-v591` read both complete
+  same-source college-SEO texts and all three model judgments. The
+  1,504-character member and 827-character canonical have SHA-256
+  `d9832ecb0c10eeb4aa6bafa6c0c4dea06abbcc1e278869618a061be5d4650912`
+  and
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+  Their complete character, line, and word-sequence similarities are
+  0.606607, 0.222222, and 0.583333. The pair shares admissions, employer,
+  biomedicine, and coursework scaffolds, but the member adds complete claims
+  about on-campus recruiting, biotechnology registration and
+  mechanical-engineering requirements, the Army Corps of Engineers, and
+  browsing biotechnology programs. Those additions exceed low-value
+  institution and program slots, so deleting the member loses distinct
+  propositions and the pair is a false positive.
+
+- The persisted inspection and semantic-judgment SHA-256 values are
+  `e7614f3817d61504522fdffaf47d6042015a3181aaac3c4a2c5ccea01cda569b`
+  and
+  `16a5f5058c9bb0a8da015fee257544daf6f826fe4527d2a5d120d46a13aaab85`.
+  `/rav/datakit-6854-publish-row4167-2026-v592` published the hash-bound
+  false-positive record, and
+  `/rav/datakit-6854-verify-row4167-2026-v593` independently reread the source
+  pair, semantic checkpoint, inspection, manual Parquet bytes, and completion
+  marker. The manual-record and marker SHA-256 values are
+  `b7527069504e1baec8ae5980484fd76aaeccb917c2513d474d2f37a461f22fcc`
+  and
+  `a4b71fd5a52ebfb32b02474c254b24ea5f5e7bfbffd84cf2f503cf28f72eada4`.
+
+- Across the stable 1,416-checkpoint snapshot, all 201 unresolved model
+  outcomes are covered by 157 true-duplicate and 44 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 144,217 pairs, 91,616 false positives, 52,601 true duplicates;
+  - treatment: 35,647 pairs, 18,455 false positives, 17,192 true duplicates;
+  - combined: 179,864 pairs, 110,071 false positives, 69,793 true duplicates.
+
+- The next audit frontiers are p0 `(8, 0)`, p1 `(39, 128)`,
+  p2 `(71, 2,816)`, and p3 `(104, 128)`. P2's next batch has 202 review units
+  and 404 minimum model requests. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T20:20:37Z — 179,608 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2020-v588` independently
