@@ -20,6 +20,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
     SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
                           (default), 8 = one JAX process per GPU (multi-controller)
+    SCALE_RAM           per-node host memory request (default 256g). Raise it when
+                        SCALE_OFFLOAD_OPT_STATE=1 parks a large optimizer state in pinned host memory.
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
@@ -211,8 +213,13 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
+    # SCALE_RAM raises the per-node host-memory request. Host offloading of the optimizer state
+    # (SCALE_OFFLOAD_OPT_STATE=1) parks the whole state in PINNED host memory, so a node's demand is
+    # gpus_per_node x per-GPU optimizer state -- at d6144 4-of-256/EP64 that is ~162 GiB against the
+    # 256g default, which leaves little room for the loader and the process itself.
+    ram = os.environ.get("SCALE_RAM", "256g")
     resources = ResourceConfig.with_gpu(
-        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+        gpu_type, count=gpus_per_node, cpu=32, ram=ram, disk="256g", replicas=replicas
     )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
