@@ -1483,6 +1483,48 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T05:01:30Z — 92,092 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0454-v100` independently
+  revalidated three additional baseline checkpoints. Their 384 pairs contain
+  193 model false positives, 190 model true duplicates, and one unresolved
+  outcome. All 922 judgments were valid on the first request. Two pairs were
+  chunked and 382 were direct.
+- The p0 decision-file 4 outcome Parquet SHA-256 values for offsets 1,408 and
+  1,536 are
+  `b5656a6691096b0ead89cd63b4647166cc5107cb1f3a042bd3e51f3358fa03d6`
+  and
+  `ca37575d13d30bd1f873b5995eb7379370fe282c69a5ab97a19df11b10b79120`.
+  The p1 decision-file 35 value for offset 1,664 is
+  `5e81fb7f656ec68226629b03284ebef0b41fb7bd1fdc014e85c4cd6a3a53a99d`.
+- Complete-text inspection resolves the ambiguous baseline pair as a false
+  positive. The canonical's 869 characters occur unchanged at the start of
+  the 994-character member. The member then adds a complete question asking
+  who can help set up Firefox Sync and an answer identifying the linked setup
+  article. This is a distinct Q&A training example even though the shared
+  forum answer contains its source material. Character similarity is 0.932904
+  and line similarity is 0.909091. Pair location:
+  `part-00004-of-00128.parquet:2097`; member/canonical text SHA-256:
+  `37006d524a66f442870ff216a46e4565fe5532b821b2691b12940f9a81e212dd` /
+  `7296d7a5db7226c781f93a46051ccdaaf2ac4f8cebcc9960090c72b2f2b578c8`.
+- The hash-bound manual record has Parquet SHA-256
+  `e20ee4dcf8063d3a6ebcbb9b28e0067516872f44a1b87a5c45205fff55582e54`
+  and semantic-judgments SHA-256
+  `5e5ba86efcd9610eda95f2c06f97f3bdb0e904b3f32b825cd4bad40e0181db1c`.
+  `/rav/datakit-6854-verify-manual-0500-v103` independently reread the source
+  pair, semantic checkpoint, manual row, Parquet bytes, record hash, and
+  completion marker.
+- Across the stable 724-checkpoint snapshot, all 96 unresolved model outcomes
+  have manual records: 75 true duplicates and 21 false positives. The adjusted
+  totals are:
+
+  - baseline: 74,702 pairs, 47,806 false positives, 26,896 true duplicates;
+  - treatment: 17,390 pairs, 8,955 false positives, 8,435 true duplicates;
+  - combined: 92,092 pairs, 56,761 false positives, 35,331 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T04:53:15Z — 91,708 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0452-v99` independently
