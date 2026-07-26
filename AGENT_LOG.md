@@ -1717,3 +1717,35 @@ ranges. The asymmetry cuts the opposite way from the weight-scale result: a shar
 scale is punished hard by a fixture with extreme per-token spread, so quoting only the hostile
 number would understate the design. Both numbers travel together.
 Confidence: 9/10 on the grad_accum mechanism (read from source, with the authors' own TODO agreeing); 9/10 on the history-length reasoning.
+
+## Check-in 2026-07-26 13:55 UTC — delayed-scaling arithmetic implemented; throughput leg queued
+
+Implemented and committed (10/10 tests pass):
+- `_wire_quantize_fixed(x, dtype, amax)` — quantizes against a SUPPLIED scale, so the per-token
+  amax reduction disappears entirely. Clips rather than wraps, so a stale/under-estimated amax
+  degrades gracefully (tested at 50% stale).
+- `_pmax_replicated_cotangent(ct, axis, mesh_size)` — `pmax(ct)/mesh_size` so shard_map's implicit
+  outer psum over a replicated input's cotangent reconstructs exactly a max. Mirrors the helper on
+  the research branches; tested through a real shard_map rather than asserted in the abstract.
+- `SCALE_A2A_FP8_AMAX=<float>` switches both the forward e4m3 and the backward e5m2 wire
+  quantizers to the supplied scale.
+
+**Scope of this leg, stated plainly:** a supplied constant scale is the delayed-scaling ARITHMETIC
+without the history STATE. It isolates the one question the attribution says decides this route —
+does removing the two `loop_reduce_fusion` amax passes recover the step time? — from the state
+plumbing, which is now known to be reusable rather than new (haliax `update_fp8_meta` /
+`compute_amax_history` + `OverwriteWithGradient`). Production delayed scaling derives the same
+scalar from an amax history; the compute profile is identical, which is why this leg answers the
+throughput question honestly even though it is not the production form.
+
+**Targets for this variant, which are NOT the previous design's bracket:**
+- break-even: QDQ must fall ~2.7x, from 2512 ms/step to 920 ms/step
+- full elimination: step 11.94 - 0.92 = 11.02 s, **MFU 24.57%, +1.90pp** over the limit=4 control
+- the previous +1.34/+2.84pp bracket belonged to the per-token-current design and does not apply
+
+Leg /mwittmann/ep25d4-fp8delayed-120-v1-20260726 submitted (amax 8.0), **120 steps** — its drop
+figures stand only against the other 120-step legs. Expect to queue behind d1's m=3 @ cf1.05
+combination leg; will not resubmit on PENDING. Loss verdict stands alone: the quantization scheme
+changed from per-token current to a shared tensor-wide scale, so the previous leg's parity does not
+transfer, and the precision cost measured 0.0381 vs 0.0374 hostile / 0.0374 vs 0.0373 realistic.
+Confidence: 7/10 that the amax removal shows up as step time; 6/10 that it clears break-even.
