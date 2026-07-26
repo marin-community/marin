@@ -167,7 +167,10 @@ def _wire_quantize_dispatch(x: jax.Array, fp8_dtype):
     throughput question (does removing the amax reduction recover the step time?) from the state
     plumbing. Production delayed scaling derives the same scalar from an amax history instead.
     """
-    fixed = os.environ.get("SCALE_A2A_FP8_AMAX")
+    # Separate knobs per direction: measured activation amax is ~4 while cotangent amax is ~1e-7,
+    # eight orders of magnitude apart, so one shared constant cannot serve both.
+    key = "SCALE_A2A_FP8_AMAX_FWD" if fp8_dtype == jnp.float8_e4m3fn else "SCALE_A2A_FP8_AMAX_BWD"
+    fixed = os.environ.get(key)
     if fixed is not None:
         return _wire_quantize_fixed(x, fp8_dtype, float(fixed))
     return _wire_quantize(x, fp8_dtype)
