@@ -1078,6 +1078,31 @@ class Transformer(eqx.Module):
         hidden, qb_beta_per_layer, mtp_hidden = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
+
+        if mtp_hidden is not None and reduction == "mean":
+            # MTP depth-1 predicts t_{i+2} (labels shifted one further; last two positions have no valid
+            # target so their weight is zeroed). Run the main and MTP cross-entropies as ONE fused call
+            # over 2B tokens (concatenated along batch) with reduction="none", then split and normalise
+            # each group by its own weight-sum -- exactly loss_main_mean + mtp_loss_weight * loss_mtp_mean.
+            # One CE keeps a single logit-tile recompute + one set of backward residuals instead of two.
+            mtp_labels = jnp.concatenate([labels[:, 1:], labels[:, :1] * 0], axis=1).astype(jnp.int32)
+            mtp_weight = loss_weight.at[:, -2:].set(0.0)
+            per_token = fused_linear_softmax_cross_entropy_loss(
+                jnp.concatenate([hidden, mtp_hidden], axis=0),
+                self.output_proj,
+                jnp.concatenate([labels, mtp_labels], axis=0),
+                weight=jnp.concatenate([loss_weight, mtp_weight], axis=0),
+                reduction="none",
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+            )
+            b = hidden.shape[0]
+            main_den = jnp.sum(loss_weight)
+            mtp_den = jnp.sum(mtp_weight)
+            loss_main = jnp.where(main_den != 0, jnp.sum(per_token[:b]) / main_den, 0.0)
+            loss_mtp = jnp.where(mtp_den != 0, jnp.sum(per_token[b:]) / mtp_den, 0.0)
+            return loss_main + self.config.mtp_loss_weight * loss_mtp, qb_beta_per_layer
+
         loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1088,8 +1113,7 @@ class Transformer(eqx.Module):
             dtype=loss_dtype,
         )
         if mtp_hidden is not None:
-            # MTP depth-1 predicts t_{i+2}: labels shifted one further, and the last two positions have
-            # no valid target so their weight is zeroed. Shares the output head with the main model.
+            # Non-mean reduction (e.g. per-position logging): keep the two-call form.
             mtp_labels = jnp.concatenate([labels[:, 1:], labels[:, :1] * 0], axis=1).astype(jnp.int32)
             mtp_weight = loss_weight.at[:, -2:].set(0.0)
             mtp_loss = fused_linear_softmax_cross_entropy_loss(
