@@ -345,12 +345,12 @@ Use `observe-audit.us-east.coreweave.com` for US-EAST and
 Kueue, kubelet, or an operator. The kubeconfig token is also the CoreWeave API
 access token; never print it or save the response with request headers.
 
-Do not mirror the full audit stream through the Iris Grafana bridge. CoreWeave
-already stores it, and
+CoreWeave's audit store is the actor-level record of Kubernetes API operations.
 [Telemetry Relay](https://docs.coreweave.com/observability/telemetry-forwarding/relay)
-can forward audit logs if longer customer-controlled retention is required.
-Iris keeps the smaller task-scoped interpretation in `iris.task_event`; use
-`iris task events /user/job/0` before querying raw audit logs.
+can forward those logs to customer-controlled storage. `iris.task_event` is a
+different view: a retained, task-scoped interpretation of backend verdicts and
+controller decisions. The Kubernetes Grafana dashboard shows recent
+`iris.task_event` rows beside the API server's shorter-lived Warning events.
 
 ## 4. Operator Setup Guide
 
