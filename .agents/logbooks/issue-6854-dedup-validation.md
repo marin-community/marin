@@ -1483,6 +1483,43 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T04:37:05Z — 88,961 pairs verified
+
+- Three additional treatment checkpoints passed independent validation. Their
+  384 pairs contain 100 model false positives, 283 model true duplicates, and
+  one unresolved outcome. All 797 judgments were valid on the first attempt;
+  every pair used direct review. Decision-file 67 outcome Parquet SHA-256
+  values for offsets 5376, 5504, and 5632 are
+  `ff052404a7efbc1c8730e1540a93a8a76b713ec9727c79bdd171d303fdf8cc5a`,
+  `2f24f59bff204d087f46baaed07c56de568c914bd2a93cf403af316827e5a327`,
+  and
+  `700f919a33581e5ee1b258ec2e75917dc3cc29bf8f4025bd8df03a0d35e11cc6`.
+- Complete-text review resolves the ambiguity as a true duplicate. Both
+  documents contain the same substantive paragraph verbatim. The member's
+  only unique text is a weekly-instagram date-range heading and a two-comment
+  count; the canonical retains the full title and adds two Q&A examples.
+  Character similarity is 0.853157. Pair location:
+  `part-00067-of-00128.parquet:8547`; member/canonical text SHA-256:
+  `ca25d3f183b75dd09ed51b4c2c23e80675acb04be591917291d20d69d5b1cf83` /
+  `153c38439185e187b0fd262e6f3994f3e98d8f603d6c1068b493bc5a59ea3dc4`.
+- The hash-bound manual record has Parquet SHA-256
+  `f4bbb2e3d05727330132abaa4dc2835288e5bceacb605f11d14468dac1329c10`
+  and semantic-judgments SHA-256
+  `33b6a0244c953beab62d20945c24dcc41d764325395a8d9e838fd3675f2a9ea4`.
+  A separate batch-priority Iris process reread and exactly checked the source
+  pair, semantic checkpoint, judgment hash, manual row, Parquet bytes, and
+  completion marker.
+- Across the stable 699-checkpoint snapshot, all 92 unresolved model outcomes
+  have manual records: 72 true duplicates and 20 false positives. The adjusted
+  totals are:
+
+  - baseline: 71,758 pairs, 45,706 false positives, 26,052 true duplicates;
+  - treatment: 17,203 pairs, 8,811 false positives, 8,392 true duplicates;
+  - combined: 88,961 pairs, 54,517 false positives, 34,444 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T04:26:56Z — 88,577 pairs verified
 
 - One p0 and three p2 baseline checkpoints passed independent validation. Their
