@@ -585,8 +585,15 @@ def _sparse_clone_weight_metadata(
         slice_size=local_experts,
         axis=1,
     )
-    send_sizes = jnp.sum(local_needed, axis=1, dtype=jnp.int32)
-    input_offsets = jnp.cumsum(send_sizes, dtype=jnp.int32) - send_sizes
+    send_matrix = jnp.sum(
+        needed.reshape(expert_shards, expert_shards, local_experts),
+        axis=2,
+        dtype=jnp.int32,
+    ).T
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+        send_matrix,
+        receiver_index,
+    )
 
     # Top-k has distinct experts, so one expert receives at most one assignment
     # per global token and can cross at most ceil(S / K) + 1 receiver bins.
@@ -604,10 +611,6 @@ def _sparse_clone_weight_metadata(
         .at[compact_position]
         .set(local_expert_indices, mode="drop")
     )
-
-    receiver_needed = needed[receiver_index].reshape(expert_shards, local_experts)
-    recv_sizes = jnp.sum(receiver_needed, axis=1, dtype=jnp.int32)
-    output_offsets = jnp.cumsum(recv_sizes, dtype=jnp.int32) - recv_sizes
 
     receiver_groups = receiver_group_sizes[receiver_index]
     receiver_group_position = jnp.cumsum((receiver_groups > 0).astype(jnp.int32), dtype=jnp.int32) - 1

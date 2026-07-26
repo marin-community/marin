@@ -182,6 +182,7 @@ def _reference_sparse_clone_weight_exchange(
     all_send_weights = jax.lax.all_gather(send_weights, "expert")
     all_input_offsets = jax.lax.all_gather(input_offsets, "expert")
     all_send_sizes = jax.lax.all_gather(send_sizes, "expert")
+    all_output_offsets = jax.lax.all_gather(output_offsets, "expert")
     receiver_index = jax.lax.axis_index("expert")
     receiver_count = all_send_weights.shape[0]
     output = jnp.zeros((max_receiver_segments, *local_weights.shape[1:]), dtype=local_weights.dtype)
@@ -190,7 +191,7 @@ def _reference_sparse_clone_weight_exchange(
         segment_size = all_send_sizes[sender_index, receiver_index]
         input_position = all_input_offsets[sender_index, receiver_index] + segment_positions
         input_position = jnp.minimum(input_position, all_send_weights.shape[1] - 1)
-        output_position = output_offsets[sender_index] + segment_positions
+        output_position = all_output_offsets[sender_index, receiver_index] + segment_positions
         output_position = jnp.where(segment_positions < segment_size, output_position, max_receiver_segments)
         output = output.at[output_position].set(all_send_weights[sender_index, input_position], mode="drop")
     return output
