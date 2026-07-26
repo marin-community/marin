@@ -50,6 +50,65 @@ def _batch_experts_enabled() -> bool:
     return os.environ.get("SCALE_A2A_BATCH_EXPERTS") == "1"
 
 
+def _spill_attempts() -> int:
+    """Same-step spill attempts per dropped assignment. 0 disables spill (index composition unchanged)."""
+    return int(os.environ.get("SCALE_A2A_SPILL", "0"))
+
+
+def _segment_rank(bucket: Int[Array, " n"], num_buckets: int) -> Int[Array, " n"]:
+    """Rank of each element within its bucket, in index order (stable)."""
+    total = bucket.shape[0]
+    order = jnp.argsort(bucket, stable=True)
+    counts = jnp.bincount(bucket, length=num_buckets).astype(jnp.int32)
+    starts = jnp.cumsum(counts) - counts
+    ranks_sorted = jnp.arange(total, dtype=jnp.int32) - starts[bucket[order]]
+    return ranks_sorted[jnp.argsort(order)]
+
+
+def _assign_with_spill(
+    selected_experts_local: Int[Array, "Tlocal K"],
+    *,
+    num_experts: int,
+    capacity: int,
+    attempts: int,
+) -> tuple[Int[Array, " A"], Int[Array, " A"], Array]:
+    """Place each (token, k) assignment into a per-(sender, expert) capacity bucket.
+
+    Round 0 is the baseline policy: assignments to expert e take slots in e's bucket in index
+    order, and those past ``capacity`` are dropped. Each spill attempt then re-offers the still
+    unplaced assignments to the next-ranked expert the same token selected, filling only that
+    bucket's remaining headroom. A spilled assignment is computed by an expert the token actually
+    chose and keeps its own combine weight, so it contributes real signal instead of nothing.
+
+    Returns the target expert, slot within that expert's bucket, and the placed mask.
+    """
+    topk = selected_experts_local.shape[1]
+    flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
+    total = flat_experts.shape[0]
+
+    slot = _segment_rank(flat_experts, num_experts)
+    placed = slot < capacity
+    if attempts <= 0:
+        return flat_experts, slot, placed
+
+    target = flat_experts
+    occupancy = jnp.minimum(jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32), capacity)
+    # Sentinel bucket num_experts collects already-placed assignments so they do not consume ranks.
+    for attempt in range(1, attempts + 1):
+        candidate = jnp.roll(selected_experts_local, -attempt, axis=1).reshape(-1).astype(jnp.int32)
+        offered = jnp.where(placed, num_experts, candidate)
+        rank = _segment_rank(offered, num_experts + 1)
+        candidate_slot = occupancy[candidate] + rank
+        spilled = jnp.logical_and(~placed, candidate_slot < capacity)
+        target = jnp.where(spilled, candidate, target)
+        slot = jnp.where(spilled, candidate_slot, slot)
+        placed = jnp.logical_or(placed, spilled)
+        filled = jnp.bincount(jnp.where(spilled, candidate, num_experts), length=num_experts + 1)[:num_experts]
+        occupancy = jnp.minimum(occupancy + filled.astype(jnp.int32), capacity)
+    assert target.shape == (total,) and topk > 0
+    return target, slot, placed
+
+
 def _batch_expert_group_size(local_experts: int) -> int:
     """Experts per batched a2a/GEMM group. Defaults to all local experts (one group = full batch).
 
@@ -226,17 +285,17 @@ def _fixed_a2a_core(
     if custom_adjoint and not gather_dispatch:
         raise ValueError("SCALE_A2A_CUSTOM_ADJOINT=1 requires SCALE_A2A_GATHER_DISPATCH=1")
 
-    flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
-
-    order = jnp.argsort(flat_experts, stable=True)
-    inverse_order = jnp.argsort(order)
-    expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
-    segment_start = jnp.cumsum(expert_counts) - expert_counts
-    sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[flat_experts[order]]
-    slot = sorted_rank[inverse_order]
-    keep = slot < capacity
-    local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
-    destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+    # Spill only rewrites which bucket slot an assignment occupies, so everything downstream --
+    # the dispatch gather, the collectives, and both custom-adjoint VJPs -- is generic in
+    # (linear_indices, keep) and needs no change.
+    target_experts, slot, keep = _assign_with_spill(
+        selected_experts_local,
+        num_experts=num_experts,
+        capacity=capacity,
+        attempts=_spill_attempts(),
+    )
+    local_expert_indices = (target_experts % local_experts).astype(jnp.int32)
+    destination_shards = (target_experts // local_experts).astype(jnp.int32)
     bucket_size = expert_shards * capacity
     send_size = local_experts * bucket_size
     linear_indices = jnp.where(

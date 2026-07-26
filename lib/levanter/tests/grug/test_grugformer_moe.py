@@ -15,7 +15,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
-from levanter.grug._moe.ep_ragged_all_to_all import _fixed_a2a_core
+from levanter.grug._moe.ep_ragged_all_to_all import _assign_with_spill, _fixed_a2a_core
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -766,6 +766,82 @@ def test_batch_experts_matches_loop_forward_and_gradients(monkeypatch: pytest.Mo
     assert group_dropped == loop_dropped
     for loop_g, group_g in zip(loop_grads, group_grads):
         np.testing.assert_allclose(np.asarray(group_g), np.asarray(loop_g), rtol=1e-5, atol=1e-5)
+
+
+def test_spill_places_dropped_assignments_within_capacity():
+    """Spill reduces drops, respects capacity, and only uses experts the token selected."""
+    num_experts, topk, tokens = 16, 8, 128
+    capacity = tokens * topk // num_experts  # capacity factor 1.0
+    logits = jax.random.normal(jax.random.key(11), (tokens, num_experts)) + jnp.concatenate(
+        [jnp.full((4,), 3.0), jnp.zeros((num_experts - 4,))]
+    )
+    selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
+
+    previous_drops = None
+    for attempts in (0, 1, 2):
+        target, slot, placed = _assign_with_spill(
+            selected_experts, num_experts=num_experts, capacity=capacity, attempts=attempts
+        )
+        target, slot, placed = np.asarray(target), np.asarray(slot), np.asarray(placed)
+        drops = int(placed.size - placed.sum())
+        if previous_drops is not None:
+            assert drops < previous_drops, f"spill attempt {attempts} did not reduce drops"
+        previous_drops = drops
+
+        selected = np.asarray(selected_experts)
+        for index in np.flatnonzero(placed):
+            assert target[index] in selected[index // topk], "spilled to an unselected expert"
+        for expert in range(num_experts):
+            slots = slot[placed & (target == expert)]
+            assert len(slots) <= capacity
+            assert len(set(slots.tolist())) == len(slots), "two assignments share a bucket slot"
+            if len(slots):
+                assert slots.min() >= 0 and slots.max() < capacity
+
+
+def test_custom_adjoint_matches_autodiff_with_spill(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SCALE_A2A_NO_BARRIER", "1")
+    monkeypatch.setenv("SCALE_A2A_GATHER_DISPATCH", "1")
+    monkeypatch.setenv("SCALE_A2A_SPILL", "2")
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(23),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    seed = jax.random.normal(jax.random.key(29), (tokens, hidden_dim), dtype=jnp.float32)
+
+    monkeypatch.delenv("SCALE_A2A_CUSTOM_ADJOINT", raising=False)
+    auto_out, auto_dropped, auto_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    monkeypatch.setenv("SCALE_A2A_CUSTOM_ADJOINT", "1")
+    custom_out, custom_dropped, custom_grads = _run_fixed_a2a_value_and_grads(
+        x=x,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_up_gate=w_up_gate,
+        w_down=w_down,
+        seed_cotangent=seed,
+        num_experts=num_experts,
+        capacity_factor=0.5,
+    )
+
+    np.testing.assert_allclose(np.asarray(custom_out), np.asarray(auto_out), rtol=1e-5, atol=1e-5)
+    assert custom_dropped == auto_dropped
+    for auto_g, custom_g in zip(auto_grads, custom_grads):
+        np.testing.assert_allclose(np.asarray(custom_g), np.asarray(auto_g), rtol=1e-5, atol=1e-5)
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
