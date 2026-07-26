@@ -52,7 +52,8 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
 |---|---|---|
 | H1 | Quantizing before the dispatch is bit-identical to quantizing after, so the forward operand is free. | **confirmed** (FP8W-001, CPU) |
 | H2 | The wgrad column operand can be rebuilt from the arrived payload without material loss. | **confirmed** (FP8W-001, CPU) |
-| H3 | Packing scales inside the payload buffer keeps the collective count unchanged at 33/64 of bf16 bytes. | proposed |
+| H3 | Packing scales inside the payload buffer keeps the collective count unchanged at 33/64 of bf16 bytes. | proposed; **revised** by FP8W-003 — the packed uint8 buffer must stay inside the wire's `custom_vjp` |
+| H8 | The quantized payload can cross the op boundary as a differentiated argument, so the quantize need not be fused into the op's VJP. | **confirmed, with a constraint** (FP8W-003) |
 | H4 | Relocating the quantize reduces producer volume by ~topk x cf (8.5x at 8-of-256, cf1.0625). | proposed |
 | H5 | The net effect is positive at layer level inside the real step with remat on. | proposed, blocked on implementation |
 | H6 | Most of #7279's -2.02pp was the round trip, not the per-token scaling granularity. | proposed (control arm) |
@@ -121,3 +122,42 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   any sm100 request until there is something to measure, and bundle the H7 probe into it.
 - **Next action:** implement `quantize_source` on the op protocol and the packed payload
   buffer.
+
+### 2026-07-26 15:10 - FP8W-003: the payload carrier dtype decides whether the gradient survives
+
+- **Hypothesis:** H8. The design has the backend quantize before the collective, permute
+  the payload, and hand it to the op, so a cotangent must reach the bf16 source through a
+  quantized intermediate. If that is impossible, the modular boundary collapses and the
+  quantize has to be fused into the op's `custom_vjp` — the shape Hopper's H3/H4 used
+  ("byte all_gather -> byte take -> w13 wgmma under one custom_vjp", #6911).
+- **Commit hash:** see the commit adding
+  `experiments/grug/moe/standalone/study_fp8_wire_ad.py` on this branch.
+- **Command:** `uv run python experiments/grug/moe/standalone/study_fp8_wire_ad.py`.
+- **Result:** with the op modelled as a `custom_vjp` handing back a straight-through bf16
+  cotangent, exactly as `fp8_all_gather` does today:
+
+  | carrier | gradient | verdict |
+  |---|---|---|
+  | bfloat16 (control) | `[1 1 1 1]` | propagates |
+  | float8_e4m3fn | `[1 1 1 1]` | propagates |
+  | uint8 (bitcast) | `[0 0 0 0]` | silently zero, no error raised |
+
+- **Interpretation:** H8 holds, so no fusing is required and the modular boundary in the
+  design survives — but under a constraint the obvious implementation violates. A uint8
+  payload has a float0 tangent type, so JAX drops the cotangent without raising. The
+  existing `fp8_wire` module bitcasts its payload to uint8 by deliberate design
+  ("permutation collectives move bytes, and this keeps the wire format independent of
+  backend FP8 dtype support"), which is safe there only because `_fp8_all_gather_impl`
+  dequantizes to bf16 inside its own `custom_vjp`, so uint8 never crosses an autodiff
+  boundary. Reusing that idiom across the new boundary would train on a silently zeroed
+  gradient. This is the same failure class as #7279's fp8 underflow that `crash_on_nan`
+  could not see: a wrong-but-finite value that every guard passes.
+
+  Consequence for H3: the packed `[T, 33H/32]` uint8 buffer stays *inside* the wire's
+  `custom_vjp` — bitcast to uint8 for the collective, split, and bitcast the payload back
+  to `float8_e4m3fn` before returning. The e8m0 scales are returned as a separate uint8
+  array and are never differentiated, so their dtype is unconstrained. Whether NCCL through
+  XLA accepts a float8-typed collective directly is now moot, since the collective still
+  sees uint8.
+- **Next action:** implement against that constraint, and add a gradient-nonzero assertion
+  to the parity tests so a future refactor back to a uint8 carrier fails loudly.
