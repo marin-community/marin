@@ -357,3 +357,50 @@ present in healthy runs too, not the cause. Resubmitted unchanged as
 `/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1600-v2`. Deliberately still on the
 default preemptible pool: the dense leg completed there, so the evidence says the window was
 transient, and I would rather not introduce a placement variable into the primary arm.
+
+## Check-in 8 — DECOMPOSING the exposed collective time, and it lowers the ceiling on what latent can win
+
+The headline exposure number (4,126 ms per 3 steps on GPU:0) is not all a2a. Breaking it down by
+kernel from the same profile — occupancy x (1 - overlap%) per op, which sums to 4,078 ms against the
+union-measured 4,126 ms, so the decomposition is essentially complete:
+
+| collective | stream | occupancy | overlap | **exposed** | what latent does to it |
+|---|---|--:|--:|--:|---|
+| `SendRecv` (the expert a2a) | #159 async | 5,620 ms | 85.1% | **838 ms** | halves the bytes |
+| `SendRecv` (the expert a2a) | #50 **inline on compute** | 1,266 ms | **0.0%** | **1,266 ms** | halves the bytes |
+| `AllGather_RING_LL` (FSDP weights) | #159 | 1,930 | 70.7% | 566 | nothing |
+| `ReduceScatter_Sum_bf16` (FSDP grads) | #159 | 1,668 | 56.3% | 729 | nothing |
+| `AllReduce_Sum_f32` (QB beta + norms) | #159 | 1,596 | 57.4% | 680 | nothing |
+
+**Only 2,104 ms of the 4,126 ms of exposure — 51% — is the expert all-to-all at all.** The other
+half is FSDP weight/gradient movement and the QB all-reduce, and latent MoE does not touch a byte of
+it. So the ceiling on this mechanism is HALF of half:
+
+    best case if a2a exposure scales exactly with payload bytes:
+      saving = 2,104 ms / 2 = 1,052 ms per 3 steps = 351 ms per step
+    against an added latent-projection cost of ~285 ms/step (e = 1.0) to ~570 ms/step (e = 0.5)
+
+REVISED PRE-REGISTRATION for the matched-work arm, and it is now a prediction of a small LOSS on
+tok/s rather than the coin-flip of check-in 2. Taking the dense control's own steady-tail step of
+15.266 s:
+
+| scenario | Δstep | tok/s | arch-aware MFU |
+|---|--:|--:|--:|
+| a2a exposure halves, projections at e = 0.5 | +219 ms | **-1.4%** | 26.34% (+1.50pp) |
+| a2a exposure halves, projections at e = 1.0 | -66 ms | **+0.4%** | 26.79% (+1.95pp) |
+| a2a exposure unchanged (pure null), e = 0.5 | +570 ms | **-3.6%** | 25.75% (+0.91pp) |
+
+The three scenarios are separated by only ~4% in tok/s and ~1pp in MFU, which is more than the
+run-to-run spread (my dense tail sd is 0.103pp) but not by a lot. **This is why the endpoint number
+cannot carry the verdict and the profile has to.** The clean test is the direct one: measure
+`SendRecv` exposure on the matched-work arm's profile and compare it to 2,104 ms. If it lands near
+1,050 ms the mechanism works and the economics are simply unfavourable; if it lands near 2,104 ms
+the mechanism itself does not transfer.
+
+INDEPENDENT FINDING, worth more than the latent question and available to any arm: **1,266 ms per 3
+steps of `SendRecv` runs INLINE on the compute stream at 0.0% overlap** — 422 ms of every 15.3 s
+step, 2.8% of the step, completely serialized. That is 31% of all exposed collective time in one
+kernel placement. Every other collective on this stack is on the async stream #159 and is 56-85%
+hidden. Whatever forces that copy of the a2a onto the compute stream is worth a look on its own; it
+is a scheduling fix rather than a bytes fix, and this effort has established that scheduling fixes
+are the cheap kind. I am not chasing it in this direction, but it should not be lost.
