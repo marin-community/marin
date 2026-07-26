@@ -1483,6 +1483,50 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T07:58:30Z — 109,169 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-0748-v182` independently
+  revalidated p2 decision-file 68 baseline semantic offset 2,816. Its 128
+  direct-review pairs contain 61 model false positives, 66 model true
+  duplicates, and one unresolved outcome. All 277 judgments and requests were
+  valid on their first attempt. The outcome Parquet SHA-256 is
+  `8a0b13d7070d4b1247b43109ecd6f9e73383ea9968ecf3f416556796f59e0f4c`.
+- `/rav/datakit-6854-inspect-row4861-0749-v183` read both complete same-source
+  college-SEO texts and all three model judgments. The 852-character member
+  and 827-character canonical have SHA-256
+  `ada82d4d5907b36a978b78c61c0d9b9bc5a51e06edabe64957c8c995947e10a3`
+  and
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+  Their complete character and line sequence ratios are 0.582490 and 0. The
+  texts share admissions and course-selection boilerplate, but the member
+  uniquely contains career-path advice, Allen degree-online and Garrett/Wilson
+  program references, a biomedical-engineering bachelor's-degree requirement
+  with mechanical-design and surgical-practice electives, and a Rhode Island
+  plant-pathology reference. The canonical instead names Tarleton State,
+  College of New Rochelle, Wilbur Wright, and Southwestern CNA and contains
+  distinct employment advice. Neither contains the other, so deletion loses
+  distinct propositions and the pair is a false positive. This agrees with
+  the prior full-text adjudication of row 5,848 against the same canonical.
+- `/rav/datakit-6854-publish-row4861-0755-v186` published the hash-bound manual
+  record. `/rav/datakit-6854-verify-row4861-0757-v187` separately reread the
+  source pair, semantic checkpoint, manual row, deterministic Parquet bytes,
+  and completion marker. The semantic-evidence, manual-record, and
+  manual-Parquet SHA-256 values are
+  `07c71f5dee17460872fc0f5c18bbe5318ce04f16cedcbf42f1fbdeca18479497`,
+  `3562b6ce7c7d17111ccd4bfb33c5a9010417031290076568468e455e4342cb82`,
+  and
+  `72af6cf0e65def84b10e5506708122131f453aab4cee7a7a13322efc8e3fb158`.
+- Across the stable 859-checkpoint snapshot, all 124 unresolved model outcomes
+  remain covered by 94 true-duplicate and 30 false-positive manual records.
+  The adjusted totals are:
+
+  - baseline: 88,153 pairs, 56,057 false positives, 32,096 true duplicates;
+  - treatment: 21,016 pairs, 10,849 false positives, 10,167 true duplicates;
+  - combined: 109,169 pairs, 66,906 false positives, 42,263 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T07:46:32Z — 109,041 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-0745-v181` independently
