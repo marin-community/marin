@@ -10,13 +10,14 @@
 //! normalized control-plane decision. Non-proxy requests are forwarded unchanged.
 
 mod auth;
+mod metrics;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
@@ -45,19 +46,19 @@ pub const PROXY_METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "
 
 pub use auth::NativeAuthConfig;
 use auth::{CacheStats, NativeVerifier, VerifyOutcome, IAP_ASSERTION_HEADER};
+pub use metrics::{ProxyMetricSeries, ProxyMetricsSnapshot, RpcMetricSeries, RpcMetricsSnapshot};
+use metrics::{ProxyMetrics, ProxyRequestTimer, RpcMetrics, RpcRequestTimer};
 
 const MAX_DECISION_BODY_BYTES: usize = 64 * 1024;
 const PROXY_PATH_PREFIX: &str = "/proxy/";
 const REGISTRY_LOCK_POISONED: &str = "native proxy registry lock is poisoned";
 const RPC_METRICS_LOCK_POISONED: &str = "native proxy RPC metrics lock is poisoned";
+const PROXY_METRICS_LOCK_POISONED: &str = "native proxy transport metrics lock is poisoned";
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOUT_SECONDS);
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 const X_FORWARDED_PREFIX: HeaderName = HeaderName::from_static("x-forwarded-prefix");
 const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
-const RPC_LATENCY_BUCKETS_SECONDS: [f64; 11] = [
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-];
 
 type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 type DecisionResult = Result<ProxyDecision, Box<Response<Body>>>;
@@ -108,6 +109,7 @@ pub struct ProxyControl {
     ready: Arc<AtomicBool>,
     stats: Arc<CacheStats>,
     rpc_metrics: Arc<std::sync::Mutex<RpcMetrics>>,
+    proxy_metrics: Arc<std::sync::Mutex<ProxyMetrics>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,128 +118,6 @@ pub struct ProxyStats {
     pub endpoint_count: usize,
     pub jwt_cache_hits: u64,
     pub jwt_cache_misses: u64,
-}
-
-/// Lifetime RPC counters and latency observations from the native listener.
-///
-/// Counters reset with the proxy process. Histogram buckets are cumulative.
-#[derive(Debug, Serialize)]
-pub struct RpcMetricsSnapshot {
-    pub series: Vec<RpcMetricSeries>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RpcMetricSeries {
-    pub service: String,
-    pub method: String,
-    pub upstream: String,
-    pub requests: u64,
-    pub responses: BTreeMap<u16, u64>,
-    pub in_flight: u64,
-    pub latency_buckets: Vec<(String, u64)>,
-    pub latency_count: u64,
-    pub latency_sum_seconds: f64,
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct RpcMetricKey {
-    service: String,
-    method: String,
-    upstream: &'static str,
-}
-
-#[derive(Default)]
-struct RpcMetricState {
-    requests: u64,
-    responses: BTreeMap<u16, u64>,
-    in_flight: u64,
-    latency_bucket_counts: [u64; RPC_LATENCY_BUCKETS_SECONDS.len()],
-    latency_sum_seconds: f64,
-}
-
-#[derive(Default)]
-struct RpcMetrics {
-    series: BTreeMap<RpcMetricKey, RpcMetricState>,
-}
-
-impl RpcMetrics {
-    fn begin(&mut self, key: RpcMetricKey) {
-        let state = self.series.entry(key).or_default();
-        state.requests += 1;
-        state.in_flight += 1;
-    }
-
-    fn finish(&mut self, key: &RpcMetricKey, status: StatusCode, elapsed: Duration) {
-        let Some(state) = self.series.get_mut(key) else {
-            return;
-        };
-        state.in_flight = state.in_flight.saturating_sub(1);
-        *state.responses.entry(status.as_u16()).or_default() += 1;
-        let seconds = elapsed.as_secs_f64();
-        state.latency_sum_seconds += seconds;
-        for (index, upper_bound) in RPC_LATENCY_BUCKETS_SECONDS.iter().enumerate() {
-            if seconds <= *upper_bound {
-                state.latency_bucket_counts[index] += 1;
-            }
-        }
-    }
-
-    fn snapshot(&self) -> RpcMetricsSnapshot {
-        RpcMetricsSnapshot {
-            series: self
-                .series
-                .iter()
-                .map(|(key, state)| {
-                    let latency_count = state.responses.values().sum();
-                    RpcMetricSeries {
-                        service: key.service.clone(),
-                        method: key.method.clone(),
-                        upstream: key.upstream.to_string(),
-                        requests: state.requests,
-                        responses: state.responses.clone(),
-                        in_flight: state.in_flight,
-                        latency_buckets: RPC_LATENCY_BUCKETS_SECONDS
-                            .iter()
-                            .zip(state.latency_bucket_counts)
-                            .map(|(bound, count)| (bound.to_string(), count))
-                            .chain(std::iter::once(("+Inf".to_string(), latency_count)))
-                            .collect(),
-                        latency_count,
-                        latency_sum_seconds: state.latency_sum_seconds,
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-struct RpcRequestTimer {
-    key: RpcMetricKey,
-    metrics: Arc<std::sync::Mutex<RpcMetrics>>,
-    started: Instant,
-}
-
-impl RpcRequestTimer {
-    fn begin(control: &ProxyControl, request: &Request) -> Option<Self> {
-        let key = rpc_metric_key(request)?;
-        control
-            .rpc_metrics
-            .lock()
-            .expect(RPC_METRICS_LOCK_POISONED)
-            .begin(key.clone());
-        Some(Self {
-            key,
-            metrics: Arc::clone(&control.rpc_metrics),
-            started: Instant::now(),
-        })
-    }
-
-    fn finish(self, status: StatusCode) {
-        self.metrics
-            .lock()
-            .expect(RPC_METRICS_LOCK_POISONED)
-            .finish(&self.key, status, self.started.elapsed());
-    }
 }
 
 impl ProxyControl {
@@ -260,6 +140,13 @@ impl ProxyControl {
             .lock()
             .map(|metrics| metrics.snapshot())
             .map_err(|_| RPC_METRICS_LOCK_POISONED.to_string())
+    }
+
+    pub fn proxy_metrics(&self) -> Result<ProxyMetricsSnapshot, String> {
+        self.proxy_metrics
+            .lock()
+            .map(|metrics| metrics.snapshot())
+            .map_err(|_| PROXY_METRICS_LOCK_POISONED.to_string())
     }
 
     pub fn pause_registry(&self) {
@@ -955,29 +842,6 @@ fn method_allowed(method: &Method) -> bool {
     PROXY_METHODS.contains(&method.as_str())
 }
 
-fn rpc_metric_key(request: &Request) -> Option<RpcMetricKey> {
-    let segments = request
-        .uri()
-        .path()
-        .split('/')
-        .filter(|segment| !segment.is_empty());
-    let mut segments = segments.skip_while(|segment| !segment.starts_with("iris."));
-    let service = segments.next()?;
-    let method = segments.next()?;
-    if segments.next().is_some() {
-        return None;
-    }
-    Some(RpcMetricKey {
-        service: service.to_string(),
-        method: method.to_string(),
-        upstream: if request.uri().path().starts_with(PROXY_PATH_PREFIX) {
-            "endpoint"
-        } else {
-            "controller"
-        },
-    })
-}
-
 fn proxy_route_for_request(
     headers: &HeaderMap,
     uri: &Uri,
@@ -1411,12 +1275,22 @@ async fn ingress(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response<Body> {
-    let timer = RpcRequestTimer::begin(&state.control, &request);
+    let rpc_timer = RpcRequestTimer::begin(&state.control.rpc_metrics, &request);
+    let proxy_timer = ProxyRequestTimer::begin(&state.control.proxy_metrics, &request);
+    // Count request bytes as the upstream reads the wrapped body.
+    let request = match &proxy_timer {
+        Some(timer) => timer.wrap_request_body(request),
+        None => request,
+    };
     let response = ingress_inner(state, peer, request).await;
-    if let Some(timer) = timer {
+    if let Some(timer) = rpc_timer {
         timer.finish(response.status());
     }
-    response
+    // Record status/latency and wrap the response body to count response bytes.
+    match proxy_timer {
+        Some(timer) => timer.finish(response),
+        None => response,
+    }
 }
 
 async fn ingress_inner(
@@ -1520,42 +1394,6 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rpc_metrics_track_started_and_completed_controller_requests() {
-        let control = ProxyControl::default();
-        let request = Request::builder()
-            .uri("/iris.cluster.ControllerService/ListJobs")
-            .body(Body::empty())
-            .unwrap();
-        let timer = RpcRequestTimer::begin(&control, &request).unwrap();
-
-        let snapshot = control.rpc_metrics().unwrap();
-        let series = snapshot.series.first().unwrap();
-        assert_eq!(series.requests, 1);
-        assert_eq!(series.in_flight, 1);
-        assert_eq!(series.latency_count, 0);
-        assert_eq!(
-            series.latency_buckets.last(),
-            Some(&("+Inf".to_string(), 0))
-        );
-
-        timer.finish(StatusCode::INTERNAL_SERVER_ERROR);
-
-        let snapshot = control.rpc_metrics().unwrap();
-        let series = snapshot.series.first().unwrap();
-        assert_eq!(series.service, "iris.cluster.ControllerService");
-        assert_eq!(series.method, "ListJobs");
-        assert_eq!(series.upstream, "controller");
-        assert_eq!(series.requests, 1);
-        assert_eq!(series.responses.get(&500), Some(&1));
-        assert_eq!(series.in_flight, 0);
-        assert_eq!(series.latency_count, 1);
-        assert_eq!(
-            series.latency_buckets.last(),
-            Some(&("+Inf".to_string(), 1))
-        );
-    }
 
     fn mapping(endpoint_id: &str, name: &str) -> EndpointMapping {
         EndpointMapping {
