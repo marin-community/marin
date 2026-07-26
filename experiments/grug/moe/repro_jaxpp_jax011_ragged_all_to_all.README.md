@@ -39,14 +39,17 @@ The script rejects any other package versions or an unpatched JaxPP runtime.
 
 ## H100 command
 
-Run all three cases on one four-H100 Iris task. The direct and transfer-only
-controls must pass before interpreting the combined case.
+Run all five cases on one eight-H100 Iris task. The direct and transfer-only
+controls must pass before interpreting the combined cases. The two four-stage
+cases isolate rank count and bidirectional transfer structure before adding a
+device ragged collective to every stage task.
 
 ```bash
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
-  job run --no-wait --enable-extra-resources --gpu=H100x4 \
+  job run --no-wait --enable-extra-resources --gpu=H100x8 \
   --cpu=16 --memory=128G --disk=128G --extra=gpu --timeout=900 \
+  --max-retries=0 --priority=interactive \
   --job-name="jaxpp-jax011-ragged-minimal-${STAMP}" \
   -- bash -c '
     set -euxo pipefail
@@ -95,6 +98,12 @@ uv run --package marin-iris --extra controller iris --cluster=cw-rno2a \
     CUDA_VISIBLE_DEVICES=0,1,2,3 .venv/bin/python -u "$SCRIPT" \
       --case jaxpp-ragged --coordinator-port 5832 \
       --timeout 180 --stack-after 30
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
+      --case jaxpp-four-stage-transfer --coordinator-port 5833 \
+      --timeout 180 --stack-after 30
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 .venv/bin/python -u "$SCRIPT" \
+      --case jaxpp-four-stage-ragged --coordinator-port 5834 \
+      --timeout 180 --stack-after 30
   '
 ```
 
@@ -131,5 +140,12 @@ This test is the lower-bound regression package: it verifies package identity,
 the JAX 0.11 inline patch, direct ragged-all-to-all, JaxPP task transfer, and
 their smallest composition. Any smaller case would remove either an MPMD stage
 or the two-device collective axis.
+
+The four-stage cases are the next delta-debug boundary. The transfer control
+runs four two-H100 MPMD ranks through three forward transfers and three reverse
+transfers. Each rank executes one forward and one backward stage task. The
+ragged treatment replaces every identity stage task with an exact two-device
+ragged exchange. Eight exchanges restore the original payload, so both cases
+must finish with zero mismatches and checksum `202` on stage 0.
 
 Part of #7024.

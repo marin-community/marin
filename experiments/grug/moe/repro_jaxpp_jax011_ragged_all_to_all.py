@@ -3,13 +3,16 @@
 
 """Minimal JaxPP and JAX 0.11 ragged-all-to-all regression boundary.
 
-The combined case uses two MPMD ranks with two devices per rank. Stage 0
-produces and transfers a four-row int32 payload. Stage 1 exchanges its two local
-rows over a two-device ``ragged_all_to_all`` and checks every returned value.
+The two-stage combined case uses two MPMD ranks with two devices per rank.
+Stage 0 produces and transfers a four-row int32 payload. Stage 1 exchanges its
+two local rows over a two-device ``ragged_all_to_all`` and checks every returned
+value.
 
 Run the direct ragged-all-to-all and JaxPP transfer-only positive controls
-before the combined ``jaxpp-ragged`` case. The companion README pins the exact
-H100 environment and command.
+before the combined ``jaxpp-ragged`` case. The four-stage cases add a
+forward/backward transfer chain across four MPMD ranks, with either identity
+stage tasks or one exact ragged exchange per stage task. The companion README
+pins the exact H100 environment and command.
 """
 
 from __future__ import annotations
@@ -44,14 +47,21 @@ JAX_VERSION = "0.11.1.dev20260725"
 JAXPP_VERSION = "0.10.2"
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 NCCL_VERSION = "2.30.7"
-MPMD_RANKS = 2
+TWO_STAGE_MPMD_RANKS = 2
+FOUR_STAGE_MPMD_RANKS = 4
 DEVICES_PER_STAGE = 2
 GLOBAL_SHAPE = (4, 1)
 LOCAL_ROWS = 2
 PEERS = 2
 EXPECTED_CHECKSUM = 202
 
-Case = Literal["direct-ragged", "jaxpp-transfer", "jaxpp-ragged"]
+Case = Literal[
+    "direct-ragged",
+    "jaxpp-transfer",
+    "jaxpp-ragged",
+    "jaxpp-four-stage-transfer",
+    "jaxpp-four-stage-ragged",
+]
 
 
 def event(name: str, **fields: Any) -> None:
@@ -201,6 +211,12 @@ def payload() -> np.ndarray:
     return np.asarray([[0], [1], [100], [101]], dtype=np.int32)
 
 
+def mpmd_ranks(case: Case) -> int:
+    if case.startswith("jaxpp-four-stage-"):
+        return FOUR_STAGE_MPMD_RANKS
+    return TWO_STAGE_MPMD_RANKS
+
+
 def local_transfer_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     source = jax.lax.axis_index("fsdp")
     expected = source * 100 + jnp.arange(LOCAL_ROWS, dtype=jnp.int32)
@@ -209,12 +225,12 @@ def local_transfer_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     return jax.lax.psum(mismatches, "fsdp"), jax.lax.psum(checksum, "fsdp")
 
 
-def local_ragged_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+def local_ragged_transform(x: jax.Array) -> jax.Array:
     source = jax.lax.axis_index("fsdp")
     offsets = jnp.arange(PEERS, dtype=jnp.int32)
     sizes = jnp.ones((PEERS,), dtype=jnp.int32)
     output_offsets = jnp.full((PEERS,), source, dtype=jnp.int32)
-    output = jax.lax.ragged_all_to_all(
+    return jax.lax.ragged_all_to_all(
         x,
         jnp.zeros_like(x),
         offsets,
@@ -224,6 +240,9 @@ def local_ragged_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
         axis_name="fsdp",
     )
 
+
+def local_ragged_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    output = local_ragged_transform(x)
     destination = jax.lax.axis_index("fsdp")
     expected = jnp.arange(PEERS, dtype=jnp.int32) * 100 + destination
     mismatches = jnp.sum(output[:, 0] != expected, dtype=jnp.int32)
@@ -291,21 +310,91 @@ def initialize_mpmd_payload(sharding: NamedSharding, *, owns_stage: bool) -> jax
     return empty_array(GLOBAL_SHAPE, jnp.int32, sharding)
 
 
+def stage_payload_task(mesh: Mesh, *, ragged: bool):
+    def local_stage(x: jax.Array) -> jax.Array:
+        if ragged:
+            return local_ragged_transform(x)
+        return x
+
+    def stage(x: jax.Array) -> jax.Array:
+        return jax.shard_map(
+            local_stage,
+            mesh=mesh,
+            in_specs=P("fsdp", None),
+            out_specs=P("fsdp", None),
+            check_vma=False,
+        )(x)
+
+    return stage
+
+
+def four_stage_program(
+    stage_meshes: tuple[Mesh, ...],
+    stage_rows: tuple[NamedSharding, ...],
+    stage_scalars: tuple[NamedSharding, ...],
+    x: jax.Array,
+    *,
+    ragged: bool,
+) -> tuple[jax.Array, jax.Array]:
+    stage_tasks = tuple(stage_payload_task(mesh, ragged=ragged) for mesh in stage_meshes)
+    value = jaxpp_mpmd.task(
+        stage_tasks[0],
+        name="stage0_forward",
+        out_shardings=stage_rows[0],
+    )(x)
+    for stage_index in range(1, len(stage_meshes)):
+        value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+        value = jaxpp_mpmd.task(
+            stage_tasks[stage_index],
+            name=f"stage{stage_index}_forward",
+            out_shardings=stage_rows[stage_index],
+        )(value)
+
+    value = jaxpp_mpmd.task(
+        stage_tasks[-1],
+        name=f"stage{len(stage_meshes) - 1}_backward",
+        out_shardings=stage_rows[-1],
+    )(value)
+    for stage_index in reversed(range(len(stage_meshes) - 1)):
+        value = jaxpp_mpmd.transfer(value, out_shardings=stage_rows[stage_index]).done()
+        value = jaxpp_mpmd.task(
+            stage_tasks[stage_index],
+            name=f"stage{stage_index}_backward",
+            out_shardings=stage_rows[stage_index],
+        )(value)
+
+    def stage0_check(value: jax.Array) -> tuple[jax.Array, jax.Array]:
+        return jax.shard_map(
+            local_transfer_check,
+            mesh=stage_meshes[0],
+            in_specs=P("fsdp", None),
+            out_specs=(P(), P()),
+            check_vma=False,
+        )(value)
+
+    return jaxpp_mpmd.task(
+        stage0_check,
+        name="stage0_exact_check",
+        out_shardings=(stage_scalars[0], stage_scalars[0]),
+    )(value)
+
+
 def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int]) -> None:
     event("worker_started", case=config.case, process_id=process_id, local_device_ids=local_device_ids)
     watchdog: threading.Event | None = None
     try:
+        num_mpmd_ranks = mpmd_ranks(config.case)
         with phase("distributed_initialize", process_id=process_id):
             jax.distributed.initialize(
                 coordinator_address=f"127.0.0.1:{config.coordinator_port}",
-                num_processes=MPMD_RANKS,
+                num_processes=num_mpmd_ranks,
                 process_id=process_id,
                 local_device_ids=local_device_ids,
                 cluster_detection_method="deactivate",
             )
         watchdog = start_watchdog(config, process_id=process_id)
 
-        devices = np.asarray(jax.devices(), dtype=object).reshape(MPMD_RANKS, DEVICES_PER_STAGE)
+        devices = np.asarray(jax.devices(), dtype=object).reshape(num_mpmd_ranks, DEVICES_PER_STAGE)
         mpmd_mesh = jaxpp_mpmd.MpmdMesh(
             Mesh(
                 devices,
@@ -314,39 +403,62 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
             ),
             "pp",
         )
-        stage0_mesh, stage1_mesh = mpmd_mesh.unstack
-        stage0_rows = NamedSharding(stage0_mesh, P("fsdp", None))
-        stage1_rows = NamedSharding(stage1_mesh, P("fsdp", None))
-        stage1_scalar = NamedSharding(stage1_mesh, P())
-        check = local_ragged_check if config.case == "jaxpp-ragged" else local_transfer_check
+        stage_meshes = tuple(mpmd_mesh.unstack)
+        stage_rows = tuple(NamedSharding(mesh, P("fsdp", None)) for mesh in stage_meshes)
+        stage_scalars = tuple(NamedSharding(mesh, P()) for mesh in stage_meshes)
+        stage0_rows = stage_rows[0]
 
-        def stage1_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
-            return jax.shard_map(
-                check,
-                mesh=stage1_mesh,
-                in_specs=P("fsdp", None),
-                out_specs=(P(), P()),
-                check_vma=False,
-            )(x)
+        if config.case.startswith("jaxpp-four-stage-"):
 
-        @jaxpp_mpmd.mpmd(
-            mpmd_mesh,
-            in_shardings=(stage0_rows,),
-            infer_donation=False,
-        )
-        def program(x: jax.Array) -> tuple[jax.Array, jax.Array]:
-            produced = jaxpp_mpmd.task(
-                lambda value: value,
-                name="stage0_produce",
-                out_shardings=stage0_rows,
-            )(x)
-            transferred = jaxpp_mpmd.transfer(produced, out_shardings=stage1_rows).done()
-            return jaxpp_mpmd.task(
-                stage1_check,
-                name=f"stage1_{config.case}",
-                out_shardings=(stage1_scalar, stage1_scalar),
-            )(transferred)
+            @jaxpp_mpmd.mpmd(
+                mpmd_mesh,
+                in_shardings=(stage0_rows,),
+                infer_donation=False,
+            )
+            def program(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+                return four_stage_program(
+                    stage_meshes,
+                    stage_rows,
+                    stage_scalars,
+                    x,
+                    ragged=config.case == "jaxpp-four-stage-ragged",
+                )
 
+            result_stage_index = 0
+        else:
+            stage1_mesh = stage_meshes[1]
+            stage1_rows = stage_rows[1]
+            stage1_scalar = stage_scalars[1]
+            check = local_ragged_check if config.case == "jaxpp-ragged" else local_transfer_check
+
+            def stage1_check(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+                return jax.shard_map(
+                    check,
+                    mesh=stage1_mesh,
+                    in_specs=P("fsdp", None),
+                    out_specs=(P(), P()),
+                    check_vma=False,
+                )(x)
+
+            @jaxpp_mpmd.mpmd(
+                mpmd_mesh,
+                in_shardings=(stage0_rows,),
+                infer_donation=False,
+            )
+            def program(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+                produced = jaxpp_mpmd.task(
+                    lambda value: value,
+                    name="stage0_produce",
+                    out_shardings=stage0_rows,
+                )(x)
+                transferred = jaxpp_mpmd.transfer(produced, out_shardings=stage1_rows).done()
+                return jaxpp_mpmd.task(
+                    stage1_check,
+                    name=f"stage1_{config.case}",
+                    out_shardings=(stage1_scalar, stage1_scalar),
+                )(transferred)
+
+            result_stage_index = 1
         input_struct = jax.ShapeDtypeStruct(GLOBAL_SHAPE, jnp.int32, sharding=stage0_rows)
         with phase("jaxpp_lower", process_id=process_id):
             lowered = program.lower(input_struct)
@@ -355,7 +467,7 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
         with phase("jaxpp_eval_local", process_id=process_id):
             result = lowered(x)
             jax.block_until_ready(result)
-        if mpmd_mesh.my_mpmd_axis_index == 1:
+        if mpmd_mesh.my_mpmd_axis_index == result_stage_index:
             exact_check(result, case=config.case, process_id=process_id)
 
         with phase("completion_barrier", process_id=process_id):
@@ -379,14 +491,15 @@ def run_jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int
 
 
 def run_jaxpp(config: Config) -> None:
-    expected_devices = MPMD_RANKS * DEVICES_PER_STAGE
+    num_mpmd_ranks = mpmd_ranks(config.case)
+    expected_devices = num_mpmd_ranks * DEVICES_PER_STAGE
     if len(jax.devices()) != expected_devices:
         raise ValueError(f"{config.case} requires {expected_devices} visible GPUs, got {len(jax.devices())}")
 
     context = mp.get_context("spawn")
     processes: list[mp.Process] = []
     try:
-        for process_id in range(MPMD_RANKS):
+        for process_id in range(num_mpmd_ranks):
             local_device_ids = list(
                 range(
                     process_id * DEVICES_PER_STAGE,
@@ -433,7 +546,13 @@ def parse_args() -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--case",
-        choices=("direct-ragged", "jaxpp-transfer", "jaxpp-ragged"),
+        choices=(
+            "direct-ragged",
+            "jaxpp-transfer",
+            "jaxpp-ragged",
+            "jaxpp-four-stage-transfer",
+            "jaxpp-four-stage-ragged",
+        ),
         required=True,
     )
     parser.add_argument("--coordinator-port", type=int, default=5831)
@@ -452,7 +571,7 @@ def main() -> None:
         environment=actual_environment,
         script=str(Path(__file__).resolve()),
         topology={
-            "mpmd_ranks": MPMD_RANKS if config.case.startswith("jaxpp-") else 1,
+            "mpmd_ranks": mpmd_ranks(config.case) if config.case.startswith("jaxpp-") else 1,
             "devices_per_stage": DEVICES_PER_STAGE,
             "global_shape": GLOBAL_SHAPE,
             "dtype": "int32",
