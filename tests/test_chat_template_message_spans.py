@@ -12,6 +12,7 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
+from experiments.llama import llama3_instruct_trainable_chat_template, llama3_tokenizer
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 # Assistant masks are derived from `{% generation %}` blocks, which no upstream template ships,
@@ -85,6 +86,26 @@ def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_n
     for message, (start, end) in zip(conversation, spans, strict=True):
         span_text = tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
         assert message["content"] in span_text
+
+
+def test_llama3_trainable_template_accepts_null_tool_calls():
+    tokenizer = _load_optional_tokenizer(llama3_tokenizer)
+    conversation = [
+        {"role": "user", "content": "alpha prompt", "tool_calls": None},
+        {"role": "assistant", "content": "beta answer", "tool_calls": None},
+    ]
+
+    result = tokenizer.apply_chat_template_with_masks(
+        [conversation],
+        chat_template=llama3_instruct_trainable_chat_template,
+    )
+
+    assistant_tokens = [
+        token
+        for token, supervised in zip(result["input_ids"][0], result["assistant_masks"][0], strict=True)
+        if supervised
+    ]
+    assert "beta answer" in tokenizer.decode(assistant_tokens)
 
 
 @pytest.mark.parametrize(
