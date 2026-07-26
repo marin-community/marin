@@ -85,7 +85,7 @@ def _required_env(key: str) -> str:
 
 def _arm_model(base_model: GrugModelConfig, arm: NestedArm) -> GrugModelConfig:
     common = dict(
-        attention_implementation="gpu_fa4_cute",
+        attention_implementation="gpu_fa4_thd",
         moe_implementation="ring",
         remat_mode="recompute_all",
     )
