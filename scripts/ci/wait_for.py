@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Block until the first of several events fires — a ``select`` over shell
-predicates and GitHub PR state.
+predicates, GitHub PR state, and Iris jobs.
 
 Each event is ``<kind> <arg>``. The general kind is an arbitrary shell predicate;
-the ``github.*`` kinds are built-in conveniences so common PR waits need no shell:
+the built-in kinds cover common PR and Iris waits without shell parsing:
 
     poll <shell command>    fires when the command exits 0
     github.ci <PR>          fires the moment any check fails, else when all checks pass
     github.pr_comment <PR>  fires on a new comment that raises a real code concern
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
+    iris.job <job-id>       fires when an Iris job reaches a terminal state (in-task only)
 
 ``github.pr_comment`` and ``github.review`` skip low-signal chatter by default so the
 caller is not woken for nothing. A catalog of rules (``COMMENT_RULES``) names, per bot,
@@ -49,12 +50,19 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 import click
+from connectrpc.errors import ConnectError
+from iris.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName, is_job_finished
+from iris.rpc.errors import format_connect_error
+from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
 
 # `gh` calls are quick metadata reads; bound them so a hung call cannot wedge the
@@ -83,6 +91,7 @@ class EventKind(StrEnum):
     GITHUB_CI = "github.ci"
     GITHUB_PR_COMMENT = "github.pr_comment"
     GITHUB_REVIEW = "github.review"
+    IRIS_JOB = "iris.job"
     POLL = "poll"
 
 
@@ -417,6 +426,10 @@ class Source:
         raise NotImplementedError
 
 
+class IrisJobClient(Protocol):
+    def job_state(self, job_id: JobName) -> int: ...
+
+
 def _parse_pr(arg: str) -> str:
     try:
         return str(int(arg))
@@ -539,6 +552,26 @@ class ReviewSource(PrActivitySource):
         return {"reviews": [{"author": r.author, "state": r.state, "url": r.url} for r in new]}
 
 
+class IrisJobSource(Source):
+    """Fires when an Iris job reaches a terminal state."""
+
+    def __init__(self, spec: EventSpec, client: IrisJobClient):
+        super().__init__(spec)
+        self.client = client
+        try:
+            self.job_id = JobName.from_wire(spec.arg)
+        except ValueError:
+            raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
+
+    def check(self) -> dict | None:
+        state = self.client.job_state(self.job_id)
+        state_name = job_state_friendly(state)
+        self.last_status = state_name
+        if not is_job_finished(state):
+            return None
+        return {"state": state_name}
+
+
 class PollSource(Source):
     def __init__(self, spec: EventSpec, poll_timeout: float):
         super().__init__(spec)
@@ -562,7 +595,13 @@ class PollSource(Source):
 
 
 def build_source(
-    spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float, comment_filter: CommentFilter
+    spec: EventSpec,
+    *,
+    repo: str,
+    ignore_authors: set[str],
+    poll_timeout: float,
+    comment_filter: CommentFilter,
+    iris_client: IrisJobClient | None,
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
@@ -570,6 +609,9 @@ def build_source(
         return CommentSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.GITHUB_REVIEW:
         return ReviewSource(spec, repo, ignore_authors, comment_filter)
+    if spec.kind is EventKind.IRIS_JOB:
+        assert iris_client is not None
+        return IrisJobSource(spec, iris_client)
     if spec.kind is EventKind.POLL:
         return PollSource(spec, poll_timeout)
     raise click.BadParameter(f"unsupported event kind {spec.kind!r}")  # pragma: no cover
@@ -669,6 +711,15 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     return [parse_spec(s) for s in raw]
 
 
+def _iris_client_from_job_info() -> IrisClient:
+    info = get_job_info()
+    if info is None:
+        raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")
+    if not info.controller_address:
+        raise click.ClickException("iris.job requires a controller address in the current Iris job metadata")
+    return IrisClient.in_cluster(info.controller_address, bundle_id=info.bundle_id)
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("specs", nargs=-1)
 @click.option(
@@ -711,34 +762,41 @@ def main(
 ) -> None:
     """Block until the first armed event fires; print which one as JSON."""
     parsed = read_specs(specs, use_stdin=use_stdin)
-    needs_github = any(s.kind is not EventKind.POLL for s in parsed)
+    github_kinds = (EventKind.GITHUB_CI, EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW)
+    needs_github = any(s.kind in github_kinds for s in parsed)
     needs_authors = any(s.kind in (EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW) for s in parsed)
+    needs_iris = any(s.kind is EventKind.IRIS_JOB for s in parsed)
 
     try:
-        resolved_repo = resolve_repo(repo) if needs_github else ""
-        ignored = set(ignore_authors)
-        if needs_authors and not include_self:
-            ignored.add(authenticated_user())
-        sources = [
-            build_source(
-                s,
-                repo=resolved_repo,
-                ignore_authors=ignored,
-                poll_timeout=parse_duration(poll_timeout),
-                comment_filter=CommentFilter(comment_filter),
+        with ExitStack() as resources:
+            resolved_repo = resolve_repo(repo) if needs_github else ""
+            ignored = set(ignore_authors)
+            if needs_authors and not include_self:
+                ignored.add(authenticated_user())
+            iris_client = resources.enter_context(_iris_client_from_job_info()) if needs_iris else None
+            sources = [
+                build_source(
+                    s,
+                    repo=resolved_repo,
+                    ignore_authors=ignored,
+                    poll_timeout=parse_duration(poll_timeout),
+                    comment_filter=CommentFilter(comment_filter),
+                    iris_client=iris_client,
+                )
+                for s in parsed
+            ]
+            deadline = None if timeout is None else time.monotonic() + parse_duration(timeout)
+            backoff = BackoffConfig(
+                initial=parse_duration(initial_interval),
+                maximum=parse_duration(max_interval),
+                factor=factor,
+                jitter=jitter,
             )
-            for s in parsed
-        ]
-        deadline = None if timeout is None else time.monotonic() + parse_duration(timeout)
-        backoff = BackoffConfig(
-            initial=parse_duration(initial_interval),
-            maximum=parse_duration(max_interval),
-            factor=factor,
-            jitter=jitter,
-        )
-        result = select_loop(sources, deadline=deadline, backoff=backoff)
+            result = select_loop(sources, deadline=deadline, backoff=backoff)
     except GhError as exc:
         raise click.ClickException(str(exc)) from exc
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
     except KeyboardInterrupt:
         click.echo("[wait_for] interrupted", err=True)
         raise SystemExit(130) from None
