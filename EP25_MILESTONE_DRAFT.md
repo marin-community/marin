@@ -190,21 +190,46 @@ unchanged. Because spill is expressed purely as a rewrite of the `(linear_indice
 the dispatch already builds, and both custom-adjoint VJPs are generic in exactly that pair, it
 required no adjoint changes; gradients still match autodiff at 1e-5 with spill on.
 
-350-step legs, QB on, cf1.0, one operating point, all from the same allocation draw, drops as a
-true 100-step tail:
+350-step legs at one operating point, QB on, all from the same allocation draw, drops as a true
+100-step tail:
 
-| m | p50 MFU | drop fraction (tail-100) | loss @349 |
-|--:|--:|--:|--:|
-| 0 | 22.062 | 0.0710 | 3.336 |
-| 2 | 21.872 | 0.0414 | 3.323 |
-| 3 | 21.849 | 0.0366 | 3.320 |
+| spill m | capacity factor | bucket capacity | p50 MFU | drop fraction (tail-100) | clears 3%? |
+|--:|--:|--:|--:|--:|:--|
+| 0 | 1.0 | 2048 | 22.062 | 0.0710 | no |
+| 2 | 1.0 | 2048 | 21.872 | 0.0414 | no |
+| 3 | 1.0 | 2048 | 21.849 | 0.0366 | no |
+| 3 | 1.05 | 2151 | 20.670 | 0.0172 | yes |
+| 3 | 1.0625 | 2176 | 20.708 | 0.0144 | yes |
+| 0 | 1.15 | 2356 | 20.416 | 0.0260 | yes |
 
-Spill halves the residual drop fraction for 0.213pp of MFU, and loss improves at every m rather
-than degrading. The loss result is the one to weigh: a spilled assignment computes `w_k * E_j(x)`
-for an expert the router itself ranked for that token, instead of contributing zero, so the
-substitution is strictly closer to the intended MoE output than dropping. It does not reach a 3%
-bar at cf1.0 (m=3 leaves 3.66%), and the drop-recovery mechanism is bounded by top-k: an assignment
-can only be re-offered to experts the token already selected, so `m_max = topk - 1`.
+The best measured compliant configuration is spill m=3 at capacity factor 1.0625: 20.708% MFU at
+1.44% drops, beating the capacity-only route (1.15 alone, 20.416% at 2.60%) on both axes.
+
+Taken at fixed capacity, spill halves the residual drop fraction for 0.213pp of MFU, and loss
+improves at every m rather than degrading. The loss result is the one to weigh: a spilled assignment
+computes `w_k * E_j(x)` for an expert the router itself ranked for that token, instead of
+contributing zero, so the substitution is strictly closer to the intended MoE output than dropping.
+Spill alone does not reach a 3% bar — at capacity factor 1.0, m=3 leaves 3.66% — which is why the
+compliant configurations above pair it with a capacity bump.
+
+**Top-k is the budget for drop recovery, which makes it an architecture decision.** A spilled
+assignment can only be re-offered to experts the token already selected, so the mechanism's ceiling
+is `m_max = topk - 1`. Lowering top-k degrades fidelity headroom four ways at once, and they
+compound:
+
+| | 8-of-256 (measured here) | 4-of-256 (a hero-run candidate) |
+|---|--:|--:|
+| per-(sender, expert) bucket mean | 2048 | 1024 |
+| statistical floor, no spill | 0.88% | 1.25% |
+| maximum spill attempts | 7 | 3 |
+| share of a token's routed signal lost per dropped assignment | ~12.5% | ~25% |
+
+At top-4 the floor is higher, the mechanism's ceiling is lower, each attempt chooses among fewer
+candidates, and each surviving drop costs the token twice as much of its routed signal. The last row
+is weight-share arithmetic rather than a measurement; the rest follow from the shapes. The practical
+consequence is that a top-4 architecture reaches a 3% bar with the recovery mechanism already at its
+ceiling and no headroom left, where top-8 retains four unused attempts — which belongs in a
+candidate comparison that currently weighs total parameters, active parameters, and throughput.
 
 **A routing model is trustworthy on one axis and not the other.** Predicting a configuration that
 has not been run means trusting a model, and the useful question is which part of it to trust. With
@@ -252,7 +277,20 @@ everything above it is flat, within 0.04pp from 1.05 to 1.0625. The penalty is p
 than 128 — 2048 is the only capacity measured here divisible by 256, and 2176 is not — or something
 keyed to capacity equalling the mean load exactly. The cause is unknown, and four legs on this axis
 were enough given the remaining prize is about a point on a configuration that is already
-compliant.
+compliant. The hypothesis was not one person's: it was proposed here, sharpened by a reviewer who
+supplied the factorization showing 2151 is odd where 2176 is 2^7 x 17, and agreed on that basis to
+be a sharp test. It was a sharp test, and it came back negative for a few rack-minutes, which is
+what a shared hypothesis is supposed to cost.
+
+The disposition matters more than the result. Had the falsification criterion not been fixed in
+advance, 20.708% would have been very easy to narrate as a partial success: it sits 0.038pp above
+the configuration it was supposed to beat by 1.2pp, it has better drops, and a motivated reading
+could have called it directionally confirming. Pre-registration is what made that impossible.
+
+For whoever picks this up: the cost is not linear in capacity either. Capacity factor 1.05 to 1.0625
+is +1.2% capacity for +0.04pp, and 1.0625 to 1.15 is +8.3% capacity for -0.29pp, so neither
+alignment nor volume explains the shape. Start from a profile rather than from arithmetic on
+capacity values.
 
 **Why this was cheap, and what that predicts.** The step is collective-volume-bound: exposed
 collective time almost exactly fills compute idle, so the remaining speed lever is reducing
