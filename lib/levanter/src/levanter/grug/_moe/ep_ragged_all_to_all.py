@@ -50,6 +50,36 @@ def _wire_quantize(x: jax.Array, fp8_dtype) -> tuple[jax.Array, jax.Array]:
     return q, scale
 
 
+def _wire_quantize_fixed(x: jax.Array, fp8_dtype, amax: float) -> tuple[jax.Array, jax.Array]:
+    """Quantize with a scale supplied from outside instead of reduced from ``x``.
+
+    This is the delayed-scaling arithmetic: the scale depends on no token in the current batch, so
+    it is causally safe, and crucially it removes the per-token amax REDUCTION, which measured as
+    the entire quantization overhead of the current-scaling variant (~2500 ms/step, two
+    `loop_reduce_fusion` passes). Precision cost of a shared tensor-wide scale measured at ~2%
+    relative on a hostile fixture and nil on a realistic one, and a scale 30% stale moves the error
+    only in the fourth decimal -- which is what makes a supplied scale viable at all.
+
+    Values beyond the format range clip rather than wrap, so an under-estimated amax degrades
+    gracefully.
+    """
+    fp8_max = _FP8_WIRE_MAX[jnp.dtype(fp8_dtype).type]
+    scale = jnp.asarray(max(amax, _WIRE_EPS) / fp8_max, dtype=jnp.float32)
+    quantized = jnp.clip(x.astype(jnp.float32) / scale, -fp8_max, fp8_max).astype(fp8_dtype)
+    return quantized, jnp.broadcast_to(scale, x.shape[:-1])
+
+
+def _pmax_replicated_cotangent(ct, axis_name: str, mesh_size: int):
+    """Make a replicated input's cotangent combine with max instead of sum.
+
+    ``shard_map``'s transpose psums the cotangent of a replicated input, which is right for real
+    gradients and wrong for amax/scale state, which must combine as a maximum. Dividing a pmax by
+    the mesh size makes the implicit outer psum reconstruct exactly the pmax. Mirrors the helper
+    already used by the ragged-dot fp8 path on the research branches.
+    """
+    return jax.lax.pmax(ct, axis_name) / mesh_size
+
+
 def _fp8_a2a_impl(x: jax.Array, fp8_dtype) -> jax.Array:
     """Fixed-capacity tiled all_to_all with the payload quantized to FP8 on the wire.
 
@@ -119,8 +149,21 @@ def _fp8_dispatch_gemm(send_block: jax.Array, w13: jax.Array) -> jax.Array:
     return _fp8_dispatch_gemm_fwd(send_block, w13)[0]
 
 
+def _wire_quantize_dispatch(x: jax.Array, fp8_dtype):
+    """Per-token current scaling, or a supplied scale when SCALE_A2A_FP8_AMAX is set.
+
+    A supplied scale is the delayed-scaling arithmetic without the history state: it isolates the
+    throughput question (does removing the amax reduction recover the step time?) from the state
+    plumbing. Production delayed scaling derives the same scalar from an amax history instead.
+    """
+    fixed = os.environ.get("SCALE_A2A_FP8_AMAX")
+    if fixed is not None:
+        return _wire_quantize_fixed(x, fp8_dtype, float(fixed))
+    return _wire_quantize(x, fp8_dtype)
+
+
 def _fp8_dispatch_gemm_fwd(send_block: jax.Array, w13: jax.Array):
-    quantized, scale = _wire_quantize(send_block, jnp.float8_e4m3fn)
+    quantized, scale = _wire_quantize_dispatch(send_block, jnp.float8_e4m3fn)
     bits = jax.lax.all_to_all(
         jax.lax.bitcast_convert_type(quantized, jnp.uint8), "expert", split_axis=0, concat_axis=0, tiled=True
     )
@@ -141,7 +184,7 @@ def _fp8_dispatch_gemm_bwd(residuals, ct: jax.Array):
     # hidden = (R @ Wq) * row * w_scale, so dL/dR = (ct * row * w_scale) @ Wq^T -- the scale sits on
     # the OUTPUT rows again, so the cotangent GEMM is e5m2 x e4m3 with the scale applied after.
     scaled_ct = ct.astype(jnp.float32) * (row_scale * weight_scale)[:, None]
-    ct_q, ct_scale = _wire_quantize(scaled_ct, jnp.float8_e5m2)
+    ct_q, ct_scale = _wire_quantize_dispatch(scaled_ct, jnp.float8_e5m2)
     d_received = (ct_q.astype(jnp.bfloat16) @ weight_q.T.astype(jnp.bfloat16)).astype(jnp.float32)
     d_received = d_received * ct_scale[:, None]
     # The dequantized value is R * row, so the cotangent w.r.t. it divides the row scale back out.

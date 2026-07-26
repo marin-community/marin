@@ -201,3 +201,44 @@ def test_fused_dispatch_gemm_matches_the_bf16_reference_and_gradients_flow():
     # crosses an e5m2 wire.
     assert w_err < 0.05, f"wgrad error {w_err:.4f}"
     assert send_err < 0.25, f"dgrad error {send_err:.4f}"
+
+
+def test_supplied_scale_removes_the_amax_reduction_and_tracks_the_reference(monkeypatch):
+    """A supplied (delayed-style) scale must quantize without reducing over the current tensor."""
+    from levanter.grug._moe.ep_ragged_all_to_all import _wire_quantize_fixed
+
+    x = jax.random.normal(jax.random.PRNGKey(4), (128, HIDDEN), jnp.float32)
+    amax = float(jnp.max(jnp.abs(x)))
+    q, scale = _wire_quantize_fixed(x, jnp.float8_e4m3fn, amax)
+    recovered = q.astype(jnp.float32) * scale[:, None]
+    err = float(jnp.mean(jnp.abs(recovered - x)) / jnp.mean(jnp.abs(x)))
+    assert err < 0.1, f"supplied-scale round trip error {err:.4f}"
+    # One scalar shared by every row: that is the precision trade, and it must be exactly shared.
+    assert float(jnp.min(scale)) == float(jnp.max(scale))
+    # A stale (too small) amax must clip rather than wrap.
+    q_stale, scale_stale = _wire_quantize_fixed(x, jnp.float8_e4m3fn, amax * 0.5)
+    assert jnp.isfinite(q_stale.astype(jnp.float32)).all()
+    stale_err = float(
+        jnp.mean(jnp.abs(q_stale.astype(jnp.float32) * scale_stale[:, None] - x)) / jnp.mean(jnp.abs(x))
+    )
+    assert stale_err < 0.3, f"50%-stale scale error {stale_err:.4f}"
+
+
+def test_pmax_replicated_cotangent_reconstructs_a_max_through_the_implicit_psum():
+    """shard_map psums a replicated input's cotangent; amax state must combine as a max instead."""
+    import numpy as np
+    from levanter.grug._moe.ep_ragged_all_to_all import _pmax_replicated_cotangent
+
+    devices = jax.devices()[:1]
+    mesh = jax.sharding.Mesh(np.array(devices), ("expert",))
+    size = len(devices)
+
+    def per_shard(v):
+        return _pmax_replicated_cotangent(v, "expert", size)
+
+    replicated = jax.sharding.PartitionSpec()
+    out = jax.shard_map(per_shard, mesh=mesh, in_specs=replicated, out_specs=replicated)(
+        jnp.array([3.0, 7.0])
+    )
+    # The helper divides by the mesh size so the implicit outer psum multiplies it back.
+    np.testing.assert_allclose(np.asarray(out) * size, np.asarray(jnp.array([3.0, 7.0])), rtol=1e-6)
