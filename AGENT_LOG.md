@@ -435,3 +435,11 @@ Control /mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = p50 22.66% stands as 
   scale, not correctness.
 - NOT killing the wedged rack job without coordinator approval (rule). Asking for the call + whether to try a
   memory-lighter variant (batch GEMM only, keep per-expert a2a) or defer.
+
+## R6-1 grouped-batching prepared (while awaiting kill/direction decision) 21:20 local
+Committed grouped variant: SCALE_A2A_BATCH_GROUP=G processes local experts in groups of G (default full).
+G=local_experts = prior full-batch (bit-exact, tests pass); G=2 halves the extra memory peak AND shrinks each
+compiled graph (mitigating BOTH failure hypotheses - OOM peak and 23-min pathological compile). Bit-exact vs
+the loop at G=full and G=2 (CPU, expert_axis=2, diff 0.0, drops identical). Ready to fire a grouped rack A/B
+(SCALE_A2A_BATCH_EXPERTS=1 + SCALE_A2A_BATCH_GROUP=2) the instant the coordinator approves killing the wedged
+v2 and pursuing option (a). Control 22.66% stands regardless.
