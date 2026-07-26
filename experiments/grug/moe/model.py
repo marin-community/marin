@@ -154,6 +154,11 @@ class GrugModelConfig:
     mtp_num_experts: int = 0
     # Use a dense-MLP MTP block instead of a MoE one (bypasses the standalone QuACK grouped GEMM).
     mtp_dense: bool = False
+    # Baseline MTP: projection -> shared head only, no attention/MLP block at all (isolates block cost).
+    mtp_head_only: bool = False
+    # MTP head attends the full document (global bounds + NoPE). False = local sliding window + RoPE
+    # (much lighter attention, higher batch ceiling).
+    mtp_head_global: bool = True
     # Apply a learnable GatedNorm after each RMSNorm (attn + mlp inputs). Off in the barebones default.
     gated_norm: bool = False
     # Per-head sigmoid attention gate: gate = 2*sigmoid(x @ attn_gate), a scalar per (token, head)
@@ -869,9 +874,14 @@ class Transformer(eqx.Module):
                 num_experts_per_token=min(cfg.num_experts_per_token, mtp_experts),
                 disable_long_rope=True,  # MTP head runs NoPE (it attends the full document, see __call__)
             )
-            mtp_block = (
-                DenseBlock.init(mtp_cfg, key=mtp_block_key) if cfg.mtp_dense else Block.init(mtp_cfg, key=mtp_block_key)
-            )
+            if cfg.mtp_head_only:
+                mtp_block = None  # baseline: projection -> head only, no attention/MLP block
+            else:
+                mtp_block = (
+                    DenseBlock.init(mtp_cfg, key=mtp_block_key)
+                    if cfg.mtp_dense
+                    else Block.init(mtp_cfg, key=mtp_block_key)
+                )
             mtp_proj = reshard(
                 _init_weight(mtp_proj_key, (2 * cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)
             )
@@ -982,19 +992,28 @@ class Transformer(eqx.Module):
 
         out = self.final_norm(hidden)
         mtp_hidden = None
-        if self.mtp_block is not None:
+        if cfg.mtp_depth:
             # DeepSeek-V3 MTP depth-1, entirely outside the trunk scan: combine the trunk hidden with the
-            # embedding of the next token t_{i+1}, project [2D,D], and run one MoE block. The head attends
-            # the FULL document (global/full-causal bounds) and runs NoPE (is_global=True -> the block's
-            # disable_long_rope path) -- a next-token predictor benefits from full context and no rope
-            # decay. Checkpointed like the trunk blocks so it does not blow up the recompute_all budget.
-            mtp_lb, _ = fa4_cute_segment_bounds(causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None)
-            mtp_mask = causal_mask.with_fa4_bounds(_batch_reshard(mtp_lb), sliding_valid)
+            # embedding of the next token t_{i+1} and project [2D,D]. Then optionally run one transformer
+            # block (global+NoPE by default, or a lighter local sliding+RoPE head) before the shared head;
+            # mtp_head_only skips the block entirely (projection -> head), isolating the block's cost.
             next_ids = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
             next_embed = self.mtp_embed_norm(_embedding_gather(self.token_embed, next_ids))
             combined = jnp.concatenate([self.mtp_hidden_norm(hidden), next_embed], axis=-1)
             h_proj = jnp.einsum("bst,td->bsd", combined, self.mtp_proj, out_sharding=_batch_spec())
-            mtp_h, _ = eqx.filter_checkpoint(self.mtp_block, policy=remat_policy)(h_proj, mtp_mask, jnp.asarray(True))
+            if self.mtp_block is None:
+                mtp_h = h_proj
+            else:
+                if cfg.mtp_head_global:
+                    mtp_lb, _ = fa4_cute_segment_bounds(
+                        causal_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+                    )
+                    mtp_mask = causal_mask.with_fa4_bounds(_batch_reshard(mtp_lb), sliding_valid)
+                    mtp_flag = jnp.asarray(True)  # full-context + NoPE
+                else:
+                    mtp_mask = causal_mask.with_fa4_bounds(sliding_lb, sliding_valid)
+                    mtp_flag = jnp.asarray(False)  # local sliding window + RoPE
+                mtp_h, _ = eqx.filter_checkpoint(self.mtp_block, policy=remat_policy)(h_proj, mtp_mask, mtp_flag)
             mtp_hidden = self.mtp_final_norm(mtp_h)
         return out, qb_beta_per_layer, mtp_hidden
 

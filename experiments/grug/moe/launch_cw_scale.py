@@ -158,6 +158,8 @@ def build_scale_model() -> GrugModelConfig:
         mtp_depth=env_int("SCALE_MTP_DEPTH", 0),
         mtp_loss_weight=env_float("SCALE_MTP_WEIGHT", 0.3),
         mtp_num_experts=env_int("SCALE_MTP_NUM_EXPERTS", 0),
+        mtp_head_only=os.environ.get("SCALE_MTP_HEAD_ONLY") == "1",
+        mtp_head_global=os.environ.get("SCALE_MTP_LOCAL") != "1",
         mtp_dense=os.environ.get("SCALE_MTP_DENSE") == "1",
         gated_norm=os.environ.get("SCALE_GATED_NORM") == "1",
         attn_gate=os.environ.get("SCALE_ATTN_GATE") == "1",
