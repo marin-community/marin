@@ -16,6 +16,65 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T18:20:55Z — 170,282 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1816-v514` independently
+  revalidated five baseline checkpoints: p0 decision-file 7 semantic offsets
+  384, 512, and 640, and p3 decision-file 103 semantic offsets 4,224 and
+  4,352. Their 640 direct pairs contain 412 model false positives, 227 model
+  true duplicates, and one unresolved outcome. The audit reread 1,319
+  judgments and their 1,321 request attempts: 1,318 attempts were valid, three
+  were invalid, and one judgment required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p0:
+    `a43667efbf5b64d1d278301d1fa733e15e9a6720081244da39d7bd5694f5f745`,
+    `dcd43256e3aa3d5755ccbcb4ab05291eb8baf252e637d3fec49c0b87360d8b0a`,
+    and
+    `f2d3773ee4014a5f52b29a2f20025a7597d124c0aab0bc6ef5d237c8fd37d86c`;
+  - p3:
+    `25337c8c04c047e096f230b4c31b953763dac52cb5130951c30d722a3d087d70`
+    and
+    `5edd0b41284a89dafed7505601b809f81783ef89613001ffb1b471a4a350759e`.
+
+- Complete-text inspection resolves the p3 ambiguity as a false positive.
+  `part-00103-of-00128.parquet:7317` compares SFT records that share only a
+  generic answer-format instruction. The member asks for the center of a
+  circle and derives `(3, -1)`; the canonical asks for `54 × 46` and derives
+  `2,484`. Their user requests, reasoning, intermediate values, and answers
+  are distinct. The 501/485-character records have character, line, and
+  word-sequence similarities 0.701826, 0.421053, and 0.627219.
+  Member/canonical text SHA-256 values are
+  `5937574f173529b6c5d3f8dc81db3a47a0a479f963302f798b4ad0c86e24c2bb`
+  and
+  `987b60cb2ac229ddf85800ae1271c587ef6e72ae2d9c9078fd832a86c4c23c24`.
+
+- `/rav/datakit-6854-inspect-row7317-1817-v515` persisted the complete pair
+  and diff with inspection SHA-256
+  `b7a6befdd1b11f5065c4a394ffb24de805321e39ee8571f4e9d876f2cc6eb309`.
+  `/rav/datakit-6854-publish-row7317-1818-v516` wrote the immutable
+  false-positive record, and `/rav/datakit-6854-verify-row7317-1820-v517`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `275abd4b61906af51ffab50efbf444421c5d083579cf24cf3f5036b221342f09`,
+  `7bb3f314dda4255da6df1fe7ee5edf2c7b8d1156c1b31c1a33a6b74db0ffd630`,
+  and `169adafdcb2298390ea678bc4848f89fcb435bf6524f143c812195e3b8fa2294`.
+
+- Across the stable 1,340-checkpoint snapshot, all 188 unresolved model
+  outcomes are covered by 148 true-duplicate and 40 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 137,017 pairs, 86,958 false positives, 50,059 true duplicates;
+  - treatment: 33,265 pairs, 17,204 false positives, 16,061 true duplicates;
+  - combined: 170,282 pairs, 104,162 false positives, 66,120 true duplicates.
+
+- The next audit frontiers are p0 `(7, 768)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(103, 4,480)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:15:50Z — 169,642 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1811-v510` independently
