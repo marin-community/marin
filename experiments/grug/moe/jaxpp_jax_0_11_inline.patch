@@ -1,0 +1,30 @@
+diff --git a/src/jaxpp/jax_compat/__init__.py b/src/jaxpp/jax_compat/__init__.py
+index 16efcfa..3840ad8 100644
+--- a/src/jaxpp/jax_compat/__init__.py
++++ b/src/jaxpp/jax_compat/__init__.py
+@@ -130 +130,15 @@
+-if jax.__version_info__ < (0, 10):
++if jax.__version_info__ >= (0, 11):
++    from jax._src import api as _api
++
++    def canonicalize_pjit_inline(inline):
++        if isinstance(inline, _api.Inline):
++            return inline
++        return _api.Inline.JAX_EARLY if inline else _api.Inline.AUTO
++
++else:
++
++    def canonicalize_pjit_inline(inline):
++        return inline
++
++
++if jax.__version_info__ < (0, 10):
+diff --git a/src/jaxpp/jax_primitives.py b/src/jaxpp/jax_primitives.py
+index 0d5cebe..a5adb98 100644
+--- a/src/jaxpp/jax_primitives.py
++++ b/src/jaxpp/jax_primitives.py
+@@ -1006 +1006,3 @@ class PjitKwargs:
+-        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
++        values = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
++        values["inline"] = jc.canonicalize_pjit_inline(values["inline"])
++        return values
