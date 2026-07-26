@@ -498,3 +498,31 @@ targets an expert the token actually selected. 20/20 kernel tests pass (spill-of
 EP4 smoke m=2 submitted: /mwittmann/ep25d1-spill-smoke-ep4-0726-0023. Then 350-step QB-on cf1.0 rack leg.
 Confidence: 6/10 that spill takes cf1.0 under 3% at <=0.5pp MFU cost (mechanism is sound and directly targets
 the diagnosed cause; risk is the extra argsorts' cost and whether live burstiness is worse than my model).
+
+## CORRECTION 01:00 — my 7.58% CPU number does NOT support the "statistical floor" reframing
+I checked the coordinator's proposed reframing before writing it up, and it does not survive. Correcting it here
+because it was headed for the milestone report.
+THE ERROR IS MINE: my CPU model ran ne=256/topk=8 at T=1024, giving per-bucket mean load 32. The REAL operating
+point has per-(sender,expert) bucket mean 2048 (4.19M tokens / 64 batch shards = 65,536 tokens/shard x topk 8 =
+524,288 assignments / 256 experts = 2048 = capacity at cf1.0). My 7.58% matching the observed 6-8% was a
+COINCIDENCE OF SCALE, not evidence.
+SIMULATED uniform-random routing, capacity==mean, drop fraction vs per-bucket mean (matches 0.3989/sqrt(mu),
+the normal-approx E[(X-mu)+]/mu):
+  mean 32   -> 0.0754 (formula 0.0705)   <- my toy model lived here
+  mean 128  -> 0.0335 (0.0353)
+  mean 512  -> 0.0176 (0.0176)
+  mean 2048 -> 0.0091 (0.0088)           <- THE REAL OPERATING POINT
+=> The statistical floor of the no-spill policy at real scale is ~0.9%, NOT 6-8%. The coordinator's ORIGINAL
+~0.9% per-bucket normal approximation was CORRECT and should NOT be superseded; my number does not supersede it.
+=> Therefore the observed 6-8% residual is ~8x the statistical floor, so it IS dominated by non-uniform (bursty,
+document-correlated) routing — d4's burstiness diagnosis STANDS rather than being replaced.
+QUANTIFYING THE BURSTINESS: inverting drop ~= 0.3989*sigma/mu at mu=2048 gives implied effective sigma 329-411
+vs Poisson 45.3, i.e. routing is 7-9x more clustered than independent-uniform (53-82x the variance). That is a
+concrete measure of the within-batch burstiness and is the thing spill must reclaim.
+WHY THIS IS GOOD NEWS FOR SPILL: in my toy (mean 32) nearly the whole 7.58% WAS irreducible floor, so spill was
+fighting the floor. At real scale ~88% of the residual is non-uniform excess sitting next to genuinely underfull
+buckets, which is exactly what spill reclaims. Note the 0.9% is only a floor for the NO-SPILL policy: spill can
+go below it, since it moves overflow into underfull buckets whenever the token selected one.
+This does NOT retro-explain d3/d4's null results as "nothing to correct" — the controllers plateau at ~8x the
+floor, so there IS non-uniformity present; it is just invisible to any one-step-delayed controller because it
+decorrelates step to step (the original diagnosis).
