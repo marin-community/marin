@@ -1658,3 +1658,62 @@ Revised plan: cherry-pick `_pmax_replicated_cotangent` and reuse `update_fp8_met
 them at the WIRE quantization site rather than to a dot_general. That is plumbing, not new
 numerics — and it removes the last reason this would have taken days.
 Confidence: 9/10 that reuse covers the state machinery and the pmax reduction.
+
+## CANDIDATE ISSUE (merged code, not mine) — amax history is corrupted by gradient accumulation
+
+Written to be lifted verbatim. Not filed, per standing rules.
+
+**Title:** fp8 amax history takes the last microbatch's amax instead of the max across microbatches
+
+**Where:** `lib/levanter/src/levanter/grad_accum.py:130-133`
+
+```python
+# TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
+overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
+new_grads = hq.apply_updates(acc_grads, updates, overwrites)
+```
+
+**Mechanism.** fp8 delayed scaling keeps its amax history as an `OverwriteWithGradient` leaf, so it
+travels the gradient channel but is REPLACED rather than accumulated
+(`haliax/quantization.py:50,77`). Real gradients are summed across microbatches; overwrite leaves
+are not, so after N microbatches the recorded amax for the step is the **last microbatch's** amax,
+not the max over all N. Under-recording the amax makes the next step's scale factor
+(`sf = fp8_max / amax`, `haliax/_src/fp8.py:57`) too large, so activations quantize above the
+representable range and **clip**. The failure is silent: no error, no NaN, no shape mismatch — just
+a quality regression that looks like fp8 being worse than it is.
+
+**Why this configuration is unaffected:** the operating point runs one microbatch per step
+(train_batch_size 1024 over 64 devices at per_device_parallelism 16), so the accumulation loop
+never iterates and last-equals-max trivially.
+
+**What triggers it:** any config where gradient accumulation is active, i.e. train_batch_size
+exceeds devices x per_device_parallelism — which is the normal way to reach large batch on fewer
+devices, and is exactly where fp8 would be attractive.
+
+**Fix shape:** combine overwrite leaves across microbatches with `max` rather than replacement, in
+the same place the sum is done for real gradients. The existing TODO at :130 anticipates the
+problem but under-rates it as "probably ok".
+
+**Status:** correctness bug in merged code, independent of the ep25 fp8 work. Found by reading, not
+by a failing test — worth a regression test that accumulates two microbatches with a large amax in
+the first and asserts the recorded history keeps the max.
+
+## Two deliberate choices recorded before the build
+
+**1. amax_history_length: 32, not the inherited 1024.** `Fp8DotGeneralOp.init` defaults to 1024
+(`haliax/quantization.py:183`) with the history zero-initialised, and `compute_scale` takes the max
+over it. Over a 120-step leg the window never rolls, so the scale is the running maximum of every
+amax since step 0 and can only increase. Early training has the largest activations (loss 10 ->
+5.6 over the leg), so that maximum would be set in the first steps and hold for the rest — the leg
+would measure a scale that is too large for most of its own duration, understating fp8's accuracy
+relative to a production steady state. A 32-step window tracks recent amax instead. Labelled as a
+measurement choice, not a production recommendation: a long run with stationary amax can use the
+1024 default because max-over-1024 and max-over-32 agree once amax stops moving.
+
+**2. Precision cost, quoted on both fixtures.** Delayed per-tensor vs per-token current scaling:
+**0.0381 vs 0.0374 on the hostile fixture (per-token range e^-4..e^4) and 0.0374 vs 0.0373 on a
+realistic one (e^-0.3..e^0.3)** — 2% relative degradation at worst, indistinguishable at realistic
+ranges. The asymmetry cuts the opposite way from the weight-scale result: a shared TENSOR-wide
+scale is punished hard by a fixture with extreme per-token spread, so quoting only the hostile
+number would understate the design. Both numbers travel together.
+Confidence: 9/10 on the grad_accum mechanism (read from source, with the authors' own TODO agreeing); 9/10 on the history-length reasoning.
