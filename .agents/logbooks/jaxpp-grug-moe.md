@@ -3245,3 +3245,28 @@ author: dlwh
   - The fixed acceptance policy remains relative-L2 at most `0.002` for loss and every gradient.
 - Next action:
   - Require finite reduced retry metrics and a clear gain over the matched `9.4180%` ring reference. If it passes, launch the four-stage L24/b512/m16 target before scaling batch further.
+
+### 2026-07-26 04:18 PDT - NCCL pin removes crashes but exposes two JaxPP integration stalls
+- Hypothesis: The reduced JaxPP failures after the direct device-kernel success come from one removable compiler or custom-kernel interaction; isolating attention, expert GEMM, transport, NCCL version, and schedule will identify a functional promotion path.
+- Commit Hash: `ddf717e994` pins `nvidia-nccl-cu13==2.30.7` in every opt-in JAX nightly worker setup and prints the installed NCCL version before JaxPP installation.
+- Commands:
+  - Reduced parents `/dlwh/iris-run-job-20260726-084810`, `/dlwh/iris-run-job-20260726-091919`, and `/dlwh/iris-run-job-20260726-092720` progressively replaced CuTe FA4 with reference attention and Triton expert GEMM with XLA while retaining JAX nightly, ragged-all-to-all, and standard 1F1B.
+  - Full-block control `/dlwh/jaxpp-full-block-nightly-bf16-r2-20260726-0230` used the self-contained two-H100x8 JaxPP CuTe FA4 reproducer on the same nightly.
+  - Exact-ring control parent `/dlwh/iris-run-job-20260726-093511` used nightly JAX, reference attention, XLA expert GEMM, and otherwise matched reduced pipeline geometry.
+  - Pre-pin ragged control parent `/dlwh/iris-run-job-20260726-095230` unset every experimental device and symmetric-memory flag.
+  - Post-pin optimized parent `/dlwh/iris-run-job-20260726-100716` restored CuTe FA4, Triton expert GEMM, standard 1F1B, device ragged-all-to-all, and NCCL 2.30.7.
+  - Post-pin functional parent `/dlwh/iris-run-job-20260726-104936` used reference attention, XLA expert GEMM, and disabled XLA autotuning, cuBLASLt, and Triton GEMM rewriting.
+- Results:
+  - The JaxPP `Inline` patch removed the original `bool.value` failure on every rank.
+  - With NCCL `2.28.9`, CuTe, reference-attention, and XLA-expert variants all segfaulted compiling the first stage-0 forward in `54-63s`. The pre-pin no-device-flags control failed sooner in `deepCopyDevCommRequirements -> ncclDevCommCreate -> NcclDeviceCommunicator::CreateFrom`, proving the nightly still attempted device-communicator setup.
+  - The self-contained nightly JaxPP plus CuTe FA4 full-block gate succeeded `2/2`: lower took `2.083s/2.039s`, compile plus execute `11.914s/100.364s`, and both barriers returned. CuTe FA4 and JaxPP localization alone are not the crash trigger.
+  - The matched nightly exact-ring control succeeded `4/4`. First-forward compilation took `14s`; finite loss was `8.797631`; the post-warmup step took `4.434745s` at `7.114594%` MFU and `472,891` tokens/s. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-nightly-ring-refattn-xlagemm-l8-e64k4-b512-s4096-p4m16-20260726-0300>.
+  - Pinning NCCL 2.30.7 removed the device-communicator segfault. The optimized device-ragged run compiled through stage-2 backward, then made no transition for `27m`. Three ranks reported 100% GPU utilization with `57.2-57.6 GiB` allocated, 0% memory throughput, and `115-139W`; one rank was idle. An unchanged native stack showed `cuModuleLoadData -> CustomKernelThunk::Initialize -> GpuProfiler::Profile -> ConfigRunner::ProfileAll`, with NCCL proxy threads spinning.
+  - Disabling autotuning and GEMM rewrites cleared `ConfigRunner::ProfileAll` and completed stage-2 backward compilation, then execution deadlocked. Rank 0 blocked launching a JaxPP NCCL transfer group in `ncclGroupEnd`; rank 1 waited for a JaxPP receive; ranks 2-3 remained inside PJRT execution. GPU telemetry was again nonproductive. No loss or MFU was emitted.
+  - All failed or stopped parents, children, ranks, and pods are terminal. One intervening submission was setup-invalid because GitHub clone timed out; it produced no experiment evidence and was not counted.
+- Interpretation:
+  - The direct device collective remains exact and fast, but the current JaxPP integration is not executable. Correct NCCL eliminates the native setup crash but exposes an autotuner/device-communicator stall and, without autotuning, a transfer-order deadlock under standard 1F1B.
+  - Attention and expert custom kernels are not required for failure. Exact ring on the same nightly is functional, so JAX 0.11 plus the general JaxPP pipeline is not sufficient.
+  - No L24 promotion or MFU claim is valid until a reduced schedule completes finite steps. The fixed relative-L2 ceiling remains `0.002` for loss and every gradient.
+- Next action:
+  - Test GPipe with the functional no-autotune graph because its non-overlapped transfer ordering may avoid the standard-1F1B deadlock. In parallel, package a self-contained JaxPP transfer plus ragged-all-to-all reproducer and file only a linked Marin issue for upstream review.
