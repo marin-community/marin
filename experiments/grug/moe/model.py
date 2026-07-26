@@ -385,11 +385,14 @@ class CausalSelfAttention(eqx.Module):
         # select per layer. The stored-width (usually local) side is a no-op.
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None and is_global is not None:
             stored = self.cfg.stored_kv_heads
+            kv_spec = P(_BATCH_AXES, None, "model", None)
 
             def _logical_kv(proj: jax.Array, num_kv: int) -> jax.Array:
-                if num_kv == stored:
-                    return proj
-                return align_kv_heads(proj[:, :, :num_kv, :], num_q_heads=stored)
+                # Slice to the logical KV heads and repeat back to the stored width; reshard to the
+                # canonical KV layout so the per-layer select runs on one consistent sharding (else the
+                # jnp.where forces an implicit reshard on the model-sharded head axis every layer).
+                widened = proj if num_kv == stored else align_kv_heads(proj[:, :, :num_kv, :], num_q_heads=stored)
+                return reshard(widened, kv_spec)
 
             local_k, local_v = _logical_kv(k, self.cfg.local_kv_heads), _logical_kv(v, self.cfg.local_kv_heads)
             global_k, global_v = _logical_kv(k, self.cfg.global_kv_heads), _logical_kv(v, self.cfg.global_kv_heads)
