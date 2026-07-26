@@ -1483,6 +1483,108 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T13:27:20Z — 137,725 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1317-v332` independently
+  revalidated six p1 decision-file 37 checkpoints at semantic offsets 1,280
+  through 1,920 and the final five p2 decision-file 69 checkpoints at offsets
+  5,376 through 5,888. Their 1,379 pairs contain 695 model false positives,
+  680 model true duplicates, and four unresolved outcomes. Two pairs were
+  chunked and 1,377 were direct. The audit checked 2,927 judgments across
+  2,941 attempts: 2,921 valid and 20 invalid responses affecting eight retried
+  judgments. The outcome Parquet SHA-256 values, in p1 then p2 frontier order,
+  are:
+
+  - `3c5fe357726fd4ec9cf6f55ff112bcad4fce9b20d1c7c92f33fb60681d821b22`;
+  - `cdc76e329840afe0f303d043b5cc6dd217e81f9ad2cf20dc04ca0385dffba7bc`;
+  - `c981bdafdb167dec71f3dd70ab42fc51baa4e226ffb127533058b57e8e82e365`;
+  - `afccfc97ea5a29e420c1f4dc064f38a68e62e7304b3c3ca88cd16452f6c6d763`;
+  - `e79f6393fdf54cba226e50215e98c4d7768c346c6a3df3025701d33febfd1f02`;
+  - `c806cb94698c805b9b8e35d9fd39ea76903d89d83a5d5ac023f25edcad6603b3`;
+  - `63c0fe0577d589bd4fbf2862f4a871c9efd1b4e40a04880afd3b5ec66731959c`;
+  - `05e33dba212e184dd44fc7735606eb3d85025767870ed9e932eabfe67792dec7`;
+  - `b7f86c7cf2918ac88101fcd07294ebc48d42891400b5af130ac9464355ab375d`;
+  - `e8d9ad9370c87d63b5c59c3792441a5792a58f855dadc6bad2b78d5074efb89d`;
+  - `95e0ff39484dce4768882a1cb3c2e0f49a0fd6fd1c06281b35cc0e999a2416e9`.
+
+- Complete-text inspection resolves all four treatment ambiguities as true
+  duplicates:
+
+  - `part-00069-of-00128.parquet:8716` contains the same complete 195-line
+    Fifth Fleet opinion article. The sole changed line is an already-corrupted
+    ending: the member ends with `the latter questions` and the canonical
+    with `ion`. Neither fragment adds a coherent proposition. Character,
+    line, and word-sequence similarity are 0.999163, 0.994872, and 0.998879.
+    Member/canonical text SHA-256 values are
+    `4b6e2e1f834c9b781d43710c14859a02b069b72c3f4d0b41e8f4e6849436bff5`
+    and
+    `b64b5b7fa2420c4352a1b001c459ab3812734fb94582e653d4ed7e5b8a2d87d4`;
+    inspection SHA-256 is
+    `f2de3129fd5e43d591dc873bb660dfeb68c9d96b1de820a4e8bbbd83a83336d9`.
+  - `part-00069-of-00128.parquet:9053` contains the identical satellite
+    thermal-control question, choices, reasoning, conclusion, and answer.
+    Only `\boxed{D}` versus `\boxed{\text{D}}` differs. The texts contain
+    16,952/16,959 characters; character, line, and word-sequence similarity
+    are 0.999794, 0.996599, and 0.999816. Member/canonical text SHA-256 values
+    are `fc1ea8fec964279b24c71c3cdaa19f835076922d8f24e80c740e1206bf23fdaf`
+    and
+    `8a372502e17c922d0f03725a7ddcccaece28ac45a28166ed9c1ba07351c0c736`;
+    inspection SHA-256 is
+    `1e30ed2ab3b1db1e2fcff1f9153fbb26c31de6bb99d5f4fafd8d712893ea38af`.
+  - `part-00069-of-00128.parquet:9062` contains the identical Triangle
+    Shirtwaist Factory question, choices, reasoning, conclusion, and answer.
+    Only `\boxed{B}` versus `\boxed{\text{B}}` differs. The texts contain
+    13,340/13,347 characters; character, line, and word-sequence similarity
+    are 0.999738, 0.996774, and 0.999779. Member/canonical text SHA-256 values
+    are `e3b9c0b283298eb1c2d2e6b920ace4b973dd2e0cbc3c3c5c31b3b2cc84f12815`
+    and
+    `a44416e1e7c9981c6e1a10eec90da4d9417b74616baabbbeb65cca3c38fb2f05`;
+    inspection SHA-256 is
+    `51378ca2f018f23ac530cff2eafc049c7c51f2a6772a0febf5d036803a29e409`.
+  - `part-00069-of-00128.parquet:9085` contains the identical work-related
+    eye-strain question, choices, reasoning, conclusion, and answer. Only
+    `\boxed{C}` versus `\boxed{\text{C}}` differs. The texts contain
+    9,085/9,078 characters; character, line, and word-sequence similarity are
+    0.999615, 0.994444, and 0.999676. Member/canonical text SHA-256 values are
+    `bba7bcff63263fc15654074e6c12f2e6d7ea84e2cfa3314241878f9aaa6df94e`
+    and
+    `d430c733bdd33aa9460058bd8c2f712cbce424d17b73a234d8a9f060b7adb498`;
+    inspection SHA-256 is
+    `2cc3e18f37258809d9a6f06f76d0328add608f4354dd9f5adf77154f600db1c3`.
+
+- `/rav/datakit-6854-publish-manual-four-1326-v334` wrote the four immutable
+  manual records. `/rav/datakit-6854-verify-manual-four-1326-v335`
+  separately reread and exactly checked all complete source pairs, semantic
+  checkpoints and evidence, inspection artifacts, deterministic Parquet
+  bytes, and completion markers. In pair order, semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are:
+
+  - `4e783f3e9f9e12b6f1c61218d3336228ac06526ae163c143b5a10fbd4fa344f5`,
+    `b9a5830dc5b0ff19435f4e4da2a18ce3799b5b77a4a465a6ebba25aacc872d97`,
+    and `0e11cfe9561a40de3db5cef1e95be17609b5a0df1e20d62b04e2fbdfe0810584`;
+  - `7b13a194ca82f810a7569b890836a85582e51b1195a0d948bc247b748c377d3a`,
+    `3bd0af5f0f4aa5e361c20bfe671ffd81e82801550e153ec4c461ce454c9a45f7`,
+    and `b111ff2e0ed5bf5b9084f037a59f1e558f81ac3699ce789739ff55e15bfaa7f2`;
+  - `1fbd62141b7e70d6d29c56e51843ff2ed446cd9ebaecf971caf8b00ca765e711`,
+    `47b3491c25055e220ba76ebe2052d0a99f86cc8e48890447209289f909ca9028`,
+    and `47bb9f67c29ac48c88963afaf5e7b8a14c753f3d6e0f9d9d72e748ad405ced4f`;
+  - `dc853e649e272fb4b127971f3747da2c9720e3d51c64d159d8708243d744eea6`,
+    `cd1f38d1d3772947f6b3e851f0e7441f01bd02832b6cf70aa94d38a8d6155eb7`,
+    and `c6ed32ca69f986008f9c37bcfa373ddc89096804b71227c39b65fbea7d6f1cc2`.
+
+- Across the stable 1,084-checkpoint snapshot, all 158 unresolved model
+  outcomes are covered by 121 true-duplicate and 37 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 110,580 pairs, 70,421 false positives, 40,159 true duplicates;
+  - treatment: 27,145 pairs, 13,986 false positives, 13,159 true duplicates;
+  - combined: 137,725 pairs, 84,407 false positives, 53,318 true duplicates.
+
+- The next audit frontiers are p0 `(6, 0)`, p1 `(37, 2,048)`,
+  p2 `(70, 0)`, and p3 `(102, 128)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T13:16:10Z — 136,346 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1305-v326` independently
