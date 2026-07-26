@@ -334,6 +334,11 @@ def _build_wheels(targets: list[tuple[str, str | None]], use_zig: bool) -> None:
     if use_zig:
         zig_dir = str(Path(_ensure_zig()).parent)
         env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        # The repo .cargo/config.toml links native Linux builds with mold, but
+        # zig supplies its own linker and can't consume `-fuse-ld=mold`. Clearing
+        # RUSTFLAGS drops that flag for the cross build; the sccache rustc-wrapper
+        # (a separate config key) is unaffected and keeps caching.
+        env["RUSTFLAGS"] = ""
 
     for triple, manylinux in targets:
         print(f"\n--- Building wheel for {triple} ---")

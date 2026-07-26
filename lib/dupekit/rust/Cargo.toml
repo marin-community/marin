@@ -24,8 +24,9 @@ rand_pcg = "0.3"
 regex = "1.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
-# thin-LTO: within ~1% of fat-LTO runtime at a fraction of the link time.
+# No LTO: parallel codegen keeps the build fast, trading a few percent of
+# runtime we don't need here for a much shorter link.
 [profile.release]
-lto = "thin"
+lto = false
 codegen-units = 16
 strip = "symbols"
