@@ -1202,3 +1202,48 @@ pair is worth +0.47pp over the current default at zero maintenance beyond regene
 profile when the HLO changes. Neither is part of a path to 25%; the honest ceiling of the whole
 scheduling family is now measured, not guessed.
 Confidence: 9/10 on both readings (census is a direct instruction census; MFU is 4 windows against a twice-pinned control); 9/10 that scheduling is now exhausted as a lever for the a2a legs.
+
+## Check-in 2026-07-26 11:35 UTC — fp8-wire prize sized against my own profile; three corrections
+
+Verified the coordinator's arithmetic against the limit=4 profile (GPU:0, 3-step window).
+
+CONFIRMED: a2a exposed = 10346.58 x (1 - 0.643) = **3694 ms**, exactly as stated. Non-a2a exposed
+is the remaining 593 ms of the 4287 ms total.
+
+CORRECTION 1 (strengthens the case): the demonstrated hiding capacity is **8939 ms**, the total
+hidden collective, not 6653 ms — 6653 is the a2a-only hidden portion. After halving a2a time
+(10347 -> 5173 ms) total collective is 8052 ms, which fits under the 8939 ms already demonstrated
+hideable, with margin.
+
+CORRECTION 2: "exposed a2a could approach zero" is the optimistic branch, not automatic — it needs
+the hidden FRACTION to improve, not just aggregate capacity to exist. Bracketing it:
+
+| scenario | exposed collective | span | step | MFU |
+|---|--:|--:|--:|--:|
+| today (limit=4) | 4287 ms | — | 11.94 s | 22.67 |
+| halve a2a, hidden fraction stays 64.3% | 2440 ms | -5.6% | 11.27 s | 24.01 (**+1.34pp**) |
+| halve a2a, a2a fully hidden | 593 ms | -11.1% | 10.61 s | 25.52 (**+2.84pp**) |
+| ceiling: ALL collective hidden | 0 | -12.9% | 10.41 s | 26.04 (+3.37pp) |
+
+So the honest prize is **+1.3 to +2.8pp**, with ~+2pp mid-range — the coordinator's estimate sits
+inside the bracket. CORRECTION 3: the conversion is slightly understated at the top end; 1231 ms
+off an 11.94 s step is +2.6pp, not +2pp, because MFU goes as 1/step_time.
+
+Also worth stating: 3.37pp is the ENTIRE remaining collective-exposure budget at this operating
+point. Nothing in the collective-overlap family can ever be worth more than that, and halving a2a
+bytes captures 40-84% of it. That is the last sizing this thread needs.
+
+SUPPORTING CHECK — the a2a is bandwidth-bound, so halving bytes really does halve time. Per device
+per dispatch round the wire carries expert_shards x capacity x hidden = 64 x 2048 x 5120 bf16 =
+1.34 GB; at NVLink-class bandwidth that is order 1.5 ms against the 2.2-3.5 ms measured per
+instruction. Consistent, and independently consistent with my own earlier fp8-wire decomposition,
+which put the maximum wire saving at ~1.5 s/step against the 1231 ms/step of exposed a2a here.
+The halving assumption is therefore not a leap; latency-bound behaviour would have shown up as
+measured times far below the byte-count estimate, and it does not.
+
+Fidelity constraints carried forward from the earlier fp8 work (unchanged): quantize strictly
+AFTER routing so drop accounting is untouched, per-token scaling only (never across tokens on the
+sequence axis), e4m3 forward and e5m2 backward on the wire, loss-trajectory parity is the verdict.
+Note the backward legs are 16 of the 24 a2a instructions, so the full halving needs both directions.
+Confidence: 9/10 on the sizing bracket; 6/10 that the top of the bracket is reachable.
+Next: kernel-feasibility survey (fp8 input + dequant epilogue) before proposing any build.
