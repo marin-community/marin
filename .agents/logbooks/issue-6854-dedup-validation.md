@@ -1483,6 +1483,55 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T14:44:38Z — 145,095 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1439-v367` independently
+  revalidated p3 decision-file 102 semantic offsets 3,072, 3,200, and 3,328.
+  Their 384 baseline pairs contain 190 model false positives, 193 model true
+  duplicates, and one unresolved outcome. Two pairs were chunked and 382 were
+  direct. All 888 judgments were valid on their first attempts. The three
+  outcome Parquet SHA-256 values are
+  `5bc3ad38379ddf64d2afea59cb626e599b62ddb3cc727d90237264e95b840322`,
+  `444137bdf88f6814cbd30e0342c6a30f20fb5e39d0be0a8bc9cda6efe8625a11`,
+  and `a60e423187fedd412904ce7da6a1aef375c62049bab61de8ccca9f952e5d4bae`.
+
+- Complete-text inspection resolves the ambiguity as a false positive.
+  `part-00102-of-00128.parquet:5226` shares the same college-SEO scaffold as
+  its canonical, but the member adds coherent advice that a corporate
+  internship develops career prospects and work experience, plus certificate
+  and adult-education content. Those payloads are absent from the complete
+  canonical, so deletion loses content. Member/canonical character counts are
+  1,005/827; character, line, and word-sequence similarities are 0.647380,
+  0.333333, and 0.577778. Text SHA-256 values are
+  `ae6e47b417a51ff1bfc8453f82be7332f40180c03a0c671568dec63a0d0ae7e7`
+  and
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`;
+  inspection SHA-256 is
+  `5275d4dd81d4a9fd4ed731f0f1913c2fa2fed1fd91abe6aa92fdec23b10aae45`.
+
+- `/rav/datakit-6854-publish-row5226-1442-v369` wrote the immutable
+  false-positive record. The separate verify-only job
+  `/rav/datakit-6854-verify-row5226-1443-v370` reread the complete source
+  texts, semantic evidence, inspection artifact, deterministic Parquet bytes,
+  and completion marker. The semantic-evidence, manual-Parquet, and marker
+  SHA-256 values are
+  `9502ee62e3e9b8e23e083e15b976d159753bd524066b5603fd50044126e1205f`,
+  `b0c62d5d15f3b7a107f0032afec9a906e91d00c664c2255a2c09fbd5617955ee`,
+  and `38ace0fb55a5940f5d9d215b4e2091488c0dc0ba96c69814893648a333a39c69`.
+
+- Across the stable 1,142-checkpoint snapshot, all 165 unresolved model
+  outcomes are covered by 127 true-duplicate and 38 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 116,757 pairs, 74,059 false positives, 42,698 true duplicates;
+  - treatment: 28,338 pairs, 14,591 false positives, 13,747 true duplicates;
+  - combined: 145,095 pairs, 88,650 false positives, 56,445 true duplicates.
+
+- The next audit frontiers are p0 `(6, 128)`, p1 `(38, 0)`,
+  p2 `(70, 0)`, and p3 `(102, 3,456)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T14:36:51Z — 144,711 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1432-v363` independently
