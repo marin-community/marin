@@ -58,6 +58,7 @@ None.
 - 2026-07-26: Extend promoted treatments and all four controls to approximately 1.8B tokens. The shared token cap, not a validation plateau, is the primary stopping condition.
 - 2026-07-26: Rank structured inherited coordinates by teacher weight energy. Activation-derived rotations do not commute through Qwen's RMSNorm and SwiGLU blocks without a more invasive model rewrite.
 - 2026-07-26: Make all 28 mapped student layers the primary `QD-001` treatment to test the user's per-layer hypothesis directly. Retain four anchors only as a throughput ablation.
+- 2026-07-26: Decouple the 12-step systems smoke from the full 100M-token cache with a fixed 1,000-document cache. Continue the full cache in parallel and pin its successful `2026.07.26.2` artifact for every screen arm.
 
 ## Negative results index
 

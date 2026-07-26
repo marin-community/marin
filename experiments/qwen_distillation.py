@@ -60,6 +60,9 @@ SCREEN_TOKENS = 100_000_000
 SCREEN_STEPS = math.ceil(SCREEN_TOKENS / (SEQ_LEN * BATCH_SIZE))
 SMOKE_STEPS = 12
 SCREEN_SEEDS = (0, 1)
+FULL_DATA_VERSION = "2026.07.26.2"
+SMOKE_DATA_VERSION = "2026.07.26.3"
+SMOKE_DATA_DOCUMENTS = 1_000
 ALL_STUDENT_ANCHORS = tuple(range(28))
 ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
 
@@ -161,9 +164,9 @@ def _mesh() -> MeshConfig:
     )
 
 
-def qwen_datakit_cache() -> ArtifactStep[TokenizedCache]:
-    name = "qwen-distillation/data/datakit-0p1b-qwen3"
-    version = resolve_version(name, None)
+def qwen_datakit_cache(*, smoke: bool = False) -> ArtifactStep[TokenizedCache]:
+    name = "qwen-distillation/data/datakit-0p1b-qwen3-smoke" if smoke else "qwen-distillation/data/datakit-0p1b-qwen3"
+    version = SMOKE_DATA_VERSION if smoke else FULL_DATA_VERSION
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
         root = ctx.artifact_path(SAMPLE_0P1B)
@@ -174,6 +177,7 @@ def qwen_datakit_cache() -> ArtifactStep[TokenizedCache]:
             tokenizer=ctx.artifact_path(qwen3_0_6b_base),
             tokenizer_backend=TokenizerBackend.HF,
             format=TextLmDatasetFormat(text_key="text"),
+            sample_count=SMOKE_DATA_DOCUMENTS if smoke else None,
             max_workers=256,
             worker_resources=ResourceConfig.with_cpu(cpu=2, ram="12g", disk="16g"),
             tags=["datakit", "qwen-distillation"],
@@ -257,7 +261,6 @@ def training_step(
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         data_config = mixture(ctx, {data: 1.0}, shuffle=True)
         student_checkpoint = ctx.artifact_path(qwen3_0_6b_base)
-        teacher_path = ctx.artifact_path(teacher_checkpoint)
         run_id = f"{arm.value}-{label}-seed-{seed}"
         trainer = _trainer(
             run_id=run_id,
@@ -279,6 +282,7 @@ def training_step(
                 pad_tokenizer_to_match_model=True,
             )
         else:
+            teacher_path = ctx.artifact_path(teacher_checkpoint)
             inner = TrainLmDistillationConfig(
                 data=data_config,
                 trainer=trainer,
@@ -325,10 +329,10 @@ def training_step(
 
 
 def build(stage: str) -> list[ArtifactStep]:
-    data = qwen_datakit_cache()
     if stage == "data":
-        return [data]
+        return [qwen_datakit_cache()]
     if stage == "smoke":
+        data = qwen_datakit_cache(smoke=True)
         return [
             training_step(
                 Arm.KL_SCRATCH,
@@ -339,6 +343,7 @@ def build(stage: str) -> list[ArtifactStep]:
             )
         ]
     if stage == "screen":
+        data = qwen_datakit_cache()
         return [
             training_step(
                 arm,
