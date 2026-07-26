@@ -1488,3 +1488,52 @@ Two implementation findings worth keeping:
   code logs that.
 Confidence: 9/10 on forward and dgrad correctness; 6/10 on end-to-end loss parity, unchanged.
 Next: rack slot when free (pre-approved) — matched pair, bf16 wire control vs fp8 wire+GEMM.
+
+## FINAL (fp8 wire + GEMM) 2026-07-26 13:00 UTC — LOSS PARITY HOLDS, EXPOSURE COLLAPSES AS PREDICTED, MFU -2.28pp
+
+/mwittmann/ep25d4-fp8gemm-120-v1-20260726 vs the limit=4 control, both **120 steps** (identical
+schedule position, so drop figures are directly comparable to each other and to nothing else).
+
+**(1) Loss — PARITY, no drift.** Matched steps: 60: 6.6839 vs 6.6974 | 80: 6.2980 vs 6.3176 |
+100: 5.9393 vs 5.9720 | 119: **5.6398 vs 5.6819**; tail20 5.7853 vs 5.8226. fp8 is at or slightly
+below the control from step 60 on, within the same spread seen between earlier arms. The
+weight-quantization risk — half the error budget by gate 1 — did NOT show up over this horizon.
+Caveat: 120 steps is a short horizon for a quality claim.
+
+**(2) Drops — matched regime.** Mean drop 20-119: **0.2669 vs 0.2670**. @119 0.0901 vs 0.0876.
+Quantize-strictly-after-routing held: drop accounting is untouched.
+
+**(3) MFU — NEGATIVE, and outside the bracket.** p50 20.391 vs 22.674 at 20-119 = **-2.283pp**
+(drop-corrected identical), consistent across all windows (-2.27 to -2.31). Step time 13.28 vs
+11.94 s, **11% slower**. Pre-registered bracket was +1.34 to +2.84pp; this lands below zero.
+
+**(4) Concurrency — the byte thesis was RIGHT; the cost is elsewhere.**
+
+| GPU:0, 3-step window | limit=4 control | fp8 wire+GEMM |
+|---|--:|--:|
+| collective total | 13226 ms | 9784 ms (-26%) |
+| SendRecv | 10347 ms | 7447 ms (-28%) |
+| **exposed collective** | **4287 ms (12.9% of span)** | **1526 ms (4.0%)** |
+| trace span | 33159 ms | 37935 ms (+14%) |
+
+Exposure fell by 2761 ms — 64% of the entire +3.37pp exposure budget, almost exactly what halving
+the dispatch leg predicted. The fp8 GEMM is genuinely running (the kernel changed to
+`nvjet_sm100_qqtst_128x256_128x6_2x1_2cta_v_bz_NNT`). But the span GREW 4776 ms, so non-collective
+compute grew ~7.5 s per 3 steps (~2.5 s/step) — roughly twice the collective saving.
+
+### Verdict and what it means
+
+Reported as a NEGATIVE per the pre-fixed criteria: -2.28pp MFU. But it is a *different* negative
+from the -2.02pp of a year of this thread, and the difference is the whole point: the wire
+saving materialized exactly as modelled and the loss held. What kills it is quantization COMPUTE —
+the per-token amax pass on send, the backward dequantization of `received` for the bf16 wgrad, and
+the e5m2 cotangent quantize. Those are the costs I flagged as "gate-3 measurements, not analysis
+questions", and they measured worse than hoped.
+
+This does not close byte reduction; it prices its current implementation. The three specific costs
+are each attackable: fold the quantize into the dispatch gather (d1's finding that cheap work rides
+the index composition), avoid the backward dequant with a delayed per-tensor scale on the wgrad
+operand (prior art exists in the fp8 ragged-dot lineage — mine it rather than rebuild), and fuse
+the cotangent quantize into the combine epilogue. Whether the remaining ~2.5 s/step of QDQ can be
+driven under the 2761 ms/3-step exposure saving is the question that decides this route.
+Confidence: 9/10 on all four readings; 6/10 that a fused-QDQ variant turns this positive.
