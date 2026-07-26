@@ -317,3 +317,17 @@ Next: v3 child registers -> poller; first metrics ~05:00; series by ~06:15.
 Confidence: 4/10 g=0.5, 1/10 integral family (measured)
 Next: poll log store every ~20 min; if v3 boots, attach poller; assemble final report
 with v1-pending contingency stated.
+
+## Check-in 2026-07-26 05:25 UTC — entire EP25 fleet blocked on the fabric
+
+- d1's ep25d1-qbon-batch-120 (03:16): container churning (boot failures). d4's
+  pgle-ab-pgle-120 (03:03): 0% GPU. My v3 attempt 6: 0% GPU. ALL rack jobs submitted
+  since ~02:00 are hung at NCCL clique init; d4's 02:15 capture is the last job known to
+  have trained. cw-us-east-08a GB200 is down for new clique formation.
+- Posture: v3 stays as canary (auto-boots on fabric heal); log store polled for v1's
+  completed g=0.5 run; no further submissions (would just join the hang queue).
+- Drafting the final report around the completed evidence: integral family (two gammas,
+  measured), g=2 (d4), g=1 (two draws); g=0.5 slot marked pending-pipeline-recovery.
+
+Confidence: 4/10 g=0.5, 1/10 integral family
+Next: 20-min polls; final report skeleton commit.
