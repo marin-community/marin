@@ -607,3 +607,75 @@ ACTION: stopped the crashlooping matched v2 and resubmitted the PRIMARY arm as
 capacity exists. This is the direct test of the eviction root cause: if v3 clears compile and steps
 where four preemptible attempts did not, the mechanism is settled and the fix is a one-line launcher
 change for anyone running long compiles on this cluster.
+
+## Check-in 11 — FALSIFICATION, flagged early as the brief asks. The wire mechanism WORKS and latent still loses.
+
+The primary arm cleared compile on the non-preemptible pool (that fix worked: first latent leg to
+reach step 0 after four preemptible attempts failed) and is running. Its emitted denominator is
+155.4304 GFLOP/token = 3 x 51.810 G, exactly the figure check-in 2 predicted, so the MFU is
+arch-aware and comparable.
+
+### The endpoint, matched early window (steps 10-24), against my own dense control
+
+| arm | FLOPs/token | MFU p50 | tok/s p50 | step p50 |
+|---|--:|--:|--:|--:|
+| dense | 48.186 G | **27.177%** | 300,803 | 13.944 s |
+| matched-work latent | 51.810 G | **27.155%** | **279,529** | 15.005 s |
+
+**-7.1% tok/s, -0.02pp MFU.** The matched-work arm did +7.52% more analytic work in +7.6% more time.
+That is the PURE NULL, hit almost exactly: check-in 8 predicted "a2a exposure unchanged, projections
+at step-average efficiency -> tok/s -7.0%, MFU +0.00pp". Measured: -7.1% and -0.02pp.
+
+### But the profile says the mechanism is NOT what failed. It worked.
+
+Matched-work profile vs dense profile, same 3-step window at step 20, GPU:0, occupancy in ms per 3
+steps with exposed = occupancy x (1 - overlap):
+
+| collective | dense occ | dense exposed | matched occ | matched exposed |
+|---|--:|--:|--:|--:|
+| `SendRecv` async (expert a2a) | 5,620 | 838 | 3,911 | **70** |
+| `SendRecv` inline on compute | 1,266 | 1,266 | 898 | 898 |
+| **a2a subtotal** | **6,886** | **2,104** | **4,809 (-30%)** | **969 (-54%)** |
+| `AllGather` | 1,930 | 566 | 2,491 | 1,124 |
+| `ReduceScatter bf16` | 1,668 | 729 | 1,660 | 0 |
+| `AllReduce f32` | 1,596 | 680 | 3,051 | 833 |
+| `AllReduce bf16` | 168 | 14 | **1,170** | 724 |
+| **non-a2a subtotal** | **5,363** | **1,989** | **8,371 (+56%)** | **2,680 (+35%)** |
+| **TOTAL** | **12,249** | **4,126** | **13,180 (+8%)** | **3,728 (-9.6%)** |
+
+Read the a2a row first: **halving the dispatch width cut a2a exposure by 54%, from 2,104 ms to 969 ms
+per 3 steps — within 8% of the 1,052 ms my check-in-8 prediction named.** The collective-bytes
+mechanism is confirmed, quantitatively, at the hero shape. This is not a null result about the
+mechanism.
+
+Now read the rest of the table. **Latent MoE pays for the halved all-to-all with new collectives of
+its own.** `AllReduce bf16` goes 168 -> 1,170 ms (7x), `AllReduce f32` 1,596 -> 3,051 (+91%),
+`AllGather` 1,930 -> 2,491 (+29%). Total collective occupancy goes UP 8% despite the a2a falling 30%.
+The cause is the replicated projections flagged in check-in 5: 1.812 B parameters that live on every
+GPU need their gradients ALL-REDUCED across the batch axes each step, and MuonH's Newton-Schulz runs
+on them replicated as well. So net exposed collective time falls only 9.6% (-133 ms/step) instead of
+the -378 ms/step the a2a alone delivered — 61% of the win is eaten before it reaches the step.
+
+And then the step time goes the other way anyway: compute-stream busy 38,700 -> 42,893 ms (+10.8%)
+against +7.52% analytic work, i.e. +1,398 ms/step of compute against -133 ms/step of collective.
+
+### The verdict, stated plainly
+
+**The byte thesis survives; latent MoE as a way to exploit it does not.** Halving dispatched
+activation width does exactly what EP25 predicted it would to the wire. It loses anyway, and for a
+reason that is specific to this mechanism rather than to the thesis: the projections that buy the
+narrower wire cost more in added compute and added parameter-gradient traffic than the wire saves.
+That is structurally the same failure as fp8 — pay compute to save bytes, and the compute wins — but
+arrived at through a completely different mechanism, which makes it a second independent data point
+on the same economics rather than a repeat.
+
+WHAT WOULD CHANGE THE ANSWER, and it is now well-motivated rather than speculative: the added
+collective traffic is an artifact of REPLICATING the projections, not of latent MoE as an idea. A
+projection shared across all 48 layers would be 48x smaller in both gradient traffic and Newton-Schulz
+work while preserving the entire wire saving. That is the experiment this result argues for, and it
+is a different architecture rather than a tuning knob.
+
+Confidence: 8/10 on the falsification of latent-MoE-as-throughput-win at this shape (the profile and
+the endpoint agree, and the endpoint hit a pre-registered null prediction to 0.1%); 9/10 that the
+wire mechanism itself works as advertised (54% exposure cut, measured); pending the steady tail
+(90-119) and the secondary arm to finalize.
