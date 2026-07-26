@@ -21,6 +21,7 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_moe_boundary_parity import (
     grouped_block_value_and_grads,
+    joined_attention_pair_value_and_grads,
     joined_final_head_loss_and_grads,
     joined_moe_pair_value_and_grads,
     ordered_attention_value_and_grads,
@@ -453,6 +454,36 @@ def test_two_learned_router_moe_calls_in_one_vag_match_separate_vags() -> None:
         )
         joined = jax.jit(joined_moe_pair_value_and_grads)(block, post_attention, cotangents)
         ordered = jax.jit(ordered_moe_pair_value_and_grads)(block, post_attention, cotangents)
+
+    _assert_tree_rel_l2(joined, ordered)
+
+
+def test_two_attention_calls_in_one_vag_match_separate_vags() -> None:
+    mesh, stage = _tiny_grouped_last_stage("recompute_all", top_k=2)
+    batches, hiddens, cotangents = _tiny_boundary_inputs(mesh)
+    masks = tuple(batch.attn_mask for batch in batches)
+
+    with jax.set_mesh(mesh):
+        joined = jax.jit(
+            lambda block, hidden_pair, cotangent_pair: joined_attention_pair_value_and_grads(
+                block,
+                hidden_pair,
+                cotangent_pair,
+                masks,
+                use_pko=False,
+                disable_rope=False,
+            )
+        )(stage.blocks[0], hiddens, cotangents)
+        ordered = jax.jit(
+            lambda block, hidden_pair, cotangent_pair: ordered_attention_value_and_grads(
+                block,
+                hidden_pair,
+                cotangent_pair,
+                masks,
+                use_pko=False,
+                disable_rope=False,
+            )
+        )(stage.blocks[0], hiddens, cotangents)
 
     _assert_tree_rel_l2(joined, ordered)
 

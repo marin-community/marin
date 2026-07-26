@@ -65,7 +65,7 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
-_DIAGNOSTIC_MODES = ("full", "moe-pair", "attention")
+_DIAGNOSTIC_MODES = ("full", "moe-pair", "attention", "attention-pair")
 
 
 def _event(event: str, **fields: Any) -> None:
@@ -272,6 +272,39 @@ def ordered_moe_pair_value_and_grads(
     )
 
 
+def joined_attention_pair_value_and_grads(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+    masks: tuple[AttentionMask | jax.Array, AttentionMask | jax.Array],
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+):
+    """Differentiate two independent attention calls in one reverse pass."""
+
+    def projected_pair(current_block, current_hiddens):
+        outputs = []
+        loss = jnp.asarray(0.0, dtype=jnp.float32)
+        for hidden, cotangent, mask in zip(current_hiddens, cotangents, masks, strict=True):
+            output = current_block.attention_residual(
+                hidden,
+                mask,
+                use_pko=use_pko,
+                disable_rope=disable_rope,
+            )
+            outputs.append(output)
+            loss = loss + _project_output(output, cotangent)
+        return loss, tuple(outputs)
+
+    (loss, outputs), (block_gradient, hidden_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(block, hiddens)
+    return loss, outputs, block_gradient, hidden_gradients
+
+
 def packed_attention_value_and_grads(
     block: Block,
     hiddens: tuple[jax.Array, jax.Array],
@@ -347,6 +380,14 @@ def ordered_attention_value_and_grads(
         grug_train._sum_microbatch_group(tuple(block_gradients)),
         tuple(hidden_gradients),
     )
+
+
+def _attention_parameter_gradients(block_gradient: Block) -> dict[str, Any]:
+    return {
+        "rms_attn": block_gradient.rms_attn,
+        "attn_gated_norm": block_gradient.attn_gated_norm,
+        "attn": block_gradient.attn,
+    }
 
 
 def grouped_block_value_and_grads(
@@ -552,6 +593,13 @@ def _moe_pair_diagnostic(
     return passed
 
 
+def _target_attention_options(stage: TransformerPipelineStage) -> tuple[bool, bool]:
+    layer_index = stage.start_layer
+    is_last = layer_index == stage.config.num_layers - 1
+    is_long = layer_index % 4 == 3 or is_last
+    return is_long and not stage.config.disable_pko, is_long and stage.config.disable_long_rope
+
+
 def _attention_diagnostic(
     mesh,
     stage: TransformerPipelineStage,
@@ -563,11 +611,7 @@ def _attention_diagnostic(
     cotangents = (hiddens[1], hiddens[0])
     masks = tuple(batch.attn_mask for batch in batches)
     packed_mask = grug_train._pack_group_attention_mask(batches)
-    layer_index = stage.start_layer
-    is_last = layer_index == stage.config.num_layers - 1
-    is_long = layer_index % 4 == 3 or is_last
-    use_pko = is_long and not stage.config.disable_pko
-    disable_rope = is_long and stage.config.disable_long_rope
+    use_pko, disable_rope = _target_attention_options(stage)
     ordered = jax.jit(
         lambda block, hidden_pair, cotangent_pair: ordered_attention_value_and_grads(
             block,
@@ -614,8 +658,8 @@ def _attention_diagnostic(
         gradient_report = build_parity_report(
             automatic_loss=actual[0],
             direct_loss=reference[0],
-            automatic_gradients={"parameters": actual[2], "inputs": actual[3]},
-            direct_gradients={"parameters": reference[2], "inputs": reference[3]},
+            automatic_gradients={"parameters": _attention_parameter_gradients(actual[2]), "inputs": actual[3]},
+            direct_gradients={"parameters": _attention_parameter_gradients(reference[2]), "inputs": reference[3]},
             tolerance=DEFAULT_TOLERANCE,
             gradient_root="gradients",
         )
@@ -674,6 +718,71 @@ def _attention_diagnostic(
     return passed
 
 
+def _attention_pair_diagnostic(
+    mesh,
+    stage: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    batches: tuple[GrugLmExample, GrugLmExample],
+) -> bool:
+    compute_block = grug_train._compute_stage(stage, qb_betas, _PRODUCTION_MIXED_PRECISION).blocks[0]
+    cotangents = (hiddens[1], hiddens[0])
+    masks = tuple(batch.attn_mask for batch in batches)
+    use_pko, disable_rope = _target_attention_options(stage)
+    ordered = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: ordered_attention_value_and_grads(
+            block,
+            hidden_pair,
+            cotangent_pair,
+            masks,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+        )
+    )
+    joined = jax.jit(
+        lambda block, hidden_pair, cotangent_pair: joined_attention_pair_value_and_grads(
+            block,
+            hidden_pair,
+            cotangent_pair,
+            masks,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+        )
+    )
+    arguments = (compute_block, hiddens, cotangents)
+    with jax.set_mesh(mesh):
+        reference = _compile_and_run("attention_pair_ordered", ordered, arguments)
+        actual = _compile_and_run("attention_pair_joined", joined, arguments)
+        value_report = build_parity_report(
+            automatic_loss=actual[0],
+            direct_loss=reference[0],
+            automatic_gradients={"outputs": actual[1]},
+            direct_gradients={"outputs": reference[1]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="values",
+        )
+        gradient_report = build_parity_report(
+            automatic_loss=actual[0],
+            direct_loss=reference[0],
+            automatic_gradients={"parameters": _attention_parameter_gradients(actual[2]), "inputs": actual[3]},
+            direct_gradients={"parameters": _attention_parameter_gradients(reference[2]), "inputs": reference[3]},
+            tolerance=DEFAULT_TOLERANCE,
+            gradient_root="gradients",
+        )
+
+    passed = value_report.passed and gradient_report.passed
+    _event(
+        "attention_pair_parity_report",
+        source_lineage=SOURCE_LINEAGE,
+        use_pko=use_pko,
+        disable_rope=disable_rope,
+        value_report=value_report.as_dict(),
+        gradient_report=gradient_report.as_dict(),
+        passed=passed,
+    )
+    return passed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--diagnostic", choices=_DIAGNOSTIC_MODES, default="full")
@@ -708,6 +817,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if passed else 1
     if args.diagnostic == "attention":
         passed = _attention_diagnostic(mesh, stage, qb_betas, hiddens, batches)
+        faulthandler.cancel_dump_traceback_later()
+        return 0 if passed else 1
+    if args.diagnostic == "attention-pair":
+        passed = _attention_pair_diagnostic(mesh, stage, qb_betas, hiddens, batches)
         faulthandler.cancel_dump_traceback_later()
         return 0 if passed else 1
 
