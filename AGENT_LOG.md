@@ -1289,3 +1289,58 @@ quantizes weights as well as the wire (per-expert scalar scale); (c) loss-trajec
 remains the verdict.
 Confidence: 7/10 that the no-new-kernel route compiles to a real fp8 GEMM; 5/10 that it beats bf16 end to end.
 Next: repo survey of existing fp8/MXFP8 kernels is running; then a free EP4 HLO check of (a).
+
+## FINAL SCOPING (fp8 wire, round-7 direction) 2026-07-26 11:30 UTC — NO NEW KERNEL NEEDED, and the old -2.02pp is explained
+
+### Probe result (free 4-GPU job, operating-point GEMM shapes 131072 x 5120 @ 5120 x 2560)
+
+| variant | lowers to |
+|---|---|
+| bf16 baseline | `__cublas$lt$matmul` |
+| fp8 operands, no scales | **`__cublas$lt$matmul$f8`** |
+| fp8 operands, per-token scale on the GEMM **output** | **`__cublas$lt$matmul$f8`** |
+| fp8 operands, per-token scale on the GEMM **input** | `__cublas$lt$matmul` (falls back to bf16) |
+| e5m2 x e4m3 (backward wire dtypes) | **`__cublas$lt$matmul$f8`** |
+
+My first probe returned fp8_calls=0 everywhere and was WRONG — it quantized inline from bf16, so
+XLA fused the convert and the rewriter saw a fusion instead of `convert(f8)`. Feeding genuine fp8
+operands, which is what an fp8 wire actually delivers, flips it. Recording the mistake because the
+false negative would have killed the direction.
+
+### This explains the -2.02pp result mechanically
+
+`SCALE_A2A_FP8_WIRE` already exists on this branch (ep_ragged_all_to_all.py:33-94, :365-376) and
+**dequantizes back to bf16 immediately after the collective** (:70), so the GEMM still sees bf16.
+That configuration loses twice: it pays ~2.9 s of QDQ, and because the per-token scale is applied
+on the input side it could not have gotten an fp8 GEMM even if the dequant were free — row 4 above
+is exactly that shape. The fix is not a better wrapper, it is moving the scale to the other side
+of the dot.
+
+### The design, and why it needs no kernel work
+
+Row-linearity gives `scale_i * (a_i @ W) == (scale_i * a_i) @ W`. So: carry unscaled e4m3 over the
+wire with a per-token f32 scale beside it; feed the unscaled fp8 straight into the dot (matches the
+rewriter's no-scale operand form); quantize weights to e4m3 with a per-EXPERT scalar scale (scalar
+satisfies the rewriter, and weights are not token-indexed so the no-token-sharing invariant is
+untouched); apply the per-token scale to the GEMM OUTPUT, where it lands on `hidden` immediately
+before the existing SwiGLU `act(gate) * up` fusion and costs one broadcast multiply inside a
+fusion that already reads and writes that tensor. The combine leg is easier still: its fp8 values
+are produced by the second GEMM, and the dequant scale folds into the existing combine-weight
+einsum. Wire saving is the full ~2x on both permutation legs.
+
+### Effort estimate (asked for rather than started)
+
+Modification of existing code on this branch, NOT a new kernel: change the fp8-wire consumer to
+stop dequantizing at :70 and carry the scale; add per-expert scalar weight quantization; apply the
+scale after each GEMM; extend the existing structured custom adjoint to e5m2 cotangents. Estimate
+~1-2 days including parity tests and a loss-trajectory leg. The d2/d5 MXFP8 grouped kernels
+(cudnn-frontend CuTeDSL, block-scaled, fp8-in/bf16-out epilogue, wired into the same fixed-a2a
+path) are a DIFFERENT route, already measured at -2.83pp, and are not needed for this.
+
+### Fidelity notes that bind
+
+Quantize strictly after routing (the dispatch gather is the natural site, and it is where d1 showed
+cheap work rides). Per-token scaling on activations only. This route additionally quantizes
+WEIGHTS (per-expert scalar), which is a numerics change beyond wire-only and must be in the
+loss-parity verdict, not assumed away.
+Confidence: 9/10 that the fp8 GEMM lowers as probed; 6/10 that the full path clears +1pp e2e; 8/10 that no kernel work is required.
