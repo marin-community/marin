@@ -556,6 +556,11 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
     )
 
 
+def _chat_cache_key(spec: SFTSpec, tokenizer_key: str) -> str:
+    recipe = f"{_CHAT_CACHE_VERSION}|{tokenizer_key}|{spec.chat_template}|{spec.pack}"
+    return hashlib.md5(recipe.encode()).hexdigest()[:6]
+
+
 def _chat_mixture_data_config(
     spec: SFTSpec,
     cache_dirs: Sequence[str],
@@ -596,10 +601,12 @@ def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: s
     train time.
     """
 
+    cache_key = _chat_cache_key(spec, tokenizer)
+
     def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
         return DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
-            cache_dir=cache_dir,
+            cache_dir=prefix_join(prefix_join(cache_dir, "_chat_cache"), cache_key),
             format=fmt,
             split="train",
         )
@@ -680,7 +687,7 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
     identity forks on ``(tokenizer, chat_template, pack)`` via the name suffix, so two recipes never
     collide on the ``StepRunner``'s name@version key.
     """
-    key = hashlib.md5(f"{spec.model.tokenizer_cache_key()}|{spec.chat_template}|{spec.pack}".encode()).hexdigest()[:6]
+    key = _chat_cache_key(spec, spec.model.tokenizer_cache_key())
     name = f"tokenized/{dataset.slug}-chat-{key}"
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
