@@ -326,7 +326,6 @@ class ControllerDB:
         self._reopen_hooks.append(hook)
 
     def attach_task_event_table(self, table: Table) -> None:
-        """Attach the controller's task-action sink to write transactions."""
         self._task_event_table = table
 
     @property

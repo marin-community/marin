@@ -421,7 +421,6 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._db.attach_task_event_table(log_stack.task_event_table)
         # Projections self-register into ``self._db.caches`` on construction; every
         # cursor the DB mints reaches them as ``tx.caches[Projection]`` without any
         # threaded references.
