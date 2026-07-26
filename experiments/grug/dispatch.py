@@ -29,7 +29,8 @@ ConfigT = TypeVar("ConfigT")
 # XLA_ covers XLA_FLAGS and XLA_PYTHON_CLIENT_ALLOCATOR (cuda_async anti-fragmentation pool).
 # SCALE_ forwards experiment knobs read at trace time, including distributed
 # Newton-Schulz layout and fixed-capacity expert all-to-all settings.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_")
+# WANDB_ keeps tracker authentication and routing intact across the nested job.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_", "WANDB_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 _HYBRIDEP_SETUP_SCRIPT = r"""
