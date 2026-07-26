@@ -104,6 +104,7 @@ from iris.cluster.stats.tables import (
     IrisTaskStat,
     ProfileTrigger,
     TaskEventRow,
+    TaskEventSeverity,
     WorkerStatus,
     build_task_stat,
     stats_timestamp,
@@ -1479,7 +1480,7 @@ class _PodEvent:
     source: str
     reason: str
     message: str
-    severity: str
+    severity: TaskEventSeverity
 
 
 def _workload_admission_blocked(workload: dict | None) -> bool:
@@ -1513,7 +1514,7 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
             source=_EVENT_SOURCE_KUEUE,
             reason=disruption.get("reason", "") or _KUEUE_TERMINATION_TARGET_CONDITION,
             message=disruption.get("message", ""),
-            severity="Warning",
+            severity=TaskEventSeverity.WARNING,
         )
 
     pr = _pod_reason_message(pod, workload)
@@ -1531,7 +1532,8 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     warning = pr.reason in _WARNING_EVENT_REASONS or (
         source == _EVENT_SOURCE_KUEUE and _workload_admission_blocked(workload)
     )
-    return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity="Warning" if warning else "Normal")
+    severity = TaskEventSeverity.WARNING if warning else TaskEventSeverity.NORMAL
+    return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity=severity)
 
 
 def _build_pod_statuses(
@@ -2040,21 +2042,20 @@ class TaskEventLog:
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        # (task_id_wire, attempt_id, attempt_uid) -> last written verdict.
-        self._last_verdict: dict[tuple[str, int, str], tuple[str, str, str]] = {}
+        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
 
-    def observe(self, key: tuple[str, int, str], event: _PodEvent | None) -> None:
-        """Record ``event`` for the attempt ``key`` if its verdict has changed."""
+    def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
+        """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
         verdict = (event.source, event.reason, event.severity)
-        if self._last_verdict.get(key) == verdict:
+        if self._last_verdict.get(attempt) == verdict:
             return
-        self._last_verdict[key] = verdict
+        self._last_verdict[attempt] = verdict
         row = TaskEventRow(
-            task_id=key[0],
-            attempt_id=key[1],
-            attempt_uid=key[2],
+            task_id=attempt.task_id.to_wire(),
+            attempt_id=attempt.attempt_id,
+            attempt_uid=attempt.attempt_uid,
             ts=stats_timestamp(),
             type=event.severity,
             reason=event.reason,
@@ -2067,7 +2068,7 @@ class TaskEventLog:
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
 
-    def retain(self, active: set[tuple[str, int, str]]) -> None:
+    def retain(self, active: set[RunningTaskEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
         for key in list(self._last_verdict):
             if key not in active:
@@ -3117,7 +3118,6 @@ class K8sTaskProvider:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
-            event_key = (entry.task_id.to_wire(), entry.attempt_id, entry.attempt_uid)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1
@@ -3162,7 +3162,7 @@ class K8sTaskProvider:
                     node_name=pod.get("spec", {}).get("nodeName", "") or "",
                 )
             if event_log is not None:
-                event_log.observe(event_key, _pod_event(pod, workload))
+                event_log.observe(entry, _pod_event(pod, workload))
 
             updates.append(update)
 
@@ -3173,6 +3173,6 @@ class K8sTaskProvider:
         if periodic_profiler is not None:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
-            event_log.retain({(entry.task_id.to_wire(), entry.attempt_id, entry.attempt_uid) for entry in running})
+            event_log.retain(set(running))
 
         return updates

@@ -258,7 +258,7 @@ class TaskEventView:
 
 
 def build_task_event_display_rows(events: list[TaskEventView]) -> list[list[object]]:
-    """Build chronological table rows from typed task events."""
+    """Build table rows from typed task events."""
     return [
         [
             event.ts.as_formatted_date(),

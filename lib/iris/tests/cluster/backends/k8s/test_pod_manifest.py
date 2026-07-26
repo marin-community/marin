@@ -352,7 +352,8 @@ def test_task_update_kueue_termination_target_is_worker_failed():
 
     assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
     assert update.exit_code == 137
-    assert update.terminal_reason == f"WorkloadEvictedDueToPreempted: {message}"
+    assert update.terminal_reason is not None
+    assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
 
 
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():

@@ -14,6 +14,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
 )
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -70,7 +71,7 @@ def terminate_coscheduled_siblings(
                 ts=Timestamp.from_ms(now_ms),
                 reason=TaskActionReason.COSCHEDULED_SIBLING_TERMINATED,
                 message=error,
-                severity="Warning",
+                severity=TaskEventSeverity.WARNING,
             )
         )
 

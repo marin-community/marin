@@ -48,6 +48,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -86,7 +87,7 @@ def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now
                 ts=Timestamp.from_ms(now_ms),
                 reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
                 message=reason,
-                severity="Warning",
+                severity=TaskEventSeverity.WARNING,
             )
         )
 
@@ -332,12 +333,16 @@ class ReconcileState:
         if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
             reason = TaskActionReason.RETRY_SCHEDULED
             message = f"{message_prefix}; controller returned the task to PENDING."
-            severity = "Normal"
+            severity = TaskEventSeverity.NORMAL
         elif outcome.new_task_state in TERMINAL_TASK_STATES:
             reason = TaskActionReason.TERMINATED
             resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
             message = f"{message_prefix}; controller resolved the task as {resolved_state}."
-            severity = "Normal" if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED else "Warning"
+            severity = (
+                TaskEventSeverity.NORMAL
+                if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED
+                else TaskEventSeverity.WARNING
+            )
         else:
             return
         self.overlay.emit_task_event(

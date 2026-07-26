@@ -24,6 +24,7 @@ from enum import StrEnum
 
 from rigging.timing import Timestamp
 
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName, WorkerId
 
 # ---------------------------------------------------------------------------
@@ -132,7 +133,7 @@ class TaskActionEvent:
     ts: Timestamp
     reason: TaskActionReason
     message: str
-    severity: str = "Normal"
+    severity: TaskEventSeverity = TaskEventSeverity.NORMAL
 
 
 # ---------------------------------------------------------------------------

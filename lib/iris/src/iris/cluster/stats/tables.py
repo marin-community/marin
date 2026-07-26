@@ -44,6 +44,12 @@ PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
 
+
+class TaskEventSeverity(StrEnum):
+    NORMAL = "Normal"
+    WARNING = "Warning"
+
+
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
 # namespace at ~1 hour of history or 100 MiB, whichever fires first.
