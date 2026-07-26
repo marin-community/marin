@@ -1483,6 +1483,78 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T00:39:35Z — 70,486 pairs verified
+
+- Eighteen additional baseline checkpoints passed independent validation:
+  2,304 pairs, 1,528 model false positives, 774 model true duplicates, and two
+  unresolved outcomes. They contain 5,107 valid responses across 5,113
+  attempts; six invalid JSON responses were the three exhausted attempts for
+  each of two judgments. Six pairs were chunked and 2,298 were direct.
+- Complete line-by-line comparison resolves the cross-source Aristotle SFT
+  pair as a true duplicate. All 174 lines contain the same question, choices,
+  reasoning, and boxed answer B. The only changed spans remove `\text{` and its
+  closing `}` around B. Character similarity is 0.999575 and line similarity
+  is 0.994253. Pair location: `part-00066-of-00128.parquet:7279`;
+  member/canonical text SHA-256:
+  `abde68acc267def23217145d26e2b38981fdbda529aefd40e61a21e6fd8fc7f1` /
+  `6a2c7053436ddf2c7b4377fe87047bae130a2d6e3063222b8aa4df5629b3dcfa`.
+- Complete-text comparison resolves the career-spam pair as a false positive.
+  Within the shared scaffold, the 553-character member uniquely states that
+  medical engineers require a bioengineering or biology bachelor's degree
+  with surgical-technology and nursing electives. The 827-character canonical
+  instead gives a generic description of biomedicine and surgery, so deleting
+  the member loses a distinct career fact. Character similarity is 0.508696
+  and line similarity is zero. Pair location:
+  `part-00099-of-00128.parquet:4085`; member/canonical text SHA-256:
+  `a86cafc57f3d6344effe02650d5577215c04590431dc60285353ad8bf706a249` /
+  `4893ce3e5b496530e4b22e31e43f7505e575b1b5c377c62acb8ae20ccb5c1c4e`.
+- The exact semantic judgments have SHA-256 values
+  `4d6e5b9467ccc7e9e10750bc78546e59ea8f12b4ff6602d5684d27fc8e177073`
+  and
+  `a5d5e954983a64d8484ac2669ce2b7e618ebdbffeead77a1367a53f51ad50846`.
+  The two hash-bound manual records have Parquet SHA-256 values
+  `a8d46510336255d0e5dc98d04fd9d2167b7109c18f121ca8d69556431d3b5cdf`
+  and
+  `3377e0748bf64b4703b4d6e883a97814e7682b84f0a589ab46b6a2459fefc291`.
+  A separate read-only batch-priority Iris process reread and exactly checked
+  both source cases, semantic checkpoints, manual rows, Parquet bytes, and
+  completion markers.
+- The 18 outcome Parquet SHA-256 values are:
+
+  - p0 decision-file 3 offsets 3584 through 4224:
+    `1a7aa7ff6036dd62f5cdfe782a270e4bc6a6eb6bae43c1a460d4889da9630dc9`,
+    `bd52e49a8c084966fc597850478855f47380d582d7b4492dc7b4226c9e2525bc`,
+    `ea4f7e1cc2929184ce267d2297e39342b5bfb5388f81778469bfc45727546aa0`,
+    `665f17826c08d44e8ec8b74bb1c23a026806cb827b0c69ceec78ff30d77804fd`,
+    `d3752cbd128e41b7902a285ff5ffc8463a4407fae7ecd6fc582eddd4fcbbd303`,
+    and
+    `58eb6e505fc499040aea5cf6972f9d3595f066cedc18379de7fd07553e23f5a8`;
+  - p2 decision-file 66 offsets 3456 through 4096:
+    `f986b65ce4c9c559e21686431c83f881471306c5cfb26d864f170f662787dac5`,
+    `c50218afc78c524ab0a8e711aa716791822eef77f899730381ecfb8ee6047f99`,
+    `8677140d53af1bdcb86acc155d2a8fb43de6e790284bf6077ad9adbd4ba56b61`,
+    `c4beb4debc6553057d2e07d051ff3c7ec9ece6de2783f665bccef66878ed9216`,
+    `8c6df0bdb6d53ac3ea23a083ed93d5e169b16ac092d5f21348a9b9033e7f6061`,
+    and
+    `618976b69a3e23d0d536de54e7634e61d480c09dca713f6f27932b592ffed78b`;
+  - p3 decision-file 99 offsets 2048 through 2688:
+    `08dfd47a64a042e2d6c3728be2b1de5be07bc913a6bb8f9ac4a94239dc918e67`,
+    `1dce01cc2d6357fbeece487f44309a72fa785c15c948003e7ba8c832296637d7`,
+    `d5effda7a2115f5465e97117181c3ccbaf474f5d130450d670309a65250b0f42`,
+    `35909820dc1f726712b5d065c2b1bbe77ea2b20e3da6129db5bbe0c8097beb71`,
+    `88635a9200ad69d5f23d2dea731925e068e686b7f7607b0374b21a423eaf660b`,
+    and
+    `690aa7f68752b52bdd21b5e578978819ac633be66008b7605fa5caf8aa7731c7`.
+
+- Across the stable 553-checkpoint snapshot, all 68 manual records leave:
+
+  - baseline: 58,449 pairs, 37,047 false positives, 21,402 true duplicates;
+  - treatment: 12,037 pairs, 6,274 false positives, 5,763 true duplicates;
+  - combined: 70,486 pairs, 43,321 false positives, 27,165 true duplicates.
+
+- All four batch-priority 2-H100 workers continue serving requests. Their 12
+  root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T00:31:28Z — 68,182 pairs verified
 
 - Sixteen additional baseline checkpoints passed independent validation:
