@@ -297,6 +297,21 @@ def test_nested_moe_launcher_reference_attention_uses_causal_examples(monkeypatc
     assert config.mp == "params=float32,compute=float32,output=float32"
 
 
+def test_nested_moe_launcher_evaluates_untreated_control_subset(monkeypatch, tmp_path):
+    monkeypatch.setenv("NESTED_ARM", "large")
+    monkeypatch.setenv("NESTED_PHASE", "smoke")
+    monkeypatch.setenv("NESTED_EVAL_EXPERTS", "128")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+
+    assert config.model.num_experts == 256
+    assert config.model.nested_expert_count == 128
+    assert config.model.nested_batch_fraction == 0.0
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

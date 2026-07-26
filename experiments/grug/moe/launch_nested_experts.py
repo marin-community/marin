@@ -24,6 +24,7 @@ Optional overrides:
     NESTED_SEQUENCE_LENGTH  sequence length (default: 8192)
     NESTED_RUN_SUFFIX   optional retry suffix for output and W&B IDs
     NESTED_MP           jmp policy (default: bf16 compute)
+    NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
 """
 
 import dataclasses
@@ -150,6 +151,18 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         seq_len=sequence_length,
     )
     model = _arm_model(dataclasses.replace(base_model, capacity_factor=capacity_factor), arm)
+    eval_expert_count = os.environ.get("NESTED_EVAL_EXPERTS")
+    if eval_expert_count is not None:
+        if arm is not NestedArm.LARGE:
+            raise ValueError("NESTED_EVAL_EXPERTS is only supported for the untreated large control")
+        nested_expert_count = int(eval_expert_count)
+        if nested_expert_count <= 0 or nested_expert_count >= model.num_experts:
+            raise ValueError("NESTED_EVAL_EXPERTS must be positive and smaller than the full expert count")
+        model = dataclasses.replace(
+            model,
+            nested_expert_count=nested_expert_count,
+            nested_batch_fraction=0.0,
+        )
     nodes = env_int("NESTED_NODES", _DEFAULT_NODES)
     expert_axis = env_int("NESTED_EXPERT_AXIS", _DEFAULT_EXPERT_AXIS)
     batch_size = env_int("NESTED_BATCH", _DEFAULT_BATCH)
