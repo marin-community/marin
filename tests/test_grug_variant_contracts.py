@@ -265,6 +265,12 @@ def test_nested_moe_launcher_uses_fixed_shape_thd_segments(monkeypatch, tmp_path
     assert {component.pack for component in components} == {1}
 
 
+def test_nested_moe_launcher_accepts_reference_attention_fallback(monkeypatch):
+    monkeypatch.setenv("NESTED_ATTENTION", "reference")
+
+    assert launch_nested_experts._attention_implementation() == "reference"
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

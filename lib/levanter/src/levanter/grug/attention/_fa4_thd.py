@@ -40,6 +40,7 @@ _SM90_BACKWARD_NUM_THREADS = 384
 _SM90_BACKWARD_PDS_STAGE = 1
 _SM90_BACKWARD_SDP_SWAP_AB = True
 _SM90_BACKWARD_ATOM_LAYOUT_N_DKV = 2
+_DENSE_BACKWARD_SUBTILE_FACTOR = 2
 _HOPPER_ARCH_FAMILY = 9
 _BLACKWELL_ARCH_FAMILY = 10
 _BLACKWELL_NEXT_ARCH_FAMILY = 11
@@ -434,7 +435,7 @@ def _upstream_fa4_thd_backward_launcher(
             score_mod_bwd=None,
             mask_mod=None,
             has_aux_tensors=False,
-            subtile_factor=1,
+            subtile_factor=_DENSE_BACKWARD_SUBTILE_FACTOR,
         )
         cluster_size = 1
         use_2cta_instrs = False
@@ -456,7 +457,7 @@ def _upstream_fa4_thd_backward_launcher(
             score_mod_bwd=None,
             mask_mod=None,
             has_aux_tensors=False,
-            subtile_factor=1,
+            subtile_factor=_DENSE_BACKWARD_SUBTILE_FACTOR,
         )
         cluster_size = 2
         use_2cta_instrs = True

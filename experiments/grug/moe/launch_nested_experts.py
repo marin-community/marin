@@ -18,14 +18,17 @@ Optional overrides:
     NESTED_BATCH        global batch size (default: 256)
     NESTED_NODES        four-GPU GB200 nodes (default: 16)
     NESTED_EXPERT_AXIS  expert-parallel axis size (default: 64)
+    NESTED_ATTENTION    attention backend (default: gpu_fa4_thd)
 """
 
 import dataclasses
 import os
 from enum import StrEnum
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -59,6 +62,7 @@ _DEFAULT_BATCH = 256
 _SMOKE_STEPS = 20
 _OUTPUT_SUBDIR = "experiments/nested-moe"
 _SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
+_ATTENTION_IMPLEMENTATIONS = ("gpu_fa4_thd", "reference")
 
 
 class NestedArm(StrEnum):
@@ -84,9 +88,16 @@ def _required_env(key: str) -> str:
     return value
 
 
+def _attention_implementation() -> GrugAttentionImplementation:
+    value = os.environ.get("NESTED_ATTENTION", "gpu_fa4_thd")
+    if value not in _ATTENTION_IMPLEMENTATIONS:
+        raise ValueError(f"NESTED_ATTENTION must be one of {_ATTENTION_IMPLEMENTATIONS}")
+    return cast(GrugAttentionImplementation, value)
+
+
 def _arm_model(base_model: GrugModelConfig, arm: NestedArm) -> GrugModelConfig:
     common = dict(
-        attention_implementation="gpu_fa4_thd",
+        attention_implementation=_attention_implementation(),
         moe_implementation="ring",
         remat_mode="recompute_all",
     )
