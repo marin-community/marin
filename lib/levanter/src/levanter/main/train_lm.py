@@ -54,9 +54,7 @@ class TrainLmConfig:
     """if provided, this will override the model config in the config. if true, use the default hf checkpoint for this model class"""
     use_hf_model_config: bool = False  # if true, replace the model config with the hf config from the checkpoint
     pad_tokenizer_to_match_model: bool = False
-    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
-    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
-    pad their vocab to be divisible by 4 for TPU efficiency)."""
+    """If True, size the model vocabulary to include checkpoint-only padding rows."""
 
     # TODO: atm we don't support loading from a checkpoint that has a different tokenizer. this is a bit annoying
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
@@ -105,6 +103,15 @@ def _restore_lm_model_from_partial_checkpoint(
 ) -> LmHeadModel:
     checkpointed_trainables = trainables_only(checkpointed_model, trainable_filter)
     return eqx.combine(checkpointed_trainables, source_model)
+
+
+def _model_vocab_size(tokenizer, converter, pad_tokenizer_to_match_model: bool) -> int:
+    vocab_size = len(tokenizer)
+    if not pad_tokenizer_to_match_model:
+        return vocab_size
+    if converter is None:
+        raise ValueError("pad_tokenizer_to_match_model requires a Hugging Face-compatible model")
+    return max(vocab_size, converter.default_hf_config.vocab_size)
 
 
 def _load_lm_model_from_configured_source(
@@ -182,9 +189,6 @@ def main(config: TrainLmConfig):
         else:
             converter = converter.replaced(tokenizer=tokenizer)
 
-        if config.pad_tokenizer_to_match_model:
-            converter = converter.with_tokenizer_padded_to_match_model()
-
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
@@ -192,8 +196,6 @@ def main(config: TrainLmConfig):
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
-        if config.pad_tokenizer_to_match_model:
-            converter = converter.with_tokenizer_padded_to_match_model()
     else:
         converter = None
 
@@ -243,7 +245,7 @@ def main(config: TrainLmConfig):
         # to do partitioning, our dimensions have to be divisible by the size of the physical axes they're mapped to
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
-        vocab_size = len(tokenizer)
+        vocab_size = _model_vocab_size(tokenizer, converter, config.pad_tokenizer_to_match_model)
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")

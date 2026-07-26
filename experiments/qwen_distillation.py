@@ -10,6 +10,10 @@ Run a one-arm systems smoke before the screen:
 Launch the two-seed screen from ``cw-us-east-08a`` at batch priority:
 
     python -m experiments.qwen_distillation --version dev --stage screen --run --max-concurrent 18
+
+Retry only screen arms that failed before training:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-retry --run --max-concurrent 6
 """
 
 import math
@@ -109,6 +113,9 @@ class Arm(StrEnum):
     TAID = "QD-003"
     STRUCTURED = "QD-004"
     FOUR_B_TEACHER = "QD-005"
+
+
+SCREEN_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE, Arm.TAID)
 
 
 @dataclass(frozen=True)
@@ -225,7 +232,7 @@ def _trainer(
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=BATCH_SIZE,
-        per_device_parallelism=MICROBATCH_SIZE,
+        per_device_parallelism=-1 if arm == Arm.TAID else MICROBATCH_SIZE,
         num_train_steps=num_train_steps,
         steps_per_eval=eval_interval,
         max_eval_batches=16,
@@ -345,8 +352,9 @@ def build(stage: str) -> list[ArtifactStep]:
                 data=data,
             )
         ]
-    if stage == "screen":
+    if stage in ("screen", "screen-retry"):
         data = qwen_datakit_cache()
+        arms = Arm if stage == "screen" else SCREEN_RETRY_ARMS
         return [
             training_step(
                 arm,
@@ -355,14 +363,14 @@ def build(stage: str) -> list[ArtifactStep]:
                 label="screen",
                 data=data,
             )
-            for arm in Arm
+            for arm in arms
             for seed in SCREEN_SEEDS
         ]
     raise ValueError(f"Unsupported stage: {stage}")
 
 
 @click.command()
-@click.option("--stage", type=click.Choice(["data", "smoke", "screen"]), required=True)
+@click.option("--stage", type=click.Choice(["data", "smoke", "screen", "screen-retry"]), required=True)
 @build_options
 def main(stage: str):
     return build(stage)

@@ -125,3 +125,26 @@ hard-label controls as well, preserving a common evaluation implementation.
   smoke.
 - [ ] Inspect whether excluding frozen teacher leaves from the differentiated
   model reduces compiler memory further.
+
+## Screen startup failures
+
+The 18-cell screen launched as `/power/qwen-distill-screen-792acc`. Twelve
+online-distillation cells entered training. Six cells failed before step 0:
+
+- `QD-C0` and `QD-C2`, both seeds, passed a regional `s3://` tokenizer
+  directory through `as_hf_tokenizer()` while reconciling checkpoint-only
+  vocabulary padding rows. Hugging Face interpreted the path as a repository
+  ID.
+- `QD-003`, both seeds, rejected `microbatch_size=4`. TAID updates its
+  controller from the full training loss and explicitly requires an
+  unaccumulated batch.
+
+The standard trainer now sizes the model vocabulary from the checkpoint
+configuration without mutating or restaging the tokenizer. TAID alone uses a
+full batch; the other online objectives retain microbatches of four. A
+`screen-retry` stage selects only these six missing cells under artifact
+version `2026.07.26.9`.
+
+The local Weaver endpoint stopped responding while this recovery was being
+recorded. This does not affect Iris or the running jobs; status updates must be
+replayed when the endpoint returns.

@@ -220,3 +220,12 @@ Levanter has native Qwen3 configuration and Hugging Face checkpoint conversion i
 - Result: all 12 training steps and every evaluation completed. Validation NLL decreased monotonically at the observed points from `11.210` to `8.679`; the final checkpoint committed at step 11.
 - Interpretation: online Qwen3-32B-to-0.6B KL, model sharding, microbatch accumulation, held-out NLL, and checkpoint serialization are device-valid. Both hard-label controls now select the same materialized NLL implementation.
 - Next action: launch the 18 paired 100M-token screen runs at batch priority and monitor each arm through its first evaluation and terminal checkpoint.
+
+### 2026-07-26 18:04 - Screen startup recovery
+
+- Hypothesis: the six failures in the first screen are configuration-boundary failures and can be retried without invalidating the 12 cells already training.
+- Commit hash: pending snapshot.
+- Job: `/power/qwen-distill-screen-792acc` on `cw-us-east-08a`, batch priority.
+- Result: 12 online-distillation cells entered training. `QD-C0` and `QD-C2`, both seeds, failed before step 0 because checkpoint vocabulary padding attempted to convert a regional tokenizer directory back into a Hugging Face tokenizer. `QD-003`, both seeds, failed before step 0 because TAID rejects gradient accumulation.
+- Interpretation: size the standard model vocabulary from the checkpoint configuration without changing the tokenizer. Run TAID with a full batch so its controller receives one loss update per optimizer update. Keep microbatch size four for the other online objectives.
+- Next action: snapshot the fixes and launch the six-cell `screen-retry` stage at version `2026.07.26.9`; continue monitoring the original 12 cells.
