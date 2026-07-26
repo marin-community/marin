@@ -30,6 +30,8 @@ EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # must match the corpus's embedding spac
 SOURCES = ["github", "discord"]
 KINDS = ["issue", "pr", "comment", "message"]
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+OPENATHENA_USER_SUFFIX = "@openathena.ai"
+CLOUD_SQL_SERVICE_ACCOUNT_SUFFIX = ".iam"
 
 
 def db_user() -> str:
@@ -55,6 +57,17 @@ def db_user() -> str:
     if not email:
         raise SystemExit("your ADC identity exposes no email; set MARIN_DB_USER to your database username")
     return email
+
+
+def validate_db_user(user: str) -> str:
+    """Reject ADC identities that cannot inherit Echo's database grants."""
+    if user.endswith((OPENATHENA_USER_SUFFIX, CLOUD_SQL_SERVICE_ACCOUNT_SUFFIX)):
+        return user
+    raise SystemExit(
+        f"Echo resolved the database identity as {user!r}, which does not have access. "
+        "Run `gcloud auth application-default login` and select your @openathena.ai account. "
+        "Application Default Credentials are separate from the active `gcloud auth list` account."
+    )
 
 
 def escape_like(pattern: str) -> str:
@@ -177,7 +190,13 @@ def main() -> None:
     args = build_parser().parse_args()
     connector = Connector(quota_project=os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT"))
     try:
-        conn = connector.connect(INSTANCE, "pg8000", user=db_user(), enable_iam_auth=True, db=DATABASE)
+        conn = connector.connect(
+            INSTANCE,
+            "pg8000",
+            user=validate_db_user(db_user()),
+            enable_iam_auth=True,
+            db=DATABASE,
+        )
         try:
             args.func(conn.cursor(), args)
         finally:

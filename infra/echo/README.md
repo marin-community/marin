@@ -21,6 +21,10 @@ infra/echo/cli/search.py grep "ragged_all_to_all" --source discord
 infra/echo/cli/search.py show <id>
 ```
 
+Select your `@openathena.ai` account when `gcloud auth application-default login`
+opens the browser. ADC and the active `gcloud auth list` account are separate credential
+stores, so changing the active gcloud account does not replace existing ADC.
+
 `search` ranks by cosine distance; lower scores are closer. GitHub hits below about
 0.25 are usually on topic. `grep` is a case-insensitive literal substring scan, newest
 first. Discord results contain one message, so open the result URL when the surrounding
