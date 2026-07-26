@@ -85,10 +85,10 @@ them as infrastructure failures, and preserves the condition reason and message
 on the attempt and in `iris.task_event`.
 
 The reconcile effect contract in
-`lib/iris/src/iris/cluster/controller/reconcile/batches.py:322` now emits compact
+`lib/iris/src/iris/cluster/controller/reconcile/batches.py:323` now emits compact
 task actions for retry, coscheduled sibling cascade, and job finalization. The
 commit sink writes those actions to `iris.task_event` after the SQL transaction
-commits. The namespace retains up to seven days, and
+commits, including worker-reaping transactions. The namespace retains up to seven days, and
 `iris task events /user/job/0` queries all attempts in one chronological view.
 
 No data migration was required. Existing one-hour segments age out under the

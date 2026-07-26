@@ -241,11 +241,12 @@ def commit_effects(
     """Record a batch's ``effects`` within the caller's write transaction.
 
     Row deltas flush via bulk ``executemany`` statements (one per entity group).
-    Endpoint deletions write within the Tx. Audit log lines are deferred to
-    ``cur``'s post-commit hooks so a rolled-back transaction leaves no observable
-    trace. Health is NOT mutated here: ``effects.health.build_failed`` rides back
-    to the controller, which folds it (with the backend's transport-observed
-    events) through the single ``WorkerHealthTracker.apply`` site.
+    Endpoint deletions write within the Tx. Audit log lines and finelog task
+    actions are deferred to ``cur``'s post-commit hooks so a rolled-back
+    transaction leaves no observable trace. Health is NOT mutated here:
+    ``effects.health.build_failed`` rides back to the controller, which folds it
+    (with the backend's transport-observed events) through the single
+    ``WorkerHealthTracker.apply`` site.
 
     Attempt writes invalidate the derived-count cache through the cursor
     (``cur.caches[AttemptCountsProjection]``) — no cache reference is threaded here.

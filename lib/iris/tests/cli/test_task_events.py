@@ -3,7 +3,7 @@
 
 from datetime import UTC, datetime
 
-from iris.cli.task import build_task_events_sql, render_task_events_text
+from iris.cli.task import TaskEventView, build_task_event_display_rows, build_task_events_sql
 from iris.cluster.types import TaskAttempt
 
 
@@ -23,34 +23,45 @@ def test_build_task_events_sql_can_select_one_attempt():
     assert "attempt_id = 3" in sql
 
 
-def test_render_task_events_text_shows_backend_and_controller_actions():
-    text = render_task_events_text(
-        "/alice/job/0",
-        [
-            {
-                "attempt_id": 0,
-                "ts": datetime(2026, 7, 25, 21, 26, 47, tzinfo=UTC),
-                "type": "Warning",
-                "reason": "WorkloadEvictedDueToPreempted",
-                "message": "Preempted due to ClusterQueue prioritization",
-                "source": "k8s/kueue",
-                "count": 1,
-            },
-            {
-                "attempt_id": 0,
-                "ts": datetime(2026, 7, 25, 21, 27, 25, tzinfo=UTC),
-                "type": "Normal",
-                "reason": "TaskRetryScheduled",
-                "message": "Backend reported WORKER_FAILED; controller returned the task to PENDING.",
-                "source": "iris/controller",
-                "count": 1,
-            },
-        ],
-    )
+def test_build_task_event_display_rows_preserves_timeline_fields():
+    events = [
+        TaskEventView(
+            attempt_id=0,
+            ts=datetime(2026, 7, 25, 21, 26, 47, tzinfo=UTC),
+            event_type="Warning",
+            reason="WorkloadEvictedDueToPreempted",
+            message="Preempted due to ClusterQueue prioritization",
+            source="k8s/kueue",
+            count=1,
+        ),
+        TaskEventView(
+            attempt_id=0,
+            ts=datetime(2026, 7, 25, 21, 27, 25, tzinfo=UTC),
+            event_type="Normal",
+            reason="TaskRetryScheduled",
+            message="Backend reported WORKER_FAILED; controller returned the task to PENDING.",
+            source="iris/controller",
+            count=1,
+        ),
+    ]
 
-    assert "Task: /alice/job/0" in text
-    assert "2026-07-25 21:26:47" in text
-    assert "WorkloadEvictedDueToPreempted" in text
-    assert "TaskRetryScheduled" in text
-    assert "k8s/kueue" in text
-    assert "iris/controller" in text
+    assert build_task_event_display_rows(events) == [
+        [
+            "2026-07-25 21:26:47",
+            0,
+            "Warning",
+            "k8s/kueue",
+            "WorkloadEvictedDueToPreempted",
+            1,
+            "Preempted due to ClusterQueue prioritization",
+        ],
+        [
+            "2026-07-25 21:27:25",
+            0,
+            "Normal",
+            "iris/controller",
+            "TaskRetryScheduled",
+            1,
+            "Backend reported WORKER_FAILED; controller returned the task to PENDING.",
+        ],
+    ]

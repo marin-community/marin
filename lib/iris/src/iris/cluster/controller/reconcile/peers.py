@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.reconcile.effects import TaskActionEvent
+from iris.cluster.controller.reconcile.effects import TaskActionEvent, TaskActionReason
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.task import merge_task_termination
 from iris.cluster.controller.task_state import (
@@ -68,7 +68,7 @@ def terminate_coscheduled_siblings(
                 task_id=sib.task_id,
                 attempt_id=sib.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason="CoscheduledSiblingTerminated",
+                reason=TaskActionReason.COSCHEDULED_SIBLING_TERMINATED,
                 message=error,
                 severity="Warning",
             )
@@ -108,7 +108,7 @@ def requeue_coscheduled_siblings(
                 task_id=sib.task_id,
                 attempt_id=sib.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason="CoscheduledSiblingRequeued",
+                reason=TaskActionReason.COSCHEDULED_SIBLING_REQUEUED,
                 message=error,
             )
         )

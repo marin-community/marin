@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Kubernetes portion of the ``iris.task_event`` task-action timeline.
-every job". The k8s backend classifies a not-yet-running pod into a
-``(source, reason)`` verdict and appends a finelog row when that verdict
-changes, so the dashboard can render *why* a task is wedged in BUILDING
-(Kueue admission denial, image-pull failure) as a sequence, not a single
-opaque "Building 18m"."""
+"""Kubernetes backend events in the ``iris.task_event`` task-action timeline.
+
+The backend records changing scheduling, container, and terminal Kueue verdicts
+so the dashboard and CLI retain the cause after the Pod is gone.
+"""
 
 from iris.cluster.backends.k8s.tasks import (
     _EVENT_SOURCE_CONTAINER,

@@ -11,6 +11,8 @@ Usage:
 import contextlib
 import logging
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import click
@@ -20,6 +22,7 @@ from tabulate import tabulate
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
 from iris.cluster.types import TERMINAL_TASK_STATES, TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import format_resources, signal_name, task_state_friendly
@@ -203,39 +206,77 @@ def build_task_events_sql(target: TaskAttempt, limit: int) -> str:
         predicates.append(f"attempt_id = {target.attempt_id}")
     where = " AND ".join(predicates)
     return (
-        'SELECT attempt_id, ts, type, reason, message, source, count FROM "iris.task_event" '
+        f'SELECT attempt_id, ts, type, reason, message, source, count FROM "{TASK_EVENT_NAMESPACE}" '
         f"WHERE {where} ORDER BY ts ASC LIMIT {limit}"
     )
 
 
-def _format_event_timestamp(value: object) -> str:
-    if isinstance(value, datetime):
-        timestamp = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-        return timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    return str(value)
+@dataclass(frozen=True, slots=True)
+class TaskEventView:
+    """Typed task-event row returned by finelog."""
+
+    attempt_id: int
+    ts: datetime
+    event_type: str
+    reason: str
+    message: str
+    source: str
+    count: int
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> "TaskEventView":
+        attempt_id = row["attempt_id"]
+        ts = row["ts"]
+        event_type = row["type"]
+        reason = row["reason"]
+        message = row["message"]
+        source = row["source"]
+        count = row["count"]
+        if not isinstance(attempt_id, int) or not isinstance(count, int):
+            raise ValueError("finelog task event has a non-integer attempt_id or count")
+        if not isinstance(ts, datetime):
+            raise ValueError("finelog task event has a non-datetime timestamp")
+        strings = (event_type, reason, message, source)
+        if not all(isinstance(value, str) for value in strings):
+            raise ValueError("finelog task event has a non-string type, reason, message, or source")
+        return cls(
+            attempt_id=attempt_id,
+            ts=ts,
+            event_type=event_type,
+            reason=reason,
+            message=message,
+            source=source,
+            count=count,
+        )
 
 
-def render_task_events_text(task_id: str, rows: list[dict]) -> str:
+def build_task_event_display_rows(events: list[TaskEventView]) -> list[list[object]]:
+    """Build chronological table rows from typed task events."""
+    return [
+        [
+            (event.ts.replace(tzinfo=UTC) if event.ts.tzinfo is None else event.ts.astimezone(UTC)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            event.attempt_id,
+            event.event_type,
+            event.source,
+            event.reason,
+            event.count,
+            _truncate(event.message, 100),
+        ]
+        for event in events
+    ]
+
+
+def render_task_events_text(task_id: str, events: list[TaskEventView]) -> str:
     """Render finelog task-event rows as a chronological operator timeline."""
     lines = [f"Task: {task_id}", ""]
-    if not rows:
+    if not events:
         lines.append("No task events found.")
         return "\n".join(lines)
-    table_rows = [
-        [
-            _format_event_timestamp(row["ts"]),
-            row["attempt_id"],
-            row["type"],
-            row["source"],
-            row["reason"],
-            row["count"],
-            _truncate(str(row["message"]), 100),
-        ]
-        for row in rows
-    ]
     lines.append(
         tabulate(
-            table_rows,
+            build_task_event_display_rows(events),
             headers=["TIME (UTC)", "ATTEMPT", "TYPE", "SOURCE", "ACTION", "COUNT", "MESSAGE"],
             tablefmt="plain",
         )
@@ -290,8 +331,10 @@ def task_events(ctx, task_id: str, limit: int) -> None:
     interceptors = credentials.interceptors() if credentials is not None else ()
     log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
     with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
-        rows = log_client.query(build_task_events_sql(target, limit)).to_pylist()
-    click.echo(render_task_events_text(target.task_id.to_wire(), rows))
+        events = [
+            TaskEventView.from_row(row) for row in log_client.query(build_task_events_sql(target, limit)).to_pylist()
+        ]
+    click.echo(render_task_events_text(target.task_id.to_wire(), events))
 
 
 @task.command("exec")

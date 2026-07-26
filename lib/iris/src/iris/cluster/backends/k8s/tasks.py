@@ -1499,13 +1499,13 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
 
 
 def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
-    """The scheduling/admission event for a not-yet-running pod, or ``None`` when
-    the pod is running or otherwise has nothing to record.
+    """The current actionable backend event for a pod.
 
     ``source`` attributes the verdict to the layer that produced it (the task
     container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
-    actionable failure (image pull, config error) or a Kueue-declined admission,
-    Normal for a transient wait.
+    actionable failure (image pull, config error, Kueue eviction) or a
+    Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
+    running or otherwise quiet pod.
     """
     disruption = _infrastructure_failure_condition(pod)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:

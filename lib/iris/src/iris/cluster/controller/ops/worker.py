@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 
+from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 
@@ -114,6 +115,7 @@ def fail(
     worker_ids: list[str],
     reason: str,
     health: WorkerHealthTracker,
+    task_event_table: Table | None = None,
 ) -> WorkerFailureBatchResult:
     """Fail active workers in chunked write transactions.
 
@@ -170,6 +172,7 @@ def fail(
                 live_chunk,
                 health=health,
                 now=now,
+                task_event_table=task_event_table,
             )
             for worker_id, worker_address, _ in live_chunk:
                 if worker_address is not None:
@@ -184,6 +187,7 @@ def _apply_worker_failures_chunk(
     *,
     health: WorkerHealthTracker,
     now: Timestamp,
+    task_event_table: Table | None,
 ) -> None:
     """Glue: load the worker slice for ``failures``, run the worker-failure
     kernel, apply effects.
@@ -200,7 +204,7 @@ def _apply_worker_failures_chunk(
 
     # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    commit_effects(cur, effects)
+    commit_effects(cur, effects, task_event_table=task_event_table)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health)
 

@@ -21,7 +21,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.effects import ControllerEffects, TaskActionEvent
+from iris.cluster.controller.reconcile.effects import ControllerEffects, TaskActionEvent, TaskActionReason
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import stamp_backend
@@ -500,7 +500,7 @@ def test_controller_task_actions_write_to_finelog_after_commit(state):
         task_id=task_id,
         attempt_id=2,
         ts=Timestamp.from_ms(1_753_478_807_000),
-        reason="TaskRetryScheduled",
+        reason=TaskActionReason.RETRY_SCHEDULED,
         message="Backend reported WORKER_FAILED; controller returned the task to PENDING.",
     )
 

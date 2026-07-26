@@ -52,6 +52,7 @@ from iris.cluster.controller.schema import jobs_table, slices_table, task_attemp
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from iris.test_util import FakeStatsTable
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
@@ -2926,11 +2927,13 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     assert _query_task(state, tasks2[0].task_id).state == job_pb2.TASK_STATE_RUNNING
 
+    task_event_table = FakeStatsTable()
     result = ops.worker.fail(
         state._db,
         worker_ids=["w2"],
         reason="slice terminated",
         health=state._health,
+        task_event_table=task_event_table,
     )
 
     assert len(result.removed_workers) == 1
@@ -2943,6 +2946,9 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     assert _query_worker(state, w1) is not None
     assert _query_worker(state, w2) is None
+    task_event_rows = [row for write in task_event_table.writes for row in write]
+    assert [row.task_id for row in task_event_rows] == [tasks2[0].task_id.to_wire()]
+    assert task_event_rows[0].source == "iris/controller"
 
 
 def test_fail_workers_batch_skips_unknown(state):

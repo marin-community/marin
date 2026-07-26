@@ -1165,6 +1165,7 @@ class Controller:
             db=self._db,
             owns_scale_group=owns_scale_group,
             budget_defaults=self._config.user_budget_defaults,
+            task_event_table=self._log_stack.task_event_table,
         )
 
     def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:

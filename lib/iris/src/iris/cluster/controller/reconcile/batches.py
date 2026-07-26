@@ -35,6 +35,7 @@ from iris.cluster.controller.reconcile.effects import (
     JobRowDelta,
     LogEvent,
     TaskActionEvent,
+    TaskActionReason,
 )
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import (
@@ -83,7 +84,7 @@ def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now
                 task_id=row.task_id,
                 attempt_id=row.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason="JobFinalizedTaskKilled",
+                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
                 message=reason,
                 severity="Warning",
             )
@@ -319,6 +320,37 @@ class ReconcileState:
     # Two-pass contract (shared by every operation)
     # ------------------------------------------------------------------
 
+    def _emit_task_transition_action(
+        self,
+        outcome: task.TransitionOutcome,
+        *,
+        attempt_id: int,
+        message_prefix: str,
+        now_ms: int,
+    ) -> None:
+        """Record a retry or terminal decision for one state-changing outcome."""
+        if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
+            reason = TaskActionReason.RETRY_SCHEDULED
+            message = f"{message_prefix}; controller returned the task to PENDING."
+            severity = "Normal"
+        elif outcome.new_task_state in TERMINAL_TASK_STATES:
+            reason = TaskActionReason.TERMINATED
+            resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
+            message = f"{message_prefix}; controller resolved the task as {resolved_state}."
+            severity = "Warning"
+        else:
+            return
+        self.overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=outcome.task_id,
+                attempt_id=attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=reason,
+                message=message,
+                severity=severity,
+            )
+        )
+
     def _apply_update(self, update: TaskUpdate, now_ms: int, *, source: task.TransitionSource) -> None:
         """Apply pass for one worker/provider task update.
 
@@ -332,29 +364,13 @@ class ReconcileState:
         if outcome is None:
             return
         if outcome.new_task_state != outcome.prior_state:
-            if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
-                reported_state = job_pb2.TaskState.Name(update.new_state).removeprefix("TASK_STATE_")
-                self.overlay.emit_task_event(
-                    TaskActionEvent(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        ts=Timestamp.from_ms(now_ms),
-                        reason="TaskRetryScheduled",
-                        message=f"Backend reported {reported_state}; controller returned the task to PENDING.",
-                    )
-                )
-            elif outcome.new_task_state in TERMINAL_TASK_STATES:
-                resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
-                self.overlay.emit_task_event(
-                    TaskActionEvent(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        ts=Timestamp.from_ms(now_ms),
-                        reason="TaskTerminated",
-                        message=f"Backend update resolved the task as {resolved_state}.",
-                        severity="Warning",
-                    )
-                )
+            reported_state = job_pb2.TaskState.Name(update.new_state).removeprefix("TASK_STATE_")
+            self._emit_task_transition_action(
+                outcome,
+                attempt_id=update.attempt_id,
+                message_prefix=f"Backend reported {reported_state}",
+                now_ms=now_ms,
+            )
         _cascade_to_peers(self.overlay, outcome, now_ms)
         if outcome.new_task_state != outcome.prior_state:
             self._note(outcome.job_id)
@@ -369,24 +385,11 @@ class ReconcileState:
         """
         task_row = self._snapshot.tasks.get(outcome.task_id)
         if task_row is not None:
-            if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
-                reason = "TaskRetryScheduled"
-                message = f"{child_reason}; controller returned the task to PENDING."
-                severity = "Normal"
-            else:
-                reason = "TaskTerminated"
-                resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
-                message = f"{child_reason}; controller resolved the task as {resolved_state}."
-                severity = "Warning"
-            self.overlay.emit_task_event(
-                TaskActionEvent(
-                    task_id=outcome.task_id,
-                    attempt_id=task_row.current_attempt_id,
-                    ts=Timestamp.from_ms(now_ms),
-                    reason=reason,
-                    message=message,
-                    severity=severity,
-                )
+            self._emit_task_transition_action(
+                outcome,
+                attempt_id=task_row.current_attempt_id,
+                message_prefix=child_reason,
+                now_ms=now_ms,
             )
         _cascade_to_peers(self.overlay, outcome, now_ms)
         self._note(outcome.job_id)

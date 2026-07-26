@@ -20,6 +20,7 @@ I/O sink that drains a :class:`ControllerEffects` to SQL lives in
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from rigging.timing import Timestamp
 
@@ -112,6 +113,16 @@ class LogEvent:
     details: tuple[tuple[str, object], ...] = ()
 
 
+class TaskActionReason(StrEnum):
+    """Stable reason codes for controller-authored task events."""
+
+    RETRY_SCHEDULED = "TaskRetryScheduled"
+    TERMINATED = "TaskTerminated"
+    COSCHEDULED_SIBLING_TERMINATED = "CoscheduledSiblingTerminated"
+    COSCHEDULED_SIBLING_REQUEUED = "CoscheduledSiblingRequeued"
+    JOB_FINALIZED_TASK_KILLED = "JobFinalizedTaskKilled"
+
+
 @dataclass(frozen=True, slots=True)
 class TaskActionEvent:
     """A durable controller decision affecting one task attempt."""
@@ -119,7 +130,7 @@ class TaskActionEvent:
     task_id: JobName
     attempt_id: int
     ts: Timestamp
-    reason: str
+    reason: TaskActionReason
     message: str
     severity: str = "Normal"
 

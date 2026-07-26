@@ -183,6 +183,7 @@ def store_from_runtime(
         health=health,
         defaults=runtime.budget_defaults,
         autoscale=autoscale,
+        task_event_table=runtime.task_event_table,
     )
 
 
