@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The echo HTTP API: search the corpus and read/append the shared work log.
+"""Search the Echo corpus and read or append the shared work log over HTTP.
 
-A FastAPI service that encapsulates the `context-search` and `work-log` skills behind one
-OpenAPI-documented interface (see `/docs`). See infra/echo/README.md for how it is wired.
+See ``infra/echo/README.md`` for endpoints and access requirements.
 """
 
 import os
