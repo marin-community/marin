@@ -3094,6 +3094,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 _install_jaxpp_const_sharding_patch()
 
     explicit_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "explicit_mpmd"
+    automatic_mpmd = config.trainer.pipeline is not None and config.trainer.pipeline.implementation == "auto"
     if explicit_mpmd:
         if config.trainer.ema_beta is not None:
             raise ValueError("explicit_mpmd does not yet support EMA")
@@ -3256,7 +3257,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         if explicit_mpmd:
             pipeline_loop_step = 0
-        elif config.trainer.pipeline is not None:
+        elif automatic_mpmd:
             pipeline_loop_step = int(state.step)
         else:
             pipeline_loop_step = None
@@ -3442,10 +3443,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     else:
                         callback_state = state
                     if pipeline_loop_step is not None:
-                        callback_state = dataclasses.replace(
-                            callback_state,
-                            step=jnp.array(pipeline_loop_step, dtype=jnp.int32),
-                        )
+                        callback_step = jnp.array(pipeline_loop_step, dtype=jnp.int32)
+                        if automatic_mpmd:
+                            callback_state = dataclasses.replace(callback_state, step=callback_step, opt_state=())
+                        else:
+                            callback_state = dataclasses.replace(callback_state, step=callback_step)
                     state_callbacks.run(callback_state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
@@ -3483,7 +3485,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             else:
                 final_state = state
             if pipeline_loop_step is not None:
-                final_state = dataclasses.replace(final_state, step=jnp.array(pipeline_loop_step, dtype=jnp.int32))
+                final_step = jnp.array(pipeline_loop_step, dtype=jnp.int32)
+                if automatic_mpmd:
+                    final_state = dataclasses.replace(final_state, step=final_step, opt_state=())
+                else:
+                    final_state = dataclasses.replace(final_state, step=final_step)
             state_callbacks.run(final_state, loss=last_loss, step_duration=last_step_duration, force=True)
         if checkpointer is not None:
             checkpoint_step = pipeline_loop_step if pipeline_loop_step is not None else int(state.step)
