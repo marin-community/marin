@@ -1,63 +1,85 @@
 # Can one MoE pretraining run yield both a 300B and 700B model?
 
-Issue: [#652](https://github.com/marin-community/marin/issues/652)
-
 Experiment series: `NEST-MOE`
 
 Date: 2026-07-27
 
 ## Summary
 
-This study tests whether a large MoE can contain a useful smaller MoE without
-paying for a second training forward. The smaller model is a fixed,
-evenly-sharded subset of the routed expert bank. Some training sequences can
-route only to that subset; the remaining sequences use the full bank. A branch
-assignment is held fixed across every layer, so the restricted sequences
-follow exactly the trajectory available after extracting the smaller
-checkpoint.
+Yes, expert-bank nesting is a valid approach at proxy scale. It is not ready
+to add unchanged to a 300B–700B hero run.
 
-The experiment compares a conventional 256-expert model, a conventional
-128-expert model, and 256-expert models that restrict 25% or 50% of sequences
-to an extractable 128-expert subset. The four arms have identical dense
-backbones, data order, optimizer, active experts per token, training tokens,
-and hardware.
+We trained a 2.039B-parameter, 256-expert MoE while restricting 25% of
+sequences to a fixed, extractable 128-expert subset. The restriction is held
+constant through every layer. Restricted and unrestricted sequences share one
+forward, loss, and backward; there is no second small-model forward.
 
-<!-- NESTED_RESULTS_SUMMARY -->
+At 262.144M common training tokens:
 
-The scope of the conclusion matters. Expert-bank nesting changes total
-parameters and checkpoint memory. With the same expert width and top-k, it does
-not make the extracted model a 2.3× cheaper decoder. If the 300B and 700B
-choices differ mainly in routed-expert count, this experiment addresses the
-choice directly. If they differ in active width, depth, or top-k, a later
-MatFormer- or LayerSkip-style stage is required.
+- the full nested model finished at `6.15123` Paloma macro loss, `+0.00900`
+  behind the conventional E256 control and inside the preregistered `+0.010`
+  margin;
+- the extracted E128 model finished at `6.18123`, `-0.03237` better than the
+  independently trained E128 control, and won on all 16 Paloma domains;
+- median training throughput was `100.31%` of the E256 control;
+- core and outer assignment balance matched an untreated E256 expert bank;
+- a 10%-FLOP E128 cooldown improved the extracted model to `6.13423`, another
+  `-0.04700`, and finished `-0.07936` ahead of the standalone E128 control.
 
-## What the existing evidence says
+The 50%-restricted arm failed decisively. Its full-model loss was `+0.07298`
+behind the E256 control. Under balanced routing, restricted rows already fill
+the core bank's assignment share, forcing nearly every unrestricted assignment
+to the outer bank. This is too aggressive for the proxy.
 
-The strongest direct precedent is Google's MatFormer work. MatFormer jointly
-trains nested feed-forward widths and reported 582M–850M decoder submodels that
-matched or improved on independently trained counterparts. This is also a
-shipped result rather than only a paper result: Google says Gemma 3n trained
-the E2B model embedded inside E4B and released both extracted checkpoints.
-Gemma 3n can additionally compose intermediate models by slicing feed-forward
-widths and skipping layers.
+The primary full-model result is close to its threshold. A deterministic
+control repeat finished at `6.13964`, which changes the full-model difference
+to `+0.01159`. The small-model result is much stronger: evaluating the same
+fixed half of an untreated E256 control gives `6.27433`, so co-training
+improves that subset by `0.09311`. The correct decision is therefore
+to run a larger replication before using the method in the hero run.
 
-Meta's LayerSkip is the strongest depth-specific precedent. It applies
-increasing layer dropout and early-exit losses during training, producing
-usable intermediate exits and self-speculative decoding. It does not directly
-produce a conventional smaller standalone transformer, but it is a plausible
-second axis if expert-bank nesting succeeds.
+The economic result has two forms:
 
-NVIDIA's Flextron demonstrates a post-hoc fallback. It converts pretrained
-models to nested elastic networks using 7.63% of their original pretraining
-tokens. This is attractive if simultaneous nesting damages the large model,
-although it does not make a small checkpoint available during the original
-pretraining run.
+- without cooldown, one nested run produced both checkpoints for the same
+  analytic model FLOPs as the large model alone; training E256 and E128
+  independently would cost `1.9956×` as many analytic model FLOPs;
+- a 50-step direct cooldown adds `9.956%` analytic model FLOPs. The observed
+  proxy job cost was much worse, `+67.9%`, because compilation, checkpoint
+  loading, and five evaluations dominate a 50-step job.
+
+The unresolved production issue is routing capacity. All scientific arms used
+capacity factor 1.25. That gives a fair architecture comparison, but it does
+not prove that production nesting costs less than 10% if the large baseline
+can run at 1.0. With one expert per expert-parallel rank, a 25%-restricted
+branch can create `1.25×` mean load on core ranks before the router moves full
+rows outward. A production implementation needs collocated core and outer
+experts, a dropless or ragged dispatcher, or a measured method-specific
+capacity charge.
+
+## Prior evidence
+
+The strongest precedent is Google's MatFormer work. MatFormer jointly trains
+nested feed-forward widths and reports 582M–850M decoder submodels that match
+or improve on independently trained counterparts. This is also a deployed
+result: Google says Gemma 3n trained the E2B model embedded inside E4B and
+released both extracted checkpoints.
+
+Meta's LayerSkip is the strongest depth-specific result. Increasing layer
+dropout and early-exit losses produce usable intermediate exits and enable
+self-speculative decoding. It is relevant to active-compute reduction, though
+it does not directly produce an ordinary shallower checkpoint.
+
+NVIDIA's Flextron is the strongest post-hoc fallback. It converts pretrained
+models into nested elastic networks using 7.63% of their original pretraining
+tokens. This avoids risking the main pretraining run, but the small model is
+not available during that run.
 
 Google DeepMind's Mixture of Nested Experts demonstrates nested expert widths
 in vision and reports equivalent accuracy at more than 2× lower inference
-compute. Sparse upcycling demonstrates the reverse schedule: train a smaller
-dense model, then expand it to an MoE. Both support the mechanism, but neither
-is direct evidence for expert-subset nesting in a frontier language MoE.
+compute. Sparse upcycling demonstrates the reverse schedule: train the small
+model first, expand it into an MoE, then continue training. These support the
+mechanism and fallback schedule, not the expected effect size for a frontier
+language MoE.
 
 Primary sources:
 
@@ -68,300 +90,498 @@ Primary sources:
 - [Mixture of Nested Experts](https://deepmind.google/research/publications/108549/)
 - [Sparse Upcycling](https://arxiv.org/abs/2212.05055)
 
-These results support co-training as a research direction. They do not
-establish that a nested language MoE is free, that its outer experts
-automatically specialize in novel concepts, or that results transfer to
-300B–700B total parameters.
+Together, these results support nested training as a real architecture family.
+They do not establish that an expert-subset language model is free, that outer
+experts learn semantically novel concepts, or that a billion-parameter proxy
+transfers directly to 300B–700B.
 
-## Ranked follow-on architectures
+## Architecture
 
-The four-arm experiment isolates one axis. If it passes, the next tests should
-remain gated rather than becoming a combinatorial sweep.
+### Why a dense mask is not enough
 
-1. **MatFormer FFN-width nesting.** Statically slice the shared expert and each
-   routed expert to two intermediate widths. Sample one width per sequence or
-   microbatch and use a sandwich schedule that always includes the smallest
-   and largest variants over a short accumulation window. This can reduce
-   active FLOPs in the extracted model, unlike expert-count nesting. It also
-   changes every routed expert and is more invasive to optimized kernels.
-2. **Depth nesting.** Apply LayerSkip-style increasing layer dropout and losses
-   at fixed early exits. This offers a direct decoder-speed lever and can
-   support self-speculative decoding. A standalone breakout needs a fixed
-   retained-depth topology and an output head trained at that exit.
-3. **Small-first sparse upcycling.** Train the 300B model conventionally,
-   duplicate or perturb experts to create the 700B bank, then continue
-   training. This protects small-model quality and is the safest fallback if
-   simultaneous training undertrains the prefix or full model. It does not
-   provide the 700B checkpoint during the first stage.
-4. **Elastic active-expert count.** Alternate top-k values while sharing the
-   same bank. This directly changes active compute but changes routing
-   capacity, communication, and load-balancing behavior. It should be tested
-   only after fixed-top-k subset nesting is understood.
-5. **Post-hoc elastic conversion.** Use a Flextron-like recovery phase from a
-   completed large checkpoint. This is operationally attractive when the large
-   run cannot accept architectural risk, but its cost is paid after
-   pretraining.
+Multiplying a large dense matrix by a mask usually retains the large GEMM.
+More importantly, small and large models follow different hidden-state
+trajectories after their first differing layer. Computing exact losses for
+both models on the same examples normally requires two forwards.
 
-Dense width, depth, top-k, and expert-count nesting should not be composed in
-the first large run. Sampling axes independently can produce subnetworks that
-were rarely or never optimized together, while evaluating every combination
-would approach the cost of training multiple models.
+MoE routing gives a cheaper first experiment. Let the large bank contain
+\(E_L\) experts and the small bank be a fixed subset of \(E_S\). Each sequence
+receives one branch bit:
 
-## Why expert-bank nesting is the first test
+- `small`: router logits outside the fixed subset are ineligible in every
+  layer;
+- `full`: every expert remains eligible.
 
-A masked dense matrix is not automatically cheaper. Multiplying a full
-activation or weight by a mask retains the large GEMM unless the compiler
-lowers a static slice. More importantly, a small loss and a large loss follow
-different hidden-state trajectories after their first differing layer. Two
-exact losses therefore normally require two forwards.
+The bit is fixed across all tokens and layers in that sequence. Both branches
+retain top-4 routing. They occupy different rows in one batch, so the model
+executes one forward and one backward. The small rows follow exactly the path
+available after extracting the fixed subset.
 
-MoE routing offers a cheaper experiment. The full bank has \(E_L\) experts and
-the small bank is a fixed subset of \(E_S\) experts. For each packed sequence,
-we choose one branch:
+The subset contains even-numbered experts. In this proxy, every
+expert-parallel rank owns two core and two outer experts. A contiguous E128
+prefix would occupy only half of the 64 ranks and confound the architecture
+with placement and communication. Extraction gathers the even experts and
+compacts them into a conventional contiguous E128 checkpoint.
 
-- `small`: mask router logits outside the fixed subset at every layer;
-- `full`: leave all router logits eligible.
+This design is a stochastic multi-architecture objective, not two simultaneous
+losses on every sequence. Alternating entire small and full steps would
+optimize the same family but make throughput and optimizer-state behavior more
+dependent on the schedule.
 
-Small and full sequences share one batch, one forward, one loss, and one
-backward. Both branches keep top-4 routing, so active expert FLOPs per token
-remain approximately fixed. The treatment adds a router eligibility mask and
-branch-aware statistics, not a second model evaluation.
+### Variations
 
-The subset uses even-numbered experts. With four experts per
-expert-parallel rank, every rank owns two subset experts and two outer experts.
-A contiguous E128 prefix of an E256 bank would reside on only half of the
-64-way expert mesh and confound the model comparison with a communication
-artifact. Extraction gathers the even experts and compacts them into a
-contiguous E128 bank.
+| ID | Expert bank | Restricted sequences | Purpose |
+|---|---:|---:|---|
+| `NEST-MOE-001` | E256 | 0% | large control |
+| `NEST-MOE-002` | E128 | 0% | small control |
+| `NEST-MOE-003` | E256 with fixed E128 subset | 25% | primary arm |
+| `NEST-MOE-004` | E256 with fixed E128 subset | 50% | aggressive tradeoff |
+| subset diagnostic | untreated E256 | evaluation only | fixed-half counterfactual |
+| breakout | extracted E128 from `003` | direct E128 training | cooldown gate |
 
-This design can encourage the outer bank to cover residual demand because only
-full-branch sequences can reach it. Routing balance is evidence about
-utilization, not semantic specialization; held-out loss is required before
-making a capability claim.
+Randomly dropping half the experts was not tested because it does not define a
+stable breakout checkpoint. The fixed E128 subset is the MoE-specific version
+of "drop the second half of experts," corrected for expert-parallel placement.
 
-## Preregistered decision
+## Preregistered hypothesis and gates
 
-The primary hypothesis was fixed before the scientific runs:
+The primary hypothesis was frozen before the scientific runs:
 
 > At common training tokens, the 25%-restricted E256 model retains at least
 > 90% of E256-control throughput, finishes within +0.010 Paloma macro loss in
 > full mode, yields an extracted E128 model within +0.030 of the standalone
-> E128 control, and keeps core and outer assignment CV within +0.10 of the
-> E256 control.
+> E128 control, and keeps core and outer assignment CV within +0.10 of an
+> untreated E256 bank.
 
-The 50% arm tests the expected tradeoff: more training for the extracted model
-at greater risk to the full model. A result above 20% measured training
-overhead or a full-model loss gap above 0.02 rejects the method for the
-intended run. A result below 10% overhead that passes the loss gates promotes
-the method to a larger preregistered replication, not directly to the hero
-run.
+The complete preregistration and amendments are in
+[`2026-07-26_nested-model-training-preregistration.md`](https://github.com/marin-community/marin/blob/main/.agents/projects/2026-07-26_nested-model-training-preregistration.md).
 
-The complete preregistration, including retry rules and the breakout gate, is
-in
-[`2026-07-26_nested-model-training-preregistration.md`](../../.agents/projects/2026-07-26_nested-model-training-preregistration.md).
+| Gate | Question | Decision |
+|---|---|---|
+| 0 | Is masked E128 evaluation equivalent to compact extraction? | pass |
+| 1 | Do all four arms train, save, evaluate, and route stably for 20 steps? | pass at common capacity 1.25 |
+| 2 | Does either nested schedule pass the 500-step quality and throughput margins? | 25% pass; 50% reject |
+| 3 | Does up to 10% direct E128 cooldown recover the extracted model efficiently? | pass |
+| 4 | Do promoted checkpoints accept a common assistant-masked SFT recipe? | completed; see SFT section |
+
+Claude Fable reviewed the preregistration before the final analysis. Its main
+findings are retained as scale-up conditions:
+
+- common capacity 1.25 makes the proxy comparison valid but is not evidence of
+  less than 10% production overhead;
+- 50% restriction is structurally close to a degenerate routing schedule;
+- exact small-model trajectories require no assignment overflow;
+- the short proxy is intentionally undertrained;
+- a one-expert-per-rank production layout loses the proxy's capacity
+  neutrality.
 
 ## Experimental setup
 
-### Model
+### Model and training
 
 | Property | Value |
 |---|---:|
 | Hidden dimension | 768 |
 | Layers | 8 |
-| Attention heads | 6 |
-| KV heads | 1 |
+| Attention heads / KV heads | 6 / 1 |
 | Sequence length | 2,048 |
+| Global batch | 256 sequences |
+| Tokens per update | 524,288 |
+| Pretraining updates | 500 |
+| Pretraining tokens | 262,144,000 |
 | Routed expert intermediate dimension | 384 |
 | Shared expert intermediate dimension | 768 |
-| Routed experts selected per token | 4 |
-| Large routed experts | 256 |
-| Small routed experts | 128 |
-| Large total parameters | 2.039B |
-| Small total parameters | 1.133B |
+| Active routed experts per token | 4 |
+| Large / small routed experts | 256 / 128 |
+| Large / small total parameters | 2.039B / 1.133B |
+| Large / small analytic FLOPs per token | 357.728M / 356.155M |
+| Expert-parallel axis | 64 |
+| Dispatch capacity factor | 1.25 |
+| Precision | fp32 parameters and compute |
+| Hardware per arm | 64 NVIDIA GB200 GPUs |
 
-All arms use the same shared dense expert, attention, embeddings, hidden width,
-depth, expert width, and top-k. Routed experts use Marin's ring
-implementation, QB load balancing, sigmoid combine weights, and a 64-way
-expert axis.
+The four primary arms ran concurrently on 256 GB200 GPUs on
+`cw-us-east-08a`, submitted through the main Marin Iris controller at batch
+priority. Training used the pinned SlimPajama-6B cache and Llama 3.1 tokenizer.
+Validation used the pinned Paloma domain caches. All arms shared seed 0, data
+order, optimizer, shared expert, attention, embeddings, hidden width, depth,
+expert width, and top-k.
 
-### Data and optimization
+The SM100 FA4 backward kernel hung after successful forward execution in this
+environment. Every scientific arm therefore used Levanter reference attention.
+The initial bf16 reference runs were also numerically unstable, so all final
+arms used fp32. These changes were common to every architecture. Loss and
+relative proxy throughput remain comparable; absolute throughput is not a
+production FA4 estimate.
 
-Training uses the pinned SlimPajama-6B cache with the Llama 3.1 tokenizer.
-Validation uses the pinned Paloma domain caches. Every example is represented
-by the ordinary causal dataset path. The four arms use seed 0, the same
-block-shuffle configuration, the same optimizer heuristic, a global batch of
-1,024 sequences, and 2,097,152 tokens per optimizer step.
+No definitive run was lost to preemption. Earlier exit-137 and retry failures
+were treated as infrastructure events and produced no model-quality evidence.
+The stale JAX retry-coordinator failure and fix are recorded in
+[`2026-07-26-jax-retry-stale-coordinator.md`](https://github.com/marin-community/marin/blob/main/.agents/ops/2026-07-26-jax-retry-stale-coordinator.md).
 
-Each arm uses 16 four-GB200 nodes on `cw-us-east-08a`, or 64 GPUs. The runs
-were submitted through the main Marin Iris controller at batch priority and
-federated as whole jobs. The four arms ran concurrently:
+### Evaluation
 
-| ID | Routed experts | Restricted rows | Role |
-|---|---:|---:|---|
-| `NEST-MOE-001` | 256 | 0% | large control |
-| `NEST-MOE-002` | 128 | 0% | small control |
-| `NEST-MOE-003` | 256 | 25% | primary nested arm |
-| `NEST-MOE-004` | 256 | 50% | prefix-quality tradeoff |
+Paloma macro loss was evaluated at approximately 52.4M, 104.9M, 157.3M,
+209.7M, and 262.1M training tokens. Nested E256 checkpoints were evaluated
+twice: once with the full bank and once with every row restricted to the fixed
+E128 subset. Gate 0 tests established equivalence between masked evaluation
+and the compacted checkpoint when no routes overflow.
 
-### Attention backend amendment
+The primary endpoint is final Paloma macro loss at common tokens. Secondary
+checks are:
 
-The preregistered model treatments did not vary attention. Before the
-scientific run, the GB200 FA4/CuTe forward kernel compiled and returned finite
-output, but its backward kernel hung after device dispatch. Matching the
-upstream backward tiling did not resolve the hang. Iris reported zero
-preemptions and zero task failures while the process remained resident.
+- all 16 Paloma domain losses;
+- training loss trajectory;
+- median and mean tokens/s after step 5;
+- assignment overflow, routing entropy, assignment fraction, and core/outer
+  coefficient of variation;
+- successful child-task GPU-hours;
+- direct E128 cooldown at 2%, 4%, 6%, 8%, and 10% of the pretraining step
+  count.
 
-Every arm was therefore amended to Levanter's reference attention backend.
-The amendment was applied identically to every arm, so relative loss
-comparisons remain valid. Reference-attention wall time is not a production
-estimate for FA4, so the cost section separates analytic model FLOPs from
-backend-specific GPU-hours.
-
-The first reference run retained the fixed-shape `pack=1` representation that
-had been introduced for THD. It produced finite forward loss but nonfinite
-gradients in every architecture because padding query rows were fully masked.
-Reference runs were corrected to use ordinary causal examples; THD runs still
-require `pack=1`.
-
-The first d768 smoke then exposed two independent configuration faults before
-a usable checkpoint: its four-step schedule rounded the fractional warmup to
-zero, and nested rows propagated an infinite router sentinel through QB
-arithmetic. The final proxy uses a finite zero-probability router sentinel and
-five explicit warmup steps, matching 1% of the bounded 500-step schedule.
-
-Those corrections did not stabilize bf16 reference training: the E256 control
-and both nested arms still produced nonfinite gradients, and all validation
-losses were nonfinite. The final bounded feasibility gate therefore compares
-only E256 control and nested25 at batch 256 under full-fp32 compute. Production
-arms launch only if both produce three finite updates and finite Paloma loss.
-
-At d1280 and length 8,192, one reference-attention step took about 262 seconds.
-The four arms were therefore uniformly reduced to the d768, length-2,048 proxy
-above while preserving tokens per step. This amendment was made before any
-arm produced a usable parameter update. It keeps both controls in the
-billion-parameter range and makes a common loss trajectory possible within the
-deadline.
-
-The dependency and kernel investigation is recorded in
-[`2026-07-26-nested-moe-fa4-cute.md`](../../.agents/ops/2026-07-26-nested-moe-fa4-cute.md).
-
-## Evaluation
-
-The primary endpoint is Paloma macro validation loss at a common final token
-count. Each E256 checkpoint is evaluated in full mode and after compacting the
-fixed E128 subset. The standalone E128 control is evaluated once. Secondary
-metrics are training loss, validation loss, tokens/s, step time, GPU-hours,
-capacity overflow, routing entropy, core/outer assignment counts, assignment
-CV, and gradient norms.
-
-Comparisons are reported at equal tokens, analytic model FLOPs, GPU-hours, and
-wall time. There is one seed per arm. Paloma domain variation and consistency
-across checkpoints are used as uncertainty checks; tokens from one run are not
-treated as independent model replications.
-
-The 20-step gate requires three finite steady-state steps, capacity overflow at
-or below 1%, nested throughput at least 85% of the large control, and a
-successful checkpoint save. The final promotion threshold is stricter at 90%
-throughput.
+There is one seed per arm. Domain results are paired diagnostics, not
+independent model replications. The control repeat measures some
+run-to-run sensitivity but does not replace a second seed.
 
 ## Results
 
 ### Training loss
 
-<!-- NESTED_TRAINING_LOSS_FIGURE -->
+![Training cross-entropy for the four 500-step arms. The 25% arm tracks the
+E256 control; the 50% arm separates late in training.](assets/nested-model-training-pretraining-loss.png)
 
-### Held-out loss
+All four arms completed 500 finite updates and wrote checkpoints. The
+25%-restricted arm follows the E256 control closely throughout training. The
+50% arm separates progressively, which is also visible in every late Paloma
+checkpoint.
 
-<!-- NESTED_EVAL_RESULTS -->
+### Final validation and throughput
 
-### Routing and stability
+| Arm | Full Paloma | Extracted E128 Paloma | Δ full vs E256 | Δ extracted vs E128 | Median tokens/s | vs E256 |
+|---|---:|---:|---:|---:|---:|---:|
+| E256 control | 6.14223 | — | — | — | 2.476M | 100.00% |
+| E128 control | 6.21359 | — | — | — | 2.452M | 99.03% |
+| nested 25% | 6.15123 | 6.18123 | +0.00900 | -0.03237 | 2.484M | 100.31% |
+| nested 50% | 6.21521 | 6.20705 | +0.07298 | -0.00654 | 2.502M | 101.04% |
 
-<!-- NESTED_ROUTING_RESULTS -->
+The 25% arm passes every preregistered primary threshold against the original
+controls. Its full model is worse than the E256 control on 13 of 16 Paloma
+domains, with a mean domain delta of `+0.00900`. Its extracted E128 is better
+than the standalone E128 on all 16 domains, with domain deltas from `-0.08960`
+to `-0.01395`.
 
-### Throughput and cost
+The 50% arm is rejected. Equal or better throughput cannot compensate for a
+`+0.07298` full-model loss penalty.
 
-<!-- NESTED_COST_RESULTS -->
+![Paloma trajectories for the full models, extracted E128, standalone E128,
+and direct breakout cooldown.](assets/nested-model-training-paloma.png)
 
-The E256 control and both nested E256 arms have the same static model shape and
-the same four active routed experts per token. Their analytic model-FLOP ratio
-is therefore 1.000, excluding the negligible branch-mask bookkeeping. The
-scientific question is whether measured step time remains close to 1.000 and
-whether the shared optimization objective changes either checkpoint's loss.
+### Sensitivity and the untreated subset
 
-Training two independent models costs the sum of the E256 and E128 GPU-hours.
-Nested cost is the nested arm's GPU-hours plus any direct E128 breakout
-cooldown. The headline overhead is:
+The original E256 control repeat, augmented only with fixed-subset evaluation,
+finished at `6.13964` full-mode Paloma. Relative to this repeat, nested25 is
+`+0.01159`, missing the `+0.010` margin by `0.00159`. The preregistered
+comparison passes, but the threshold decision is not robust to control-run
+variation at this scale.
 
-\[
-\frac{\text{nested GPU-hours} + \text{breakout GPU-hours}}
-     {\text{large-control GPU-hours}} - 1.
-\]
+The same repeat's untreated fixed E128 half scores `6.27433`. The co-trained
+E128 subset scores `6.18123`, an improvement of `0.09311`, and wins on 15 of
+16 domains. This is the cleanest evidence that the nested objective improved
+the breakout checkpoint rather than merely selecting a naturally strong half
+of an ordinary E256 bank.
 
-Below 10% is viable if both loss gates pass. Between 10% and 20% needs a clear
-loss benefit. Above 20% does not promote, and 50% is economically close to
-training the smaller model separately.
+The result is asymmetric:
 
-## Breakout cooldown
+- the extracted-model benefit is large and consistent;
+- the full-model cost is small but close to the acceptance boundary.
 
-<!-- NESTED_BREAKOUT_RESULTS -->
+That is enough to establish viability, but not enough to select the method for
+a 300B–700B run without a larger replication.
 
-At any checkpoint, the even expert subset can be gathered into an E128
-checkpoint and continued with ordinary direct training. The preregistration
-allows up to 10% of Gate 2 per-arm FLOPs for this cooldown, with evaluations at
-2%, 5%, and 10%. Cooldown compute is charged to the nested method.
+### Routing, the 1% gate, and the original 5.93%
 
-## SFT and agentic transfer
+Assignment overflow is the fraction of top-4 token-to-expert assignments
+dropped because a rank's fixed dispatch buffer is full. It is not the
+percentage of experts that failed. If 5% of assignments overflow, as many as
+20% of tokens can lose one of their four expert contributions.
 
-<!-- NESTED_SFT_RESULTS -->
+Overflow is critical for three reasons:
 
-Marin contains instruction data and SFT pipelines, including WildChat,
-SmolTalk, OpenHermes, Tulu, and Nemotron-derived mixtures. This stage is
-conditional: it must use the same pinned mixture and common schedule for the
-large control, promoted full model, small control, and promoted extracted
-model. SFT loss and a fixed agentic/code smoke are transfer checks, not
-evidence of general agentic capability.
+1. dropped assignments change the architecture being trained;
+2. overloaded experts receive no gradient for those assignments;
+3. throughput can look artificially better because the kernel performs less
+   useful routed work.
 
-## Implications for a 300B–700B run
+The original capacity-1.0 nested canary ended at `5.93%` overflow. Its matched
+control failed before step 0 for an independent retry-coordinator bug, so that
+number could not be attributed to nesting. It was a routing-capacity
+observation, not evidence about the research hypothesis. The common
+capacity-1.25 rerun was therefore the correct discovery experiment.
 
-<!-- NESTED_SCALEUP_DECISION -->
+At capacity 1.25, all four 20-step Gate 1 arms ended below `0.1%` overflow. In
+the 500-step runs, mean overflow remained below 1% and every arm ended at zero:
 
-If the intended 300B and 700B models differ mainly in routed-expert count,
-expert-subset nesting is mechanically well matched to the decision:
+| Arm | Mean overflow | Maximum startup overflow | Terminal overflow |
+|---|---:|---:|---:|
+| E256 control | 0.623% | 3.431% | 0% |
+| E128 control | 0.707% | 3.973% | 0% |
+| nested 25% | 0.565% | 3.617% | 0% |
+| nested 50% | 0.384% | 2.546% | 0% |
 
-- it produces a fixed 300B-total checkpoint throughout pretraining;
-- it can use approximately the 700B model's active FLOPs rather than a second
-  300B forward;
-- an interleaved subset can preserve expert-parallel balance;
-- the extracted model reduces checkpoint and serving memory.
+The common control has the same transient behavior. The 5.93% canary was
+therefore primarily a fixed-capacity/cold-router inefficiency, not an
+architecture-specific finding. Correcting it does not contaminate the
+discovery question; it makes the comparison interpretable.
 
-The constraints are equally important:
+The final untreated control has core/outer assignment CVs of `0.1037` and
+`0.1012`. Nested25 has `0.1041` and `0.1005`, well inside the `+0.10` gate.
+Nested25 sends `49.32%` of all assignments to the core bank. Since 25% of rows
+are core-only, unrestricted rows send an inferred `32.43%` of assignments to
+core and `67.57%` to outer experts.
 
-- the extracted model is not 2.3× cheaper per token when top-k, expert width,
-  dense width, and depth are unchanged;
-- outer experts see only full-branch sequences and need routing/gradient
-  diagnostics at scale;
-- a proxy pass requires replication at a larger size and at least two seeds;
-- production overhead must be remeasured with a working FA4 backward kernel;
-- dense-width or depth nesting should be tested separately before composing
-  multiple elastic axes.
+This is almost exactly the balanced solution: the router uses the outer bank
+disproportionately for full rows. It supports the proposed residual-capacity
+mechanism. It does not show that the outer experts learned semantically novel
+concepts; that requires capability or domain specialization evaluation.
 
-A sensible scaled plan is to retain the 25% sequence schedule only if it passes
-both loss gates, repeat it at an intermediate size with the intended
-expert-parallel topology, and add a small number of fixed breakout checkpoints.
-Do not add simultaneous dense-width, depth, top-k, and expert-count nesting to
-the first hero run: the interaction would make a failure difficult to
-interpret.
+At 50% restriction, the restricted rows alone account for the core bank's
+balanced share. The final core assignment fraction is `50.03%`, implying that
+nearly all unrestricted assignments go to outer experts. This explains why
+the 50% schedule is structurally brittle and why it was rejected.
+
+### Breakout cooldown
+
+The fixed E128 subset was compacted from the nested25 step-500 checkpoint,
+loaded into a conventional E128 model with a fresh optimizer, and trained for
+50 more updates. The cooldown used 26.214M tokens and `9.956%` of the large
+pretraining run's analytic model FLOPs.
+
+| E128 cooldown updates | Added E128 tokens | Paloma macro loss |
+|---:|---:|---:|
+| 0 | 0 | 6.18123 |
+| 10 | 5.243M | 6.18579 |
+| 20 | 10.486M | 6.16572 |
+| 30 | 15.729M | 6.15394 |
+| 40 | 20.972M | 6.14163 |
+| 50 | 26.214M | 6.13423 |
+
+The small early regression is within the noise of a fresh optimizer and short
+evaluation interval. By 20 updates the model improves, and by 50 it is
+`0.04700` better than the extracted checkpoint, `0.07936` better than the
+standalone E128 control, and `0.00800` better than the original E256 control.
+
+Breakout works at an arbitrary checkpoint. A small model can ship immediately,
+or direct cooldown can start when its quality becomes the priority.
+
+### SFT and agentic transfer
+
+The promoted checkpoints were initialized into a common Grug chat-SFT
+pipeline:
+
+- WildChat 385.7k, revision `46a5bb5`;
+- Llama 3.1 instruct template;
+- assistant-token-only loss and packed 2,048-token sequences;
+- batch 256, eight updates, fresh optimizer, and identical data order;
+- E256 control, E128 control, nested25 full, and cooled-down breakout arms.
+
+The first matched execution exposed a pre-existing cache correctness bug:
+Levanter warned that tokenizer and chat-template metadata differed, but reused
+the old cache. Those loss values are excluded. The SFT launcher now isolates
+step-count chat caches by tokenizer, template, packing mode, and cache version.
+The corrected matched rerun is the source of the results below.
+
+<!-- SFT_RESULTS_START -->
+![Assistant-token loss for the four corrected WildChat SFT arms. The nested
+full model tracks the E256 control; the cooled breakout remains below the
+standalone E128 control.](assets/nested-model-training-sft-loss.png)
+
+| Initialization | Mean loss, updates 2–7 | Final loss | Mean overflow | Median tokens/s, updates 3–7 |
+|---|---:|---:|---:|---:|
+| E256 control | 7.08179 | 7.10610 | 12.815% | 2.575M |
+| E128 control | 7.15806 | 7.17838 | 11.060% | 2.556M |
+| nested25 full | 7.08169 | 7.10641 | 11.927% | 2.518M |
+| cooled E128 breakout | 7.03852 | 7.05814 | 10.794% | 2.552M |
+
+On the same six logged batches, nested25 full differs from the E256 control by
+`-0.00010` mean loss and `+0.00031` final loss. The cooled breakout is
+`-0.11954` below the standalone E128 mean and `-0.12024` below its final loss.
+Nested25 full retains `97.79%` of E256 median SFT throughput; breakout retains
+`99.85%` of E128 throughput. All four jobs completed and saved checkpoints
+without cache-metadata warnings.
+
+Overflow is high in every arm, between 10.8% and 12.8% on average. This is a
+cold-router response to the abrupt WildChat distribution shift, not evidence
+that SFT is loss-safe at capacity 1.25. It does not prevent the narrower Gate 4
+conclusion that the checkpoints load, optimize, and preserve their relative
+short-horizon loss behavior. A real post-training run needs a loss-safe
+dispatcher or more SFT routing headroom.
+<!-- SFT_RESULTS_END -->
+
+This stage is a transfer and trainability check. Eight updates of an
+undertrained billion-parameter proxy cannot support a meaningful claim about
+general agentic capability, so no agentic benchmark is reported.
+
+## Cost
+
+### Pretraining
+
+Successful child-task durations give the following charged GPU-hours:
+
+| Arm | GPU-hours | Ratio to E256 control | Analytic process-FLOP ratio |
+|---|---:|---:|---:|
+| E256 control | 7.011 | 1.000 | 1.0000 |
+| E128 control | 6.654 | 0.949 | 0.9956 |
+| nested 25% | 6.670 | 0.951 | 1.0000 |
+| nested 50% | 7.282 | 1.039 | 1.0000 |
+| E256 + independently trained E128 | 13.665 | 1.949 | 1.9956 |
+| nested25 + 50-step E128 cooldown | 11.774 | 1.679 | 1.0996 |
+
+The observed nested25 run is 4.9% cheaper than the E256 control. This is run
+variance, not a claim that the mask speeds training up. The defensible result
+is no measurable proxy overhead: both have the same shape, top-k, and analytic
+model FLOPs.
+
+The independent-model cost nearly doubles because E128 and E256 have almost
+the same active FLOPs. One nested run avoids that second forward. The
+50-step cooldown's observed `+67.9%` is not representative of a long run:
+compilation, checkpoint loading, and five full evaluations dominate its 245
+seconds of W&B runtime. If cooldown is appended in-process and amortized, its
+model-FLOP charge is `+9.956%`. That production wall-clock result has not yet
+been measured.
+
+The untreated-subset diagnostic and four matched SFT arms are research
+diagnostics, not part of the proposed pretraining method cost.
+
+### The capacity-factor caveat
+
+Capacity 1.25 allocates a 25% larger routed dispatch buffer. It was applied to
+every proxy arm, so the architecture throughput comparison is fair. It may
+still be a method-specific production cost.
+
+The proxy places two core and two outer experts on every rank. Core pressure
+and outer slack can cancel at the rank boundary. If the hero model uses one
+expert per rank, a 25%-restricted schedule sends `1.25×` mean load to a core
+rank before unrestricted routes rebalance outward. A fixed padded dispatcher
+may therefore need capacity factor 1.25 for nesting even if the ordinary model
+uses 1.0.
+
+A 25% routed-compute or communication tax would erase the desired less-than-10%
+economics. The next experiment must use the intended production sharding and
+compare each method at its lowest loss-safe capacity. Dropless/ragged dispatch,
+core-and-outer colocation, or explicit branch-balanced routing are viable
+solutions.
+
+## Viability at 300B–700B
+
+### What scales directly
+
+Expert-bank nesting is well matched when the 300B–700B difference is primarily
+stored routed experts:
+
+- it produces a fixed smaller checkpoint throughout pretraining;
+- it keeps approximately the large model's active FLOPs instead of adding a
+  second small-model forward;
+- the subset can be sharded evenly;
+- extraction reduces checkpoint and serving memory;
+- direct cooldown can start at any checkpoint.
+
+The proxy's E128 checkpoint has 55.5% of the E256 model's total parameters
+because the dense backbone is shared. A 300B/700B target is 42.9%, so the exact
+expert subset must be chosen after accounting for embeddings, attention,
+shared experts, and other fixed parameters. The sequence restriction fraction
+does not have to equal the parameter fraction; the proxy supports 25%, not
+50%.
+
+### What does not scale automatically
+
+Expert-count nesting is a parameter-footprint lever, not an inference-FLOP
+lever. The proxy E128 model uses 99.56% of E256 analytic FLOPs per token because
+top-k, expert width, dense width, and depth are unchanged. If the intended
+300B model must also decode much faster, expert-width, depth, or top-k nesting
+is required.
+
+The result also does not justify semantic-specialization claims. QB routing
+pushes unrestricted rows toward outer experts, but route counts only show
+residual utilization. Domain-specific routing, held-out capability deltas, or
+expert interventions are needed to show that the outer bank covers novel
+concepts.
+
+### Recommendation
+
+Do not add the current mechanism directly to the 300B–700B run. Promote one
+25%-restricted arm to an intermediate replication with:
+
+1. the intended expert-per-rank topology and production attention kernel;
+2. at least two seeds;
+3. a longer loss curve with enough tokens to separate a `0.01` effect;
+4. the large control, small control, nested25, and one routing-capacity
+   treatment—four complete arms, not a broad sweep;
+5. each arm's lowest loss-safe dispatch capacity;
+6. an appended in-process 10%-FLOP breakout cooldown;
+7. fixed checkpoints for SFT and downstream capability evaluation.
+
+Promote to the hero run only if the replicated full model is within `+0.01`,
+the extracted model is no worse than the standalone small control, and total
+measured overhead including capacity and cooldown is below 10%. A measured
+overhead near 50% is not interesting; it is too close to training the smaller
+model separately.
+
+## Next architecture arms
+
+The next ideas should remain gated and orthogonal:
+
+1. MatFormer expert-width nesting: slice the shared and routed FFNs at
+   static intermediate widths. This reduces active FLOPs and has the strongest
+   shipped frontier-lab precedent.
+2. LayerSkip-style depth nesting: train fixed early exits or retained-layer
+   topologies. This reduces decoder latency and can support self-speculation.
+3. Small-first sparse upcycling: train the small checkpoint conventionally,
+   expand or duplicate experts, then continue as the large MoE. This protects
+   small-model quality if simultaneous training remains too risky.
+4. Elastic top-k: alternate active-expert counts while sharing the bank.
+   This directly changes compute, but routing capacity and communication make
+   it a later experiment.
+5. Post-hoc elastic conversion: apply a Flextron-like cooldown to a
+   completed large model when the pretraining schedule cannot accept
+   architectural risk.
+
+Width, depth, top-k, and expert-count nesting should not be composed in the
+first scaled run. Sampling several axes independently creates submodels that
+were rarely optimized together and makes a failure difficult to interpret.
 
 ## Reproducibility
 
-The launcher is
-[`experiments/grug/moe/launch_nested_experts.py`](../../experiments/grug/moe/launch_nested_experts.py).
-The implementation and tests are linked from issue
-[#652](https://github.com/marin-community/marin/issues/652). W&B runs and exact
-Iris job identifiers are listed with the final tables.
+The implementation and launchers are:
 
-Claude Fable review was requested twice before launch. Both bounded local
-review processes remained alive without returning review content, and the Loom
-launch endpoint returned HTTP 405. No review findings were received; the
-interleaved-subset correction came from the subsequent code-grounded
-implementation review.
+- [`experiments/grug/moe/model.py`](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/model.py)
+- [`experiments/grug/moe/launch_nested_experts.py`](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/launch_nested_experts.py)
+- [`experiments/grug/moe/launch_nested_sft.py`](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/launch_nested_sft.py)
+- [`scripts/training/analyze_nested_moe.py`](https://github.com/marin-community/marin/blob/main/scripts/training/analyze_nested_moe.py)
+
+Machine-readable results:
+
+- [result JSON](assets/nested-model-training-results.json)
+- [summary CSV](assets/nested-model-training-summary.csv)
+
+Primary W&B runs:
+
+- [E256 control](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-001-full-d768-s2048-e256-cf125-r15)
+- [E128 control](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-002-full-d768-s2048-e128-cf125-r18)
+- [nested25](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-003-full-d768-s2048-e256-cf125-r17)
+- [nested50](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-004-full-d768-s2048-e256-cf125-r15)
+- [untreated-subset diagnostic](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-001-full-d768-s2048-e256-subset-eval-cf125-r19)
+- [E128 cooldown](https://wandb.ai/marin-community/marin_moe/runs/nest-moe-005-cooldown-d768-s2048-e128-cf125-r20)
+- [E256 control SFT](https://wandb.ai/marin-community/marin_moe_sft/runs/nest-moe-sft-large-d768-s2048-r23)
+- [E128 control SFT](https://wandb.ai/marin-community/marin_moe_sft/runs/nest-moe-sft-small-d768-s2048-r24)
+- [nested25 full SFT](https://wandb.ai/marin-community/marin_moe_sft/runs/nest-moe-sft-nested_full-d768-s2048-r24)
+- [cooled E128 breakout SFT](https://wandb.ai/marin-community/marin_moe_sft/runs/nest-moe-sft-breakout-d768-s2048-r24)
+
+Checkpoints:
+
+- nested25:
+  `s3://marin-us-east-02a/marin/experiments/nested-moe/nest-moe-003-full-d768-s2048-e256-cf125-r17/2026.07.27/checkpoints/step-500`
+- cooled E128:
+  `s3://marin-us-east-02a/marin/experiments/nested-moe/nest-moe-005-cooldown-d768-s2048-e128-cf125-r20/2026.07.27/checkpoints/step-50`
+
+The append-only task history is in
+[`652-nested-model-training.md`](https://github.com/marin-community/marin/blob/main/.agents/logbooks/652-nested-model-training.md).

@@ -1,6 +1,6 @@
 # Nested model training: research brief and preregistration
 
-Status: revision 2; Claude Fable review requested, no review content returned
+Status: revision 3; reviewed by Claude Fable
 
 Experiment series: `NEST-MOE`
 
@@ -426,9 +426,30 @@ The artifact was sent twice to `claude --model fable`: first with the relevant
 Grug files and then with an artifact-only bounded prompt. Both processes
 remained alive without returning review content and were stopped after bounded
 waits. An asynchronous Loom launch with the same Fable model returned HTTP 405.
-No review findings were received. The interleaved-subset correction above came
-from the subsequent code-grounded implementation review. This failed review
-lane is an operational limitation, not evidence that the plan passed review.
+After the Loom ACP connection was repaired, Claude Fable completed the
+code-grounded review and published Weaver artifact `review`. The review session
+was archived after the artifact was fetched.
+
+The reviewer agreed that changing capacity factor from 1.0 to 1.25 in every arm
+is a valid common-system amendment for this proxy layout. The review added
+three limits that constrain interpretation:
+
+- the proxy has two nested and two outer experts on every expert-parallel rank,
+  while a one-expert-per-rank production layout would require method-specific
+  capacity headroom of at least `1 + nested_batch_fraction`;
+- QB equal-count balancing deliberately redirects full-branch traffic toward
+  the outer bank, with a distortion that grows with the nested fraction and is
+  degenerate at 50%; loss from that arm tests this complete routing design, not
+  parameter sharing in isolation;
+- the fixed dispatch buffer makes capacity factor 1.25 approximately 25% more
+  routed-expert work than ideal capacity in every proxy arm. Equal E256
+  throughput does not establish less than 10% production overhead.
+
+The final report must also treat routing counts as pre-capacity intent, state
+that exact small trajectories hold only up to capacity contention, and limit
+scale-up claims because 262M tokens substantially undertrain a 2B-parameter
+proxy. These are review constraints, not post-hoc changes to the registered
+loss comparisons.
 
 ## Protocol amendments
 
@@ -449,13 +470,13 @@ ordinary causal example representation (`pack=None`). THD runs retain
 `pack=1`. A materialized-config regression test covers both branches.
 
 The d1280, length-8192 reference step measured about 262 seconds. It cannot
-produce a useful loss trajectory before the deadline. The corrected proxy is
-d768, 8 layers, length 2,048, global batch 1,024, and therefore the same
-2,097,152 tokens per step. Its E256 and E128 models remain approximately 2.0B
-and 1.1B parameters. Every scientific arm changes together. The common final
-step count will be frozen from the corrected four-step throughput smoke and
-cannot exceed 500 steps. This amendment trades proxy scale for completed
-four-arm evidence; it does not relax any relative-loss or overhead threshold.
+produce a useful loss trajectory before the deadline. The corrected shape is
+d768, 8 layers, and length 2,048. The later fp32 feasibility amendment fixes
+global batch 256, or 524,288 tokens per step. Its E256 and E128 models remain
+approximately 2.0B and 1.1B parameters. Every scientific arm changes together.
+The common final step count cannot exceed 500. This amendment trades proxy
+scale for completed four-arm evidence; it does not relax any relative-loss or
+overhead threshold.
 
 ### Finite router masking and proxy warmup
 
@@ -490,6 +511,27 @@ updates, a finite Paloma macro loss, capacity overflow at or below 1%, and a
 checkpoint. If either fails, Gate 1 closes as blocked and no production arms
 launch. If both pass, the four production arms use this policy and batch size,
 with a step count frozen before launch from the measured steady-state rate.
+
+### User-directed discovery continuation after capacity overflow
+
+The fp32 nested25 arm completed with finite gradients, a checkpoint, and a
+`+0.00298` full-versus-nested Paloma gap, but dropped 5.93% of routed
+assignments at capacity factor 1.0. Its E256 control failed during JAX gang
+bootstrap before step 0. The registered gate therefore did not pass, but it
+also did not produce a treatment-versus-control observation about overflow.
+
+After seeing this result, the user directed the study to continue toward the
+discovery objective rather than treat a common routing-system inefficiency as
+an architecture rejection. This is an outcome-aware protocol amendment. It
+does not retroactively pass the capacity-1.0 gate.
+
+Rerun all four arms for 20 updates with batch 256, full-fp32 compute, and
+capacity factor 1.25. The capacity change is identical across controls and
+treatments; model topology, data, optimizer, seed, expert-parallel geometry,
+and reference attention remain fixed. Interpret the result only if all four
+arms produce finite checkpoints and less than 1% assignment overflow.
+Throughput, loss, and routing comparisons then answer the original architecture
+question under a usable common routing system.
 
 ## Decision rules
 

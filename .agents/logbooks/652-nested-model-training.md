@@ -20,10 +20,13 @@ author: Marin research
 
 - Google Gemma 3n is a shipped dense-model precedent: E2B was optimized inside
   E4B using MatFormer.
-- The preregistered Marin test nests a fixed 128-expert prefix inside a
-  256-expert bank and assigns whole sequences to prefix or full routes.
-- Four arms compare conventional large, conventional small, 25%-prefix, and
-  50%-prefix training.
+- The Marin test nests a fixed, interleaved 128-expert subset inside a
+  256-expert bank and assigns whole sequences to subset or full routes.
+- A four-step fp32 nested25 canary was finite and showed a `+0.00298`
+  full-versus-nested Paloma gap, but capacity factor 1.0 dropped 5.93% of
+  assignments and the control did not reach step 0.
+- A user-directed discovery rerun compares all four architectures for 20 fp32
+  updates at common capacity factor 1.25.
 
 ## Hypothesis queue
 
@@ -37,7 +40,8 @@ author: Marin research
 
 ### Blocked
 
-- None.
+- Production FA4 throughput measurement: the SM100 backward canary dispatches
+  but does not return.
 
 ### Falsified / dead end
 
@@ -330,3 +334,169 @@ author: Marin research
   compute. Both require three finite updates, finite Paloma, overflow at or
   below 1%, and a saved checkpoint. Failure of either closes Gate 1 without
   production launches.
+
+### 2026-07-26 21:59 - Common-capacity discovery rerun
+
+- Result: the fp32 nested25 canary completed four finite updates, saved a
+  checkpoint, and reached Paloma macro loss 11.71754 in full mode and 11.72052
+  in nested mode. Assignment overflow was 9.84%, 4.33%, 5.37%, and 5.93%
+  across the four updates. The matched control exhausted four JAX
+  gang-incarnation attempts before step 0 and was stopped.
+- Interpretation: capacity factor 1.0 is not a usable comparison vehicle, but
+  the run did not establish that nesting caused the overflow. The user
+  directed the study to fix the common routing inefficiency and continue the
+  architecture comparison.
+- Change: expose `capacity_factor` in `GrugModelConfig` and the nested launcher.
+  Seven focused contracts and the required pre-commit entry point passed.
+  Commit `c7bad5119a` contains the routing-only change.
+- Jobs: submit E256, E128, nested25, and nested50 together for 20 updates,
+  batch 256, full fp32, capacity factor 1.25, on 64 GB200s each. The run suffix
+  is `cf125-r13`.
+- Next action: require finite checkpoints and less than 1% overflow from all
+  four arms, then compare matched loss, throughput, routing balance, and cost.
+
+### 2026-07-26 22:22 - Gate 2 nested50 rejection and retry recovery
+
+- Gate 1 result: E256 control, nested25, and nested50 completed 20 finite
+  updates. Terminal Paloma was 11.24659, 11.24700, and 11.25210. Terminal
+  overflow was 0.072%, 0.044%, and 0%; median steady throughput was 2.496M,
+  2.536M, and 2.530M tokens/s. Both nested arms passed the feasibility and
+  throughput gates. The E128 control remained blocked by JAX gang retries.
+- Gate 2 result: the E256 control and nested50 completed 500 matched updates,
+  262.144M tokens each. Terminal full-mode Paloma was 6.14223 and 6.21521;
+  nested50's nested-mode Paloma was 6.20705. The +0.07298 full-mode and
+  +0.06482 nested-mode penalties exceed the preregistered +0.02 rejection
+  boundary. The 50% schedule is rejected at this proxy scale.
+- Routing interpretation: capacity factor 1.25 removed terminal overflow, but
+  the E256 control itself had transient overflow during early optimization.
+  Overflow is therefore a common router/capacity dynamic rather than evidence
+  that nesting alone caused the original 5.93% observation.
+- Infrastructure diagnosis: r16 workers restarted at attempt 1 and split
+  between task 0's stale attempt-0 and current attempt-1 coordinator
+  addresses. Commit `b9029615fa` scopes JAX coordinator endpoint names by
+  nonzero gang attempt; 31 focused tests and pre-commit passed. The incident is
+  recorded in
+  `.agents/ops/2026-07-26-jax-retry-stale-coordinator.md`.
+- Jobs: E128 Gate 1 and nested25 Gate 2 were relaunched at batch priority as
+  `cf125-r17`.
+- Review blocker: Claude Fable launch/poll still returns Loom ACP HTTP 403.
+- Next action: finish nested25 Gate 2, then run the E128 matched-token baseline
+  if Gate 1 succeeds. Promote only arms that satisfy the loss boundary; do not
+  spend the remaining window on rejected nested50 follow-ups.
+
+### 2026-07-26 22:36 - Gate 2 selects nested25
+
+- Result: the corrected nested25 run completed 500 updates and 262.144M
+  training tokens. Final Paloma macro loss was `6.15123` in full E256 mode and
+  `6.18123` in fixed E128 mode. The preregistered E256 control was `6.14223`;
+  the full-model delta is `+0.00900`, inside the `+0.010` gate.
+- Result: the standalone E128 control completed after attempt-scoped JAX
+  coordination fixed the retry fault. Its final Paloma macro loss was
+  `6.21359`; the extracted-model delta is `-0.03237`, better than the
+  preregistered `+0.030` threshold and better on all 16 Paloma domains.
+- Throughput: nested25 median steady throughput was 2.484M tokens/s, `100.31%`
+  of the E256 control. Mean assignment overflow was `0.565%`, with zero
+  terminal overflow.
+- Decision: nested25 passes Gate 2. Nested50 remains rejected.
+
+### 2026-07-26 22:40 - Untreated fixed-subset diagnostic
+
+- Result: an E256 control repeat with the fixed even E128 subset exposed only
+  at evaluation finished at `6.13964` full-mode and `6.27433` subset-mode
+  Paloma.
+- Sensitivity: nested25 is `+0.01159` behind this repeated full control,
+  missing the `+0.010` margin by `0.00159`. The primary registered comparison
+  passes, but its binary threshold is sensitive to one-run control variation.
+- Architecture evidence: the trained nested E128 is `-0.09311` better than the
+  untreated fixed half and wins on 15 of 16 domains. Its benefit is not
+  explained by selecting a naturally strong half of the expert bank.
+- Routing: untreated core/outer assignment CV was `0.1037`/`0.1012`;
+  nested25 was `0.1041`/`0.1005`. Nested25 sent `49.32%` of assignments to the
+  core bank. After subtracting the 25% core-only rows, full rows sent an
+  inferred `32.43%` core and `67.57%` outer, consistent with QB-driven
+  residual allocation.
+
+### 2026-07-26 22:46 - Gate 3 breakout cooldown passes
+
+- Result: the fixed even E128 subset was compacted from nested25 step 500,
+  loaded with a fresh optimizer, and trained directly for 50 E128 updates.
+  Paloma at 10/20/30/40/50 updates was
+  `6.18579`/`6.16572`/`6.15394`/`6.14163`/`6.13423`.
+- Decision: Gate 3 passes. The final checkpoint is `-0.04700` better than the
+  extracted start and `-0.07936` better than the independently trained E128.
+  The cooldown adds `9.956%` analytic model FLOPs to the E256 pretraining run.
+- Cost caveat: the isolated 50-step job adds 5.104 charged GPU-hours, making
+  nested plus cooldown `+67.9%` versus the E256 proxy. Compilation, checkpoint
+  loading, and five evaluations dominate this short job; an in-process
+  appended cooldown is required to validate the analytic 10% wall-clock
+  estimate.
+
+### 2026-07-26 22:49 - Claude Fable review recovered
+
+- Result: the Loom ACP connection recovered. Review artifact
+  `review` was fetched from Fable session `fdjx43mm`; its child Weaver issue
+  `#659` and the Fable session were closed.
+- Incorporated findings: common capacity 1.25 is a valid proxy comparison but
+  is not production overhead evidence; 50% restriction is routing-degenerate;
+  exact extraction assumes no overflow; the proxy is undertrained; and a
+  one-expert-per-rank production layout may require capacity at least
+  `1 + restricted_fraction` before route rebalancing.
+- Decision: retain the positive discovery result while requiring production
+  sharding and capacity accounting in the next scale gate.
+
+### 2026-07-26 23:02 - SFT cache collision invalidates the first transfer loss
+
+- Result: four matched eight-step SFT jobs completed from the E256 control,
+  E128 control, nested25 full checkpoint, and cooled E128 breakout. A provenance
+  check found that Levanter logged tokenizer and chat-template metadata
+  mismatches but loaded an existing cache anyway.
+- Interpretation: checkpoint loading and trainability succeeded, but the r21
+  loss values are not valid evidence for the intended Llama 3.1 instruct,
+  assistant-only WildChat recipe. Pretraining, routing, extraction, and
+  cooldown findings are unaffected.
+- Change: step-count SFT cache paths now include cache version, tokenizer,
+  template, and packing identity. Fifteen focused SFT tests, Pyrefly, and
+  pre-commit passed. Commit `ecead81e68`.
+- Next action: build the isolated cache once, rerun the four eight-step SFT
+  arms as `r22`, and exclude every `r21` loss value from the report.
+
+### 2026-07-26 23:15 - WildChat null tool-call compatibility
+
+- Result: two recipe-isolated cache coordinators exited 137 before all workers
+  registered and were classified as preemptions. A later attempt reached all
+  five shards and deterministically failed while rendering the Llama 3
+  trainable template.
+- Diagnosis: canonical WildChat messages carry `"tool_calls": null`. The
+  template tested only for key presence, then evaluated `len(None)`. It also
+  would have omitted a null-bearing ordinary message from the rendered
+  conversation.
+- Change: the template now distinguishes nonempty tool-call lists from null or
+  absent values. A regression applies the real tokenizer and template to user
+  and assistant messages with null tool calls and verifies the supervised
+  assistant span. Pytest, Pyrefly, and pre-commit passed. Commit `540d07e2c9`.
+- Cache identity: the template change moves the corrected recipe from key
+  `216d2f` to `0b14cd`, so no partial shard from the failed build can be reused.
+- Next action: run the large-control SFT arm as `r23` to materialize the shared
+  corrected cache, then launch the other three matched arms.
+
+### 2026-07-26 23:30 - Corrected SFT transfer gate completes
+
+- Result: the large control built recipe-isolated WildChat cache `0b14cd`,
+  loaded it without a metadata warning, trained for eight updates, and saved a
+  checkpoint. Three coordinators launched before its final consolidation was
+  visible and entered redundant cache builds. They were stopped before
+  concurrent materialized-cache copies and excluded from analysis.
+- Result: fresh `r24` small-control, nested-full, and breakout jobs loaded the
+  completed cache directly. All three completed eight updates and saved
+  checkpoints. The large-control run remains `r23`.
+- Loss: mean assistant-token loss over updates 2–7 was `7.08179` for E256,
+  `7.15806` for E128, `7.08169` for nested25 full, and `7.03852` for the cooled
+  breakout. Nested25 full differs from E256 by `-0.00010`; breakout differs
+  from E128 by `-0.11954`.
+- Routing: mean assignment overflow was `12.815%`, `11.060%`, `11.927%`, and
+  `10.794%`, respectively. Gate 4 establishes loadability and short-horizon
+  trainability only; it does not establish loss-safe post-training or agentic
+  capability under this cold-router distribution shift.
+- Verification: the changed-file pre-commit suite passed. Repository-wide
+  pytest collection is blocked by the existing Flax/JAX environment mismatch:
+  installed Flax references `jax.core.Effect`, which JAX 0.11 removed.
