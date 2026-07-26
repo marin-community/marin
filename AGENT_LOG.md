@@ -387,3 +387,49 @@ Fixes by class:
 optimizer state — ~162 GiB at d6144 4-of-256 — so roughly 800 GB per node sits idle while the container
 hits a cap it did not choose. Any workload combining `SCALE_OFFLOAD_OPT_STATE=1` with this model scale
 will hit it. Now overridable via `SCALE_RAM` (default unchanged at 256g).
+
+## Check-in 12 — CORRECTION to every modelled spill number, and a sharper finding falls out
+
+d1 recovered true tail-100 statistics (the iris log default truncates at 1000 lines, which had been
+biasing every "steady state" number low) and its live spill measurements moved: m=2 from 3.7% to
+4.14%, m=3 to 3.66%, with the no-spill baseline still 7.30%. So my "within 0.3pp out-of-sample
+validation" was measured against a biased number and must be withdrawn in that form: against the true
+4.14%, my model's 3.44% is 0.70pp optimistic, i.e. ~17% relative. The model over-predicts how much
+spill reclaims, which makes mechanical sense — an idealized model overestimates how many free buckets
+later attempts find, because a token's alternative experts are correlated with its first choice.
+
+CORRECTION FACTORS, derived self-consistently against MY model on the proxy shape (this differs from
+the 1.36 / 1.54 quoted to me, which were derived against d1's own more-optimistic model; correcting my
+numbers requires my model's error, and I note the discrepancy rather than adopt a factor whose baseline
+is not mine — under the larger factors every conclusion below only gets stronger):
+
+    m=2: measured 4.14% / my model 3.44% = x1.204
+    m=3: measured 3.66% / my model 2.73% = x1.338
+    the factor grows with m by about +0.134 per attempt, consistent with the correlation mechanism.
+
+CORRECTED projection against the 3% bar at cf1.0:
+
+| shape | m_max | model m=2 | corrected | model m=3 | corrected | verdict |
+|---|---|---|---|---|---|---|
+| d5120 proxy 256/top-8 | 7 | 3.44% | 4.14% | 2.73% | **3.66%** | fails at m=3, but has budget left |
+| cand A d6144 256/top-4 | 3 | 3.58% | 4.31% | 2.88% | **3.86%** | fails, and SATURATED |
+| cand B d6144 128/top-4 | 3 | 3.11% | 3.74% | 2.55% | **3.42%** | fails, and SATURATED |
+
+THE SHARPER FINDING, and it is now MEASURED rather than asserted: top-k IS the spill recovery budget.
+Running the shipping kernel out to m=7 shows the top-4 shapes stop improving at m=3 exactly —
+
+    cand A: m3 2.88% | m4 2.88% | m5 2.88% | m6 2.88% | m7 2.88%   (saturated)
+    proxy:  m3 2.73% | m4 2.28% | m5 1.97% | m6 1.75% | m7 1.57%   (still improving)
+
+because an assignment can only be re-offered to experts the token itself selected, so top-4 leaves at
+most 3 alternatives. CONSEQUENCE FOR THE RUN DECISION: neither top-4 candidate can reach a 3% drop bar
+by spill alone at cf1.0, and unlike the top-8 proxy they have no further attempts to spend. They would
+need capacity headroom on top, at the measured price of about -0.58pp MFU per +0.05 cf. The top-8
+proxy retains headroom the hero candidates do not have — so the proxy was FLATTERING on fidelity, and
+every compliance claim carried over from it needs this correction.
+
+What does NOT change: the between-shape comparison, because the correction is multiplicative at fixed
+m and applies to all shapes equally. The ordering (cand B slightly better than proxy, cand A slightly
+worse) and the ~0.4pp spread survive. Also unchanged: the no-spill prediction, since m=0 needs no
+correction — the hero shape should still land in the same 6-8% band as the proxy, which my live leg
+tests directly.
