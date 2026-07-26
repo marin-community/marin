@@ -51,15 +51,22 @@ def _report_underflow(x: jax.Array, quantized: jax.Array, fp8_dtype) -> None:
 
     Gated on SCALE_A2A_FP8_UNDERFLOW_CHECK=1 because it adds a reduction per quantization. Worth
     paying on the first run of any new configuration or scale.
+
+    Counts in the native dtypes and reduces straight to scalars. Comparing through float32 masks
+    instead builds two full-size temporaries per quantization site, which XLA hoists out of the
+    layer scan: at [64, 2048, 5120] across 48 scanned layers that asked for 313 GiB and the run
+    died before its first step. Quantization maps zero to zero and never turns a zero into a
+    non-zero, so ``{q != 0}`` is a subset of ``{x != 0}`` and the difference of the two counts is
+    exactly the number of values that underflowed.
     """
     if os.environ.get("SCALE_A2A_FP8_UNDERFLOW_CHECK") != "1":
         return
-    nonzero_in = jnp.abs(x.astype(jnp.float32)) > 0
-    zeroed = jnp.logical_and(nonzero_in, quantized.astype(jnp.float32) == 0)
+    nonzero_in = jnp.count_nonzero(x)
+    nonzero_out = jnp.count_nonzero(quantized)
     jax.debug.print(
         "fp8-underflow dtype={d} zeroed_fraction={f} (of non-zero inputs; >0.5 means the scale is far too large)",
         d=jnp.dtype(fp8_dtype).name,
-        f=jnp.sum(zeroed) / jnp.maximum(jnp.sum(nonzero_in), 1),
+        f=(nonzero_in - nonzero_out) / jnp.maximum(nonzero_in, 1),
     )
 
 
