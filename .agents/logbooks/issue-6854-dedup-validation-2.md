@@ -16,6 +16,57 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T18:15:50Z — 169,642 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1811-v510` independently
+  revalidated p0 decision-file 7 semantic offset 256 and p3 decision-file 103
+  semantic offset 4,096. Their 256 baseline pairs contain 175 model false
+  positives, 80 model true duplicates, and one unresolved outcome. Twelve
+  pairs were chunked and 244 were direct. All 1,883 judgments were valid on
+  their first request attempt. The p0 and p3 outcome Parquet SHA-256 values
+  are
+  `73f89e2b858c0664d4e0fd89bad407814f4321c755af5398b4b11a8c911f35e4`
+  and
+  `bcf86583271f3e6baf67312114ef5bf79c3d6435c504266a24410f79781359b7`.
+
+- Complete-text inspection resolves the p0 ambiguity as a true duplicate.
+  `part-00007-of-00128.parquet:773` compares sentence-spun copies of the same
+  singing-myth article. Both carry the same argument, Michael Jordan and
+  American Idol anecdotes, tone-deafness explanation, and first-person
+  vocal-coach story. Differences such as soccer/netball, Babe Ruth/Pele,
+  Peter/Perry, and synonymous wording are low-value slot substitutions; the
+  member's title only restates the article. The 2,502/2,589-character records
+  have character, line, and word-sequence similarities 0.859949, 0.080000,
+  and 0.840164. Member/canonical text SHA-256 values are
+  `060609ebba0565ab71b6a612cbeb133576379c5b3825a8e582fda4b8e13bf178`
+  and
+  `e3b4f65990716b72c48fa37cc3d5b9cade00f6d77ec251039c51b4388a1ca91f`.
+
+- `/rav/datakit-6854-inspect-row773-1813-v511` persisted the complete pair and
+  diff with inspection SHA-256
+  `e09315bd87d3e98d4aa9a9ca90b0f1680d05c95973bfe1a5cb068132cfcde494`.
+  `/rav/datakit-6854-publish-row773-1814-v512` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row773-1815-v513`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `6988f1159e3dd3fe7b45f7da90fbef2cf48a9356b7f249feda73c583a8c0d24e`,
+  `f95ceec8a97ce1a7b5f7b259fa974729eb1f4e04e4a579b4572e1873b32b4894`,
+  and `3536eda8f4e36be6c99bbcccf6357a28bbf3966c2fadf52f57a1628a0e05c834`.
+
+- Across the stable 1,335-checkpoint snapshot, all 187 unresolved model
+  outcomes are covered by 148 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 136,377 pairs, 86,545 false positives, 49,832 true duplicates;
+  - treatment: 33,265 pairs, 17,204 false positives, 16,061 true duplicates;
+  - combined: 169,642 pairs, 103,749 false positives, 65,893 true duplicates.
+
+- The next audit frontiers are p0 `(7, 384)`, p1 `(39, 0)`,
+  p2 `(71, 0)`, and p3 `(103, 4,224)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T18:11:00Z — 169,386 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1810-v509` independently
