@@ -541,3 +541,26 @@ This raises the prior that the pre-approved m=3 follow-up will be required. Trea
 PRIOR, not a prediction - the live legs decide. The toy (mu=32) m=2/m=3 numbers are discarded entirely.
 Independent corroboration: a plain document-block structure at seq_len granularity reproduces the observed
 6-8% naturally at burst=0.30, supporting the document-correlation account of the burstiness.
+
+## SPILL m=2 RESULT 01:49 — drops HALVED at ~zero MFU cost, loss BETTER
+/mwittmann/ep25d1-spill2-cf100-350-0726-0028 SUCCEEDED (350 steps, QB-on cf1.0):
+| metric | baseline (d4 global-QB) | spill m=2 | delta |
+| p50 MFU        | 22.002 | 21.872 | -0.13pp |
+| drops @349     | 0.064  | 0.0369 | -42%    |
+| drops tail-100 | 0.073  | 0.0373 | -49%    |
+| loss @349      | 3.335  | 3.3225 | -0.0125 (BETTER) |
+READS:
+- MFU cost is -0.13pp for 2 attempts = ~0.065pp per attempt. Far inside the <=0.5pp budget. Spill does real
+  work dropping skipped (it fills buckets that would have computed padding), so a small cost is legitimate and
+  expected - this is cheaper than expected because the expert GEMMs run on capacity-sized buffers either way,
+  so the only new cost is the extra segment-rank/argsort per attempt.
+- FIDELITY ARGUMENT CONFIRMED: loss is BETTER (3.3225 vs 3.335), not merely at parity. Predicted: a spilled
+  token gets w_k * E_{e_j}(x) from an expert the router itself selected instead of contributing zero. The
+  measurement matches the prediction, so the semantic change is an improvement, not a regression.
+- BAR: 3.73% tail-100 mean does NOT clear the 3% bar. Calibrated prior said m=2 ~3.04% (borderline) - it landed
+  slightly worse but in the predicted neighbourhood, and the prior's m=3 ~2.37% now looks like the clearing shot.
+FIRED the pre-approved m=3 leg: /mwittmann/ep25d1-spill3-cf100-350-0726-0149.
+PROJECTED COMPLIANT FRONTIER (to confirm with m=3): if m=3 clears 3% near ~21.8%, that beats the current only
+3%-compliant config (QB+cf1.15 at 20.85%) by ~+1.0pp of compliant MFU. If m=3 lands ~2.4% it may also permit
+cf BELOW 1.0 or compose with cf1.15 for deeper compliance.
+Confidence: 8/10 that spill is the right mechanism (halved drops, free, loss better); 6/10 that m=3 alone clears 3%.
