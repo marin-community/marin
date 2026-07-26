@@ -16,6 +16,86 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T22:07:00Z — 188,435 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2159-v661` independently
+  revalidated eight checkpoints: p0 decision-file 8 offset 0, six p1
+  decision-file 39 checkpoints spanning offsets 4,480 through 5,120, and p3
+  decision-file 104 offset 128. Their 1,024 pairs contain 737 model false
+  positives, 285 model true duplicates, and two unresolved outcomes. The arm
+  split is 495 baseline pairs with 393 false positives, 100 true duplicates,
+  and two unresolved outcomes, plus 529 treatment pairs with 344 false
+  positives and 185 true duplicates. Thirty-five pairs were chunked and 989
+  were direct. The 7,430 judgments required 7,442 request attempts: 7,424 were
+  valid, and 18 invalid JSON attempts affected six retried judgments.
+
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `6d48ba488a964a93cfc6907bb7f6bc7e4bb3eaf9286fd023e8a2dc0f3ff5d6ea`;
+  - p1:
+    `10d12fc965d1fa58230c710e0ca61a35099ff99faf5ed94e4b21a45075d9306c`,
+    `d58a4f0d425e566c619eab26fb8ad202d06f8f471a87d041e84c3ff6e754b7e3`,
+    `f23d3f3d04c4be1691630cec3b2a1c11346e8ef25f3875c99be01bfa451c0cc0`,
+    `8834372b01487642a043e39afcf2e6f16b9359b64a03e41aa1edc69114925906`,
+    `6ad7e8911ac24fd2c70ba56c4874be3197979edd7baab9b4f1e4eace3fe3b884`,
+    and
+    `e0d64b99b43a5d940ba04cb9607c015d524bfa73c215751bf4c16d7a5dd477c7`;
+  - p3:
+    `e18207a770baec184b11931bc4b90b1c5bfff473d2364f91606b0b6d7413dc05`.
+
+- Two separate inspection jobs read, hash-bound, and persisted every complete
+  unresolved pair. Both are true duplicates:
+
+  - Row 7,620 is an 8,862-character member and 8,855-character canonical with
+    character, line, and word-sequence similarity 0.999605, 0.993333, and
+    0.999635. The complete high-rise-design examples differ only by the final
+    `\boxed{\text{J}}` versus `\boxed{J}`.
+  - Row 7,622 is a 6,923-character member and 6,916-character canonical with
+    similarity 0.999494, 0.990741, and 0.999493. The complete
+    software-integration examples differ only by the final
+    `\boxed{\text{G}}` versus `\boxed{G}`.
+
+- The inspection jobs for rows 7,620 and 7,622 are
+  `/rav/datakit-6854-inspect-row7620-2203-v662` and
+  `/rav/datakit-6854-inspect-row7622-2203-v663`. Their inspection SHA-256
+  values are
+  `48d6d3496744d2a71c5d07012bbff793e080f9aeaab3652b94613bcf940d259e`
+  and
+  `643266da492c3c86075048145bf6a08ed5c983d4caa58fa276ae664bb9f787dc`.
+  Their semantic-judgment SHA-256 values are
+  `db43afb6bd88e2ef1d37fd58b722cd834b5d6d03d81550d6c51b134a63e75ae8`
+  and
+  `5f5ed734ccb9ea98207ba62c35f2dd9f9d343dd98ec22d0c51a02a75489905ea`.
+
+- `/rav/datakit-6854-publish-row7620-2205-v665` and
+  `/rav/datakit-6854-publish-row7622-2204-v664` wrote the manual Parquet and
+  completion-marker pairs. Their manual SHA-256 values are
+  `9c988d481a30f5fab34492cfceba0f26cf5f09bdbc34c04a48bfea52e2cc39de`
+  and
+  `ec5be89b62f8dcf56aa8866823b87276b9040e1fb4f01db1a653455d8e2f81e1`.
+  Their marker SHA-256 values are
+  `b170cd8bf9a46fc149e275d4601522b253c61332451a0b5cd6ee0985e20fda7d`
+  and
+  `8a8f0d5333154fccb2316834f52e33aa1b53bdb73dd38d4ee319a25ba4a8060d`.
+  `/rav/datakit-6854-verify-row7620-2206-v666` and
+  `/rav/datakit-6854-verify-row7622-2206-v667` independently fetched and
+  verified the exact artifacts.
+
+- Across the stable 1,483-checkpoint snapshot, all 218 unresolved model
+  outcomes are covered by 168 true-duplicate and 50 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 151,067 pairs, 96,022 false positives, 55,045 true duplicates;
+  - treatment: 37,368 pairs, 19,397 false positives, 17,971 true duplicates;
+  - combined: 188,435 pairs, 115,419 false positives, 73,016 true duplicates.
+
+- The next audit frontiers are p0 `(8, 128)`, p1 `(39, 5,248)`, p2
+  `(72, 128)`, and p3 `(104, 256)`. The pending p0, p2, and p3 batches require
+  at least 3,194, 2,466, and 1,498 model requests respectively. All four
+  batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T21:58:10Z — 187,411 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2145-v651` independently
