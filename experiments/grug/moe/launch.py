@@ -103,6 +103,10 @@ class GrugMoeLaunchConfig:
     """Checkpoint base directory to initialize weights from (the latest checkpoint
     under it is loaded). None trains from scratch. Used to chain training phases —
     a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
+    nested_init_from: str | None = None
+    """E256 checkpoint base directory for a fresh-optimizer nested-model breakout."""
+    nested_init_source_model: GrugModelConfig | None = None
+    """Source architecture for ``nested_init_from``; both fields must be set together."""
 
 
 def env_int(key: str, default: int) -> int:
@@ -150,6 +154,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     blocks until it completes.
     """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
+    nested_init_from = latest_checkpoint_path(config.nested_init_from) if config.nested_init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -179,6 +184,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,
+        nested_init_from=nested_init_from,
+        nested_init_source_model=config.nested_init_source_model,
     )
     run_grug(run_config)
 

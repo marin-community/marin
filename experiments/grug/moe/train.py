@@ -5,7 +5,9 @@ import dataclasses
 import functools
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -23,6 +25,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -40,7 +43,12 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import (
+    GrugModelConfig,
+    Transformer,
+    extract_nested_expert_model,
+    nested_expert_eligibility,
+)
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -98,6 +106,10 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    nested_init_from: str | None = None
+    """Concrete E256 checkpoint used for a fresh-optimizer nested-model breakout."""
+    nested_init_source_model: GrugModelConfig | None = None
+    """Source architecture for ``nested_init_from``; both fields must be set together."""
 
 
 def build_train_dataset(
@@ -295,6 +307,49 @@ def initial_state(
     )
 
 
+def init_nested_weights_from_checkpoint(
+    state: GrugTrainState,
+    source_model: Transformer,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: Callable[..., object] = load_checkpoint,
+) -> GrugTrainState:
+    """Extract nested weights from an external checkpoint into a fresh train state."""
+    source_nested_count = source_model.config.nested_expert_count
+    if source_nested_count is None:
+        raise ValueError("nested breakout source model must configure nested_expert_count")
+
+    num_moe_layers = sum(1 for block in source_model.blocks if block.mlp is not None)
+    source_pending_qb_betas = jnp.zeros((num_moe_layers, source_model.config.num_experts))
+    exemplar: dict[str, object] = {
+        "params": source_model,
+        "pending_qb_betas": source_pending_qb_betas,
+    }
+    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    loaded_source_model = cast(Transformer, loaded["params"])
+    extracted_model = extract_nested_expert_model(loaded_source_model)
+    if extracted_model.config != state.params.config:
+        raise ValueError("nested breakout target config does not match the extracted source config")
+
+    nested_experts = nested_expert_eligibility(
+        source_model.config.num_experts,
+        source_nested_count,
+    )
+    nested_indices = jnp.nonzero(nested_experts, size=source_nested_count)[0]
+    loaded_pending_qb_betas = cast(jax.Array, loaded["pending_qb_betas"])
+    extracted_pending_qb_betas = loaded_pending_qb_betas[:, nested_indices]
+
+    updates: dict[str, object] = {
+        "params": extracted_model,
+        "pending_qb_betas": extracted_pending_qb_betas,
+    }
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = extracted_model
+    return dataclasses.replace(state, **updates)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -470,6 +525,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        nested_init_fields = (config.nested_init_from, config.nested_init_source_model)
+        if (nested_init_fields[0] is None) != (nested_init_fields[1] is None):
+            raise ValueError("nested_init_from and nested_init_source_model must be set together")
+        if int(state.step) == 0 and config.nested_init_from is not None:
+            if config.nested_init_source_model is None:
+                raise AssertionError("validated nested source model is missing")
+
+            @jax.jit
+            def _init_source_model(model_rng):
+                return trainer.mp.cast_to_param(Transformer.init(config.nested_init_source_model, key=model_rng))
+
+            source_model = _init_source_model(model_key)
+            state = init_nested_weights_from_checkpoint(
+                state,
+                source_model,
+                config.nested_init_from,
+                mesh=mesh,
+                load_ema=config.trainer.ema_beta is not None,
+            )
+            logger.info("Initialized nested breakout weights from %s", config.nested_init_from)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -638,6 +713,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "init_nested_weights_from_checkpoint",
     "initial_state",
     "run_grug",
 ]

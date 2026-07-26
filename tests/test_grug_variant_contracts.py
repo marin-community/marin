@@ -312,6 +312,70 @@ def test_nested_moe_launcher_evaluates_untreated_control_subset(monkeypatch, tmp
     assert config.model.nested_batch_fraction == 0.0
 
 
+def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_path):
+    checkpoint_root = "s3://test/nested25/checkpoints"
+    monkeypatch.setenv("NESTED_ARM", "breakout25")
+    monkeypatch.setenv("NESTED_PHASE", "cooldown")
+    monkeypatch.setenv("NESTED_INIT_FROM", checkpoint_root)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+
+    assert config.model.num_experts == 128
+    assert config.steps == 50
+    assert config.seed == 1
+    assert config.eval.steps_per_eval == 10
+    assert config.nested_init_from == checkpoint_root
+    assert config.nested_init_source_model.num_experts == 256
+    assert config.nested_init_source_model.nested_expert_count == 128
+    assert config.nested_init_source_model.nested_batch_fraction == 0.25
+
+
+def test_grug_moe_nested_checkpoint_init_extracts_weights_and_qb_state():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    source_config = _nested_grug_model_config(model_module)
+    target_config = dataclasses.replace(
+        source_config,
+        num_experts=source_config.nested_expert_count,
+        nested_expert_count=None,
+        nested_batch_fraction=0.0,
+    )
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        source_model = model_module.Transformer.init(source_config, key=jax.random.PRNGKey(0))
+        target_state = train_module.initial_state(
+            target_config,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(1),
+            ema_beta=None,
+        )
+        source_pending = jnp.arange(source_config.num_experts, dtype=jnp.float32)[None, :]
+
+        def fake_load(exemplar, checkpoint_path, **kwargs):
+            assert checkpoint_path == "s3://test/checkpoints/step-500"
+            assert set(exemplar) == {"params", "pending_qb_betas"}
+            return {"params": source_model, "pending_qb_betas": source_pending}
+
+        initialized = train_module.init_nested_weights_from_checkpoint(
+            target_state,
+            source_model,
+            "s3://test/checkpoints/step-500",
+            mesh=None,
+            load_ema=False,
+            _load_fn=fake_load,
+        )
+
+    np.testing.assert_array_equal(initialized.pending_qb_betas, source_pending[:, ::2])
+    assert initialized.params.config == target_config
+    assert int(initialized.step) == 0
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
