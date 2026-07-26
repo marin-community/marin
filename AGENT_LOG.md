@@ -443,3 +443,21 @@ compiled graph (mitigating BOTH failure hypotheses - OOM peak and 23-min patholo
 the loop at G=full and G=2 (CPU, expert_axis=2, diff 0.0, drops identical). Ready to fire a grouped rack A/B
 (SCALE_A2A_BATCH_EXPERTS=1 + SCALE_A2A_BATCH_GROUP=2) the instant the coordinator approves killing the wedged
 v2 and pursuing option (a). Control 22.66% stands regardless.
+
+## R6-1 RESULT 00:16 — leg-batching x QB-on: NEGATIVE (matched pair complete)
+| leg | p10 | p50 | p90 | drops@119 | loss@119 | samples |
+|---|---|---|---|---|---|---|
+| control: QB-on cf1.0 + adjoint            | 22.34 | 22.66 | 24.23 | 0.088 | 5.614 | 119 |
+| treatment: + batching G=2 (SCALE_A2A_BATCH_GROUP=2) | 18.72 | 19.00 | 20.27 | 0.092 | 5.643 | 119 |
+=> batching G=2 = -3.66pp p50 vs matched control. Bands do NOT overlap (control p10 22.34 > treatment p90 20.27).
+FIDELITY PARITY CONFIRMED: drops 0.092 vs 0.088 (same regime, so MFU IS comparable here), loss 5.643 vs 5.614
+(0.029 = RNG-scale). So this is a pure THROUGHPUT regression, not a numerics or drop artifact.
+VERDICT: rav's +1.35pp batching win does NOT transfer to QB-on in my implementation. Note this is MY grouped
+reconstruction (G=2, forced by two full-batch gang-aborts), not rav's exact uncommitted patch: full batching
+(G=4) never produced a step so it is UNMEASURED. Two readings: (a) the batching mechanism genuinely doesn't help
+at this shape once QB is on, or (b) my grouped variant's extra concatenate + 2x-per-group a2a structure costs
+more than the launch-overhead it saves, and only rav's exact full-batch patch would show the win. Cannot separate
+without rav's patch running at G=4.
+ROUND-6 NUMBER: 22.66% (control) stands as my honest QB-on cf1.0 datapoint; it reproduces d4's 22.595/22.002 band.
+Confidence that leg-batching contributes >=1pp toward honest 25%: 2/10 (was 6/10) - measured negative at G=2,
+unmeasured at G=4.
