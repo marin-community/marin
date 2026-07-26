@@ -9,6 +9,7 @@ import pytest
 from experiments.grug.moe import check_jaxpp_explicit_mpmd_std1f1b_ragged_parity as parity
 from experiments.grug.moe.check_jaxpp_eager_1f1b_parity import DEFAULT_TOLERANCE
 from experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity import (
+    block_local_parity_outputs,
     build_stage_parity_report,
     captured_gradients,
     gradient_capture_optimizer,
@@ -16,6 +17,48 @@ from experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity import
     validate_authoritative_topology,
     validate_device_ragged_flags,
 )
+
+
+def test_block_local_parity_outputs_awaits_only_local_gradients_and_stage_zero_loss(monkeypatch):
+    local_gradient = object()
+    remote_state = object()
+    local_loss = object()
+    blocked = []
+    events = []
+    monkeypatch.setattr(parity.jax, "block_until_ready", blocked.append)
+    monkeypatch.setattr(parity, "_event", lambda process_id, event, **fields: events.append((process_id, event, fields)))
+
+    block_local_parity_outputs(
+        process_id=0,
+        local_stage_index=0,
+        opt_state=({"gradient": local_gradient},),
+        metrics={"train/loss": local_loss, "remote": remote_state},
+    )
+
+    assert blocked == [local_gradient, local_loss]
+    assert [event for _, event, _ in events] == [
+        "explicit_gradient_ready_start",
+        "explicit_gradient_ready_complete",
+        "explicit_loss_ready_start",
+        "explicit_loss_ready_complete",
+    ]
+
+
+def test_block_local_parity_outputs_skips_loss_on_nonzero_stage(monkeypatch):
+    local_gradient = object()
+    local_loss = object()
+    blocked = []
+    monkeypatch.setattr(parity.jax, "block_until_ready", blocked.append)
+    monkeypatch.setattr(parity, "_event", lambda *_args, **_kwargs: None)
+
+    block_local_parity_outputs(
+        process_id=2,
+        local_stage_index=2,
+        opt_state=({"gradient": local_gradient},),
+        metrics={"train/loss": local_loss},
+    )
+
+    assert blocked == [local_gradient]
 
 
 def test_gradient_capture_optimizer_preserves_params_and_returns_every_gradient():

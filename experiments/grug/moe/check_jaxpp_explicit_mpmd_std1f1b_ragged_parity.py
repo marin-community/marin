@@ -183,6 +183,30 @@ def captured_gradients(opt_state):
     return gradients
 
 
+def block_local_parity_outputs(
+    process_id: int,
+    local_stage_index: int,
+    opt_state,
+    metrics: dict[str, Any],
+) -> None:
+    """Materialize only outputs owned by this MPMD rank."""
+    leaves_with_paths, _ = jax.tree_util.tree_flatten_with_path(opt_state)
+    for leaf_index, (path, leaf) in enumerate(leaves_with_paths):
+        fields = {
+            "stage_index": local_stage_index,
+            "leaf_index": leaf_index,
+            "path": jax.tree_util.keystr(path),
+        }
+        _event(process_id, "explicit_gradient_ready_start", **fields)
+        jax.block_until_ready(leaf)
+        _event(process_id, "explicit_gradient_ready_complete", **fields)
+
+    if local_stage_index == 0:
+        _event(process_id, "explicit_loss_ready_start", stage_index=local_stage_index)
+        jax.block_until_ready(metrics["train/loss"])
+        _event(process_id, "explicit_loss_ready_complete", stage_index=local_stage_index)
+
+
 def build_stage_parity_report(
     *,
     stage_index: int,
@@ -590,7 +614,12 @@ def _run_initialized_worker(
             _event(process_id, "explicit_precompile_barrier_complete", stage_index=local_stage_index)
         _event(process_id, "explicit_execute_start", stage_index=local_stage_index)
         next_state, metrics, _ = explicit_step(pipeline_state, stage_batches)
-        jax.block_until_ready((next_state, metrics))
+        block_local_parity_outputs(
+            process_id,
+            local_stage_index,
+            next_state.opt_state[local_stage_index],
+            metrics,
+        )
         _event(process_id, "explicit_execute_complete", stage_index=local_stage_index)
 
         explicit_gradients = captured_gradients(next_state.opt_state[local_stage_index])
