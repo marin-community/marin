@@ -8,9 +8,9 @@ device-initiated ``ragged_all_to_all`` path. The production gate reserves four
 H100x8 Iris tasks so every rank has an isolated physical node, then selects one
 working two-GPU pair per rank for its ``expert=2`` mesh. Each task computes its
 direct reference in a bounded single-process child before initializing the
-distributed JAX runtime. The single-host fallback self-spawns four JAX
-processes on one H100x8 host and serializes only their direct-reference
-executions.
+distributed JAX runtime in a second fresh process with that pair visible. The
+single-host fallback self-spawns four JAX processes on one H100x8 host and
+serializes only their direct-reference executions.
 
 After installing the pinned JAX/JaxPP runtime with ``jaxpp_setup_scripts()``
 from ``train.py``, run the command below in every task of a four-replica
@@ -315,6 +315,32 @@ def _standalone_direct_reference_result(process_id: int):
     raise RuntimeError("all standalone direct-reference device pairs failed: " + "; ".join(failures))
 
 
+def _run_distributed_worker_subprocess(standalone_direct_result: tuple[Any, Any], device_pair: str) -> int:
+    descriptor, raw_input_path = tempfile.mkstemp(prefix="jaxpp-ragged-parity-direct-result-", suffix=".pkl")
+    os.close(descriptor)
+    input_path = Path(raw_input_path)
+    with input_path.open("wb") as output:
+        pickle.dump(standalone_direct_result, output)
+
+    environment = os.environ.copy()
+    environment["CUDA_VISIBLE_DEVICES"] = device_pair
+    command = (
+        sys.executable,
+        "-m",
+        "experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity",
+        "--distributed-worker-direct-input",
+        str(input_path),
+    )
+    try:
+        try:
+            completed = subprocess.run(command, env=environment, timeout=1200, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError("distributed parity worker exceeded 1200 seconds") from error
+        return completed.returncode
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
 def _run_initialized_worker(
     process_id: int,
     direct_reference_barrier: Any | None,
@@ -525,6 +551,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--standalone-direct-output", type=Path)
     parser.add_argument("--standalone-direct-stage", type=int)
     parser.add_argument("--standalone-direct-device-pair")
+    parser.add_argument("--distributed-worker-direct-input", type=Path)
     return parser.parse_args(argv)
 
 
@@ -543,14 +570,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    job_info = get_job_info()
-    if job_info is not None and job_info.num_tasks > 1:
-        standalone_direct_result, device_pair = _standalone_direct_reference_result(job_info.task_index)
-        os.environ["CUDA_VISIBLE_DEVICES"] = device_pair
+    if args.distributed_worker_direct_input is not None:
+        with args.distributed_worker_direct_input.open("rb") as direct_input:
+            standalone_direct_result = pickle.load(direct_input)
         initialize_jax()
         _event(jax.process_index(), "distributed_initialize_complete")
         _run_initialized_worker(jax.process_index(), None, standalone_direct_result)
         return 0
+
+    job_info = get_job_info()
+    if job_info is not None and job_info.num_tasks > 1:
+        standalone_direct_result, device_pair = _standalone_direct_reference_result(job_info.task_index)
+        return _run_distributed_worker_subprocess(standalone_direct_result, device_pair)
 
     context = mp.get_context("spawn")
     direct_reference_barrier = context.Barrier(PIPELINE_STAGES)
