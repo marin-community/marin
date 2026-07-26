@@ -3570,3 +3570,19 @@ author: dlwh
   - The remaining m1-specific ingredients include real Transformer stage state/body, task executable size, receive-buffer prologue, updates/metrics, and lazy compilation skew.
 - Next action:
   - Precompile and allocate the exact m1 rank-local task executables and receive-buffer prologue, synchronize all four hosts, then begin transfer execution. A pass would isolate lazy compilation/allocation concurrent with DIME; a hang would move focus to the retained Transformer/update graph.
+
+### 2026-07-26 10:25 PDT - local task precompile fixes deadlock; one gradient narrowly fails
+- Hypothesis: Lazy rank-local task compilation and receive-buffer allocation concurrent with DIME transfers causes the m1 rank-asymmetric execution deadlock.
+- Commit Hash: `bb2299d406` adds opt-in `GRUG_JAXPP_PRECOMPILE_LOCAL=1`. It compiles and caches every local task call-jaxpr, allocates only the leading receive-buffer prologue, skips all transfer equations, barriers the four hosts, then evaluates the transfer graph with the allocation prologue removed.
+- Command: Four-task H100x8 job `/dlwh/jaxpp-ragged-parity-m1-precompile-r16-20260726-1831` ran the valid m1 parity graph with the precompile control; all other r15 runtime settings were unchanged.
+- Results:
+  - Precompile completed on every rank. Task/receive-buffer counts were rank 0 `4/2`, rank 1 `3/2`, rank 2 `3/2`, and rank 3 `2/1`.
+  - All ranks crossed the precompile barrier and completed explicit execution. The r15 DIME/compiler/PJRT deadlock did not recur.
+  - Loss relative-L2 was exactly `0.0` on every stage. Maximum gradient relative-L2 was stage 0 `0.00189865`, stage 1 `0.00193056`, stage 2 `0.00231603`, and stage 3 `0.00198969`.
+  - The only failing leaf was `params['stage_2'].blocks[0].attn.attn_gate`: relative-L2 `0.00231603`, absolute-L2 `1.05318e-7`, reference-L2 `4.54734e-5`.
+  - The fixed `0.002` gate therefore failed. Iris is terminal failed with no live task or allocation.
+- Interpretation:
+  - The execution deadlock mechanism is rank-skewed lazy task compilation/allocation concurrent with DIME. Coordinated local precompile is a sufficient functional fix for this m1 graph.
+  - Numerical promotion remains blocked. The one failing near-zero leaf exceeds the human-approved policy even though its absolute error is small; do not round it down or relax the gate.
+- Next action:
+  - Replicate the exact control to measure determinism, then isolate the stage-2 attention-gate gradient under the fixed policy. Launch L24 only after every leaf passes `0.002`.
