@@ -1853,3 +1853,57 @@ could, and it never reached a step, so it owes no throughput reading either — 
 the throughput verdict (against break-even 2.7x, full elimination +1.90pp / 24.57%) and the loss
 verdict (conclusive if positive, provisional if negative, per the pre-registered asymmetry).
 Confidence: 9/10 on the triage classification; the discriminators are unambiguous and mutually exclusive here.
+
+## FINAL (delayed-scaling fp8 wire) 2026-07-26 14:45 UTC — LOSS BETTER THAN CONTROL, but QDQ fell only 11%: attribution magnitude FALSIFIED
+
+/mwittmann/ep25d4-fp8delayed-120-v2-20260726 (calibrated: fwd amax 4.5, bwd 1.0e-07) vs the
+limit=4 control. Both **120 steps**; drops comparable only to other 120-step legs.
+
+**(1) Loss — BETTER than the control at every matched step.** 20: 8.5777 vs 8.6397 | 40: 7.2079 vs
+7.2383 | 60: 6.6404 vs 6.6974 | 80: 6.2433 vs 6.3176 | 100: 5.8825 vs 5.9720 | 119: **5.5953 vs
+5.6819**; tail20 5.7370 vs 5.8226. Under the pre-registered asymmetry this is the CONCLUSIVE case:
+a fixed constant scale preserved (indeed slightly bettered) the trajectory, so production delayed
+scaling, which adapts every step, certainly will. **Fidelity is not the obstacle for this route.**
+
+**(2) Drops (120-step) — matched, slightly lower.** Mean 20-119 **0.2452 vs 0.2670**; @119 0.0954
+vs 0.0876. The fp8 leg drops *less*, which is why the drop-corrected delta is slightly smaller in
+magnitude than the raw one.
+
+**(3) Throughput — NEGATIVE, -1.73 to -1.80pp drop-corrected**, consistent across windows
+(20-119: 20.879 vs 22.674 = -1.795 raw / -1.730 corrected). Step 12.98 vs 11.94 s. Better than the
+per-token fp8 leg's -2.28pp by ~0.5pp, but far from the +1.90pp full-elimination target and it
+never approaches break-even.
+
+**(4) Concurrency — and the number that falsifies the attribution's magnitude.**
+
+| GPU:0, 3-step window | limit=4 control | fp8 per-token | fp8 DELAYED |
+|---|--:|--:|--:|
+| collective total | 13226 ms | 9784 ms | 9757 ms |
+| exposed collective | 4287 ms (12.9%) | 1526 ms (4.0%) | 1633 ms (4.4%) |
+| trace span | 33159 ms | 37935 ms | 37211 ms |
+| **added non-collective compute** | — | **2512 ms/step** | **2235 ms/step** |
+
+Added compute = span growth + exposure reduction = (37211-33159) + (4287-1633) = 6706 ms per 3
+steps = 2235 ms/step. **Removing both amax reductions cut QDQ by only 277 ms/step, 11%** — against
+a break-even requirement of falling to 920 ms/step, a 2.7x cut.
+
+**This falsifies the magnitude of my own attribution.** I reported the two `loop_reduce_fusion`
+passes as ~2500 ms/step, i.e. essentially all of the overhead, and predicted delayed scaling would
+remove nearly all of it. It removed a ninth. The most likely explanation is the caveat I attached
+to that attribution at the time: the tool reports each leg's top-30 ops, so ops absent from the
+control's list read as 0 and their deltas are upper bounds — `loop_reduce_fusion_2` was the only
+one measured in both legs. The reduce fusions evidently also carry the elementwise quantize work
+fused into them, and removing the reduction leaves the divide/clip/convert over the full activation
+tensor plus the (now pointless) all_to_all of scales.
+
+**What remains to attack, by name:** the elementwise quantize pass over [bucket, hidden], the same
+on the e5m2 backward, the scale all_to_all which is now carrying a constant and can be deleted
+outright, and the backward dequantization of `received` for the bf16 wgrad. None was measured
+individually; that measurement is the prerequisite for any further work here, and it should be done
+with per-op totals across ALL ops rather than a top-30 view.
+
+**Route status:** fidelity clear, throughput -1.73pp. The byte reduction works and is worth ~2650
+ms/3-step of exposure; the quantization compute costs more than it saves and did not yield to the
+one change the attribution said would fix it. Not closed, but its cost structure is now measured
+rather than assumed, and the next step is a full op-level accounting, not another variant.
+Confidence: 9/10 on all four readings; 8/10 that the top-30 truncation explains the attribution error.
