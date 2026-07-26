@@ -461,3 +461,40 @@ without rav's patch running at G=4.
 ROUND-6 NUMBER: 22.66% (control) stands as my honest QB-on cf1.0 datapoint; it reproduces d4's 22.595/22.002 band.
 Confidence that leg-batching contributes >=1pp toward honest 25%: 2/10 (was 6/10) - measured negative at G=2,
 unmeasured at G=4.
+
+## R6-NEW: SAME-STEP SPILL implemented 00:25 — design + fidelity argument
+MECHANISM (commit 1224ccb02, SCALE_A2A_SPILL=m, 0=off byte-identical): after the baseline placement, each
+still-unplaced assignment is re-offered to the next-ranked expert THE SAME TOKEN SELECTED, taking only that
+bucket's remaining headroom. m bounded attempts (each = one extra segment-rank/argsort over T*K).
+Bucket layout + capacity UNCHANGED (Larry's granularity constraint preserved).
+
+WHY THE ADJOINT COMPOSES (the delicate part, and it fell out clean): spill is expressed PURELY as a rewrite of
+(linear_indices, keep). Both custom VJPs are generic in those: _dispatch_gather_bwd is a segment-sum over the
+token's topk send slots indexed by linear_indices+keep; _combine_gather_bwd is a gather along assignment_sources
+(the inverse of linear_indices). Neither hard-codes WHICH expert a slot belongs to. So spill required ZERO
+adjoint changes. VERIFIED: custom-adjoint vs autodiff at 1e-5 with spill m=1,2 on a real 2-shard shard_map
+(grad diff 2.3e-10..4.7e-10, drops identical 61/40/20). Also survives scan+recompute_all by construction (pure
+index math, no new residuals).
+
+WHY SPILL IS A FIDELITY IMPROVEMENT OVER DROPPING (the semantics DO change, so arguing it explicitly):
+A dropped assignment (t,k) contributes EXACTLY ZERO to token t's output — the router asked for expert e_k with
+weight w_k and got nothing, so the token's effective combine weights silently don't sum to their intended total
+and the token is under-computed. A spilled assignment instead computes w_k * E_{e_j}(x_t) where e_j is ANOTHER
+EXPERT THE ROUTER ITSELF SELECTED for that token (rank k+1..k+m of its own top-k). So: (i) the token gets real
+expert signal instead of nothing; (ii) the expert used is one the router endorsed, not an arbitrary substitute;
+(iii) the combine weight is the token's own w_k, unchanged; (iv) total expert FLOPs and the capacity invariant
+are identical — we fill idle capacity that would otherwise compute padding. The approximation is substituting a
+lower-ranked selected expert for a higher-ranked full one, which is strictly closer to the true MoE output than
+substituting zero. This is why LOSS PARITY IS THE VERDICT: if the argument holds, loss should be equal or BETTER.
+
+CPU MODEL AT THE OPERATING-POINT SHAPE (ne=256, topk=8, cf=1.0, capacity==mean):
+  uniform     drops 0.0758 -> m1 0.0482 -> m2 0.0366 -> m3 0.0304
+  mild burst  drops 0.1062 -> m1 0.0688 -> m2 0.0536 -> m3 0.0441
+  strong burst drops 0.2321 -> m1 0.1816 -> m2 0.1498 -> m3 0.1284
+The uniform m0 (7.58%) MATCHES the observed real steady 6-8%, which supports the burstiness diagnosis and
+predicts m=2 lands ~3.5-5% and m=3 ~3-4.5% live. PRE-REGISTERED: m=2 may not clear 3% alone; m=3 is the follow-up.
+Invariants tested: drops strictly fall with m, no bucket exceeds capacity, slots unique, every placed assignment
+targets an expert the token actually selected. 20/20 kernel tests pass (spill-off path unchanged).
+EP4 smoke m=2 submitted: /mwittmann/ep25d1-spill-smoke-ep4-0726-0023. Then 350-step QB-on cf1.0 rack leg.
+Confidence: 6/10 that spill takes cf1.0 under 3% at <=0.5pp MFU cost (mechanism is sound and directly targets
+the diagnosed cause; risk is the extra argsorts' cost and whether live burstiness is worse than my model).
