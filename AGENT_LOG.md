@@ -557,3 +557,105 @@ round-6 protocol.
 Next: stop for coordinator submission of the EP4 pair. Submit one rack job at
 a time only after EP4 drop parity is confirmed. If metrics are unavailable,
 wait for log-shipping recovery before advancing.
+
+## R6-4 final verdict: MXFP8 expert GEMMs
+
+- Date: 2026-07-25
+- Operating point: d5120, i1280, 48 layers, 8-of-256, EP64, QB-on,
+  capacity factor 1.0, gather dispatch, custom adjoint, drops reported,
+  120 steps.
+- Verdict: do not adopt MXFP8 expert GEMMs at this operating point. The
+  matched treatment loses 2.832 mean-MFU points and 2.582 p50-MFU points.
+  This is a measured mechanism negative, not an operational closure.
+
+### Matched rack result
+
+| Arm | p10 MFU | p50 MFU | p90 MFU | mean MFU | loss at 119 | drop fraction at 119 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| BF16 control | 21.909 | 22.345 | 24.358 | 22.716 | 5.6982 | 0.0885 |
+| MXFP8 treatment | 19.612 | 19.763 | 20.462 | 19.884 | 5.6303 | 0.0847 |
+| Treatment - control | -2.297 | -2.582 | -3.897 | -2.832 | -0.0679 | -0.0038 |
+
+The mean-MFU change is -12.46% relative. Applying the observed treatment/control
+ratio to the 20.848% strict-drop reference projects about 18.25% MFU at
+capacity factor 1.15, well below the 25% compliant-config target.
+
+The final drop fractions differ by 0.0038, or 0.38 percentage points. That is
+short-horizon drop parity for this speed decision, and the treatment does not
+increase drops. Neither arm is compliant with the round-6 <3% drop gate at
+capacity factor 1.0. The treatment loss is 0.0679 lower at step 119, so there
+is no 120-step loss regression. A single short run does not establish a
+quality improvement or discharge #7271's 66B-token held-out-loss concern. That
+long-horizon gate remains an adoption condition if this performance direction
+is reopened.
+
+### Where the regression lands
+
+The last-three-step mean duration is 12.402 seconds for BF16 and 13.814 seconds
+for MXFP8: +1.412 seconds, or +11.38%. Final host hook and loading time remain
+only milliseconds and tens of microseconds, respectively. The lost throughput
+therefore lands in the compiled device step rather than input or tracker
+overhead.
+
+The run did not enable XPlane profiling and the logs contain no separate
+quantize, dequantize, layout, or grouped-GEMM timings. The +1.412 seconds
+cannot be split honestly between XLA quantization/padding overhead and GEMM
+savings. The bounded inference is that, for the thin i1280 expert GEMMs, net
+producer and layout overhead exceeds the grouped-GEMM savings. The 1.308x
+within-EP8 grouped-GEMM microbenchmark does not survive end to end here. This
+is the third microbenchmark-overstates-E2E result on this stack, including the
+fp8-wire result.
+
+The Iris summaries report no peak-memory value, and neither treatment logs nor
+the two complete salvaged BF16 pod logs contain arena, HBM, heap, or buffer
+allocation metrics. The prior 37% arena shrink is therefore unmeasured in this
+pair; it neither reproduced nor failed to reproduce in the available
+telemetry.
+
+### What would change the verdict
+
+Reopen MXFP8 only with a mechanism that changes this balance:
+
+1. fused quantize epilogues that remove or materially overlap the XLA producer
+   and intermediate layout traffic;
+2. fatter expert GEMMs, such as d6144/i2560, whose arithmetic intensity can
+   amortize quantization and padding; or
+3. the CuTe activation producer after its 16-node executable-load failure is
+   fixed and demonstrated at rack scale.
+
+Any reopened path needs a new matched all-QB-on end-to-end pair, drop and
+120-step loss parity, the long-horizon #7271 quality gate, and explicit device
+arena telemetry. Kernel-only throughput is not sufficient evidence.
+
+### Ranking update and reusable operations note
+
+MXFP8 moves from the highest-priority unmeasured compute lever to the bottom of
+the current d5120/i1280 operating-point ranking. It should not stack with
+capacity factor 1.15 or displace measured-positive transport/adjoint work.
+Fused production or fatter shapes are new hypotheses rather than tuning of
+this negative configuration.
+
+The successful GB200 build also establishes a reusable CUTLASS DSL rule. The
+bundled job resolves from this worktree's `pyproject.toml` and `uv.lock`.
+CUTLASS DSL 4.6.0 allowed the wrong base/CUDA payload to shadow the cu13
+compiler and failed libNVVM compilation for `sm_100a`; excluding the cu12
+payload at 4.6.0 did not repair it. The known-green resolution must be copied
+verbatim: `nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6`, the NVIDIA package index,
+and `nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'`. That
+4.5.2/cu13 graph, including the generic-address-space fix from the 7282
+lineage, compiled and passed the GB200 numerical ladder. Frozen bundle exports
+should be checked for the exact payload set before submission.
+
+The control metrics above were recovered from two complete kubelet pod logs
+during the GB200 log-shipper outage; both agree at the displayed precision.
+The treatment metrics came from the normal relay harvest.
+
+Confidence: 10/10 that MXFP8 is an end-to-end negative at the tested
+d5120/i1280 operating point; 8/10 that quantization and layout overhead are the
+dominant mechanism, pending a device profile.
+
+No new jobs are warranted. Commit exactly:
+
+```text
+AGENT_LOG.md
+```
