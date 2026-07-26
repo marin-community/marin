@@ -13,8 +13,8 @@ Usage (as an iris CPU job): python -m experiments.grug.moe.pgle_convert <xprof_s
 import base64
 import gzip
 import sys
-import tempfile
-from pathlib import Path
+
+
 
 import fsspec
 
@@ -31,28 +31,21 @@ def main() -> None:
         raise FileNotFoundError(f"no .xplane.pb under {root}")
     print(f"found {len(xplanes)} xplane files:", *xplanes, sep="\n  ")
 
-    spaces = []
+    # Mirror jax's PGLEProfiler: extract the FDO profile from each raw xspace, then
+    # aggregate the extracted profiles at the given percentile.
+    fdo_profiles = []
     for p in xplanes:
         with fs.open(p, "rb") as f:
             data = f.read()
-        one = _profiler.aggregate_profiled_instructions([data], 90)
-        print(f"{p}: xspace {len(data)} bytes -> single-file proto {len(one)} bytes")
-        spaces.append(data)
-    proto = _profiler.aggregate_profiled_instructions(spaces, 90)
+        fdo = _profiler.get_fdo_profile(data)
+        print(f"{p}: xspace {len(data)} bytes -> fdo {len(fdo)} bytes")
+        if fdo:
+            fdo_profiles.append(fdo)
+    if not fdo_profiles:
+        raise RuntimeError("all fdo profiles empty (CUPTI contention or missing device trace?)")
+    proto = _profiler.aggregate_profiled_instructions(fdo_profiles, 90)
     if isinstance(proto, str):
         proto = proto.encode()
-
-    with tempfile.TemporaryDirectory() as tmp:
-        # Fallback path for comparison: the tensorboard-tree walker.
-        for p in xplanes:
-            dest = Path(tmp) / "plugins" / "profile" / "run" / Path(p).name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            fs.get(p, str(dest))
-        walker = _profiler.get_profiled_instructions_proto(str(Path(tmp)))
-        print(f"walker proto bytes: {len(walker)}")
-        if len(walker) > len(proto):
-            proto = walker
-
     print(f"proto bytes: {len(proto)}")
     payload = base64.b64encode(gzip.compress(proto)).decode()
     print("PGLE_B64_BEGIN")
