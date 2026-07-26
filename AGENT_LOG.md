@@ -564,3 +564,23 @@ PROJECTED COMPLIANT FRONTIER (to confirm with m=3): if m=3 clears 3% near ~21.8%
 3%-compliant config (QB+cf1.15 at 20.85%) by ~+1.0pp of compliant MFU. If m=3 lands ~2.4% it may also permit
 cf BELOW 1.0 or compose with cf1.15 for deeper compliance.
 Confidence: 8/10 that spill is the right mechanism (halved drops, free, loss better); 6/10 that m=3 alone clears 3%.
+
+## Conservation bound (closes "lower cf and spill it back" permanently) 02:00
+Total capacity = num_shards * num_experts * ceil(cf * assignments_per_shard / num_experts) ~= cf * total
+assignments. So for cf < 1, drop_fraction >= 1 - cf REGARDLESS of routing, balancing, or spill:
+  cf 0.85 -> >=15% drops | 0.90 -> >=10% | 0.95 -> >=5% | 0.97 -> >=3% | 1.00 -> >=0%
+Under a 3% bar only cf >= ~0.97 is even feasible, which buys no meaningful speed. Spill can only reclaim drops
+caused by MISPLACEMENT (overflow sitting next to underfull buckets); it can never manufacture capacity that the
+global budget does not contain. NOT running the spill x cf<1.0 composition - it is dead by conservation.
+=> COROLLARY (the headline framing): cf1.0 is the fastest feasible operating point for the fixed-capacity policy
+under any drop bar. Spill's contribution is precisely that it makes cf1.0 COMPLIANT, saving the -1.75pp that
+cf1.15 costs. Net ~+1.0pp of compliant MFU after spill's own -0.13pp, not the naive +1.75pp.
+=> WHAT SPILL IS: a mechanism that recovers the ~8x burstiness excess ABOVE the statistical floor. Bounded below
+by the floor (0.9% here) and by conservation (1-cf). Not a way to buy capacity.
+
+## Note for the d6144 4-of-256 peer shape
+  d5120 8-of-256 (here): bucket mean 2048, no-spill floor ~0.88%, max spill attempts = topk-1 = 7
+  d6144 4-of-256 (peer): bucket mean 1024, no-spill floor ~1.25%, max spill attempts = topk-1 = 3
+Double caution for that shape: the statistical floor is HIGHER (1.25%) while spill has LESS headroom (m capped
+at 3, and each attempt chooses among fewer alternatives). Spill may be needed there just to reach where we are
+here, and m=3 is the ceiling rather than a tuning choice.
