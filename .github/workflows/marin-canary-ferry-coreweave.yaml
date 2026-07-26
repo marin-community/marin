@@ -55,12 +55,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
-      # marin-us-west-04a is the CoreWeave AI Object Storage bucket co-located
-      # with this cluster (config/coreweave.yaml, cw-us-west-04a.yaml task_env).
-      # The deprecated marin-na R2 bucket 403s from the CoreWeave pod egress
-      # (#7504). No trailing slash: object-store keys are not normalized, so a
+      # The shared CoreWeave data bucket (everything lives in marin-us-east-02a;
+      # LOTA caches reads locally). Task pods reach it through the one CoreWeave
+      # endpoint + credential set the cluster projects into the iris-task-env
+      # Secret. No trailing slash: object-store keys are not normalized, so a
       # doubled separator after a path join addresses a different key (#6904).
-      MARIN_PREFIX: s3://marin-us-west-04a/marin
+      MARIN_PREFIX: s3://marin-us-east-02a/marin
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
       CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'gpu_fa4_cute' }}
@@ -188,7 +188,7 @@ jobs:
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
         # Runs on the GitHub runner (outside CoreWeave), so it reads
-        # marin-us-west-04a through the external cwobject.com endpoint.
+        # marin-us-east-02a through the external cwobject.com endpoint.
         # validate_canary_metrics.py calls configure_coreweave_s3(), which turns
         # these CW_* creds into the AWS_*/FSSPEC_S3 config (virtual-hosted
         # addressing, region "auto") that CoreWeave object storage requires.
