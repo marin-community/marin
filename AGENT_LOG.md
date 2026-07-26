@@ -2018,3 +2018,46 @@ name. It carries two changes that have never executed: all five quantization sit
 the supplied-scale path, and the scale all_to_all deleted. Honouring the pre-registration at
 AGENT_LOG 15:35 UTC as committed; reporting order fixed as underflow, loss, drops, MFU, op-level.
 Confidence: 9/10 that the guard is correct and cheap; 6/10 that v4 reaches a step (two untested changes plus this cluster's eviction class).
+
+## CAUSE FOUND 2026-07-26 16:20 UTC (agent d6) — the OOM is the TELEMETRY CALLBACK, not the masks and not the routing
+
+v4 died exactly as v3 did, asking **308.49 GiB** against v3's **313.49 GiB** — my memory fix was
+real but bought only **5.00 GiB of 313**. That number is a single allocation because XLA GPU
+allocates one module-wide temp buffer, so it is the whole step's temp, not a hoisted tensor.
+
+Compiled the real kernel locally under shard_map + checkpoint + scan (EP8, 4 layers, CPU) and
+measured `temp_size_in_bytes` per variant:
+
+| variant | temp | vs v2 |
+|---|--:|--:|
+| v2: 2-site supplied scale, scale a2a kept, no guard | 1.87 MB | 1.00 |
+| v4: 5-site supplied scale, scale a2a deleted, no guard | 1.81 MB | **0.97** |
+| v4 + underflow guard | 3.09 MB | **1.65** |
+| all per-token (no supplied scale) | 2.01 MB | 1.07 |
+| guard replaced by a BARE `jax.debug.print`, no data dependence | 2.64 MB | **1.41** |
+| guard's two reductions with the callback REMOVED | 1.81 MB | 0.97 |
+
+**Mechanism: `jax.debug.print` is a side effect, and an effect inside the rematerialized scan body
+defeats remat.** A callback that touches no tensor at all still costs 1.41x; the same reductions
+without the callback cost nothing. The cost is the effect, not the data — which is why making the
+masks cheap moved 5 GiB and not 300.
+
+**The five-site routing and the deleted collective are exonerated (0.97x).** They were never the
+problem, and they remain untested only in the sense that they have still never reached a step.
+
+Three attributions were wrong before this, mine included: the handoff said the masks, I checked
+the masks were 8 full-size temporaries and fixed those, and both readings missed that the guard's
+*print* was the expensive part. The fix I shipped is still correct and strictly better — it is
+what makes the guard affordable in a probe config — it just was not the fix that mattered.
+
+**Actions:**
+- `/mwittmann/ep25d4-fp8delayed-120-v5-20260726` — v4 minus `SCALE_A2A_FP8_UNDERFLOW_CHECK`, one
+  variable, carrying the full pre-registered prediction (added compute ~127 ms/step, break-even
+  920, MFU +1.5 to +1.9pp over 22.674%).
+- `/mwittmann/ep25d4-underflow-probe-v1-20260726` — the guard's first real use moved to the
+  calibration-probe shape (1 replica, 4 layers, 12 steps), where 1.41x temp is affordable, with
+  FP8_GEMM on so all five quantization sites are exercised at the calibrated constants. Reading
+  (a) comes from here instead of from the rack leg.
+- Docstring now says the guard belongs in a probe config and why, so the next agent does not
+  spend a third leg on it.
+Confidence: 9/10 on the mechanism (bare-callback control isolates effect from data); 7/10 that v5 now fits, since the local model is CPU and only the direction of each delta transfers.
