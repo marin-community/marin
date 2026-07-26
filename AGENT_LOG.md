@@ -317,3 +317,43 @@ leg has now spent three compiles and produced no steps. Added `SCALE_PREEMPTIBLE
 (default unchanged) so the non-preemptible pool is one env away if the retries keep losing; I have
 not used it yet, because switching pools changes placement and I would rather not add a variable to
 the primary arm while a plain retry might land.
+
+## Check-in 7 — the DENSE CONTROL COMPLETED and reproduces d5's reference leg cleanly
+
+`/mwittmann/ep25d6-d6144-e128-dense-120-0726-1440` — SUCCEEDED, 120/120 steps.
+d6144, 128 experts, top-4, 48 layers, EP64 on one GB200 rack, batch 1024, seq 4096, QB-on, cf1.0,
+custom adjoint + gather dispatch, drops on, host offload on, default BFC allocator at the default
+0.75 fraction, sliding window 2048, plus a 3-step profiler window at step 20.
+
+**Analytic FLOPs/token: 48.186 G (emitted 144.5588 GFLOP/token = 3 x that).**
+
+| window | MFU p10 | **MFU p50** | MFU p90 | sd | tok/s p50 | step p50 |
+|---|--:|--:|--:|--:|--:|--:|
+| steady tail, 90-119 | 24.719 | **24.842** | 24.978 | 0.103 | 274,954 | 15.266 s |
+| early, 10-24 | 26.891 | 27.177 | 27.308 | 0.156 | 300,803 | 13.944 s |
+
+Drops: 0.169@0 -> 0.870@12 -> 0.590@36 -> 0.296@48 -> 0.150@96 -> **0.091@119** (120-step run, so
+step 119 is end-of-anneal). Loss 10.31@2 -> **5.654@119**, descending throughout.
+
+Against d5's reference leg (24.594% / 276,413 tok/s / 15.174 s / drops 0.089@119 / loss 5.59) this
+is a reproduction to within +0.25pp MFU and 0.002 on the drop fraction, from a different session on
+a different rack allocation. Two consequences:
+1. The EP25 hero-shape result replicates. That was not guaranteed and it is worth stating on its own.
+2. My control is INTERNALLY CONSISTENT where d5's summary row was not: 274,954 tok/s x 144.5588e9 /
+   1.6e17 = 24.84%, exactly the reported p50. Every comparison below is against my own leg, so the
+   check-in-2 discrepancy does not propagate into any conclusion.
+
+MECHANISM BASELINE, from the profiler window (steps 20-22, one host, four GPUs):
+exposed collective **4,126 / 4,384 / 4,828 / 4,755 ms** per 3 steps = **1.38-1.61 s of every step**,
+against compute-stream idle of 3,498 ms per 3 steps on GPU:0. Collective total 12.0-13.0 s per 3
+steps, of which ~62-68% is already concurrent with non-collective work.
+
+### The primary arm lost three compiles to the cluster; resubmitted
+
+`...-matched-i6144-L3072-120-0726-1455` exhausted its retries without reaching step 0 (21:10
+preemption, 21:28 and 21:40 gang aborts — the 21:28-21:40 window that also hit the param-preserving
+leg). The `Metadata mismatch` line in its failure text is a benign `levanter.store.cache` warning
+present in healthy runs too, not the cause. Resubmitted unchanged as
+`/mwittmann/ep25d6-d6144-e128-matched-i6144-L3072-120-0726-1600-v2`. Deliberately still on the
+default preemptible pool: the dense leg completed there, so the evidence says the window was
+transient, and I would rather not introduce a placement variable into the primary arm.
