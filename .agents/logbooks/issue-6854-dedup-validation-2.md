@@ -16,6 +16,65 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T17:32:00Z — 164,580 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1728-v476` independently
+  revalidated five baseline checkpoints: p1 decision-file 38 semantic offsets
+  4,352, 4,480, and 4,608, and p3 decision-file 103 semantic offsets 384 and
+  512. Their 640 pairs contain 440 model false positives, 199 model true
+  duplicates, and one unresolved outcome. Two pairs were chunked and 638 were
+  direct. The audit reread all 1,632 judgments and their 1,637 request
+  attempts: 1,631 attempts were valid, six were invalid, and three judgments
+  required retries.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p1:
+    `fb2f8f0484e20211efccf5350f00ebde622c866b1448d8b29b04e85bcec20767`,
+    `059bf072daea1b90b6a1fc2e18a478980c11ef681ba5f9454dbcdd10b555d27c`,
+    and
+    `fce351a252c3040eeef907d1d4dee520be4d18da025ffb63224b83d78a383590`;
+  - p3:
+    `7aee4a95dabd191921f481d0dbfa6b9220837fd573ab1b6b62ada8ccac6b91fa`
+    and
+    `cac35eedd64fd12debdf137da4c969e12803cf95bce604322e56b24e57510476`.
+
+- Complete-text inspection resolves the baseline ambiguity as a true
+  duplicate. `part-00038-of-00128.parquet:7500` compares 332-line SFT records
+  with identical historical-figures questions, choices, reasoning about every
+  candidate, conclusions, and answers. The sole changed line is
+  `\boxed{C}` versus `\boxed{\text{C}}`. The 16,656/16,663-character records
+  have character, line, and word-sequence similarities 0.999790, 0.996988,
+  and 0.999815. Member/canonical text SHA-256 values are
+  `ef7b40f621668f57b795c2994aad3c1e20cdac2f6fd4e31a53e6a3121b8b8d3a`
+  and
+  `3a4659343099e47f6f40772bd924808fd8bd9f61844d2a491c56dd0c7e7cd671`.
+
+- `/rav/datakit-6854-inspect-row7500-1729-v477` persisted the complete pair
+  and diff with inspection SHA-256
+  `85aa1a88be725e81ca09bf4a367595d293fcb295feba537c9cc2ed77b545e9f3`.
+  `/rav/datakit-6854-publish-row7500-1730-v478` wrote the immutable
+  true-duplicate record, and `/rav/datakit-6854-verify-row7500-1731-v479`
+  independently reread the source pair, semantic checkpoint, inspection,
+  deterministic Parquet bytes, and completion marker. The semantic-evidence,
+  manual-Parquet, and marker SHA-256 values are
+  `9002b32223980dc8a799505be4d158505c53ad5cbe3c730991f1c873dc0321a6`,
+  `5da5d7a4be1c5fa3fdb9eb18dfc622451da1cfeb3e1aa7c4613789be02eab8cc`,
+  and `1abd25112e460ae9c61e3dc17dc57c85ed4ea9a309b7c385c3356f24bc941bc0`.
+
+- Across the stable 1,295-checkpoint snapshot, all 182 unresolved model
+  outcomes are covered by 143 true-duplicate and 39 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 132,530 pairs, 84,225 false positives, 48,305 true duplicates;
+  - treatment: 32,050 pairs, 16,566 false positives, 15,484 true duplicates;
+  - combined: 164,580 pairs, 100,791 false positives, 63,789 true duplicates.
+
+- The next audit frontiers are p0 `(7, 128)`, p1 `(38, 4,736)`,
+  p2 `(71, 0)`, and p3 `(103, 640)`. All four batch-priority 2-H100 workers
+  continue serving requests. Their 12 root, broker, and GPU pods remain Ready
+  with zero Kubernetes restarts.
+
 ### 2026-07-26T17:24:35Z — 163,940 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1719-v469` independently
