@@ -376,7 +376,7 @@ def _require_jaxpp_explicit_mpmd():
     return jaxpp_explicit_mpmd
 
 
-def _prewarm_jaxpp_dime(mpmd_mesh: Any) -> None:
+def _prewarm_jaxpp_dime(mpmd_mesh: Any, mode: Literal["streams", "all"]) -> None:
     """Create adjacent-stage DIME resources in one global order."""
     if jaxpp_dime2 is None:
         raise ModuleNotFoundError("jaxpp.dime2 is required for GRUG_JAXPP_PREWARM_DIME")
@@ -395,8 +395,9 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any) -> None:
             if process_index not in participant_processes:
                 continue
 
-            devices = jaxpp_dime2.UniqueSortedDevices(source_device, target_device)
-            jaxpp_dime2.get_or_create_comm(devices)
+            if mode == "all":
+                devices = jaxpp_dime2.UniqueSortedDevices(source_device, target_device)
+                jaxpp_dime2.get_or_create_comm(devices)
             local_is_source = source_device.process_index == process_index
             local_device, remote_device = (
                 (source_device, target_device) if local_is_source else (target_device, source_device)
@@ -418,10 +419,11 @@ def _prewarm_jaxpp_dime(mpmd_mesh: Any) -> None:
             timeout,
         )
         logger.info(
-            "Prewarmed JaxPP DIME link %d->%d across %d device lanes",
+            "Prewarmed JaxPP DIME link %d->%d across %d device lanes in %s mode",
             source_stage,
             target_stage,
             devices_per_stage,
+            mode,
         )
 
 
@@ -3217,8 +3219,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 pipeline=config.trainer.pipeline,
                 mpmd_mesh=mpmd_mesh,
             )
-            if os.environ.get("GRUG_JAXPP_PREWARM_DIME", "false").lower() in ("1", "true", "yes", "on"):
-                _prewarm_jaxpp_dime(mpmd_mesh)
+            prewarm_dime = os.environ.get("GRUG_JAXPP_PREWARM_DIME")
+            if prewarm_dime is not None:
+                if prewarm_dime not in ("streams", "all"):
+                    raise ValueError("GRUG_JAXPP_PREWARM_DIME must be 'streams' or 'all'")
+                _prewarm_jaxpp_dime(mpmd_mesh, cast(Literal["streams", "all"], prewarm_dime))
             logger.warning("explicit_mpmd uses stage-local JaxPP arrays; checkpoint writes are disabled for now")
             checkpointer = None
         else:
