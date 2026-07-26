@@ -1483,6 +1483,66 @@ statistics for performance comparisons.
 - All four batch-priority 2-H100 workers continue serving requests. Their 12
   root, broker, and GPU pods remain Ready with zero Kubernetes restarts.
 
+### 2026-07-26T13:16:10Z — 136,346 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-1305-v326` independently
+  revalidated six p1 decision-file 37 checkpoints at semantic offsets 512
+  through 1,152 and six p2 decision-file 69 checkpoints at offsets 4,608
+  through 5,248. Their 1,536 pairs contain 1,040 model false positives, 495
+  model true duplicates, and one unresolved outcome. Four pairs were chunked
+  and 1,532 were direct. All 3,305 judgments were valid on their first
+  attempts. The outcome Parquet SHA-256 values, in p1 then p2 frontier order,
+  are:
+
+  - `8775bc4ade60935fd74dad9a0f7a39bcdcb71f39a0369d3a33c63bfded336842`;
+  - `996219006e79a8c75c55e8b29843edde45c9dc5a3e16aeb910d577645e7dd9d8`;
+  - `7b93e5ede5985029eb025f5edc59912affa984a89ac249b1935600ab12688401`;
+  - `7e06649b5067e7ce7aec1c1f3c7be7e6293e523d979662fb8b4b9b6644b91b53`;
+  - `ea771717b084d8580214989ac047aa5b2c02c65c52445cb4990b81e69c5ac729`;
+  - `836d4fe3a7dede79ac5ebe3f5cf7d726fe65ed54eb8a1eac950b2eaa6768addf`;
+  - `de77fb645bb45172d4ebc6085e65558bc066b6e7e866b5935d88b52bd3e83fdc`;
+  - `f9de4153a0ba020ac4885756da637f9c264e5ba742af5c934dc60a76c563a63a`;
+  - `e7b56ba2b6306272a6718f47501159ebc1e6b3ffaa6fa7933c50db05bfe29431`;
+  - `d0d8c7414cb523962314ebc81f9bb1604160cefd0247edd36a164cb9dcf46a50`;
+  - `60fe1a6ff3383943804963d7ccb0bdada27be533ff5a296a7ff3d991f1acd4c8`;
+  - `5ab9e26802ec8a7167514213e8a1dc8a123844589ad1cfeafff5f73a196d4c0f`.
+
+- Complete-text inspection resolves baseline
+  `part-00037-of-00128.parquet:1736` as a false positive. The 990-character
+  member contains the Eastep surname census record, including different race
+  and ethnicity statistics and two Eastep-specific questions and answers.
+  The 942-character canonical contains Landgraf statistics and different
+  questions. This is structured factual content, not the narrow incoherent
+  SEO, college, or career slot-template exception. Character, line, and word
+  sequence similarity are 0.783644, 0.551181, and 0.604230.
+  Member/canonical text SHA-256 values are
+  `762efedf8c3dd856d562e028f31f2d7a03f159c497002df37b31101423539bcd`
+  and
+  `0e11f48ff12fd12b1932031eb24d0bb69f55e54cf4d8ef7e715bfddbed8e5e9e`;
+  inspection SHA-256 is
+  `5c3ea8ddfe2870d93fd6a1cfb126ebe7068da46d266dffe895000532720da06d`.
+- `/rav/datakit-6854-publish-manual-row1736-1315-v330` wrote the immutable
+  manual record.
+  `/rav/datakit-6854-verify-manual-row1736-1315-v331` separately reread and
+  exactly checked the complete source pair, semantic checkpoint and evidence,
+  inspection artifact, deterministic Parquet bytes, and completion marker.
+  The semantic-evidence, manual-Parquet, and marker SHA-256 values are
+  `ce4b218f64e61806bc21c89cffc68f0e167f73c077ae85deeb6bf194d613d359`,
+  `6e0ab5da6d192942a845a7c92823a560141491e0b58346fa0a4ee34f2ba16a03`,
+  and `364b55736395c3f9c79dff8435b4f2340302e69f8a62dacb8d320f375fd77b42`.
+- Across the stable 1,073-checkpoint snapshot, all 154 unresolved model
+  outcomes are covered by 117 true-duplicate and 37 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 109,812 pairs, 69,990 false positives, 39,822 true duplicates;
+  - treatment: 26,534 pairs, 13,722 false positives, 12,812 true duplicates;
+  - combined: 136,346 pairs, 83,712 false positives, 52,634 true duplicates.
+
+- The next audit frontiers are p0 `(6, 0)`, p1 `(37, 1,280)`,
+  p2 `(69, 5,376)`, and p3 `(102, 128)`. All four batch-priority 2-H100
+  workers continue serving requests. Their 12 root, broker, and GPU pods
+  remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T13:00:41Z — 134,810 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-1251-v322` independently
