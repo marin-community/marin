@@ -31,6 +31,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _round_robin_ppermute_all_to_all,
     _same_expert_clone_dispatch_metadata,
     _same_expert_echo_dispatch_metadata,
+    _same_expert_echo_fixed_transport_metadata,
     _same_expert_hybridep_routing,
     _same_expert_pooled_dispatch_metadata,
     _sonic_unique_row_gather,
@@ -2106,6 +2107,20 @@ def test_same_expert_echo_dispatch_metadata_clones_only_hot_receiver_overflow():
     assert int(np.sum(global_group_sizes - retained_home)) == 8
 
 
+def test_same_expert_echo_fixed_transport_metadata_counts_only_envelope_overflow():
+    destination = jnp.array([0, 1, 0, 2, 1, 0], dtype=jnp.int32)
+
+    transport_position, keep, envelope_overflow = _same_expert_echo_fixed_transport_metadata(
+        destination,
+        expert_shards=2,
+        sender_destination_capacity=2,
+    )
+
+    np.testing.assert_array_equal(transport_position, np.array([0, 2, 1, 4, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(keep, np.array([True, True, True, False, True, False]))
+    assert int(envelope_overflow) == 1
+
+
 def test_same_expert_hybridep_routing_encodes_receiver_segments():
     flat_experts = jnp.asarray([0, 1, 0, 2, 1, 3, 2, 4, 3, 5, 4, 5], dtype=jnp.int32)
     destination = jnp.asarray([0, 0, 0, 1, 0, 1, 1, 2, 1, 2, 2, 2], dtype=jnp.int32)
@@ -2246,6 +2261,7 @@ def test_sparse_clone_weight_metadata_matches_sender_receiver_segments():
         (False, False, False, False),
         (True, False, False, False),
         (True, True, False, False),
+        (True, True, False, True),
         (True, True, True, True),
     ],
 )
@@ -2260,7 +2276,11 @@ def test_same_expert_cloned_fixed_a2a_matches_dense_value_and_grad(
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
     if sparse_weights and not mnnvl_transport and not any(device.platform == "gpu" for device in jax.devices()):
-        pytest.skip("XLA CPU does not implement ragged_all_to_all")
+        monkeypatch.setattr(
+            ep_ragged_a2a,
+            "_sparse_clone_weight_exchange",
+            _reference_sparse_clone_weight_exchange,
+        )
 
     monkeypatch.setenv("SCALE_A2A_FIXED", "1")
     monkeypatch.setenv("SCALE_A2A_SAME_EXPERT_CLONES", "1")

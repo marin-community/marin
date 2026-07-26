@@ -460,6 +460,35 @@ def _same_expert_echo_dispatch_metadata(
     return destination, receiver_slot, receiver_group_sizes, overflow
 
 
+def _same_expert_echo_fixed_transport_metadata(
+    destination: Int[Array, "TK"],
+    *,
+    expert_shards: int,
+    sender_destination_capacity: int,
+) -> tuple[Int[Array, "TK"], jax.Array, Int[Array, ""]]:
+    """Pack ECHO destinations into a fixed sender-to-receiver envelope."""
+    destination_rank = _stable_expert_local_rank(
+        destination,
+        num_experts=expert_shards + 1,
+    )
+    destination_valid = destination < expert_shards
+    within_envelope = jnp.logical_and(
+        destination_valid,
+        destination_rank < sender_destination_capacity,
+    )
+    transport_size = expert_shards * sender_destination_capacity
+    transport_position = jnp.where(
+        within_envelope,
+        destination * sender_destination_capacity + destination_rank,
+        transport_size,
+    )
+    envelope_overflow = jnp.sum(
+        jnp.logical_and(destination_valid, jnp.logical_not(within_envelope)),
+        dtype=jnp.int32,
+    )
+    return transport_position, within_envelope, envelope_overflow
+
+
 def _same_expert_hybridep_routing(
     destination: Int[Array, "TK"],
     flat_experts: Int[Array, "TK"],
@@ -755,10 +784,8 @@ def _same_expert_cloned_fixed_a2a_core(
         raise ValueError("MNNVL and HybridEP token transports are mutually exclusive")
     if use_hybridep_transport and not echo_dispatch:
         raise ValueError("SCALE_A2A_HYBRID_EP=1 requires SCALE_A2A_ECHO_CLONES=1")
-    if echo_dispatch and not (
-        pooled_dispatch and sparse_clone_weights and (use_mnnvl_transport or use_hybridep_transport)
-    ):
-        raise ValueError("SCALE_A2A_ECHO_CLONES=1 requires pooled sparse clone weights and a fabric transport")
+    if echo_dispatch and not (pooled_dispatch and sparse_clone_weights):
+        raise ValueError("SCALE_A2A_ECHO_CLONES=1 requires pooled sparse clone weights")
 
     use_barrier = os.environ.get("SCALE_A2A_NO_BARRIER") != "1"
     if use_barrier:
@@ -776,10 +803,18 @@ def _same_expert_cloned_fixed_a2a_core(
             receiver_capacity=receiver_capacity,
             max_receiver_segments=max_receiver_segments,
         )
-        send_size = assignments_per_shard
-        transport_position = jnp.arange(send_size, dtype=jnp.int32)
-        keep = destination < expert_shards
-        transport_position = jnp.where(keep, transport_position, send_size)
+        if use_mnnvl_transport or use_hybridep_transport:
+            send_size = assignments_per_shard
+            transport_position = jnp.arange(send_size, dtype=jnp.int32)
+            keep = destination < expert_shards
+            transport_position = jnp.where(keep, transport_position, send_size)
+        else:
+            transport_position, keep, envelope_overflow = _same_expert_echo_fixed_transport_metadata(
+                destination,
+                expert_shards=expert_shards,
+                sender_destination_capacity=sender_destination_capacity,
+            )
+            overflow = overflow + envelope_overflow
     elif pooled_dispatch:
         transport_position, receiver_slot, receiver_group_sizes, overflow = _same_expert_pooled_dispatch_metadata(
             flat_experts,
@@ -806,7 +841,15 @@ def _same_expert_cloned_fixed_a2a_core(
     with jax.named_scope("dispatch"):
         if echo_dispatch:
             send_destination = destination
-            send_receiver_slot = receiver_slot
+            if use_mnnvl_transport or use_hybridep_transport:
+                send_receiver_slot = receiver_slot
+            else:
+                send_receiver_slot = (
+                    jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
+                    .at[transport_position]
+                    .set(receiver_slot, mode="drop")
+                    .reshape(expert_shards, sender_destination_capacity)
+                )
         else:
             send_receiver_slot = (
                 jnp.full((send_size,), receiver_capacity, dtype=jnp.int32)
