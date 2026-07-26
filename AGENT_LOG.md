@@ -1618,3 +1618,43 @@ relative quantization error. Against a break-even requirement of a 2.73x QDQ red
 NOTE the next leg CANNOT inherit the previous leg's loss parity — the quantization scheme changes
 from per-token current to delayed per-tensor, so its loss verdict must stand alone.
 Confidence: 9/10 on the precision measurement; 7/10 that delayed scaling flips the sign at the rack.
+
+## LINEAGE 2026-07-26 13:40 UTC — delayed scaling is ALREADY BUILT; do not write it
+
+Searched the repo and all branches before implementing. Result: near-total reuse.
+
+**On this branch already (merged to main):** `lib/haliax/src/haliax/_src/fp8.py` is a
+reimplementation of TE's DelayedScaling recipe — `compute_scale` (:50), `compute_amax_history`
+(:64, `roll(hist,-1).at[0].set(max|x|)`), `update_fp8_meta` (:91, the delayed part: the new scale
+comes from `max(amax_history)` i.e. PREVIOUS steps, and the current amax only rolls in for the
+next step). Verified present. State container is
+`Fp8DotGeneralOp(OverwriteWithGradient)` in `lib/haliax/src/haliax/quantization.py:154` with
+input/kernel/output_grad scales + amax histories, `amax_history_length=1024`.
+
+**How the state rides:** it is MODEL state, not optimizer state, updated through the gradient
+channel — `partition_for_grad_overwrite` / `apply_updates`
+(`levanter/trainer_state.py:257-262`), excluded from optimizer state at :180.
+
+**The pmax trap is already solved, with a test.** `_pmax_replicated_cotangent` in
+`levanter/grug/_moe/ep_common.py` (NOT on this branch; newest source
+`origin/research/jaxpp-grug-moe`, also `origin/research/mcwitt/7271-mxfp8-quality`):
+`pmax(ct, axes) / mesh_size`, so shard_map's implicit outer psum over a replicated input's
+cotangent reconstructs exactly `pmax`. Covered by
+`test_moe_ragged_dot_ops.py::test_replicated_cotangent_maxes_overwrite_state_and_sums_plain_gradient`.
+This is precisely the trap flagged twice in this thread, already fixed elsewhere.
+
+**Also exists on branches:** `haliax/_src/fp8_ragged.py` (`fp8_scaled_ragged_dot`, delayed
+per-tensor, TE-style), `fp8_cast_transpose.py` (fused Pallas/Mosaic cast+transpose+amax),
+`Fp8RaggedDotOp`, and a recipe selector `GrugFp8Config(recipe="auto"|"per_tensor"|"mxfp8")` that
+routes sm90 -> delayed per-tensor and sm100+ -> stateless MXFP8.
+
+**Gotcha found while reading, worth checking before reuse:** `levanter/grad_accum.py:132-133`
+*replaces* rather than maxes overwrite leaves across microbatches, which is wrong for amax history
+under gradient accumulation. Not a blocker here (this config does not microbatch) but it would
+silently corrupt the history if it did.
+
+Revised plan: cherry-pick `_pmax_replicated_cotangent` and reuse `update_fp8_meta` /
+`compute_scale` / `compute_amax_history` + `OverwriteWithGradient` as the state channel, applying
+them at the WIRE quantization site rather than to a dot_general. That is plumbing, not new
+numerics — and it removes the last reason this would have taken days.
+Confidence: 9/10 that reuse covers the state machinery and the pmax reduction.
