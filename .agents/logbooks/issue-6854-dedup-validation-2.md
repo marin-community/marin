@@ -16,6 +16,92 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-26T21:58:10Z — 187,411 pairs verified
+
+- `/rav/datakit-6854-audit-next-checkpoints-2145-v651` independently
+  revalidated five p1 decision-file 39 checkpoints at semantic offsets 3,840
+  through 4,352 and p2 decision-file 72 offset 0. Their 768 baseline pairs
+  contain 559 model false positives, 206 model true duplicates, and three
+  unresolved outcomes. Sixteen pairs were chunked and 752 were direct. The
+  2,448 judgments required 2,461 request attempts: 2,444 were valid, and 17
+  invalid JSON attempts affected eight retried judgments.
+
+- The outcome Parquet SHA-256 values are:
+
+  - p1:
+    `a9ffebe483ec353572ba61d5683b2fa3eba50e0b3b11d168f368d85e296aadb5`,
+    `2c9aaa2062502a293acc8985566e5166bc2b324da99ae15cfaa567c5f7f7ce7b`,
+    `b574c9b69fa450dbf3ba5ca7b95f87d1c2c19ef622205ccb89e5a8ad7b38d543`,
+    `31b766f1cb9f1b396a5b301c980eb5c41031d90db1947e65c0ae4d81879db32a`,
+    and
+    `b195caf3a42201d25bf12e7ee8948b380f9f35b03b5484f91ca0690c0bff0427`;
+  - p2:
+    `62e9ea1a64b31374d402f357ffca962f6cd130ee05c384c08dba15cf8b09972e`.
+
+- Three separate inspection jobs read, hash-bound, and persisted every
+  complete unresolved pair. All three are true duplicates:
+
+  - Row 7,394 is a 15,941-character member and 15,948-character canonical
+    with character, line, and word-sequence similarity 0.999780, 0.997067,
+    and 0.999820. The complete Davisson-Germer examples differ only by the
+    final `\boxed{J}` versus `\boxed{\text{J}}`.
+  - Row 7,397 is a 10,666-character member and 10,673-character canonical
+    with similarity 0.999672, 0.993976, and 0.999704. The complete
+    conditioning examples differ only by the final `\boxed{A}` versus
+    `\boxed{\text{A}}`.
+  - Row 7,402 is a 9,461-character member and 9,468-character canonical with
+    similarity 0.999630, 0.994898, and 0.999665. The complete
+    diabetes-prevention examples differ only by the final `\boxed{C}` versus
+    `\boxed{\text{C}}`.
+
+- The inspection jobs for rows 7,394, 7,397, and 7,402 are
+  `/rav/datakit-6854-inspect-row7394-2147-v652`,
+  `/rav/datakit-6854-inspect-row7397-2147-v653`, and
+  `/rav/datakit-6854-inspect-row7402-2148-v654`. Their inspection SHA-256
+  values are
+  `da845e1e0ffb5735d5421dcf4516bd1685c89f272617790a7401166a6a58184a`,
+  `113815c967a1d1d6c0a70535ed27114c0dae5c1485468f8a9f13ebfc262f90b6`,
+  and
+  `9f3fa5737231bf407ffee33f801e5edb8ca90321a9f74abb124089e047faf247`.
+  Their semantic-judgment SHA-256 values are
+  `40f04cc71d87a91bb2bf3f1b71ef4e09839c9586fed046e3260acf1d3375de42`,
+  `c1bdd4365b2501a7cd8c2380b70f9ece9076c4a27d01ed99ff11f5dc17206e33`,
+  and
+  `cbf08d836aeb70035ac7f79f2a2f818e2168b57e6504d739b930030b445be765`.
+
+- `/rav/datakit-6854-publish-row7394-2154-v655`,
+  `/rav/datakit-6854-publish-row7397-2155-v656`, and
+  `/rav/datakit-6854-publish-row7402-2155-v657` wrote the three manual Parquet
+  and completion-marker pairs. Their manual SHA-256 values are
+  `799bc0ccb52991a44c9a3d9602c5de8837176e62ae42c2314f9f81734313d9f6`,
+  `d81d3bb64a327c101a17f892ec41000f2a354f031244aee4581bfbfbb41880bf`,
+  and
+  `08e8430f68498ac9b8dcde0ae63a0f2e082f330664b8b7af617c52e26d8be126`.
+  Their marker SHA-256 values are
+  `497d7d84e10afc847d16134d322b20be34fd6018372a8b8369c68fab7b08f829`,
+  `17da41eb16088369cac5b31c7ac928ff625ed4cd7122e9fc7f0b724a66343544`,
+  and
+  `fca2ca7f60c292314f4dbaca24f4f4a664d3df72419b8240a42af9263bae1426`.
+  `/rav/datakit-6854-verify-row7394-2157-v660`,
+  `/rav/datakit-6854-verify-row7397-2156-v659`, and
+  `/rav/datakit-6854-verify-row7402-2156-v658` independently fetched and
+  verified the exact artifacts.
+
+- Across the stable 1,475-checkpoint snapshot, all 216 unresolved model
+  outcomes are covered by 166 true-duplicate and 50 false-positive manual
+  records. The adjusted totals are:
+
+  - baseline: 150,572 pairs, 95,629 false positives, 54,943 true duplicates;
+  - treatment: 36,839 pairs, 19,053 false positives, 17,786 true duplicates;
+  - combined: 187,411 pairs, 114,682 false positives, 72,729 true duplicates.
+
+- The next audit frontiers are p0 `(8, 0)`, p1 `(39, 4,480)`, p2 `(72, 128)`,
+  and p3 `(104, 128)`. P1's next baseline batch has 128 review units and 256
+  minimum model requests with no oversized pairs. P2's next batch has 1,233
+  review units and 2,466 minimum requests, including 15 oversized pairs. All
+  four batch-priority 2-H100 workers continue serving requests. Their 12 root,
+  broker, and GPU pods remain Ready with zero Kubernetes restarts.
+
 ### 2026-07-26T21:43:45Z — 186,643 pairs verified
 
 - `/rav/datakit-6854-audit-next-checkpoints-2135-v641` independently
