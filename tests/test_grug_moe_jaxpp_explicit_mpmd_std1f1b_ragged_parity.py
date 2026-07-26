@@ -12,6 +12,7 @@ from experiments.grug.moe.check_jaxpp_explicit_mpmd_std1f1b_ragged_parity import
     build_stage_parity_report,
     captured_gradients,
     gradient_capture_optimizer,
+    local_precompile_enabled,
     validate_authoritative_topology,
     validate_device_ragged_flags,
 )
@@ -74,6 +75,15 @@ def test_device_ragged_validation_rejects_host_initiated_mode():
 
     with pytest.raises(ValueError, match="device-ragged parity requires"):
         validate_device_ragged_flags("--xla_gpu_autotune_level=0")
+
+
+def test_local_precompile_requires_explicit_binary_opt_in():
+    assert not local_precompile_enabled({})
+    assert not local_precompile_enabled({"GRUG_JAXPP_PRECOMPILE_LOCAL": "0"})
+    assert local_precompile_enabled({"GRUG_JAXPP_PRECOMPILE_LOCAL": "1"})
+
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        local_precompile_enabled({"GRUG_JAXPP_PRECOMPILE_LOCAL": "true"})
 
 
 def test_direct_reference_can_be_loaded_from_another_pipeline_rank(monkeypatch):

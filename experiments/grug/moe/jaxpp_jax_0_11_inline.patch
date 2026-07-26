@@ -1,9 +1,106 @@
+diff --git a/src/jaxpp/experimental/_mpmd.py b/src/jaxpp/experimental/_mpmd.py
+index 60c6401..c2fed19 100644
+--- a/src/jaxpp/experimental/_mpmd.py
++++ b/src/jaxpp/experimental/_mpmd.py
+@@ -51,0 +52 @@ from jaxpp.jax_primitives import (
++    precompile_task,
+@@ -56,0 +58 @@ from jaxpp.jax_primitives import (
++    zeros_p,
+@@ -551,0 +554,7 @@ def _mpmd_trace(
++@dataclasses.dataclass(frozen=True)
++class PrecompiledLocalExecution:
++    local_jaxpr: LocalJaxpr
++    recv_buffers: tuple[Any, ...]
++    task_count: int
++
++
+@@ -586,0 +596,81 @@ class LoweredMpmdFun:
++    def precompile_local(self, *local_args: Any) -> PrecompiledLocalExecution:
++        local_jaxpr = self._local_jaxpr
++        if len(local_args) != len(local_jaxpr.closed_jaxpr.invars):
++            raise ValueError(
++                "precompile_local expects arguments in "
++                "local_jaxpr.global_invar_indices order: expected "
++                f"{len(local_jaxpr.closed_jaxpr.invars)}, got {len(local_args)}"
++            )
++
++        recv_buffers: tuple[Any, ...] = ()
++        task_count = 0
++        with self.mpmd_mesh:
++            for eqn in local_jaxpr.closed_jaxpr.eqns:
++                if eqn.primitive is zeros_p:
++                    if recv_buffers:
++                        raise ValueError(
++                            "precompile_local supports one receive-buffer prologue"
++                        )
++                    recv_buffers = tuple(
++                        zeros_p.bind(**eqn.primitive.get_bind_params(eqn.params))
++                    )
++                    jax.block_until_ready(recv_buffers)
++                elif eqn.primitive is task_p:
++                    precompile_task(
++                        **eqn.primitive.get_bind_params(eqn.params)
++                    )
++                    task_count += 1
++
++        return PrecompiledLocalExecution(
++            local_jaxpr=local_jaxpr,
++            recv_buffers=recv_buffers,
++            task_count=task_count,
++        )
++
++    def eval_local_precompiled(
++        self,
++        execution: PrecompiledLocalExecution,
++        *local_args: Any,
++    ) -> list[Any]:
++        local_jaxpr = self._local_jaxpr
++        if execution.local_jaxpr is not local_jaxpr:
++            raise ValueError(
++                "precompiled execution belongs to a different local jaxpr"
++            )
++        if len(local_args) != len(local_jaxpr.closed_jaxpr.invars):
++            raise ValueError(
++                "eval_local_precompiled expects arguments in "
++                "local_jaxpr.global_invar_indices order: expected "
++                f"{len(local_jaxpr.closed_jaxpr.invars)}, got {len(local_args)}"
++            )
++
++        jaxpr = local_jaxpr.closed_jaxpr.jaxpr
++        if not execution.recv_buffers:
++            with self.mpmd_mesh:
++                return jcore.eval_jaxpr(
++                    jaxpr,
++                    local_jaxpr.closed_jaxpr.consts,
++                    *local_args,
++                )
++
++        zeros_eqn, *runtime_eqns = jaxpr.eqns
++        if zeros_eqn.primitive is not zeros_p:
++            raise ValueError(
++                "precompiled receive buffers require a leading zeros prologue"
++            )
++        if len(zeros_eqn.outvars) != len(execution.recv_buffers):
++            raise ValueError(
++                "precompiled receive-buffer count does not match zeros prologue"
++            )
++        runtime_jaxpr = jaxpr.replace(
++            invars=[*jaxpr.invars, *zeros_eqn.outvars],
++            eqns=runtime_eqns,
++        )
++        with self.mpmd_mesh:
++            return jcore.eval_jaxpr(
++                runtime_jaxpr,
++                local_jaxpr.closed_jaxpr.consts,
++                *local_args,
++                *execution.recv_buffers,
++            )
++
 diff --git a/src/jaxpp/jax_compat/__init__.py b/src/jaxpp/jax_compat/__init__.py
 index 16efcfa..3840ad8 100644
 --- a/src/jaxpp/jax_compat/__init__.py
 +++ b/src/jaxpp/jax_compat/__init__.py
-@@ -130 +130,15 @@
--if jax.__version_info__ < (0, 10):
+@@ -129,0 +130,14 @@ else:
 +if jax.__version_info__ >= (0, 11):
 +    from jax._src import api as _api
 +
@@ -18,9 +115,8 @@ index 16efcfa..3840ad8 100644
 +        return inline
 +
 +
-+if jax.__version_info__ < (0, 10):
 diff --git a/src/jaxpp/jax_primitives.py b/src/jaxpp/jax_primitives.py
-index 0d5cebe..a5adb98 100644
+index 0d5cebe..bb4425e 100644
 --- a/src/jaxpp/jax_primitives.py
 +++ b/src/jaxpp/jax_primitives.py
 @@ -1006 +1006,3 @@ class PjitKwargs:
@@ -28,3 +124,92 @@ index 0d5cebe..a5adb98 100644
 +        values = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 +        values["inline"] = jc.canonicalize_pjit_inline(values["inline"])
 +        return values
+@@ -1037,0 +1040,65 @@ def callable_task(prim: jcore.Primitive, params: PjitKwargs):
++_precompiled_callable_tasks: dict[tuple[jcore.Primitive, PjitKwargs], Any] = {}
++
++
++def _task_pjit_kwargs(
++    *,
++    call_jaxpr: jcore.ClosedJaxpr,
++    task_name,
++    mpmd_idx,
++    in_shardings: tuple[jax.NamedSharding, ...],
++    out_shardings: tuple[jax.NamedSharding, ...],
++    donate_invars,
++) -> PjitKwargs:
++    mpmd_mesh = MpmdMesh.mesh_stack[-1]
++    _, mesh = _resolve_placement(mpmd_mesh, mpmd_idx, name="task mpmd_idx")
++    return PjitKwargs(
++        jaxpr=call_jaxpr,
++        in_shardings=in_shardings,
++        out_shardings=out_shardings,
++        in_layouts=(None,) * len(call_jaxpr.in_avals),
++        out_layouts=(None,) * len(out_shardings),
++        donated_invars=tuple(donate_invars),
++        ctx_mesh=mesh,
++        name=task_name,
++    )
++
++
++def precompile_task(
++    *,
++    call_jaxpr: jcore.ClosedJaxpr,
++    task_name,
++    task_info,
++    mpmd_idx,
++    in_shardings: tuple[jax.NamedSharding, ...],
++    out_shardings: tuple[jax.NamedSharding, ...],
++    donate_invars,
++    latency: float | None = None,
++    call_counter: int | None = None,
++):
++    del task_info, latency, call_counter
++    params = _task_pjit_kwargs(
++        call_jaxpr=call_jaxpr,
++        task_name=task_name,
++        mpmd_idx=mpmd_idx,
++        in_shardings=in_shardings,
++        out_shardings=out_shardings,
++        donate_invars=donate_invars,
++    )
++    abstract_args = tuple(
++        jax.ShapeDtypeStruct(
++            aval.shape,
++            aval.dtype,
++            sharding=sharding,
++            weak_type=getattr(aval, "weak_type", False),
++        )
++        for aval, sharding in zip(
++            call_jaxpr.in_avals, in_shardings, strict=True
++        )
++    )
++    key = (jc.jit_p, params)
++    with jax.set_mesh(params.ctx_mesh):
++        compiled = callable_task(*key).lower(*abstract_args).compile()
++    _precompiled_callable_tasks[key] = compiled
++    return compiled
++
++
+@@ -1042,0 +1110,3 @@ def apply_task(prim: jcore.Primitive, *args, params: PjitKwargs):
++        precompiled = _precompiled_callable_tasks.get((prim, params))
++        if precompiled is not None:
++            return precompiled(*args)
+@@ -1102,4 +1172,7 @@ def task_impl(
+-    mpmd_indices, mesh = _resolve_placement(mpmd_mesh, mpmd_idx, name="task mpmd_idx")
+-
+-    pjit_kwargs = PjitKwargs(
+-        jaxpr=call_jaxpr,
++    mpmd_indices, _ = _resolve_placement(
++        mpmd_mesh, mpmd_idx, name="task mpmd_idx"
++    )
++    pjit_kwargs = _task_pjit_kwargs(
++        call_jaxpr=call_jaxpr,
++        task_name=task_name,
++        mpmd_idx=mpmd_idx,
+@@ -1108,5 +1181 @@ def task_impl(
+-        in_layouts=(None,) * len(args),
+-        out_layouts=(None,) * len(out_shardings),
+-        donated_invars=tuple(donate_invars),
+-        ctx_mesh=mesh,
+-        name=task_name,
++        donate_invars=donate_invars,

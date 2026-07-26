@@ -19,6 +19,7 @@ from ``train.py``, run the command below in every task of a four-replica
 H100x8 Iris job:
 
     JAXPP_SOURCE=/tmp/jaxpp \
+    GRUG_JAXPP_PRECOMPILE_LOCAL=1 \
     XLA_PYTHON_CLIENT_MEM_FRACTION=.35 \
     XLA_FLAGS="--xla_gpu_autotune_level=0 \
       --xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true \
@@ -33,7 +34,10 @@ microbatch losses. The explicit arm executes ``train.py``'s production
 ``std_1f1b`` step with an observation-only Optax transform that leaves
 parameters unchanged and stores each averaged stage-local gradient directly in
 optimizer state. Loss and every gradient leaf must have relative-L2 at most
-0.002.
+0.002. ``GRUG_JAXPP_PRECOMPILE_LOCAL=1`` activates a research-only control
+from ``jaxpp_jax_0_11_inline.patch``: every rank precompiles its exact local
+task call-jaxprs, allocates its bufferized receive prologue, and enters a host
+barrier before any transfer equation is evaluated.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ import sys
 import tempfile
 import traceback
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +84,7 @@ COORDINATOR_PORT = 5847
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _DEVICE_RAGGED_FLAG = "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true"
 _DIRECT_REFERENCE_DEVICE_PAIRS = ("0,1", "2,3", "4,5", "6,7")
+_PRECOMPILE_LOCAL_ENV = "GRUG_JAXPP_PRECOMPILE_LOCAL"
 
 
 def _event(process_id: int, event: str, **fields: Any) -> None:
@@ -105,6 +111,57 @@ def validate_device_ragged_flags(xla_flags: str) -> None:
     """Reject host-initiated ragged-all-to-all execution."""
     if _DEVICE_RAGGED_FLAG not in xla_flags.split():
         raise ValueError(f"device-ragged parity requires XLA_FLAGS to contain {_DEVICE_RAGGED_FLAG}")
+
+
+def local_precompile_enabled(environment: dict[str, str]) -> bool:
+    """Return whether the research-only JaxPP local precompile control is enabled."""
+    value = environment.get(_PRECOMPILE_LOCAL_ENV, "0")
+    if value not in {"0", "1"}:
+        raise ValueError(f"{_PRECOMPILE_LOCAL_ENV} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
+@dataclass(frozen=True)
+class _PrecompiledLoweredMpmdFun:
+    lowered: Any
+    execution: Any
+
+    @property
+    def in_shardings(self):
+        return self.lowered.in_shardings
+
+    @property
+    def _local_jaxpr(self):
+        return self.lowered._local_jaxpr
+
+    @property
+    def mpmd_mesh(self):
+        return self.lowered.mpmd_mesh
+
+    @property
+    def out_shape(self):
+        return self.lowered.out_shape
+
+    def eval_local(self, *local_args):
+        return self.lowered.eval_local_precompiled(self.execution, *local_args)
+
+
+def _precompile_local_explicit_step(
+    explicit_step: grug_train._LocalLoweredExplicitMpmdStep,
+    state: grug_train.GrugPipelineTrainState,
+    batches: tuple[GrugLmExample, ...],
+) -> tuple[grug_train._LocalLoweredExplicitMpmdStep, Any]:
+    flat_args, args_tree = jax.tree_util.tree_flatten((state, batches))
+    lowered = explicit_step.lowered
+    in_tree = jax.tree_util.tree_structure(lowered.in_shardings)
+    if args_tree != in_tree:
+        raise ValueError("local precompile received an unexpected input tree")
+    local_jaxpr = lowered._local_jaxpr
+    execution = lowered.precompile_local(*(flat_args[idx] for idx in local_jaxpr.global_invar_indices))
+    return (
+        grug_train._LocalLoweredExplicitMpmdStep(_PrecompiledLoweredMpmdFun(lowered, execution)),
+        execution,
+    )
 
 
 def gradient_capture_optimizer() -> optax.GradientTransformation:
@@ -515,6 +572,22 @@ def _run_initialized_worker(
         )
         explicit_step = grug_train._LocalLoweredExplicitMpmdStep(explicit_step.lower(pipeline_state, stage_batches))
         _event(process_id, "explicit_lower_complete", stage_index=local_stage_index)
+        if local_precompile_enabled(os.environ):
+            _event(process_id, "explicit_precompile_start", stage_index=local_stage_index)
+            explicit_step, precompiled_execution = _precompile_local_explicit_step(
+                explicit_step,
+                pipeline_state,
+                stage_batches,
+            )
+            _event(
+                process_id,
+                "explicit_precompile_complete",
+                stage_index=local_stage_index,
+                task_count=precompiled_execution.task_count,
+                recv_buffer_count=len(precompiled_execution.recv_buffers),
+            )
+            _wait_at_jaxpp_barrier("grug_ragged_parity_explicit_precompiled")
+            _event(process_id, "explicit_precompile_barrier_complete", stage_index=local_stage_index)
         _event(process_id, "explicit_execute_start", stage_index=local_stage_index)
         next_state, metrics, _ = explicit_step(pipeline_state, stage_batches)
         jax.block_until_ready((next_state, metrics))
