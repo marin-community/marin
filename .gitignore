@@ -224,6 +224,7 @@ gha-creds-*.json
 
 *.jsonl
 **/*.jsonl
+!/tests/**/data/*.jsonl
 scr/*
 .weaver/
 

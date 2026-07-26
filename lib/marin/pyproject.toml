@@ -83,7 +83,7 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14", "antlr4-python3-runtime==4.11"]
 
 dev = [
     { include-group = "test" },
@@ -204,7 +204,7 @@ datakit = [
     "duckdb>=1.0.0",
 ]
 
-math = ["pylatexenc", "sympy"]
+math = ["pylatexenc", "sympy", "antlr4-python3-runtime==4.11"]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
