@@ -398,3 +398,9 @@ Draft committed locally, NOT pushed/posted. Ready for human.
   control = QB-on cf1.0 adjoint (SCALE_MOE_QB=1 SCALE_REPORT_DROPS=1 SCALE_A2A_GATHER_DISPATCH=1
   SCALE_A2A_CUSTOM_ADJOINT=1), treatment = + SCALE_A2A_BATCH_EXPERTS=1. 120 steps, cf1.0, DISABLE_CHECKPOINT.
 - Code is committed and parity-proven (65e3ca50d bit-exact); no code work blocked, only the rack measurement.
+
+## R6-1 rerun 18:23 local — hold lifted, control resubmitted
+Canary flipped (multi-arch log-shipper fixed, controller restarted). Resubmitted control
+/mwittmann/ep25d1-qbon-adj-control-120-0725-1823 = QB-on cf1.0 adjoint + drops, 120 steps. Poller bs63gv65n
+does an EARLY log-flow probe once running (>=3 metric lines around step ~5) so we catch any loss before harvest,
+then harvests at terminal. Treatment (+SCALE_A2A_BATCH_EXPERTS=1) goes back-to-back after control terminates.
