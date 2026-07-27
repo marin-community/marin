@@ -15,8 +15,7 @@ class UbXRoutingMaps(NamedTuple):
     dispatch_topk_slot: Int[Array, "Tlocal K"]
     inverse_map: Int[Array, "S 4"]
     topk_idx: Int[Array, "Tlocal K"]
-    compact_slots: Int[Array, "C"]
-    compact_valid: Bool[Array, "C"]
+    dispatch_valid: Bool[Array, "C"]
     group_sizes: Int[Array, "Elocal"]
     accepted_local: Bool[Array, "Tlocal K"]
     accepted_counts: Int[Array, "E"]
@@ -79,6 +78,8 @@ def build_ubx_routing_maps(
     )
     accepted_counts = jnp.sum(routing, axis=0, dtype=jnp.int32)
     prefix = jnp.cumsum(routing, axis=0, dtype=jnp.int32) - routing
+    counts_by_rank = accepted_counts.reshape(num_ranks, local_experts)
+    expert_bases = jnp.cumsum(counts_by_rank, axis=1, dtype=jnp.int32) - counts_by_rank
 
     # UB-X scans expert ids in ascending order. Sorting the accepted top-k
     # reproduces its dispatch map and combine k-index independently of the
@@ -88,7 +89,10 @@ def build_ubx_routing_maps(
     sorted_valid = sorted_experts < num_experts
     sorted_safe = jnp.minimum(sorted_experts, num_experts - 1)
     sorted_prefix = jnp.take_along_axis(prefix, sorted_safe, axis=1)
-    sorted_slots = (sorted_safe % local_experts) * capacity + sorted_prefix
+    sorted_destination_rank = sorted_safe // local_experts
+    sorted_local_expert = sorted_safe % local_experts
+    sorted_base = expert_bases[sorted_destination_rank, sorted_local_expert]
+    sorted_slots = sorted_base + sorted_prefix
     sorted_experts = jnp.where(sorted_valid, sorted_experts, -1)
     sorted_slots = jnp.where(sorted_valid, sorted_slots, -1)
 
@@ -99,7 +103,10 @@ def build_ubx_routing_maps(
     accepted_local = jax.lax.dynamic_slice_in_dim(accepted, local_start, local_tokens, axis=0)
 
     assignment_prefix = jnp.take_along_axis(prefix, selected, axis=1)
-    assignment_slots = (selected % local_experts) * capacity + assignment_prefix
+    assignment_destination_rank = selected // local_experts
+    assignment_local_expert = selected % local_experts
+    assignment_base = expert_bases[assignment_destination_rank, assignment_local_expert]
+    assignment_slots = assignment_base + assignment_prefix
     lower_accepted = accepted[:, None, :] & (selected[:, None, :] < selected[:, :, None])
     combine_k = jnp.sum(lower_accepted, axis=2, dtype=jnp.int32)
     destination_rank = selected // local_experts
@@ -117,7 +124,7 @@ def build_ubx_routing_maps(
         ),
         axis=-1,
     )
-    max_slots_per_rank = local_experts * capacity
+    max_slots_per_rank = capacity
     inverse_safe = jnp.where(owned, assignment_slots, max_slots_per_rank)
     inverse_map = (
         jnp.zeros((max_slots_per_rank + 1, 4), dtype=jnp.int32)
@@ -128,8 +135,7 @@ def build_ubx_routing_maps(
     expert_start = jnp.asarray(rank, dtype=jnp.int32) * local_experts
     local_counts = jax.lax.dynamic_slice_in_dim(accepted_counts, expert_start, local_experts, axis=0)
     accepted_local_total = jnp.sum(local_counts, dtype=jnp.int32)
-    compact_slots = jnp.nonzero(inverse_map[:, 3], size=capacity, fill_value=0)[0].astype(jnp.int32)
-    compact_valid = jnp.arange(capacity, dtype=jnp.int32) < accepted_local_total
+    dispatch_valid = jnp.arange(capacity, dtype=jnp.int32) < accepted_local_total
     group_sizes = local_counts.at[-1].add(capacity - jnp.sum(local_counts, dtype=jnp.int32))
 
     original_counts = jnp.bincount(selected.reshape(-1), length=num_experts).astype(jnp.int32)
@@ -141,8 +147,7 @@ def build_ubx_routing_maps(
         dispatch_topk_slot=dispatch_topk_slot,
         inverse_map=inverse_map,
         topk_idx=dispatch_topk_expert,
-        compact_slots=compact_slots,
-        compact_valid=compact_valid,
+        dispatch_valid=dispatch_valid,
         group_sizes=group_sizes,
         accepted_local=accepted_local,
         accepted_counts=accepted_counts,
