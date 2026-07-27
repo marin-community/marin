@@ -123,7 +123,7 @@ gpu = [
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # SonicMoE grouped GEMMs and their JAX TVM-FFI bridge.
-  "quack-kernels==0.5.0; sys_platform == 'linux'",
+  "quack-kernels==0.6.1; sys_platform == 'linux'",
   "jax-tvm-ffi==0.1.3; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
