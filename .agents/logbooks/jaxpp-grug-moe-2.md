@@ -574,3 +574,16 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Do not launch this unchanged graph.
 - Next action:
   - Test an FP8 wire format inside the bulk ring itself. Per-token scaled FP8 all-gather plus shared-scale FP8 reduce-scatter targets the dominant MoE payloads, unlike the previously tested FP8 inter-stage wire and FP8 expert GEMMs. Require direct output/every-gradient relative-L2 at most `0.002` and at least `1.10x` value-and-grad speedup.
+
+### 2026-07-26 23:53 PDT - FP8 bulk-ring wire lowers forward and backward payloads
+- Hypothesis: Per-token scaled E4M3 activation all-gather and shared-scale E4M3 output reduce-scatter will halve the dominant exact-ring payloads while retaining BF16 expert GEMMs and bounded final tensor error.
+- Changes:
+  - Benchmark-only `ring_fp8_wire_approx` preserves the existing routing, capacity, BF16 expert weights, and BF16 Pallas-Triton GEMMs.
+  - Dispatch quantizes each local token with a stop-gradient FP32 scale, gathers E4M3 values and scales separately, then dequantizes before expert compute.
+  - Combine computes a shared expert-axis per-token scale, leaves headroom for at most `min(top_k, expert_axis_size)` contributing ranks, reduce-scatters E4M3 values, and dequantizes the local shard.
+  - The default `ring` path is unchanged and the new mode is explicitly marked approximate and non-promotable by the benchmark itself.
+- Validation:
+  - Forced EP8 forward and full value-and-grad StableHLO contain E4M3 all-gather and reduce-scatter payloads with no BF16 all-gather payload.
+  - Focused tests pass `20/20`; changed-file precommit including Pyrefly passes; `git diff --check` is clean.
+- Next action:
+  - Commit and run the one-H100x8 exact d2560/i1280/e64/top-k4/microbatch32/sequence-4096 direct A/B. Require finite output and all gradients, relative-L2 at most `0.002` for each, zero drop mismatch, and at least `1.10x` median value-and-grad speedup.

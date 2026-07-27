@@ -24,6 +24,9 @@ from levanter.grug._moe.sonic_quack import quack_mlp_varlen
 from levanter.grug.sharding import _batch_axes
 
 
+_RING_FP8_WIRE_DTYPE = jnp.float8_e4m3fn
+
+
 class _RingRouting(NamedTuple):
     assignment_indices: Int[Array, "C"]
     valid: Bool[Array, "C"]
@@ -50,6 +53,60 @@ class _BulkRingExpertState(NamedTuple):
     """Expert-sharded state between bulk-ring expert compute and combine."""
 
     out_dispatch: Float[Array, "C H"]
+
+
+def _validate_fp8_wire_contract(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+) -> None:
+    if x_local.dtype != jnp.bfloat16 or moe_w13_local.dtype != jnp.bfloat16 or moe_w2_local.dtype != jnp.bfloat16:
+        raise TypeError("approximate FP8 ring wire requires bfloat16 activations and expert weights")
+    if combine_weights_local.dtype != jnp.float32:
+        raise TypeError("approximate FP8 ring wire requires float32 combine weights")
+    if not jnp.issubdtype(selected_experts_local.dtype, jnp.integer):
+        raise TypeError("approximate FP8 ring wire requires integer selected experts")
+    if x_local.ndim != 2 or selected_experts_local.ndim != 2 or combine_weights_local.ndim != 2:
+        raise ValueError("approximate FP8 ring wire inputs must have shapes [T,H], [T,K], and [T,K]")
+    if moe_w13_local.ndim != 3 or moe_w2_local.ndim != 3:
+        raise ValueError("approximate FP8 ring wire weights must have shapes [Elocal,H,2I] and [Elocal,I,H]")
+    if selected_experts_local.shape != combine_weights_local.shape:
+        raise ValueError("approximate FP8 ring wire selected experts and combine weights must have the same shape")
+    if x_local.shape[0] != selected_experts_local.shape[0]:
+        raise ValueError("approximate FP8 ring wire routing must have one row per activation token")
+    if x_local.shape[1] == 0 or selected_experts_local.shape[1] == 0:
+        raise ValueError("approximate FP8 ring wire hidden and top-k dimensions must be non-empty")
+    if moe_w13_local.shape[0] != moe_w2_local.shape[0]:
+        raise ValueError("approximate FP8 ring wire W13 and W2 must have the same local expert count")
+    if moe_w13_local.shape[1] != x_local.shape[1] or moe_w2_local.shape[2] != x_local.shape[1]:
+        raise ValueError("approximate FP8 ring wire W13/W2 hidden dimensions must match the activations")
+    if moe_w13_local.shape[2] != 2 * moe_w2_local.shape[1]:
+        raise ValueError("approximate FP8 ring wire W13 output must be twice the W2 intermediate dimension")
+
+
+def _quantize_fp8_wire_per_token(
+    value: Float[Array, "T H"],
+    *,
+    reduction_terms: int = 1,
+) -> tuple[Array, Float[Array, "T"]]:
+    if reduction_terms <= 0:
+        raise ValueError(f"reduction_terms must be positive, got {reduction_terms}")
+    value_f32 = value.astype(jnp.float32)
+    amax = jnp.max(jnp.abs(value_f32), axis=-1)
+    fp8_max = jnp.asarray(jnp.finfo(_RING_FP8_WIRE_DTYPE).max, dtype=jnp.float32)
+    dequant_scale = jnp.where(amax > 0, amax * reduction_terms / fp8_max, jnp.ones_like(amax))
+    dequant_scale = jax.lax.stop_gradient(dequant_scale)
+    quantized = (value_f32 / dequant_scale[:, None]).astype(_RING_FP8_WIRE_DTYPE)
+    return quantized, dequant_scale
+
+
+def _dequantize_fp8_wire_per_token(
+    quantized: Array,
+    dequant_scale: Float[Array, "T"],
+) -> Float[Array, "T H"]:
+    return (quantized.astype(jnp.float32) * dequant_scale[:, None]).astype(jnp.bfloat16)
 
 
 def _ring_routing_prepass(
@@ -148,6 +205,36 @@ def _bulk_ring_dispatch_from_routing(
     )
 
 
+def _bulk_ring_fp8_wire_dispatch_from_routing(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    routing: _RingRouting,
+) -> _BulkRingDispatchState:
+    with jax.named_scope("gather"):
+        x_quantized_local, x_scale_local = _quantize_fp8_wire_per_token(x_local)
+        x_quantized_global = jax.lax.all_gather(x_quantized_local, "expert", tiled=True)
+        x_scale_global = jax.lax.all_gather(x_scale_local, "expert", tiled=True)
+        x_global = _dequantize_fp8_wire_per_token(x_quantized_global, x_scale_global)
+
+        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+        weight_flat = combine_weights_global.reshape(-1)
+        token_global = jnp.floor_divide(routing.assignment_indices, routing.topk)
+        weight = jnp.take(weight_flat, routing.assignment_indices, axis=0).astype(x_local.dtype)
+        x_take = jnp.take(x_global, token_global, axis=0)
+        x_dispatch = jnp.where(routing.valid[:, None], x_take, jnp.zeros_like(x_take))
+        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        weight_dispatch = jnp.where(routing.valid, weight, jnp.zeros_like(weight))
+
+    group_sizes = _group_sizes_with_padding(routing.accepted_counts, routing.local_capacity)
+    return _BulkRingDispatchState(
+        x_dispatch=x_dispatch,
+        weight_dispatch=weight_dispatch,
+        token_global=token_global,
+        group_sizes=group_sizes,
+        dropped_local=routing.dropped_local[None],
+    )
+
+
 def _bulk_ring_expert_compute(
     dispatch: _BulkRingDispatchState,
     moe_w13_local: Float[Array, "Elocal H I2"],
@@ -198,6 +285,43 @@ def _bulk_ring_combine(
         )
 
 
+def _bulk_ring_fp8_wire_combine(
+    dispatch: _BulkRingDispatchState,
+    expert: _BulkRingExpertState,
+    *,
+    tokens_per_shard: int,
+    expert_axis_size: int,
+    topk: int,
+) -> Float[Array, "Tlocal H"]:
+    with jax.named_scope("scatter"):
+        output_shape = (tokens_per_shard * expert_axis_size, expert.out_dispatch.shape[-1])
+        out_global = (
+            jnp.zeros(output_shape, dtype=dispatch.x_dispatch.dtype)
+            .at[dispatch.token_global]
+            .add(expert.out_dispatch * dispatch.weight_dispatch[:, None], mode="drop")
+        )
+        local_amax = jnp.max(jnp.abs(out_global.astype(jnp.float32)), axis=-1)
+        local_amax = jax.lax.stop_gradient(local_amax)
+        shared_amax = jax.lax.pmax(local_amax, "expert")
+        max_contributing_ranks = min(topk, expert_axis_size)
+        fp8_max = jnp.asarray(jnp.finfo(_RING_FP8_WIRE_DTYPE).max, dtype=jnp.float32)
+        shared_scale = jnp.where(
+            shared_amax > 0,
+            shared_amax * max_contributing_ranks / fp8_max,
+            jnp.ones_like(shared_amax),
+        )
+        out_quantized = (out_global.astype(jnp.float32) / shared_scale[:, None]).astype(_RING_FP8_WIRE_DTYPE)
+        out_quantized_local = jax.lax.psum_scatter(
+            out_quantized,
+            "expert",
+            scatter_dimension=0,
+            tiled=True,
+        )
+        scale_start = jax.lax.axis_index("expert") * tokens_per_shard
+        scale_local = jax.lax.dynamic_slice_in_dim(shared_scale, scale_start, tokens_per_shard)
+        return _dequantize_fp8_wire_per_token(out_quantized_local, scale_local)
+
+
 def _bulk_ring_from_routing(
     x_local: Float[Array, "Tlocal H"],
     combine_weights_local: Float[Array, "Tlocal K"],
@@ -228,6 +352,31 @@ def _bulk_ring_from_routing(
         tokens_per_shard=routing.tokens_per_shard,
         expert_axis_size=routing.expert_axis_size,
         combine_dtype=combine_dtype,
+    )
+
+
+def _bulk_ring_fp8_wire_from_routing(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    routing: _RingRouting,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "Tlocal H"]:
+    dispatch = _bulk_ring_fp8_wire_dispatch_from_routing(x_local, combine_weights_local, routing)
+    expert = _bulk_ring_expert_compute(
+        dispatch,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+    )
+    return _bulk_ring_fp8_wire_combine(
+        dispatch,
+        expert,
+        tokens_per_shard=routing.tokens_per_shard,
+        expert_axis_size=routing.expert_axis_size,
+        topk=routing.topk,
     )
 
 
@@ -518,6 +667,43 @@ def _moe_mlp_ep_ring_local(
         ops,
         activation_fn=activation_fn,
         combine_dtype=combine_dtype,
+    )
+    dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, dropped_total
+
+
+def _moe_mlp_ep_ring_fp8_wire_approx_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Benchmark-only approximate ring transport with E4M3 collective payloads."""
+    _validate_fp8_wire_contract(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+    )
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=moe_w13_local.shape[0],
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    out_local = _bulk_ring_fp8_wire_from_routing(
+        x_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        routing,
+        activation_fn=activation_fn,
     )
     dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

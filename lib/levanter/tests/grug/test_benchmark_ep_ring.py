@@ -141,6 +141,25 @@ def test_fp8_gate_cli_accepts_exact_target_shape() -> None:
     assert args.implementations == ["ring", "ring_fp8_gemm"]
 
 
+def test_fp8_wire_is_explicitly_approximate_and_not_enabled_by_default() -> None:
+    parser = _parser()
+    default_args = parser.parse_args([])
+    args = parser.parse_args(
+        [
+            "--implementations",
+            "ring",
+            "ring_fp8_wire_approx",
+            "--parity-mode",
+            "diagnostic",
+        ]
+    )
+
+    _validate_args(args)
+
+    assert "ring_fp8_wire_approx" not in default_args.implementations
+    assert args.implementations == ["ring", "ring_fp8_wire_approx"]
+
+
 def test_diagnostic_parity_failure_is_recorded_as_non_promotable() -> None:
     parity = {
         "ring_quack": {
@@ -188,6 +207,26 @@ def test_diagnostic_parity_pass_is_still_non_promotable() -> None:
     assert status["passed"] is True
     assert status["promotable"] is False
     assert status["non_promotable_reason"] == "diagnostic parity mode"
+
+
+def test_approximate_transport_is_never_reported_as_promotable() -> None:
+    parity = {
+        "ring_fp8_wire_approx": {
+            "dropped_matches": True,
+            "output": {"allclose": True},
+            "gradients": {"w2": {"allclose": True}},
+        }
+    }
+
+    status = _parity_status(
+        parity,
+        mode="strict",
+        approximate_implementations=("ring_fp8_wire_approx",),
+    )
+
+    assert status["passed"] is True
+    assert status["promotable"] is False
+    assert status["non_promotable_reason"] == "approximate transport benchmark"
 
 
 def test_approximate_quack_ring_requires_explicit_backend_name() -> None:

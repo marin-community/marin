@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark exact bulk-ring expert compute variants on one EP8 node."""
+"""Benchmark bulk-ring expert compute and transport variants on one EP8 node."""
 
 import argparse
 import json
@@ -20,6 +20,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import MoeRaggedDotOps
 from levanter.grug._moe.ep_ring import (
     _ep_ring_two_chunk_fast_path_local,
+    _moe_mlp_ep_ring_fp8_wire_approx_local,
     _moe_mlp_ep_ring_local,
     _moe_mlp_ep_ring_quack_local,
     _moe_mlp_ep_ring_two_chunk_local,
@@ -34,10 +35,12 @@ _ERROR_QUANTILES = (0.0, 0.5, 0.9, 0.99, 0.999, 1.0)
 _FP8_ALIGNMENT = 128
 _IMPLEMENTATIONS = {
     "ring": _moe_mlp_ep_ring_local,
+    "ring_fp8_wire_approx": _moe_mlp_ep_ring_fp8_wire_approx_local,
     "ring_fp8_gemm": _moe_mlp_ep_ring_local,
     "ring_quack": _moe_mlp_ep_ring_quack_local,
     "two_chunk": _moe_mlp_ep_ring_two_chunk_local,
 }
+_APPROXIMATE_IMPLEMENTATIONS = frozenset({"ring_fp8_wire_approx"})
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -411,16 +414,29 @@ def _parity_failures(parity: dict[str, Any]) -> list[dict[str, str]]:
     return failures
 
 
-def _parity_status(parity: dict[str, Any], *, mode: str) -> dict[str, Any]:
+def _parity_status(
+    parity: dict[str, Any],
+    *,
+    mode: str,
+    approximate_implementations: tuple[str, ...] = (),
+) -> dict[str, Any]:
     failures = _parity_failures(parity)
     if failures and mode == "strict":
         raise AssertionError(f"parity failed: {failures}")
+    approximate = sorted(set(approximate_implementations) & parity.keys())
+    promotable = mode == "strict" and not failures and not approximate
+    if mode != "strict":
+        non_promotable_reason = "diagnostic parity mode"
+    elif approximate:
+        non_promotable_reason = "approximate transport benchmark"
+    else:
+        non_promotable_reason = None
     return {
         "mode": mode,
         "passed": not failures,
         "failures": failures,
-        "promotable": mode == "strict" and not failures,
-        "non_promotable_reason": None if mode == "strict" and not failures else "diagnostic parity mode",
+        "promotable": promotable,
+        "non_promotable_reason": non_promotable_reason,
     }
 
 
@@ -628,7 +644,14 @@ def main() -> None:
                 "reference_dropped": reference_dropped,
                 "dropped_matches": dropped == reference_dropped,
             }
-        parity_status = _parity_status(parity, mode=args.parity_mode)
+        approximate_implementations = tuple(
+            implementation for implementation in implementations if implementation in _APPROXIMATE_IMPLEMENTATIONS
+        )
+        parity_status = _parity_status(
+            parity,
+            mode=args.parity_mode,
+            approximate_implementations=approximate_implementations,
+        )
 
         timings = {
             "forward": {
@@ -659,6 +682,7 @@ def main() -> None:
         "seed": args.seed,
         "skew_alpha": args.skew_alpha,
         "implementations": implementations,
+        "approximate_implementations": approximate_implementations,
         "two_chunk_path": "fast" if use_fast_path else "fallback",
         "groups": group_statistics,
         "warmup": args.warmup,
