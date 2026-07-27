@@ -299,8 +299,8 @@ def _ubx_combine_bwd(
         inverse_map,
         tokens_per_rank=tokens_per_rank,
     )
-    expert_outputs_cotangent = (
-        output_cotangent_dispatch * slot_weights.astype(output_cotangent_dispatch.dtype)[:, None]
+    expert_outputs_cotangent = (output_cotangent_dispatch.astype(jnp.float32) * slot_weights[:, None]).astype(
+        expert_outputs_local.dtype
     )
 
     slot_weight_cotangents = jnp.sum(
