@@ -16,18 +16,17 @@ from datetime import UTC, datetime
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIREMENT
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
-    Provenance,
 )
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
     EvaluationIdentity,
+    LaunchProvenance,
     SubmittedEvaluationBatch,
     submit_evaluation_batch,
 )
@@ -98,7 +97,7 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
 
 def build_evaluation_batch(
     spec: LaunchSpec,
-    provenance: Provenance,
+    provenance: LaunchProvenance,
     user: str,
 ) -> EvaluationBatch:
     """Resolve experiment names into one model-serving evaluation batch."""
@@ -128,6 +127,7 @@ def build_evaluation_batch(
                     created_at=created_at,
                     output_dir=output_dir,
                     eval_ref=definition.record_ref,
+                    eval_runtime=definition.runtime_descriptor,
                 ),
                 executor=definition.executor_for(model, spec.limit),
                 secret_env_keys=tuple(definition.secret_env),
@@ -153,9 +153,8 @@ def build_evaluation_batch(
 
 def launch_group(spec: LaunchSpec, client: IrisClient) -> SubmittedEvaluationBatch:
     """Submit one CPU orchestrator for a resolved batch."""
-    provenance = Provenance(
+    provenance = LaunchProvenance(
         git_sha=_git_sha(),
-        eval_image=EVALCHEMY_REQUIREMENT,
         launch_host=socket.gethostname(),
     )
     batch = build_evaluation_batch(spec, provenance, _launch_user())

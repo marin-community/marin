@@ -20,7 +20,7 @@ from marin.evaluation.harbor.driver_config import (
     HarborRunConfig,
     HarborVerifierConfig,
 )
-from marin.evaluation.harbor.runner import HarborExecutor
+from marin.evaluation.harbor.runner import HARBOR_RUNTIME, HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
@@ -59,6 +59,9 @@ class EvaluationDefinition(Protocol):
     @property
     def record_ref(self) -> EvalRef: ...
 
+    @property
+    def runtime_descriptor(self) -> str: ...
+
     def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor: ...
 
 
@@ -74,6 +77,10 @@ class EvalchemyDefinition:
             mechanism="evalchemy",
             tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
         )
+
+    @property
+    def runtime_descriptor(self) -> str:
+        return self.config.runtime.requirement
 
     def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
         effective_limit = self.config.max_eval_instances if limit is None else limit
@@ -111,6 +118,10 @@ class HarborDefinition:
                 env=self.config.environment.environment_type,
             ),
         )
+
+    @property
+    def runtime_descriptor(self) -> str:
+        return HARBOR_RUNTIME
 
     def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
         effective_limit = self.max_eval_instances if limit is None else limit
@@ -381,7 +392,7 @@ NLP_EVALS: tuple[str, ...] = (
 # MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned fork.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 
-# Report-row groupings for the Math / code report layouts.
+# Named suite groupings for math and code evaluations.
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
 

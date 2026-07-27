@@ -85,7 +85,6 @@ class EvalchemyRuntimeConfig:
     requirement: str = EVALCHEMY_REQUIREMENT
     python_version: str = EVALCHEMY_PYTHON_VERSION
     extra_packages: tuple[str, ...] = EVALCHEMY_EXTRA_PACKAGES
-    image: str | None = None
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
@@ -202,7 +201,6 @@ def _run_evalchemy_child(
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
             )
         ),
-        task_image=config.runtime.image,
         max_retries_failure=0,
     )
     eval_path = str(eval_job.job_id)

@@ -9,15 +9,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from marin.evaluation.evalchemy.runtime import evalchemy_requirement
+from marin.evaluation.harbor.runner import HARBOR_RUNTIME
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, Provenance, RunStatus, read_record
+from marin.evaluation.records import EvalRef, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
     EvaluationError,
     EvaluationIdentity,
     EvaluationOutcome,
+    LaunchProvenance,
     evaluate_batch,
     submit_evaluation_batch,
 )
@@ -60,6 +63,7 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
             created_at="2026-07-24T00:00:00+00:00",
             output_dir=str(root / name),
             eval_ref=EvalRef(name=name, mechanism="test"),
+            eval_runtime="test-runtime",
         ),
         executor=executor,
     )
@@ -97,7 +101,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
             _evaluation(tmp_path, "failure", _failed_evaluation),
             _evaluation(tmp_path, "success", _successful_evaluation),
         ),
-        provenance=Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
     )
 
     with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
@@ -110,6 +114,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
+    assert succeeded.provenance.eval_image == "test-runtime"
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
@@ -129,6 +134,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             created_at="2026-07-24T00:00:00+00:00",
             output_dir=str(tmp_path / "secret"),
             eval_ref=EvalRef(name="secret", mechanism="test"),
+            eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
     )
@@ -148,7 +154,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
         capability_origin="https://iris.example",
         api_model="model",
         evaluations=(evaluation,),
-        provenance=Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         secret_env={"DAYTONA_API_KEY": ("env:MARIN_TEST_EVAL_SECRET",)},
     )
 
@@ -172,7 +178,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 
     batch = build_evaluation_batch(
         spec,
-        Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+        LaunchProvenance(git_sha="abc", launch_host="host"),
         "tester",
     )
 
@@ -182,6 +188,28 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
+    assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
+
+
+def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=("math500",),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        cluster="marin",
+    )
+
+    batch = build_evaluation_batch(
+        spec,
+        LaunchProvenance(git_sha="abc", launch_host="host"),
+        "tester",
+    )
+
+    assert batch.evaluations[0].identity.eval_runtime == evalchemy_requirement(("math500",))
 
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
@@ -205,6 +233,6 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     with pytest.raises(ValueError, match="conflicting secret specifications for DAYTONA_API_KEY"):
         build_evaluation_batch(
             spec,
-            Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+            LaunchProvenance(git_sha="abc", launch_host="host"),
             "tester",
         )

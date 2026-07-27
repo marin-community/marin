@@ -21,7 +21,7 @@ from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
 )
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_EXTRA_PACKAGES, EVALCHEMY_REQUIREMENT
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIREMENT
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -276,8 +276,9 @@ def test_evalchemy_child_runs_pinned_uvx_environment_on_default_task_image(monke
 
     evalchemy_runner._run_evalchemy_child(_MODEL, _config(), "gs://bucket/evals/qwen3/core", {})
 
-    assert submitted["task_image"] is None
-    command = [
+    assert "task_image" not in submitted
+    command = shlex.split(submitted["entrypoint"].command[2])
+    assert command[:7] == [
         "exec",
         "uvx",
         "--no-config",
@@ -286,8 +287,7 @@ def test_evalchemy_child_runs_pinned_uvx_environment_on_default_task_image(monke
         "--from",
         EVALCHEMY_REQUIREMENT,
     ]
-    for package in EVALCHEMY_EXTRA_PACKAGES:
-        command.extend(("--with", package))
-    command.extend(("python", "$IRIS_WORKDIR/lib/marin/src/marin/evaluation/evalchemy/client.py"))
-
-    assert shlex.split(submitted["entrypoint"].command[2]) == command
+    assert command[-2:] == ["python", "$IRIS_WORKDIR/lib/marin/src/marin/evaluation/evalchemy/client.py"]
+    with_packages = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert {"s3fs", "gcsfs"} <= set(with_packages)
+    assert len([package for package in with_packages if package.startswith("torch @ https://")]) == 2

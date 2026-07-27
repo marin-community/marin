@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # pins that do not fit the marin lock). These specs pin what that ephemeral env installs.
 _HARBOR_SPEC = "harbor==0.20.1.dev202607240136"
 _DAYTONA_SPEC = "daytona==0.200.2"
+HARBOR_RUNTIME = f"{_HARBOR_SPEC}; {_DAYTONA_SPEC}"
 _DRIVER = str(Path(__file__).with_name("trial_driver.py"))
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _DRIVER_SYSTEM_ENV_KEYS = (
