@@ -1986,3 +1986,34 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - Run an L24 `6,6,6,6` UB-X batch512/m16 discriminator with local precompile. Its microbatch and UB-X
     transport shapes match the exact target while limiting the failed-run cost.
   - Only a clean compile and at least three finite executions admit a fresh exact batch8192/m256 run.
+
+### 2026-07-27 13:15 PDT - Receive-prologue reuse is invalid for the full standard schedule
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-200605` and its four-rank child ran commit `dd0051b84d`.
+  - The L24 `6,6,6,6` UB-X discriminator used batch512/m16, preserving the exact target's 32-example
+    microbatch and `16384`-token/capacity-`65536` UB-X transport shape.
+- Result:
+  - All four ranks initialized UB-X and compiled their complete local task sets before execution. Precompile
+    counts were `66/65/65/65` tasks on stages 0-3; receive-buffer counts were `2/5/4/2`.
+  - Every rank crossed the coordinated precompile barrier. The earlier XLA `1/8` thunk-initialization
+    rendezvous did not recur.
+  - The first `eval_local_precompiled` then failed on every rank with
+    `RuntimeError: Array has been deleted with shape=bfloat16[32,4096,2560]`. No step or W&B history row
+    was produced.
+  - The reused receive prologue is donated into the full standard-1F1B transfer graph. A later consumer sees
+    the deleted large activation array. The reduced one-microbatch parity graph that originally validated
+    `eval_local_precompiled` does not exercise this receive-buffer reuse pattern.
+  - The babysitter stopped the parent and child before another expensive retry. Both are terminal `killed`,
+    all child tasks are complete, and no live resource remains.
+- Fix:
+  - Keep the task compilation/cache and four-rank barrier, which are the parts relevant to lazy executable
+    initialization.
+  - Return to ordinary `eval_local` so JaxPP allocates and owns the receive prologue under its normal lifetime
+    rules. This matches the prior memory-plan path that precompiled tasks without reusing donated inputs.
+  - Eleven focused JaxPP parity tests pass; changed-file pre-commit including Pyrefly passes.
+- Numerical policy:
+  - No numerical output was produced. Exact routes/counts/drops and relative-L2 `<=0.002` for output, loss,
+    and every floating gradient leaf remain mandatory.
+- Next action:
+  - Commit the task-only precompile correction and rerun the same L24 batch512/m16 discriminator under a fresh
+    identity. A repeated `1/8` failure promotes the command-buffer-disabled A/B; a pass admits one exact retry.

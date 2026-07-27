@@ -1892,7 +1892,6 @@ def _log_jaxpp_local_memory_plan_once(local_jaxpr) -> None:
 @dataclass(frozen=True)
 class _LocalLoweredExplicitMpmdStep:
     lowered: Any
-    precompiled_execution: Any | None = None
 
     def __call__(
         self,
@@ -1907,11 +1906,7 @@ class _LocalLoweredExplicitMpmdStep:
         local_jaxpr = self.lowered._local_jaxpr
         with self.lowered.mpmd_mesh:
             _log_jaxpp_local_memory_plan_once(local_jaxpr)
-        local_args = tuple(flat_args[idx] for idx in local_jaxpr.global_invar_indices)
-        if self.precompiled_execution is None:
-            local_outs = self.lowered.eval_local(*local_args)
-        else:
-            local_outs = self.lowered.eval_local_precompiled(self.precompiled_execution, *local_args)
+        local_outs = self.lowered.eval_local(*(flat_args[idx] for idx in local_jaxpr.global_invar_indices))
         local_outs_by_idx = dict(zip(local_jaxpr.global_outvar_indices, local_outs, strict=True))
 
         local_loss = jax.device_put(
@@ -1931,30 +1926,23 @@ class _LocalLoweredExplicitMpmdStep:
         return jax.tree_util.tree_unflatten(out_tree, flat_outs)
 
 
-def _precompile_local_explicit_mpmd_step(
-    lowered: Any,
-    state: GrugPipelineTrainState,
-    batches: tuple[GrugLmExample, ...],
-) -> Any:
-    flat_args, args_tree = jax.tree_util.tree_flatten((state, batches))
-    in_tree = jax.tree_util.tree_structure(lowered.in_shardings)
-    if args_tree != in_tree:
-        raise ValueError("local precompile received an unexpected input tree")
-
+def _precompile_local_explicit_mpmd_tasks(lowered: Any) -> None:
     local_jaxpr = lowered._local_jaxpr
-    execution = lowered.precompile_local(*(flat_args[idx] for idx in local_jaxpr.global_invar_indices))
+    task_count = 0
+    with lowered.mpmd_mesh:
+        for equation in local_jaxpr.closed_jaxpr.eqns:
+            if equation.primitive.name != "task":
+                continue
+            jaxpp_jax_primitives.precompile_task(**equation.primitive.get_bind_params(equation.params))
+            task_count += 1
+
     if jaxpp_dime2 is None:
         raise ModuleNotFoundError("jaxpp.dime2 is required for GRUG_JAXPP_PRECOMPILE_LOCAL")
     jaxpp_dime2.get_distributed_client().wait_at_barrier(
         "grug_jaxpp_explicit_precompiled",
         jaxpp_dime2.env_vars.jaxpp_client_timeout.value,
     )
-    logger.info(
-        "Precompiled %d local JaxPP tasks and %d receive buffers",
-        execution.task_count,
-        len(execution.recv_buffers),
-    )
-    return execution
+    logger.info("Precompiled %d local JaxPP tasks", task_count)
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array | None) -> Transformer:
@@ -5699,17 +5687,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 raise ValueError(
                                     "GRUG_JAXPP_PRECOMPILE_LOCAL must be 0 or 1, " f"got {precompile_local!r}"
                                 )
-                            precompiled_execution = None
                             if precompile_local == "1":
-                                precompiled_execution = _precompile_local_explicit_mpmd_step(
-                                    lowered_explicit_mpmd_train_step,
-                                    state,
-                                    stage_batches,
-                                )
-                            explicit_mpmd_train_step = _LocalLoweredExplicitMpmdStep(
-                                lowered_explicit_mpmd_train_step,
-                                precompiled_execution,
-                            )
+                                _precompile_local_explicit_mpmd_tasks(lowered_explicit_mpmd_train_step)
+                            explicit_mpmd_train_step = _LocalLoweredExplicitMpmdStep(lowered_explicit_mpmd_train_step)
                     state, metrics, watch_stats = explicit_mpmd_train_step(state, stage_batches)
             else:
                 if mpmd_mesh is None:
