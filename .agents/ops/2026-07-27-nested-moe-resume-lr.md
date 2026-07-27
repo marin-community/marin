@@ -34,9 +34,25 @@ the NaN-tainted `r28` outputs.
 
 ## Results
 
-Pending replacement-run validation.
+The schedule-continuous `r29` retry logged the intended low rates:
+
+- MuonH `0.00019696` at step 8,192;
+- Adam `0.00004545` at step 8,192.
+
+E256 nevertheless became NaN at step 8,195 and E128 at step 8,194. Schedule
+discontinuity was therefore a real defect in `r28`, but not the root cause of
+the full-state continuation failure. The original checkpoints have finite
+weights and validation loss; their restored optimizer state cannot be used for
+this extension without a deeper optimizer/checkpoint investigation.
+
+The replacement experiment will initialize same-architecture weights from the
+original checkpoints and create fresh optimizer state. It uses 10% of the
+pretraining peak learning rates with a 512-step warmup, then linear decay. This
+changes the continuation question from seamless training-state resume to
+paired continued pretraining from identical 4.295B-token endpoints.
 
 ## Future work
 
-- [ ] Confirm all four replacement runs start at the old learning-rate floor.
-- [ ] Confirm finite loss through the 512-step rewarmup and peak.
+- [ ] Isolate which restored optimizer-state leaf first becomes non-finite.
+- [ ] Confirm all four weights-only continuations survive their 512-step
+  warmup and peak.

@@ -27,9 +27,12 @@ Optional overrides:
     NESTED_MP           jmp policy (default: bf16 compute)
     NESTED_EVAL_EXPERTS  evaluate a fixed subset without restricting training
     NESTED_INIT_FROM    nested25 checkpoint root (required for breakout25)
+    NESTED_WEIGHTS_FROM  prior same-architecture checkpoint for weights-only initialization
     NESTED_RESUME_FROM  prior checkpoint directory for full-state continuation
     NESTED_RESUME_STEP  global step stored in NESTED_RESUME_FROM
     NESTED_REWARMUP_STEPS  resumed-cycle linear rewarmup length
+    NESTED_LR_MULTIPLIER  multiply all optimizer learning rates (default: 1.0)
+    NESTED_WARMUP_STEPS  override the optimizer warmup length
     NESTED_EVAL_INTERVAL  optimizer steps between evaluations (default: 100)
     NESTED_EVAL_OFFSETS   evenly spaced expert-subset offsets per ladder level (default: 1)
     NESTED_SEED          training and data seed (default: 0; cooldown: 1)
@@ -214,7 +217,15 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         hidden_dim,
         seq_len=sequence_length,
     )
-    optimizer = dataclasses.replace(optimizer, warmup=_PROXY_WARMUP_STEPS)
+    lr_multiplier = float(os.environ.get("NESTED_LR_MULTIPLIER", "1.0"))
+    if lr_multiplier <= 0:
+        raise ValueError("NESTED_LR_MULTIPLIER must be positive")
+    optimizer = dataclasses.replace(
+        optimizer,
+        learning_rate=optimizer.learning_rate * lr_multiplier,
+        adam_lr=optimizer.adam_lr * lr_multiplier,
+        warmup=env_int("NESTED_WARMUP_STEPS", _PROXY_WARMUP_STEPS),
+    )
     full_steps = max(1, round(compute_optimal_tokens / (batch_size * sequence_length)))
     if phase is _NestedPhase.SMOKE:
         default_steps = _SMOKE_STEPS
@@ -226,7 +237,12 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     eval_interval = env_int("NESTED_EVAL_INTERVAL", _PROXY_EVAL_INTERVAL)
     eval_offsets = env_int("NESTED_EVAL_OFFSETS", 1)
     seed = env_int("NESTED_SEED", 1 if phase is _NestedPhase.COOLDOWN else 0)
+    weights_from = os.environ.get("NESTED_WEIGHTS_FROM")
     resume_from = os.environ.get("NESTED_RESUME_FROM")
+    if weights_from is not None and resume_from is not None:
+        raise ValueError("NESTED_WEIGHTS_FROM and NESTED_RESUME_FROM are mutually exclusive")
+    if weights_from is not None and arm is NestedArm.BREAKOUT_25:
+        raise ValueError("NESTED_WEIGHTS_FROM is incompatible with breakout25")
     if resume_from is not None and arm is NestedArm.BREAKOUT_25:
         raise ValueError("NESTED_RESUME_FROM is incompatible with breakout25")
     if resume_from is not None:
@@ -319,6 +335,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
                 nested_eval_offsets=eval_offsets,
             ),
             processes_per_task=1,
+            init_from=weights_from,
             resume_from=resume_from,
             nested_init_from=nested_init_from,
             nested_init_source_model=nested_init_source_model,

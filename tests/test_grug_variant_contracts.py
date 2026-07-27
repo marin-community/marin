@@ -370,6 +370,35 @@ def test_nested_moe_launcher_builds_fresh_optimizer_breakout(monkeypatch, tmp_pa
     assert config.nested_init_source_model.nested_batch_fraction == 0.25
 
 
+def test_nested_moe_launcher_builds_weights_only_continuation(monkeypatch, tmp_path):
+    checkpoint_root = "s3://test/large/checkpoints"
+    monkeypatch.setenv("NESTED_ARM", "large")
+    monkeypatch.setenv("NESTED_PHASE", "full")
+    monkeypatch.setenv("NESTED_STEPS", "30720")
+    monkeypatch.setenv("NESTED_WEIGHTS_FROM", checkpoint_root)
+    monkeypatch.setenv("NESTED_LR_MULTIPLIER", "0.1")
+    monkeypatch.setenv("NESTED_WARMUP_STEPS", "512")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    step = launch_nested_experts.build(version="dev")
+    _seed_cache_records(step, str(tmp_path))
+    config = materialized_config(step, str(tmp_path))
+
+    assert config.steps == 30720
+    assert config.init_from == checkpoint_root
+    assert config.resume_from is None
+    assert config.optimizer.warmup == 512
+
+    default_optimizer = launch_nested_experts.MoeHeuristic().build_optimizer_config(
+        config.batch_size,
+        launch_nested_experts._BUDGET / (3 * launch_nested_experts.compute_flops_per_token(config.model)),
+        config.model.hidden_dim,
+        seq_len=config.model.max_seq_len,
+    )
+    np.testing.assert_allclose(config.optimizer.learning_rate, default_optimizer.learning_rate * 0.1)
+    np.testing.assert_allclose(config.optimizer.adam_lr, default_optimizer.adam_lr * 0.1)
+
+
 def test_grug_moe_nested_checkpoint_init_extracts_weights_and_qb_state():
     train_module = importlib.import_module("experiments.grug.moe.train")
     model_module = importlib.import_module("experiments.grug.moe.model")

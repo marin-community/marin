@@ -786,3 +786,28 @@ launch:
 - The 512-step rewarmup is 0.268B tokens. Replacement jobs must remain finite
   through both the first resumed updates and the peak at step 8,704 before the
   incident is considered resolved.
+
+### 2026-07-27 17:14 - Full-state continuation abandoned
+
+- The schedule-continuous `r29` retry logged the intended learning rates at
+  step 8,192, exactly matching the old schedule floor.
+- E256 nevertheless became NaN at step 8,195 and E128 at step 8,194. Both had
+  finite first-step losses. This falsifies LR discontinuity as the sufficient
+  cause and implicates restored optimizer state or another checkpoint-resume
+  mechanism.
+- The original checkpoint weights remain finite: initial full-mode Paloma was
+  `5.501` for E256, `5.321` for ladder25, and `5.447` for ladder50 before any
+  failed update affected evaluation. The `r29` outputs are invalid and were
+  stopped.
+- The user asked for architecture discovery rather than cleanroom resume
+  semantics. The next wave is therefore a paired weights-only continuation:
+  - initialize each arm from its original step-8,192 model weights;
+  - create fresh optimizer state and reset the phase-local step to zero;
+  - train 30,720 updates, adding the same 16.106B tokens;
+  - use 10% of the original pretraining peak learning rates, warm up over 512
+    updates, then linearly decay;
+  - keep the four architectures, data, batch, precision, capacity, hardware,
+    and multi-offset evaluation plan unchanged.
+- Final analysis will add the 8,192-step offset when splicing phase-local
+  histories. It will report this optimizer reset prominently and will not call
+  the result a seamless full-state continuation.
