@@ -99,6 +99,10 @@ from experiments.grug.moe.train import (
     _pack_microbatch_pair,
     _sum_microbatch_group,
     _unpack_microbatch_pair,
+    explicit_router_pre_boundary_bootstrap,
+    explicit_router_pre_boundary_forward,
+    explicit_router_pre_boundary_primal_and_value_and_grads,
+    explicit_stage_gradient_from_blocks,
     explicit_std_1f1b_stage_schedule,
     pack_fp8_pipeline_wire,
     paired_compute_block_forward,
@@ -1215,6 +1219,88 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
     validate_explicit_expert_task_structure(explicit_component_task_structure(expert_structure_jaxpr))
     for actual_routes, expected_routes in zip(pre_ring, expected[4], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
+def test_production_explicit_router_bootstrap_matches_zero_cotangent_vjp() -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    batches, hiddens, _ = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    hidden = hiddens[0]
+    mask = batches[0].attn_mask
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+
+    def pre_forward(block, block_hidden):
+        return explicit_router_pre_boundary_forward(
+            block,
+            qb_beta,
+            block_hidden,
+            mask,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode="save_moe",
+        )
+
+    def pre_vjp(block, block_hidden, boundary_cotangents):
+        return explicit_router_pre_boundary_primal_and_value_and_grads(
+            block,
+            qb_beta,
+            block_hidden,
+            boundary_cotangents,
+            mask,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode="save_moe",
+            router_z_loss_scale=0.1,
+        )
+
+    def pre_bootstrap(block, block_hidden):
+        return explicit_router_pre_boundary_bootstrap(
+            block,
+            qb_beta,
+            block_hidden,
+            mask,
+            mp,
+            use_pko=False,
+            disable_rope=False,
+            remat_mode="save_moe",
+            router_z_loss_scale=0.1,
+        )
+
+    with jax.set_mesh(mesh):
+        boundaries = jax.jit(pre_forward)(params, hidden)
+        zero_cotangents = tuple(jnp.zeros_like(value) for value in (*boundaries[:3], boundaries[3].combine_weights))
+        expected = jax.jit(pre_vjp)(params, hidden, zero_cotangents)
+        actual = jax.jit(pre_bootstrap)(params, hidden)
+        bootstrap_jaxpr, _, _ = eqx.filter_make_jaxpr(pre_bootstrap)(params, hidden)
+
+    _assert_tree_rel_l2(actual, expected)
+    np.testing.assert_array_equal(
+        actual[0][3].selected_experts,
+        expected[0][3].selected_experts,
+    )
+    validate_explicit_pre_task_structure(explicit_component_task_structure(bootstrap_jaxpr))
+
+
+def test_explicit_stage_gradient_from_blocks_preserves_stage_tree() -> None:
+    _, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    block_gradient = jax.tree.map(jnp.ones_like, stage.blocks[0])
+    expected = eqx.tree_at(
+        lambda value: value.blocks,
+        jax.tree.map(jnp.zeros_like, stage),
+        (block_gradient,),
+    )
+
+    actual = jax.jit(explicit_stage_gradient_from_blocks)(stage, (block_gradient,))
+
+    for actual_leaf, expected_leaf in zip(
+        jax.tree.leaves(actual),
+        jax.tree.leaves(expected),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual_leaf, expected_leaf)
 
 
 def test_ordered_checkpoint_allow_cse_control_matches_default_and_no_checkpoint() -> None:

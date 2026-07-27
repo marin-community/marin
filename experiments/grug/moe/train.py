@@ -42,12 +42,14 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.attention import AttentionMask, ThdSegmentMetadata
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import init_optimizer_for_trainables
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -58,11 +60,13 @@ from experiments.grug.moe.model import (
     GRUG_MOE_NCCL_EP_DROP_CAPACITY_FACTOR,
     Block,
     GrugModelConfig,
+    MoERoutingState,
     RematMode,
     Transformer,
     TransformerPipelineStage,
     paired_block_forward,
     paired_block_value_and_grads,
+    paired_explicit_moe_component_forward,
 )
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -311,7 +315,7 @@ class GrugRunConfig:
         if (
             pipeline is not None
             and pipeline.explicit_mpmd_stage_task_microbatch_group_size == 2
-            and self.model.moe_implementation not in (None, "ring")
+            and self.model.moe_implementation != "ring"
         ):
             raise ValueError("grouped explicit MPMD stage tasks require the exact bulk-ring MoE implementation")
         if self.model.moe_implementation in _NCCL_EP_IMPLEMENTATIONS:
@@ -1723,6 +1727,353 @@ def _compute_block(params: Block, qb_beta: jax.Array, mp: jmp.Policy) -> Block:
     return _cast_preserving_overwrites(block, mp.cast_to_compute)
 
 
+def _explicit_stage_block_attention(
+    params: TransformerPipelineStage,
+    local_index: int,
+    mask: AttentionMask | jax.Array,
+) -> tuple[AttentionMask, bool, bool]:
+    layer_index = params.start_layer + local_index
+    is_last = layer_index == params.config.num_layers - 1
+    is_long = layer_index % 4 == 3 or is_last
+    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+    layer_mask = AttentionMask(
+        is_causal=True,
+        sliding_window=None if is_long else params.config.sliding_window,
+        segment_ids=segment_ids,
+    )
+    return (
+        layer_mask,
+        is_long and not params.config.disable_pko,
+        is_long and params.config.disable_long_rope,
+    )
+
+
+def explicit_router_pre_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    mask: AttentionMask | jax.Array,
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+) -> tuple[jax.Array, jax.Array, jax.Array, MoERoutingState]:
+    """Run one microbatch's attention, dense path, and router."""
+
+    def pre_boundary(block: Block, current_hidden: jax.Array):
+        post_attention = block.attention_residual(
+            current_hidden,
+            mask,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+        )
+        mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
+        shared_output = (
+            block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+            if block.shared is not None
+            else jnp.zeros_like(mlp_input)
+        )
+        return post_attention, mlp_input, shared_output, block.mlp.route(mlp_input)
+
+    remat_policy = None
+    if remat_mode == "save_moe":
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    compute_block = _compute_block(params, qb_beta, mp)
+    return eqx.filter_checkpoint(pre_boundary, policy=remat_policy)(compute_block, hidden)
+
+
+def explicit_router_pre_boundary_primal_and_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    mask: AttentionMask | jax.Array,
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array, jax.Array, MoERoutingState],
+    Block,
+    jax.Array,
+]:
+    """Differentiate one pre/router task from explicit boundary cotangents."""
+
+    def projected_pre_boundary(master_params: Block, current_hidden: jax.Array):
+        boundaries = explicit_router_pre_boundary_forward(
+            master_params,
+            qb_beta,
+            current_hidden,
+            mask,
+            mp,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            remat_mode=remat_mode,
+        )
+        post_attention, mlp_input, shared_output, routing_state = boundaries
+        projection = sum(
+            (
+                jnp.sum(boundary.astype(jnp.float32) * cotangent.astype(jnp.float32))
+                for boundary, cotangent in zip(
+                    (post_attention, mlp_input, shared_output, routing_state.combine_weights),
+                    boundary_cotangents,
+                    strict=True,
+                )
+            ),
+            start=jnp.asarray(0.0, dtype=jnp.float32),
+        )
+        projection += router_z_loss_scale * routing_state.router_stats["router_z_loss"]
+        return projection, boundaries
+
+    (_, boundaries), (parameter_gradient, input_gradient) = jax.value_and_grad(
+        projected_pre_boundary,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return boundaries, parameter_gradient, input_gradient
+
+
+def explicit_router_pre_boundary_bootstrap(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+    mask: AttentionMask | jax.Array,
+    mp: jmp.Policy,
+    *,
+    use_pko: bool,
+    disable_rope: bool,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array, jax.Array, MoERoutingState],
+    Block,
+    jax.Array,
+]:
+    """Run the pre/router VJP context with zero boundary cotangents."""
+    token_count = hidden.shape[0] * hidden.shape[1]
+    combine_weights = jnp.zeros(
+        (token_count, params.mlp.cfg.num_experts_per_token),
+        dtype=mp.cast_to_compute(hidden).dtype,
+    )
+    boundary_cotangents = (
+        jnp.zeros_like(hidden),
+        jnp.zeros_like(hidden),
+        jnp.zeros_like(hidden),
+        combine_weights,
+    )
+    return explicit_router_pre_boundary_primal_and_value_and_grads(
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+        mask,
+        mp,
+        use_pko=use_pko,
+        disable_rope=disable_rope,
+        remat_mode=remat_mode,
+        router_z_loss_scale=router_z_loss_scale,
+    )
+
+
+def explicit_routing_finish_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: tuple[jax.Array, jax.Array],
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    shared_outputs: tuple[jax.Array, jax.Array],
+    routing_states: tuple[MoERoutingState, MoERoutingState],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+    *,
+    remat_mode: RematMode,
+    router_z_loss_scale: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+]:
+    """Run two expert calls from explicit routes and finish both residuals."""
+    compute_block = _compute_block(params, qb_beta, mp)
+    routed_outputs, router_stats = paired_explicit_moe_component_forward(
+        compute_block.mlp.expert_mlp,
+        mlp_inputs,
+        routing_states,
+        remat_mode=remat_mode,
+    )
+    updates = tuple(
+        routed + shared if compute_block.shared is not None else routed
+        for routed, shared in zip(routed_outputs, shared_outputs, strict=True)
+    )
+    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+    losses = tuple(
+        jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+        + router_z_loss_scale * routing.router_stats["router_z_loss"]
+        for output, cotangent, routing in zip(outputs, output_cotangents, routing_states, strict=True)
+    )
+    return losses, routed_outputs, outputs, router_stats
+
+
+def explicit_routing_finish_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    post_attention: tuple[jax.Array, jax.Array],
+    mlp_inputs: tuple[jax.Array, jax.Array],
+    shared_outputs: tuple[jax.Array, jax.Array],
+    routing_states: tuple[MoERoutingState, MoERoutingState],
+    output_cotangents: tuple[jax.Array, jax.Array],
+    mp: jmp.Policy,
+    *,
+    remat_mode: RematMode,
+) -> tuple[
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[dict[str, jax.Array], dict[str, jax.Array]],
+    Block,
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array],
+]:
+    """Differentiate the joined expert task while preserving two router cotangents."""
+
+    def projected_finish(
+        master_params: Block,
+        current_post_attention: tuple[jax.Array, jax.Array],
+        current_mlp_inputs: tuple[jax.Array, jax.Array],
+        current_shared_outputs: tuple[jax.Array, jax.Array],
+        current_combine_weights: tuple[jax.Array, jax.Array],
+    ):
+        compute_block = _compute_block(master_params, qb_beta, mp)
+        current_routing_states = tuple(
+            eqx.tree_at(lambda state: state.combine_weights, state, combine_weights)
+            for state, combine_weights in zip(routing_states, current_combine_weights, strict=True)
+        )
+        routed_outputs, router_stats = paired_explicit_moe_component_forward(
+            compute_block.mlp.expert_mlp,
+            current_mlp_inputs,
+            current_routing_states,
+            remat_mode=remat_mode,
+        )
+        updates = tuple(
+            routed + shared if compute_block.shared is not None else routed
+            for routed, shared in zip(routed_outputs, current_shared_outputs, strict=True)
+        )
+        outputs = tuple(hidden + update for hidden, update in zip(current_post_attention, updates, strict=True))
+        losses = tuple(
+            jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32))
+            for output, cotangent in zip(outputs, output_cotangents, strict=True)
+        )
+        return losses[0] + losses[1], (losses, routed_outputs, outputs, router_stats)
+
+    combine_weights = tuple(state.combine_weights for state in routing_states)
+    (_, auxiliary), gradients = jax.value_and_grad(
+        projected_finish,
+        argnums=(0, 1, 2, 3, 4),
+        has_aux=True,
+    )(params, post_attention, mlp_inputs, shared_outputs, combine_weights)
+    (
+        parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+        combine_weight_gradients,
+    ) = gradients
+    losses, routed_outputs, outputs, router_stats = auxiliary
+    return (
+        losses,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        post_attention_gradients,
+        mlp_input_gradients,
+        shared_output_gradients,
+        combine_weight_gradients,
+    )
+
+
+def sum_explicit_routing_parameter_gradients(
+    expert_gradient: Block,
+    first_pre_gradient: Block,
+    second_pre_gradient: Block,
+) -> Block:
+    """Sum task-local gradients in master precision and microbatch order."""
+    return _sum_microbatch_group((expert_gradient, first_pre_gradient, second_pre_gradient))
+
+
+def explicit_stage0_embedding_forward(
+    params: TransformerPipelineStage,
+    batch: GrugLmExample,
+    mp: jmp.Policy,
+) -> jax.Array:
+    """Run one microbatch's stage-zero embedding path."""
+    return _cast_preserving_overwrites(params, mp.cast_to_compute).embed_tokens(batch.tokens)
+
+
+def explicit_stage0_embedding_value_and_grad(
+    params: TransformerPipelineStage,
+    batch: GrugLmExample,
+    output_cotangent: jax.Array,
+    mp: jmp.Policy,
+) -> TransformerPipelineStage:
+    """Differentiate one microbatch's embedding path."""
+
+    def projection(master_params: TransformerPipelineStage):
+        hidden = explicit_stage0_embedding_forward(master_params, batch, mp)
+        return jnp.sum(hidden.astype(jnp.float32) * output_cotangent.astype(jnp.float32))
+
+    return jax.grad(projection)(params)
+
+
+def explicit_last_stage_head_loss_and_grads(
+    params: TransformerPipelineStage,
+    hidden: jax.Array,
+    batch: GrugLmExample,
+    router_metrics: dict[str, jax.Array],
+    mp: jmp.Policy,
+    *,
+    logsumexp_weight: float | None,
+) -> tuple[jax.Array, jax.Array, TransformerPipelineStage, jax.Array]:
+    """Differentiate one microbatch's weighted final head loss."""
+
+    def loss_fn(master_params: TransformerPipelineStage, current_hidden: jax.Array):
+        compute_params = _cast_preserving_overwrites(master_params, mp.cast_to_compute)
+        final_hidden = compute_params.finalize_hidden(current_hidden)
+        loss, metrics = compute_params.hidden_next_token_loss(
+            final_hidden,
+            batch.tokens,
+            batch.loss_weight,
+            jax.tree.map(jax.lax.stop_gradient, router_metrics),
+            reduction="mean",
+            logsumexp_weight=logsumexp_weight,
+            return_router_metrics=True,
+        )
+        return loss, metrics["qb_beta_per_layer"]
+
+    (loss, qb_betas_next), (parameter_gradient, input_gradient) = jax.value_and_grad(
+        loss_fn,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hidden)
+    return loss, qb_betas_next, parameter_gradient, input_gradient
+
+
+def explicit_stage_gradient_from_blocks(
+    params: TransformerPipelineStage,
+    block_gradients: tuple[Block, ...],
+) -> TransformerPipelineStage:
+    """Place ordered block gradients into a stage-shaped gradient tree."""
+    if len(block_gradients) != len(params.blocks):
+        raise ValueError(f"expected {len(params.blocks)} block gradients, got {len(block_gradients)}")
+    zero_gradient = jax.tree.map(jnp.zeros_like, params)
+    return eqx.tree_at(lambda stage: stage.blocks, zero_gradient, block_gradients)
+
+
 def paired_compute_block_forward(
     params: Block,
     qb_beta: jax.Array,
@@ -2273,6 +2624,117 @@ def _make_explicit_mpmd_train_step(
             f"missing stages: {missing_stages}"
         )
 
+    def explicit_router_stats_shardings(stage_index: int, *, include_capacity: bool) -> dict[str, NamedSharding]:
+        stage_mesh = mpmd_mesh.unstack[stage_mpmd_indices[stage_index]]
+        scalar = NamedSharding(stage_mesh, P())
+        expert = NamedSharding(stage_mesh, P(None))
+        shardings = {
+            "routing_counts": expert,
+            "routing_entropy": scalar,
+            "load_balancing_loss": scalar,
+            "router_z_loss": scalar,
+            "qb_beta": expert,
+        }
+        if include_capacity:
+            shardings["capacity_overflow"] = scalar
+        return shardings
+
+    def explicit_routing_state_shardings(stage_index: int) -> MoERoutingState:
+        stage_mesh = mpmd_mesh.unstack[stage_mpmd_indices[stage_index]]
+        token_matrix = NamedSharding(stage_mesh, P(_BATCH_AXES, None))
+        token_vector = NamedSharding(stage_mesh, P(_BATCH_AXES))
+        return MoERoutingState(
+            router_logits=token_matrix,
+            selected_experts=token_matrix,
+            combine_weights=token_matrix,
+            boundary_margin=token_vector,
+            router_stats=explicit_router_stats_shardings(stage_index, include_capacity=False),
+        )
+
+    explicit_pre_out_shardings = tuple(
+        tuple(
+            (
+                (
+                    activation_shardings[stage_index],
+                    activation_shardings[stage_index],
+                    activation_shardings[stage_index],
+                    explicit_routing_state_shardings(stage_index),
+                ),
+                param_shardings[stage_index].blocks[block_index],
+                activation_shardings[stage_index],
+            )
+            for block_index in range(len(stage.blocks))
+        )
+        for stage_index, stage in enumerate(sample_state.params)
+    )
+    explicit_finish_forward_out_shardings = tuple(
+        (
+            (
+                NamedSharding(mpmd_mesh.unstack[stage_mpmd_indices[stage_index]], P()),
+                NamedSharding(mpmd_mesh.unstack[stage_mpmd_indices[stage_index]], P()),
+            ),
+            (activation_shardings[stage_index], activation_shardings[stage_index]),
+            (activation_shardings[stage_index], activation_shardings[stage_index]),
+            (
+                explicit_router_stats_shardings(stage_index, include_capacity=True),
+                explicit_router_stats_shardings(stage_index, include_capacity=True),
+            ),
+        )
+        for stage_index in range(num_stages)
+    )
+    explicit_finish_backward_out_shardings = tuple(
+        tuple(
+            (
+                *explicit_finish_forward_out_shardings[stage_index],
+                param_shardings[stage_index].blocks[block_index],
+                (activation_shardings[stage_index], activation_shardings[stage_index]),
+                (activation_shardings[stage_index], activation_shardings[stage_index]),
+                (activation_shardings[stage_index], activation_shardings[stage_index]),
+                (
+                    NamedSharding(
+                        mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                        P(_BATCH_AXES, None),
+                    ),
+                    NamedSharding(
+                        mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                        P(_BATCH_AXES, None),
+                    ),
+                ),
+            )
+            for block_index in range(len(stage.blocks))
+        )
+        for stage_index, stage in enumerate(sample_state.params)
+    )
+    explicit_stage_router_metrics_shardings = tuple(
+        {
+            "routing_entropy_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None),
+            ),
+            "routing_counts_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None, None),
+            ),
+            "load_balancing_loss_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None),
+            ),
+            "router_z_loss_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None),
+            ),
+            "qb_beta_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None, None),
+            ),
+            "capacity_overflow_per_layer": NamedSharding(
+                mpmd_mesh.unstack[stage_mpmd_indices[stage_index]],
+                P(None),
+            ),
+        }
+        for stage_index in range(num_stages)
+    )
+
     def stage_batch_shardings(stage_batches):
         return tuple(
             _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, sample_batch)
@@ -2368,27 +2830,144 @@ def _make_explicit_mpmd_train_step(
         )
         return loss, qb_betas_next, grads, d_hidden
 
-    def grouped_stage0_forward(params, qb_betas, batches):
-        return _grouped_stage0_forward(params, qb_betas, batches, mp)
+    def explicit_group2_pre_bootstrap(
+        block_params,
+        qb_beta,
+        hidden,
+        mask,
+        *,
+        stage_index: int,
+        block_index: int,
+    ):
+        layer_mask, use_pko, disable_rope = _explicit_stage_block_attention(
+            sample_state.params[stage_index],
+            block_index,
+            mask,
+        )
+        router_z_loss_scale = (
+            sample_state.params[stage_index].config.router_z_loss_coef / len(sample_state.params[stage_index].blocks)
+            if stage_index == num_stages - 1
+            else 0.0
+        )
+        return explicit_router_pre_boundary_bootstrap(
+            block_params,
+            qb_beta,
+            hidden,
+            layer_mask,
+            mp,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            remat_mode=sample_state.params[stage_index].config.remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
 
-    def grouped_stage_forward(params, qb_betas, hiddens, batches):
-        return _grouped_stage_forward(params, qb_betas, hiddens, batches, mp)
+    def explicit_group2_pre_backward(
+        block_params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+        mask,
+        *,
+        stage_index: int,
+        block_index: int,
+    ):
+        layer_mask, use_pko, disable_rope = _explicit_stage_block_attention(
+            sample_state.params[stage_index],
+            block_index,
+            mask,
+        )
+        router_z_loss_scale = (
+            sample_state.params[stage_index].config.router_z_loss_coef / len(sample_state.params[stage_index].blocks)
+            if stage_index == num_stages - 1
+            else 0.0
+        )
+        return explicit_router_pre_boundary_primal_and_value_and_grads(
+            block_params,
+            qb_beta,
+            hidden,
+            boundary_cotangents,
+            layer_mask,
+            mp,
+            use_pko=use_pko,
+            disable_rope=disable_rope,
+            remat_mode=sample_state.params[stage_index].config.remat_mode,
+            router_z_loss_scale=router_z_loss_scale,
+        )
 
-    def grouped_stage0_backward(params, qb_betas, batches, d_hiddens):
-        return _grouped_stage0_backward(params, qb_betas, batches, d_hiddens, mp)
+    def explicit_group2_finish_forward(
+        block_params,
+        qb_beta,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        routing_states,
+        *,
+        stage_index: int,
+    ):
+        output_cotangents = tuple(jnp.zeros_like(hidden) for hidden in post_attention)
+        return explicit_routing_finish_boundary_forward(
+            block_params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            routing_states,
+            output_cotangents,
+            mp,
+            remat_mode=sample_state.params[stage_index].config.remat_mode,
+            router_z_loss_scale=0.0,
+        )
 
-    def grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens):
-        return _grouped_stage_backward(params, qb_betas, hiddens, batches, d_hiddens, mp)
+    def explicit_group2_finish_backward(
+        block_params,
+        qb_beta,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        routing_states,
+        output_cotangents,
+        *,
+        stage_index: int,
+    ):
+        return explicit_routing_finish_boundary_value_and_grads(
+            block_params,
+            qb_beta,
+            post_attention,
+            mlp_inputs,
+            shared_outputs,
+            routing_states,
+            output_cotangents,
+            mp,
+            remat_mode=sample_state.params[stage_index].config.remat_mode,
+        )
 
-    def grouped_last_stage_loss_and_grads(params, qb_betas, hiddens, batches):
-        return _grouped_last_stage_loss_and_grads(
+    def stage0_embedding_forward(params, batch):
+        return explicit_stage0_embedding_forward(params, batch, mp)
+
+    def stage0_embedding_backward(params, batch, output_cotangent):
+        return explicit_stage0_embedding_value_and_grad(params, batch, output_cotangent, mp)
+
+    def last_stage_head_loss_and_grads(params, hidden, batch, router_metrics):
+        return explicit_last_stage_head_loss_and_grads(
             params,
-            qb_betas,
-            hiddens,
-            batches,
+            hidden,
+            batch,
+            router_metrics,
             mp,
             logsumexp_weight=z_loss,
         )
+
+    def explicit_group2_stack_router_metrics(router_stats_by_block):
+        return tuple(
+            _stack_stage_router_metrics(tuple(block_stats[microbatch_index] for block_stats in router_stats_by_block))
+            for microbatch_index in range(2)
+        )
+
+    def explicit_group2_qb_betas(router_metrics):
+        return _combine_grouped_router_metrics(router_metrics)["qb_beta_per_layer"]
+
+    def explicit_stage_block_gradients(params, block_gradients):
+        return explicit_stage_gradient_from_blocks(params, block_gradients)
 
     def last_stage_backward(
         params: TransformerPipelineStage,
@@ -2918,6 +3497,9 @@ def _make_explicit_mpmd_train_step(
         input_backward_done = set()
         weight_backward_done = set()
         backward_residuals = {}
+        grouped_block_contexts = {}
+        grouped_stage_router_metrics = {}
+        grouped_stage_outputs = {}
         compute_params = (
             {}
             if pipeline.sonic_fsdp_materialization == "staged_per_step"
@@ -3017,8 +3599,158 @@ def _make_explicit_mpmd_train_step(
             name = "_".join(str(index) for index in indices)
             return indices, batches, name
 
-        def activation_group_shardings(stage_index: int, microbatch_indices: tuple[int, ...]):
-            return tuple(activation_shardings[stage_index] for _ in microbatch_indices)
+        def explicit_group2_stage_forward(
+            stage_index: int,
+            microbatch_key: tuple[int, ...],
+            stage_params: TransformerPipelineStage,
+            stage_qb_betas,
+            hiddens,
+            stage_batches,
+            microbatch_name: str,
+        ):
+            _require_microbatch_pair(hiddens, name="hidden batches")
+            _require_microbatch_pair(stage_batches, name="batches")
+            current_hiddens = hiddens
+            block_contexts = []
+            router_stats_by_block = []
+            for block_index in range(len(stage_params.blocks)):
+                block_inputs = current_hiddens
+                pre_task = functools.partial(
+                    explicit_group2_pre_bootstrap,
+                    stage_index=stage_index,
+                    block_index=block_index,
+                )
+                pre_contexts = tuple(
+                    mpmd.task(
+                        pre_task,
+                        name=(
+                            f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_"
+                            f"block{block_index}_pre_forward_mb{microbatch_offset}"
+                        ),
+                        out_shardings=explicit_pre_out_shardings[stage_index][block_index],
+                    )(
+                        stage_params.blocks[block_index],
+                        stage_qb_betas[block_index],
+                        block_inputs[microbatch_offset],
+                        stage_batches[microbatch_offset].attn_mask,
+                    )
+                    for microbatch_offset in range(2)
+                )
+                pre_boundaries = tuple(context[0] for context in pre_contexts)
+                post_attention = tuple(boundaries[0] for boundaries in pre_boundaries)
+                mlp_inputs = tuple(boundaries[1] for boundaries in pre_boundaries)
+                shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
+                routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
+                finish_forward = mpmd.task(
+                    functools.partial(explicit_group2_finish_forward, stage_index=stage_index),
+                    name=(
+                        f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_forward"
+                    ),
+                    out_shardings=explicit_finish_forward_out_shardings[stage_index],
+                )(
+                    stage_params.blocks[block_index],
+                    stage_qb_betas[block_index],
+                    post_attention,
+                    mlp_inputs,
+                    shared_outputs,
+                    routing_states,
+                )
+                current_hiddens = finish_forward[2]
+                router_stats_by_block.append(finish_forward[3])
+                block_contexts.append((block_inputs, pre_boundaries))
+
+            router_metrics = mpmd.task(
+                explicit_group2_stack_router_metrics,
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_stack_router_metrics",
+                out_shardings=(
+                    explicit_stage_router_metrics_shardings[stage_index],
+                    explicit_stage_router_metrics_shardings[stage_index],
+                ),
+            )(tuple(router_stats_by_block))
+            grouped_block_contexts[(stage_index, microbatch_key)] = tuple(block_contexts)
+            grouped_stage_router_metrics[(stage_index, microbatch_key)] = router_metrics
+            grouped_stage_outputs[(stage_index, microbatch_key)] = current_hiddens
+            return current_hiddens, router_metrics
+
+        def explicit_group2_stage_backward(
+            stage_index: int,
+            microbatch_key: tuple[int, ...],
+            stage_params: TransformerPipelineStage,
+            stage_qb_betas,
+            stage_batches,
+            output_cotangents,
+            microbatch_name: str,
+        ):
+            arriving_cotangents = output_cotangents
+            block_gradients: list[Any] = [None] * len(stage_params.blocks)
+            block_contexts = grouped_block_contexts[(stage_index, microbatch_key)]
+            for block_index in reversed(range(len(stage_params.blocks))):
+                block_inputs, pre_boundaries = block_contexts[block_index]
+                post_attention = tuple(boundaries[0] for boundaries in pre_boundaries)
+                mlp_inputs = tuple(boundaries[1] for boundaries in pre_boundaries)
+                shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
+                routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
+                finish_backward = mpmd.task(
+                    functools.partial(explicit_group2_finish_backward, stage_index=stage_index),
+                    name=(
+                        f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_backward"
+                    ),
+                    out_shardings=explicit_finish_backward_out_shardings[stage_index][block_index],
+                )(
+                    stage_params.blocks[block_index],
+                    stage_qb_betas[block_index],
+                    post_attention,
+                    mlp_inputs,
+                    shared_outputs,
+                    routing_states,
+                    arriving_cotangents,
+                )
+                boundary_cotangents = tuple(
+                    (
+                        finish_backward[5][microbatch_offset],
+                        finish_backward[6][microbatch_offset],
+                        finish_backward[7][microbatch_offset],
+                        finish_backward[8][microbatch_offset],
+                    )
+                    for microbatch_offset in range(2)
+                )
+                pre_task = functools.partial(
+                    explicit_group2_pre_backward,
+                    stage_index=stage_index,
+                    block_index=block_index,
+                )
+                pre_backwards = tuple(
+                    mpmd.task(
+                        pre_task,
+                        name=(
+                            f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_"
+                            f"block{block_index}_pre_backward_mb{microbatch_offset}"
+                        ),
+                        out_shardings=explicit_pre_out_shardings[stage_index][block_index],
+                    )(
+                        stage_params.blocks[block_index],
+                        stage_qb_betas[block_index],
+                        block_inputs[microbatch_offset],
+                        boundary_cotangents[microbatch_offset],
+                        stage_batches[microbatch_offset].attn_mask,
+                    )
+                    for microbatch_offset in range(2)
+                )
+                block_gradients[block_index] = mpmd.task(
+                    sum_explicit_routing_parameter_gradients,
+                    name=(
+                        f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_master_gradient_reduce"
+                    ),
+                    out_shardings=param_shardings[stage_index].blocks[block_index],
+                )(finish_backward[4], pre_backwards[0][1], pre_backwards[1][1])
+                arriving_cotangents = (pre_backwards[0][2], pre_backwards[1][2])
+
+            stage_gradient = mpmd.task(
+                explicit_stage_block_gradients,
+                name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_assemble_block_gradients",
+                out_shardings=param_shardings[stage_index],
+            )(stage_params, tuple(block_gradients))
+            return stage_gradient, arriving_cotangents
 
         def ensure_forward(stage_index: int, microbatch_key: int | tuple[int, ...]):
             key = (stage_index, microbatch_key)
@@ -3031,11 +3763,28 @@ def _make_explicit_mpmd_train_step(
 
             if stage_index == 0:
                 if grouped:
-                    hidden, stage_qb_betas = mpmd.task(
-                        grouped_stage0_forward,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage0_forward",
-                        out_shardings=(activation_group_shardings(0, microbatch_indices), qb_shardings[0]),
-                    )(stage_params, qb_betas[0], stage_batches)
+                    hidden = tuple(
+                        mpmd.task(
+                            stage0_embedding_forward,
+                            name=f"grug_1f1b_mb{microbatch_name}_stage0_embedding_mb{microbatch_offset}",
+                            out_shardings=activation_shardings[0],
+                        )(stage_params, stage_batches[microbatch_offset])
+                        for microbatch_offset in range(2)
+                    )
+                    hidden, router_metrics = explicit_group2_stage_forward(
+                        0,
+                        cast(tuple[int, ...], microbatch_key),
+                        stage_params,
+                        qb_betas[0],
+                        hidden,
+                        stage_batches,
+                        microbatch_name,
+                    )
+                    stage_qb_betas = mpmd.task(
+                        explicit_group2_qb_betas,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_combine_qb",
+                        out_shardings=qb_shardings[0],
+                    )(router_metrics)
                 else:
                     hidden, stage_qb_betas = mpmd.task(
                         stage0_forward,
@@ -3076,25 +3825,34 @@ def _make_explicit_mpmd_train_step(
                 name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward_wire",
             )
             stage_inputs[key] = hidden
-            if stage_index == num_stages - 1:
+            if stage_index == num_stages - 1 and not grouped:
                 forward_done.add(key)
                 return
 
             if grouped:
-                hidden, stage_qb_betas = mpmd.task(
-                    grouped_stage_forward,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward",
-                    out_shardings=(
-                        activation_group_shardings(stage_index, microbatch_indices),
-                        qb_shardings[stage_index],
-                    ),
-                )(stage_params, qb_betas[stage_index], hidden, stage_batches)
+                hidden, router_metrics = explicit_group2_stage_forward(
+                    stage_index,
+                    cast(tuple[int, ...], microbatch_key),
+                    stage_params,
+                    qb_betas[stage_index],
+                    hidden,
+                    stage_batches,
+                    microbatch_name,
+                )
+                stage_qb_betas = mpmd.task(
+                    explicit_group2_qb_betas,
+                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_combine_qb",
+                    out_shardings=qb_shardings[stage_index],
+                )(router_metrics)
             else:
                 hidden, stage_qb_betas = mpmd.task(
                     stage_forward,
                     name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_forward",
                     out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
                 )(stage_params, qb_betas[stage_index], hidden, stage_batches[0])
+            if stage_index == num_stages - 1:
+                forward_done.add(key)
+                return
             if prioritize_transfers:
                 forward_futures[(stage_index + 1, microbatch_key)] = send_pipeline_wire_value(
                     hidden,
@@ -3132,16 +3890,58 @@ def _make_explicit_mpmd_train_step(
             if stage_index == num_stages - 1:
                 ensure_forward(stage_index, microbatch_key)
                 if grouped:
-                    loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
-                        grouped_last_stage_loss_and_grads,
-                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_loss_backward",
-                        out_shardings=(
-                            last_loss_sharding,
-                            qb_shardings[stage_index],
-                            param_shardings[stage_index],
-                            activation_group_shardings(stage_index, microbatch_indices),
-                        ),
-                    )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches)
+                    stage_outputs = grouped_stage_outputs[key]
+                    router_metrics = grouped_stage_router_metrics[key]
+                    head_results = tuple(
+                        mpmd.task(
+                            last_stage_head_loss_and_grads,
+                            name=(
+                                f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_"
+                                f"head_backward_mb{microbatch_offset}"
+                            ),
+                            out_shardings=(
+                                last_loss_sharding,
+                                qb_shardings[stage_index],
+                                param_shardings[stage_index],
+                                activation_shardings[stage_index],
+                            ),
+                        )(
+                            stage_params,
+                            stage_outputs[microbatch_offset],
+                            stage_batches[microbatch_offset],
+                            router_metrics[microbatch_offset],
+                        )
+                        for microbatch_offset in range(2)
+                    )
+                    loss = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_head_losses",
+                        out_shardings=last_loss_sharding,
+                    )(head_results[0][0], head_results[1][0])
+                    stage_qb_betas = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_head_qb",
+                        out_shardings=qb_shardings[stage_index],
+                    )(head_results[0][1], head_results[1][1])
+                    head_gradient = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_head_gradients",
+                        out_shardings=param_shardings[stage_index],
+                    )(head_results[0][2], head_results[1][2])
+                    block_gradient, d_hidden = explicit_group2_stage_backward(
+                        stage_index,
+                        cast(tuple[int, ...], microbatch_key),
+                        stage_params,
+                        qb_betas[stage_index],
+                        stage_batches,
+                        (head_results[0][3], head_results[1][3]),
+                        microbatch_name,
+                    )
+                    stage_grads = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_sum_stage_gradients",
+                        out_shardings=param_shardings[stage_index],
+                    )(head_gradient, block_gradient)
                 else:
                     loss, stage_qb_betas, stage_grads, d_hidden = mpmd.task(
                         last_stage_loss_and_grads,
@@ -3199,13 +3999,44 @@ def _make_explicit_mpmd_train_step(
                 name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward_wire",
             )
             if stage_index == 0:
-                backward_fn = grouped_stage0_backward if grouped else stage0_backward
-                backward_batches = stage_batches if grouped else stage_batches[0]
-                stage_grads = mpmd.task(
-                    backward_fn,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
-                    out_shardings=param_shardings[0],
-                )(stage_params, qb_betas[0], backward_batches, d_hidden)
+                if grouped:
+                    block_gradient, embedding_cotangents = explicit_group2_stage_backward(
+                        0,
+                        cast(tuple[int, ...], microbatch_key),
+                        stage_params,
+                        qb_betas[0],
+                        stage_batches,
+                        d_hidden,
+                        microbatch_name,
+                    )
+                    embedding_gradients = tuple(
+                        mpmd.task(
+                            stage0_embedding_backward,
+                            name=(f"grug_1f1b_mb{microbatch_name}_stage0_" f"embedding_backward_mb{microbatch_offset}"),
+                            out_shardings=param_shardings[0],
+                        )(
+                            stage_params,
+                            stage_batches[microbatch_offset],
+                            embedding_cotangents[microbatch_offset],
+                        )
+                        for microbatch_offset in range(2)
+                    )
+                    embedding_gradient = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_sum_embedding_gradients",
+                        out_shardings=param_shardings[0],
+                    )(embedding_gradients[0], embedding_gradients[1])
+                    stage_grads = mpmd.task(
+                        add_trees,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_sum_stage_gradients",
+                        out_shardings=param_shardings[0],
+                    )(embedding_gradient, block_gradient)
+                else:
+                    stage_grads = mpmd.task(
+                        stage0_backward,
+                        name=f"grug_1f1b_mb{microbatch_name}_stage0_backward",
+                        out_shardings=param_shardings[0],
+                    )(stage_params, qb_betas[0], stage_batches[0], d_hidden)
                 grads[0] = accumulate_or_set(
                     grads[0],
                     stage_grads,
@@ -3217,14 +4048,15 @@ def _make_explicit_mpmd_train_step(
 
             ensure_forward(stage_index, microbatch_key)
             if grouped:
-                stage_grads, d_hidden = mpmd.task(
-                    grouped_stage_backward,
-                    name=f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_backward",
-                    out_shardings=(
-                        param_shardings[stage_index],
-                        activation_group_shardings(stage_index, microbatch_indices),
-                    ),
-                )(stage_params, qb_betas[stage_index], stage_inputs[key], stage_batches, d_hidden)
+                stage_grads, d_hidden = explicit_group2_stage_backward(
+                    stage_index,
+                    cast(tuple[int, ...], microbatch_key),
+                    stage_params,
+                    qb_betas[stage_index],
+                    stage_batches,
+                    d_hidden,
+                    microbatch_name,
+                )
             else:
                 stage_grads, d_hidden = mpmd.task(
                     stage_backward,

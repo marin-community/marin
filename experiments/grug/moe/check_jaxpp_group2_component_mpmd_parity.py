@@ -52,7 +52,6 @@ from experiments.grug.moe.model import (
     MoEMLP,
     MoERoutingState,
     _run_block_with_remat,
-    paired_explicit_moe_component_forward,
     paired_moe_component_forward,
 )
 
@@ -454,25 +453,6 @@ def _single_pre_moe_boundaries(
     return post_attention, mlp_input, shared_output, _pre_ring_router_values(block.mlp, mlp_input)
 
 
-def _single_explicit_router_pre_boundaries(
-    block: Block,
-    hidden: jax.Array,
-):
-    post_attention = block.attention_residual(
-        hidden,
-        AttentionMask.causal(),
-        use_pko=False,
-        disable_rope=False,
-    )
-    mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
-    shared_output = (
-        block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
-        if block.shared is not None
-        else jnp.zeros_like(mlp_input)
-    )
-    return post_attention, mlp_input, shared_output, block.mlp.route(mlp_input)
-
-
 def _single_pre_moe_boundaries_with_barriers(
     block: Block,
     hidden: jax.Array,
@@ -525,11 +505,15 @@ def single_explicit_router_pre_boundary_forward(
     hidden: jax.Array,
 ):
     """Run attention, dense work, and routing in one independently compiled task."""
-    return _single_pre_moe_checkpoint_boundary_forward(
-        _single_explicit_router_pre_boundaries,
+    return grug_train.explicit_router_pre_boundary_forward(
         params,
         qb_beta,
         hidden,
+        AttentionMask.causal(),
+        _MIXED_PRECISION,
+        use_pko=False,
+        disable_rope=False,
+        remat_mode="save_moe",
     )
 
 
@@ -627,63 +611,16 @@ def joined_explicit_routing_finish_boundary_value_and_grads(
     output_cotangents: tuple[jax.Array, jax.Array],
 ):
     """Differentiate two expert calls while treating router state as an explicit boundary."""
-
-    def projected_finish(
-        master_params: Block,
-        current_post_attention: tuple[jax.Array, jax.Array],
-        current_mlp_inputs: tuple[jax.Array, jax.Array],
-        current_shared_outputs: tuple[jax.Array, jax.Array],
-        current_combine_weights: tuple[jax.Array, jax.Array],
-    ):
-        block = grug_train._compute_block(master_params, qb_beta, _MIXED_PRECISION)
-        current_routing_states = tuple(
-            eqx.tree_at(
-                lambda state: state.combine_weights,
-                state,
-                combine_weights,
-            )
-            for state, combine_weights in zip(routing_states, current_combine_weights, strict=True)
-        )
-        routed_outputs, router_stats = paired_explicit_moe_component_forward(
-            block.mlp.expert_mlp,
-            current_mlp_inputs,
-            current_routing_states,
-            remat_mode="save_moe",
-        )
-        updates = tuple(
-            routed + shared if block.shared is not None else routed
-            for routed, shared in zip(routed_outputs, current_shared_outputs, strict=True)
-        )
-        outputs = tuple(hidden + update for hidden, update in zip(current_post_attention, updates, strict=True))
-        losses = tuple(
-            _project_output(output, cotangent) for output, cotangent in zip(outputs, output_cotangents, strict=True)
-        )
-        return losses[0] + losses[1], (losses, routed_outputs, outputs, router_stats)
-
-    combine_weights = tuple(state.combine_weights for state in routing_states)
-    (_, auxiliary), gradients = jax.value_and_grad(
-        projected_finish,
-        argnums=(0, 1, 2, 3, 4),
-        has_aux=True,
-    )(params, post_attention, mlp_inputs, shared_outputs, combine_weights)
-    (
-        parameter_gradient,
-        post_attention_gradients,
-        mlp_input_gradients,
-        shared_output_gradients,
-        combine_weight_gradients,
-    ) = gradients
-    losses, routed_outputs, outputs, router_stats = auxiliary
-    return (
-        losses,
-        routed_outputs,
-        outputs,
-        router_stats,
-        parameter_gradient,
-        post_attention_gradients,
-        mlp_input_gradients,
-        shared_output_gradients,
-        combine_weight_gradients,
+    return grug_train.explicit_routing_finish_boundary_value_and_grads(
+        params,
+        qb_beta,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        routing_states,
+        output_cotangents,
+        _MIXED_PRECISION,
+        remat_mode="save_moe",
     )
 
 
@@ -697,23 +634,18 @@ def joined_explicit_routing_finish_boundary_forward(
     output_cotangents: tuple[jax.Array, jax.Array],
 ):
     """Run the pure two-ring expert forward from explicit router state."""
-    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
-    routed_outputs, router_stats = paired_explicit_moe_component_forward(
-        block.mlp.expert_mlp,
+    return grug_train.explicit_routing_finish_boundary_forward(
+        params,
+        qb_beta,
+        post_attention,
         mlp_inputs,
+        shared_outputs,
         routing_states,
+        output_cotangents,
+        _MIXED_PRECISION,
         remat_mode="save_moe",
+        router_z_loss_scale=ROUTER_Z_LOSS_SCALE,
     )
-    updates = tuple(
-        routed + shared if block.shared is not None else routed
-        for routed, shared in zip(routed_outputs, shared_outputs, strict=True)
-    )
-    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
-    losses = tuple(
-        _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * routing.router_stats["router_z_loss"]
-        for output, cotangent, routing in zip(outputs, output_cotangents, routing_states, strict=True)
-    )
-    return losses, routed_outputs, outputs, router_stats
 
 
 def sum_explicit_routing_parameter_gradients(
@@ -722,7 +654,11 @@ def sum_explicit_routing_parameter_gradients(
     second_pre_gradient: Block,
 ) -> Block:
     """Sum task-local gradients in master precision and microbatch order."""
-    return grug_train._sum_microbatch_group((expert_gradient, first_pre_gradient, second_pre_gradient))
+    return grug_train.sum_explicit_routing_parameter_gradients(
+        expert_gradient,
+        first_pre_gradient,
+        second_pre_gradient,
+    )
 
 
 def single_moe_finish_boundary_value_and_grads(
@@ -836,30 +772,18 @@ def single_explicit_router_pre_boundary_primal_and_value_and_grads(
     boundary_cotangents: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
 ):
     """Differentiate pre-task work and explicit combine weights in one VJP."""
-
-    def projected_pre_moe(master_params: Block, current_hidden: jax.Array):
-        boundaries = single_explicit_router_pre_boundary_forward(master_params, qb_beta, current_hidden)
-        post_attention, mlp_input, shared_output, routing_state = boundaries
-        loss = sum(
-            (
-                _project_output(boundary, cotangent)
-                for boundary, cotangent in zip(
-                    (post_attention, mlp_input, shared_output, routing_state.combine_weights),
-                    boundary_cotangents,
-                    strict=True,
-                )
-            ),
-            start=jnp.asarray(0.0, dtype=jnp.float32),
-        )
-        loss += ROUTER_Z_LOSS_SCALE * routing_state.router_stats["router_z_loss"]
-        return loss, boundaries
-
-    (_, boundaries), (parameter_gradient, input_gradient) = jax.value_and_grad(
-        projected_pre_moe,
-        argnums=(0, 1),
-        has_aux=True,
-    )(params, hidden)
-    return boundaries, parameter_gradient, input_gradient
+    return grug_train.explicit_router_pre_boundary_primal_and_value_and_grads(
+        params,
+        qb_beta,
+        hidden,
+        boundary_cotangents,
+        AttentionMask.causal(),
+        _MIXED_PRECISION,
+        use_pko=False,
+        disable_rope=False,
+        remat_mode="save_moe",
+        router_z_loss_scale=ROUTER_Z_LOSS_SCALE,
+    )
 
 
 def single_pre_moe_barrier_checkpoint_boundary_value_and_grads(
