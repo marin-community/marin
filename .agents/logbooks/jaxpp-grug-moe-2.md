@@ -1216,3 +1216,32 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Do not launch the L8 JaxPP profile from this result and do not weaken tolerances.
 - Next action:
   - Audit the QuACK 0.6.1 grouped-GEMM backward contract against `sonic_quack.py`, focusing on layout/transposition semantics that could independently corrupt token and W13 gradients. Run only a smallest discriminating gate after identifying a concrete adapter hypothesis.
+
+### 2026-07-27 06:57 PDT - Correct QuACK's gated backward permutation; residual numerics still fail
+- Root cause:
+  - QuACK's `concat_layout` interleaves a tensor's non-contiguous dimension. The forward W13 view presents `(2I,H,E)`, so its gated dimension is correctly interleaved.
+  - The token-gradient and W13-gradient paths instead presented `(H,2I,E)`. Their concat kernels therefore interleaved hidden size rather than the gated `2I` dimension.
+  - The r5 W13 cosine `0.0025866` with equal actual/reference norms predicts relative-L2 `sqrt(2 - 2c) = 1.412383`, matching the observed `1.412395` and confirming a permutation signature.
+- Fix:
+  - Commit `7511e190c6` removes the incorrect concat weight-gradient kernel. Backward now converts QuACK's interleaved dpreactivation to concatenated `[dgate; dup]` explicitly and uses the ordinary grouped GEMM kernels for token and W13 gradients.
+  - Gate-policy unit tests report `5 passed`; the QuACK-focused Levanter selection reports `4 passed, 1 skipped` on CPU. Changed-file pre-commit including Pyrefly passes.
+- Job:
+  - `/dlwh/quack061-numerical-gate-r6-20260727-135404` ran the same one-H100 command from `7511e190c60e93a3b19cb418040975fa4c303fbb`.
+- Result:
+
+  | Tensor | r5 relative L2 | r6 relative L2 | r6 cosine | Accepted at `0.002` |
+  | --- | ---: | ---: | ---: | --- |
+  | loss | `0.000210469` | `0.000210469` | `0.999999980` | yes |
+  | output | `0.00606944` | `0.00606941` | `0.999981663` | no |
+  | gradient.tokens | `1.28293727` | `0.00690849` | `0.999976272` | no |
+  | gradient.routing_weights | `0.00295452` | `0.00295354` | `0.999995699` | no |
+  | gradient.w13 | `1.41239541` | `0.00707695` | `0.999974898` | no |
+  | gradient.w2 | `0.00697065` | `0.00697064` | `0.999975932` | no |
+
+  - The fix removes the catastrophic permutation: token and W13 relative-L2 improve by about `186x` and `200x`, and both cosines exceed `0.99997`.
+  - The remaining output and gradient errors cluster around `0.30-0.71%`, above the unchanged `0.2%` ceiling. Every tensor is finite.
+  - Routing remains exact at `65,536` assignments and `1,024` per expert; dropped assignments remain exactly zero. Timing is absent because admission failed.
+  - Iris records task exit `1` after `28.31s` with zero retries. Cleanup reports zero pods, workloads, and jobs.
+- Interpretation:
+  - The adapter permutation was a real correctness bug and is fixed. The corrected QuACK BF16 path still fails the accepted full numerical policy, so proper Sonic remains closed as a performance candidate.
+  - Do not relax the ceiling or launch a Sonic L8 run. The independent Ring explicit-backward profile remains the active target path.
