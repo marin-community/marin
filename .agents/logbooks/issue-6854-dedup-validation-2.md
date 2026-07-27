@@ -16,6 +16,82 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T06:00:05Z — 236,272 pairs verified
+
+- `/rav/rav-datakit-6854-audit-next-checkpoints-0311-v976` independently
+  revalidated six treatment checkpoints: p0 decision-file 9 semantic offsets
+  5,504, 5,632, 5,760, and the 63-pair final offset 5,888, plus p1
+  decision-file 41 offset 5,760 and the 121-pair final offset 5,888. Their 696
+  pairs initially contained 407 false positives, 287 true duplicates, and two
+  unresolved outcomes. All pairs used direct review. Nine invalid attempts
+  exhausted three judgments; the run persisted 1,436 valid attempts across
+  1,445 requests.
+- In checkpoint order, the outcome Parquet SHA-256 values are:
+
+  - p0:
+    `813bdc3e88b43d44e20a3cf95a6d970a504df65ea42e15152d0f61d5bf11fab1`,
+    `3fb656aeaefe25d5ece7dbf61d719c35377817ae95b9c36204bbe860d77952f6`,
+    `8e2a8e0c183fa44db377892983ad369d9cac7cc17a673cedab406676d2201a49`,
+    and
+    `e165b916b50e35ef2f691fff012950df9655e04c069e037ae1bff9a9f7312ff3`;
+  - p1:
+    `1fbe29e1a5cf3b90735bdad323277bfa439d2b781c61010d7e3bf1bdf9edbc08`
+    and
+    `f91f38857db9686418df049f05ea5bbf83c5e6f89f5be4b72c7666e19f39186e`.
+
+- Complete-text inspection resolves both treatment ambiguities as true
+  duplicates:
+
+  - row 9,126 compares 256-line medical SFT examples with identical clinical
+    question, choices, reasoning, conclusion, and answer. The only changed
+    line is `\boxed{\text{I}}` versus `\boxed{I}`. The 12,972- and
+    12,979-character texts have character, line, and word-sequence
+    similarities 0.999730, 0.996094, and 0.999763. Inspection, semantic
+    judgment, member, and canonical SHA-256 values are
+    `86cdfc984ffd1c337c7da9867c42bf34cb43234b1c0cdad6250a95c0ea801178`,
+    `99f099102f0be5f6ccd51590f0deac1a10026c750d7248de4581f8221eacea2a`,
+    `76dd38bf326755aa7d2d2d809094e6380fe940dda10cd3708dd30df3aa11cbaa`,
+    and
+    `a5f9c9178dc85910b4a948562d2c6c3ebafc67f4b01472ba4469f8df5185ac04`;
+  - row 9,128 compares 94-line history SFT examples with identical question,
+    choices, reasoning, conclusion, and answer. The only changed line is
+    `\boxed{\text{J}}` versus `\boxed{J}`. The 7,469- and 7,476-character
+    texts have character, line, and word-sequence similarities 0.999532,
+    0.989362, and 0.999545. Inspection, semantic judgment, member, and
+    canonical SHA-256 values are
+    `66aca39755c163e8aaa1c4f9656f8729e2ede103e384bacf5c0a2baacf138afe`,
+    `e87ea4d661ffe334d376e49335418e6915162de4971327b5040af60f8ff9d2e7`,
+    `015444e0da5340635c72f8b44b34a60c09cd256637154f7331af35de3bf1d042`,
+    and
+    `8c6dc3a2f88851d0847ad47d1da8fa7cc4adae5485337ed4a8c2fcb43361e41c`.
+
+- `/rav/rav-datakit-6854-publish-row9126-0317-v982` and
+  `/rav/rav-datakit-6854-publish-row9128-0316-v981` wrote the immutable
+  true-duplicate records. Their manual-Parquet and completion-marker SHA-256
+  values are
+  `9a380cc2d94bb24d589e74c09e4e4ff73133741144f0f8c694236c0ee96b85be`,
+  `bc896f6d4485bc857ad7a65938a1a6c412ec8c9f6dfaff6f9e63c9569d8d8437`,
+  `4f15396f83f305fe9120288fc7f412b6d2cea190655e86795f69956131c488a6`,
+  and
+  `7b228418d620f431b6d399cdef3bd54cf9813c407668e4563ee90ca7917bbfc2`.
+  `/rav/rav-datakit-6854-verify-row9126-0318-v983` and
+  `/rav/rav-datakit-6854-verify-row9128-0319-v984` independently reread and
+  verified every bound source and output artifact.
+
+- Replacing the two unresolved outcomes gives 407 false positives and 289
+  true duplicates in the block. Across the stable 1,860-checkpoint snapshot,
+  all 282 unresolved model outcomes are covered by 218 true-duplicate and 64
+  false-positive manual records. The adjusted totals are:
+
+  - baseline: 188,591 pairs, 119,668 false positives, 68,923 true duplicates;
+  - treatment: 47,681 pairs, 24,641 false positives, 23,040 true duplicates;
+  - combined: 236,272 pairs, 144,309 false positives, 91,963 true duplicates.
+
+- The next audit frontiers are p0 `(10, 0)`, p1 `(42, 0)`, p2 `(74, 0)`,
+  and p3 `(106, 256)`. The next p0 and p1 checkpoints contain 121,377,796 and
+  120,606,800 combined characters. All four batch-priority 2-H100 workers
+  remain active with zero Kubernetes restarts.
+
 ### 2026-07-27T05:47:33Z — 235,576 pairs verified
 
 - `/rav/rav-datakit-6854-audit-next-checkpoints-0309-v974` independently
