@@ -650,6 +650,80 @@ def test_decon_catches_near_verbatim_with_word_insertion(tmp_path: Path):
     assert rows["doc_inserted"]["max_overlap"] >= 0.5
 
 
+# ----- Absolute-count recall path (marin#6852): embedded/inline eval text -----
+
+# 14 tokens → 11 distinct 4-grams, all from the eval; enough to clear min_abs_hits.
+_EMBED_EVAL_TEXT = (
+    "photosynthesis converts carbon dioxide and water into glucose "
+    "using sunlight within chloroplast membranes efficiently"
+)
+
+
+def _embedded_doc(eval_text: str, pad_words: int = 40) -> str:
+    """Wrap *eval_text* verbatim inside a long single paragraph of unrelated filler.
+
+    The filler shares no ngrams with the eval, so only the eval's own ngrams hit
+    the bloom — a minority of the paragraph, i.e. overlap fraction well below the
+    0.5 threshold. This is the embedded/inline case the fraction path misses.
+    """
+    filler = " ".join(f"filler{i}" for i in range(pad_words))
+    return f"{filler} {eval_text} {filler}"
+
+
+def test_decon_abs_count_flags_embedded_eval_below_fraction_threshold(tmp_path: Path):
+    """A substantial eval item embedded mid-paragraph is flagged via the absolute-count path.
+
+    The overlap *fraction* is well below 0.5 (the eval is a minority of the long
+    paragraph's ngrams), so the fraction path alone misses it — but the eval
+    contributes >= min_abs_hits distinct bloom-hit ngrams, so it is caught.
+    """
+    eval_text = _EMBED_EVAL_TEXT
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": eval_text}],
+        input_records=[{"id": "doc_embedded", "partition_id": 0, "text": _embedded_doc(eval_text)}],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, min_abs_hits=10),
+    )
+    assert rows["doc_embedded"]["contaminated"] is True
+    # Proves the win is from the absolute-count path, not the fraction: fraction < 0.5.
+    assert rows["doc_embedded"]["max_overlap"] < 0.5
+
+
+def test_decon_abs_count_disabled_reverts_to_fraction_only(tmp_path: Path):
+    """With min_abs_hits=None the same embedded doc is NOT flagged (fraction path only).
+
+    Pins the absolute-count path as the sole reason the previous test flags, and
+    that disabling it restores the pre-fix behaviour.
+    """
+    eval_text = _EMBED_EVAL_TEXT
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": eval_text}],
+        input_records=[{"id": "doc_embedded", "partition_id": 0, "text": _embedded_doc(eval_text)}],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, min_abs_hits=None),
+    )
+    assert rows["doc_embedded"]["contaminated"] is False
+    assert rows["doc_embedded"]["max_overlap"] < 0.5
+
+
+def test_decon_abs_count_gated_below_min_hits(tmp_path: Path):
+    """A short embedded fragment (few matched ngrams) is NOT flagged by the abs-count path.
+
+    The minimum-hit gate is what keeps trivial coincidental overlaps (and the
+    ``"..."`` short-paragraph artifact) from re-introducing false positives:
+    an eval fragment contributing fewer than min_abs_hits ngrams stays clean.
+    """
+    # 6 tokens → 3 distinct 4-grams, below min_abs_hits=10.
+    eval_text = "sodium chloride readily dissolves in warm water"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": eval_text}],
+        input_records=[{"id": "doc_fragment", "partition_id": 0, "text": _embedded_doc(eval_text)}],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, min_abs_hits=10),
+    )
+    assert rows["doc_fragment"]["contaminated"] is False
+
+
 # ----- Known limitations (xfail with strict=True — tripwire if behavior improves) -----
 
 
@@ -702,15 +776,22 @@ def test_decon_misses_punctuation_only_differences(tmp_path: Path):
 
 
 @pytest.mark.xfail(
-    reason="short eval embedded in a long single paragraph dilutes the overlap fraction below threshold",
+    reason="short eval embedded in a long single paragraph dilutes the overlap "
+    "fraction below threshold; the absolute-count recall path is opt-in (default "
+    "off) and, even when on, a 1-ngram fragment is below any sane min_abs_hits",
     strict=True,
 )
 def test_decon_misses_short_eval_diluted_in_long_paragraph(tmp_path: Path):
     """Eval is a short fragment; pretraining wraps it inside a long single paragraph.
 
     With n=4, the eval contributes ~1 ngram. The pretraining paragraph has many
-    ngrams (the prefix + the eval ngram + the suffix). Score = 1/N → below 0.5.
-    A length-decay or substring-aware scorer (cf. allenai/decon) would catch it.
+    ngrams (the prefix + the eval ngram + the suffix). Score = 1/N → below 0.5. The
+    default config leaves ``min_abs_hits=None`` (the precision-favoring operating
+    point), so the absolute-count recall path (marin#6852) is off here. Even enabled,
+    a 1-ngram fragment is below any useful ``min_abs_hits`` — catching it would
+    re-open the trivial ``"..."`` short-fragment false positives. A *substantial*
+    embedded span IS caught when the path is enabled; see
+    ``test_decon_abs_count_flags_embedded_eval_below_fraction_threshold``.
     """
     rows = _run_decon_one_shot(
         tmp_path,

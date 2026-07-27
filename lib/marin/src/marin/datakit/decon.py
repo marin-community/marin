@@ -85,12 +85,34 @@ class NGramConfig:
             both dilutes isolated-line coincidences (precision) and lets short-line
             / inline-embedded eval text be matched (recall). ``"\n"`` instead treats
             each line as its own paragraph. See marin#6852.
+        min_abs_hits: Absolute-count recall path (marin#6852), **opt-in / default
+            disabled**. When set, a paragraph is also marked contaminated when it
+            contains at least this many *distinct* bloom-hit ngrams, regardless of
+            the overlap fraction. This catches an eval item embedded mid-paragraph
+            among unrelated filler — a minority of the paragraph's ngrams
+            (fraction < ``overlap_threshold``) but still a contiguous run of matched
+            ngrams. ``min_abs_hits`` distinct hits ≈ ``min_abs_hits + ngram_length -
+            1`` consecutive verbatim benchmark words.
+
+            Precision caveat (measured on a 100B testbed, marin#6852): the
+            per-source common-ngram drop-set suppresses boilerplate that is common
+            *within* a source, but **cross-source** boilerplate/passages/templates
+            (a legal enacting clause, a famous quote, an MCQ instruction stem, a
+            standard LaTeX identity) are rare within any one source, survive the
+            drop-set, and are then flagged by this path — the same false-positive
+            classes tracked in marin#7126. At ``min_abs_hits=8`` this ~doubled the
+            testbed flag rate (0.004%→0.010%), a mix of genuine embedded leakage
+            (instruction-tuning / synthetic sources) and those cross-source FPs.
+            Leave ``None`` unless paired with a cross-source boilerplate filter, or
+            you accept that added flag volume. ``None`` = pure fraction overlap (the
+            precision-favoring default). See :func:`_make_marker`.
     """
 
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
     paragraph_delimiter: str = "\n\n"
+    min_abs_hits: int | None = None
 
 
 class DeconAttributes(BaseModel):
@@ -424,6 +446,10 @@ def _make_marker(
     # so any non-zero match is always recorded.
     threshold = ngram.overlap_threshold if ngram is not None else 0.0
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
+    # Absolute-count recall path (marin#6852): flag when any paragraph carries at
+    # least this many distinct bloom-hit ngrams, even if that is a minority of the
+    # paragraph (embedded/inline eval text). Disabled in exact-paragraph mode.
+    min_abs_hits = ngram.min_abs_hits if ngram is not None else None
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
@@ -439,6 +465,7 @@ def _make_marker(
                 for record in load_file(p):
                     text = str(record.get(text_field, "") or "")
                     max_score = 0.0
+                    max_para_hits = 0
                     matched: set[int] = set()
                     for para in text.split(delimiter):
                         if not para:
@@ -446,8 +473,13 @@ def _make_marker(
                         score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop_hashes)
                         if score > max_score:
                             max_score = score
+                        para_distinct = len(set(hits))
+                        if para_distinct > max_para_hits:
+                            max_para_hits = para_distinct
                         matched.update(hits)
-                    contaminated = max_score > 0 and max_score >= threshold
+                    contaminated = (max_score > 0 and max_score >= threshold) or (
+                        min_abs_hits is not None and max_para_hits >= min_abs_hits
+                    )
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
                     if contaminated and flagged_sample_size:
                         n_flagged += 1
@@ -1235,6 +1267,7 @@ def decon_step(
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
     paragraph_delimiter: str = "\n\n",
+    min_abs_hits: int | None = None,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
@@ -1278,6 +1311,12 @@ def decon_step(
         paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
             When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
             was built with, or the two feature sets won't line up.
+        min_abs_hits: Absolute-count recall path (see :class:`NGramConfig`) —
+            opt-in, default disabled. When set, a paragraph is also marked
+            contaminated when it holds at least this many distinct bloom-hit ngrams,
+            catching embedded/inline eval text (at a cross-source-boilerplate FP
+            cost; see :class:`NGramConfig`). Only affects the mark stage, not the
+            bloom. ``None`` disables it.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters.
             Ignored when ``prebuilt_bloom`` is set.
         worker_resources, max_workers: Zephyr execution knobs.
@@ -1290,7 +1329,10 @@ def decon_step(
 
     ngram: NGramConfig | None = (
         NGramConfig(
-            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+            ngram_length=ngram_length,
+            overlap_threshold=overlap_threshold,
+            paragraph_delimiter=paragraph_delimiter,
+            min_abs_hits=min_abs_hits,
         )
         if ngram_length is not None
         else None
@@ -1312,6 +1354,11 @@ def decon_step(
     # run with sampling off keeps the same address as before this feature landed.
     if flagged_sample_size:
         hash_attrs["flagged_sample_size"] = flagged_sample_size
+    # Likewise the absolute-count path: min_abs_hits=None reproduces the pre-fix
+    # fraction-only mark exactly, so it must not re-address existing caches. A
+    # non-None value changes the marking and gets its own address.
+    if min_abs_hits is not None:
+        hash_attrs["min_abs_hits"] = min_abs_hits
 
     if drop_sets is not None and drop_set_source is None:
         raise ValueError("drop_set_source is required when drop_sets is set")

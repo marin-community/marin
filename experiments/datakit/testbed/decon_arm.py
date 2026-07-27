@@ -61,6 +61,14 @@ OVERLAP_THRESHOLD = 0.5
 # isolated-line coincidences (fewer FPs) and lets short-line / inline-embedded
 # eval text be matched (higher recall). See marin#6852.
 PARAGRAPH_DELIMITER = "\n\n"
+# Absolute-count recall path (marin#6852): flag a paragraph carrying >= this many
+# distinct bloom-hit ngrams even when they are a minority of the paragraph — the
+# embedded/inline case the fraction threshold misses. ~= this many + 12 consecutive
+# verbatim benchmark words. Opt-in / default off: on a 100B testbed min_abs_hits=8
+# ~doubled the flag rate, mixing genuine embedded leakage with cross-source
+# boilerplate FPs (now filtered by the global drop-set, #7635 / marin#7126). Set via
+# --min-abs-hits to experiment. None = pure fraction (production default).
+MIN_ABS_HITS: int | None = None
 # Estimate local and cross-source DF from the largest materialized sample
 # regardless of the decon target. Layout: <root>/<source>/outputs/main.
 SAMPLE_1T_ROOT = "datakit/sample_1t_733c8c5c"
@@ -75,6 +83,7 @@ def build_testbed_decon_steps(
     only_sources: list[str] | None = None,
     exclude_sources: frozenset[str] = frozenset(),
     sample_root: str | None = None,
+    min_abs_hits: int | None = MIN_ABS_HITS,
 ) -> list[StepSpec]:
     """Bloom (fixed) + one decon step per sampled source.
 
@@ -156,6 +165,7 @@ def build_testbed_decon_steps(
                 ngram_length=NGRAM_LENGTH,
                 overlap_threshold=OVERLAP_THRESHOLD,
                 paragraph_delimiter=PARAGRAPH_DELIMITER,
+                min_abs_hits=min_abs_hits,
                 flagged_sample_size=FLAGGED_SAMPLE_SIZE,
                 estimated_doc_count=ESTIMATED_DOC_COUNT,
                 false_positive_rate=FALSE_POSITIVE_RATE,
@@ -187,13 +197,22 @@ def main() -> None:
         help="decon a pre-materialized sample root under MARIN_PREFIX directly "
         "(e.g. datakit/sample_1t_733c8c5c); marks read <root>/<source>/outputs/main",
     )
+    ap.add_argument(
+        "--min-abs-hits",
+        type=int,
+        default=MIN_ABS_HITS,
+        help="absolute-count recall path threshold (marin#6852); pass -1 to disable "
+        "it and reproduce the pre-fix fraction-only baseline for a before/after compare",
+    )
     args = ap.parse_args()
+    min_abs_hits = None if args.min_abs_hits is not None and args.min_abs_hits < 0 else args.min_abs_hits
     StepRunner().run(
         build_testbed_decon_steps(
             target_total_tokens_b=args.target_tokens_b,
             sample_root=args.sample_root,
             only_sources=args.only,
             exclude_sources=frozenset(args.exclude or ()),
+            min_abs_hits=min_abs_hits,
         )
     )
 
