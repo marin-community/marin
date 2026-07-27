@@ -3,6 +3,7 @@
 
 import numpy as np
 
+from experiments.grug.moe.benchmark_jax_ubx_ffi import _stack_maps
 from experiments.grug.moe.benchmark_nccl_ubx import (
     BenchmarkConfig,
     admission_result,
@@ -81,6 +82,19 @@ def test_compact_reference_maps_use_contiguous_ring_capacity() -> None:
             np.arange(accepted_on_rank, dtype=np.int64),
         )
         assert np.all(maps.dispatch_topk_slot[valid_dispatch] < maps.max_tokens_per_rank)
+
+
+def test_raw_jax_gate_stacks_one_compact_map_per_rank() -> None:
+    config = _small_config("learned_skew", slot_layout="compact")
+    plan, dispatch_expert, dispatch_slot, dispatch_valid, inverse_map, topk_idx, gate_weights = _stack_maps(config)
+
+    assert dispatch_expert.shape == (config.global_tokens, config.top_k)
+    assert dispatch_slot.shape == dispatch_expert.shape
+    assert topk_idx.shape == dispatch_expert.shape
+    assert dispatch_valid.shape == (8 * config.capacity_per_expert_rank,)
+    assert inverse_map.shape == (8 * config.capacity_per_expert_rank, 4)
+    assert gate_weights.shape == (config.global_tokens, config.num_experts)
+    assert int(dispatch_valid.sum()) == int(plan.accepted_counts.sum())
 
 
 def test_admission_requires_exactness_relative_l2_and_speedup() -> None:
