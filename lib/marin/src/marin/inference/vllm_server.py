@@ -34,12 +34,20 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
-# vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
-_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
+# Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
+# range, while the Marin git fork does not bundle it.
+_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
+_RUNAI_STREAMER_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
+    # The AWS CRT clamps the 0.16.x streamer's 1s default to 3s. Ten seconds tolerates a brief
+    # object-store stall while still failing early enough for Marin's whole-server retry.
+    ("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", "10000"),
+    # RunAI otherwise writes no internal logs. WARNING is its default level, so this exposes the
+    # final S3 exception without enabling per-request debug output.
+    ("RUNAI_STREAMER_LOG_TO_STDERR", "1"),
+)
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
 _LINUX_PROC_ROOT = "/proc"
@@ -117,14 +125,15 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
-            from_spec, extra = vllm_fork_ref(), ["--with", _RUNAI_STREAMER_REQUIREMENT]
+            from_spec = vllm_fork_ref()
         else:
-            from_spec, extra = f"vllm[runai]=={self.version}", []
+            from_spec = f"vllm[runai]=={self.version}"
         return [
             "uvx",
             "--from",
             from_spec,
-            *extra,
+            "--with",
+            _RUNAI_STREAMER_REQUIREMENT,
             "--python",
             self.python_version,
             "--torch-backend",
@@ -143,6 +152,8 @@ class IsolatedCudaVllm:
             _FLASHINFER_SAMPLER_ENV_VAR: "0",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
+        for key, default in _RUNAI_STREAMER_ENV_DEFAULTS:
+            environment[key] = os.environ.get(key, default)
         if self.source is VllmType.MARIN_FORK:
             environment["VLLM_USE_PRECOMPILED"] = "1"
         return environment

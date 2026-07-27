@@ -123,6 +123,41 @@ The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
 persistence use the selected GCS or S3 records store after
 [PR #7625](https://github.com/marin-community/marin/pull/7625).
 
+### Object-store model loading
+
+CUDA vLLM serves `s3://` checkpoints with RunAI model streamer 0.16.1. The launcher gives the
+streamer's low-speed check 10 seconds and sends its warning and error logs to the Iris job log. The
+Grug H100x8 entry also enables distributed loading: each data-parallel rank reads its assigned
+weights and broadcasts them locally instead of all eight ranks reading the full 124.9 GiB export.
+
+The following variables may prefix an evaluation command and are forwarded to the remote inference
+child:
+
+- `RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS` overrides the 10,000 ms low-speed window.
+- `RUNAI_STREAMER_CONCURRENCY` controls the number of object-store reader workers. Try `4` if an S3
+  endpoint fails under the default concurrency of `8`; this may increase model-load time.
+- `RUNAI_STREAMER_S3_MAX_INFLIGHT_MIB` caps in-flight data per S3 client on RunAI 0.16.1. Leave the
+  derived default in place unless concurrency reduction is insufficient.
+- `RUNAI_STREAMER_CHUNK_BYTESIZE` changes the default 8 MiB object-store chunk. Benchmark changes;
+  larger chunks reduce request count and increase memory per request.
+- `RUNAI_STREAMER_LOG_TO_STDERR`, `RUNAI_STREAMER_LOG_LEVEL`, and `RUNAI_STREAMER_S3_TRACE` control
+  diagnostics. S3 trace logging writes a file and is intended for a bounded reproduction.
+
+For example, retry a model-load failure with half the default reader concurrency:
+
+```bash
+RUNAI_STREAMER_CONCURRENCY=4 \
+uv run python -m experiments.evaluation.cli launch \
+  --model grug-agentic-s3-step1903 \
+  --evals grug-opencode-id \
+  --limit 1
+```
+
+Do not set `AWS_RETRY_MODE` or `AWS_MAX_ATTEMPTS` to increase retries for this loader. The AWS CRT
+client bundled with RunAI already retries each request five times, and that build does not propagate
+`AWS_MAX_ATTEMPTS` to the CRT retry count. Marin separately retries vLLM startup up to three times
+when RunAI reports a transient read failure.
+
 ### Named suites
 
 | Suite | Evaluator | Contents and constraints |

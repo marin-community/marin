@@ -16,3 +16,5 @@ serve:
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'

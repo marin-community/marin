@@ -172,11 +172,16 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
+def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler(monkeypatch):
+    monkeypatch.delenv("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("RUNAI_STREAMER_LOG_TO_STDERR", raising=False)
     launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
     env = launcher.env()
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert env["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "10000"
+    assert env["RUNAI_STREAMER_LOG_TO_STDERR"] == "1"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
+    assert "runai-model-streamer[s3]==0.16.1" in launcher.command()
 
 
 def test_isolated_cuda_vllm_marin_fork_command_and_env():
@@ -184,11 +189,21 @@ def test_isolated_cuda_vllm_marin_fork_command_and_env():
     cmd = launcher.command()
     assert cmd[:3] == ["uvx", "--from", vllm_fork_ref()]
     assert "--torch-backend" in cmd and cmd[cmd.index("--torch-backend") + 1] == "cu130"
-    assert "runai-model-streamer[s3]==0.16.0" in cmd
+    assert "runai-model-streamer[s3]==0.16.1" in cmd
     env = launcher.env()
     assert env["VLLM_USE_PRECOMPILED"] == "1"
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
+
+
+def test_isolated_cuda_vllm_preserves_streamer_overrides(monkeypatch):
+    monkeypatch.setenv("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", "30000")
+    monkeypatch.setenv("RUNAI_STREAMER_LOG_TO_STDERR", "0")
+
+    env = IsolatedCudaVllm(source=VllmType.MARIN_FORK).env()
+
+    assert env["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "30000"
+    assert env["RUNAI_STREAMER_LOG_TO_STDERR"] == "0"
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():

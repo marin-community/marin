@@ -13,6 +13,8 @@ issue: https://github.com/marin-community/marin/issues/6503
 - The existing transient-startup retry classified the read failure correctly.
 - Teardown kept the managed compilation-cache lock because the killed vLLM process group still existed, so the retry failed before launch with `vLLM compilation cache ... is already active on this host`.
 - Teardown now ignores zombie/dead group members after killing vLLM, allowing the managed-cache lock to close before the retry.
+- The Grug entry now uses distributed streaming, RunAI 0.16.1 bounds in-flight object-store reads,
+  and the CUDA launcher gives the S3 low-speed check 10 seconds.
 - A clean resubmission reached `vLLM environment ready`; the zombie regression and existing retry suite passed locally.
 
 ## Original problem report
@@ -54,6 +56,62 @@ cache.
 `tests/inference/test_vllm_server.py` creates a real process group with an
 unreaped zombie and verifies that `VllmServerHandle.stop()` releases the
 managed cache. The full vLLM server and cache test selection passed: 18 tests.
+
+## Streamer configuration follow-up
+
+The failed serve made each of eight data-parallel ranks stream the full 124.9
+GiB export. Rank load times ranged from 57 to 229 seconds. The equivalent
+Snowball factory and backend parity test already pass
+`--model-loader-extra-config '{"distributed":true}'`; the Grug YAML omitted it.
+
+RunAI 0.16.0 submits all chunks for a read to the object-store client at once
+and fails the read when any chunk exhausts the AWS client's retries. RunAI
+0.16.1 adds a completion-driven in-flight window before the S3 client. It still
+has no second retry loop around a failed chunk.
+
+The 0.16.0 wheel bundles AWS SDK for C++ 1.11.584. Its `aws-c-s3` client uses a
+standard retry strategy with five retries when RunAI leaves the strategy
+unset. `AWS_MAX_ATTEMPTS` is read by the C++ SDK but is not transferred to the
+CRT strategy's retry count. `AWS_RETRY_MODE=standard` selects a CRT standard
+strategy whose default is three retries, so these variables are not used for
+hardening.
+
+The RunAI S3 client's `RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS` controls the
+low-throughput failure interval. RunAI 0.16.x defaults it to 1,000 ms, while
+AWS SDK 1.11.584 clamps the effective CRT interval to at least three seconds.
+The CUDA launcher now defaults to 10,000 ms and preserves a value already
+present in the inference environment. It also enables warning/error output on
+stderr so a later `File access error` includes the underlying S3 exception in
+the Iris job log.
+
+### Background research brief
+
+- Effort: low
+- Stop rule: exact pinned sources established the request fanout, timeout, and retry behavior.
+- Date: 2026-07-27
+
+Evidence:
+
+- The failed Iris job logged eight full 124.9 GiB streams and three RunAI read
+  failures.
+- RunAI 0.16.0 `client.cc` says one failed subrange fails the entire read and
+  leaves a failed-read retry as future work.
+- RunAI PR #156 bounds object-store submissions and shipped in 0.16.1.
+- AWS SDK for C++ 1.11.584 maps the generic retry mode to a CRT strategy but
+  does not map its maximum-attempt value. The bundled `aws-c-s3` commit defaults
+  to five retries.
+
+Negative results:
+
+- `AWS_MAX_ATTEMPTS` does not increase this S3 CRT client's retries.
+- `AWS_RETRY_MODE=standard` can reduce the retry budget.
+- RunAI memory limits address host-memory pressure, not this S3 read fault.
+
+The minimum live experiment is one
+`grug-agentic-s3-step1903` / `grug-opencode-id --limit 1` launch. Success
+requires distributed per-rank byte counts in the logs, a ready vLLM endpoint,
+and one Harbor request. If S3 faults persist, the next bounded experiment is
+`RUNAI_STREAMER_CONCURRENCY=4` against the same command.
 
 ## How OPS.md could have shortened this
 
