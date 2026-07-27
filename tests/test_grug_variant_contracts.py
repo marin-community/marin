@@ -459,7 +459,7 @@ def test_grug_moe_nested_checkpoint_init_extracts_weights_and_qb_state():
         )
         source_pending = jnp.arange(source_config.num_experts, dtype=jnp.float32)[None, :]
 
-        def fake_load(exemplar, checkpoint_path, **kwargs):
+        def fake_load(exemplar, checkpoint_path, **_kwargs):
             assert checkpoint_path == "s3://test/checkpoints/step-500"
             assert set(exemplar) == {"params", "pending_qb_betas"}
             return {"params": source_model, "pending_qb_betas": source_pending}
@@ -496,7 +496,7 @@ def test_grug_moe_weights_only_init_preserves_fresh_optimizer_and_step():
         loaded_model = model_module.Transformer.init(config, key=jax.random.PRNGKey(1))
         loaded_pending = jnp.ones_like(base_state.pending_qb_betas)
 
-        def fake_load(exemplar, checkpoint_path, **kwargs):
+        def fake_load(_exemplar, checkpoint_path, **_kwargs):
             assert checkpoint_path == "s3://test/checkpoints/step-500"
             return {"params": loaded_model, "pending_qb_betas": loaded_pending}
 

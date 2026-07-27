@@ -125,7 +125,7 @@ class GrugModel:
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path
 
-    def resolve_tokenizer(self, ctx: StepContext) -> str:
+    def resolve_tokenizer(self, _ctx: StepContext) -> str:
         return self.tokenizer_path
 
     @property
