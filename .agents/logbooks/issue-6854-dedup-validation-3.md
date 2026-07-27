@@ -1159,3 +1159,68 @@ are recorded in the previous volumes.
   frontiers are p0 `(14, 0)`, p1 `(45, 4608)`, p2 `(78, 0)`, and p3
   `(110, 256)`. The next p1 and p3 checkpoints contain 10.4 million and 15.9
   million characters. The eight H100s remain healthy at batch priority.
+
+## 2026-07-27 23:29 UTC — treatment formatting adjudications reach 43.99%
+
+- Checkpoint audits independently reread another 2,990 pairs. Three treatment
+  outcomes required full-text adjudication:
+  - decision-file 45, semantic offset 5,760, pair row 8,951 is a true
+    duplicate. The complete 15-line documents have the same prompt, Python
+    function, comments, test, and output; only tabs versus four spaces inside
+    the function differ. Their word sequence is identical and character
+    similarity is 0.9696. Its inspection, manual Parquet, and marker SHA-256
+    values are
+    `c157427efdf2fdf1bb7d2001778974a60c1d83cf579cdd336be7fdaf71a0dd11`,
+    `c409466f82f46f25f6da3d4d7e7a4e878f2dfa33de7df473bf13ba4e435aa99f`,
+    and
+    `1f57d3e50df5c600cc729aa40f814f53885631b57136285c8019dc3a35fed7e6`.
+  - decision-file 45, semantic offset 5,888, pair row 8,983 is a true
+    duplicate. The complete 400-line documents have the same question,
+    choices, reasoning, conclusion, and answer; only `\boxed{H}` versus
+    `\boxed{\text{H}}` differs. Character and word-sequence similarities both
+    exceed 0.9997. Its inspection, manual Parquet, and marker SHA-256 values
+    are
+    `c073337d9096fc9a19cf6bcc1031f1202b248d517bcb8153ae0148e597bc4eaf`,
+    `e74fd7bc9d8e07b5798d52bbbb3c02d87cf742b897b92392d089f96b62f3e12a`,
+    and
+    `a4f7b66ba690109a6dc0902d6664caa30f57cffec3d3da4bd66e7ea4787d0c78`.
+  - decision-file 45, semantic offset 5,888, pair row 8,984 is a true
+    duplicate. The complete 252-line documents have the same question,
+    choices, reasoning, conclusion, and answer; only the same boxed-answer
+    formatting differs. Character and word-sequence similarities both exceed
+    0.9997. Its inspection, manual Parquet, and marker SHA-256 values are
+    `27d285d64f4d9566e481d056dba72843a98830bee2308207ecdb0e0be66992da`,
+    `663824312758ffc1d6e5dbf273e32693127e813eaabbcdfe9d7491ecd817d45e`,
+    and
+    `3273e5fe4a8d491e0da21b1d0e911fec12b6f2916e24c07bed699d31c8e7dc54`.
+  Publish and verify-only jobs v1580–v1590 wrote the hash-bound decisions and
+  reproduced their complete input and output bytes.
+- The `20260727-2322` reconciliation independently verified 2,617
+  checkpoints and complete manual coverage for all 386 unresolved outcomes.
+  Applying 80 false-positive and 306 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 264,497 | 168,182 | 96,315 | 63.5856% |
+  | treatment | 67,718 | 35,160 | 32,558 | 51.9212% |
+  | combined | 332,215 | 203,342 | 128,873 | 61.2080% |
+
+  The baseline-minus-treatment gap is 11.6644 percentage points. This snapshot
+  covers 43.9856% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2322.json`
+  with SHA-256
+  `91aba7d531d4f669dfa443c2b46956979f4ede2bce2014e00b9517b3cf96f6e7`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `d64010b27e76da5a5c70ea8e549552ecabbd8a217c348d416ba0ef4b2629e536`,
+  `5e3da86edd47231558b688e5857db2b0b6a7c82e461ae259eab74860a60a6fcf`,
+  and
+  `d42e2088c3ba5c67dcbbabb15bbe3454e9d98416747bc575917a6ce60e2de6c0`.
+  No outcome or Parquet decision is missing. The only reconciliation
+  anomalies are unchanged historical shadow records: two duplicate Parquet
+  keys, three obsolete hash mismatches, and 146 orphan Parquet records.
+- Independent checkpoint rereads exactly match the reconciled 332,215 pairs.
+  The next frontiers are p0 `(14, 0)`, p1 `(46, 0)`, p2 `(78, 0)`, and p3
+  `(110, 1920)`. The latest two p3 checkpoints resolved all 256 pairs with 583
+  valid judgments, no invalid attempts, and no ambiguity. The eight H100s
+  remain healthy at batch priority.
