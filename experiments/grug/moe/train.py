@@ -2114,15 +2114,6 @@ def explicit_last_stage_head_loss_and_grads(
     return loss, qb_betas_next, head_gradient, input_gradient
 
 
-def _state_donating_mpmd(mpmd, mpmd_mesh, in_shardings):
-    return mpmd.mpmd(
-        mpmd_mesh,
-        in_shardings=in_shardings,
-        donate_argnums=0,
-        infer_donation=True,
-    )
-
-
 def explicit_stage_gradient_from_components(
     params: TransformerPipelineStage,
     block_gradients: tuple[Block, ...],
@@ -3175,9 +3166,7 @@ def _make_explicit_mpmd_train_step(
             return value_or_future
         return value_or_future.done()
 
-    stateful_mpmd = _state_donating_mpmd(mpmd, mpmd_mesh, in_shardings)
-
-    @stateful_mpmd
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_pipeline_step(
         state: GrugPipelineTrainState,
         batches: tuple[GrugLmExample, ...],
@@ -3270,7 +3259,7 @@ def _make_explicit_mpmd_train_step(
         metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
         return next_state, metrics, None
 
-    @stateful_mpmd
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_gpipe_step(
         state: GrugPipelineTrainState,
         batches_by_microbatch,
@@ -3447,7 +3436,7 @@ def _make_explicit_mpmd_train_step(
 
     interleaved_task_order = _interleaved_gpipe_task_order(pipeline) if pipeline.schedule == "interleaved_gpipe" else ()
 
-    @stateful_mpmd
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_interleaved_gpipe_step(
         state: GrugPipelineTrainState,
         batches_by_microbatch,
@@ -3598,7 +3587,7 @@ def _make_explicit_mpmd_train_step(
         metrics = {"train/loss": loss_for_metrics, "qb_beta_per_layer": tuple(qb_betas_next)}
         return next_state, metrics, None
 
-    @stateful_mpmd
+    @mpmd.mpmd(mpmd_mesh, in_shardings=in_shardings, infer_donation=True)
     def explicit_std_1f1b_step(
         state: GrugPipelineTrainState,
         batches_by_microbatch,

@@ -444,3 +444,17 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The next supported memory control is outer-state donation. It can alias updated parameter and optimizer-state buffers but does not change task boundaries, routes, or arithmetic.
 - Next action:
   - Add `donate_argnums=0` to the four explicit-MPMD entrypoints, validate lowering and donation metadata, then rerun the unchanged L8 gate before considering any L24 promotion.
+
+### 2026-07-26 22:05 PDT - outer-state donation deletes reused QB state
+- Hypothesis: Donating the explicit-MPMD outer state will alias updated parameter and optimizer-state buffers without changing the task graph, numerical order, or model configuration, allowing the matched L8 group-size-two graph to execute within HBM.
+- Commit Hash: `6eb2cf8a87631ae0fba3ecda14562ebc4dc13e74`.
+- Command: Parent `/dlwh/iris-run-job-20260727-045310` launched child `/dlwh/iris-run-job-20260727-045310/grug-train-jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-donate-r9-20260726-2151` with the unchanged r7 L8 shape, default receive reuse, XLA fraction `0.70`, and `donate_argnums=0` on the four explicit-MPMD entrypoints.
+- Results:
+  - All `68` JaxPP tasks compiled. The first execution then failed on every rank in JaxPP `task_impl` while JAX was sharding a task argument.
+  - Every rank raised `RuntimeError: Array has been deleted with shape=float32[2,64]`. The shape identifies a two-layer-by-64-expert stage QB state leaf reused by multiple tasks in the same MPMD step.
+  - W&B initialized but produced no training or metric rows. The unchanged retry was stopped before compilation. Parent and child are terminal killed, all child tasks are terminal, and Iris reports no live allocation.
+- Interpretation:
+  - Whole-state outer donation is invalid for the current multi-use stage-state graph. JaxPP propagates donation to a task before later tasks have finished reading the same state leaves.
+  - The allocator failure was not reached, so this run provides no evidence that donation would reduce the `5.62 GiB` stage-1/2 allocation after task-liveness is corrected.
+- Next action:
+  - Revert whole-state donation. Before another matched L8 run, identify the executable and buffer category responsible for the large first-execution request or prove a narrower donation scheme preserves every stage-state consumer.
