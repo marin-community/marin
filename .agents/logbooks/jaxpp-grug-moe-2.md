@@ -2095,3 +2095,52 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
     compute/communication/stall breakdown with the existing Ring profile.
   - Promote only a low-risk change whose projected improvement exceeds the remaining `0.50%`; then rerun the
     exact throughput gate.
+
+### 2026-07-27 14:50 PDT - Exact UB-X profile isolates the dispatch copy
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-204932` and child
+    `/dlwh/iris-run-job-20260727-204932/grug-train-jaxpp-rno2a-ubx-profile-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727`
+    profiled the exact L24/d2560/e64/top-k4/sequence4096 batch8192/m256 configuration after warmup.
+  - The run used the same `6,6,6,6` split, EP8, explicit `std_1f1b`, ordinary gradients, BF16 pipeline wire,
+    CuTe FA4, Triton block-k 32/eight warps, `save_moe`, XLA fraction `0.70`, and task-only local precompile
+    as the exact throughput gate.
+- Profile recovery:
+  - Capture steps 8-10 completed, but the launcher omitted the RNO2A `--prefix` and the artifact upload
+    targeted inaccessible `s3://marin-na/...`.
+  - Rank 0 retained the trace long enough to copy it within the region to
+    `s3://marin-us-east-02a/tmp/ttl=30d/xprof/jaxpp-rno2a-ubx-profile-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727/plugins/profile/steps-8-to-10`.
+    The XPlane is `1,202,418,164` bytes and the compressed trace is `76,992,152` bytes.
+  - CPU analysis job `/dlwh/jaxpp-ubx-profile-analyze-20260727-1432` succeeded in `11m47s` with one task,
+    exit `0`, no failure, and no preemption. It processed `39,429,919` complete events and uploaded the
+    compact [profiler artifact](https://wandb.ai/marin-community/marin_moe/artifacts/profiler/jaxpp-rno2a-ubx-profile-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727-profiler-salvaged/v0).
+  - [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fjaxpp-rno2a-ubx-profile-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727)
+    and local TensorBoard at `http://127.0.0.1:6006/` expose the recovered trace. The training
+    [W&B run](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-profile-l24-e64k4-b8192-s4096-p4m256-precompile-r1-20260727)
+    is finished.
+- Throughput:
+  - Pre-profile steps averaged `19.9163` MFU, `74.7319s`, and `449,172.7 tok/s`.
+  - Profile-window steps averaged `19.1937` MFU, `77.5928s`, and `432,877.6 tok/s`.
+  - The full retained run averaged `19.7356` MFU, `75.4471s`, and `445,098.9 tok/s`. Profiling overhead
+    makes these numbers unsuitable as the promotion gate.
+- Profile result:
+  - Exclusive device time was `74.57%` compute and `25.43%` communication. The earlier Ring profile was
+    `68.16%` compute and `31.84%` communication at a different batch/microbatch shape, so the comparison is
+    qualitative but consistent with the exact throughput improvement.
+  - CuTe FA4 forward was the largest compute kernel at `18.629s`, or `9.24%` of profiled exclusive time.
+    Reduce-scatter took `16.955s`; UB-X token all-to-all took `11.457s`; pipeline send/recv took `8.494s`.
+  - `CopyAndMaskDispatchKernel` took `9.125s` over `12,635` calls, averaging `722.2us` per 320 MiB dispatch
+    output. Its effective bandwidth is approximately `465 GB/s`, well below H100 HBM bandwidth.
+  - The dispatch kernel processes one BF16 element per thread. Every element repeats a 64-bit index-to-row
+    division and reads the same row-validity flag. A row-wise 128-bit implementation can remove both costs
+    without changing the transport, routing, or gradient contract.
+  - Send/recv averaged `6.81ms`, but the trace records `256.16ms` average gaps before send/recv. These gaps
+    primarily measure dependency waiting on prior stages, not raw link bandwidth. Previously tested
+    transfer-priority, input-gradient-first, GPipe, and interleaved schedules remain negative results.
+  - CUPTI reported at least `50,001` dropped activity buffers. XProf retained `39,698,893` events, so
+    fine-grained totals are lower bounds, but the observed drop fraction is approximately `0.13%`.
+- Decision:
+  - Replace the scalar dispatch copy/mask with one block per row and 128-bit loads/stores. Require exact
+    routes/counts/drops and relative-L2 `<=0.002` for outputs, loss, and every floating gradient leaf.
+    The user reconfirmed this `0.2%` numerical bound.
+  - Validate numerical parity and dispatch timing on the smallest H100 gate before rerunning exact L24.
+    The exact throughput rerun remains the only success gate for mean MFU `>20`.
