@@ -3444,19 +3444,25 @@ def _make_explicit_mpmd_train_step(
     def initialize_expert_gradient_accumulators(
         params: TransformerPipelineStage,
     ) -> StageExpertGradientAccumulators:
+        mesh = jax.sharding.get_abstract_mesh()
+        accumulator_sharding = NamedSharding(mesh, P("expert", None, None))
+
+        def expert_zeros(shape):
+            replicated = jnp.zeros(shape, dtype=jnp.float32)
+            return jax.sharding.reshard(replicated, accumulator_sharding)
+
         return StageExpertGradientAccumulators(
             w13=tuple(
-                jnp.zeros(
+                expert_zeros(
                     (
                         block.mlp.expert_mlp.w_gate.shape[0],
                         block.mlp.expert_mlp.w_gate.shape[1],
                         block.mlp.expert_mlp.w_gate.shape[2] + block.mlp.expert_mlp.w_up.shape[2],
-                    ),
-                    dtype=jnp.float32,
+                    )
                 )
                 for block in params.blocks
             ),
-            w2=tuple(jnp.zeros_like(block.mlp.expert_mlp.w_down, dtype=jnp.float32) for block in params.blocks),
+            w2=tuple(expert_zeros(block.mlp.expert_mlp.w_down.shape) for block in params.blocks),
         )
 
     def sync_expert_gradient_accumulators(
