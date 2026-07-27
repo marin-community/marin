@@ -1703,3 +1703,20 @@ torchrun --standalone --nproc-per-node=8 experiments/grug/moe/benchmark_nccl_ubx
   - This is an optimistic precomputed-map identity transport result. It excludes routing-map construction, expert compute, gradients, JAX/JaxPP integration, pipeline scheduling, and end-to-end MFU. It does not establish or imply the `>20` MFU target.
 - Terminal state:
   - R12 is terminal `failed` because its older policy rejected diagnostic Ring errors after emitting the complete balanced JSON. R13 is terminal `succeeded`. Neither job has a live task.
+
+### 2026-07-27 10:00 PDT - Compact UB-X slot map removes sparse receive expansion
+- Snapshot: `2ff09a7907` (`[grug] Compact UB-X expert slots`).
+- Finding:
+  - UB-X `a2av_token_bf16_bf16_topk` treats `topk_slot` as an arbitrary destination row. It derives only the destination rank from the expert id.
+  - PUSH3 phase 1 similarly treats each valid `inverse_map` row as an arbitrary expert-output row and scans exactly `max_tokens_per_rank` rows.
+  - The upstream Python map helper assigns each local expert a fixed `max_tokens_per_expert` segment. On R13 skew this expands the dispatch buffer to `8 * 65536 = 524288` rows even though Ring accepts at most `65536` assignments per expert rank.
+- Change:
+  - `build_ubx_routing_maps` now uses exclusive per-expert accepted-count prefixes to assign contiguous expert-major segments inside the existing Ring rank capacity.
+  - Dispatch output, expert input/output, and `inverse_map` are therefore fixed at `65536` rows for the target shape. `group_sizes` already follows the same expert-major order, and `dispatch_valid` masks the unused tail.
+  - The small JIT test covers a rank whose second local expert receives an accepted segment after the first expert and verifies dispatch slots, inverse maps, exact counts, one dropped route, and padded group sizes.
+- Validation:
+  - `uv run pytest lib/levanter/tests/grug/test_ep_ubx_maps.py`: `1 passed`.
+  - `./infra/pre-commit.py --changed-files --fix`: passed, including Pyrefly.
+- Interpretation:
+  - The compact layout removes the planned sparse gather/scatter and reduces the learned-skew dispatch buffer by `8x` without changing accepted routes or drops.
+  - GPU transport correctness and timing for this compact slot layout remain unmeasured. The next gate must validate it through the JAX FFI wrapper before any MoE or JaxPP run.
