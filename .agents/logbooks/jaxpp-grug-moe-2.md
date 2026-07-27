@@ -1923,3 +1923,25 @@ bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
   - L24 remains blocked until the exact reduced graph reaches compile and eight finite executions.
 - Next action:
   - Relaunch the exact reduced gate from `f6dd2108f5` with fresh R4 identity and a dedicated babysitter.
+
+### 2026-07-27 12:26 PDT - Reduced JaxPP UB-X gate passes end to end
+- Snapshot:
+  - Parent `/dlwh/iris-run-job-20260727-191808` and child
+    `/dlwh/iris-run-job-20260727-191808/grug-train-jaxpp-rno2a-ubx-vjp-l8-e64k4-b32-s4096-p4m4-r4-20260727`
+    ran from clean commit `c13fc3e64c`.
+- Result:
+  - Parent and child succeeded. All four ranks exited `0` with no retry, failure, or preemption after `6m22.8s`; no resource remains live.
+  - Every rank built and linked NCCL `2.30.7`, initialized JAX and UB-X, lowered, compiled, and executed.
+  - UB-X reported `groups=4`, EP8, `4096` local tokens, capacity `16384`, and hidden size `2560`.
+  - Training completed `8/8`. [W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-vjp-l8-e64k4-b32-s4096-p4m4-r4-20260727) is `finished`.
+  - W&B retained six measured rows for steps 2-7. Loss declined from `11.713057` to `11.595929`; every loss and MFU was finite.
+  - Mean/p50/p90 MFU was `8.125928/8.134653/8.159374`. Mean step time was `0.336684s`, and mean throughput was approximately `389,306 tokens/s`.
+- Comparison:
+  - The historical matching reduced Ring smoke was `9.4180` MFU at `0.209382s`, although it was a shorter run at an older snapshot. R4 is therefore not evidence of a reduced-shape UB-X performance win.
+  - The direct target-shape compact transport gate was `3.17-3.45x` faster than Ring, while the small full-MoE VJP was latency-bound and slower. The exact L24 shape is required to resolve which regime dominates end to end.
+- Interpretation:
+  - UB-X now passes the complete reduced JaxPP compile, execution, finite-loss, and ordinary-gradient lifecycle gate.
+  - This admits one exact L24/d2560/e64/top-k4/sequence4096/batch8192/m256 EP8 measurement. It does not predict that the run will exceed `20` MFU.
+- Next action:
+  - Launch four six-layer stages with explicit `std_1f1b`, ordinary expert gradients, BF16 pipeline wire, CuTe FA4, Triton block-k 32/eight warps, `save_moe`, and XLA fraction `0.70`.
+  - Compare sustained mean MFU with the exact Ring baseline `18.2583`; profile UB-X only if the exact run is stable and the result is close enough to the target to justify tuning.
