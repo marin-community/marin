@@ -6,7 +6,7 @@ runtime:
   # venv with no Pulumi SDK.
   options:
     virtualenv: ../../.venv
-description: echo — the shared agent-context database (marinmirror corpus mirror + agent work log) and its sync job.
+description: Echo shared activity/wiki search, browser dashboard, agent work log, and marinmirror sync.
 # The state backend is selected by the operator/CI environment and shared with infra/pulumi
 # (see README.md):
 #   pulumi login gs://marin-iac-state

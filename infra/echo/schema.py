@@ -5,8 +5,9 @@
 
 The single source of truth for echo's schema. Migrations (migrations/) create and evolve
 these tables; the sync job (sync/main.py) uses them for DML. `chunks` mirrors the
-marinmirror corpus schema for the github+discord sources; `work_log` is the agents'
-shared logbook; `sync_state` is the corpus-build watermark.
+marinmirror corpus schema for the github+discord sources; `wiki_entries` holds durable
+agent-authored notes; `work_log` is the agents' shared logbook; `sync_state` is the
+corpus-build watermark.
 """
 
 from pgvector.sqlalchemy import Vector
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Computed,
     DateTime,
     Identity,
     Index,
@@ -25,6 +27,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects import postgresql
 
 EMBED_DIM = 384  # BAAI/bge-small-en-v1.5, the corpus's prose embedding space
 
@@ -46,6 +49,15 @@ chunks = Table(
     Column("text", Text),
     Column("hash", Text),
     Column("embedding", Vector(EMBED_DIM)),
+    Column(
+        "search_document",
+        postgresql.TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') || "
+            "setweight(to_tsvector('english'::regconfig, coalesce(text, '')), 'B')",
+            persisted=True,
+        ),
+    ),
     Column("part", Integer, nullable=False, server_default=text("0")),
     Column("n_parts", Integer, nullable=False, server_default=text("1")),
     Index("idx_chunks_source_kind", "source", "kind"),
@@ -58,6 +70,7 @@ chunks = Table(
         postgresql_using="hnsw",
         postgresql_ops={"embedding": "vector_cosine_ops"},
     ),
+    Index("idx_chunks_search_document", "search_document", postgresql_using="gin"),
 )
 
 sync_state = Table(
@@ -83,4 +96,35 @@ work_log = Table(
     Column("body", Text),
     Index("idx_work_log_project_at", "project", text("at DESC")),
     Index("idx_work_log_at", text("at DESC")),
+)
+
+wiki_entries = Table(
+    "wiki_entries",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("author", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("body", Text, nullable=False),
+    Column("reference_count", BigInteger, nullable=False, server_default=text("0")),
+    Column("embedding", Vector(EMBED_DIM), nullable=False),
+    Column(
+        "search_document",
+        postgresql.TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english'::regconfig, title), 'A') || "
+            "setweight(to_tsvector('english'::regconfig, body), 'B')",
+            persisted=True,
+        ),
+    ),
+    CheckConstraint("reference_count >= 0", name="wiki_entries_reference_count_nonnegative"),
+    Index("idx_wiki_entries_created_at", text("created_at DESC")),
+    Index(
+        "idx_wiki_entries_embedding",
+        "embedding",
+        postgresql_using="hnsw",
+        postgresql_ops={"embedding": "vector_cosine_ops"},
+    ),
+    Index("idx_wiki_entries_search_document", "search_document", postgresql_using="gin"),
 )

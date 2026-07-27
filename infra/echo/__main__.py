@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pulumi entry point for echo: Marin's shared agent-context database and its sync job.
+"""Pulumi entry point for Echo's context database, sync job, API, and dashboard.
 
 Declares the `context` database on the shared `marin-metadata` Cloud SQL instance
 (infra/cloudsql owns the instance), its Cloud SQL IAM database users, and the `echo-sync`
@@ -9,10 +9,10 @@ scheduled Cloud Run job that keeps the corpus mirror current (sync/main.py).
 
 Access is IAM, not passwords: the `eng-all@openathena.ai` group reads the corpus
 and appends to the logbook, and the sync job's service account writes
-`chunks`/`sync_state`. Every principal authenticates through the Cloud SQL connector
-with a short-lived OAuth token, so no database password exists. Table grants are
-applied by migrate.py (see README.md); this program owns the users and their login
-IAM roles.
+`chunks`/`sync_state`. The API owns wiki writes and serves the compiled Vue dashboard.
+Every principal authenticates through the Cloud SQL connector with a short-lived OAuth
+token, so no database password exists. Table grants are applied by migrate.py (see
+README.md); this program owns the users and their login IAM roles.
 """
 
 import hashlib
