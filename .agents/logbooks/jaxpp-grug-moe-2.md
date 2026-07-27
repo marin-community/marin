@@ -335,3 +335,31 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - This is a one-block correctness and compile gate. Production scheduling, multi-block caching, and L8 throughput remain untested.
 - Next action:
   - Integrate the same graph into production explicit-MPMD `std_1f1b` group-size-two scheduling without duplicating the harness task functions. Preserve the existing tuple wire format and group-size-one path. Review and locally validate the production integration before launching an L8 smoke.
+
+### 2026-07-26 20:05 PDT - production grouped L4 gate compiles and executes
+- Hypothesis: The r15 explicit-router task graph can replace the production group-size-two `std_1f1b` stage wrappers while preserving group-size-one and non-ring paths.
+- Commit Hash:
+  - `df6ad012d3` moves the r15 numerical kernels into `train.py`, makes the parity harness import them, and integrates the grouped production task graph.
+  - `964a0b5892` moves block QB extraction inside each MPMD task and validates the default `moe_implementation=None` as exact ring.
+- Command: `TF_GPU_ALLOCATOR=cuda_malloc_async experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --run-id jaxpp-rno2a-ring-explicit-routing-prod-g2-l4-e64k4-b128-s4096-p4m4-r3-20260726-2001 --schedule std_1f1b --implementation explicit_mpmd --explicit-mpmd-stage-task-microbatch-group-size 2 --physical-stages 4 --logical-stages 4 --microbatches 4 --nodes 4 --gpus-per-replica 8 --expert-axis 8 --layers 4 --experts 64 --top-k 4 --vocab-size 8192 --batch 128 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 6 --tracker wandb --xla-memory-fraction 0.70 --remat save_moe`.
+- Results:
+  - Focused validation passed: `40 passed in 33.13s`; changed-files precommit, including Pyrefly, passed.
+  - The first parent, `/dlwh/iris-run-job-20260727-024811`, failed setup when one worker could not connect to GitHub while cloning `jax-tvm-ffi`; it was stopped and is terminal.
+  - The second parent, `/dlwh/iris-run-job-20260727-025222`, reached `explicit_mpmd_train_step.lower` but failed before task compilation because top-level `stage_qb_betas[block_index]` emitted unsupported MPMD primitive `squeeze`. The parent and child were stopped and are terminal. Passing the stage QB vector into each task and indexing with static `block_index` inside the task removed the unsupported top-level primitive.
+  - Authoritative parent `/dlwh/iris-run-job-20260727-025904` and child `/dlwh/iris-run-job-20260727-025904/grug-train-jaxpp-rno2a-ring-explicit-routing-prod-g2-l4-e64k4-b128-s4096-p4m4-r3-20260726-2001` ran the fixed production graph. All four workers succeeded with exit `0`; parent and child are terminal with zero failures or preemptions and no live allocation.
+  - The graph compiled the separate pre-forward, joined-expert forward/backward, pre-backward, gradient-reduction, embedding/head, transfer, accumulation, and update tasks. It completed all six requested steps.
+  - All four measured W&B rows were finite:
+
+    | step | loss | duration (s) | MFU | tokens/s |
+    | ---: | ---: | ---: | ---: | ---: |
+    | 2 | 8.8157654 | 0.5096568 | 7.9427940 | 1,028,708.0 |
+    | 3 | 8.7312212 | 0.5121544 | 7.9040594 | 1,023,691.3 |
+    | 4 | 8.6664658 | 0.5116922 | 7.9111997 | 1,024,616.0 |
+    | 5 | 8.6214437 | 0.5109474 | 7.9227311 | 1,026,109.5 |
+
+  - W&B summary: mean MFU `7.9207030`, p50 `7.9227311`, p90 `7.9508192`, standard deviation `0.0146932`, sample count `5`, final duration `0.5109474s`, and final throughput `1,026,109.5 tok/s`. Run: https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-explicit-routing-prod-g2-l4-e64k4-b128-s4096-p4m4-r3-20260726-2001
+- Interpretation:
+  - The production grouped task graph now passes the L4 compile/functionality gate. The prior `squeeze` was graph-construction leakage from traced scalar indexing, not a numerical or task-kernel failure.
+  - This run is too short and too shallow to compare throughput with the established L8 group-size-one control. It establishes only production lowering, task compilation, finite execution, and clean teardown.
+- Next action:
+  - Stop at L4 as requested. The next separate decision is whether to run the matched L8 group-size-two throughput gate against the `16.116235` MFU control.
