@@ -1105,3 +1105,16 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - `uv run pytest -q tests/test_grug_moe_accumulating_api.py` reports `2 passed`; the combined accumulating API/config selection reports `9 passed`. Changed-file pre-commit, including Pyrefly, passes.
 - Next action:
   - Snapshot this implementation and rerun the unchanged L8 EP2/data4 profile gate. Require compile completion, finite steps, and trace evidence before an exact L24 launch.
+
+### 2026-07-27 05:53 PDT - Package the nested-VJP compile cliff as a CPU reproducer
+- Snapshot: `a4a9f8d8ca`.
+- Artifact:
+  - `scratch/jaxpp_manual_vjp_compile_repro/repro.py` is independent of Marin, JaxPP, and GPU kernels. It keeps the 2x2 data/expert mesh, exact integer routing and drops, Ring-shaped gather/scatter collectives, accumulating grouped matmul contract, outer custom VJP, and nested full-local `jax.vjp`.
+  - `README.md` records the command, scope, numerical policy, and interpretation. `results.json` contains complete lowering, compile, StableHLO, recursive-JAXPR, operation-count, and parity measurements.
+- Result:
+  - Forward-only StableHLO grows `23,306 -> 41,104` bytes from one to two blocks. Nested full-VJP StableHLO grows `59,319 -> 108,812` bytes and recursive JAXPR equations grow `351 -> 664`.
+  - The second forward block adds `17,798` StableHLO bytes; the corresponding training graph adds `49,493` bytes, a `2.78x` amplification. Dot, reduce-scatter, and scatter deltas are each `4.00x` their forward-only deltas.
+  - `jax.jit(inline=False)` outlining does not contain growth: two-block StableHLO is `114,655` bytes. A synthetic `lax.scan` formulation holds one- and two-block modules at `83,609` bytes and 363 recursive equations.
+  - Every floating output, loss, and gradient leaf has zero relative-L2 difference in the synthetic fixture. Routing counts and drops are exact.
+- Interpretation:
+  - The compile cliff comes from replay and transpose construction across each unrolled full Ring block. It is not isolated to grouped-matmul lowering. The production explicit pullback in `eda3bac52a` removes that nested whole-block transformation without requiring a scanned transformer representation.
