@@ -949,3 +949,72 @@ are recorded in the previous volumes.
   `(14, 0)`, p1 `(45, 0)`, p2 `(77, 3456)`, and p3 `(110, 0)`. Three
   partitions are processing 117–137 million-character code checkpoints; all
   four workers remain active and healthy at batch priority.
+
+## 2026-07-27 21:39 UTC — SFT-template and answer-format adjudications
+
+- Checkpoint audits independently reread another 1,408 pairs. Thirty-one
+  malformed model responses were rejected and retried; no invalid response
+  contributed to an outcome. Four baseline outcomes required full-text
+  adjudication:
+  - decision-file 77, semantic offset 4,096, pair row 7,332 is a false
+    positive. The documents reuse the same SFT response wrapper but ask and
+    solve different math problems: factoring `3x(x+1)+7(x+1)` versus
+    computing `54×46`. Deleting the member removes a distinct algebra problem,
+    derivation, and answer. Its inspection, manual Parquet, and marker SHA-256
+    values are
+    `def2547c1605b3e9d7fe85567af8388bac6bff2d1c7c4b8d750395bde24167de`,
+    `e805bd803a0f4c0e62512245bdffc1983d29cbc3021af51823f49a5762150411`,
+    and
+    `fa917cb45af379453963f5eb5a423e6d431d7b6a4554621a7a3084f90789f022`.
+  - decision-file 77, semantic offset 4,352, pair rows 7,600, 7,601, and
+    7,604 are true duplicates. Each pair has identical questions, reasoning,
+    and answers; the only difference is `\boxed{F}` versus
+    `\boxed{\text{F}}`, `\boxed{J}` versus `\boxed{\text{J}}`, or
+    `\boxed{I}` versus `\boxed{\text{I}}`. Their inspection SHA-256 values
+    are
+    `e313880b6a975cd9f1f28ac2358095b13f6150677cd99e0f89f4690c0177a342`,
+    `6492154b6c0da068f5f1c0db001add4c7fc3896d68930c8fb4a79b7eda508703`,
+    and
+    `9c27e8dd292ad78d896dafc4adc142325cedbf480c1a9c4cc8d163f617441e6c`.
+    Their manual Parquet SHA-256 values are
+    `085b295150d13904b3361109549e8e46ca71dff548558337d691176d23e6cc27`,
+    `a3fe6ac52ce1142f8044681651ee5bb1d6365eb0d458c80f47031944f50b120d`,
+    and
+    `7a4427c21a256b306875bba24090518910f2fa05a9e1951e417a77f06e146b2f`.
+    Their marker SHA-256 values are
+    `b5a06060534eb53a0bb487ecdc6faf4a53f9465989cf4a45bc67a2f24324667a`,
+    `7929a5820c7d7e716c569368d89372dad5a13e302d2fe9f1e5063859556aa490`,
+    and
+    `36584882269cb6923f4730ef710b1ef51863e0cb60fc9b5375931d5075542060`.
+  Publish jobs `/rav/rav-datakit-6854-publish-row7332-v1517` and
+  `/rav/rav-datakit-6854-publish-row7600-v1521` through
+  `/rav/rav-datakit-6854-publish-row7604-v1521` wrote the hash-bound records.
+  Separate verify-only jobs reproduced their complete input and output bytes.
+- `/rav/rav-datakit-6854-reconcile-manual-2136-v1523` verified 2,548
+  checkpoints and complete manual coverage for all 379 unresolved outcomes.
+  Applying 78 false-positive and 301 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 258,162 | 163,989 | 94,173 | 63.5217% |
+  | treatment | 65,413 | 33,941 | 31,472 | 51.8872% |
+  | combined | 323,575 | 197,930 | 125,645 | 61.1697% |
+
+  The baseline-minus-treatment gap is 11.6345 percentage points. This snapshot
+  covers 42.8417% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2136.json`
+  with SHA-256
+  `e07227ff2f2a4e22bd6ddac3dbf9c14d642b4700993a199bd85f2ef0af5e83e3`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `79a19813668b9e5a90d2e6069ec262433a6dd6d791cdfc893aa68bf826771d98`,
+  `116cc13895bd1503bbabd8a641ad3ee22e9cfe1f8d79dabfdac35a903915be1e`,
+  and
+  `498daa7b26231655d624949ed239456159c7356afeb30a963cbd66847f3707a9`.
+  No manual outcome is missing. Historical shadow-record anomaly counts remain
+  unchanged and marker-bound records remain internally consistent.
+- The independently audited and reconciled total is 323,575 pairs. The next
+  frontiers are p0 `(14, 0)`, p1 `(45, 128)`, p2 `(77, 4736)`, and p3
+  `(110, 0)`. Partitions p0, p1, and p3 are processing 32–137
+  million-character code checkpoints; all four semantic-review parents,
+  brokers, and 2-H100 workers remain healthy at batch priority.
