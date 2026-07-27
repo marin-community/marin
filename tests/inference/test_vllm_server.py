@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 
+import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
@@ -23,8 +24,10 @@ from marin.inference.vllm_server import (
     TransientStartupError,
     VllmServerHandle,
     _engine_kwargs_to_cli_args,
+    _linux_process_group_status,
     _LogPump,
     _native_logs_tail,
+    _ProcessGroupStatus,
     _start_vllm_native_server,
 )
 from rigging.timing import ExponentialBackoff
@@ -167,46 +170,74 @@ def test_handle_stop_releases_cache_for_zombie_only_process_group(tmp_path, monk
         text=True,
         process_group=0,
     )
-    process_group_id = os.getpgid(leader.pid)
-    zombie = subprocess.Popen(
-        [sys.executable, "-c", "pass"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        process_group=process_group_id,
-    )
-    os.waitid(os.P_PID, zombie.pid, os.WEXITED | os.WNOWAIT)
-    assert Path(f"/proc/{zombie.pid}/stat").read_text().rpartition(")")[2].split()[0] == "Z"
-
-    pump = _LogPump(leader, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
-    pump.start()
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
-    compilation_cache = VllmCompilationCache.prepare(
-        launcher_identity="test-zombie",
-        compile_identity=VllmCompileIdentity(model_name_or_path="test/zombie", extra_cli_args=()),
-        environment={},
-        mode=VllmCompilationCacheMode.MANAGED,
-    )
-    compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
-    handle = VllmServerHandle(
-        server_url="http://127.0.0.1:0/v1",
-        port=0,
-        process=leader,
-        process_group_id=process_group_id,
-        log_dir=str(tmp_path),
-        log_pump=pump,
-        compilation_cache=compilation_cache,
-    )
-
+    zombie: subprocess.Popen[str] | None = None
+    pump: _LogPump | None = None
+    compilation_cache: VllmCompilationCache | None = None
+    handle: VllmServerHandle | None = None
     try:
+        process_group_id = os.getpgid(leader.pid)
+        zombie = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            process_group=process_group_id,
+        )
+        os.waitid(os.P_PID, zombie.pid, os.WEXITED | os.WNOWAIT)
+        assert Path(f"/proc/{zombie.pid}/stat").read_text().rpartition(")")[2].split()[0] == "Z"
+
+        pump = _LogPump(leader, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
+        pump.start()
+        monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "marin"))
+        compilation_cache = VllmCompilationCache.prepare(
+            launcher_identity="test-zombie",
+            compile_identity=VllmCompileIdentity(model_name_or_path="test/zombie", extra_cli_args=()),
+            environment={},
+            mode=VllmCompilationCacheMode.MANAGED,
+        )
+        compilation_cache_root = Path(compilation_cache.environment()["JAX_COMPILATION_CACHE_DIR"]).parent
+        handle = VllmServerHandle(
+            server_url="http://127.0.0.1:0/v1",
+            port=0,
+            process=leader,
+            process_group_id=process_group_id,
+            log_dir=str(tmp_path),
+            log_pump=pump,
+            compilation_cache=compilation_cache,
+        )
+
         handle.stop(timeout_seconds=0.1)
         assert not compilation_cache_root.exists()
     finally:
-        zombie.wait(timeout=5)
+        if zombie is not None:
+            zombie.wait(timeout=5)
         if leader.poll() is None:
             leader.kill()
             leader.wait(timeout=5)
-        handle.stop(timeout_seconds=1)
+        if handle is not None:
+            handle.stop(timeout_seconds=1)
+        else:
+            if pump is not None:
+                pump.join(timeout=1)
+                pump.close()
+            if compilation_cache is not None:
+                compilation_cache.close()
+
+
+def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, monkeypatch):
+    process_group_id = 900
+    proc_root = tmp_path / "proc"
+    leader = proc_root / "101"
+    tasks = leader / "task"
+    tasks.mkdir(parents=True)
+    (leader / "stat").write_text(f"101 (leader) Z 1 {process_group_id}\n")
+    (tasks / "101").mkdir()
+    (tasks / "101" / "stat").write_text(f"101 (leader) Z 1 {process_group_id}\n")
+    (tasks / "102").mkdir()
+    (tasks / "102" / "stat").write_text(f"102 (worker) S 1 {process_group_id}\n")
+    monkeypatch.setattr(vllm_server, "_LINUX_PROC_ROOT", str(proc_root))
+
+    assert _linux_process_group_status(process_group_id) is _ProcessGroupStatus.HAS_LIVE_PROCESSES
 
 
 # --- bounded retry around a transient Run:ai streamer read fault during startup ---

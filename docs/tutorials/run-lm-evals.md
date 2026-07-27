@@ -234,7 +234,7 @@ paths.
 ## Use the shared launcher in a pipeline
 
 `experiments.evaluation.pipeline.eval_step` wraps the same registered model and evaluation
-selection in a lazy artifact:
+selection in a lazy artifact. Save the pipeline as `eval_pipeline.py`:
 
 ```python
 from experiments.evaluation.pipeline import eval_step
@@ -247,6 +247,13 @@ step = eval_step(
     limit=32,
 )
 StepRunner().run([step.lower()])
+```
+
+Run the pipeline itself inside an Iris job so `eval_step` can submit its
+orchestrator job:
+
+```bash
+uv run iris --cluster marin job run -- python eval_pipeline.py
 ```
 
 The step uses the same serving, executor, record, and result paths as the CLI. Its artifact identity

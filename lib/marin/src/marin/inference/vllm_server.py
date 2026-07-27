@@ -391,8 +391,39 @@ def _linux_process_group_status(process_group_id: int) -> _ProcessGroupStatus:
                 entry_process_group_id = int(fields[2])
             except ValueError:
                 return _ProcessGroupStatus.UNKNOWN
-            if entry_process_group_id == process_group_id and fields[0] not in _LINUX_DEAD_PROCESS_STATES:
+            if entry_process_group_id != process_group_id:
+                continue
+            if fields[0] not in _LINUX_DEAD_PROCESS_STATES:
                 return _ProcessGroupStatus.HAS_LIVE_PROCESSES
+
+            try:
+                tasks = os.scandir(os.path.join(entry.path, "task"))
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return _ProcessGroupStatus.UNKNOWN
+            with tasks:
+                for task in tasks:
+                    if not task.name.isdigit() or task.name == entry.name:
+                        continue
+                    try:
+                        with open(os.path.join(task.path, "stat")) as stat_file:
+                            task_stat_text = stat_file.read()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        return _ProcessGroupStatus.UNKNOWN
+
+                    _, task_separator, task_stat_fields = task_stat_text.rpartition(")")
+                    task_fields = task_stat_fields.split()
+                    if not task_separator or len(task_fields) < 3:
+                        return _ProcessGroupStatus.UNKNOWN
+                    try:
+                        task_process_group_id = int(task_fields[2])
+                    except ValueError:
+                        return _ProcessGroupStatus.UNKNOWN
+                    if task_process_group_id == process_group_id and task_fields[0] not in _LINUX_DEAD_PROCESS_STATES:
+                        return _ProcessGroupStatus.HAS_LIVE_PROCESSES
     return _ProcessGroupStatus.NO_LIVE_PROCESSES
 
 

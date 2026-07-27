@@ -50,15 +50,18 @@ the next attempt could not prepare the deterministic cache workspace.
 
 ## Fix
 
-`lib/marin/src/marin/inference/vllm_server.py` now inspects `/proc/*/stat` on
-Linux and treats a process group containing only `Z` or `X` entries as stopped.
-It falls back to the existing conservative `killpg(..., 0)` check when procfs
-cannot be inspected or on another platform. Active workers still retain the
-cache.
+`lib/marin/src/marin/inference/vllm_server.py` now inspects `/proc/*/stat` and
+the task stats under `/proc/*/task/*/stat` on Linux. It treats a process group
+containing only `Z` or `X` entries as stopped, but retains the cache when a
+non-leader thread remains alive under a dead leader. It falls back to the
+existing conservative `killpg(..., 0)` check when procfs cannot be inspected
+or on another platform.
 
 `tests/inference/test_vllm_server.py` creates a real process group with an
 unreaped zombie and verifies that `VllmServerHandle.stop()` releases the
-managed cache. The full vLLM server and cache test selection passed: 18 tests.
+managed cache. A synthetic procfs tree verifies that a live non-leader thread
+still retains it. The server suite passed 12 tests; the combined serve and
+server selection passed 62 tests.
 
 ## Streamer configuration follow-up
 
