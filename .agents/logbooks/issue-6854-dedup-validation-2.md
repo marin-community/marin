@@ -16,6 +16,98 @@ are recorded in the previous volume.
 
 ## Experiment log
 
+### 2026-07-27T09:30:05Z — 255,180 pairs verified; all 302 ambiguities covered
+
+- `/rav/rav-datakit-6854-reconcile-manual-0929-v1100` ran:
+
+  ```text
+  uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait \
+    --job-name rav-datakit-6854-reconcile-manual-0929-v1100 \
+    --enable-extra-resources --cpu 4 --memory 32g --disk 20g \
+    --priority batch --extra marin-core:cpu -- \
+    python experiments/datakit/scripts/dedup_ab_reconcile_manual_tmp.py \
+    --snapshot 20260727-0929
+  ```
+
+  It independently reread and hash-verified 2,008 semantic checkpoints, all
+  outcome Parquets, 158 current manual markers, and 304 manual Parquets
+  representing 302 unique review keys. All 302 unresolved model outcomes have
+  one consistent manual label; none are missing. The two extra Parquets are
+  the previously documented same-label records for rows 9,034 and 9,204.
+  The immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-0929.json`
+  with SHA-256
+  `732ce94618539782d1695ef7a7b66c62efd17bed3f7e3ffdca79ce4c92ead6d4`.
+- The snapshot covers 255,180 of 755,281 semantic candidates (33.79%).
+  Adjusting every unresolved model result with its manual full-text decision
+  gives:
+
+  - baseline: 204,438 pairs, 129,699 false positives, and 74,739 true
+    duplicates;
+  - treatment: 50,742 pairs, 26,244 false positives, and 24,498 true
+    duplicates;
+  - combined: 155,943 false positives and 99,237 true duplicates.
+
+- Thirteen new ambiguities since the 246,348-pair snapshot were resolved from
+  complete persisted texts and unified diffs:
+
+  - baseline rows 1,262 and 2,117 are false positives. Row 1,262's member adds
+    a substantive Apache SSI caching section absent from the canonical.
+    Row 2,117 changes the final interview request and answer, so it is a
+    distinct training example. Their inspection SHA-256 values are
+    `4fa64099716097abe9d55ebd8152c264ea82c3797f36883b050c8762d0c15cdf`
+    and
+    `b9c65357ce98b54c0d6af36e1c52f822ab9726d9af83f6d1d2aea47279b39120`.
+  - baseline rows 3,853, 4,616, and 5,259 are the same incoherent college SEO
+    template with only entity, program, and location slot substitutions.
+    Baseline row 5,186 is the same Singapore insurance location template with
+    a paraphrased or truncated member. Under the pinned evaluation contract,
+    those template slots do not preserve distinct substance, so all four are
+    true duplicates. Their inspection SHA-256 values are
+    `1fba20716c500e6ad2fba4222116dfa762a0d7317b03dba40cba84e84463937b`,
+    `572ddf0ca61d8066124b3f18486fbd922bab85680095c7d13633605e21519699`,
+    `4d1d32d6e541e7779de19bb446b37bb2b55f9325d8a7b633816d9119952fd4fc`,
+    and
+    `7b899fc15118db7eb664347b4b339bccf82d1477bb4ff6544da1051a380d973c`.
+  - baseline rows 7,021 and 7,496 contain the same request, derivation or code,
+    and conclusion; rows 7,350, 7,362, and 7,394 differ only in final boxed
+    answer formatting. All five are true duplicates. Their inspection
+    SHA-256 values are
+    `e9037c063cebe86224620f2bff65b2c0df5f3c7d595ccd703639eaa4200940a0`,
+    `047ac9bb3983cc2b502a3babe6d602c4aa8f8d42f81cad7836573a251750ba72`,
+    `e7cf2c4bf1f985a970b0732351247b7b55adc3ab2f79bf6459829d8f22fb5e5c`,
+    `1403105078c22b925ed86e738a5fa932c31a76e3af97e41a7786fe9ed2b30815`,
+    and
+    `4093c42561f7d9b93bc9f851a7bc8dcb4a3a71129ded948b26c2d36cd047c767`.
+  - baseline row 7,284 is the same 136-line NMR question and reasoning; its
+    sole changed line is `\boxed{\text{C}}` versus `\boxed{C}`. Character,
+    line, and word-sequence similarities are 0.999620, 0.992647, and
+    0.999667. Member/canonical text SHA-256 values are
+    `042dc81b0cf2ba833602a0b8cfedf9c879ad9767b9c2c71cb58f6023a41cbd2a`
+    and
+    `79af1eae6bf7b0ddc077ef315d353f2fb88bffc0e939d915ee286a2f1d410295`;
+    inspection SHA-256 is
+    `61b1f3e65dc2faad564360fc30b85434b3b9e666646474f19c742feb105962d8`.
+  - baseline row 7,666 is the same 187-line disability disparate-impact
+    question and reasoning; its sole changed line is `\boxed{B}` versus
+    `\boxed{\text{B}}`. Similarities are 0.999726, 0.994652, and 0.999736.
+    Member/canonical text SHA-256 values are
+    `b6d604004b17a40750ca691e6d333cd7d23e91759df6fb25f6e3d11ea5bdac8f`
+    and
+    `1f5a0c621d2d033d0438e374327a67c3de289951e1497072261a9c4691e3538d`;
+    inspection SHA-256 is
+    `c1885b030a4a3325f886049e01f3708e0884c1073e0ba69109d24dc55c47f3a9`.
+
+- `/rav/rav-datakit-6854-publish-row7284-0927-v1096` and
+  `/rav/rav-datakit-6854-publish-row7666-0927-v1097` wrote immutable,
+  hash-bound true-duplicate records. Independent verify-only jobs
+  `/rav/rav-datakit-6854-verify-row7284-0928-v1098` and
+  `/rav/rav-datakit-6854-verify-row7666-0928-v1099` reread the source pairs,
+  semantic evidence, inspections, deterministic Parquet bytes, and completion
+  markers and succeeded.
+- The four batch-priority 2-H100 workers remain active. All 12 root, broker,
+  and GPU pods are Ready with zero Kubernetes restarts.
+
 ### 2026-07-27T08:49:00Z — 246,348 pairs verified; manual evidence reconciled
 
 - `/rav/rav-datakit-6854-reconcile-manual-0844-v1049` snapshotted and
