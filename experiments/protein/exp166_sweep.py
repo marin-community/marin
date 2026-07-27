@@ -3,10 +3,10 @@
 
 """Exp 166: contacts-v1 amino-acid augmentation ablation.
 
-Runs the four best completed 8-epoch configurations from MarinFold #117
+Runs the six best completed 8-epoch configurations from MarinFold #117
 (https://github.com/Open-Athena/MarinFold/issues/117) with training-time amino-acid
 augmentation. Each configuration is trained both from scratch and from its corresponding
-exp117 checkpoint, for eight logical trials total. Checkpoint trials strictly load the
+exp117 checkpoint, for twelve logical trials total. Checkpoint trials strictly load the
 exp117 model subtree into a fresh optimizer and exp166 schedule at step 0.
 
 ``TRIAL`` identifies a logical trial and excludes region. ``REGION`` is included in the
@@ -144,12 +144,12 @@ NUM_EVALS_PER_EPOCH: int = 2
 CORRECTION_FACTORS: dict[str, float] = {"v5e": 0.5, "v6e": 0.3, "v5p": 0.45}
 
 
-# --- Four exp117 winners x two initialization modes -------------------------
+# --- Six exp117 winners x two initialization modes --------------------------
 
 
 @dataclass(frozen=True)
 class Point:
-    """One of the four selected exp117 hyperparameter configurations."""
+    """One of the six selected exp117 hyperparameter configurations."""
 
     key: str
     learning_rate: float
@@ -212,6 +212,24 @@ POINTS: tuple[Point, ...] = (
         exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr1e-3-wd0p8-bs128-us-east5",
         exp117_region="us-east5",
         exp117_loss=2.7450978755950928,
+    ),
+    Point(
+        key="lr3p162e-4-wd1p6-bs128",
+        learning_rate=3.1623e-4,
+        weight_decay=1.6,
+        batch_size=128,
+        exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr3p162e-4-wd1p6-bs128-us-east1",
+        exp117_region="us-east1",
+        exp117_loss=2.7489023208618164,
+    ),
+    Point(
+        key="lr1e-3-wd0p2-bs64",
+        learning_rate=1e-3,
+        weight_decay=0.2,
+        batch_size=64,
+        exp117_run="prot-exp117-cv1-s02-1_5b-e8-lr1e-3-wd0p2-bs64-us-east5",
+        exp117_region="us-east5",
+        exp117_loss=2.750558853149414,
     ),
 )
 

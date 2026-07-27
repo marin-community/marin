@@ -8,6 +8,7 @@ import numpy as np
 from experiments.protein.exp166_sweep import (
     CONTACTS_V1_TOKEN_IDS,
     POINTS,
+    TRIALS,
     Initialization,
     StageCheckpointConfig,
     Trial,
@@ -77,6 +78,18 @@ def test_exp117_tags_use_compact_checkpoint_identity():
 
         assert f"source_checkpoint=exp117/{point.key}" in tags
         assert all(1 <= len(tag) <= 64 for tag in tags)
+
+
+def test_top_six_exp117_points_generate_twelve_logical_trials():
+    assert len(POINTS) == 6
+    assert len(TRIALS) == 12
+    assert [point.exp117_loss for point in POINTS] == sorted(point.exp117_loss for point in POINTS)
+    assert [point.batch_size for point in POINTS].count(64) == 3
+    assert [point.batch_size for point in POINTS].count(128) == 3
+    assert [point.exp117_run for point in POINTS[-2:]] == [
+        "prot-exp117-cv1-s02-1_5b-e8-lr3p162e-4-wd1p6-bs128-us-east1",
+        "prot-exp117-cv1-s02-1_5b-e8-lr1e-3-wd0p2-bs64-us-east5",
+    ]
 
 
 def test_stage_checkpoint_copies_latest_complete_checkpoint(tmp_path):

@@ -12,9 +12,9 @@ It does not define a hyperparameter search.
 experiment:
   training_script: experiments/protein/exp166_sweep.py
   trial_selector: TRIAL
-  # Four fixed exp117 configurations, each run from scratch and from its
+  # Six fixed exp117 configurations, each run from scratch and from its
   # corresponding exp117 checkpoint.
-  logical_trial_count: 8
+  logical_trial_count: 12
   regional_race_width: 3
   single_job_command: >
     TRIAL={trial_id} TPU={tpu_slice} REGION={region}
@@ -37,7 +37,7 @@ execution:
     cross_region_restart_timeout: 96h
 ```
 
-The `TRIALS` mapping in the sweep module is the source of truth for the eight
+The `TRIALS` mapping in the sweep module is the source of truth for the twelve
 logical trial IDs and their structured metadata. Do not recreate that mapping
 by parsing run names.
 
