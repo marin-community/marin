@@ -7,7 +7,8 @@ import logging
 import posixpath
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+
+from fsspec.spec import AbstractFileSystem
 
 import rigging.filesystem.factory as filesystem_factory
 from rigging.filesystem.storage_path import StoragePath
@@ -36,18 +37,17 @@ class TreeTransferResult:
 def _path_join(root: str, relative: str) -> str:
     if not relative or relative == ".":
         return root
-    return posixpath.join(root.rstrip("/"), relative)
+    return posixpath.join(root, relative)
 
 
 def _relative_path(path: str, root: str) -> str:
-    normalized_path = path.strip("/")
-    normalized_root = root.strip("/")
+    normalized_path = posixpath.normpath(f"/{path.lstrip('/')}")
+    normalized_root = posixpath.normpath(f"/{root.lstrip('/')}")
     if normalized_path == normalized_root:
         return ""
-    prefix = f"{normalized_root}/" if normalized_root else ""
-    if not normalized_path.startswith(prefix):
+    if posixpath.commonpath((normalized_path, normalized_root)) != normalized_root:
         raise ValueError(f"filesystem walk returned {path!r} outside source root {root!r}")
-    return normalized_path.removeprefix(prefix)
+    return posixpath.relpath(normalized_path, normalized_root)
 
 
 def _reject_recursive_copy(source: StoragePath, destination: StoragePath) -> None:
@@ -59,7 +59,12 @@ def _reject_recursive_copy(source: StoragePath, destination: StoragePath) -> Non
     raise ValueError(f"copy_tree destination {destination} is {location} {source}")
 
 
-def _copy_file(source_fs: Any, source_path: str, destination_fs: Any, destination_path: str) -> None:
+def _copy_file(
+    source_fs: AbstractFileSystem,
+    source_path: str,
+    destination_fs: AbstractFileSystem,
+    destination_path: str,
+) -> None:
     destination_parent = posixpath.dirname(destination_path)
     if destination_parent:
         destination_fs.makedirs(destination_parent, exist_ok=True)
@@ -82,8 +87,7 @@ def copy_tree(
 
     ``RESUME`` skips destination files with the same byte size and replaces missing
     or differently sized files. ``OVERWRITE`` replaces every source file. Neither
-    mode deletes destination-only files. Each replacement is written to a temporary
-    sibling before it is renamed into place.
+    mode deletes destination-only files. Replacements are atomic.
     """
     _reject_recursive_copy(source, destination)
     source_fs, source_root = filesystem_factory.url_to_fs(str(source))

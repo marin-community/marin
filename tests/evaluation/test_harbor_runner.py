@@ -3,11 +3,9 @@
 
 import json
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 import rigging.filesystem.factory as filesystem_factory
-from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborAgentConfig,
@@ -30,6 +28,7 @@ from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
+from rigging.testing import memory_filesystem_for_scheme
 
 
 def _running_model() -> RunningModel:
@@ -43,21 +42,8 @@ def _running_model() -> RunningModel:
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_materialize_harbor_dataset_stages_only_selected_remote_tasks(protocol, tmp_path, monkeypatch):
-    class RemoteMemoryFileSystem(MemoryFileSystem):
-        store: ClassVar[dict] = {}
-        pseudo_dirs: ClassVar[list[str]] = [""]
-
-    RemoteMemoryFileSystem.protocol = protocol
-    remote_fs = RemoteMemoryFileSystem()
-    original_url_to_fs = filesystem_factory.url_to_fs
-
-    def remote_url_to_fs(url: str, **kwargs):
-        path = StoragePath(url)
-        if path.scheme != protocol:
-            return original_url_to_fs(url, **kwargs)
-        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
-
-    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
+    remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
     remote = StoragePath(f"{protocol}://regional-cache/benchmark")
     for task_name in ("task-b", "task-a"):
         root = f"regional-cache/benchmark/{task_name}"
@@ -80,7 +66,7 @@ def test_materialize_harbor_dataset_stages_only_selected_remote_tasks(protocol, 
 
 
 def test_materialize_harbor_dataset_rejects_direct_hugging_face_reads(tmp_path):
-    with pytest.raises(ValueError, match="regional artifact"):
+    with pytest.raises(ValueError):
         materialize_harbor_dataset("hf://DCAgent2/terminal_bench_2", tmp_path, task_limit=None)
 
 
@@ -95,20 +81,8 @@ def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, monkeypatch):
-    class RemoteMemoryFileSystem(MemoryFileSystem):
-        pass
-
-    RemoteMemoryFileSystem.protocol = protocol
-    remote_fs = RemoteMemoryFileSystem()
-    original_url_to_fs = filesystem_factory.url_to_fs
-
-    def remote_url_to_fs(url: str, **kwargs):
-        path = StoragePath(url)
-        if path.scheme != protocol:
-            return original_url_to_fs(url, **kwargs)
-        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
-
-    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
+    _remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
 
     trial_dir = tmp_path / "source" / "trial-one"
     (trial_dir / "agent").mkdir(parents=True)

@@ -16,7 +16,7 @@ Focused submodules with one-directional imports:
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
-This module re-exports the public API of the first four so
+This module re-exports the public API of the first five so
 ``from rigging.filesystem import …`` keeps working. ``mirror`` and
 ``distributed_lock`` are reached by their submodule path; the lazy ``mirror://``
 registration below keeps them — and the ``botocore`` import they pull in for the

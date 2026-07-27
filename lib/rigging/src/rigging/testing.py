@@ -1,14 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test-support doubles for services built on rigging's auth stack.
+"""Test-support doubles for services built on rigging.
 
 Shipped alongside the library (not under ``tests/``) so both rigging's own suite
 and downstream consumers such as iris import one copy rather than each carrying
 its own.
 """
 
+from collections.abc import Callable
+from typing import Any
+
+from fsspec.implementations.memory import MemoryFileSystem
+from fsspec.spec import AbstractFileSystem
+
+from rigging.filesystem.storage_path import StoragePath
 from rigging.server_auth import VerifiedIdentity
+
+type FileSystemResolver = Callable[..., tuple[AbstractFileSystem, str]]
+
+
+def memory_filesystem_for_scheme(
+    protocol: str,
+    fallback: FileSystemResolver,
+) -> tuple[MemoryFileSystem, FileSystemResolver]:
+    """Return an isolated memory filesystem and resolver for one URL scheme."""
+
+    class RemoteMemoryFileSystem(MemoryFileSystem):
+        pass
+
+    RemoteMemoryFileSystem.protocol = protocol
+    RemoteMemoryFileSystem.store = {}
+    RemoteMemoryFileSystem.pseudo_dirs = [""]
+    remote_fs = RemoteMemoryFileSystem()
+
+    def resolve(url: str, **kwargs: Any) -> tuple[AbstractFileSystem, str]:
+        path = StoragePath(url)
+        if path.scheme != protocol:
+            return fallback(url, **kwargs)
+        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
+
+    return remote_fs, resolve
 
 
 class MockVerifier:

@@ -13,6 +13,7 @@ from rigging.filesystem import marin_temp_bucket
 
 _CACHE_TTL_DAYS = 7
 _CATALOG_VERSION = "2026.07.27"
+_HARBOR_DATASET_NAMESPACE = "evaluation/harbor-datasets"
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -37,14 +38,14 @@ class HuggingFaceHarborDataset:
         """Return the cache path colocated with ``placement_prefix``."""
         return marin_temp_bucket(
             ttl_days=_CACHE_TTL_DAYS,
-            prefix=f"evaluation/harbor-datasets/{self.slug}/{self.commit}",
+            prefix=f"{_HARBOR_DATASET_NAMESPACE}/{self.slug}/{self.commit}",
             source_prefix=placement_prefix,
         )
 
     def artifact_for(self, placement_prefix: str) -> ArtifactStep[Artifact]:
         """Return the lazy Hugging Face-to-regional-cache transfer."""
         return hf_download(
-            name=f"evaluation/harbor-datasets/{self.slug}",
+            name=f"{_HARBOR_DATASET_NAMESPACE}/{self.slug}",
             hf_id=self.repository,
             revision=self.commit,
             version=_CATALOG_VERSION,

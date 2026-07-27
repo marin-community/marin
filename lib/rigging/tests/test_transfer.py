@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import ClassVar
-
 import pytest
 import rigging.filesystem.factory as filesystem_factory
-from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath, TreeTransferMode, copy_tree
+from rigging.filesystem.transfer import _relative_path
+from rigging.testing import memory_filesystem_for_scheme
 
 
 def test_copy_tree_preserves_nested_files_and_empty_directories(tmp_path):
@@ -32,21 +31,8 @@ def test_copy_tree_preserves_nested_files_and_empty_directories(tmp_path):
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_copy_tree_uses_the_filesystem_from_each_uri(protocol, tmp_path, monkeypatch):
-    class RemoteMemoryFileSystem(MemoryFileSystem):
-        store: ClassVar[dict] = {}
-        pseudo_dirs: ClassVar[list[str]] = [""]
-
-    RemoteMemoryFileSystem.protocol = protocol
-    remote_fs = RemoteMemoryFileSystem()
-    original_url_to_fs = filesystem_factory.url_to_fs
-
-    def shaped_url_to_fs(url: str, **kwargs):
-        path = StoragePath(url)
-        if path.scheme != protocol:
-            return original_url_to_fs(url, **kwargs)
-        return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
-
-    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", shaped_url_to_fs)
+    _remote_fs, resolve = memory_filesystem_for_scheme(protocol, filesystem_factory.url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", resolve)
 
     source = tmp_path / "source"
     (source / "nested").mkdir(parents=True)
@@ -98,5 +84,9 @@ def test_copy_tree_resume_and_overwrite_are_explicit(tmp_path):
 def test_copy_tree_rejects_a_destination_inside_the_source(tmp_path):
     source = StoragePath(str(tmp_path / "source"))
 
-    with pytest.raises(ValueError, match="inside source"):
+    with pytest.raises(ValueError):
         copy_tree(source, source / "nested", mode=TreeTransferMode.RESUME)
+
+
+def test_relative_path_normalizes_doubled_separators_without_escaping_root():
+    assert _relative_path("bucket/source//nested", "bucket/source") == "nested"

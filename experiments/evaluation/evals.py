@@ -101,14 +101,14 @@ class EvalchemyDefinition:
     config: EvalchemyRunConfig
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    def record_ref_for(self, placement_prefix: str) -> EvalRef:
+    def record_ref_for(self, _placement_prefix: str) -> EvalRef:
         return EvalRef(
             name=self.config.name,
             mechanism="evalchemy",
             tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
         )
 
-    def executor_for(self, model: ModelConfig, limit: int | None, placement_prefix: str) -> EvalExecutor:
+    def executor_for(self, model: ModelConfig, limit: int | None, _placement_prefix: str) -> EvalExecutor:
         effective_limit = self.config.max_eval_instances if limit is None else limit
         config = replace(
             self.config,

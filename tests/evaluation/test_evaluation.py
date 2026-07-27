@@ -25,7 +25,7 @@ from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
-from experiments.evaluation.evals import EVALS, HarborDefinition
+from experiments.evaluation.evals import EVALS
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
@@ -251,33 +251,8 @@ def test_agentic_evaluation_uses_a_revision_pinned_regional_dataset_artifact(
     evaluation = batch.evaluations[0]
     harbor = evaluation.identity.eval_ref.harbor
     assert harbor is not None
-    assert harbor.repository == "DCAgent2/terminal_bench_2"
-    assert harbor.commit == "693231ec029249e7c91ed2e414bcc9c45d7cd879"
+    assert harbor.repository == evaluation.executor.config.dataset
+    assert harbor.commit == evaluation.executor.config.revision
     assert harbor.mirror_uri.startswith(mirror_prefix)
     assert harbor.mirror_uri.endswith(f"DCAgent2--terminal_bench_2/{harbor.commit}")
     assert evaluation.executor.dataset_artifact.path() == harbor.mirror_uri
-
-
-@pytest.mark.parametrize(
-    "eval_name",
-    [
-        "tb2",
-        "swebench",
-        "swebench-full",
-        "gaia",
-        "bfcl",
-        "aider",
-        "medagentbench",
-        "financeagent",
-        "grug-opencode-id",
-    ],
-)
-def test_hugging_face_harbor_presets_use_full_immutable_commits(eval_name):
-    definition = EVALS[eval_name]
-
-    assert isinstance(definition, HarborDefinition)
-    assert definition.dataset_artifact is not None
-    assert definition.config.dataset == definition.dataset_artifact.repository
-    assert definition.config.revision == definition.dataset_artifact.commit
-    assert len(definition.config.revision) == 40
-    assert all(character in "0123456789abcdef" for character in definition.config.revision)

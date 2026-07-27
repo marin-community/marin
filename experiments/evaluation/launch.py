@@ -39,6 +39,8 @@ from experiments.evaluation.evals import EVALS
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
+_COREWEAVE_CLUSTER_PREFIX = "cw-"
+
 
 @dataclass(frozen=True)
 class LaunchSpec:
@@ -99,8 +101,9 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
 def _dataset_placement_prefix(accelerator: AcceleratorChoice) -> str:
     if accelerator.region:
         return f"gs://marin-{accelerator.region}"
-    if accelerator.target_cluster and accelerator.target_cluster.startswith("cw-"):
-        return f"s3://marin-{accelerator.target_cluster.removeprefix('cw-')}"
+    if accelerator.target_cluster and accelerator.target_cluster.startswith(_COREWEAVE_CLUSTER_PREFIX):
+        cluster = accelerator.target_cluster.removeprefix(_COREWEAVE_CLUSTER_PREFIX)
+        return f"s3://marin-{cluster}"
     raise ValueError(f"cannot resolve regional dataset storage for accelerator placement {accelerator}")
 
 
