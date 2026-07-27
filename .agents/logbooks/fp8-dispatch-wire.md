@@ -424,3 +424,37 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
   Process note worth carrying: any multi-process timing harness in this repo needs explicit
   global barriers. The unbarriered version did not merely add noise, it produced a
   confidently wrong 2.77x that would have been an attractive number to believe.
+
+### 2026-07-27 16:05 - FP8W-012: EP64, the #7279 operating point
+
+- **Hypothesis:** the EP4 -> EP16 trend continues at the rack-scale EP degree #7279 and
+  #7201 actually run.
+- **Command:** as FP8W-011 with `--replicas 16 --tokens 1048576` (64 GPUs, 16 processes,
+  16,384 tokens per device -- the same per-device load as the EP4 and EP16 runs).
+- **Result (r1):** `dw13`/`dw2` relfrob exactly 0.0, `dx` 6.52e-5, forward 6.52e-5,
+  dispatch gradient nonzero. fwd 38.349 -> 29.773 ms = **1.288x**; fwd+bwd
+  72.999 -> 63.661 ms = **1.147x**.
+- **Interpretation:** the scaling holds across a 16x range of expert-parallel degree at
+  fixed per-device tokens:
+
+  | config | EP | GPUs | fwd | fwd+bwd |
+  |---|--:|--:|--:|--:|
+  | d6144 4-of-256 | 4 | 4 | 1.044 | 1.005 |
+  | d5120 4-of-128 | 4 | 4 | 1.071 | 1.019 |
+  | d5120 4-of-128 | 16 | 16 | 1.210 | 1.101 |
+  | d5120 4-of-128 | 64 | 64 | 1.288 | 1.147 |
+
+  The saving tracks the collective's share of the layer, and that share grows with EP
+  degree because dispatch volume does. Note the relfrob against the control also *falls*
+  with EP (2.1e-4 at EP4, 1.1e-4 at EP16, 6.5e-5 at EP64), consistent with the residual
+  difference being bf16 combine accumulation order rather than anything in the wire: more
+  shards means fewer duplicate-index accumulations per shard.
+
+  One draw. Repeats are queued; EP64 gang scheduling across 16 nodes is slow to admit, and
+  r2 sat pending. Do not quote 1.147 as settled until at least one repeat lands.
+
+  Teardown noise: after the result prints, the run emits a burst of grpc
+  `failed to connect to all addresses` lines as the 16 processes exit. The job still
+  reports succeeded and the measured window is unaffected.
+- **Next action:** land EP64 repeats, then move to the in-step measurement with scan and
+  remat, which is the one that decides this.
