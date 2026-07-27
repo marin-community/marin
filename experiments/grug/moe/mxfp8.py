@@ -347,7 +347,11 @@ def _forward_pipeline_quantized(op: "MxFp8MoeMlpOp", payload, scales, w13, w2, g
     s_row = _pad_rows(scales, layout)
     x_sf = build_sfa_fast(s_row, row_idx)
 
-    x_col, s_col = quantize_mxfp8_tokens(dequantize_mxfp8_rows(x_q, s_row))
+    # bf16, not the f32 dequantize_mxfp8_rows returns: the reconstruction is
+    # exact in bf16 (an e4m3 value has 3 mantissa bits, bf16 has 7, and the
+    # e8m0 scale is a power of two), and at the operating point this
+    # intermediate is the largest tensor either forward path materializes.
+    x_col, s_col = quantize_mxfp8_tokens(dequantize_mxfp8_rows(x_q, s_row).astype(jnp.bfloat16))
     x_sfc = build_sf_wgrad_fast(s_col.T, col_idx, perm_d)
 
     return _forward_legs(fused, producer, layout, (x_q, x_sf, x_col, x_sfc), w13, w2)
