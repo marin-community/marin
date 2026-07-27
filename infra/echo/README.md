@@ -29,8 +29,9 @@ thread matters.
 Direct SQL access uses Cloud SQL IAM group authentication. Members of
 `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
 `roles/cloudsql.client`, `SELECT` on `chunks`, and `SELECT, INSERT` on `work_log`.
-No database password is shared. Group membership and IAM changes can take about 15
-minutes to propagate.
+The `loom-vm` service account receives the same direct database access. No database
+password is shared. Group membership and IAM changes can take about 15 minutes to
+propagate.
 
 `MARIN_DB_USER` overrides the PostgreSQL username when ADC cannot resolve an
 impersonated, external-account, or workforce identity. Service-account usernames omit

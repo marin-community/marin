@@ -40,12 +40,14 @@ OPENATHENA_GROUP = "eng-all@openathena.ai"
 # The bootstrap migration chain requires this role to exist from its initial grants
 # through their revocation. It receives no IAM login roles or IAP access.
 LEGACY_ECHO_GROUP = "echo@openathena.ai"
-# The Cloud Run runtime service accounts (created by their components as <name>@<project>).
+# Echo's Cloud Run runtime service accounts (created by their components as <name>@<project>).
 SYNC_SA = f"echo-sync@{PROJECT}.iam.gserviceaccount.com"
 API_SA = f"echo-api@{PROJECT}.iam.gserviceaccount.com"
+LOOM_VM_SA = f"loom-vm@{PROJECT}.iam.gserviceaccount.com"
 # A Cloud SQL IAM database user's Postgres name is its principal minus the SA suffix.
 SYNC_DB_USER = SYNC_SA.removesuffix(".gserviceaccount.com")
 API_DB_USER = API_SA.removesuffix(".gserviceaccount.com")
+LOOM_VM_DB_USER = LOOM_VM_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 
@@ -93,18 +95,22 @@ def main() -> None:
             pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{OPENATHENA_GROUP}" if adopt else None),
         ),
     )
+    login_grants: list[pulumi.Resource] = []
     for member, roles in (
         (f"group:{OPENATHENA_GROUP}", LOGIN_ROLES),
         (f"serviceAccount:{SYNC_SA}", ("roles/cloudsql.instanceUser",)),
         (f"serviceAccount:{API_SA}", ("roles/cloudsql.instanceUser",)),
+        (f"serviceAccount:{LOOM_VM_SA}", LOGIN_ROLES),
     ):
         for role in roles:
-            gcp.projects.IAMMember(
-                f"login-{role_slug(member.split(':', 1)[1])}-{role_slug(role)}",
-                project=PROJECT,
-                role=role,
-                member=member,
-                opts=child,
+            login_grants.append(
+                gcp.projects.IAMMember(
+                    f"login-{role_slug(member.split(':', 1)[1])}-{role_slug(role)}",
+                    project=PROJECT,
+                    role=role,
+                    member=member,
+                    opts=child,
+                )
             )
 
     mirror_token = gcp.secretmanager.Secret(
@@ -182,6 +188,19 @@ def main() -> None:
                 ),
             )
         )
+    db_users.append(
+        gcp.sql.User(
+            "loom-vm-sa",
+            name=LOOM_VM_DB_USER,
+            instance=INSTANCE,
+            project=PROJECT,
+            type="CLOUD_IAM_SERVICE_ACCOUNT",
+            opts=pulumi.ResourceOptions.merge(
+                child,
+                pulumi.ResourceOptions(depends_on=login_grants),
+            ),
+        )
+    )
 
     # Apply pending migrations as the last step of `pulumi up`: migrate.py creates the tables
     # and grants the IAM users above (so it must follow them). It is idempotent — it skips
