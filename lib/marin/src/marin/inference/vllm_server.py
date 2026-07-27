@@ -34,14 +34,22 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
-# Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
-# vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
-_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
+# Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
+# range, while the Marin git fork does not bundle it.
+_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+_LINUX_PROC_ROOT = "/proc"
+_LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
+
+
+class _ProcessGroupStatus(StrEnum):
+    HAS_LIVE_PROCESSES = "has_live_processes"
+    NO_LIVE_PROCESSES = "no_live_processes"
+    UNKNOWN = "unknown"
 
 
 class TransientStartupError(RuntimeError):
@@ -109,14 +117,15 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
-            from_spec, extra = vllm_fork_ref(), ["--with", _RUNAI_STREAMER_REQUIREMENT]
+            from_spec = vllm_fork_ref()
         else:
-            from_spec, extra = f"vllm[runai]=={self.version}", []
+            from_spec = f"vllm[runai]=={self.version}"
         return [
             "uvx",
             "--from",
             from_spec,
-            *extra,
+            "--with",
+            _RUNAI_STREAMER_REQUIREMENT,
             "--python",
             self.python_version,
             "--torch-backend",
@@ -304,11 +313,11 @@ class VllmServerHandle:
             self._signal(signal.SIGKILL)
             self.process.wait(timeout=timeout_seconds)
 
-        if self._process_group_exists():
+        if self._process_group_has_live_processes():
             # The API parent can exit before EngineCore does, so check the group after wait().
             self._signal(signal.SIGKILL)
             deadline = time.monotonic() + timeout_seconds
-            while self._process_group_exists() and time.monotonic() < deadline:
+            while self._process_group_has_live_processes() and time.monotonic() < deadline:
                 time.sleep(0.05)
 
         # Child and group are gone, so the pipes are at EOF; join the readers (bounded, so a
@@ -316,9 +325,9 @@ class VllmServerHandle:
         if self.log_pump is not None:
             self.log_pump.join(timeout=timeout_seconds)
             self.log_pump.close()
-        if self._process_group_exists():
+        if self._process_group_has_live_processes():
             logger.warning(
-                "Keeping vLLM compilation cache because process group %s still exists",
+                "Keeping vLLM compilation cache because process group %s still has live processes",
                 self.process_group_id,
             )
         else:
@@ -340,14 +349,82 @@ class VllmServerHandle:
             )
             self.process.send_signal(sig)
 
-    def _process_group_exists(self) -> bool:
+    def _process_group_has_live_processes(self) -> bool:
         if self.process_group_id is None:
             return False
+        linux_status = _linux_process_group_status(self.process_group_id)
+        if linux_status is not _ProcessGroupStatus.UNKNOWN:
+            return linux_status is _ProcessGroupStatus.HAS_LIVE_PROCESSES
         try:
             os.killpg(self.process_group_id, 0)
             return True
         except ProcessLookupError:
             return False
+
+
+def _linux_process_group_status(process_group_id: int) -> _ProcessGroupStatus:
+    """Return the observable liveness state for a Linux process group."""
+    if sys.platform != "linux":
+        return _ProcessGroupStatus.UNKNOWN
+    try:
+        entries = os.scandir(_LINUX_PROC_ROOT)
+    except OSError:
+        return _ProcessGroupStatus.UNKNOWN
+
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(os.path.join(entry.path, "stat")) as stat_file:
+                    stat_text = stat_file.read()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return _ProcessGroupStatus.UNKNOWN
+
+            _, separator, stat_fields = stat_text.rpartition(")")
+            fields = stat_fields.split()
+            if not separator or len(fields) < 3:
+                return _ProcessGroupStatus.UNKNOWN
+            try:
+                entry_process_group_id = int(fields[2])
+            except ValueError:
+                return _ProcessGroupStatus.UNKNOWN
+            if entry_process_group_id != process_group_id:
+                continue
+            if fields[0] not in _LINUX_DEAD_PROCESS_STATES:
+                return _ProcessGroupStatus.HAS_LIVE_PROCESSES
+
+            try:
+                tasks = os.scandir(os.path.join(entry.path, "task"))
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return _ProcessGroupStatus.UNKNOWN
+            with tasks:
+                for task in tasks:
+                    if not task.name.isdigit() or task.name == entry.name:
+                        continue
+                    try:
+                        with open(os.path.join(task.path, "stat")) as stat_file:
+                            task_stat_text = stat_file.read()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        return _ProcessGroupStatus.UNKNOWN
+
+                    _, task_separator, task_stat_fields = task_stat_text.rpartition(")")
+                    task_fields = task_stat_fields.split()
+                    if not task_separator or len(task_fields) < 3:
+                        return _ProcessGroupStatus.UNKNOWN
+                    try:
+                        task_process_group_id = int(task_fields[2])
+                    except ValueError:
+                        return _ProcessGroupStatus.UNKNOWN
+                    if task_process_group_id == process_group_id and task_fields[0] not in _LINUX_DEAD_PROCESS_STATES:
+                        return _ProcessGroupStatus.HAS_LIVE_PROCESSES
+    return _ProcessGroupStatus.NO_LIVE_PROCESSES
 
 
 def resolve_model_name_or_path(model: InferenceModelConfig) -> tuple[str, InferenceModelConfig]:
@@ -611,6 +688,12 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("MODEL_IMPL_TYPE", "vllm"),
     ("TPU_MIN_LOG_LEVEL", "3"),
     ("TPU_STDERR_LOG_LEVEL", "3"),
+    # The AWS CRT clamps the 0.16.x streamer's 1s default to 3s. Ten seconds tolerates a brief
+    # object-store stall while still failing early enough for Marin's whole-server retry.
+    ("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", "10000"),
+    # RunAI otherwise writes no internal logs. WARNING is its default level, so this exposes the
+    # final S3 exception without enabling per-request debug output.
+    ("RUNAI_STREAMER_LOG_TO_STDERR", "1"),
 )
 
 

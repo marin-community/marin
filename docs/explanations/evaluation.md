@@ -3,16 +3,21 @@
 This document explains how Marin evaluates models and where to find runnable workflows.
 
 For step-by-step usage, start with:
-- [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for multiple-choice, generation, and key eval suites.
-- [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
+
+- [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for command lines covering
+  Evalchemy and Harbor across registered models.
+- [Harbor Framework Integration](../harbor-integration.md) for Harbor dataset, agent, endpoint, and
+  result details.
 
 ## Evaluation modes
 
 Marin supports three evaluation paths:
 
 - **In-loop training evals**: [`train_lm`][marin.experiment.train.train_lm] runs periodic multiple-choice evaluations through Levanter's lm-evaluation-harness integration and logs to W&B when an `EvalSuite` is provided.
-- **Post-hoc evals**: composable `EvalGroup`s evaluated against a served model with the evalchemy fork — multiple-choice and generation both.
-- **Harbor tasks**: run through Marin's Harbor integration for containerized agent benchmarks and registry datasets.
+- **Post-hoc evals**: the shared launcher or composable `EvalGroup`s evaluate multiple-choice and
+  generation tasks with the Evalchemy fork.
+- **Harbor tasks**: the shared launcher runs containerized agent benchmarks and registry datasets
+  through Marin's Harbor integration.
 
 ## Post-hoc evaluation (evalchemy over a served endpoint)
 

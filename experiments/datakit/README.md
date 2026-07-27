@@ -15,11 +15,11 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 the StepRunner walks at once.
 
 Every stage keeps one step per source with its own output dir
-(`datakit/<stage>/<source>_<hash>/`); only dedup and the store combine sources,
-by design. Steps write their main output under `outputs/main/` plus, where it
-makes sense, a small site/sample side output (`outputs/samples/`,
-`outputs/flagged_sample/`, …) that the per-stage HTML reports
-([`reports/`](reports/)) read.
+(`datakit/<stage>/<source>_<hash>/`). Dedup, the decontamination DF filter, and
+the store combine sources. Steps write their main output under `outputs/main/`
+plus, where it makes sense, a small site/sample side output
+(`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
+reports ([`reports/`](reports/)) read.
 
 Each `datakit/report/<stage>` step depends only on that stage's steps, so it
 runs as soon as the stage finishes — reports are not deferred to the end of the
@@ -50,6 +50,7 @@ flowchart TD
     end
 
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
+    DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
     STORE["store: 5-way join, drop contaminated + non-canonical,<br/>route by (cluster_&lt;view&gt;, quality_bucket)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
@@ -59,7 +60,9 @@ flowchart TD
     SRC --> DECON
     SRC --> MH
     MODEL --> QUAL
-    EVALS --> BLOOM --> DECON
+    EVALS --> BLOOM --> DF --> DECON
+    SRC --> DF
+    BLOOM --> DECON
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
@@ -87,6 +90,13 @@ flowchart TD
     DEDUP -.-> RU
     STORE -.-> RS
 ```
+
+`datakit/decon_drop/_combined` scans up to 5,000 documents per source for
+source-local boilerplate and up to 1,000,000 for the cross-source estimate.
+The global set contains eval n-grams found in at least 50 sampled documents
+across at least three sources. Every decontamination mark loads its local set
+and the shared global set. The thresholds live in
+[`decontam/config.py`](decontam/config.py).
 
 ## Testbed samples
 
