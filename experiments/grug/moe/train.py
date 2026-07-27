@@ -1088,6 +1088,41 @@ def _stage_with_expert_gradients(
     return eqx.tree_at(lambda module: module.blocks, ordinary_gradients, tuple(blocks))
 
 
+def _sync_expert_gradient_accumulators(
+    accumulators: StageExpertGradientAccumulators,
+) -> StageExpertGradientAccumulators:
+    mesh = jax.sharding.get_abstract_mesh()
+
+    def sync_w13(value):
+        return jax.lax.psum_scatter(value, "data", scatter_dimension=1, tiled=True)
+
+    def sync_w2(value):
+        return jax.lax.psum_scatter(value, "data", scatter_dimension=2, tiled=True)
+
+    return StageExpertGradientAccumulators(
+        w13=tuple(
+            jax.shard_map(
+                sync_w13,
+                mesh=mesh,
+                in_specs=P("expert", None, None),
+                out_specs=P("expert", "data", None),
+                check_vma=False,
+            )(value)
+            for value in accumulators.w13
+        ),
+        w2=tuple(
+            jax.shard_map(
+                sync_w2,
+                mesh=mesh,
+                in_specs=P("expert", None, None),
+                out_specs=P("expert", None, "data"),
+                check_vma=False,
+            )(value)
+            for value in accumulators.w2
+        ),
+    )
+
+
 def _is_overwrite(value) -> bool:
     return isinstance(value, OverwriteWithGradient)
 
@@ -3488,40 +3523,6 @@ def _make_explicit_mpmd_train_step(
             w2=tuple(expert_zeros(block.mlp.expert_mlp.w_down.shape) for block in params.blocks),
         )
 
-    def sync_expert_gradient_accumulators(
-        accumulators: StageExpertGradientAccumulators,
-    ) -> StageExpertGradientAccumulators:
-        mesh = jax.sharding.get_abstract_mesh()
-
-        def sync_w13(value):
-            return jax.lax.psum_scatter(value, "data", scatter_dimension=1, tiled=True)
-
-        def sync_w2(value):
-            return jax.lax.psum_scatter(value, "data", scatter_dimension=2, tiled=True)
-
-        return StageExpertGradientAccumulators(
-            w13=tuple(
-                jax.shard_map(
-                    sync_w13,
-                    mesh=mesh,
-                    in_specs=P("expert", None, None),
-                    out_specs=P("expert", "data", None),
-                    check_vma=False,
-                )(value)
-                for value in accumulators.w13
-            ),
-            w2=tuple(
-                jax.shard_map(
-                    sync_w2,
-                    mesh=mesh,
-                    in_specs=P("expert", None, None),
-                    out_specs=P("expert", None, "data"),
-                    check_vma=False,
-                )(value)
-                for value in accumulators.w2
-            ),
-        )
-
     def average_expert_gradients(
         accumulators: StageExpertGradientAccumulators,
     ) -> StageExpertGradientAccumulators:
@@ -3538,7 +3539,7 @@ def _make_explicit_mpmd_train_step(
         expert_accumulators: StageExpertGradientAccumulators,
     ):
         ordinary_gradients = _average_microbatch_tree(ordinary_gradient_sum, pipeline.microbatches)
-        expert_gradients = average_expert_gradients(sync_expert_gradient_accumulators(expert_accumulators))
+        expert_gradients = average_expert_gradients(_sync_expert_gradient_accumulators(expert_accumulators))
         gradients = _stage_with_expert_gradients(ordinary_gradients, expert_gradients)
         return update_stage(params, opt_state, gradients)
 

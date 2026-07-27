@@ -16,7 +16,6 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from math import prod
 
 import equinox as eqx
 import jax
@@ -467,8 +466,6 @@ def moe_mlp_accumulating_weight_gradient(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, weight_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, weight_spec)
 
-    token_replica_count = prod(int(axis_size) for axis_size in mesh.shape.values())
-
     def local_fn(
         x_local,
         selected_experts_local,
@@ -490,10 +487,7 @@ def moe_mlp_accumulating_weight_gradient(
             num_experts=num_experts,
             capacity_factor=capacity_factor,
         )
-        # shard_map divides the cotangent of a replicated P() scalar among its
-        # replicas. The token is zero, so this restores unit cotangent on every
-        # data-local expert accumulator without changing the forward value.
-        return out, dropped, token * token_replica_count
+        return out, dropped, token
 
     shard_fn = shard_map(
         local_fn,
@@ -510,15 +504,141 @@ def moe_mlp_accumulating_weight_gradient(
         out_specs=(batch_spec, P(), P()),
         check_vma=False,
     )
-    return shard_fn(
-        x,
-        selected_experts,
-        combine_weights,
-        w_up_gate,
-        w_down,
-        w13_accumulator,
-        w2_accumulator,
-    )
+
+    # Transposing shard_fn would reconcile each data-replicated weight
+    # cotangent with a per-microbatch psum. Run the VJP inside shard_map so the
+    # controlled VMA cotangents stay data-local until the caller's step sync.
+    @jax.custom_vjp
+    def mapped_fn(x, selected_experts, combine_weights, w_up_gate, w_down, w13_accumulator, w2_accumulator):
+        return shard_fn(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            w13_accumulator,
+            w2_accumulator,
+        )
+
+    def mapped_fwd(x, selected_experts, combine_weights, w_up_gate, w_down, w13_accumulator, w2_accumulator):
+        outputs = shard_fn(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            w13_accumulator,
+            w2_accumulator,
+        )
+        return outputs, (
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            w13_accumulator,
+            w2_accumulator,
+        )
+
+    def mapped_bwd(residuals, cotangents):
+        x, selected_experts, combine_weights, w_up_gate, w_down, w13_accumulator, w2_accumulator = residuals
+        output_cotangent, _, token_cotangent = cotangents
+
+        def local_bwd(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            w_up_gate_local,
+            w_down_local,
+            w13_accumulator_local,
+            w2_accumulator_local,
+            output_cotangent_local,
+            token_cotangent_local,
+        ):
+            def differentiable_local_fn(
+                x_local,
+                combine_weights_local,
+                w_up_gate_local,
+                w_down_local,
+                w13_accumulator_local,
+                w2_accumulator_local,
+            ):
+                out, _, token = local_fn(
+                    x_local,
+                    selected_experts_local,
+                    combine_weights_local,
+                    w_up_gate_local,
+                    w_down_local,
+                    w13_accumulator_local,
+                    w2_accumulator_local,
+                )
+                return out, token
+
+            _, pullback = jax.vjp(
+                differentiable_local_fn,
+                x_local,
+                combine_weights_local,
+                w_up_gate_local,
+                w_down_local,
+                w13_accumulator_local,
+                w2_accumulator_local,
+            )
+            return pullback((output_cotangent_local, token_cotangent_local))
+
+        local_gradients = shard_map(
+            local_bwd,
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+                batch_spec,
+                P(),
+            ),
+            out_specs=(
+                batch_spec,
+                batch_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+            ),
+            check_vma=False,
+        )(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            w13_accumulator,
+            w2_accumulator,
+            output_cotangent,
+            token_cotangent,
+        )
+        (
+            x_gradient,
+            combine_weights_gradient,
+            w_up_gate_gradient,
+            w_down_gradient,
+            w13_accumulator_gradient,
+            w2_accumulator_gradient,
+        ) = local_gradients
+        return (
+            x_gradient,
+            None,
+            combine_weights_gradient,
+            w_up_gate_gradient,
+            w_down_gradient,
+            w13_accumulator_gradient,
+            w2_accumulator_gradient,
+        )
+
+    mapped_fn.defvjp(mapped_fwd, mapped_bwd)
+    return mapped_fn(x, selected_experts, combine_weights, w_up_gate, w_down, w13_accumulator, w2_accumulator)
 
 
 __all__ = [
