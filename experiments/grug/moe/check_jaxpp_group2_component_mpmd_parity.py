@@ -81,7 +81,7 @@ _REQUIRED_KERNEL_ENVIRONMENT = {
     "HALIAX_RAGGED_DOT_TRITON_BLOCK_K": "32",
     "HALIAX_RAGGED_DOT_TRITON_NUM_WARPS": "8",
 }
-_DIAGNOSTICS = ("gate", "moe-call-order", "full-block-boundaries")
+_DIAGNOSTICS = ("gate", "moe-call-order", "full-block-boundaries", "full-block-remat-scope")
 
 
 def event(process_id: int | None, name: str, **fields: Any) -> None:
@@ -424,6 +424,147 @@ def _single_block_boundaries(
     return output, (post_attention, mlp_input, shared_output, pre_ring, routed_output, router_stats)
 
 
+def _single_pre_moe_boundaries(
+    block: Block,
+    hidden: jax.Array,
+):
+    post_attention = block.attention_residual(
+        hidden,
+        AttentionMask.causal(),
+        use_pko=False,
+        disable_rope=False,
+    )
+    mlp_input = block.mlp_gated_norm(block.rms_mlp(post_attention))
+    shared_output = (
+        block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+        if block.shared is not None
+        else jnp.zeros_like(mlp_input)
+    )
+    return post_attention, mlp_input, shared_output, _pre_ring_router_values(block.mlp, mlp_input)
+
+
+def _finish_paired_full_block_boundaries(
+    block: Block,
+    pre_moe_boundaries,
+):
+    post_attention = tuple(boundaries[0] for boundaries in pre_moe_boundaries)
+    mlp_inputs = tuple(boundaries[1] for boundaries in pre_moe_boundaries)
+    shared_outputs = tuple(boundaries[2] for boundaries in pre_moe_boundaries)
+    pre_ring = tuple(boundaries[3] for boundaries in pre_moe_boundaries)
+    routed_outputs, router_stats = paired_moe_component_forward(
+        block.mlp,
+        mlp_inputs,
+        remat_mode="save_moe",
+    )
+    updates = tuple(
+        routed + shared if block.shared is not None else routed
+        for routed, shared in zip(routed_outputs, shared_outputs, strict=True)
+    )
+    outputs = tuple(hidden + update for hidden, update in zip(post_attention, updates, strict=True))
+    return post_attention, mlp_inputs, shared_outputs, pre_ring, routed_outputs, outputs, router_stats
+
+
+def _paired_full_block_boundaries(
+    block: Block,
+    hiddens: tuple[jax.Array, jax.Array],
+):
+    pre_moe_boundaries = tuple(_single_pre_moe_boundaries(block, hidden) for hidden in hiddens)
+    return _finish_paired_full_block_boundaries(block, pre_moe_boundaries)
+
+
+def paired_complete_checkpoint_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+):
+    """Checkpoint one complete paired forward around the joined MoE remat."""
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    return eqx.filter_checkpoint(_paired_full_block_boundaries, policy=policy)(block, hiddens)
+
+
+def paired_pre_moe_checkpoint_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+):
+    """Checkpoint each pre-MoE path separately before the joined MoE remat."""
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    pre_moe = eqx.filter_checkpoint(_single_pre_moe_boundaries, policy=policy)
+    pre_moe_boundaries = tuple(pre_moe(block, hidden) for hidden in hiddens)
+    return _finish_paired_full_block_boundaries(block, pre_moe_boundaries)
+
+
+def _paired_remat_arm_value_and_grads(
+    forward,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    def projected_pair(master_params: Block, current_hiddens: tuple[jax.Array, jax.Array]):
+        boundaries = forward(master_params, qb_beta, current_hiddens)
+        outputs = boundaries[5]
+        router_stats = boundaries[6]
+        losses = tuple(
+            _project_output(output, cotangent) + ROUTER_Z_LOSS_SCALE * stats["router_z_loss"]
+            for output, cotangent, stats in zip(outputs, output_cotangents, router_stats, strict=True)
+        )
+        return losses[0] + losses[1], (losses, boundaries)
+
+    (_, (losses, boundaries)), (parameter_gradient, input_gradients) = jax.value_and_grad(
+        projected_pair,
+        argnums=(0, 1),
+        has_aux=True,
+    )(params, hiddens)
+    post_attention, mlp_inputs, shared_outputs, pre_ring, routed_outputs, outputs, router_stats = boundaries
+    return (
+        losses,
+        post_attention,
+        mlp_inputs,
+        shared_outputs,
+        pre_ring,
+        routed_outputs,
+        outputs,
+        router_stats,
+        parameter_gradient,
+        input_gradients,
+    )
+
+
+def paired_complete_checkpoint_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the complete-paired-checkpoint candidate."""
+    return _paired_remat_arm_value_and_grads(
+        paired_complete_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hiddens,
+        output_cotangents,
+    )
+
+
+def paired_pre_moe_checkpoint_boundary_value_and_grads(
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    output_cotangents: tuple[jax.Array, jax.Array],
+):
+    """Differentiate the per-microbatch-pre-MoE-checkpoint candidate."""
+    return _paired_remat_arm_value_and_grads(
+        paired_pre_moe_checkpoint_boundary_forward,
+        params,
+        qb_beta,
+        hiddens,
+        output_cotangents,
+    )
+
+
 def _single_full_block_boundary_value_and_grads(
     params: Block,
     qb_beta: jax.Array,
@@ -480,6 +621,19 @@ def single_full_block_boundary_value_and_grads(
         output_cotangent,
         checkpoint=True,
     )
+
+
+def single_full_block_boundary_forward(
+    params: Block,
+    qb_beta: jax.Array,
+    hidden: jax.Array,
+):
+    """Run one ordered full-block checkpoint and expose its forward boundaries."""
+    block = grug_train._compute_block(params, qb_beta, _MIXED_PRECISION)
+    policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+    output, boundaries = eqx.filter_checkpoint(_single_block_boundaries, policy=policy)(block, hidden)
+    post_attention, mlp_input, shared_output, pre_ring, routed_output, router_stats = boundaries
+    return post_attention, mlp_input, shared_output, pre_ring, routed_output, output, router_stats
 
 
 def single_full_block_no_checkpoint_boundary_value_and_grads(
@@ -801,6 +955,10 @@ def _combine_single_full_block_results(first, second):
     )
 
 
+def _combine_single_full_block_forwards(first, second):
+    return tuple((first[index], second[index]) for index in range(len(first)))
+
+
 def _tree_parity(actual, reference, *, root: str) -> dict[str, Any]:
     zero = jnp.asarray(0.0, dtype=jnp.float32)
     return build_parity_report(
@@ -891,6 +1049,54 @@ def _report_full_block_boundaries(
             event_name,
             tolerance=DEFAULT_TOLERANCE,
             loss=[dataclasses.asdict(loss) for loss in loss_report],
+            reports=reports,
+            route_mismatches=route_mismatches,
+            routing_count_mismatches=routing_count_mismatches,
+            first_divergent_boundary=first_divergent_boundary,
+            passed=passed,
+        )
+    return passed
+
+
+def _report_full_block_forward(
+    process_id: int,
+    arm: str,
+    actual,
+    reference,
+) -> bool:
+    reports = {
+        "post_attention": _tree_parity(actual[0], reference[0], root="post_attention"),
+        "mlp_inputs": _tree_parity(actual[1], reference[1], root="mlp_inputs"),
+        "shared_outputs": _tree_parity(actual[2], reference[2], root="shared_outputs"),
+        "pre_moe": _tree_parity(_pre_ring_numeric(actual[3]), _pre_ring_numeric(reference[3]), root="pre_moe"),
+        "moe_outputs": _tree_parity(actual[4], reference[4], root="moe_outputs"),
+        "block_outputs": _tree_parity(actual[5], reference[5], root="block_outputs"),
+        "router_stats": _tree_parity(actual[6], reference[6], root="router_stats"),
+    }
+    route_mismatches = _route_mismatch_counts(actual[3], reference[3])
+    routing_count_mismatches = _routing_count_mismatches(actual[6], reference[6])
+    checks = (
+        ("post_attention", reports["post_attention"]["passed"]),
+        ("mlp_inputs", reports["mlp_inputs"]["passed"]),
+        ("shared_outputs", reports["shared_outputs"]["passed"]),
+        ("pre_moe_values", reports["pre_moe"]["passed"]),
+        ("pre_moe_routes", not any(route_mismatches["assignments"])),
+        ("moe_outputs", reports["moe_outputs"]["passed"]),
+        ("router_stats", reports["router_stats"]["passed"] and not any(routing_count_mismatches)),
+        ("block_outputs", reports["block_outputs"]["passed"]),
+    )
+    first_divergent_boundary = next((name for name, passed in checks if not passed), None)
+    passed = (
+        all(report["passed"] for report in reports.values())
+        and not any(route_mismatches["assignments"])
+        and not any(routing_count_mismatches)
+    )
+    if process_id == 0:
+        event(
+            process_id,
+            "full_block_remat_forward_report",
+            arm=arm,
+            tolerance=DEFAULT_TOLERANCE,
             reports=reports,
             route_mismatches=route_mismatches,
             routing_count_mismatches=routing_count_mismatches,
@@ -1276,6 +1482,90 @@ def _run_full_block_boundary_diagnostic(
     return passed
 
 
+def _run_full_block_remat_scope_diagnostic(
+    process_id: int,
+    params: Block,
+    qb_beta: jax.Array,
+    hiddens: tuple[jax.Array, jax.Array],
+    cotangents: tuple[jax.Array, jax.Array],
+) -> bool:
+    ordered_forward = jax.jit(single_full_block_boundary_forward)
+    forward_references = tuple(
+        _compile_and_run(
+            process_id,
+            f"remat_scope_ordered_forward_{index}",
+            ordered_forward,
+            (params, qb_beta, hidden),
+        )
+        for index, hidden in enumerate(hiddens)
+    )
+    forward_reference = _combine_single_full_block_forwards(*forward_references)
+    arms = (
+        (
+            "complete_paired_checkpoint",
+            paired_complete_checkpoint_boundary_forward,
+            paired_complete_checkpoint_boundary_value_and_grads,
+        ),
+        (
+            "per_microbatch_pre_moe_checkpoint",
+            paired_pre_moe_checkpoint_boundary_forward,
+            paired_pre_moe_checkpoint_boundary_value_and_grads,
+        ),
+    )
+    forward_results = {}
+    for name, forward, _ in arms:
+        result = _compile_and_run(
+            process_id,
+            f"remat_scope_{name}_forward",
+            jax.jit(forward),
+            (params, qb_beta, hiddens),
+        )
+        forward_results[name] = _report_full_block_forward(process_id, name, result, forward_reference)
+
+    passing_forward_arms = tuple(name for name, passed in forward_results.items() if passed)
+    gradient_results = {}
+    if passing_forward_arms:
+        ordered_vjp = jax.jit(single_full_block_boundary_value_and_grads)
+        gradient_references = tuple(
+            _compile_and_run(
+                process_id,
+                f"remat_scope_ordered_vjp_{index}",
+                ordered_vjp,
+                (params, qb_beta, hidden, cotangent),
+            )
+            for index, (hidden, cotangent) in enumerate(zip(hiddens, cotangents, strict=True))
+        )
+        gradient_reference = _combine_single_full_block_results(*gradient_references)
+        for name, _, value_and_grads in arms:
+            if name not in passing_forward_arms:
+                continue
+            result = _compile_and_run(
+                process_id,
+                f"remat_scope_{name}_vjp",
+                jax.jit(value_and_grads),
+                (params, qb_beta, hiddens, cotangents),
+            )
+            gradient_results[name] = _report_full_block_boundaries(
+                process_id,
+                f"full_block_remat_{name}_vjp_report",
+                result,
+                gradient_reference,
+            )
+
+    passed = any(gradient_results.values())
+    if process_id == 0:
+        event(
+            process_id,
+            "full_block_remat_scope_summary",
+            forward_results=forward_results,
+            passing_forward_arms=passing_forward_arms,
+            gradient_results=gradient_results,
+            gradients_skipped=not passing_forward_arms,
+            passed=passed,
+        )
+    return passed
+
+
 def _run_worker(
     process_id: int,
     coordinator_address: str,
@@ -1356,6 +1646,15 @@ def _run_worker(
             multihost_utils.sync_global_devices("group2_component_full_block_boundaries_complete")
             if not passed:
                 raise AssertionError("full-block boundary parity exceeded the fixed per-leaf tolerance")
+            completed = True
+            return
+
+        if diagnostic == "full-block-remat-scope":
+            with jax.set_mesh(stage_mesh):
+                passed = _run_full_block_remat_scope_diagnostic(process_id, *arguments)
+            multihost_utils.sync_global_devices("group2_component_full_block_remat_scope_complete")
+            if not passed:
+                raise AssertionError("no remat-scope arm passed the fixed per-leaf tolerance")
             completed = True
             return
 

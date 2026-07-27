@@ -163,3 +163,22 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The router failure is consistent with summing two cotangents into one BF16 compute leaf before promotion. It is independent of the much larger r4/r5 full-block forward divergence, which must occur before or while constructing the paired MoE inputs.
 - Next action:
   - Compare ordered and paired target-shape full blocks at post-attention residuals, MLP inputs, shared outputs, pre-MoE logits/routes, routed outputs, and final outputs. Include an ordered full-block-checkpoint versus no-checkpoint control and report each microbatch's router gradient separately before testing master-precision summation of two disjoint compute-MLP gradients.
+
+### 2026-07-26 16:56 PDT - full-block remat context is the first direct divergence
+- Hypothesis: The r4/r5 paired full-block failure begins at a component boundary unique to paired execution rather than the ordered block's complete `save_moe` checkpoint.
+- Commit Hash: `02e99ee05b` adds target-shape forward-boundary reporting, an ordered complete-checkpoint versus no-checkpoint control, per-microbatch router-gradient reporting, and a distinct-compute-MLP gradient arm.
+- Command:
+  - Setup-invalid parent `/dlwh/jaxpp-group2-full-block-boundaries-r7-02e99ee0-20260726-1655` stopped after `9.17s` because its full-SHA assertion contained an incorrect suffix. It reached no diagnostic phase and left no live allocation.
+  - Authoritative parent `/dlwh/jaxpp-group2-full-block-boundaries-r7b-02e99ee0-20260726-1656` ran `--diagnostic full-block-boundaries` from clean commit `02e99ee05beff6acd63e731cef9432ee7c94d842`; child `/dlwh/jaxpp-group2-full-block-boundaries-r7b-02e99ee0-20260726-1656/0`.
+- Results:
+  - Ordered complete-checkpoint versus ordered no-checkpoint and paired versus ordered produced the same boundary signature. Post-attention passed at `0.00103886` and MLP inputs passed at `0.00116565`. Shared-expert outputs were the first failures at `0.00400094/0.00399753`.
+  - Pre-MoE boundary margins reached `0.00927861`; selected routes differed on `2,698/2,732` assignments across `1,647/1,663` tokens. Routing counts differed in `59/61` expert entries.
+  - MoE outputs reached `0.04815`; final block outputs reproduced r4/r5 at `0.0205638/0.0202413`. Parameter gradients reached approximately `1.39`.
+  - The checkpoint-versus-no-checkpoint individual projected losses were `0.0130294/0.00348135`; paired-versus-ordered losses were `0.0131915/0.00347034`.
+  - The distinct-MLP arm had exact MoE outputs, router statistics, and routing counts, but its router-gradient comparison crossed the already divergent full-block remat contexts. Its approximately `1.39` gradient errors do not test master-precision summation in isolation and are not interpreted.
+  - All lower/compile/execute phases completed; the longest lower was `19.60s` and the longest compile was `6.58s`. Iris reached the intended strict assertion after `2m40s`; the parent and child are terminal with no live allocation.
+- Interpretation:
+  - The complete ordered `save_moe` remat compiler context is the source of the r4/r5 forward identity. The current paired formulation behaves like ordered no-checkpoint execution at the reported boundaries.
+  - The first threshold violation is shared-expert output, but it is downstream of small checkpoint-context changes in CuTe attention and MLP inputs. Those passing perturbations are sufficient to flip thousands of near-tied routes.
+- Next action:
+  - Compare the ordered checkpoint oracle with a complete paired checkpoint and with one pre-MoE checkpoint per microbatch followed by the joined MoE checkpoint. Gate gradients on exact routes and all forward boundaries passing `0.002`; do not launch L8 or L24.

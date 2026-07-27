@@ -23,12 +23,17 @@ from levanter.grug.attention import AttentionMask
 from experiments.grug.moe import launch_cw_jaxpp_may_d2560
 from experiments.grug.moe.check_jaxpp_group2_component_mpmd_parity import (
     component_structure,
+    paired_complete_checkpoint_boundary_forward,
+    paired_complete_checkpoint_boundary_value_and_grads,
     paired_distinct_mlp_master_router_gradients,
     paired_full_block_boundary_value_and_grads,
     paired_full_block_per_microbatch_router_gradients,
     paired_moe_joint_checkpoint_value_and_grads,
     paired_moe_no_checkpoint_value_and_grads,
     paired_moe_per_checkpoint_value_and_grads,
+    paired_pre_moe_checkpoint_boundary_forward,
+    paired_pre_moe_checkpoint_boundary_value_and_grads,
+    single_full_block_boundary_forward,
     single_full_block_boundary_value_and_grads,
     single_full_block_no_checkpoint_boundary_value_and_grads,
     single_moe_value_and_grads,
@@ -766,6 +771,51 @@ def test_full_block_boundary_diagnostic_matches_ordered_checkpoint_controls() ->
     _assert_tree_rel_l2(distinct_mlp[2], expected[7])
     _assert_tree_rel_l2(distinct_mlp[3:6], expected_router_gradients)
     for actual_routes, expected_routes in zip(paired[4], expected[4], strict=True):
+        np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
+
+
+@pytest.mark.parametrize(
+    ("forward", "value_and_grads"),
+    (
+        (paired_complete_checkpoint_boundary_forward, paired_complete_checkpoint_boundary_value_and_grads),
+        (paired_pre_moe_checkpoint_boundary_forward, paired_pre_moe_checkpoint_boundary_value_and_grads),
+    ),
+)
+def test_paired_remat_scope_candidates_match_ordered_full_block_checkpoint(forward, value_and_grads) -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+    _, hiddens, output_cotangents = _tiny_boundary_inputs(mesh)
+    params = stage.blocks[0]
+    qb_beta = jnp.asarray([0.2, -0.1, 0.05], dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        ordered_forwards = tuple(
+            jax.jit(single_full_block_boundary_forward)(params, qb_beta, hidden) for hidden in hiddens
+        )
+        actual_forward = jax.jit(forward)(params, qb_beta, hiddens)
+        ordered_vjps = tuple(
+            jax.jit(single_full_block_boundary_value_and_grads)(params, qb_beta, hidden, cotangent)
+            for hidden, cotangent in zip(hiddens, output_cotangents, strict=True)
+        )
+        actual_vjp = jax.jit(value_and_grads)(params, qb_beta, hiddens, output_cotangents)
+
+    expected_forward = tuple(
+        (ordered_forwards[0][index], ordered_forwards[1][index]) for index in range(len(ordered_forwards[0]))
+    )
+    expected_vjp = (
+        (ordered_vjps[0][0], ordered_vjps[1][0]),
+        (ordered_vjps[0][1], ordered_vjps[1][1]),
+        (ordered_vjps[0][2], ordered_vjps[1][2]),
+        (ordered_vjps[0][3], ordered_vjps[1][3]),
+        (ordered_vjps[0][4], ordered_vjps[1][4]),
+        (ordered_vjps[0][5], ordered_vjps[1][5]),
+        (ordered_vjps[0][6], ordered_vjps[1][6]),
+        (ordered_vjps[0][7], ordered_vjps[1][7]),
+        _sum_microbatch_group((ordered_vjps[0][8], ordered_vjps[1][8])),
+        (ordered_vjps[0][9], ordered_vjps[1][9]),
+    )
+    _assert_tree_rel_l2(actual_forward, expected_forward)
+    _assert_tree_rel_l2(actual_vjp, expected_vjp)
+    for actual_routes, expected_routes in zip(actual_forward[3], expected_forward[3], strict=True):
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
 
 
