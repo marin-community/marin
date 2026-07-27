@@ -1621,3 +1621,85 @@ experiments/grug/moe/run_cw_jaxpp_may_d2560.sh \
   - Commit `5c09dc0e98` contains the reviewed optimistic EP8 direct transport gate. Local tests and pre-commit passed; no UB-X GPU benchmark result exists yet.
 - Decision:
   - Do not promote or retry the exact `7,6,6,5` Ring configuration. It is slower than the `18.2583` baseline and exceeds rank-0 memory before completing 12 steps.
+
+### 2026-07-27 09:45 PDT - NCCL UB-X direct transport passes balanced and learned-skew gates
+- Snapshot:
+  - R12 `/dlwh/nccl-ubx-direct-ep8-r12-20260727` used clean commit `cf01920bda` on one `H100x8` node in `cw-rno2a`.
+  - R13 `/dlwh/nccl-ubx-direct-ep8-r13-skew-20260727` used clean commit `b50ce7d1a1` on the same cluster and ran only `--routing learned_skew`.
+  - Both jobs built NVIDIA/nccl commit `db0c814185a0415cc2e23dca387fecb9282de551` as NCCL `2.30.7-1`, nccl4py, and UB-X `0.01`. Runtime validation returned NCCL version `23007` with exactly one mapped library, `/tmp/nccl-ubx-db0c814/build/lib/libnccl.so.2.30.7`.
+  - The accepted policy at `b50ce7d1a1` requires exact route/map/count/drop data, bitwise-exact dispatch, UB-X versus the FP32 identity reference relative L2 `<=0.002`, and slowest-rank p50 speedup `>=1.10x`. Ring-versus-FP32 and UB-X-versus-Ring remain diagnostics.
+- Setup findings:
+  - R5-R11 were setup or adapter failures and produced no transport result. The sequence identified the missing shared-cudart link override, Torch's older NCCL soname collision, the compile-time-versus-runtime NCCL version distinction, omitted nccl4py CUDA Python dependencies, and a pinned UB-X namespace bug.
+  - Commit `cf01920bda` audits the unchanged upstream namespace behavior and redirects `ubx._nccl_backend._nccl_bindings` from the empty `nccl.bindings` package to the compiled `nccl.bindings.nccl` module. No NVIDIA source file is patched.
+- R13 exact command:
+
+```bash
+uv run iris --cluster cw-rno2a job run --no-wait \
+  --enable-extra-resources --gpu H100x8 --cpu 64 --memory 256GB --disk 256GB \
+  --timeout 3600 --max-retries 0 --priority interactive \
+  --extra gpu --sync-package marin-levanter \
+  --job-name nccl-ubx-direct-ep8-r13-skew-20260727 -- \
+  bash -lc 'set -euxo pipefail
+source "$IRIS_VENV/bin/activate"
+cd "$IRIS_WORKDIR"
+uv pip install --no-deps --reinstall --index-url https://download.pytorch.org/whl/cu130 "torch==2.11.0+cu130"
+uv pip install --link-mode copy --reinstall "nvidia-cuda-nvcc==13.2.78" "nvidia-nvvm==13.2.78" "nvidia-cuda-cccl==13.3.3.4.1" "nvidia-cuda-runtime==13.2.75"
+uv pip install --link-mode copy "cuda-core==1.0.1" "cuda-pathfinder==1.5.4" "cuda-bindings==13.2.0"
+python -c "import cuda.core; print(\"cuda.core import ok\", cuda.core.__file__)"
+cuda_bin="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu13/bin -name nvcc -print -quit)"
+test -n "$cuda_bin"
+CUDA_HOME="$(dirname "$(dirname "$cuda_bin")")"
+export CUDA_HOME
+ln -sf libcudart.so.13 "$CUDA_HOME/lib/libcudart.so"
+grep "#define CUDART_VERSION" "$CUDA_HOME/include/cuda_runtime_api.h" | head -1
+cccl_target="$(find "$CUDA_HOME/include/cccl" -path "*/nv/target" -print -quit)"
+test -n "$cccl_target"
+"$CUDA_HOME/bin/nvcc" --version
+python -c "import torch; print(\"Torch CUDA\", torch.__version__, torch.version.cuda)"
+SOURCE=/tmp/nccl-ubx-db0c814
+rm -rf "$SOURCE"
+git clone --filter=blob:none --no-checkout https://github.com/NVIDIA/nccl.git "$SOURCE"
+git -C "$SOURCE" fetch --depth 1 origin db0c814185a0415cc2e23dca387fecb9282de551
+git -C "$SOURCE" checkout --detach FETCH_HEAD
+make -C "$SOURCE" -j32 src.build CUDA_HOME="$CUDA_HOME" CUDA_LIB="$CUDA_HOME/lib" CUDARTLIB=cudart NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+export NCCL_HOME="$SOURCE/build"
+export NCCL_INCLUDE_DIR="$SOURCE/build/include"
+export NCCL_LIBRARY_DIR="$SOURCE/build/lib"
+export LD_LIBRARY_PATH="$NCCL_LIBRARY_DIR:$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+wheel_nccl="$(find "$IRIS_VENV"/lib/python*/site-packages/nvidia/nccl/lib -name libnccl.so.2 -print -quit)"
+test -n "$wheel_nccl"
+rm -f "$wheel_nccl"
+ln -s "$NCCL_LIBRARY_DIR/libnccl.so.2" "$wheel_nccl"
+readlink -f "$wheel_nccl"
+uv pip install --no-deps -e "$SOURCE/bindings/nccl4py"
+TORCH_CUDA_ARCH_LIST=9.0a uv pip install --no-build-isolation --no-deps -e "$SOURCE/contrib/nccl_ubx"
+export LD_PRELOAD="$NCCL_LIBRARY_DIR/libnccl.so.2"
+export NCCL_UBX_SOURCE="$SOURCE"
+export NCCL_UBX_OUTPUT_DIR=/tmp/nccl-ubx-direct-results
+export UBX_GRAPH_POOL_SHARE=0.1
+python -c "from experiments.grug.moe.nccl_runtime import nccl_runtime; print(\"loaded NCCL\", nccl_runtime())"
+python -c "import torch, ubx; print(\"UBX runtime\", torch.__version__, torch.cuda.nccl.version(), ubx.get_version())"
+ldd "$(python -c "import ubx._C; print(ubx._C.__file__)")" | grep libnccl
+mkdir -p "$NCCL_UBX_OUTPUT_DIR"
+torchrun --standalone --nproc-per-node=8 experiments/grug/moe/benchmark_nccl_ubx.py \
+  --ubx-source "$SOURCE" --routing learned_skew \
+  | tee "$NCCL_UBX_OUTPUT_DIR/learned_skew.jsonl"'
+```
+
+- Balanced R12 result:
+  - Route digest `04e82c2839611c078eb5063e3dcb5adb8bc908ced183744cf8b9c3bf7c36f910`; `524288/524288` assignments accepted, zero dropped, `65536` accepted by every expert rank, and `8192` assignments per expert.
+  - Every map check passed on rank 0, route/count/drop data were exact on all ranks, gathered experts were exact, and dispatch was bitwise exact.
+  - All outputs were finite. All-rank maximum relative L2 was `0.0016620228719725061` for UB-X versus FP32 identity, `0.002751047558687074` for Ring versus FP32 identity, and `0.003171801610466874` for UB-X versus Ring. Dispatch versus reference was exactly zero.
+  - Slowest-rank p50 was `6.503631830215454ms` for Ring and `2.0476959943771362ms` for UB-X, a `3.176072936643955x` speedup over 30 measured iterations.
+  - The raw R12 JSON used the earlier all-metrics policy and reported admission false. The unchanged data pass the user-approved `b50ce7d1a1` policy because UB-X versus FP32 is below `0.002`, routing is exact, and speedup exceeds `1.10x`.
+- Learned-skew R13 result:
+  - Route digest `38a85732daa3831b7344b545cdee636c7fbd3e282cc1858df27345a40677c1bb`; `417371/524288` assignments accepted and `106917` dropped. Accepted assignments by expert rank were `[41649, 57491, 65536, 62002, 65536, 52039, 41163, 31955]`; drops were `[0, 0, 84582, 0, 22335, 0, 0, 0]`.
+  - Original per-expert counts ranged from `1309` to `102289`; accepted counts ranged from `0` to `65536`. Every map check, route/count/drop check, gathered-expert check, and bitwise dispatch check passed.
+  - All outputs were finite. All-rank maximum relative L2 was `0.0016605777289329705` for UB-X versus FP32 identity, `0.0027192861254322436` for Ring versus FP32 identity, and `0.003141772833169258` for UB-X versus Ring. Dispatch versus reference was exactly zero.
+  - Slowest-rank p50 was `6.5939040184021ms` for Ring and `2.295423984527588ms` for UB-X, a `2.8726300948533328x` speedup over 30 measured iterations.
+  - Admission was true. Iris completed R13 successfully with one succeeded task, zero failures, and zero preemptions.
+- Interpretation:
+  - UB-X passes the direct EP8 identity-transport gate for balanced and capacity-limited learned-skew routing. This earns a JAX FFI integration experiment.
+  - This is an optimistic precomputed-map identity transport result. It excludes routing-map construction, expert compute, gradients, JAX/JaxPP integration, pipeline scheduling, and end-to-end MFU. It does not establish or imply the `>20` MFU target.
+- Terminal state:
+  - R12 is terminal `failed` because its older policy rejected diagnostic Ring errors after emitting the complete balanced JSON. R13 is terminal `succeeded`. Neither job has a live task.
