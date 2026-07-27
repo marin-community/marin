@@ -49,7 +49,6 @@ Smoke-test the same path under an isolated identity. ``SMOKE_STEPS`` defaults to
 
 import logging
 import os
-import posixpath
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from enum import StrEnum
@@ -76,7 +75,7 @@ from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import TransferBudget, prefix_join, record_transfer
+from rigging.filesystem import prefix_join
 
 from experiments.coral.batch_calibration import (
     TpuBatchConfig,
@@ -95,7 +94,7 @@ RUN_PREFIX: str = "prot-exp166-cv1-aaaug"
 WANDB_GROUP: str = "exp166-contacts-v1-aa-augmentation"
 SMOKE_RUN_PREFIX: str = "prot-exp166-aaaug-smoke"
 SMOKE_WANDB_GROUP: str = "exp166-aaaug-smoke"
-SMOKE_VERSION: str = "v7"
+SMOKE_VERSION: str = "v8"
 SMOKE_STEPS_DEFAULT: int = 2
 SMOKE_MAX_EVAL_BATCHES: int = 1
 
@@ -108,7 +107,9 @@ VAL_DOCS: str = f"{_DOCS_BASE}/val/*.parquet"
 COMPONENT_TRAIN: str = "tokenized/contacts-v1"
 COMPONENT_VAL: str = "tokenized/contacts-v1-val"
 TRAIN_TOKENS: int = 4_676_753_425
-EXP117_CHECKPOINT_TRANSFER_BUDGET_GB: int = 24
+# Region-local exp117 seeds, keyed by exp166 point. Populated once per eligible
+# region by scratch/exp166_seed_checkpoints.sh; never written by a training job.
+SEED_NAMESPACE: str = "checkpoints/protein/exp166-init"
 
 # Token ids from the pinned contacts-v1 tokenizer. The augmentation validates these
 # at training startup before touching examples.
@@ -331,12 +332,12 @@ def smoke_run_id(trial: Trial, region: str, tpu: str) -> str:
 
 
 @dataclass(frozen=True)
-class StageCheckpointConfig:
-    """Copy the final exp117 checkpoint into this execution's regional bucket."""
+class SeededCheckpointConfig:
+    """The region-local exp117 seed an `exp117-init` trial initializes from."""
 
-    source_run_path: str
-    output_path: str
-    transfer_budget_gb: int
+    checkpoint_root: str
+    region: str
+    region_prefix: str
 
 
 def _checkpoint_objects(fs, checkpoint_path: str) -> dict[str, dict]:
@@ -344,89 +345,76 @@ def _checkpoint_objects(fs, checkpoint_path: str) -> dict[str, dict]:
     return {path: info for path, info in objects.items() if info.get("type") != "directory"}
 
 
-def _stage_checkpoint(config: StageCheckpointConfig) -> None:
-    source_checkpoints = prefix_join(config.source_run_path, "checkpoints")
-    source_checkpoint = latest_checkpoint_path(source_checkpoints)
-    checkpoint_name = source_checkpoint.rstrip("/").rsplit("/", 1)[-1]
-    destination_checkpoint = prefix_join(prefix_join(config.output_path, "checkpoints"), checkpoint_name)
+def _verify_seeded_checkpoint(config: SeededCheckpointConfig) -> None:
+    """Confirm this region already holds a complete exp117 seed checkpoint.
 
-    source_fs, source_path = fsspec.core.url_to_fs(source_checkpoint)
-    destination_fs, destination_path = fsspec.core.url_to_fs(destination_checkpoint)
-    if type(source_fs) is not type(destination_fs):
-        raise TypeError(
-            f"checkpoint staging requires one filesystem type, got {type(source_fs)} and {type(destination_fs)}"
-        )
-
-    source_objects = _checkpoint_objects(source_fs, source_path)
-    if not source_objects:
-        raise FileNotFoundError(f"no objects found in exp117 checkpoint {source_checkpoint}")
-    total_bytes = sum(int(info.get("size", 0)) for info in source_objects.values())
-
-    if source_checkpoint != destination_checkpoint:
-        budget = TransferBudget(limit_bytes=config.transfer_budget_gb * 1024**3)
-        record_transfer(total_bytes, source_checkpoint, budget=budget)
-        logging.info(
-            "Staging exp117 checkpoint %s -> %s (%d objects, %.2f GiB)",
-            source_checkpoint,
-            destination_checkpoint,
-            len(source_objects),
-            total_bytes / 1024**3,
-        )
-        for source_object in source_objects:
-            relative_path = posixpath.relpath(source_object, source_path)
-            destination_object = posixpath.join(destination_path, relative_path)
-            destination_fs.makedirs(posixpath.dirname(destination_object), exist_ok=True)
-            source_fs.copy(source_object, destination_object)
-
-    destination_objects = _checkpoint_objects(destination_fs, destination_path)
-    source_sizes = {
-        posixpath.relpath(path, source_path): int(info.get("size", 0)) for path, info in source_objects.items()
-    }
-    destination_sizes = {
-        posixpath.relpath(path, destination_path): int(info.get("size", 0)) for path, info in destination_objects.items()
-    }
-    if destination_sizes != source_sizes:
-        missing = sorted(source_sizes.keys() - destination_sizes.keys())
-        extra = sorted(destination_sizes.keys() - source_sizes.keys())
-        mismatched = sorted(
-            path
-            for path in source_sizes.keys() & destination_sizes.keys()
-            if source_sizes[path] != destination_sizes[path]
-        )
+    Nothing is copied here, and nothing may be: exp166 never moves weights across a
+    region boundary. Seeds are placed into every eligible region once, out of band,
+    by `scratch/exp166_seed_checkpoints.sh`. A region missing its seed is a setup
+    error for that region -- never something to repair by reading another region.
+    """
+    if not config.checkpoint_root.startswith(config.region_prefix):
         raise RuntimeError(
-            f"incomplete staged checkpoint at {destination_checkpoint}: {missing=}, {extra=}, {mismatched=}"
+            f"exp117 seed root {config.checkpoint_root} is outside region {config.region} "
+            f"({config.region_prefix}); refusing to read weights across a region boundary"
         )
+
+    checkpoints = prefix_join(config.checkpoint_root, "checkpoints")
+    checkpoint = latest_checkpoint_path(checkpoints)
+    if checkpoint is None:
+        raise FileNotFoundError(
+            f"no region-local exp117 seed under {checkpoints}; seed this region before running the trial"
+        )
+    if not checkpoint.startswith(config.region_prefix):
+        raise RuntimeError(
+            f"resolved exp117 seed {checkpoint} is outside region {config.region} "
+            f"({config.region_prefix}); refusing to read weights across a region boundary"
+        )
+
+    fs, path = fsspec.core.url_to_fs(checkpoint)
+    objects = _checkpoint_objects(fs, path)
+    if not objects:
+        raise FileNotFoundError(f"empty region-local exp117 seed at {checkpoint}")
+
+    total_bytes = sum(int(info.get("size", 0)) for info in objects.values())
     logging.info(
-        "Exp117 checkpoint ready at region-local path %s (%d objects, %.2f GiB)",
-        destination_checkpoint,
-        len(destination_objects),
+        "EXP166 SEED region=%s prefix=%s path=%s objects=%d size=%.2fGiB region_local=True",
+        config.region,
+        config.region_prefix,
+        checkpoint,
+        len(objects),
         total_bytes / 1024**3,
     )
 
 
-def exp117_checkpoint(point: Point) -> ArtifactStep[LevanterCheckpoint]:
-    """Stage the relocated exp117 checkpoint into the execution region before TPU allocation."""
-    source_run_path = (
-        f"{marin_prefix_for_region(point.exp117_region)}/checkpoints/protein/{point.exp117_run}/{EXP117_VERSION}"
-    )
+def exp117_checkpoint(point: Point, region: str) -> ArtifactStep[LevanterCheckpoint]:
+    """Resolve the exp117 seed for this point inside the execution region.
 
+    The step's output path is region-local by construction, and the verifier asserts
+    that against `region` so a resolution bug surfaces as a hard failure rather than
+    a silent cross-region read. The seed is named for the exp117 run it came from,
+    which records the exact source run and its origin region; the `exp166-init`
+    namespace keeps that name from colliding with the real exp117 run directory in
+    its home region.
+    """
+    region_prefix = marin_prefix_for_region(region)
     return ArtifactStep(
-        name=f"checkpoints/protein/{point.exp117_run}",
+        name=f"{SEED_NAMESPACE}/{point.exp117_run}",
         version=EXP117_VERSION,
         artifact_type=LevanterCheckpoint,
-        run=_stage_checkpoint,
-        build_config=lambda ctx: StageCheckpointConfig(
-            source_run_path=source_run_path,
-            output_path=ctx.output_path,
-            transfer_budget_gb=EXP117_CHECKPOINT_TRANSFER_BUDGET_GB,
+        run=_verify_seeded_checkpoint,
+        build_config=lambda ctx: SeededCheckpointConfig(
+            checkpoint_root=ctx.output_path,
+            region=region,
+            region_prefix=region_prefix,
         ),
     )
 
 
-def initial_checkpoint(trial: Trial) -> ArtifactStep[LevanterCheckpoint] | None:
+def initial_checkpoint(trial: Trial, region: str) -> ArtifactStep[LevanterCheckpoint] | None:
     if trial.initialization is Initialization.SCRATCH:
         return None
-    return exp117_checkpoint(trial.point)
+    return exp117_checkpoint(trial.point, region)
 
 
 def _batch_bytes(batch_size: int, correction_factor: float) -> int:
@@ -789,7 +777,7 @@ def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactS
         evals=None,
         resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
         version=VERSION,
-        init_from=initial_checkpoint(trial),
+        init_from=initial_checkpoint(trial, region),
         tensor_parallel_size=batch_config.tensor_parallelism,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
@@ -804,9 +792,9 @@ def build_run(trial: Trial, shape: RunShape, tpu: str, region: str) -> ArtifactS
 def _print_preview(trial: Trial, shape: RunShape, tpu: str, region: str) -> None:
     point = trial.point
     batch_config = batch_fit(tpu, point.batch_size)
-    init = initial_checkpoint(trial)
+    init = initial_checkpoint(trial, region)
     checkpoint = (
-        f"region-local staged exp117/{point.key} from {point.exp117_region}"
+        f"region-local seed {SEED_NAMESPACE}/{point.exp117_run} in {region}"
         if init is not None
         else "random initialization"
     )

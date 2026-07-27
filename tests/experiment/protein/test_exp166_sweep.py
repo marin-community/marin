@@ -2,18 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
+from marin.rl.placement import marin_prefix_for_region
 
 from experiments.protein.exp166_sweep import (
     CONTACTS_V1_TOKEN_IDS,
+    EXP117_VERSION,
     POINTS,
+    SEED_NAMESPACE,
     TRIALS,
     Initialization,
-    StageCheckpointConfig,
+    SeededCheckpointConfig,
     Trial,
-    _stage_checkpoint,
     _tags,
+    _verify_seeded_checkpoint,
+    exp117_checkpoint,
     shuffle_amino_acid_statements,
 )
 
@@ -92,26 +98,70 @@ def test_top_six_exp117_points_generate_twelve_logical_trials():
     ]
 
 
-def test_stage_checkpoint_copies_latest_complete_checkpoint(tmp_path):
-    source = tmp_path / "source"
-    older = source / "checkpoints" / "step-3"
-    latest = source / "checkpoints" / "step-7"
-    destination = tmp_path / "destination"
-    for checkpoint, step in ((older, 3), (latest, 7)):
-        (checkpoint / "d").mkdir(parents=True)
-        (checkpoint / "metadata.json").write_text(json.dumps({"step": step, "timestamp": f"2026-07-27T00:00:0{step}"}))
-        (checkpoint / "manifest.ocdbt").write_bytes(f"manifest-{step}".encode())
-        (checkpoint / "d" / "tensor").write_bytes(f"tensor-{step}".encode())
+def _write_checkpoint(root, step: int) -> None:
+    checkpoint = root / "checkpoints" / f"step-{step}"
+    (checkpoint / "d").mkdir(parents=True)
+    (checkpoint / "metadata.json").write_text(json.dumps({"step": step, "timestamp": f"2026-07-27T00:00:0{step}"}))
+    (checkpoint / "manifest.ocdbt").write_bytes(f"manifest-{step}".encode())
+    (checkpoint / "d" / "tensor").write_bytes(f"tensor-{step}".encode())
 
-    config = StageCheckpointConfig(
-        source_run_path=str(source),
-        output_path=str(destination),
-        transfer_budget_gb=1,
+
+def test_verify_seeded_checkpoint_accepts_a_region_local_seed(tmp_path):
+    seed = tmp_path / "seed"
+    _write_checkpoint(seed, 7)
+
+    _verify_seeded_checkpoint(
+        SeededCheckpointConfig(checkpoint_root=str(seed), region="us-east5", region_prefix=str(tmp_path))
     )
-    _stage_checkpoint(config)
 
-    copied = destination / "checkpoints" / "step-7"
-    assert (copied / "metadata.json").read_bytes() == (latest / "metadata.json").read_bytes()
-    assert (copied / "manifest.ocdbt").read_bytes() == b"manifest-7"
-    assert (copied / "d" / "tensor").read_bytes() == b"tensor-7"
-    assert not (destination / "checkpoints" / "step-3").exists()
+
+def test_verify_seeded_checkpoint_rejects_an_unseeded_region(tmp_path):
+    unseeded = tmp_path / "unseeded"
+    (unseeded / "checkpoints").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError):
+        _verify_seeded_checkpoint(
+            SeededCheckpointConfig(checkpoint_root=str(unseeded), region="us-east5", region_prefix=str(tmp_path))
+        )
+
+
+def test_exp117_seed_records_provenance_without_pinning_a_region():
+    """The seed name carries its exp117 source; the region comes from the executor prefix."""
+    point = next(p for p in POINTS if p.exp117_region == "europe-west4")
+    step = exp117_checkpoint(point, "us-west4")
+
+    assert step.name == f"{SEED_NAMESPACE}/{point.exp117_run}"
+    assert step.version == EXP117_VERSION
+    # Namespaced away from the real exp117 run directory, so seeding a point into
+    # its own origin region cannot overwrite the source it was copied from.
+    assert step.name.startswith(f"{SEED_NAMESPACE}/")
+    assert step.name != f"checkpoints/protein/{point.exp117_run}"
+
+
+def test_every_point_seeds_a_distinct_artifact():
+    names = {exp117_checkpoint(point, "us-east5").name for point in POINTS}
+
+    assert len(names) == len(POINTS)
+
+
+def test_verify_seeded_checkpoint_refuses_a_seed_outside_the_execution_region(tmp_path):
+    """A resolution bug must fail loudly, never silently read another region."""
+    seed = tmp_path / "elsewhere"
+    _write_checkpoint(seed, 7)
+
+    with pytest.raises(RuntimeError, match="outside region"):
+        _verify_seeded_checkpoint(
+            SeededCheckpointConfig(checkpoint_root=str(seed), region="us-east5", region_prefix="gs://marin-us-east5")
+        )
+
+
+def test_exp117_seed_is_pinned_to_the_execution_region_not_the_origin():
+    point = next(p for p in POINTS if p.exp117_region == "europe-west4")
+
+    config = exp117_checkpoint(point, "us-west4").build_config(
+        SimpleNamespace(output_path="gs://marin-us-west4/x", is_fingerprint=False)
+    )
+
+    assert config.region == "us-west4"
+    assert config.region_prefix == marin_prefix_for_region("us-west4")
+    assert marin_prefix_for_region(point.exp117_region) not in config.region_prefix
