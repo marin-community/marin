@@ -1105,3 +1105,57 @@ are recorded in the previous volumes.
 - The independently audited and reconciled total is 327,945 pairs. The next
   frontiers are p0 `(14, 0)`, p1 `(45, 3456)`, p2 `(78, 0)`, and p3
   `(110, 128)`. The eight H100s remain healthy at batch priority.
+
+## 2026-07-27 22:57 UTC — SFT formatting adjudications reach 43.59%
+
+- Checkpoint audits independently reread another 1,280 pairs. This includes
+  p3's 34.7-million-character code checkpoint, whose 128 pairs required 1,106
+  valid model judgments. No invalid response contributed to an outcome. Two
+  baseline SFT outcomes required full-text adjudication:
+  - decision-file 45, semantic offset 4,224, pair row 7,243 is a true
+    duplicate. The documents have the same question, choices, reasoning,
+    conclusion, and answer; only `\boxed{E}` versus
+    `\boxed{\text{E}}` differs. Its inspection, manual Parquet, and marker
+    SHA-256 values are
+    `2131115856bc527a282c6e384f1021c945d75be8ea94e242ca14902de777592b`,
+    `18055cff4c3065ddd5648dbf304ab7b43a127ed9bd547c30144de3f781d05160`,
+    and
+    `261a7d13e59b6d224ecbbeb2f236d1239fd1a70342d0bb00b6d4b9c76237c88f`.
+  - decision-file 45, semantic offset 4,224, pair row 7,303 is a true
+    duplicate. The documents have the same question, choices, reasoning,
+    conclusion, and answer; only `\boxed{B}` versus
+    `\boxed{\text{B}}` differs. Its inspection, manual Parquet, and marker
+    SHA-256 values are
+    `c5d5e34e810252fe149d9ce5a18fed5c1a66021a4654d040a4a4a24f82d0aac4`,
+    `3b353c41f38e447a84af944f7e1da23b7587192e58bbb2dabd091bbbe0301526`,
+    and
+    `4b02f7f69f973f2595defd2d2fcb7c16cdeeb51bc382a28c8b1205090fa84fab`.
+  Publish jobs `/rav/rav-datakit-6854-publish-row7243-v1562` and
+  `/rav/rav-datakit-6854-publish-row7303-v1563` wrote the hash-bound records.
+  Separate verify-only jobs reproduced their complete input and output bytes.
+- `/rav/rav-datakit-6854-reconcile-manual-2253-v1566` verified 2,593
+  checkpoints and complete manual coverage for all 383 unresolved outcomes.
+  Applying 80 false-positive and 303 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 262,770 | 166,875 | 95,895 | 63.5061% |
+  | treatment | 66,455 | 34,488 | 31,967 | 51.8968% |
+  | combined | 329,225 | 201,363 | 127,862 | 61.1627% |
+
+  The baseline-minus-treatment gap is 11.6093 percentage points. This snapshot
+  covers 43.5897% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2253.json`
+  with SHA-256
+  `b0d060b35e9dfb764ce15c8a3017f42ecdf43087f61295e2a5ca128d20ad8ae3`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `c8c53d6de658423622d2252fbbe1df8d0e1a4fbc4068fbbe3cd4de3d3c9d7530`,
+  `5392d02400d13390b13d50408053bf6ab73058456c8852d6f631d2f33b1cc8e1`,
+  and
+  `8f3986bdd8e0305e6d898ebb1b5d0a467d089f1bc315fcf2fd83c8df3dad929b`.
+  No manual outcome is missing.
+- The independently audited and reconciled total is 329,225 pairs. The next
+  frontiers are p0 `(14, 0)`, p1 `(45, 4608)`, p2 `(78, 0)`, and p3
+  `(110, 256)`. The next p1 and p3 checkpoints contain 10.4 million and 15.9
+  million characters. The eight H100s remain healthy at batch priority.
