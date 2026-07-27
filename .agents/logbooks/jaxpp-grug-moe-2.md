@@ -1846,3 +1846,58 @@ uv run iris --config lib/iris/config/cw-rno2a.yaml job run --no-wait \
 - Decision:
   - Admit the hybrid UB-X backend for the smallest explicit-MPMD JaxPP training gate.
   - Do not claim a performance win from R9. Scale only after reduced JaxPP compilation, execution, finite loss, and gradient completion succeed.
+
+### 2026-07-27 12:06 PDT - Reduced JaxPP UB-X gates clear setup and expose the FP32 router contract
+- Snapshots:
+  - `9956d573e9` adds the CUDA runtime symlink required by the source NCCL linker.
+  - `8114f47cc1` preserves FP32 UB-X combine weights through routing and the explicit-router bootstrap cotangent.
+- Command:
+
+```bash
+bash experiments/grug/moe/run_cw_jaxpp_may_d2560.sh --submit \
+  --cluster cw-rno2a \
+  --run-id jaxpp-rno2a-ubx-vjp-l8-e64k4-b32-s4096-p4m4-r2-20260727 \
+  --implementation explicit_mpmd \
+  --schedule std_1f1b \
+  --explicit-mpmd-pipeline-wire-format bf16 \
+  --expert-gradient-accumulation ordinary \
+  --physical-stages 4 \
+  --logical-stages 4 \
+  --stage-layer-counts 2,2,2,2 \
+  --microbatches 4 \
+  --nodes 4 \
+  --gpus-per-replica 8 \
+  --expert-axis 8 \
+  --layers 8 \
+  --experts 64 \
+  --top-k 4 \
+  --batch 32 \
+  --seq-len 4096 \
+  --moe-implementation ubx \
+  --attention-implementation gpu_fa4_cute \
+  --ragged-dot-implementation triton \
+  --ragged-dot-block-k 32 \
+  --ragged-dot-num-warps 8 \
+  --xla-memory-fraction 0.70 \
+  --remat save_moe \
+  --steps 8 \
+  --tracker wandb
+```
+
+- Results:
+  - R1 parent `/dlwh/iris-run-job-20260727-183932` failed on every rank during source NCCL linking because the wheel CUDA root contained `libcudart.so.13` but no `libcudart.so` linker name. No rank imported JAX.
+  - R2 parent `/dlwh/iris-run-job-20260727-185130` cleared the linker failure. All four ranks built and linked NCCL `2.30.7`, installed runtime dependencies, imported JAX `0.11.0`, and entered distributed initialization.
+  - R2 then failed in JAX lowering with `TypeError: UB-X requires float32 combine weights`. Production `MoEMLP.route` cast the FP32 router weights to the BF16 activation dtype, and `explicit_router_pre_boundary_bootstrap` independently allocated a BF16 combine-weight cotangent.
+  - [R2 W&B](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ubx-vjp-l8-e64k4-b32-s4096-p4m4-r2-20260727) finished with zero history rows. No XLA compile, execution, loss, step, or MFU result was produced.
+  - The babysitter stopped the failed child and parent. Both are terminal `killed`; no live resource remains.
+- Fix and validation:
+  - UB-X routing now retains the already-computed FP32 combine weights. Every other backend preserves the existing activation-dtype cast.
+  - The explicit-router bootstrap uses the matching FP32 zero cotangent only for UB-X.
+  - The parameterized route/bootstrap test proves BF16 Ring and FP32 UB-X routing contracts and zero-cotangent VJP equivalence: `2 passed`.
+  - The broader focused suite reported `51 passed`; three pre-existing explicit-sharding failures occur in final-loss label concatenation before the changed routing paths.
+  - `./infra/pre-commit.py --changed-files --fix` passed, including Pyrefly.
+- Interpretation:
+  - The source-build integration is now past the R1 setup blocker. R2 found a production routing-boundary mismatch rather than a transport numerical failure.
+  - L24 remains blocked until the unchanged reduced graph compiles, executes eight finite steps, and reports W&B throughput.
+- Next action:
+  - Relaunch the exact reduced gate from `8114f47cc1` with a fresh R3 run identity and dedicated babysitter.
