@@ -4100,7 +4100,7 @@ def _make_explicit_mpmd_train_step(
         def stage_compute_params(stage_index: int):
             if stage_index in compute_params:
                 return compute_params[stage_index]
-            if stage_index == 0:
+            if stage_index == 0 or fused_expert_accumulation:
                 incoming_token = state.step
             else:
                 incoming_token = materialization_token_futures[stage_index].done()
@@ -4110,7 +4110,7 @@ def _make_explicit_mpmd_train_step(
                 out_shardings=compute_param_shardings[stage_index],
             )(params[stage_index])
             compute_params[stage_index] = stage_params
-            if stage_index + 1 < num_stages:
+            if stage_index + 1 < num_stages and not fused_expert_accumulation:
                 completion_token = mpmd.task(
                     expert_materialization_completion_token,
                     name=f"grug_1f1b_stage{stage_index}_expert_materialization_completion_token",
