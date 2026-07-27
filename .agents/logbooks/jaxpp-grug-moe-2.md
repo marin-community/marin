@@ -940,3 +940,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
 - Interpretation:
   - The ordinary EP2/data4 arm is a topology-matched throughput control only; direct evidence already rejects its BF16 expert-weight gradients under the fixed `0.002` relative-L2 policy.
   - Compare steady-state steps 2-19 when telemetry permits. Exact L24 promotion requires the fused arm to complete cleanly and show enough measured gain to support a credible target above 20 MFU.
+
+### 2026-07-27 03:45 PDT - Fused L8 succeeds; ordinary control deadlocks
+- Fused treatment:
+  - Parent `/dlwh/iris-run-job-20260727-103121`, child, and all four ranks succeeded with exit `0`. The ranks completed in `3m19.4s`; no retry, preemption, failure, or live resource remains.
+  - All ranks compiled and completed `20/20` iterations. Maximum planned task memory was `10.566/10.118/10.118/10.657 GiB` across ranks 0-3. There was no OOM, compiler, NCCL, DIME, traceback, or watchdog failure.
+  - W&B [fused L8](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l8-e64k4-b512-s4096-p4m16-ab-20260727) is `finished` at step 19 with `41,943,040` tokens.
+  - Steps 2-19 had mean/p50/p90 MFU `16.1404/16.1365/16.1814`, mean/p50/p90 step time `1.95482/1.95528/1.95790s`, and mean throughput `1.07281M tokens/s`. Loss declined from `8.530657` to `6.300170`.
+- Ordinary control:
+  - Parent `/dlwh/iris-run-job-20260727-103109` completed lowering and compilation on all ranks but stalled in the first `eval_local` before a training metric.
+  - Two stable stack samples showed ranks 0-2 in `eval_local -> apply_task` at 100% GPU utilization and rank 3 in `eval_local -> recv_done_impl -> dime2.enqueue_wait` at 0%. Memory was approximately `62.1/81.6 GB` per GPU.
+  - The parent and child were stopped with no retry or live resource. W&B [ordinary L8](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-ordinary-fp8-l8-e64k4-b512-s4096-p4m16-ab-20260727) has zero history and remained stale `running`.
+- Interpretation:
+  - The matched A/B has no ordinary throughput denominator. The control-specific execution deadlock is a negative result for ordinary EP2/data4, not evidence of fused speedup.
+  - The fused result is `0.0242` MFU points (`0.15%`) above the existing valid L8 EP8 group-size-one reference at `16.116235`; this cross-topology comparison is not a material L8 gain.
+  - The independent exact six-layer-stage projection remains `20.01429` MFU, only `0.01429` points above the target. The L8 result neither validates nor decisively falsifies that projection because fixed task overhead and two-layer stages differ from L24.
+- Next action:
+  - Run one exact L24 d2560/e64/top-k4/b512/m16/s4096 fused measurement as the decisive gate. Require sustained mean MFU above 20; otherwise record the path as a performance negative.
