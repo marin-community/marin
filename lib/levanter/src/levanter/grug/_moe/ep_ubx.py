@@ -194,12 +194,25 @@ def _ubx_dispatch_bwd(
     output_cotangent: jax.Array,
 ) -> tuple[jax.Array, None, None, None, None, None]:
     inverse_map, topk_idx = residuals
-    unit_gates = _accepted_unit_gates(topk_idx, num_experts=num_experts)
-    x_cotangent = combine_push3_bf16(
+    even_gates = _accepted_unit_gates(topk_idx[:, ::2], num_experts=num_experts)
+    even_cotangent = combine_push3_bf16(
         output_cotangent.astype(jnp.bfloat16),
         inverse_map,
         topk_idx,
-        unit_gates,
+        even_gates,
+    )
+    if topk_idx.shape[1] == 1:
+        return even_cotangent, None, None, None, None, None
+
+    odd_gates = _accepted_unit_gates(topk_idx[:, 1::2], num_experts=num_experts)
+    odd_cotangent = combine_push3_bf16(
+        output_cotangent.astype(jnp.bfloat16),
+        inverse_map,
+        topk_idx,
+        odd_gates,
+    )
+    x_cotangent = (even_cotangent.astype(jnp.float32) + odd_cotangent.astype(jnp.float32)).astype(
+        output_cotangent.dtype
     )
     return x_cotangent, None, None, None, None, None
 
