@@ -302,3 +302,50 @@ Living queue; updated as hypotheses are proposed, blocked, falsified, or promote
 - **Next action:** confirm the combine-ordering hypothesis, then run the layer A/B at the
   #7201 operating point (d5120 or d6144, 48 layers, 4-of-128), where the collective is a
   real share of the step and the timing means something.
+
+### 2026-07-27 08:37 - FP8W-008: operating-point layer A/B, +1.9% fwd+bwd after a bf16 fix
+
+- **Hypothesis:** H4 and H5 at a shape where the dispatch collective is a real share of the
+  work, using the #7201 baseline architecture (`d5120 · 4-of-128 · i2560`).
+- **Commit hash:** `bbf04ee48` for r1, plus the bf16 rebuild fix for r2-r4.
+- **Command:** `iris --cluster cw-us-east-08a job run --user mwittmann --gpu GB200x4
+  --enable-extra-resources --cpu 32 --memory 256g --extra gpu --job-name
+  fp8w-008-opshape-d5120-<r> -- python
+  experiments/grug/moe/standalone/test_mxfp8_dispatch_gpu.py --tokens 65536 --hidden 5120
+  --intermediate 2560 --experts 128 --topk 4 --iters 60`
+- **Config:** 1x GB200x4, ring EP over 4 devices, XLA producer, 65,536 gathered tokens
+  (16,384 per device), capacity factor 1.25. Standalone layer bench: no scan, no remat, no
+  optimizer.
+- **Result:**
+
+  | draw | fwd speedup | fwd+bwd speedup | fwd ms (ctl -> wire) | fwd+bwd ms (ctl -> wire) |
+  |---|--:|--:|---|---|
+  | r1 (f32 rebuild) | 1.0689 | 0.9975 | 19.78 -> 18.51 | 35.52 -> 35.61 |
+  | r2 | 1.0692 | 1.0204 | 19.81 -> 18.53 | 35.56 -> 34.85 |
+  | r3 | 1.0704 | 1.0180 | 19.76 -> 18.46 | 35.55 -> 34.92 |
+  | r4 | 1.0747 | 1.0195 | 19.86 -> 18.48 | 35.59 -> 34.91 |
+
+  Parity across all draws: `dw13` and `dw2` relfrob exactly 0.0, `dx` relfrob 2.08e-4,
+  forward relfrob 2.06e-4, dispatch gradient nonzero.
+- **Interpretation:** r1 exposed a real defect in the quantized forward path rather than a
+  property of the design. Rebuilding the wgrad operand through `dequantize_mxfp8_rows`'s
+  f32 output materializes an `[81920, 5120]` f32 tensor, 1.7 GB, that the control never
+  creates; it consumed the entire forward gain and left the pair a wash. Casting the
+  reconstruction to bf16 is exact -- an e4m3 value carries 3 mantissa bits against bf16's
+  7, and the e8m0 scale is a power of two -- and recovered the backward: 0.9975 -> 1.0204.
+  Forward was unchanged by the fix (1.069 -> 1.069), which is the signature of a
+  backward-side memory-traffic problem rather than a numerics or scheduling one.
+
+  Post-fix the effect is stable over three draws: **forward 1.071x, fwd+bwd 1.019x**, bands
+  non-overlapping, absolute times stable to about 0.5%. The forward gain also grew with
+  shape as predicted (1.035x at the 512-token smoke, 1.071x here), which is what a
+  byte-bound effect should do.
+
+  Scope limits worth stating plainly. This is one layer in isolation on one node at EP4
+  over NVLink. It is not inside the real training step, so there is no scan, no remat, and
+  no competition with the other collectives that dominate the EP64 profile; and NVLink at
+  EP4 is the regime where dispatch bytes matter least, so the sign should hold at higher EP
+  but the magnitude will not transfer. The predicted whole-step upside remains the
+  0.2-0.4pp from the ledger, and nothing here contradicts that.
+- **Next action:** repeat at `d6144 · 4-of-256` (#7201's other candidate), then multi-node
+  EP16/EP64, then inside the real step with remat on.
