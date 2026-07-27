@@ -90,7 +90,13 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
-from iris.cluster.stats.tables import PROFILE_NAMESPACE, IrisProfile
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    IrisProfile,
+    TaskEventRow,
+)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -1164,6 +1170,13 @@ class ControllerServiceImpl:
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._db.attach_task_event_table(
+            self._log_client.get_table(
+                TASK_EVENT_NAMESPACE,
+                TaskEventRow,
+                storage_policy=TASK_EVENT_STORAGE_POLICY,
+            )
+        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
@@ -2447,11 +2460,12 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
+    # --- Endpoint registry (deprecated compatibility surface) ---
     #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
+    # EndpointService is the canonical home and all current clients call it. These
+    # forward there so a pre-migration worker or task (e.g. an already-running log
+    # shipper) that still calls the old ControllerService surface keeps working
+    # across a controller update. Remove once those old callers have drained.
 
     def register_endpoint(
         self,

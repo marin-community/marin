@@ -4,7 +4,9 @@
 """Behavior of the endpoint-oriented evaluation loop and durable records."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -17,10 +19,14 @@ from marin.evaluation.runner import (
     EvaluationIdentity,
     EvaluationOutcome,
     evaluate_batch,
+    submit_evaluation_batch,
 )
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
+
+from experiments.evaluation.evals import EVALS
+from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
 def _successful_evaluation(
@@ -105,3 +111,100 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
+
+
+def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
+    captured: dict = {}
+    resolved_value = "resolved-evaluation-secret"
+
+    class Client:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(job_id="/eval/job")
+
+    monkeypatch.setenv("MARIN_TEST_EVAL_SECRET", resolved_value)
+    evaluation = Evaluation(
+        identity=EvaluationIdentity(
+            run_id="run-secret",
+            created_at="2026-07-24T00:00:00+00:00",
+            output_dir=str(tmp_path / "secret"),
+            eval_ref=EvalRef(name="secret", mechanism="test"),
+        ),
+        executor=_successful_evaluation,
+    )
+    batch = EvaluationBatch(
+        group_id="group",
+        user="tester",
+        version=None,
+        description=None,
+        records_prefix=str(tmp_path / "records"),
+        model=ModelConfig(
+            name="model",
+            location="org/model",
+            tokenizer="tokenizer",
+            resource_hint=ResourceHint(hbm_gb=3),
+        ),
+        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+        capability_origin="https://iris.example",
+        api_model="model",
+        evaluations=(evaluation,),
+        provenance=Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+        secret_env={"DAYTONA_API_KEY": ("env:MARIN_TEST_EVAL_SECRET",)},
+    )
+
+    submit_evaluation_batch(batch, Client())
+
+    assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
+
+
+def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=("aime-harbor", "tb2"),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        cluster="marin",
+    )
+
+    batch = build_evaluation_batch(
+        spec,
+        Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+        "tester",
+    )
+
+    assert batch.secret_env == {
+        "DAYTONA_API_KEY": (
+            "env:DAYTONA_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
+        )
+    }
+
+
+def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    conflicting = replace(
+        EVALS["aime-harbor"],
+        name="conflicting-daytona",
+        secret_env={"DAYTONA_API_KEY": ("env:OTHER_DAYTONA_API_KEY",)},
+    )
+    monkeypatch.setitem(EVALS, "conflicting-daytona", conflicting)
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=("aime-harbor", "conflicting-daytona"),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        cluster="marin",
+    )
+
+    with pytest.raises(ValueError, match="conflicting secret specifications for DAYTONA_API_KEY"):
+        build_evaluation_batch(
+            spec,
+            Provenance(git_sha="abc", eval_image="image", launch_host="host"),
+            "tester",
+        )

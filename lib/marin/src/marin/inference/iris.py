@@ -126,6 +126,10 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
         select_tensor_parallel_size,
     )
 
+    # Pin the requested id as the served name before weights is overwritten with the
+    # resolved cache path; otherwise model_id collapses to the path and vLLM advertises
+    # (and only answers to) that path instead of the id the caller asked to serve.
+    api_model = model.model_id
     weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
@@ -133,7 +137,12 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     if tensor_parallel_size is None:
         num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
-    return replace(model, weights=weights, revision=revision, tensor_parallel_size=tensor_parallel_size), num_chips
+    return (
+        replace(
+            model, weights=weights, api_model=api_model, revision=revision, tensor_parallel_size=tensor_parallel_size
+        ),
+        num_chips,
+    )
 
 
 @contextlib.contextmanager
@@ -178,9 +187,12 @@ def _new_endpoint_identity() -> tuple[str, str]:
 
 def _capability_model(model: RunningModel, endpoint_name: str, capability_origin: str) -> RunningModel:
     response = iris_ctx().client.mint_endpoint_token(endpoint_name, ttl=_CAPABILITY_TTL)
+    capability_url = response.capability_url or (
+        f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}"
+    )
     endpoint = replace(
         model.endpoint,
-        base_url=f"{capability_origin.rstrip('/')}{capability_path(endpoint_name, response.token)}{OPENAI_API_SUFFIX}",
+        base_url=f"{capability_url}{OPENAI_API_SUFFIX}",
     )
     return replace(model, endpoint=endpoint)
 

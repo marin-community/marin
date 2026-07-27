@@ -1131,6 +1131,45 @@ mod tests {
     }
 
     #[test]
+    fn stamp_cluster_column_overwrites_a_caller_supplied_origin() {
+        // Caller-provided provenance is ignored, not trusted or merged. `cluster` is a
+        // real registered column, so a WriteRows batch may declare it with a spoofed
+        // value; alignment accepts that value, but the credential-bound stamp overwrites
+        // every row with the authenticated origin. This is the data-level guarantee
+        // behind the stats path reading no caller-supplied cluster.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("cluster", DataType::Utf8, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec!["e1", "e2"])),
+                Arc::new(StringArray::from(vec!["attacker", "attacker"])),
+            ],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "the credential's cluster overrides the caller-supplied value"
+        );
+    }
+
+    #[test]
     fn stamp_cluster_column_is_a_noop_without_a_cluster_column() {
         // A namespace whose schema has no cluster column must not gain one from
         // stamping — an extra array would not match the engine's schema on append.

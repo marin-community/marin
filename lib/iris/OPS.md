@@ -65,16 +65,16 @@ The restart preflight resolves operator-side controller secrets before taking a 
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
-Restarts default to the fast Rust profile, which skips LTO and reduces native link time. The controller is built for amd64 because controller nodes are pinned to that architecture. Worker and task images remain amd64+arm64 by default for clusters with arm64 GPU nodes. To build amd64-only workload images on a dev cluster:
+Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
 ```bash
-iris --cluster=marin-dev cluster controller restart \
+iris --config path/to/dev.yaml cluster controller restart \
   --image-platform linux/amd64
 ```
 
-Pass `--cargo-profile release` for an LTO build. Keep the default workload image platforms when the deployed cluster needs arm64 workers.
+Pass `--cargo-profile release` for an LTO build. Keep the default task image platforms when the deployed cluster includes arm64 nodes.
 
 **Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
 
@@ -178,9 +178,19 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 ## Task Operations
 
 ```bash
-iris task exec /user/job/0 -- bash          # shell into running container
+iris task describe /user/job/0                 # state, attempts, backend object, root cause
+iris task events /user/job/0                   # retained backend + controller action timeline
+iris task events /user/job/0:2                 # one attempt only
+iris task exec /user/job/0 -- bash             # shell into running container
 iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 ```
+
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to seven
+days.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -397,6 +407,16 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.task_event` — up to seven days of deduplicated backend verdicts and
+  state-changing controller actions per task attempt. Query all attempts with
+  `iris task events /user/job/0`, or directly:
+
+  ```sql
+  SELECT attempt_id, ts, type, reason, message, source, count
+  FROM "iris.task_event"
+  WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
+  ORDER BY ts ASC;
+  ```
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.

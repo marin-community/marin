@@ -8,13 +8,22 @@ Usage:
     iris --config cluster.yaml task exec /user/job/0 -- bash -c "ls /app"
 """
 
+import contextlib
 import logging
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import click
+from finelog.client import LogClient
+from rigging.connect import proxy_path
+from rigging.timing import Timestamp
 from tabulate import tabulate
 
-from iris.cli.connect import rpc_client_for_ctx
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
 from iris.cluster.types import TERMINAL_TASK_STATES, TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import format_resources, signal_name, task_state_friendly
@@ -190,6 +199,112 @@ def fetch_task_status(ctx, task_id: str) -> controller_pb2.Controller.GetTaskSta
         return client.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=target.task_id.to_wire()))
 
 
+def build_task_events_sql(target: TaskAttempt, attempt_uids: list[str], limit: int) -> str:
+    """Build a query for the newest retained events in one task incarnation."""
+    task_id = target.task_id.to_wire().replace("'", "''")
+    escaped_uids = [uid.replace("'", "''") for uid in attempt_uids]
+    uid_literals = ", ".join("'" + uid + "'" for uid in escaped_uids)
+    predicates = [
+        f"task_id = '{task_id}'",
+        f"attempt_uid IN ({uid_literals})",
+    ]
+    where = " AND ".join(predicates)
+    return (
+        "SELECT attempt_id, ts, type, reason, message, source, count FROM ("
+        f'SELECT attempt_id, ts, type, reason, message, source, count FROM "{TASK_EVENT_NAMESPACE}" '
+        f"WHERE {where} ORDER BY ts DESC LIMIT {limit}"
+        ") AS recent ORDER BY ts ASC"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEventView:
+    """Typed task-event row returned by finelog."""
+
+    attempt_id: int
+    ts: Timestamp
+    event_type: str
+    reason: str
+    message: str
+    source: str
+    count: int
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> "TaskEventView":
+        attempt_id = row["attempt_id"]
+        ts = row["ts"]
+        event_type = row["type"]
+        reason = row["reason"]
+        message = row["message"]
+        source = row["source"]
+        count = row["count"]
+        if not isinstance(attempt_id, int) or not isinstance(count, int):
+            raise ValueError("finelog task event has a non-integer attempt_id or count")
+        if not isinstance(ts, datetime):
+            raise ValueError("finelog task event has a non-datetime timestamp")
+        strings = (event_type, reason, message, source)
+        if not all(isinstance(value, str) for value in strings):
+            raise ValueError("finelog task event has a non-string type, reason, message, or source")
+        normalized_ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
+        return cls(
+            attempt_id=attempt_id,
+            ts=Timestamp.from_seconds(normalized_ts.timestamp()),
+            event_type=event_type,
+            reason=reason,
+            message=message,
+            source=source,
+            count=count,
+        )
+
+
+def build_task_event_display_rows(events: list[TaskEventView]) -> list[list[object]]:
+    return [
+        [
+            event.ts.as_formatted_date(),
+            event.attempt_id,
+            event.event_type,
+            event.source,
+            event.reason,
+            event.count,
+            _truncate(event.message, 100),
+        ]
+        for event in events
+    ]
+
+
+def render_task_events_text(task_id: str, events: list[TaskEventView]) -> str:
+    """Render finelog task-event rows as a chronological operator timeline."""
+    lines = [f"Task: {task_id}", ""]
+    if not events:
+        lines.append("No task events found.")
+        return "\n".join(lines)
+    lines.append(
+        tabulate(
+            build_task_event_display_rows(events),
+            headers=["TIME (UTC)", "ATTEMPT", "TYPE", "SOURCE", "ACTION", "COUNT", "MESSAGE"],
+            tablefmt="plain",
+        )
+    )
+    return "\n".join(lines)
+
+
+def task_event_attempt_uids(
+    response: controller_pb2.Controller.GetTaskStatusResponse,
+    target: TaskAttempt,
+) -> list[str]:
+    """Return the current job incarnation's attempt UIDs selected by ``target``."""
+    attempts = response.task.attempts
+    if target.attempt_id is None:
+        return [attempt.attempt_uid for attempt in attempts if attempt.attempt_uid]
+    uid = next(
+        (attempt.attempt_uid for attempt in attempts if attempt.attempt_id == target.attempt_id),
+        "",
+    )
+    if not uid:
+        raise click.ClickException(f"Attempt {target.attempt_id} not found for task {target.task_id}")
+    return [uid]
+
+
 @click.group()
 def task():
     """Task operations."""
@@ -213,6 +328,40 @@ def task_describe(ctx, task_id: str) -> None:
     """
     response = fetch_task_status(ctx, task_id)
     click.echo(render_task_description_text(build_task_description(response)))
+
+
+@task.command("events")
+@click.argument("task_id")
+@click.option("--limit", type=click.IntRange(min=1, max=10_000), default=200, show_default=True)
+@click.pass_context
+def task_events(ctx, task_id: str, limit: int) -> None:
+    """Show backend events and controller actions for a task.
+
+    Without an attempt suffix, returns all retained attempts in chronological
+    order. Add ``:ATTEMPT`` to select one attempt.
+
+    Examples:
+
+      iris task events /user/job/0
+
+      iris task events /user/job/0:2
+    """
+    target = TaskAttempt.from_wire(task_id)
+    response = fetch_task_status(ctx, task_id)
+    attempt_uids = task_event_attempt_uids(response, target)
+    if not attempt_uids:
+        click.echo(render_task_events_text(target.task_id.to_wire(), []))
+        return
+    url = require_controller_url(ctx)
+    credentials = ctx.obj.get("credentials") if ctx.obj else None
+    interceptors = credentials.interceptors() if credentials is not None else ()
+    log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
+        events = [
+            TaskEventView.from_row(row)
+            for row in log_client.query(build_task_events_sql(target, attempt_uids, limit)).to_pylist()
+        ]
+    click.echo(render_task_events_text(target.task_id.to_wire(), events))
 
 
 @task.command("exec")

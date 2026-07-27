@@ -3,10 +3,11 @@
 
 """Canary ferry regression gate: validate training metrics against thresholds.
 
-Reads tracker_metrics.jsonl from the canary ferry's GCS output directory and
-checks final metrics against coarse thresholds. Exits non-zero if any
-threshold is breached. Intended to run as a post-training step in the
-marin-canary-ferry GitHub Actions workflow.
+Reads tracker_metrics.jsonl from the canary ferry's output directory (GCS for
+the TPU lane, CoreWeave object storage for the GPU lane) and checks final
+metrics against coarse thresholds. Exits non-zero if any threshold is breached.
+Intended to run as a post-training step in the marin-canary-ferry GitHub Actions
+workflow.
 
 Thresholds are deliberately loose — they catch total failures (job hung,
 loss exploded, zero throughput) not quality regressions. Tighten after
@@ -20,6 +21,7 @@ import sys
 from collections.abc import Callable
 
 from rigging.filesystem import StoragePath
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.ferries.canary_ferry import build
 
@@ -40,7 +42,7 @@ def resolve_canary_output_path() -> str:
     """Resolve the canary ferry's output path from its lazy checkpoint.
 
     Uses mirror:// so the read works regardless of which region the canary
-    wrote to (an R2 pin resolves to its absolute bucket path instead).
+    wrote to (a CoreWeave/S3 pin resolves to its absolute bucket path instead).
     """
     return build().path("mirror://")
 
@@ -89,6 +91,10 @@ def print_report(results: list[tuple[str, float | None, float, bool]]) -> None:
 
 
 def main():
+    # The GPU lane's output lives on CoreWeave object storage; this configures
+    # s3:// access from CW_KEY_* when they are present (no-op on the GCS lane).
+    configure_coreweave_s3()
+
     output_path = resolve_canary_output_path()
     print(f"Canary output path: {output_path}")
 

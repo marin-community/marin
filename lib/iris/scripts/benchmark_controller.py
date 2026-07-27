@@ -119,7 +119,7 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudg
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
@@ -336,6 +336,9 @@ class RpcHarness:
     def make_client(self) -> ControllerServiceClientSync:
         return ControllerServiceClientSync(address=self.url, timeout_ms=30000)
 
+    def make_endpoint_client(self) -> EndpointServiceClientSync:
+        return EndpointServiceClientSync(address=self.url, timeout_ms=30000)
+
     def close(self) -> None:
         try:
             self.client.close()
@@ -364,7 +367,9 @@ _SCENARIO_DURATION: float = 60.0
 class RpcLoad:
     name: str
     target_rps: float
-    invoke: Callable[[ControllerServiceClientSync], None]
+    # Client type is per-load (controller vs endpoint), so the param is untyped
+    # here; each builder annotates its own invoke with the concrete client.
+    invoke: Callable[[Any], None]
     n_clients_min: int = 1
     """Minimum number of client threads / connections for this load.
 
@@ -374,6 +379,9 @@ class RpcLoad:
     processes, each holding its own connection. A single thread doing N rps
     doesn't expose the same concurrency on the server.
     """
+    # Per-load client factory. Defaults to the controller client; loads that
+    # exercise the endpoint registry set this to ``harness.make_endpoint_client``.
+    make_client: Callable[[], Any] | None = None
 
 
 @dataclasses.dataclass
@@ -404,7 +412,7 @@ class ScenarioRunner:
                 idx: int, tl: list[float], te: list[Exception], lload: RpcLoad, ptr: float
             ) -> threading.Thread:
                 def worker() -> None:
-                    client = self.harness.make_client()
+                    client = (lload.make_client or self.harness.make_client)()
                     interval = 1.0 / ptr
                     next_call = time.perf_counter()
                     try:
@@ -744,7 +752,7 @@ def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) ->
     lock = threading.Lock()
     counter = {"n": 0}
 
-    def invoke(client: ControllerServiceClientSync) -> None:
+    def invoke(client: EndpointServiceClientSync) -> None:
         with lock:
             n = counter["n"]
             counter["n"] += 1
@@ -758,7 +766,7 @@ def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) ->
             )
         )
 
-    return RpcLoad(name="RegisterEndpoint", target_rps=rps, invoke=invoke)
+    return RpcLoad(name="RegisterEndpoint", target_rps=rps, invoke=invoke, make_client=harness.make_endpoint_client)
 
 
 def load_register(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
@@ -847,10 +855,10 @@ def load_list_jobs(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad
 def load_list_endpoints(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     req = controller_pb2.Controller.ListEndpointsRequest()
 
-    def invoke(client: ControllerServiceClientSync) -> None:
+    def invoke(client: EndpointServiceClientSync) -> None:
         client.list_endpoints(req)
 
-    return RpcLoad(name="ListEndpoints", target_rps=rps, invoke=invoke)
+    return RpcLoad(name="ListEndpoints", target_rps=rps, invoke=invoke, make_client=harness.make_endpoint_client)
 
 
 def load_list_workers(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:

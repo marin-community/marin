@@ -27,7 +27,7 @@ from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, lo
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,30 @@ def rpc_client_for_ctx(
     controller_url = url or require_controller_url(ctx)
     obj = ctx.obj or {}
     return rpc_client(controller_url, obj.get("credentials"), timeout_ms=timeout_ms)
+
+
+def endpoint_rpc_client_for_ctx(
+    ctx: click.Context,
+    *,
+    url: str | None = None,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
+) -> EndpointServiceClientSync:
+    """Build an EndpointService RPC client from the CLI context.
+
+    The endpoint registry (register/list/unregister) lives on its own service;
+    this threads the same resolved URL and credentials as ``rpc_client_for_ctx``.
+    """
+    controller_url = url or require_controller_url(ctx)
+    obj = ctx.obj or {}
+    credentials = obj.get("credentials")
+    interceptors = credentials.interceptors() if credentials is not None else []
+    return EndpointServiceClientSync(
+        controller_url,
+        timeout_ms=timeout_ms,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
 
 
 def iap_config(config: IrisClusterConfig | None) -> IapAuthConfig | None:

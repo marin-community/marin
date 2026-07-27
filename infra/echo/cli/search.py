@@ -7,20 +7,30 @@
 # dependencies = [
 #     "cloud-sql-python-connector[pg8000]>=1.9",
 #     "google-auth>=2.30",
-#     "fastembed>=0.3",
+#     "fastembed>=0.8",
+#     "sqlalchemy>=2",
 # ]
 # ///
-"""Search the echo corpus (github+discord) over Cloud SQL IAM auth. See
-`.agents/skills/context-search/SKILL.md`."""
+"""Search the echo corpus over Cloud SQL IAM authentication.
+
+See ``infra/echo/README.md`` for access requirements and usage.
+"""
 
 import argparse
 import datetime
 import json
 import os
+import sys
 import urllib.request
+from pathlib import Path
 
 import google.auth
+import sqlalchemy
 from google.auth.transport.requests import Request
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+
+import hybrid_search
 
 INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 DATABASE = "context"
@@ -60,17 +70,17 @@ def escape_like(pattern: str) -> str:
     return pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def chunk_filters(args: argparse.Namespace) -> tuple[list[str], list[str]]:
-    """The (predicate, param) pairs common to search and grep."""
+def chunk_filters(args: argparse.Namespace) -> tuple[list[str], dict[str, object]]:
+    """Return safe fixed predicates and their named values."""
     predicates: list[str] = []
-    params: list[str] = []
+    params: dict[str, object] = {}
     for column, value in (("source", args.source), ("kind", getattr(args, "kind", None))):
         if value:
-            predicates.append(f"{column} = %s")
-            params.append(value)
+            predicates.append(f"c.{column} = :{column}")
+            params[column] = value
     if getattr(args, "since", None):
-        predicates.append("date >= %s")
-        params.append(args.since)
+        predicates.append("c.date >= :since")
+        params["since"] = args.since
     return predicates, params
 
 
@@ -79,54 +89,55 @@ def where_clause(predicates: list[str]) -> str:
 
 
 def print_hits(rows) -> None:
-    for chunk_id, dist, source, kind, date, author, title, text, url in rows:
-        snippet = " ".join((text or "").split())[:110]
-        prefix = f"{dist:.3f} " if dist is not None else ""
+    for row in rows:
+        snippet = " ".join((row.text or "").split())[:110]
+        prefix = f"{row.score:.4f} " if row.score is not None else ""
         # For discord, title is just the channel name — the snippet carries the content.
-        headline = f"{title}: {snippet}" if source == "discord" else (title or snippet)
-        print(f"#{chunk_id} {prefix}[{source}/{kind}] {date} {author or '?'} — {headline}")
-        print(f"    {url}")
+        headline = f"{row.title}: {snippet}" if row.source == "discord" else (row.title or snippet)
+        print(f"#{row.id} {prefix}[{row.source}/{row.kind}] {row.date} {row.author or '?'} — {headline}")
+        print(f"    {row.url}")
 
 
-def cmd_search(cur, args: argparse.Namespace) -> None:
+def cmd_search(conn: sqlalchemy.Connection, args: argparse.Namespace) -> None:
     # Imported here, not at module top: fastembed is heavy (only `search` needs it) and
     # keeping it out of import lets the pure-logic unit tests run without it.
     from fastembed import TextEmbedding  # noqa: PLC0415
 
     model = TextEmbedding(EMBED_MODEL)
-    query_vector = "[" + ",".join(repr(float(v)) for v in next(iter(model.embed([args.query])))) + "]"
+    query_vector = "[" + ",".join(repr(float(v)) for v in next(iter(model.query_embed([args.query])))) + "]"
     # Without iterative scans, HNSW returns ef_search candidates before WHERE applies —
     # a selective filter (e.g. --source discord) can discard all of them and return nothing.
-    cur.execute("SET hnsw.iterative_scan = relaxed_order")
+    conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
     predicates, params = chunk_filters(args)
-    cur.execute(
-        "SELECT id, embedding <=> CAST(%s AS vector) AS dist, source, kind, date::date, author, title, text, url "
-        f"FROM chunks {where_clause(predicates)} ORDER BY dist LIMIT %s",
-        [query_vector, *params, args.limit],
+    params.update(
+        q=args.query,
+        embedding=query_vector,
+        candidate_limit=hybrid_search.candidate_limit(args.limit),
+        limit=args.limit,
     )
-    print_hits(cur.fetchall())
+    print_hits(conn.execute(hybrid_search.chunk_search_statement(predicates), params))
 
 
-def cmd_grep(cur, args: argparse.Namespace) -> None:
+def cmd_grep(conn: sqlalchemy.Connection, args: argparse.Namespace) -> None:
     predicates, params = chunk_filters(args)
-    predicates.append("text ILIKE %s ESCAPE '\\'")
-    params.append(f"%{escape_like(args.pattern)}%")
-    cur.execute(
-        "SELECT id, NULL, source, kind, date::date, author, title, text, url "
-        f"FROM chunks {where_clause(predicates)} ORDER BY chunks.date DESC LIMIT %s",
-        [*params, args.limit],
+    predicates.append("c.text ILIKE :pattern ESCAPE '\\'")
+    params.update(pattern=f"%{escape_like(args.pattern)}%", limit=args.limit)
+    statement = sqlalchemy.text(
+        "SELECT c.*, 0.0 AS score, NULL AS distance, NULL AS lexical_score "
+        f"FROM chunks AS c {where_clause(predicates)} ORDER BY c.date DESC LIMIT :limit"
     )
-    print_hits(cur.fetchall())
+    print_hits(conn.execute(statement, params))
 
 
-def cmd_show(cur, args: argparse.Namespace) -> None:
-    cur.execute("SELECT source, kind, date, author, title, url, text FROM chunks WHERE id = %s", [args.id])
-    row = cur.fetchone()
+def cmd_show(conn: sqlalchemy.Connection, args: argparse.Namespace) -> None:
+    row = conn.execute(
+        sqlalchemy.text("SELECT source, kind, date, author, title, url, text FROM chunks WHERE id = :id"),
+        {"id": args.id},
+    ).first()
     if row is None:
         raise SystemExit(f"no chunk #{args.id}")
-    source, kind, date, author, title, url, text = row
-    print(f"[{source}/{kind}] {date} {author or '?'} {title or ''}\n{url}\n")
-    print(text or "")
+    print(f"[{row.source}/{row.kind}] {row.date} {row.author or '?'} {row.title or ''}\n{row.url}\n")
+    print(row.text or "")
 
 
 def bounded_limit(value: str) -> int:
@@ -173,15 +184,17 @@ def main() -> None:
     from google.cloud.sql.connector import Connector  # noqa: PLC0415  (heavy; kept off import for tests)
 
     args = build_parser().parse_args()
-    connector = Connector(quota_project=os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT"))
-    try:
-        conn = connector.connect(INSTANCE, "pg8000", user=db_user(), enable_iam_auth=True, db=DATABASE)
+    with Connector(quota_project=os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT")) as connector:
+        engine = sqlalchemy.create_engine(
+            "postgresql+pg8000://",
+            creator=lambda: connector.connect(INSTANCE, "pg8000", user=db_user(), enable_iam_auth=True, db=DATABASE),
+            pool_pre_ping=True,
+        )
         try:
-            args.func(conn.cursor(), args)
+            with engine.connect() as conn:
+                args.func(conn, args)
         finally:
-            conn.close()
-    finally:
-        connector.close()
+            engine.dispose()
 
 
 if __name__ == "__main__":

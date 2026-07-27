@@ -25,7 +25,6 @@ import random
 import re
 import threading
 import time
-import typing
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,11 +33,11 @@ from typing import ClassVar, Protocol, TypeVar
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Gauge, Histogram, generate_latest
 from prometheus_client.metrics import MetricWrapperBase
 from prometheus_client.registry import Collector
-from prometheus_client.samples import Sample
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
+from rigging.metrics import FamilySample, render_metric_rows
 from rigging.server_auth import public
 from rigging.timing import Timestamp
 
@@ -385,15 +384,6 @@ def get_status() -> str:
         return _status
 
 
-class FamilySample(typing.NamedTuple):
-    """One registry sample, tagged with the family it came from."""
-
-    family: str
-    kind: str
-    """The family's metric type: counter, gauge, histogram, summary, info."""
-    sample: Sample
-
-
 def samples() -> Iterator[FamilySample]:
     """Yield every sample in the registry, tagged with its family and type.
 
@@ -429,13 +419,8 @@ def _render_index(status: str, uptime: float) -> str:
     behind the Iris controller's ``/proxy/<name>/`` prefix, where an absolute URL
     or a bundled asset would 404.
     """
-    rows = []
-    for _family_name, family_type, sample in samples():
-        labels = ",".join(f"{k}={v}" for k, v in sorted(sample.labels.items()))
-        rows.append(
-            f"<tr><td>{html.escape(sample.name)}</td><td>{html.escape(family_type)}</td>"
-            f"<td>{html.escape(labels)}</td><td>{sample.value!r}</td></tr>"
-        )
+    metric_samples = list(samples())
+    rows = render_metric_rows(metric_samples)
     table = "\n".join(rows) or '<tr><td colspan="4">no metrics registered</td></tr>'
     return f"""<!doctype html>
 <title>telltale</title>
@@ -449,7 +434,7 @@ def _render_index(status: str, uptime: float) -> str:
 <p>uptime {uptime:.0f}s &middot; <a href="metrics">metrics</a> &middot; <a href="health">health</a></p>
 <h2>status</h2>
 <pre>{html.escape(status) or "(none set)"}</pre>
-<h2>metrics ({len(rows)} samples)</h2>
+<h2>metrics ({len(metric_samples)} samples &middot; {len(rows)} display rows)</h2>
 <table><tr><th>sample</th><th>type</th><th>labels</th><th>value</th></tr>
 {table}
 </table>

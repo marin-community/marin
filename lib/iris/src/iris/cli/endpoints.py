@@ -14,7 +14,7 @@ import click
 from rigging.connect import capability_path
 from rigging.timing import Duration
 
-from iris.cli.connect import rpc_client_for_ctx
+from iris.cli.connect import endpoint_rpc_client_for_ctx, rpc_client_for_ctx
 from iris.cluster.types import EndpointAccess
 from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
@@ -45,7 +45,7 @@ def _access_label(access: int) -> str:
 @click.pass_context
 def list_(ctx, prefix: str, exact: bool, task_ids: tuple[str, ...]):
     """List registered endpoints, optionally filtered by PREFIX, --exact, or --task-id."""
-    with rpc_client_for_ctx(ctx) as client:
+    with endpoint_rpc_client_for_ctx(ctx) as client:
         resp = client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(
                 prefix=prefix,

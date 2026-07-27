@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { formatRelativeTime } from '@/utils/formatting'
+import { formatRelativeTime, formatBytes } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
 
@@ -15,6 +15,9 @@ interface TelltaleRow {
   upstream?: string
   status?: string
   le?: string
+  scope?: string
+  endpoint?: string
+  route_kind?: string
 }
 
 const METRIC_NAMES = {
@@ -25,6 +28,29 @@ const METRIC_NAMES = {
   durationSum: 'iris_rpc_duration_seconds_sum',
   durationCount: 'iris_rpc_duration_seconds_count',
 } as const
+
+const PROXY_METRIC_NAMES = {
+  requests: 'iris_proxy_requests_total',
+  responses: 'iris_proxy_responses_total',
+  inFlight: 'iris_proxy_in_flight',
+  durationBucket: 'iris_proxy_duration_seconds_bucket',
+  durationSum: 'iris_proxy_duration_seconds_sum',
+  durationCount: 'iris_proxy_duration_seconds_count',
+  requestBytes: 'iris_proxy_request_bytes_total',
+  responseBytes: 'iris_proxy_response_bytes_total',
+} as const
+
+// Trailing window: only series written in the last five minutes are shown, so a retired
+// method or a gone endpoint (its last row now older than the window) drops out
+// instead of lingering forever as the latest row for its label set. DataFusion
+// folds now() to a timestamp literal, which exposes the direct ts predicate to
+// Parquet row-group pruning.
+const RECENT_STATS_FILTER = "ts >= now() - INTERVAL '5 minutes'"
+
+// Scope to this cluster's own rows. A hub finelog also holds child rows stamped
+// with their origin cluster; local writes leave `cluster` empty/NULL, so this
+// filter shows only the cluster whose dashboard is open (no cross-cluster mixing).
+const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
 
 function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
@@ -37,6 +63,8 @@ SELECT name, value, ts,
        json_get(labels, 'le') AS le
 FROM telltale
 WHERE source = 'iris' AND name IN (${names})
+  AND ${RECENT_STATS_FILTER}
+  AND ${LOCAL_CLUSTER_FILTER}
 QUALIFY row_number() OVER (
   PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
                json_get(labels, 'upstream'), json_get(labels, 'status'), json_get(labels, 'le')
@@ -44,9 +72,36 @@ QUALIFY row_number() OVER (
 ) = 1`.trim()
 }
 
+function proxySql(): string {
+  const names = Object.values(PROXY_METRIC_NAMES).map((name) => `'${name}'`).join(', ')
+  return `
+SELECT name, value, ts,
+       json_get(labels, 'scope') AS scope,
+       json_get(labels, 'endpoint') AS endpoint,
+       json_get(labels, 'method') AS method,
+       json_get(labels, 'route_kind') AS route_kind,
+       json_get(labels, 'status') AS status,
+       json_get(labels, 'le') AS le
+FROM telltale
+WHERE source = 'iris' AND name IN (${names})
+  AND ${RECENT_STATS_FILTER}
+  AND ${LOCAL_CLUSTER_FILTER}
+QUALIFY row_number() OVER (
+  PARTITION BY name, json_get(labels, 'scope'), json_get(labels, 'endpoint'),
+               json_get(labels, 'method'), json_get(labels, 'route_kind'),
+               json_get(labels, 'status'), json_get(labels, 'le')
+  ORDER BY ts DESC
+) = 1`.trim()
+}
+
 const { data, loading, error, refresh } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: statsSql() }))
-useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
-onMounted(refresh)
+const { data: proxyData, refresh: refreshProxy } = useLogServerStatsRpc<{ arrowIpc?: string }>('Query', () => ({ sql: proxySql() }))
+function refreshAll() {
+  refresh()
+  refreshProxy()
+}
+useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
+onMounted(refreshAll)
 
 type SortKey = 'method' | 'count' | 'errorCount' | 'inFlight' | 'p50' | 'p95' | 'p99' | 'last'
 const sortKey = ref<SortKey>('p95')
@@ -67,6 +122,15 @@ interface MethodRow {
   totalDurationMs: number
   durationCount: number
   bucketSamples: Array<{ bound: number; cumulative: number }>
+}
+
+// Proxy transport rows share the histogram machinery (finalizeHistogram, sparkBars)
+// and add endpoint/route-kind identity plus request/response byte volume.
+interface ProxyRow extends MethodRow {
+  endpoint: string
+  routeKind: string
+  requestBytes: number
+  responseBytes: number
 }
 
 function percentileBound(samples: MethodRow['bucketSamples'], count: number, quantile: number): number {
@@ -130,6 +194,64 @@ const rows = computed<MethodRow[]>(() => {
   })
 })
 
+const TOP_PROXY_ENDPOINTS = 5
+
+function emptyProxyRow(key: string, endpoint: string, routeKind: string): ProxyRow {
+  return {
+    method: key, endpoint, routeKind,
+    count: 0, errorCount: 0, inFlight: 0, p50: 0, p95: 0, p99: 0, last: 0,
+    buckets: [], bounds: [], totalDurationMs: 0, durationCount: 0, bucketSamples: [],
+    requestBytes: 0, responseBytes: 0,
+  }
+}
+
+function applyProxySample(row: ProxyRow, metric: TelltaleRow): void {
+  row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
+  const value = Number(metric.value ?? 0)
+  if (metric.name === PROXY_METRIC_NAMES.requests) row.count = value
+  if (metric.name === PROXY_METRIC_NAMES.responses && metric.status !== '200') row.errorCount += value
+  if (metric.name === PROXY_METRIC_NAMES.inFlight) row.inFlight = value
+  if (metric.name === PROXY_METRIC_NAMES.durationSum) row.totalDurationMs = value * 1000
+  if (metric.name === PROXY_METRIC_NAMES.durationCount) row.durationCount = value
+  if (metric.name === PROXY_METRIC_NAMES.requestBytes) row.requestBytes = value
+  if (metric.name === PROXY_METRIC_NAMES.responseBytes) row.responseBytes = value
+  if (metric.name === PROXY_METRIC_NAMES.durationBucket) {
+    row.bucketSamples.push({
+      bound: metric.le === '+Inf' ? 0 : Number(metric.le ?? 0) * 1000,
+      cumulative: value,
+    })
+  }
+}
+
+// scope=total is the exact aggregate over all proxied traffic; scope=endpoint is
+// the bounded per-endpoint breakdown the native proxy emits.
+const proxyParsed = computed<{ total: ProxyRow | null; endpoints: ProxyRow[] }>(() => {
+  const metrics = decodeArrowIpc(proxyData.value?.arrowIpc).rows as TelltaleRow[]
+  let total: ProxyRow | null = null
+  const byEndpoint = new Map<string, ProxyRow>()
+  for (const metric of metrics) {
+    if (metric.scope === 'total') {
+      total = total ?? emptyProxyRow('total', '', '')
+      applyProxySample(total, metric)
+    } else if (metric.scope === 'endpoint' && metric.endpoint) {
+      const routeKind = metric.route_kind ?? ''
+      const key = `${metric.endpoint} ${metric.method ?? ''} ${routeKind}`
+      const row = byEndpoint.get(key) ?? emptyProxyRow(key, metric.endpoint, routeKind)
+      applyProxySample(row, metric)
+      byEndpoint.set(key, row)
+    }
+  }
+  const endpoints = [...byEndpoint.values()]
+  for (const row of endpoints) finalizeHistogram(row)
+  if (total) finalizeHistogram(total)
+  endpoints.sort((a, b) => b.count - a.count)
+  return { total, endpoints }
+})
+
+const proxyTotal = computed(() => proxyParsed.value.total)
+const proxyEndpoints = computed(() => proxyParsed.value.endpoints.slice(0, TOP_PROXY_ENDPOINTS))
+const proxyEndpointCount = computed(() => proxyParsed.value.endpoints.length)
+
 const totalCount = computed(() => rows.value.reduce((a, r) => a + r.count, 0))
 const totalErrors = computed(() => rows.value.reduce((a, r) => a + r.errorCount, 0))
 const totalInFlight = computed(() => rows.value.reduce((a, r) => a + r.inFlight, 0))
@@ -156,6 +278,11 @@ function fmtMs(value: number): string {
   if (value < 10) return value.toFixed(1)
   if (value < 1000) return Math.round(value).toString()
   return (value / 1000).toFixed(value < 10000 ? 2 : 1) + 's'
+}
+
+// Reuse the shared byte formatter; keep the table's em-dash for zero/absent.
+function fmtBytes(value: number): string {
+  return value ? formatBytes(value) : '—'
 }
 
 function fmtBound(ms: number): string {
@@ -448,6 +575,94 @@ function avgMs(row: MethodRow): number {
           </div>
         </div>
       </div>
+    </InfoCard>
+
+    <InfoCard title="Proxy transport">
+      <p class="text-xs text-text-muted mb-3">
+        Every request the native proxy forwards upstream, not just Iris Connect RPCs.
+        A proxied Connect call is counted here and in RPC Methods above; the two panels
+        measure different things and must not be summed. Totals are exact; the per-endpoint
+        breakdown is bounded to the busiest endpoints in each refresh window.
+      </p>
+
+      <div v-if="!proxyTotal" class="text-sm text-text-muted py-4 text-center">
+        No proxied traffic in the last hour.
+      </div>
+
+      <template v-else>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Requests</div>
+            <div class="font-mono text-lg text-text">{{ proxyTotal.count.toLocaleString() }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">In flight</div>
+            <div class="font-mono text-lg text-text">{{ proxyTotal.inFlight.toLocaleString() }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Req bytes</div>
+            <div class="font-mono text-lg text-text">{{ fmtBytes(proxyTotal.requestBytes) }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">Resp bytes</div>
+            <div class="font-mono text-lg text-text">{{ fmtBytes(proxyTotal.responseBytes) }}</div>
+          </div>
+          <div class="rounded-lg border border-surface-border bg-surface px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wider text-text-muted">p95</div>
+            <div class="font-mono text-lg text-text">{{ fmtMs(proxyTotal.p95) }}</div>
+          </div>
+        </div>
+
+        <div class="text-[10px] uppercase tracking-wider text-text-muted mb-1">
+          Top endpoints
+          <span v-if="proxyEndpointCount > proxyEndpoints.length" class="normal-case tracking-normal">
+            ({{ proxyEndpoints.length }} of {{ proxyEndpointCount }} by request count)
+          </span>
+        </div>
+
+        <div v-if="!proxyEndpoints.length" class="text-sm text-text-muted py-3 text-center">
+          No per-endpoint breakdown available.
+        </div>
+
+        <template v-else>
+          <div
+            class="grid items-center gap-x-3 px-2 py-1.5 text-[10px] uppercase tracking-wider text-text-muted border-b border-surface-border"
+            style="grid-template-columns: minmax(0,1fr) 88px 72px 56px 72px 72px 64px 72px"
+          >
+            <div>Endpoint</div>
+            <div class="text-right">Count</div>
+            <div class="text-right">Live</div>
+            <div class="text-right">Err</div>
+            <div class="text-right">Req</div>
+            <div class="text-right">Resp</div>
+            <div class="text-right">p95</div>
+            <div class="text-right">Last</div>
+          </div>
+          <div class="divide-y divide-surface-border">
+            <div
+              v-for="row in proxyEndpoints"
+              :key="row.method"
+              class="grid items-center gap-x-3 px-2 py-2 text-sm"
+              style="grid-template-columns: minmax(0,1fr) 88px 72px 56px 72px 72px 64px 72px"
+            >
+              <div class="min-w-0 truncate">
+                <span class="font-mono text-text">{{ row.endpoint }}</span>
+                <span v-if="row.routeKind" class="font-mono text-[10px] text-text-muted ml-1.5">{{ row.routeKind }}</span>
+              </div>
+              <div class="text-right font-mono text-text">{{ row.count.toLocaleString() }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ row.inFlight.toLocaleString() }}</div>
+              <div
+                class="text-right font-mono"
+                :class="row.errorCount > 0 ? 'text-status-danger' : 'text-text-muted'"
+              >{{ row.errorCount > 0 ? row.errorCount : '—' }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ fmtBytes(row.requestBytes) }}</div>
+              <div class="text-right font-mono text-text-secondary">{{ fmtBytes(row.responseBytes) }}</div>
+              <div class="text-right font-mono text-text">{{ fmtMs(row.p95) }}</div>
+              <div class="text-right font-mono text-text-muted text-xs">{{ fmtSince(row.last) }}</div>
+            </div>
+          </div>
+        </template>
+      </template>
     </InfoCard>
   </div>
 </template>

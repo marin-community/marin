@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "marin-dupekit-native"
 # Version is read from rust/Cargo.toml by maturin so the release workflow has a
-# single source of truth to stamp (see lib/dupekit/build_package.py).
+# single source of truth to stamp (see scripts/ci/package_release.py).
 dynamic = ["version"]
 description = "Native (Rust) text-deduplication kernels for marin-dupekit."
 requires-python = ">=3.12"

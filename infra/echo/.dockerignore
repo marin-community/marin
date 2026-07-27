@@ -1,0 +1,4 @@
+**/__pycache__
+**/*.pyc
+dashboard/dist
+dashboard/node_modules

@@ -56,11 +56,13 @@ def _env_entry(name: str, value: str) -> str:
 def _inline_env_block(cfg: FinelogConfig) -> str:
     """Render the non-secret container-env entries the templates splice in, or "".
 
-    `FINELOG_AUTH_POLICY` is inline-safe (a cidr layer carries network prefixes, a jwt
-    layer Ed25519 public keys), as is `FINELOG_FORWARDING` (a url and a cluster name).
-    The forwarding *private* key travels in the `<name>-env` Secret instead.
+    The query cache limit, `FINELOG_AUTH_POLICY` (network prefixes and Ed25519
+    public keys), and `FINELOG_FORWARDING` (a URL and cluster name) are
+    inline-safe. The forwarding private key travels in the `<name>-env` Secret.
     """
     entries = []
+    if cfg.query_metadata_cache_mb is not None:
+        entries.append(_env_entry("FINELOG_QUERY_METADATA_CACHE_MB", str(cfg.query_metadata_cache_mb)))
     if cfg.auth:
         entries.append(_env_entry("FINELOG_AUTH_POLICY", auth_policy_json(cfg.auth)))
     if cfg.forwarding:

@@ -47,7 +47,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2
@@ -317,6 +317,18 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
 CHILD_CLUSTER = "cw"
 
 
+def test_federated_capability_url_stays_under_the_public_capability_route() -> None:
+    config = CapabilityUrlConfig(
+        cluster_name="cw-us-west-04a",
+        local_origin="https://iris-cw-us-west-04a.oa.dev",
+        parent_origin="https://iris-dev.oa.dev",
+    )
+
+    assert config.build("/serve/model", "token") == (
+        "https://iris-dev.oa.dev/proxy/t/cluster=cw-us-west-04a/token/serve.model"
+    )
+
+
 def _child_capability_proxy(stack: ExitStack, upstream_url: str) -> tuple[str, str]:
     """A child native proxy that owns ``/serve/foo`` as a link endpoint and validates
     its own capability token. Returns ``(proxy_url, capability_token)``.
@@ -406,11 +418,11 @@ def test_child_capability_url_relays_through_the_parent_end_to_end(tmp_path, log
 
         with httpx.Client() as client:
             relayed = client.get(
-                f"{parent_proxy.address}/proxy/{CHILD_CLUSTER}/t/{token}/{ENDPOINT_PROXY_NAME}/greet",
+                f"{parent_proxy.address}/proxy/t/cluster={CHILD_CLUSTER}/{token}/{ENDPOINT_PROXY_NAME}/greet",
                 params={"q": "1"},
                 headers={"cookie": "session=secret", "authorization": "Bearer browser-user-token"},
             )
-            unknown = client.get(f"{parent_proxy.address}/proxy/nope/t/{token}/{ENDPOINT_PROXY_NAME}/greet")
+            unknown = client.get(f"{parent_proxy.address}/proxy/t/cluster=nope/{token}/{ENDPOINT_PROXY_NAME}/greet")
 
         assert relayed.status_code == 200, relayed.text
         assert relayed.json()["marker"] == UPSTREAM_MARKER
@@ -430,7 +442,7 @@ def _relay_decision_payload(**overrides) -> dict:
         "encoded_name": ENDPOINT_PROXY_NAME,
         "sub_path": "v1/models",
         "query": "q=1",
-        "proxy_prefix": f"/proxy/{CHILD_CLUSTER}/t/tok/{ENDPOINT_PROXY_NAME}",
+        "proxy_prefix": f"/proxy/t/cluster={CHILD_CLUSTER}/tok/{ENDPOINT_PROXY_NAME}",
         "peer_id": CHILD_CLUSTER,
         "task_id": None,
         "token": "tok",
