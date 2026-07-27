@@ -235,7 +235,13 @@ def _grug_scale_with_muon(
                     # Pad the L-stack up to a multiple of the (intra-rack) shard count so a stack
                     # whose length doesn't divide the mesh (e.g. 48 layers over 64 data GPUs) still
                     # distributes one matrix per chip instead of replicating NS on every device.
-                    updated = _newtonschulz_padded_stack_sharded(x, steps, muon_eps, coefficient_type)
+                    updated = _newtonschulz_padded_stack_sharded(
+                        x,
+                        steps,
+                        muon_eps,
+                        coefficient_type,
+                        target_sharding=_target_sharding(param),
+                    )
                 else:
                     stack_target_pspec = _batch_sharded_stack_target_pspec(param)
                     if stack_target_pspec is None:
@@ -598,6 +604,8 @@ def _newtonschulz_padded_stack_sharded(
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
+    *,
+    target_sharding: jax.sharding.Sharding | None = None,
 ) -> jax.Array:
     """Distribute NS over a 3D stack whose length does not divide the mesh, via zero-padding.
 
@@ -632,5 +640,14 @@ def _newtonschulz_padded_stack_sharded(
     target = P(batch_axis[0], None, None) if len(batch_axis) == 1 else P(batch_axis, None, None)
     Xd = reshard(Xp, target)
     updated = jax.vmap(local)(Xd)
+    if target_sharding is not None:
+        target_spec = getattr(target_sharding, "spec", None)
+        if target_spec and target_spec[0] is not None:
+            raise ValueError("padded stack Newton-Schulz requires the parameter layer axis to be replicated")
+        # JAX cannot slice 48 rows directly from a 64-way sharded leading axis.
+        # Repartition the padded result into the parameter layout first; unlike
+        # full replication, this keeps the matrix dimensions sharded.
+        updated = reshard(updated, target_sharding)
+        return updated[:layers] if pad else updated
     updated = reshard(updated, P(None, None, None))
     return updated[:layers] if pad else updated
