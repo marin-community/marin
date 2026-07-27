@@ -160,13 +160,15 @@ def _reduce_slot_cotangents_to_sources(
     source_token = inverse_map_local[:, 0] * tokens_per_rank + inverse_map_local[:, 1]
     valid = inverse_map_local[:, 3].astype(jnp.bool_)
     safe_source_token = jnp.where(valid, source_token, global_tokens)
-    values = jnp.where(valid[:, None], slot_cotangents_local, 0)
+    values = jnp.where(valid[:, None], slot_cotangents_local.astype(jnp.float32), 0)
     cotangents_global = (
-        jnp.zeros((global_tokens + 1, slot_cotangents_local.shape[1]), dtype=slot_cotangents_local.dtype)
+        jnp.zeros((global_tokens + 1, slot_cotangents_local.shape[1]), dtype=jnp.float32)
         .at[safe_source_token]
         .add(values)[:global_tokens]
     )
-    return jax.lax.psum_scatter(cotangents_global, "expert", scatter_dimension=0, tiled=True)
+    return jax.lax.psum_scatter(cotangents_global, "expert", scatter_dimension=0, tiled=True).astype(
+        slot_cotangents_local.dtype
+    )
 
 
 def _unsort_topk_values(
