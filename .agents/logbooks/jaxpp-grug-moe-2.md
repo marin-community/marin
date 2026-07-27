@@ -430,3 +430,17 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - No valid throughput comparison exists against the group-size-one L8 control (`16.116235` mean MFU) or the old numerically invalid group-size-two result (`15.7366` mean MFU).
 - Next action:
   - Inspect the exact transfer payload and live producer/consumer buffers for the `5.62 GiB` stage-1/2 and `6.09 GiB` stage-3 requests. Require a measured removal or reuse of that allocation before another matched L8 run.
+
+### 2026-07-26 21:48 PDT - disabling JaxPP receive reuse leaves the L8 failure unchanged
+- Hypothesis: The `5.62 GiB` stage-1/2 allocation is JaxPP's hoisted reusable receive-buffer pool, so `JAXPP_REUSE_RECV_BUFFERS=false` will remove the single large first-execution allocation.
+- Command: Parent `/dlwh/iris-run-job-20260727-043813` launched child `/dlwh/iris-run-job-20260727-043813/grug-train-jaxpp-rno2a-ring-explicit-routing-componentgrads-g2-l8-e64k4-b512-s4096-p4m16-norecvreuse-r8-20260726-2137` from unchanged commit `d6b8b2e190` with the r7 L8 shape, XLA fraction `0.70`, and `JAXPP_REUSE_RECV_BUFFERS=false`.
+- Results:
+  - All four worker containers reported `JAXPP_REUSE_RECV_BUFFERS=false`. The run compiled the same `68` tasks and reached first execution.
+  - The failed allocations were byte-for-byte identical to r7: stage 1 requested `6,039,815,424` bytes, stage 2 requested `6,040,339,456` bytes, and stage 3 requested `6,543,655,424` bytes. Stage 0 reported no failed allocation.
+  - Ranks 1-3 failed after the allocator errors. The unchanged retry entered setup and was stopped before compilation.
+  - W&B initialized but produced zero history rows. The parent and child are terminal killed; all four child tasks are terminal and no matching pod or Kueue workload remains.
+- Interpretation:
+  - Disabling receive-buffer reuse is a hard negative for this grouped-ring graph. The numerical match between the request size and a count of 80 MiB activation shards is not sufficient to identify the allocation as the reusable receive prologue.
+  - The next supported memory control is outer-state donation. It can alias updated parameter and optimizer-state buffers but does not change task boundaries, routes, or arithmetic.
+- Next action:
+  - Add `donate_argnums=0` to the four explicit-MPMD entrypoints, validate lowering and donation metadata, then rerun the unchanged L8 gate before considering any L24 promotion.

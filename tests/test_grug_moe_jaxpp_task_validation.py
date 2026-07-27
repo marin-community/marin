@@ -164,3 +164,30 @@ def test_automatic_jaxpp_output_shardings_preserve_expert_axis():
     assert metric_shardings["train/loss"].spec == P()
     assert metric_shardings["qb_beta_per_layer"] is None
     assert watch_shardings is None
+
+
+def test_explicit_mpmd_entrypoints_donate_outer_state():
+    calls = []
+
+    def mpmd(mesh, **kwargs):
+        calls.append((mesh, kwargs))
+        return lambda function: function
+
+    mesh = object()
+    in_shardings = object()
+    decorator = grug_train._state_donating_mpmd(SimpleNamespace(mpmd=mpmd), mesh, in_shardings)
+
+    def train_step():
+        return None
+
+    assert decorator(train_step) is train_step
+    assert calls == [
+        (
+            mesh,
+            {
+                "in_shardings": in_shardings,
+                "donate_argnums": 0,
+                "infer_donation": True,
+            },
+        )
+    ]
