@@ -197,3 +197,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Changing remat scopes while both microbatch calls remain in one executable does not reproduce the ordered full-checkpoint compiler identity. The two arms being identical indicates that the relevant distinction is executable/task compilation context, not merely the placement of remat primitives in one Jaxpr.
 - Next action:
   - Compile one single-microbatch pre-MoE executable, reuse it for both inputs, and pass both prepared results to a separately compiled joined-MoE/finish executable. Compare forward boundaries and exact routes before adding VJPs. If the pre-task still misses, test an optimization barrier after attention and MLP-input formation.
+
+### 2026-07-26 17:20 PDT - split forward executables are exact; VJP compilation changes their primals
+- Hypothesis: Compiling one single-microbatch pre-MoE executable and reusing it twice, then running a separately compiled joined-MoE/finish executable, will reproduce the ordered complete-checkpoint oracle.
+- Commit Hash: `d28f24d782` adds the split-executable forward and VJP gate, with a conditional optimization-barrier arm when the base forward fails.
+- Command: Parent `/dlwh/jaxpp-group2-split-exec-r9-d28f24d7-20260726-1717` ran `--diagnostic split-executable-boundaries` from clean commit `d28f24d78201163e4a82fa71002405d31b26300c`; child `/dlwh/jaxpp-group2-split-exec-r9-d28f24d7-20260726-1717/0`.
+- Results:
+  - The base forward arm passed exactly. Post-attention residuals, MLP inputs, shared outputs, pre-MoE logits/weights/margins, routed outputs, router statistics, and final block outputs all had relative-L2 `0.0`. Selected-route assignment/token mismatches and routing-count mismatches were all `0`.
+  - The single pre-MoE task lowered in `5.718s`, compiled in at most `1.113s`, and executed twice in at most `0.009s`. The separate joined-MoE/finish task lowered in `0.122s`, compiled in at most `1.348s`, and executed in at most `0.043s`. The barrier arm correctly did not run.
+  - Because forward passed, the gate compiled matched VJP executables. Their returned primals no longer matched the ordered VJP oracle: post-attention still passed at `0.00193276`, but MLP inputs were the first failures at `0.00216019`, shared outputs reached `0.00529552`, and pre-MoE boundary margins reached `0.0173280`.
+  - The VJP arm differed on `5,137/5,305` selected-route assignments across `3,144/3,249` tokens and on `57/62` routing-count entries. Routed outputs reached `0.0689444`, final block outputs `0.0292388`, and the two projected losses `0.00473397/0.0129419`.
+  - VJP parameter gradients reached relative-L2 `1.3823348` at `mlp.expert_mlp.w_gate`; input gradients reached `0.6709662`. QB reached `0.00485684`. All reported values were finite.
+  - Iris reached the intended strict assertion after `2m01s`; the parent and child are terminal with no retry or live allocation.
+- Interpretation:
+  - The architecture-realistic forward decomposition is validated exactly at target shape. Separate executable contexts, not an optimization barrier, recover the ordered full-checkpoint forward identity.
+  - Transforming the split functions into fresh VJP executables changes their returned primals before gradient comparison. The remaining failure is therefore in reverse-mode compilation/recomputation context, not the split forward dataflow or joined-MoE forward.
+- Next action:
+  - Preserve outputs and residuals from the validated forward executables and compile transpose-only backward tasks that consume those saved residuals. Do not use a fresh `value_and_grad` wrapper that recomputes each task's primals, and do not launch L8 or L24 until every backward leaf passes relative-L2 `0.002`.
