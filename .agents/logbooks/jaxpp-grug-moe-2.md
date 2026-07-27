@@ -560,3 +560,17 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Keep `ring_token_gradient` as a bounded reproducer. Do not integrate or pipeline it.
 - Next action:
   - Return to the valid group-size-one exact-ring graph. Prototype saving compact block inputs and running block-local combined VJPs so backward can eliminate recomputed primal MoE collectives without the measured split-backward duplication.
+
+### 2026-07-26 23:40 PDT - saved block inputs do not remove backward collectives
+- Hypothesis: Saving each transformer block input and differentiating each block locally inside the existing combined backward task will let XLA eliminate recomputed primal MoE collectives without splitting input and parameter gradients.
+- Results:
+  - A forced two-device CPU optimized-HLO probe compared one exact-ring middle-stage block. Forward had 4 all-gathers and 1 reduce-scatter.
+  - Current combined backward had 5 all-gathers, 2 reduce-scatters, and 2 all-reduces.
+  - Saved block inputs plus block-local combined VJP had the same 5 all-gathers, 2 reduce-scatters, and 2 all-reduces. Gradient parity passed at `rtol=atol=2e-5`.
+  - Focused input-gradient-first tests pass `4/4`; changed-file precommit passes. No code change or GPU job was produced.
+- Interpretation:
+  - Block inputs are not the residuals needed to avoid the MoE primal replay. Ring weight gradients still require gathered token activations, and `save_moe` residuals exist only inside one AD transform; they do not cross explicit JaxPP's separate forward and backward tasks.
+  - A dedicated model/ring forward-residual and backward API would need to export dispatch inputs, expert hidden activations, dispatch outputs, and routing state. That is not a compact-input optimization and has a substantially larger memory/interface cost.
+  - Do not launch this unchanged graph.
+- Next action:
+  - Test an FP8 wire format inside the bulk ring itself. Per-token scaled FP8 all-gather plus shared-scale FP8 reduce-scatter targets the dominant MoE payloads, unlike the previously tested FP8 inter-stage wire and FP8 expert GEMMs. Require direct output/every-gradient relative-L2 at most `0.002` and at least `1.10x` value-and-grad speedup.
