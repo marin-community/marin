@@ -19,10 +19,12 @@ import hashlib
 from pathlib import Path
 
 import pulumi
+import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
 ECHO_DIR = Path(__file__).parent
 MIGRATIONS_DIR = ECHO_DIR / "migrations"
@@ -32,6 +34,10 @@ REGION = "us-central1"
 INSTANCE = "marin-metadata"
 CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "context"
+# The IAP-gated Cloud Run service serving the API + dashboard; also the domain-mapping route.
+API_SERVICE = "echo-api"
+# Google's shared frontend for Cloud Run domain mappings; the vanity CNAME points here.
+CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 # Cloud Identity group whose members read the corpus and append to work_log through
 # Cloud SQL IAM group authentication. Cloud SQL does not support domain principals as
 # database users, so the organization-wide group represents *@openathena.ai at the
@@ -150,7 +156,7 @@ def main() -> None:
         CloudRunServiceArgs(
             project=PROJECT,
             region=REGION,
-            service_name="echo-api",
+            service_name=API_SERVICE,
             build_context=".",
             dockerfile="api/Dockerfile",
             env={
@@ -164,6 +170,9 @@ def main() -> None:
             cpu_always_allocated=True,
             memory="2Gi",
             iap_members=("*@openathena.ai",),
+            # Admit CLI/agent tokens (cli.py) whose audience is the shared Marin desktop OAuth
+            # client, so the same rigging login that reaches iris also reaches echo-api.
+            iap_programmatic_clients=(MARIN_DESKTOP_OAUTH_CLIENT.client_id,),
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,
@@ -217,6 +226,38 @@ def main() -> None:
         environment={"GOOGLE_CLOUD_QUOTA_PROJECT": PROJECT},
         opts=pulumi.ResourceOptions(depends_on=db_users),
     )
+
+    # Optional vanity domain (echo.oa.dev): a Cloud Run domain mapping routes the host to
+    # echo-api and provisions the managed cert, and a DNS-only Cloudflare CNAME points the
+    # host at Cloud Run's shared frontend. Cloud Run terminates TLS and IAP, so a Cloudflare
+    # proxy would block cert issuance — the record stays unproxied. Set marin-echo:custom_domain
+    # and marin-echo:dns_zone_id to enable. The domain mapping is immutable and adopted with
+    # server-set metadata, so ignore those fields to keep `up` from planning unsupported updates.
+    site_config = pulumi.Config()
+    custom_domain = site_config.get("custom_domain")
+    if custom_domain:
+        dns_zone_id = site_config.require("dns_zone_id")
+        gcp.cloudrun.DomainMapping(
+            "api-domain",
+            name=custom_domain,
+            location=REGION,
+            metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
+            spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=API_SERVICE),
+            opts=pulumi.ResourceOptions.merge(
+                child,
+                pulumi.ResourceOptions(depends_on=[api], ignore_changes=["metadata", "spec", "statuses"]),
+            ),
+        )
+        cloudflare.DnsRecord(
+            "api-dns",
+            zone_id=dns_zone_id,
+            name=custom_domain,
+            type="CNAME",
+            content=CLOUD_RUN_FRONTEND,
+            ttl=1,  # 1 = automatic
+            proxied=False,
+        )
+        pulumi.export("custom_domain", f"https://{custom_domain}")
 
     pulumi.export("connection_name", CONNECTION_NAME)
     pulumi.export("database", database.name)

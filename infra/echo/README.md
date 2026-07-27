@@ -12,56 +12,82 @@ provides an IAP-gated HTTP interface and browser dashboard.
   deliberate-reference counters. Search indexes all three text fields.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
 
-## Search from the CLI
+## CLI
 
-The repository CLI connects directly to Cloud SQL with Application Default
-Credentials (ADC):
+`infra/echo/cli.py` drives the `echo-api` service. Run it in the repo environment:
 
 ```bash
-gcloud auth application-default login
-infra/echo/cli/search.py search "expert parallel MoE MFU on B200" --limit 10
-infra/echo/cli/search.py grep "ragged_all_to_all" --source discord
-infra/echo/cli/search.py show <id>
+uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
+uv run infra/echo/cli.py grep ragged_all_to_all --source discord
+uv run infra/echo/cli.py show <id>
+uv run infra/echo/cli.py wiki search "grafana access"
+uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
+uv run infra/echo/cli.py wiki show <id> > note.md         # export as OKF, edit, then:
+uv run infra/echo/cli.py wiki edit <id> --file note.md
 ```
 
-`search` uses reciprocal-rank fusion over PostgreSQL full-text and BGE semantic
-candidates; higher scores are better. Exact identifiers and names receive a strong
-lexical signal while paraphrases can enter through the semantic candidates. `grep` is a
-case-insensitive literal substring scan, newest first. Discord results contain one
-message, so open the result URL when the surrounding thread matters.
+Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
+echo-api tokens from the same cached credential (`~/.config/marin/credentials`), because
+echo-api admits the shared Marin desktop OAuth client as an IAP programmatic client. There
+is no separate echo login. Agents and CI need no login at all — ambient service-account
+credentials (a key, GCE/Cloud Run metadata, or an ADC impersonating a service account) mint
+the token instead. `ECHO_API_URL` overrides the target host; `ECHO_LOGIN_CLUSTER` selects
+which cached login to reuse.
 
-Direct SQL access uses Cloud SQL IAM group authentication. Members of
-`eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
-`roles/cloudsql.client`, `SELECT` on `chunks` and `wiki_entries`, and `SELECT, INSERT`
-on `work_log`. Wiki writes go through the API so it can embed and attribute each note.
-The `loom-vm` service account receives the same direct database access. Search results
-include `use_when` so an agent can decide whether to fetch the full entry from
-`GET /wiki/{id}`. No database password is shared. Group membership and IAM changes can
-take about 15 minutes to propagate.
+`search` uses reciprocal-rank fusion over PostgreSQL full-text and BGE semantic candidates;
+higher scores are better. Exact identifiers and names receive a strong lexical signal while
+paraphrases can enter through the semantic candidates. `grep` is a case-insensitive literal
+substring scan, newest first. Discord results contain one message, so open the result URL
+when the surrounding thread matters. Wiki writes go through the API so it can embed and
+attribute each note.
 
-`MARIN_DB_USER` overrides the PostgreSQL username when ADC cannot resolve an
-impersonated, external-account, or workforce identity. Service-account usernames omit
-the `.gserviceaccount.com` suffix.
+Wiki notes are authored as [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
+(OKF) documents — a markdown file with a YAML frontmatter block. `wiki add --file` and
+`wiki edit --file` read one, `wiki show` prints one, so an entry round-trips through a `.md`
+file (the `--title`/`--use-when`/`--body` flags remain as an alternative to `--file`):
+
+```markdown
+---
+type: wiki-note
+title: chunks.text needs a pg_trgm index for grep
+use_when: when grep or ILIKE substring queries over the corpus are slow
+---
+
+A pg_trgm GIN index on chunks.text makes the substring match an index scan.
+```
+
+Direct SQL access remains available for raw queries through Cloud SQL IAM group
+authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
+`roles/cloudsql.client`, `SELECT` on `chunks` and `wiki_entries`, and `SELECT, INSERT` on
+`work_log`; the `loom-vm` service account receives the same access. No database password is
+shared. Group membership and IAM changes can take about 15 minutes to propagate.
 
 ## Dashboard and HTTP API
 
 OpenAthena accounts can open the IAP-gated `echo-api` Cloud Run service to search both
 the activity corpus and wiki notes. The same service exposes OpenAPI documentation at
-`/docs` and the following endpoints:
+`/docs` and the following endpoints, all under `/api`:
 
-- `GET /search`
-- `GET /grep`
-- `GET /chunks/{id}`
-- `GET /wiki/search`
-- `GET /wiki/{id}`
-- `POST /wiki`
-- `POST /wiki/{id}/references`
-- `GET /work_log`
-- `GET /work_log/{id}`
-- `POST /work_log`
+- `GET /api/search`
+- `GET /api/grep`
+- `GET /api/chunks/{id}`
+- `GET /api/wiki/search`
+- `GET /api/wiki/{id}`
+- `POST /api/wiki`
+- `PUT /api/wiki/{id}`
+- `POST /api/wiki/{id}/references`
+- `GET /api/work_log`
+- `GET /api/work_log/{id}`
+- `POST /api/work_log`
 
 The API connects to PostgreSQL as `echo-api@hai-gcp-models.iam`; callers do not need
 direct database access.
+
+The dashboard is a Vue single-page app served from the same origin, with client-side
+routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
+`/chunk/<id>` (an activity chunk). The API's catch-all route serves `index.html` for
+any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`,
+so vue-router's history-mode navigation and reloads resolve correctly.
 
 For local dashboard development:
 
@@ -70,7 +96,7 @@ npm --prefix infra/echo/dashboard install
 npm --prefix infra/echo/dashboard run dev
 ```
 
-Rsbuild's development server proxies Echo API requests to `http://127.0.0.1:8000`.
+Rsbuild's development server proxies `/api/...` requests to `http://127.0.0.1:8000`.
 Production builds are compiled into the API image and served from the same origin.
 
 ## Infrastructure
