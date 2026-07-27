@@ -248,3 +248,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - The remaining discontinuity is between the ordered full-block VAG reference and the split pre-task/finish assembly. A ranked cause is the reference itself: the whole-block `save_moe` checkpoint saves dispatch and expert tensors but not router logits, top-k indices, or combine weights, so its backward recompute may route differently from its exact auxiliary forward. Reference cut mismatch, microbatch/tree ordering, and cross-fed cotangents remain controls. The summed router leaf remains a separate BF16 accumulation issue.
 - Next action:
   - Report ordered versus joined finish gradients on identical saved primals, joined versus ordered pre-task boundary cotangents, and unsummed same-index and cross-index per-microbatch finish/pre-task gradients before any master-tree reduction. Compare split assembly against the no-checkpoint full-block VJP and report default-checkpoint versus no-checkpoint gradients/routes. If split matches no-checkpoint, test saving router/top-k/combine intermediates or a narrower per-MoE checkpoint. Keep exact routes and the per-leaf `0.002` gate; do not launch L8 or L24.
+
+### 2026-07-26 18:04 PDT - no existing remat context is a canonical gradient reference
+- Hypothesis: The r11 discontinuity is either a microbatch/tree-order swap or evidence that the whole-block `save_moe` reference recomputes unsaved routing state during backward.
+- Commit Hash: `22f2e80bfd` adds unsummed same-index/cross-index reports, default-checkpoint versus no-checkpoint controls, and split assembly versus no-checkpoint reporting.
+- Command: Parent `/dlwh/jaxpp-group2-reference-assembly-r12-22f2e80b-20260726-1804` ran `--diagnostic reference-assembly-discontinuity` from clean commit `22f2e80bfd603a5c34481a724283381228162553`; child `/dlwh/jaxpp-group2-reference-assembly-r12-22f2e80b-20260726-1804/0`.
+- Results:
+  - Joined-finish versus independently computed ordered-cut boundary cotangents passed same-index exactly and failed crossed. The maximum crossed relative-L2 was `1.41724`. Microbatch/tree swapping is ruled out.
+  - Single-finish MoE gradients matched neither ordered microbatch. Same-index maximum relative-L2 was `1.39611/1.39808`; crossed was `1.41943/1.41080`. The summed joined-finish versus ordered MoE gradient remained `1.39399`.
+  - Pre-task parameter/input gradients also matched neither order. Same-index maximum relative-L2 was `0.877953/0.880515`; crossed was `1.42584/1.43008`.
+  - Default whole-block checkpoint versus no checkpoint reproduced the known forward-context split: shared outputs were the first failure at `0.00400094`, routes differed on `2,698/2,732` assignments across `1,647/1,663` tokens, routing counts differed in `59/61` entries, parameter gradients reached `1.39361`, and input gradients reached `0.673786`.
+  - Split assembly did not match no checkpoint either: parameter gradients reached `1.35558` and input gradients reached `0.654292`. Its saved default-context forward primals and routes remained exact.
+  - Iris reached the intended strict assertion after `2m10.12s`; no retry or live allocation remains.
+- Interpretation:
+  - Program order and microbatch tree ordering are not the cause. The exact same-index cut cotangents establish that the split finish sends each cotangent to the intended pre-task input.
+  - Neither default whole-block checkpoint nor no checkpoint is a canonical reference for the saved default-context forward. Their routes differ, while the split derivative is evaluated at the default-context saved primals. The ordered default checkpoint's MoE gradients matching neither exact saved-primal finish derivative is consistent with backward recomputation using unsaved routing state.
+- Next action:
+  - Add checkpoint names for selected experts and the `T×K` continuous routing intermediates required by the router VJP, avoiding retention of `T×E` logits. First require default whole-block checkpoint versus no checkpoint to pass every gradient leaf at relative-L2 `0.002` with exact routes; only then rerun split assembly against the stabilized reference. Do not launch L8 or L24.
