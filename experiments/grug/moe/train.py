@@ -2135,9 +2135,10 @@ def explicit_router_pre_boundary_bootstrap(
 ]:
     """Run the pre/router VJP context with zero boundary cotangents."""
     token_count = hidden.shape[0] * hidden.shape[1]
+    combine_dtype = jnp.float32 if params.mlp.expert_mlp.implementation == "ubx" else mp.cast_to_compute(hidden).dtype
     combine_weights = jnp.zeros(
         (token_count, params.mlp.cfg.num_experts_per_token),
-        dtype=mp.cast_to_compute(hidden).dtype,
+        dtype=combine_dtype,
     )
     boundary_cotangents = (
         jnp.zeros_like(hidden),

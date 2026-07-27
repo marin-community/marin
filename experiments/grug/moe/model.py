@@ -752,7 +752,8 @@ class MoEMLP(eqx.Module):
             sigmoid_weights * (_ROUTING_RENORM_SUM / (denom + 1e-9)),
             CHECKPOINT_ROUTER_COMBINE_WEIGHTS,
         )
-        combine_weights = reshard(combine_weights_f.astype(x.dtype), P(_BATCH_AXES, None))
+        combine_dtype = jnp.float32 if self.expert_mlp.implementation == "ubx" else x.dtype
+        combine_weights = reshard(combine_weights_f.astype(combine_dtype), P(_BATCH_AXES, None))
         router_stats = _routing_stats(
             selected_experts,
             router_probs,

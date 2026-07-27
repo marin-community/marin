@@ -417,7 +417,7 @@ def _assert_tree_rel_l2(actual, expected, *, tolerance: float = 0.002) -> None:
         assert relative_l2 <= tolerance
 
 
-def _tiny_grouped_stages(remat_mode: str, *, top_k: int = 1):
+def _tiny_grouped_stages(remat_mode: str, *, top_k: int = 1, moe_implementation: str = "ring"):
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -432,7 +432,7 @@ def _tiny_grouped_stages(remat_mode: str, *, top_k: int = 1):
         sliding_window=4,
         router_z_loss_coef=0.1,
         attention_implementation="reference",
-        moe_implementation="ring",
+        moe_implementation=moe_implementation,
         loss_implementation="reference",
         remat_mode=remat_mode,
     )
@@ -446,8 +446,8 @@ def _tiny_grouped_stages(remat_mode: str, *, top_k: int = 1):
     return mesh, model.split_for_pipeline(2)
 
 
-def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1):
-    mesh, stages = _tiny_grouped_stages(remat_mode, top_k=top_k)
+def _tiny_grouped_last_stage(remat_mode: str, *, top_k: int = 1, moe_implementation: str = "ring"):
+    mesh, stages = _tiny_grouped_stages(remat_mode, top_k=top_k, moe_implementation=moe_implementation)
     return mesh, stages[1]
 
 
@@ -1308,8 +1308,9 @@ def test_explicit_routing_split_matches_ordered_full_block() -> None:
         np.testing.assert_array_equal(actual_routes["selected_experts"], expected_routes["selected_experts"])
 
 
-def test_production_explicit_router_bootstrap_matches_zero_cotangent_vjp() -> None:
-    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2)
+@pytest.mark.parametrize("moe_implementation", ("ring", "ubx"))
+def test_production_explicit_router_bootstrap_matches_zero_cotangent_vjp(moe_implementation: str) -> None:
+    mesh, stage = _tiny_grouped_last_stage("save_moe", top_k=2, moe_implementation=moe_implementation)
     batches, hiddens, _ = _tiny_boundary_inputs(mesh)
     params = stage.blocks[0]
     hidden = hiddens[0]
@@ -1357,7 +1358,12 @@ def test_production_explicit_router_bootstrap_matches_zero_cotangent_vjp() -> No
         )
 
     with jax.set_mesh(mesh):
+        routing = jax.jit(lambda mlp, value: mlp.route(value))(params.mlp, hidden.astype(jnp.bfloat16))
+        expected_combine_dtype = jnp.float32 if moe_implementation == "ubx" else jnp.bfloat16
+        assert routing.combine_weights.dtype == expected_combine_dtype
         boundaries = jax.jit(pre_forward)(params, hidden)
+        if moe_implementation == "ubx":
+            assert boundaries[3].combine_weights.dtype == jnp.float32
         zero_cotangents = tuple(jnp.zeros_like(value) for value in (*boundaries[:3], boundaries[3].combine_weights))
         expected = jax.jit(pre_vjp)(params, hidden, zero_cotangents)
         actual = jax.jit(pre_bootstrap)(params, hidden)
