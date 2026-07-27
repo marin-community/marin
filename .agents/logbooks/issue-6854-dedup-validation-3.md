@@ -1255,3 +1255,44 @@ are recorded in the previous volumes.
 - The next frontiers are p0 `(14, 128)`, p1 `(46, 0)`, p2 `(78, 0)`, and p3
   `(110, 2560)`. The next p0 checkpoint contains 87.3 million characters.
   The eight H100s remain healthy at batch priority.
+
+## 2026-07-27 23:49 UTC — article-truncation adjudication reaches 44.22%
+
+- Checkpoint audits independently reread another 1,024 baseline pairs. One
+  outcome required full-text adjudication: decision-file 110, semantic offset
+  3,072, pair row 5,010 is a true duplicate. Both documents contain the same
+  article, facts, quotations, and image caption. The canonical copy ends five
+  characters early at `enjoyed by so`, while the member ends `enjoyed by so
+  many.`; the member contributes no distinct proposition or substantive
+  passage. Character and word-sequence similarities are 0.9869 and 0.9862.
+  Its inspection, manual Parquet, and marker SHA-256 values are
+  `af508edaf21a8bd5420d6b20090622e441b5455ea030717a68d6f10dd95af133`,
+  `392a59fe2957e32f1b9ae579e2778455f682568db2fd00e6291e558f4347776b`,
+  and
+  `2ac66079ed8d6f16430bfe6272e64a384c079d87cfe1752b7f22572b25130002`.
+  `/rav/datakit-6854-verify-row5010-v1608` reproduced its complete input and
+  output bytes.
+- `/rav/datakit-6854-reconcile-manual-v1609` verified 2,631 checkpoints and
+  complete manual coverage for all 387 unresolved outcomes. Applying 80
+  false-positive and 307 true-duplicate manual decisions gives:
+
+  | Arm | Pairs | False positives | True duplicates | False-positive rate |
+  | --- | ---: | ---: | ---: | ---: |
+  | baseline | 266,289 | 169,050 | 97,239 | 63.4837% |
+  | treatment | 67,718 | 35,160 | 32,558 | 51.9212% |
+  | combined | 334,007 | 204,210 | 129,797 | 61.1394% |
+
+  The baseline-minus-treatment gap is 11.5625 percentage points. This snapshot
+  covers 44.2229% of the 755,281 semantic candidates. Its immutable report is
+  `s3://marin-us-east-02a/marin/user/rav/datakit/dedup-ab/issue6854-semantic-reconciliation-100b-20260727-v1/snapshots/20260727-2347.json`
+  with SHA-256
+  `43d72d385c44a719586827de6d88bac096099523fa8c478ffc643191422a39de`.
+  The semantic, manual-marker, and manual-Parquet path-manifest SHA-256 values
+  are
+  `e549e09eeab8de3fc36778d8ff1e451842d114acaa2fc86e1fe615cebb145d27`,
+  `1428bb3671300d2f4435dbbc6a53edcbd29456d0ddfbcabb4496eca810971961`,
+  and
+  `d76f82d88d724566a25aea92f6580ee573b0b0fdcaa96b91d14dfe61e9a411bd`.
+  Independent checkpoint rereads exactly match all 334,007 reconciled pairs.
+- The next frontiers are p0 `(14, 128)`, p1 `(46, 0)`, p2 `(78, 0)`, and p3
+  `(110, 3584)`. The eight H100s remain healthy at batch priority.
