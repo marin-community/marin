@@ -866,3 +866,20 @@ Continues [jaxpp-grug-moe.md](jaxpp-grug-moe.md).
   - Focused tests report `57 passed`; changed-file precommit including Pyrefly passes.
 - Next action:
   - Run L4 r5. L8 remains blocked.
+
+### 2026-07-27 03:03 PDT - L4 r5 clears sharding and reaches gradient reconstruction
+- Launch:
+  - Parent `/dlwh/iris-run-job-20260727-094731`, unchanged L4 configuration with run ID suffix `r5`.
+- Result:
+  - All four ranks entered explicit-MPMD lowering. Rank 0 then failed while restoring synchronized expert gradients into the ordinary gradient tree; ranks 1-3 were terminated as coscheduled siblings.
+  - The failure was `eqx.tree_at` attempting to replace `None` W13/W2 leaves without treating `None` as a leaf.
+  - No rank reached compile or execute. Parent and child are terminal with no retry or failed resource live.
+  - W&B [r5](https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-ep2d4-fusedacc-fp8-l4-e64k4-b128-s4096-p4m4-r5-20260727) is finished with config metadata only.
+- Fix:
+  - Commit `28b3f757168bcd8ebf68a24c4a2d519205ca1f9a` passes `is_leaf=lambda value: value is None` when restoring expert leaves.
+  - A direct regression now removes, extracts, and restores every stage expert-gradient leaf, checking exact W13 split and W2 values.
+  - The expanded focused suite reports `58 passed`; the direct regression passes independently; changed-file precommit including Pyrefly passes.
+- Interpretation:
+  - r5 passed the prior materialization and accumulator-sharding boundaries. The new failure is local gradient-tree plumbing, not a repeated sharding mismatch.
+- Next action:
+  - Run L4 r6. L8 remains blocked.
