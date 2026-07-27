@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -1230,6 +1231,46 @@ def explicit_std_1f1b_stage_schedule(
         tasks.append(("fwd", groups[group_index]))
     tasks.extend(("bwd", group) for group in groups[len(groups) - warmup :])
     return tuple(tasks)
+
+
+_StageBlockCallables = tuple[tuple[Callable[..., Any], ...], ...]
+
+
+@dataclass(frozen=True)
+class _ExplicitGroup2PhaseCallables:
+    pre_forward: _StageBlockCallables
+    finish_forward: _StageBlockCallables
+    finish_backward: _StageBlockCallables
+    pre_backward: _StageBlockCallables
+
+
+def _bind_explicit_group2_phase_callables(
+    *,
+    pre_forward: Callable[..., Any],
+    finish_forward: Callable[..., Any],
+    finish_backward: Callable[..., Any],
+    pre_backward: Callable[..., Any],
+    blocks_per_stage: tuple[int, ...],
+) -> _ExplicitGroup2PhaseCallables:
+    def bind_stage_blocks(phase: Callable[..., Any]) -> _StageBlockCallables:
+        return tuple(
+            tuple(
+                functools.partial(
+                    phase,
+                    stage_index=stage_index,
+                    block_index=block_index,
+                )
+                for block_index in range(block_count)
+            )
+            for stage_index, block_count in enumerate(blocks_per_stage)
+        )
+
+    return _ExplicitGroup2PhaseCallables(
+        pre_forward=bind_stage_blocks(pre_forward),
+        finish_forward=bind_stage_blocks(finish_forward),
+        finish_backward=bind_stage_blocks(finish_backward),
+        pre_backward=bind_stage_blocks(pre_backward),
+    )
 
 
 def _ema_update(old, new, beta: float):
@@ -2971,6 +3012,14 @@ def _make_explicit_mpmd_train_step(
     def explicit_stage_block_gradients(params, block_gradients):
         return explicit_stage_gradient_from_blocks(params, block_gradients)
 
+    explicit_group2_phase_callables = _bind_explicit_group2_phase_callables(
+        pre_forward=explicit_group2_pre_bootstrap,
+        finish_forward=explicit_group2_finish_forward,
+        finish_backward=explicit_group2_finish_backward,
+        pre_backward=explicit_group2_pre_backward,
+        blocks_per_stage=tuple(len(stage.blocks) for stage in sample_state.params),
+    )
+
     def last_stage_backward(
         params: TransformerPipelineStage,
         qb_betas: jax.Array,
@@ -3617,11 +3666,7 @@ def _make_explicit_mpmd_train_step(
             router_stats_by_block = []
             for block_index in range(len(stage_params.blocks)):
                 block_inputs = current_hiddens
-                pre_task = functools.partial(
-                    explicit_group2_pre_bootstrap,
-                    stage_index=stage_index,
-                    block_index=block_index,
-                )
+                pre_task = explicit_group2_phase_callables.pre_forward[stage_index][block_index]
                 pre_contexts = tuple(
                     mpmd.task(
                         pre_task,
@@ -3644,11 +3689,7 @@ def _make_explicit_mpmd_train_step(
                 shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
                 routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
                 finish_forward = mpmd.task(
-                    functools.partial(
-                        explicit_group2_finish_forward,
-                        stage_index=stage_index,
-                        block_index=block_index,
-                    ),
+                    explicit_group2_phase_callables.finish_forward[stage_index][block_index],
                     name=(
                         f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_forward"
                     ),
@@ -3697,11 +3738,7 @@ def _make_explicit_mpmd_train_step(
                 shared_outputs = tuple(boundaries[2] for boundaries in pre_boundaries)
                 routing_states = tuple(boundaries[3] for boundaries in pre_boundaries)
                 finish_backward = mpmd.task(
-                    functools.partial(
-                        explicit_group2_finish_backward,
-                        stage_index=stage_index,
-                        block_index=block_index,
-                    ),
+                    explicit_group2_phase_callables.finish_backward[stage_index][block_index],
                     name=(
                         f"grug_1f1b_mb{microbatch_name}_stage{stage_index}_" f"block{block_index}_joined_expert_backward"
                     ),
@@ -3724,11 +3761,7 @@ def _make_explicit_mpmd_train_step(
                     )
                     for microbatch_offset in range(2)
                 )
-                pre_task = functools.partial(
-                    explicit_group2_pre_backward,
-                    stage_index=stage_index,
-                    block_index=block_index,
-                )
+                pre_task = explicit_group2_phase_callables.pre_backward[stage_index][block_index]
                 pre_backwards = tuple(
                     mpmd.task(
                         pre_task,

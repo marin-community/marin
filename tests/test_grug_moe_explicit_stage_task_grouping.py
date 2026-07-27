@@ -91,6 +91,7 @@ from experiments.grug.moe.train import (
     GrugTrainerConfig,
     _accumulate_microbatch_tree,
     _average_microbatch_tree,
+    _bind_explicit_group2_phase_callables,
     _combine_grouped_router_metrics,
     _compute_block,
     _compute_stage,
@@ -112,6 +113,55 @@ from experiments.grug.moe.train import (
 )
 
 _RUN_SCRIPT = Path("experiments/grug/moe/run_cw_jaxpp_may_d2560.sh")
+
+
+def _lower_group2_phase_schedule(microbatches: int) -> tuple[int, int]:
+    def pre_forward(value, *, stage_index: int, block_index: int):
+        return value + stage_index + block_index + 1
+
+    def finish_forward(value, *, stage_index: int, block_index: int):
+        return value * (stage_index + block_index + 2)
+
+    def finish_backward(value, *, stage_index: int, block_index: int):
+        return value - stage_index - block_index - 1
+
+    def pre_backward(value, *, stage_index: int, block_index: int):
+        return value / (stage_index + block_index + 2)
+
+    phases = _bind_explicit_group2_phase_callables(
+        pre_forward=pre_forward,
+        finish_forward=finish_forward,
+        finish_backward=finish_backward,
+        pre_backward=pre_backward,
+        blocks_per_stage=(1,),
+    )
+    block_phases = (
+        phases.pre_forward[0][0],
+        phases.pre_forward[0][0],
+        phases.finish_forward[0][0],
+        phases.finish_backward[0][0],
+        phases.pre_backward[0][0],
+        phases.pre_backward[0][0],
+    )
+
+    def grouped_schedule(value):
+        for _ in range(microbatches // 2):
+            for phase in block_phases:
+                value = jax.jit(phase)(value)
+        return value
+
+    lowered = jax.make_jaxpr(grouped_schedule)(jnp.asarray(1.0, dtype=jnp.float32))
+    heavy_phase_equations = tuple(equation for equation in lowered.jaxpr.eqns if equation.primitive.name == "jit")
+    call_jaxprs = tuple(equation.params["jaxpr"] for equation in heavy_phase_equations)
+    return len(heavy_phase_equations), len({id(call_jaxpr) for call_jaxpr in call_jaxprs})
+
+
+def test_grouped_phase_lowering_reuses_call_jaxprs_across_microbatch_pairs() -> None:
+    m4_task_calls, m4_unique_call_jaxprs = _lower_group2_phase_schedule(4)
+    m8_task_calls, m8_unique_call_jaxprs = _lower_group2_phase_schedule(8)
+
+    assert (m4_task_calls, m8_task_calls) == (12, 24)
+    assert m4_unique_call_jaxprs == m8_unique_call_jaxprs == 4
 
 
 def test_grouped_explicit_std_1f1b_schedule_preserves_contiguous_pair_order() -> None:
